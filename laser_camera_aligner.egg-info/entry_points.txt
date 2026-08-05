@@ -1,0 +1,2 @@
+[console_scripts]
+laser-camera-aligner = laser_aligner.__main__:main

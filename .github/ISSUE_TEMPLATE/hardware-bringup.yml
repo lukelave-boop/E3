@@ -1,0 +1,59 @@
+name: Hardware bring-up report
+description: Record controller, camera, motion, and calibration measurements without guessing.
+title: "[bring-up] "
+labels: [hardware, bring-up]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Keep laser emission physically disabled during controller identification and early motion testing where practical. Remove serial numbers, usernames, and network details before posting publicly.
+  - type: input
+    id: controller
+    attributes:
+      label: Controller/control-box identification
+      placeholder: Labels, PCB markings, USB VID:PID
+    validations:
+      required: true
+  - type: textarea
+    id: probe
+    attributes:
+      label: Controller probe output
+      description: Paste startup text plus $I, $$, and M115 responses.
+      render: text
+    validations:
+      required: true
+  - type: dropdown
+    id: protocol
+    attributes:
+      label: Confirmed protocol
+      options: [Unknown, GRBL-like, Marlin-like, Other]
+    validations:
+      required: true
+  - type: input
+    id: serial
+    attributes:
+      label: Stable serial by-id path and baud rate
+  - type: textarea
+    id: coordinates
+    attributes:
+      label: Homing and coordinate measurements
+      description: Origin, positive directions, photo pose, and verified laser-spot X/Y limits.
+  - type: textarea
+    id: power
+    attributes:
+      label: Laser-mode and power-scale evidence
+      description: Record firmware settings and how M3/M4/S behavior was established. Do not post an unverified recommendation.
+  - type: textarea
+    id: camera
+    attributes:
+      label: C920 setup and calibration results
+      description: Stable by-id path, resolution, controls, mount height, lens residuals, bed RMS/max residuals, and repeatability.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Bring-up conditions
+      options:
+        - label: Laser emission was disabled during controller identification/early motion where practical.
+          required: true
+        - label: Physical enclosure, extraction, interlock, and hardware E-stop status are described accurately.
+          required: true

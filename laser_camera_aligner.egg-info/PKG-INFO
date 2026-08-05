@@ -1,0 +1,179 @@
+Metadata-Version: 2.4
+Name: laser-camera-aligner
+Version: 0.1.0
+Summary: Stationary-camera alignment, SVG placement, and guarded G-code generation for a laser-converted 3D printer
+Author: Laser Camera Aligner contributors
+License: MIT
+Classifier: Development Status :: 3 - Alpha
+Classifier: Programming Language :: Python :: 3
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Topic :: Multimedia :: Graphics :: Capture :: Digital Camera
+Classifier: Topic :: Scientific/Engineering :: Image Processing
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: numpy<3,>=1.24
+Requires-Dist: opencv-contrib-python-headless<5,>=4.8
+Dynamic: license-file
+
+# Laser Camera Aligner
+
+A Linux-first, self-hosted camera alignment application for placing vector artwork on a laser-converted 3D printer. The initial hardware target is an **Ender-3 S1 Pro**, a **Creality 10 W blue-diode laser module**, and a stationary overhead **Logitech C920**.
+
+> **Project status: early alpha.** Simulation, camera calibration, bed mapping, SVG parsing, G-code generation, and the controller abstraction are implemented. Real controller commands, laser power scaling, reachable travel, and laser-head offsets must be measured on the specific machine before hardware execution is enabled.
+
+See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the exact tested/unverified boundary of this release.
+
+## What already works
+
+- Browser-based local interface with no paid cloud service
+- Logitech C920 capture through Linux V4L2/OpenCV
+- Manual focus, exposure, white-balance, and gain locking when exposed by the camera driver
+- Synthetic camera and GRBL-like controller for development without hardware
+- Multi-image checkerboard lens calibration
+- Multi-point image-pixel to machine-XY homography with RANSAC and residual error reporting
+- Perspective-corrected, top-down bed photograph
+- Traditional computer-vision detection of a rectangular workpiece
+- SVG loading and display with drag, size, and rotation controls
+- In-house SVG vector parser for paths, lines, polylines, polygons, rectangles, circles, ellipses, groups, transforms, curves, and arcs
+- Path flattening, nearest-path ordering, design bounds checks, dry framing, and vector G-code generation
+- Linux serial communication without a mandatory pyserial dependency
+- GRBL/Marlin identification probes and a read-only diagnostic command console (`M5` is the only actuator command accepted there)
+- Temporary laser arming, automatic disarming, software stop, and simulation-first defaults
+- Unit tests and GitHub Actions configuration
+
+## Deliberately disabled by default
+
+The shipped configuration uses a synthetic camera and controller. In a real-hardware profile:
+
+- Serial access requires the `--hardware` command-line flag.
+- Motion remains blocked until `machine.allow_motion` is explicitly changed.
+- Positive laser commands require temporary arming with the phrase displayed in the UI.
+- Low-power laser framing is disabled, and the default dry-frame file contains no `M3`/`M4` laser-enable command at all.
+- The server binds only to `127.0.0.1`.
+
+These are software guardrails, not safety-rated controls.
+
+## Fastest way to try it
+
+On Linux Mint, Ubuntu, or Debian:
+
+```bash
+unzip laser-camera-aligner-0.1.0.zip
+cd laser-camera-aligner
+./install.sh
+./run.sh
+```
+
+The browser opens to `http://127.0.0.1:8080`. Simulation mode starts with an automatically mapped perspective bed, a test workpiece, and a simulated controller.
+
+Load `sample_data/sample_design.svg`, drag it over the simulated workpiece, generate G-code, type the temporary arming phrase, and run it against the simulator.
+
+## Moving to the real C920
+
+1. Copy the hardware example:
+
+   ```bash
+   cp config/ender3_s1_pro.hardware.example.json config/local.json
+   ```
+
+2. Find the stable C920 device path:
+
+   ```bash
+   ls -l /dev/v4l/by-id/
+   .venv/bin/python tools/camera_probe.py
+   ```
+
+3. Replace the camera device placeholder in `config/local.json`.
+4. Keep the controller backend set to `simulator` during camera and calibration work, or leave serial motion disabled.
+5. Start with:
+
+   ```bash
+   ./run.sh
+   ```
+
+See [docs/CAMERA_SETUP.md](docs/CAMERA_SETUP.md) and [docs/CALIBRATION.md](docs/CALIBRATION.md).
+
+## Controller bring-up
+
+Do not guess whether the Creality conversion is speaking GRBL or Marlin. With laser power physically disconnected if practical, run:
+
+```bash
+.venv/bin/python tools/controller_probe.py --port /dev/serial/by-id/YOUR_CONTROLLER
+```
+
+The probe only sends identity/configuration requests (`$I`, `$$`, and `M115`); it does not send motion or laser-enable commands. Record the output in a GitHub issue or commit it to a local bring-up note with secrets removed.
+
+Only after the port, protocol, coordinate system, reachable laser work area, power scale, and framing behavior are verified should `machine.allow_motion` be changed to `true` and the application started with:
+
+```bash
+./run-hardware.sh
+```
+
+See [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md).
+
+## Repository layout
+
+```text
+laser_aligner/
+  camera/        C920/V4L2 and synthetic capture
+  calibration/   lens model, bed mapping, printable target generation
+  geometry/      SVG parsing, curves, transforms, units
+  gcode/         placement, validation, generation, preview parsing
+  machine/       POSIX serial, simulator, controller safety service
+  vision/        workpiece and ArUco detection
+  web/           dependency-free browser interface
+config/          simulation and hardware examples
+docs/            setup, calibration, safety, and architecture notes
+targets/         exact-size SVG calibration targets
+tools/           camera/controller probes and release tooling
+tests/           unit and integration tests
+```
+
+## Development commands
+
+```bash
+# Run all tests
+.venv/bin/python -m pytest
+
+# Generate calibration targets
+.venv/bin/python -m laser_aligner --config config/local.json --generate-targets
+
+# Run with verbose logs
+./run.sh --verbose
+
+# Build a clean source ZIP
+.venv/bin/python tools/make_release.py
+```
+
+## GitHub setup
+
+```bash
+./bootstrap-git.sh
+git remote add origin git@github.com:YOUR_USERNAME/YOUR_REPOSITORY.git
+git push -u origin main
+```
+
+Keep `config/local.json`, captures, calibration photographs, logs, and generated G-code out of Git by default. Calibration JSON files also live under `data/`; back them up separately after the physical rig is finalized.
+
+## Current limitations
+
+- Vector outlines only; filled/raster engraving is not implemented yet.
+- SVG text and embedded images are ignored. Convert text to paths in the design program.
+- CSS stylesheets, clipping paths, masks, and every edge case of the full SVG specification are not supported.
+- The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.
+- No safety-rated enclosure, interlock, flame detector, or hardware E-stop can be implemented in this software.
+- The exact Creality controller protocol and `S` power range for this particular conversion kit remain unverified.
+- Software stop is not a substitute for immediately removing power with a hardware emergency stop.
+
+## References used for the initial design
+
+- OpenCV camera calibration documentation: https://docs.opencv.org/master/d4/d94/tutorial_camera_calibration.html
+- OpenCV calibration-pattern guidance: https://docs.opencv.org/master/da/d0d/tutorial_camera_calibration_pattern.html
+- Logitech C920 technical specifications: https://support.logi.com/hc/en-us/articles/360023307294-C920-Technical-Specifications
+- Creality laser engraver safety/manual material: https://wiki.creality.com/en/laser-engraver/cr-laser-falcon/user-manual
+- GRBL source and protocol project: https://github.com/grbl/grbl
+
+## Safety
+
+Read [SAFETY.md](SAFETY.md) before connecting the application to real hardware. A 10 W, approximately 455 nm diode laser is capable of permanent eye injury, fire, harmful smoke generation, and damage from reflected beams. Never leave a laser job unattended.

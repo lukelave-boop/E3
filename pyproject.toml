@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "laser-camera-aligner"
+version = "0.1.0"
+description = "Stationary-camera alignment, SVG placement, and guarded G-code generation for a laser-converted 3D printer"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "Laser Camera Aligner contributors"}]
+dependencies = [
+  "numpy>=1.24,<3",
+  "opencv-contrib-python-headless>=4.8,<5"
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Operating System :: POSIX :: Linux",
+  "Topic :: Multimedia :: Graphics :: Capture :: Digital Camera",
+  "Topic :: Scientific/Engineering :: Image Processing"
+]
+
+[project.scripts]
+laser-camera-aligner = "laser_aligner.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["laser_aligner*"]
+
+[tool.setuptools.package-data]
+laser_aligner = ["web/*.html", "web/*.js", "web/*.css"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]

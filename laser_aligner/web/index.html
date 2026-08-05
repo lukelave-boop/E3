@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Laser Camera Aligner</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <div class="eyebrow">ENDER-3 S1 PRO CAMERA POSITIONING</div>
+      <h1>Laser Camera Aligner</h1>
+    </div>
+    <div class="topbar-status">
+      <span id="modeBadge" class="badge warning">Loading</span>
+      <span id="cameraBadge" class="badge">Camera</span>
+      <span id="machineBadge" class="badge">Controller</span>
+    </div>
+  </header>
+
+  <div class="shell">
+    <nav class="sidebar" aria-label="Project sections">
+      <button class="nav-button active" data-section="overview">Overview</button>
+      <button class="nav-button" data-section="camera">1 · Camera</button>
+      <button class="nav-button" data-section="lens">2 · Lens calibration</button>
+      <button class="nav-button" data-section="bed">3 · Bed mapping</button>
+      <button class="nav-button" data-section="workspace">4 · Place design</button>
+      <button class="nav-button" data-section="machine">5 · Controller</button>
+      <div class="sidebar-note">
+        <strong>Software is not a safety interlock.</strong>
+        A physical enclosure, hardware E-stop, extraction, and door interlock are still required.
+      </div>
+    </nav>
+
+    <main>
+      <section id="section-overview" class="section active">
+        <div class="section-heading">
+          <div>
+            <div class="eyebrow">PROJECT STATUS</div>
+            <h2>Bring-up dashboard</h2>
+          </div>
+          <button class="secondary" id="refreshStatusButton">Refresh</button>
+        </div>
+        <div class="status-grid">
+          <article class="status-card">
+            <span>Camera</span><strong id="overviewCamera">—</strong><small id="overviewCameraDetail">—</small>
+          </article>
+          <article class="status-card">
+            <span>Lens model</span><strong id="overviewLens">—</strong><small id="overviewLensDetail">—</small>
+          </article>
+          <article class="status-card">
+            <span>Bed mapping</span><strong id="overviewBed">—</strong><small id="overviewBedDetail">—</small>
+          </article>
+          <article class="status-card">
+            <span>Motion controller</span><strong id="overviewMachine">—</strong><small id="overviewMachineDetail">—</small>
+          </article>
+        </div>
+        <div id="simulationPanel" class="callout info">
+          <strong>Simulation mode is active.</strong>
+          The generated camera scene and controller let you test the full interface without moving the Ender or powering the laser.
+        </div>
+        <div class="two-column">
+          <article class="panel">
+            <h3>Recommended order</h3>
+            <ol class="steps">
+              <li>Mount the C920 rigidly and lock its focus/exposure.</li>
+              <li>Calibrate lens distortion with at least ten varied checkerboard photos.</li>
+              <li>Park the bed at the fixed photography pose and map known XY points.</li>
+              <li>Place an SVG over the rectified photograph and export G-code.</li>
+              <li>Validate dry motion before enabling any laser power.</li>
+            </ol>
+          </article>
+          <article class="panel">
+            <h3>Configured work area</h3>
+            <dl class="key-values">
+              <div><dt>X range</dt><dd id="workAreaX">—</dd></div>
+              <div><dt>Y range</dt><dd id="workAreaY">—</dd></div>
+              <div><dt>Photo position</dt><dd id="photoPosition">—</dd></div>
+              <div><dt>Laser scale</dt><dd id="laserScale">—</dd></div>
+            </dl>
+            <p class="muted">These are conservative software coordinates, not proof of the laser module's actual reachable area.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="section-camera" class="section">
+        <div class="section-heading">
+          <div><div class="eyebrow">STEP 1</div><h2>Camera setup</h2></div>
+          <div class="button-row">
+            <button class="secondary" id="applyCameraControlsButton">Apply locked controls</button>
+            <button id="captureCameraButton">Save still image</button>
+          </div>
+        </div>
+        <div class="media-layout">
+          <div class="image-panel">
+            <img id="cameraStream" src="/api/camera/stream.mjpg" alt="Live camera preview">
+          </div>
+          <aside class="panel compact">
+            <h3>C920 target settings</h3>
+            <dl class="key-values">
+              <div><dt>Device</dt><dd id="cameraDevice">—</dd></div>
+              <div><dt>Resolution</dt><dd id="cameraResolution">—</dd></div>
+              <div><dt>Measured rate</dt><dd id="cameraFps">—</dd></div>
+              <div><dt>Frames read</dt><dd id="cameraFrames">—</dd></div>
+            </dl>
+            <p class="muted">The application attempts to disable autofocus, automatic white balance, and automatic exposure only when those controls are exposed by Linux.</p>
+            <div id="syntheticControls" class="synthetic-controls">
+              <label>Simulation scene
+                <select id="syntheticScene">
+                  <option value="bed">Perspective bed</option>
+                  <option value="checkerboard">Checkerboard</option>
+                </select>
+              </label>
+              <button class="secondary" id="setSyntheticSceneButton">Change scene</button>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+      <section id="section-lens" class="section">
+        <div class="section-heading">
+          <div><div class="eyebrow">STEP 2</div><h2>Lens distortion calibration</h2></div>
+          <div class="button-row">
+            <button class="secondary" id="clearLensButton">Clear result</button>
+            <button id="solveLensButton">Solve calibration</button>
+          </div>
+        </div>
+        <div class="media-layout">
+          <div class="image-panel">
+            <img id="lensPreview" src="/api/camera/frame.jpg?undistort=0" alt="Lens calibration preview">
+          </div>
+          <aside class="panel compact">
+            <h3>Checkerboard capture</h3>
+            <p id="lensPatternDescription">—</p>
+            <button class="full" id="captureLensButton">Capture this checkerboard angle</button>
+            <dl class="key-values spaced">
+              <div><dt>Captured</dt><dd id="lensImageCount">0</dd></div>
+              <div><dt>Usable</dt><dd id="lensUsableCount">0</dd></div>
+              <div><dt>RMS error</dt><dd id="lensRms">—</dd></div>
+              <div><dt>Mean reprojection</dt><dd id="lensMeanError">—</dd></div>
+            </dl>
+            <p class="muted">Move and tilt the printed checkerboard between captures while keeping it flat. Do not collect ten identical views.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section id="section-bed" class="section">
+        <div class="section-heading">
+          <div><div class="eyebrow">STEP 3</div><h2>Map camera pixels to machine XY</h2></div>
+          <div class="button-row">
+            <button class="secondary" id="parkPhotoButton">Park at camera pose</button>
+            <button class="secondary" id="captureBedButton">Capture fixed bed pose</button>
+            <button id="solveBedButton">Solve mapping</button>
+          </div>
+        </div>
+        <div class="calibration-layout">
+          <div class="canvas-panel">
+            <canvas id="bedCalibrationCanvas"></canvas>
+            <p class="muted">Click the center of a known mark, enter the exact machine coordinate, then add the point. Spread points across the whole usable area.</p>
+          </div>
+          <aside class="panel compact">
+            <h3>Selected correspondence</h3>
+            <div class="form-grid two">
+              <label>Image X (px)<input id="bedImageX" type="number" step="0.01" readonly></label>
+              <label>Image Y (px)<input id="bedImageY" type="number" step="0.01" readonly></label>
+              <label>Machine X (mm)<input id="bedMachineX" type="number" step="0.01"></label>
+              <label>Machine Y (mm)<input id="bedMachineY" type="number" step="0.01"></label>
+            </div>
+            <label>Label<input id="bedPointLabel" type="text" maxlength="80" placeholder="Example: upper-left mark"></label>
+            <button class="full" id="addBedPointButton">Add point</button>
+            <div class="button-row stack-on-small">
+              <button class="secondary" id="deleteBedPointButton">Delete selected row</button>
+              <button class="danger ghost" id="clearBedButton">Clear all</button>
+            </div>
+            <dl class="key-values spaced">
+              <div><dt>Point pairs</dt><dd id="bedPointCount">0</dd></div>
+              <div><dt>Inliers</dt><dd id="bedInliers">—</dd></div>
+              <div><dt>RMS error</dt><dd id="bedRms">—</dd></div>
+              <div><dt>Maximum error</dt><dd id="bedMaxError">—</dd></div>
+            </dl>
+          </aside>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th></th><th>Label</th><th>Image X</th><th>Image Y</th><th>Machine X</th><th>Machine Y</th></tr></thead>
+            <tbody id="bedPointsBody"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section id="section-workspace" class="section">
+        <div class="section-heading">
+          <div><div class="eyebrow">STEP 4</div><h2>Place an SVG on the camera image</h2></div>
+          <div class="button-row">
+            <button class="secondary" id="captureWorkspaceButton">Refresh bed image</button>
+            <button class="secondary" id="detectWorkpieceButton">Detect workpiece</button>
+          </div>
+        </div>
+        <div class="workspace-layout">
+          <div>
+            <div id="workspaceStage" class="workspace-stage">
+              <img id="workspaceImage" src="/api/workspace/frame.jpg" alt="Perspective-corrected laser bed">
+              <img id="designOverlay" alt="Imported SVG overlay">
+              <svg id="detectionOverlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+                <polygon id="workpiecePolygon" points=""></polygon>
+              </svg>
+            </div>
+            <p class="muted">Drag the design directly on the bed image. Rotation is expressed in machine coordinates; positive values are counter-clockwise.</p>
+          </div>
+          <aside class="panel compact controls-panel">
+            <label class="file-picker">Import SVG<input id="svgFileInput" type="file" accept="image/svg+xml,.svg"></label>
+            <div id="svgSummary" class="small-summary">No SVG loaded.</div>
+            <div class="form-grid two">
+              <label>Center X (mm)<input id="designX" type="number" step="0.1"></label>
+              <label>Center Y (mm)<input id="designY" type="number" step="0.1"></label>
+              <label>Width (mm)<input id="designWidth" type="number" min="0.1" step="0.1"></label>
+              <label>Height (mm)<input id="designHeight" type="number" min="0.1" step="0.1"></label>
+              <label>Rotation (°)<input id="designRotation" type="number" step="0.1" value="0"></label>
+              <label>Laser power<input id="designPower" type="number" min="0" step="1"></label>
+              <label>Engrave feed<input id="designFeed" type="number" min="1" step="10"></label>
+              <label>Travel feed<input id="travelFeed" type="number" min="1" step="10"></label>
+            </div>
+            <label class="checkbox"><input id="lockAspect" type="checkbox" checked> Keep SVG aspect ratio</label>
+            <div class="button-row stack-on-small">
+              <button id="generateGcodeButton">Generate G-code</button>
+              <button class="secondary" id="generateFrameButton">Generate dry frame</button>
+            </div>
+            <a id="downloadGcodeLink" class="download-link hidden" href="#">Download generated file</a>
+          </aside>
+        </div>
+        <div class="panel output-panel">
+          <div class="output-heading"><h3>Generated G-code</h3><span id="gcodeMetrics" class="muted">—</span></div>
+          <textarea id="gcodeOutput" spellcheck="false" readonly placeholder="Generated G-code will appear here."></textarea>
+        </div>
+      </section>
+
+      <section id="section-machine" class="section">
+        <div class="section-heading">
+          <div><div class="eyebrow">STEP 5</div><h2>Controller connection and guarded execution</h2></div>
+          <button class="danger" id="emergencyStopButton">Software stop / laser off</button>
+        </div>
+        <div class="two-column">
+          <article class="panel">
+            <h3>Connection</h3>
+            <div class="form-grid two">
+              <label>Serial port<input id="serialPort" type="text"></label>
+              <label>Baud rate<input id="serialBaud" type="number" value="115200"></label>
+              <label>Protocol
+                <select id="serialProtocol"><option value="auto">Auto detect</option><option value="grbl">GRBL</option><option value="marlin">Marlin</option></select>
+              </label>
+              <label>State<input id="controllerState" type="text" readonly></label>
+            </div>
+            <div class="button-row">
+              <button id="connectMachineButton">Connect</button>
+              <button class="secondary" id="disconnectMachineButton">Disconnect</button>
+              <button class="secondary" id="identityButton">Query identity</button>
+              <button class="secondary" id="parkPhotoMachineButton">Park at camera pose</button>
+            </div>
+            <label>Diagnostic command<input id="manualCommand" type="text" placeholder="$I, $$, M115, or M5"></label>
+            <button class="secondary" id="sendCommandButton">Send safety-filtered command</button>
+          </article>
+          <article class="panel">
+            <h3>Temporary arming</h3>
+            <p>Arming expires automatically and is cleared after every job. Motion must also be enabled in the local configuration.</p>
+            <label>Type the exact phrase shown below
+              <input id="armPhrase" type="text" autocomplete="off">
+            </label>
+            <code id="requiredArmPhrase">ENABLE LASER CONTROL</code>
+            <div class="button-row">
+              <button class="warning-button" id="armMachineButton">Arm temporarily</button>
+              <button class="secondary" id="disarmMachineButton">Disarm</button>
+            </div>
+            <label class="checkbox"><input id="runConfirmation" type="checkbox"> I have completed a dry-motion check and the enclosure is secured.</label>
+            <button class="full danger" id="runGeneratedButton">Run current generated G-code</button>
+          </article>
+        </div>
+        <div class="panel output-panel">
+          <div class="output-heading"><h3>Controller log</h3><span id="jobProgress" class="muted">—</span></div>
+          <pre id="controllerLog">No controller messages.</pre>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

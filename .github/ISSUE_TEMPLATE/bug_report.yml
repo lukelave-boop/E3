@@ -1,0 +1,43 @@
+name: Bug report
+description: Report reproducible software behavior in simulation or on hardware.
+title: "[bug] "
+labels: [bug]
+body:
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options: [Simulation, Real C920 with simulated controller, Real hardware]
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Commit/version
+      placeholder: git rev-parse --short HEAD
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and logs
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: Remove device serial numbers, usernames, paths, and network details.
+      render: json
