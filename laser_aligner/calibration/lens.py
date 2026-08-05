@@ -77,6 +77,7 @@ class LensCalibrator:
         self.settings = settings
         self.image_dir = data_dir / "lens_images"
         self.model_path = data_dir / "lens_calibration.json"
+        self.image_index_path = data_dir / "lens_image_index.json"
         self.image_dir.mkdir(parents=True, exist_ok=True)
         self._model = self.load_model()
 
@@ -104,15 +105,99 @@ class LensCalibrator:
         if delete_images:
             for path in self.image_dir.glob("*.jpg"):
                 path.unlink(missing_ok=True)
+            self.image_index_path.unlink(missing_ok=True)
+
+    def _pattern_signature(self) -> dict[str, int]:
+        return {"columns": self.settings.columns, "rows": self.settings.rows}
+
+    def _read_image_index(self) -> dict[str, Any]:
+        raw = read_json(self.image_index_path)
+        if not isinstance(raw, dict) or raw.get("pattern") != self._pattern_signature():
+            return {"pattern": self._pattern_signature(), "images": {}}
+        images = raw.get("images")
+        if not isinstance(images, dict):
+            images = {}
+        return {"pattern": self._pattern_signature(), "images": images}
+
+    def _write_image_index(self, index: dict[str, Any]) -> None:
+        atomic_write_json(self.image_index_path, index)
+
+    @staticmethod
+    def _stat_signature(path: Path) -> tuple[int, int]:
+        stat = path.stat()
+        return stat.st_size, stat.st_mtime_ns
+
+    def _cache_image_result(
+        self,
+        index: dict[str, Any],
+        path: Path,
+        *,
+        found: bool,
+        corner_count: int,
+    ) -> dict[str, Any]:
+        size, mtime_ns = self._stat_signature(path)
+        entry = {
+            "name": path.name,
+            "found": bool(found),
+            "corner_count": int(corner_count),
+            "size": size,
+            "mtime_ns": mtime_ns,
+        }
+        index["images"][path.name] = entry
+        return entry
 
     def list_images(self) -> list[dict[str, Any]]:
+        """Return cached checkerboard results without rescanning every status request.
+
+        Existing or externally modified files are detected once, then recorded in a
+        small JSON index. New captures are indexed immediately by ``capture``.
+        """
+        index = self._read_image_index()
+        cached_images = index["images"]
         entries: list[dict[str, Any]] = []
+        changed = False
+        active_names: set[str] = set()
+
         for path in sorted(self.image_dir.glob("*.jpg")):
-            image = cv2.imread(str(path), cv2.IMREAD_COLOR)
-            found = False
-            if image is not None:
-                found, _ = self.detect_corners(image)
-            entries.append({"name": path.name, "found": bool(found), "size": path.stat().st_size})
+            active_names.add(path.name)
+            size, mtime_ns = self._stat_signature(path)
+            cached = cached_images.get(path.name)
+            if (
+                isinstance(cached, dict)
+                and cached.get("size") == size
+                and cached.get("mtime_ns") == mtime_ns
+                and "found" in cached
+            ):
+                entry = dict(cached)
+            else:
+                image = cv2.imread(str(path), cv2.IMREAD_COLOR)
+                found = False
+                corners = None
+                if image is not None:
+                    found, corners = self.detect_corners(image)
+                entry = self._cache_image_result(
+                    index,
+                    path,
+                    found=bool(found),
+                    corner_count=0 if corners is None else len(corners),
+                )
+                changed = True
+            entries.append(
+                {
+                    "name": entry["name"],
+                    "found": bool(entry["found"]),
+                    "corner_count": int(entry.get("corner_count", 0)),
+                    "size": int(entry["size"]),
+                }
+            )
+
+        stale_names = set(cached_images) - active_names
+        if stale_names:
+            for name in stale_names:
+                cached_images.pop(name, None)
+            changed = True
+        if changed:
+            self._write_image_index(index)
         return entries
 
     def capture(self, image: np.ndarray) -> dict[str, Any]:
@@ -122,10 +207,16 @@ class LensCalibrator:
         path = self.image_dir / f"lens-{timestamp}-{suffix:03d}.jpg"
         if not cv2.imwrite(str(path), image, [cv2.IMWRITE_JPEG_QUALITY, 96]):
             raise CalibrationError(f"Could not save calibration image to {path}")
+        corner_count = 0 if corners is None else int(len(corners))
+        index = self._read_image_index()
+        self._cache_image_result(
+            index, path, found=bool(found), corner_count=corner_count
+        )
+        self._write_image_index(index)
         return {
             "name": path.name,
             "found": bool(found),
-            "corner_count": 0 if corners is None else int(len(corners)),
+            "corner_count": corner_count,
         }
 
     def detect_corners(self, image: np.ndarray) -> tuple[bool, np.ndarray | None]:
