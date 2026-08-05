@@ -202,11 +202,12 @@
             <div id="workspaceStage" class="workspace-stage">
               <img id="workspaceImage" src="/api/workspace/frame.jpg" alt="Perspective-corrected laser bed">
               <img id="designOverlay" alt="Imported SVG overlay">
+              <button id="designRotationHandle" type="button" aria-label="Drag to rotate design" title="Drag to rotate; hold Shift to snap to 15°"></button>
               <svg id="detectionOverlay" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
                 <polygon id="workpiecePolygon" points=""></polygon>
               </svg>
             </div>
-            <p class="muted">Drag the design directly on the bed image. Rotation is expressed in machine coordinates; positive values are counter-clockwise.</p>
+            <p class="muted">Drag the design to move it. Drag the round corner handle to rotate; hold Shift to snap to 15°. Rotation is expressed in machine coordinates; positive values are counter-clockwise.</p>
           </div>
           <aside class="panel compact controls-panel">
             <label class="file-picker">Import SVG<input id="svgFileInput" type="file" accept="image/svg+xml,.svg"></label>

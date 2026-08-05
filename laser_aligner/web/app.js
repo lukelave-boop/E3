@@ -13,6 +13,7 @@ const state = {
   bedImage: null,
   refreshBusy: false,
   dragging: null,
+  rotating: null,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -243,8 +244,10 @@ function workArea() {
 
 function renderDesignOverlay() {
   const overlay = $('designOverlay');
+  const rotationHandle = $('designRotationHandle');
   if (!state.svgText || !state.status) {
     overlay.style.display = 'none';
+    rotationHandle.style.display = 'none';
     return;
   }
   const area = workArea();
@@ -261,6 +264,22 @@ function renderDesignOverlay() {
   overlay.style.width = `${width / (area.x_max - area.x_min) * 100}%`;
   overlay.style.height = `${height / (area.y_max - area.y_min) * 100}%`;
   overlay.style.transform = `translate(-50%, -50%) rotate(${-rotation}deg)`;
+
+  const stageRect = $('workspaceStage').getBoundingClientRect();
+  if (stageRect.width > 0 && stageRect.height > 0) {
+    const centerX = xPercent / 100 * stageRect.width;
+    const centerY = yPercent / 100 * stageRect.height;
+    const halfWidth = width / (area.x_max - area.x_min) * stageRect.width / 2;
+    const halfHeight = height / (area.y_max - area.y_min) * stageRect.height / 2;
+    const angle = -rotation * Math.PI / 180;
+    const cornerX = halfWidth * Math.cos(angle) + halfHeight * Math.sin(angle);
+    const cornerY = halfWidth * Math.sin(angle) - halfHeight * Math.cos(angle);
+    const length = Math.hypot(cornerX, cornerY) || 1;
+    const offset = 18;
+    rotationHandle.style.display = 'block';
+    rotationHandle.style.left = `${centerX + cornerX + cornerX / length * offset}px`;
+    rotationHandle.style.top = `${centerY + cornerY + cornerY / length * offset}px`;
+  }
 }
 
 function renderWorkpiecePolygon(polygonMm) {
@@ -321,6 +340,45 @@ function finishDrag(event) {
 }
 $('designOverlay').addEventListener('pointerup', finishDrag);
 $('designOverlay').addEventListener('pointercancel', finishDrag);
+
+
+$('designRotationHandle').addEventListener('pointerdown', (event) => {
+  if (!state.svgText) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const handle = event.currentTarget;
+  const stageRect = $('workspaceStage').getBoundingClientRect();
+  const overlayRect = $('designOverlay').getBoundingClientRect();
+  handle.setPointerCapture(event.pointerId);
+  handle.classList.add('dragging');
+  state.rotating = {
+    pointerId: event.pointerId,
+    centerClientX: overlayRect.left + overlayRect.width / 2,
+    centerClientY: overlayRect.top + overlayRect.height / 2,
+    baseAngle: Math.atan2(-Number($('designHeight').value) / (workArea().y_max - workArea().y_min) * stageRect.height,
+                          Number($('designWidth').value) / (workArea().x_max - workArea().x_min) * stageRect.width),
+  };
+});
+
+$('designRotationHandle').addEventListener('pointermove', (event) => {
+  if (!state.rotating || state.rotating.pointerId !== event.pointerId) return;
+  const pointerAngle = Math.atan2(event.clientY - state.rotating.centerClientY,
+                                  event.clientX - state.rotating.centerClientX);
+  let rotation = (state.rotating.baseAngle - pointerAngle) * 180 / Math.PI;
+  rotation = ((rotation + 180) % 360 + 360) % 360 - 180;
+  if (event.shiftKey) rotation = Math.round(rotation / 15) * 15;
+  $('designRotation').value = rotation.toFixed(event.shiftKey ? 0 : 1);
+  renderDesignOverlay();
+});
+
+function finishRotation(event) {
+  if (!state.rotating || state.rotating.pointerId !== event.pointerId) return;
+  $('designRotationHandle').classList.remove('dragging');
+  state.rotating = null;
+}
+$('designRotationHandle').addEventListener('pointerup', finishRotation);
+$('designRotationHandle').addEventListener('pointercancel', finishRotation);
+window.addEventListener('resize', renderDesignOverlay);
 
 let aspectUpdate = false;
 $('designWidth').addEventListener('input', () => {
