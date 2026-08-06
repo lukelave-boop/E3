@@ -70,6 +70,11 @@
   portable.
 - Enabled safe browser and native desktop simulator startup on Windows.
 - Made POSIX pseudoterminal tests skip explicitly on unsupported platforms.
+- Fixed Windows text clipping in the grid designer's primary action and made
+  its form, preview, status card, and footer fit compact logical screens.
+- Made the Templates, Camera, Trace, and Transform inspectors tolerate narrow
+  docks and larger text without hiding controls; concise responsive labels keep
+  their full meaning in tooltips.
 
 ### Documentation
 

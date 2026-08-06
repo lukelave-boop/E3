@@ -77,6 +77,8 @@ QPushButton:default {
     background: #2D9F88;
     color: #07130F;
     border-color: #4FC3A1;
+}
+QPushButton#primaryActionButton {
     font-weight: 700;
 }
 QPushButton:disabled {

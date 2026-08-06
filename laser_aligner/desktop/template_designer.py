@@ -12,6 +12,13 @@ QtCore, QtGui, QtWidgets = require_qt()
 
 _MAX_PREVIEW_CUTS = 5_000
 WORK_AREA_TOLERANCE_MM = 1e-6
+_ACTION_TEXT_RESERVE_PX = 8
+_DEFAULT_DIALOG_WIDTH = 940
+_DEFAULT_DIALOG_HEIGHT = 640
+_MIN_DIALOG_WIDTH = 588
+_MIN_DIALOG_HEIGHT = 382
+_SCREEN_WIDTH_RESERVE = 32
+_SCREEN_HEIGHT_RESERVE = 48
 
 
 def _value(source: Mapping[str, Any] | object, *names: str, default: Any) -> Any:
@@ -46,6 +53,60 @@ def _representative_indices(count: int) -> list[int]:
         for index in {0, 1, count // 2, count - 2, count - 1}
         if 0 <= index < count
     )
+
+
+class _ActionButton(QtWidgets.QPushButton):
+    """Push button whose layout hint leaves a small text-painting reserve."""
+
+    def __init__(
+        self,
+        full_text: str,
+        compact_text: str | None = None,
+        *,
+        tool_tip: str = "",
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(full_text, parent)
+        self.full_text = full_text
+        self.compact_text = compact_text or full_text
+        self._compact = False
+        if tool_tip:
+            self.setToolTip(tool_tip)
+
+    def sizeHint(self) -> QtCore.QSize:
+        hint = super().sizeHint()
+        hint.setWidth(hint.width() + _ACTION_TEXT_RESERVE_PX)
+        return hint
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return self.sizeHint()
+
+    def set_labels(self, full_text: str, compact_text: str | None = None) -> None:
+        self.full_text = full_text
+        self.compact_text = compact_text or full_text
+        self.setText(self.compact_text if self._compact else self.full_text)
+
+    def use_compact_text(self, compact: bool) -> None:
+        self._compact = compact
+        self.setText(self.compact_text if compact else self.full_text)
+
+
+class _WrappedStatusLabel(QtWidgets.QLabel):
+    """Wrapped status card that cannot be compressed below its text height."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWordWrap(True)
+
+    def sync_minimum_height(self, width: int | None = None) -> None:
+        available_width = max(1, self.width() if width is None else width)
+        required_height = self.heightForWidth(available_width)
+        if required_height >= 0 and required_height != self.minimumHeight():
+            self.setMinimumHeight(required_height)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self.sync_minimum_height(event.size().width())
 
 
 class GridTemplatePreview(QtWidgets.QGraphicsView):
@@ -174,8 +235,9 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         self.setWindowTitle("Grid cutting template designer")
         self.setModal(True)
         self.setSizeGripEnabled(True)
-        self.setMinimumSize(760, 520)
-        self.resize(940, 640)
+        minimum_size, initial_size = self._screen_limited_sizes()
+        self.setMinimumSize(minimum_size)
+        self.resize(initial_size)
 
         self._updating = False
         self._spacing_mode = "gap"
@@ -198,9 +260,8 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         heading.setObjectName("panelHeading")
         root.addWidget(heading)
         intro = QtWidgets.QLabel(
-            "Set the cut shape and repeat spacing. The preview and physical "
-            "footprint update immediately; no project geometry changes until "
-            "you choose an action."
+            "Set cut size and spacing. The preview updates live; choose an action "
+            "to change the project."
         )
         intro.setObjectName("mutedLabel")
         intro.setWordWrap(True)
@@ -221,13 +282,17 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         identity_form.setFieldGrowthPolicy(
             QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
         )
+        identity_form.setRowWrapPolicy(
+            QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
+        )
         self.name_edit = QtWidgets.QLineEdit()
         self.name_edit.setPlaceholderText("Example: 3 × 8 rounded labels")
         self.description_edit = QtWidgets.QPlainTextEdit()
         self.description_edit.setPlaceholderText(
             "Optional notes such as stock name, product, or orientation"
         )
-        self.description_edit.setMaximumHeight(74)
+        self.description_edit.setMinimumHeight(64)
+        self.description_edit.setMaximumHeight(96)
         identity_form.addRow("Name", self.name_edit)
         identity_form.addRow("Description", self.description_edit)
         form_layout.addWidget(identity_group)
@@ -236,6 +301,9 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         shape_form = QtWidgets.QFormLayout(shape_group)
         shape_form.setFieldGrowthPolicy(
             QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        shape_form.setRowWrapPolicy(
+            QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
         )
         self.width_spin = _spin(0.001, 10000.0, value=50.0)
         self.height_spin = _spin(0.001, 10000.0, value=25.0)
@@ -253,6 +321,9 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         grid_form.setFieldGrowthPolicy(
             QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
         )
+        grid_form.setRowWrapPolicy(
+            QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
+        )
         self.columns_spin = QtWidgets.QSpinBox()
         self.columns_spin.setRange(1, 999)
         self.columns_spin.setValue(3)
@@ -263,7 +334,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         self.rows_spin.setKeyboardTracking(False)
         self.spacing_mode_combo = QtWidgets.QComboBox()
         self.spacing_mode_combo.addItem("Edge gap", "gap")
-        self.spacing_mode_combo.addItem("Center-to-center pitch", "pitch")
+        self.spacing_mode_combo.addItem("Center pitch", "pitch")
         self.spacing_mode_combo.setToolTip(
             "Gap measures clear space between cuts. Pitch measures from one "
             "cut center to the next."
@@ -274,7 +345,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         self.vertical_spacing_label = QtWidgets.QLabel("Vertical gap")
         grid_form.addRow("Columns", self.columns_spin)
         grid_form.addRow("Rows", self.rows_spin)
-        grid_form.addRow("Spacing measured as", self.spacing_mode_combo)
+        grid_form.addRow("Spacing mode", self.spacing_mode_combo)
         grid_form.addRow(
             self.horizontal_spacing_label,
             self.horizontal_spacing_spin,
@@ -311,11 +382,16 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         preview_heading.setObjectName("panelHeading")
         preview_layout.addWidget(preview_heading)
         self.preview = GridTemplatePreview()
-        self.preview.setMinimumSize(360, 320)
+        # The preview expands in a normal window, but a smaller minimum lets
+        # the same two-column workspace fit high-DPI screens whose logical
+        # desktop is shorter than the 940 x 640 design size.
+        self.preview.setMinimumSize(260, 40)
         preview_layout.addWidget(self.preview, 1)
-        self.footprint_status = QtWidgets.QLabel()
+        self.footprint_status = _WrappedStatusLabel()
         self.footprint_status.setObjectName("statusCard")
-        self.footprint_status.setWordWrap(True)
+        self.footprint_status.setToolTip(
+            "Cut count and overall footprint, center pitch, and edge gap."
+        )
         preview_layout.addWidget(self.footprint_status)
         splitter.addWidget(preview_page)
         splitter.setStretchFactor(0, 0)
@@ -323,14 +399,33 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         splitter.setSizes([340, 580])
 
         actions = QtWidgets.QHBoxLayout()
-        actions.addStretch(1)
-        self.cancel_button = QtWidgets.QPushButton("Cancel")
-        self.add_project_button = QtWidgets.QPushButton("Add grid to project")
-        self.save_button = QtWidgets.QPushButton()
+        # Align the group itself instead of inserting a stretch item. A stretch
+        # also consumes an inter-item spacing slot, which needlessly compresses
+        # the final label in a narrow but otherwise viable window.
+        actions.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
+        actions.setSpacing(6)
+        self.cancel_button = _ActionButton("Cancel")
+        self.add_project_button = _ActionButton(
+            "Add to project",
+            "Add",
+            tool_tip="Add this grid as editable objects in the current project.",
+        )
+        self.save_button = _ActionButton(
+            "Update template" if self._editing else "Save template",
+            "Update" if self._editing else "Save",
+            tool_tip="Save this grid in the reusable cutting-template library.",
+        )
+        self.save_button.setObjectName("primaryActionButton")
         self.save_button.setDefault(True)
         actions.addWidget(self.cancel_button)
         actions.addWidget(self.add_project_button)
         actions.addWidget(self.save_button)
+        self._actions_layout = actions
+        self._action_buttons = (
+            self.cancel_button,
+            self.add_project_button,
+            self.save_button,
+        )
         root.addLayout(actions)
 
         self.name_edit.textChanged.connect(self._refresh)
@@ -365,11 +460,69 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
             raise ValueError(f"{name} must be a positive finite number")
         return number
 
+    def _available_screen_size(self) -> QtCore.QSize:
+        parent = self.parentWidget()
+        screen = parent.screen() if parent is not None else self.screen()
+        if screen is None:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is None:
+            return QtCore.QSize(
+                _DEFAULT_DIALOG_WIDTH + _SCREEN_WIDTH_RESERVE,
+                _DEFAULT_DIALOG_HEIGHT + _SCREEN_HEIGHT_RESERVE,
+            )
+        return screen.availableGeometry().size()
+
+    def _screen_limited_sizes(self) -> tuple[QtCore.QSize, QtCore.QSize]:
+        available = self._available_screen_size()
+        usable_width = max(
+            _MIN_DIALOG_WIDTH,
+            available.width() - _SCREEN_WIDTH_RESERVE,
+        )
+        usable_height = max(
+            _MIN_DIALOG_HEIGHT,
+            available.height() - _SCREEN_HEIGHT_RESERVE,
+        )
+        initial = QtCore.QSize(
+            min(_DEFAULT_DIALOG_WIDTH, available.width(), usable_width),
+            min(_DEFAULT_DIALOG_HEIGHT, available.height(), usable_height),
+        )
+        minimum = QtCore.QSize(
+            min(_MIN_DIALOG_WIDTH, initial.width()),
+            min(_MIN_DIALOG_HEIGHT, initial.height()),
+        )
+        return minimum, initial
+
     def set_editing(self, editing: bool) -> None:
         self._editing = bool(editing)
-        self.save_button.setText(
-            "Update template" if self._editing else "Save template"
+        self.save_button.set_labels(
+            "Update template" if self._editing else "Save template",
+            "Update" if self._editing else "Save",
         )
+        self._update_action_labels()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "_action_buttons"):
+            QtCore.QTimer.singleShot(0, self._update_action_labels)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        QtCore.QTimer.singleShot(0, self._update_action_labels)
+
+    def _update_action_labels(self) -> None:
+        for button in self._action_buttons:
+            button.use_compact_text(False)
+        margins = self.layout().contentsMargins()
+        available_width = max(
+            0,
+            self.contentsRect().width() - margins.left() - margins.right(),
+        )
+        required_width = sum(
+            button.sizeHint().width() for button in self._action_buttons
+        ) + self._actions_layout.spacing() * (len(self._action_buttons) - 1)
+        if required_width > available_width:
+            for button in self._action_buttons:
+                button.use_compact_text(True)
 
     def selected_action(self) -> str | None:
         return self._selected_action
@@ -423,6 +576,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
             self.name_edit.setText(
                 str(_value(source, "name", default=self.name_edit.text()))
             )
+            self.name_edit.setCursorPosition(0)
             self.description_edit.setPlainText(
                 str(
                     _value(
@@ -664,14 +818,15 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         spec = self.spec()
         self.preview.set_spec(spec)
         self.footprint_status.setText(
-            f"{spec['cut_count']} cuts  ·  "
-            f"{spec['footprint_width_mm']:.2f} × "
-            f"{spec['footprint_height_mm']:.2f} mm footprint\n"
-            f"Pitch {spec['horizontal_pitch_mm']:.2f} × "
-            f"{spec['vertical_pitch_mm']:.2f} mm  ·  "
-            f"Gap {spec['horizontal_gap_mm']:.2f} × "
-            f"{spec['vertical_gap_mm']:.2f} mm"
+            f"{spec['cut_count']} cuts · "
+            f"{spec['footprint_width_mm']:g} × "
+            f"{spec['footprint_height_mm']:g} mm\n"
+            f"Pitch {spec['horizontal_pitch_mm']:g} × "
+            f"{spec['vertical_pitch_mm']:g} · "
+            f"Gap {spec['horizontal_gap_mm']:g} × "
+            f"{spec['vertical_gap_mm']:g} mm"
         )
+        self.footprint_status.sync_minimum_height()
         valid, message = self._validation(spec)
         self.validation_label.setText(message)
         self.validation_label.setVisible(bool(message))

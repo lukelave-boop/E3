@@ -124,7 +124,7 @@ Audit environment:
 
 Results:
 
-- **170 tests passed and 2 POSIX-only tests skipped.**
+- **182 tests passed and 2 POSIX-only tests skipped.**
 - The complete suite collected, including app simulation and machine-service
   tests.
 - A focused cutting-template run passed 39 model, library, matcher, controller,
@@ -137,6 +137,9 @@ Results:
 - A second offscreen `E3MainWindow` smoke test drove the modal grid designer,
   saved and edited a template in place, added four rectangles as one history
   command, and undid the entire grid insertion.
+- Layout regression tests cover both Save and Update designer actions, compact
+  600 x 430 logical screens, 360 px inspector viewports, and 13 pt text without
+  hidden horizontal content.
 - The interactive native workflow has not yet been manually exercised on this
   Windows checkout.
 - Ruff was not available in the current virtual environment.
@@ -151,7 +154,7 @@ rectangle width/height/radius edits, regular-grid generation, editable authoring
 metadata, exact-ID replacement, gap/pitch conversion, live preview, and
 work-area/object-count rejection. An additional toolpath regression verifies
 that microscopic floating-point noise at an exact work-area edge is accepted
-while a real overflow is still rejected. The complete 170-test suite then passed.
+while a real overflow is still rejected. The complete 182-test suite then passed.
 
 The two skipped tests require POSIX pseudoterminals and `termios`. The exact
 updated branch has not been run as a complete Linux suite during this audit.

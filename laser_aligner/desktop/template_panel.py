@@ -14,6 +14,35 @@ def _muted(text: str) -> QtWidgets.QLabel:
     return label
 
 
+class _ResponsiveActionButton(QtWidgets.QPushButton):
+    """Action button with a concise label available for narrow inspectors."""
+
+    def __init__(
+        self,
+        full_text: str,
+        compact_text: str,
+        *,
+        tool_tip: str,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(full_text, parent)
+        self.full_text = full_text
+        self.compact_text = compact_text
+        self.setToolTip(tool_tip)
+        # The inspector owns the available width. Ignoring the natural width
+        # prevents one long action label from widening the entire dock and
+        # hiding its right edge behind the disabled horizontal scrollbar.
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+
+    def use_compact_text(self, compact: bool) -> None:
+        text = self.compact_text if compact else self.full_text
+        if self.text() != text:
+            self.setText(text)
+
+
 class TemplatePanel(QtWidgets.QWidget):
     """Template library, matching, and reviewed rigid-placement controls."""
 
@@ -57,31 +86,46 @@ class TemplatePanel(QtWidgets.QWidget):
         self.template_combo.setSizeAdjustPolicy(
             QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
         )
-        self.template_combo.setMinimumContentsLength(22)
+        self.template_combo.setMinimumContentsLength(12)
         layout.addWidget(self.template_combo)
 
-        designer_buttons = QtWidgets.QHBoxLayout()
+        self.designer_buttons = QtWidgets.QBoxLayout(
+            QtWidgets.QBoxLayout.Direction.LeftToRight
+        )
         self.new_grid_button = QtWidgets.QPushButton("New grid…")
         self.edit_grid_button = QtWidgets.QPushButton("Edit grid…")
-        designer_buttons.addWidget(self.new_grid_button)
-        designer_buttons.addWidget(self.edit_grid_button)
-        layout.addLayout(designer_buttons)
+        for button in (self.new_grid_button, self.edit_grid_button):
+            button.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Ignored,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            self.designer_buttons.addWidget(button)
+        self.new_grid_button.setToolTip(
+            "Design a new rounded-rectangle grid cutting template."
+        )
+        layout.addLayout(self.designer_buttons)
 
-        self.save_button = QtWidgets.QPushButton("From current project…")
-        self.save_button.setToolTip(
-            "Save the visible, output-enabled geometry in the current project "
-            "as a reusable template."
+        self.save_button = _ResponsiveActionButton(
+            "From current project…",
+            "Save project",
+            tool_tip=(
+                "Save the visible, output-enabled geometry in the current project "
+                "as a reusable template."
+            ),
         )
         layout.addWidget(self.save_button)
 
         library_buttons = QtWidgets.QHBoxLayout()
-        library_buttons.addStretch(1)
         self.refresh_button = QtWidgets.QToolButton()
         self.refresh_button.setText("Refresh")
         self.delete_button = QtWidgets.QToolButton()
         self.delete_button.setText("Delete")
-        library_buttons.addWidget(self.refresh_button)
-        library_buttons.addWidget(self.delete_button)
+        for button in (self.refresh_button, self.delete_button):
+            button.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Ignored,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            library_buttons.addWidget(button, 1)
         layout.addLayout(library_buttons)
 
         self.template_summary = _muted("No cutting templates saved yet.")
@@ -89,8 +133,19 @@ class TemplatePanel(QtWidgets.QWidget):
 
         match_group = QtWidgets.QGroupBox("Camera match")
         match_layout = QtWidgets.QVBoxLayout(match_group)
-        self.auto_button = QtWidgets.QPushButton("Auto identify and align")
-        self.match_selected_button = QtWidgets.QPushButton("Align selected template")
+        self.auto_button = _ResponsiveActionButton(
+            "Auto identify and align",
+            "Auto align",
+            tool_tip=(
+                "Detect the sheet geometry, identify the best template, and align "
+                "it automatically."
+            ),
+        )
+        self.match_selected_button = _ResponsiveActionButton(
+            "Align selected template",
+            "Align selected",
+            tool_tip="Align the selected template to the detected sheet geometry.",
+        )
         match_layout.addWidget(self.auto_button)
         match_layout.addWidget(self.match_selected_button)
         self.match_status = _muted(
@@ -100,10 +155,16 @@ class TemplatePanel(QtWidgets.QWidget):
         match_layout.addWidget(self.match_status)
         layout.addWidget(match_group)
 
-        placement_group = QtWidgets.QGroupBox("Reviewed placement")
+        placement_group = QtWidgets.QGroupBox("Placement")
+        placement_group.setToolTip(
+            "Review and adjust the template placement before creating cut objects."
+        )
         placement_layout = QtWidgets.QFormLayout(placement_group)
         placement_layout.setFieldGrowthPolicy(
             QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+        )
+        placement_layout.setRowWrapPolicy(
+            QtWidgets.QFormLayout.RowWrapPolicy.WrapAllRows
         )
         self.x_spin = self._placement_spin(" mm", -1000.0, 1000.0, 0.10)
         self.y_spin = self._placement_spin(" mm", -1000.0, 1000.0, 0.10)
@@ -115,8 +176,10 @@ class TemplatePanel(QtWidgets.QWidget):
         nudge_row = QtWidgets.QGridLayout()
         self.nudge_step = self._placement_spin(" mm", 0.01, 10.0, 0.10)
         self.nudge_step.setValue(0.10)
-        nudge_row.addWidget(QtWidgets.QLabel("Step (mm / °)"), 0, 0)
-        nudge_row.addWidget(self.nudge_step, 0, 1, 1, 2)
+        nudge_step_label = QtWidgets.QLabel("Nudge step (mm / °)")
+        nudge_step_label.setWordWrap(True)
+        nudge_row.addWidget(nudge_step_label, 0, 0, 1, 2)
+        nudge_row.addWidget(self.nudge_step, 1, 0, 1, 2)
         for index, (label, axis, direction) in enumerate(
             (
                 ("X−", "x", -1.0),
@@ -134,13 +197,23 @@ class TemplatePanel(QtWidgets.QWidget):
                     axis, direction
                 )
             )
-            nudge_row.addWidget(button, 1 + index // 2, index % 2 + 1)
+            nudge_row.addWidget(button, 2 + index // 2, index % 2)
         placement_layout.addRow(nudge_row)
         layout.addWidget(placement_group)
 
-        self.apply_button = QtWidgets.QPushButton("Create aligned cut objects")
+        self.apply_button = _ResponsiveActionButton(
+            "Create aligned cut objects",
+            "Create cuts",
+            tool_tip=(
+                "Create project cut objects using the reviewed template placement."
+            ),
+        )
         self.apply_button.setEnabled(False)
-        self.clear_button = QtWidgets.QPushButton("Clear template preview")
+        self.clear_button = _ResponsiveActionButton(
+            "Clear template preview",
+            "Clear preview",
+            tool_tip="Remove the current template alignment preview.",
+        )
         layout.addWidget(self.apply_button)
         layout.addWidget(self.clear_button)
         layout.addStretch(1)
@@ -160,6 +233,40 @@ class TemplatePanel(QtWidgets.QWidget):
         self.rotation_spin.valueChanged.connect(self._emit_placement)
 
         self._update_enabled()
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        QtCore.QTimer.singleShot(0, self._update_responsive_actions)
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        QtCore.QTimer.singleShot(0, self._update_responsive_actions)
+
+    def _update_responsive_actions(self) -> None:
+        content_width = max(0, self.contentsRect().width() - 20)
+        pair_width = (
+            self.new_grid_button.sizeHint().width()
+            + self.edit_grid_button.sizeHint().width()
+            + max(0, self.designer_buttons.spacing())
+        )
+        direction = (
+            QtWidgets.QBoxLayout.Direction.TopToBottom
+            if pair_width > content_width
+            else QtWidgets.QBoxLayout.Direction.LeftToRight
+        )
+        if self.designer_buttons.direction() != direction:
+            self.designer_buttons.setDirection(direction)
+
+        for button in (
+            self.save_button,
+            self.auto_button,
+            self.match_selected_button,
+            self.apply_button,
+            self.clear_button,
+        ):
+            available = max(0, button.width())
+            required = button.fontMetrics().horizontalAdvance(button.full_text) + 30
+            button.use_compact_text(required > available)
 
     @staticmethod
     def _placement_spin(
@@ -200,7 +307,13 @@ class TemplatePanel(QtWidgets.QWidget):
         try:
             self.template_combo.clear()
             for item in sorted(templates, key=lambda entry: str(entry["name"]).lower()):
-                self.template_combo.addItem(str(item["name"]), str(item["id"]))
+                name = str(item["name"])
+                self.template_combo.addItem(name, str(item["id"]))
+                self.template_combo.setItemData(
+                    self.template_combo.count() - 1,
+                    name,
+                    QtCore.Qt.ItemDataRole.ToolTipRole,
+                )
             if previous:
                 index = self.template_combo.findData(previous)
                 if index >= 0:
@@ -243,6 +356,11 @@ class TemplatePanel(QtWidgets.QWidget):
                 if template_id in scores:
                     label += f" — {scores[template_id] * 100:.0f}%"
                 self.template_combo.addItem(label, template_id)
+                self.template_combo.setItemData(
+                    self.template_combo.count() - 1,
+                    str(summary.get("name", "Unnamed template")),
+                    QtCore.Qt.ItemDataRole.ToolTipRole,
+                )
             if current:
                 index = self.template_combo.findData(current)
                 if index >= 0:
@@ -330,8 +448,10 @@ class TemplatePanel(QtWidgets.QWidget):
         template_id = self.current_template_id()
         item = self._templates.get(template_id or "")
         if item is None:
+            self.template_combo.setToolTip("")
             self.template_summary.setText("No cutting templates saved yet.")
             return
+        self.template_combo.setToolTip(str(item.get("name", "Unnamed template")))
         feature_count = int(item.get("feature_count", 0))
         width = float(item.get("width_mm", 0.0))
         height = float(item.get("height_mm", 0.0))

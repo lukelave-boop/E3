@@ -31,7 +31,7 @@ Environment:
 
 Results:
 
-- **170 tests passed and 2 POSIX-only tests skipped.**
+- **182 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
@@ -47,6 +47,9 @@ Results:
 - A second offscreen `E3MainWindow` smoke test drove the modal designer through
   parametric grid save, exact-ID editing, four-object insertion as one command,
   and one-step undo.
+- Focused layout regressions verify unclipped Save/Update actions, a compact
+  600 x 430 logical designer, and the Templates, Camera, Trace, and Transform
+  inspectors at 360 px with 13 pt text.
 - Ruff was not installed in the current virtual environment and was not run.
 
 The template suite also verifies that one captured corrected frame is reused
@@ -58,7 +61,7 @@ and designer, exact-ID template replacement, gap/pitch conversion, the
 500-object and work-area gates, and atomic rectangle width/height/radius editing.
 Toolpath coverage also verifies that insignificant floating-point drift at an
 exact work-area boundary is accepted while meaningful overflow remains blocked.
-The complete 170-test suite passed after that focused run.
+The complete 182-test suite passed after the authoring and layout-focused runs.
 
 POSIX serial is selected lazily, so `termios` is not imported by simulator or
 application startup on Windows. Selecting the real serial backend on Windows

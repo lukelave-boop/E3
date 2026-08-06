@@ -221,6 +221,12 @@ class TransformPanel(QtWidgets.QWidget):
         layout = _panel_layout(self)
         self.summary = QtWidgets.QLabel("No object selected")
         self.summary.setWordWrap(True)
+        self.summary.setMinimumWidth(0)
+        self.summary.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        self.summary.setToolTip(self.summary.text())
         layout.addWidget(self.summary)
 
         form = _form_layout()
@@ -233,8 +239,10 @@ class TransformPanel(QtWidgets.QWidget):
             "Limited to half of the rectangle's smaller dimension"
         )
         self.rotation_spin = self._spin(-360.0, 360.0, "°")
-        self.mirror_x = QtWidgets.QCheckBox("Mirror horizontally")
-        self.mirror_y = QtWidgets.QCheckBox("Mirror vertically")
+        self.mirror_x = QtWidgets.QCheckBox("Flip horizontally")
+        self.mirror_x.setToolTip("Mirror the selected object horizontally.")
+        self.mirror_y = QtWidgets.QCheckBox("Flip vertically")
+        self.mirror_y.setToolTip("Mirror the selected object vertically.")
         _form_row(form, "Center X", self.x_spin)
         _form_row(form, "Center Y", self.y_spin)
         _form_row(form, "Width", self.width_spin)
@@ -250,7 +258,11 @@ class TransformPanel(QtWidgets.QWidget):
         layout.addLayout(form)
 
         self.layer_combo = QtWidgets.QComboBox()
-        layout.addWidget(QtWidgets.QLabel("Assign selected objects to layer"))
+        self.layer_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.layer_combo.setMinimumContentsLength(12)
+        layout.addWidget(_muted("Assign selected objects to layer"))
         layout.addWidget(self.layer_combo)
         layout.addStretch(1)
 
@@ -290,6 +302,10 @@ class TransformPanel(QtWidgets.QWidget):
                 self.layer_combo.setCurrentIndex(index)
         self.layer_combo.blockSignals(False)
 
+    def _set_summary(self, text: str) -> None:
+        self.summary.setText(text)
+        self.summary.setToolTip(text)
+
     def set_selection(
         self,
         objects: list[SceneObject],
@@ -317,10 +333,10 @@ class TransformPanel(QtWidgets.QWidget):
             self.corner_radius_spin.setVisible(self._rectangle_selected)
             self.corner_radius_spin.setEnabled(self._rectangle_selected)
             if not objects:
-                self.summary.setText("No object selected")
+                self._set_summary("No object selected")
                 return
             if len(objects) > 1:
-                self.summary.setText(f"{len(objects)} objects selected")
+                self._set_summary(f"{len(objects)} objects selected")
                 layer_ids = {item.layer_id for item in objects}
                 if len(layer_ids) == 1:
                     index = self.layer_combo.findData(next(iter(layer_ids)))
@@ -328,7 +344,7 @@ class TransformPanel(QtWidgets.QWidget):
                         self.layer_combo.setCurrentIndex(index)
                 return
             item = objects[0]
-            self.summary.setText(f"{item.name} · {item.kind.value}")
+            self._set_summary(f"{item.name} · {item.kind.value}")
             transform = item.transform
             self.x_spin.setValue(transform.x_mm)
             self.y_spin.setValue(transform.y_mm)
@@ -408,22 +424,28 @@ class CameraPanel(QtWidgets.QWidget):
         self.state_label.setWordWrap(True)
         layout.addWidget(self.state_label)
 
-        overlay_group = QtWidgets.QGroupBox("Corrected bed overlay")
+        overlay_group = QtWidgets.QGroupBox("Camera overlay")
+        overlay_group.setToolTip("Corrected bed overlay controls")
         overlay_layout = QtWidgets.QVBoxLayout(overlay_group)
         overlay_layout.setSpacing(8)
 
-        self.live_check = QtWidgets.QCheckBox("Live corrected overlay")
+        self.live_check = QtWidgets.QCheckBox("Live overlay")
+        self.live_check.setToolTip(
+            "Live corrected overlay: refresh the camera image continuously."
+        )
         self.live_check.setChecked(True)
         self.live_rate = QtWidgets.QComboBox()
         self.live_rate.addItem("0.5 fps", 2000)
         self.live_rate.addItem("1 fps", 1000)
         self.live_rate.addItem("2 fps", 500)
         self.live_rate.setCurrentIndex(self.live_rate.findData(1000))
-        live_row = QtWidgets.QHBoxLayout()
-        live_row.addWidget(self.live_check, 1)
-        live_row.addWidget(QtWidgets.QLabel("Rate"))
-        live_row.addWidget(self.live_rate)
-        overlay_layout.addLayout(live_row)
+        overlay_layout.addWidget(self.live_check)
+        live_rate_row = QtWidgets.QHBoxLayout()
+        live_rate_label = QtWidgets.QLabel("Rate")
+        live_rate_label.setToolTip("Corrected overlay refresh rate")
+        live_rate_row.addWidget(live_rate_label)
+        live_rate_row.addWidget(self.live_rate, 1)
+        overlay_layout.addLayout(live_rate_row)
 
         self.image_state = QtWidgets.QLabel("Waiting for corrected image")
         self.image_state.setObjectName("mutedLabel")
@@ -444,12 +466,10 @@ class CameraPanel(QtWidgets.QWidget):
         opacity_row.addWidget(self.opacity_slider, 1)
         overlay_layout.addLayout(opacity_row)
 
-        refresh_row = QtWidgets.QHBoxLayout()
         self.refresh_button = QtWidgets.QPushButton("Refresh now")
         self.capture_button = QtWidgets.QPushButton("Save still image")
-        refresh_row.addWidget(self.refresh_button)
-        refresh_row.addWidget(self.capture_button)
-        overlay_layout.addLayout(refresh_row)
+        overlay_layout.addWidget(self.refresh_button)
+        overlay_layout.addWidget(self.capture_button)
         layout.addWidget(overlay_group)
 
         calibration_group = QtWidgets.QGroupBox("Calibration")
@@ -460,18 +480,20 @@ class CameraPanel(QtWidgets.QWidget):
                 "resolution, or changing focus."
             )
         )
-        calibration_row = QtWidgets.QHBoxLayout()
-        self.lens_button = QtWidgets.QPushButton("Lens calibration…")
+        self.lens_button = QtWidgets.QPushButton("Calibrate lens…")
+        self.lens_button.setToolTip("Open the lens calibration workflow.")
         self.bed_button = QtWidgets.QPushButton("Bed alignment…")
-        calibration_row.addWidget(self.lens_button)
-        calibration_row.addWidget(self.bed_button)
-        calibration_layout.addLayout(calibration_row)
+        calibration_layout.addWidget(self.lens_button)
+        calibration_layout.addWidget(self.bed_button)
         layout.addWidget(calibration_group)
 
         focus_group = QtWidgets.QGroupBox("Focus")
         focus_layout = QtWidgets.QVBoxLayout(focus_group)
         focus_layout.setSpacing(8)
-        self.autofocus_check = QtWidgets.QCheckBox("Continuous autofocus")
+        self.autofocus_check = QtWidgets.QCheckBox("Autofocus")
+        self.autofocus_check.setToolTip(
+            "Continuous autofocus lets the camera adjust focus automatically."
+        )
         focus_layout.addWidget(self.autofocus_check)
 
         focus_row = QtWidgets.QHBoxLayout()
@@ -487,15 +509,17 @@ class CameraPanel(QtWidgets.QWidget):
         focus_row.addWidget(self.focus_spin)
         focus_layout.addLayout(focus_row)
 
-        focus_buttons = QtWidgets.QHBoxLayout()
         self.apply_focus_button = QtWidgets.QPushButton("Apply")
-        self.measure_button = QtWidgets.QPushButton("Measure sharpness")
-        focus_buttons.addWidget(self.apply_focus_button)
-        focus_buttons.addWidget(self.measure_button)
-        focus_layout.addLayout(focus_buttons)
+        self.measure_button = QtWidgets.QPushButton("Measure focus")
+        self.measure_button.setToolTip(
+            "Measure sharpness at the current focus setting."
+        )
+        focus_layout.addWidget(self.apply_focus_button)
+        focus_layout.addWidget(self.measure_button)
 
-        self.save_focus_button = QtWidgets.QPushButton(
-            "Save as locked startup focus"
+        self.save_focus_button = QtWidgets.QPushButton("Save focus")
+        self.save_focus_button.setToolTip(
+            "Save as locked startup focus using the current value."
         )
         focus_layout.addWidget(self.save_focus_button)
         self.sharpness_label = QtWidgets.QLabel("Sharpness score: —")
@@ -672,8 +696,9 @@ class TracePanel(QtWidgets.QWidget):
         self._result_is_current = False
         layout = _panel_layout(self)
 
-        heading = QtWidgets.QLabel("Detect and trace objects")
+        heading = QtWidgets.QLabel("Trace objects")
         heading.setObjectName("panelHeading")
+        heading.setToolTip("Detect and trace objects in the corrected camera image.")
         layout.addWidget(heading)
         layout.addWidget(
             _muted(
@@ -687,9 +712,13 @@ class TracePanel(QtWidgets.QWidget):
         source_form = _form_layout()
         source_group.setLayout(source_form)
         self.mode_combo = QtWidgets.QComboBox()
-        self.mode_combo.addItem("Automatic color / contrast", "auto")
-        self.mode_combo.addItem("Colored objects", "color")
-        self.mode_combo.addItem("High-contrast objects", "contrast")
+        self.mode_combo.addItem("Auto detect", "auto")
+        self.mode_combo.addItem("By color", "color")
+        self.mode_combo.addItem("By contrast", "contrast")
+        self.mode_combo.setToolTip(
+            "Choose automatic color / contrast detection, color detection, "
+            "or high-contrast detection."
+        )
         self.target_hue = QtWidgets.QDoubleSpinBox()
         self.target_hue.setRange(-1.0, 179.0)
         self.target_hue.setDecimals(0)
@@ -705,7 +734,10 @@ class TracePanel(QtWidgets.QWidget):
         sample_row = QtWidgets.QWidget()
         sample_layout = QtWidgets.QHBoxLayout(sample_row)
         sample_layout.setContentsMargins(0, 0, 0, 0)
-        self.pick_color_button = QtWidgets.QPushButton("Pick from image")
+        self.pick_color_button = QtWidgets.QPushButton("Pick color")
+        self.pick_color_button.setToolTip(
+            "Pick from image to choose a target color."
+        )
         self.color_swatch = QtWidgets.QLabel()
         self.color_swatch.setFixedSize(30, 22)
         self.color_swatch.setStyleSheet(
@@ -743,19 +775,35 @@ class TracePanel(QtWidgets.QWidget):
         self.confidence.setRange(0.0, 100.0)
         self.confidence.setValue(55.0)
         self.confidence.setSuffix(" %")
-        self.regular_grid = QtWidgets.QCheckBox(
-            "Repeated objects form a regular row/column layout"
+        for spin in (
+            self.min_area,
+            self.max_area,
+            self.min_width,
+            self.min_height,
+            self.confidence,
+        ):
+            size_policy = spin.sizePolicy()
+            size_policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
+            spin.setSizePolicy(size_policy)
+        self.regular_grid = QtWidgets.QCheckBox("Use grid")
+        self.regular_grid.setToolTip(
+            "Treat repeated objects as a regular row-and-column layout."
         )
         self.regular_grid.setChecked(True)
-        self.infer_missing = QtWidgets.QCheckBox(
-            "Show inferred missing/obscured grid positions"
+        self.infer_missing = QtWidgets.QCheckBox("Infer gaps")
+        self.infer_missing.setToolTip(
+            "Show grid positions inferred behind missing or obscured objects."
         )
         self.infer_missing.setChecked(True)
         _form_row(filter_form, "Minimum area", self.min_area)
         _form_row(filter_form, "Maximum area", self.max_area)
         _form_row(filter_form, "Minimum width", self.min_width)
         _form_row(filter_form, "Minimum height", self.min_height)
-        _form_row(filter_form, "Auto-select above", self.confidence)
+        confidence_label = QtWidgets.QLabel("Auto-select")
+        confidence_label.setToolTip(
+            "Automatically select detections at or above this confidence."
+        )
+        filter_form.addRow(confidence_label, self.confidence)
         filter_form.addRow(self.regular_grid)
         filter_form.addRow(self.infer_missing)
         layout.addWidget(filter_group)
@@ -764,9 +812,13 @@ class TracePanel(QtWidgets.QWidget):
         output_form = _form_layout()
         output_group.setLayout(output_form)
         self.output_mode = QtWidgets.QComboBox()
-        self.output_mode.addItem("Fitted rounded rectangles", "rounded")
-        self.output_mode.addItem("Smoothed visible contours", "smoothed")
-        self.output_mode.addItem("Exact visible contours", "exact")
+        self.output_mode.addItem("Rounded rects", "rounded")
+        self.output_mode.addItem("Smooth contours", "smoothed")
+        self.output_mode.addItem("Exact contours", "exact")
+        self.output_mode.setToolTip(
+            "Choose fitted rounded rectangles, smoothed visible contours, "
+            "or exact visible contours."
+        )
         self.border_offset = QtWidgets.QDoubleSpinBox()
         self.border_offset.setRange(-25.0, 25.0)
         self.border_offset.setDecimals(2)
@@ -782,13 +834,11 @@ class TracePanel(QtWidgets.QWidget):
         _form_row(output_form, "Contour smoothing", self.smoothing)
         layout.addWidget(output_group)
 
-        action_row = QtWidgets.QHBoxLayout()
         self.detect_button = QtWidgets.QPushButton("Detect objects")
         self.detect_button.setObjectName("primaryButton")
         self.clear_button = QtWidgets.QPushButton("Clear preview")
-        action_row.addWidget(self.detect_button, 1)
-        action_row.addWidget(self.clear_button)
-        layout.addLayout(action_row)
+        layout.addWidget(self.detect_button)
+        layout.addWidget(self.clear_button)
 
         self.status_label = QtWidgets.QLabel(
             "Capture a clear corrected bed image, then detect objects."
@@ -797,7 +847,8 @@ class TracePanel(QtWidgets.QWidget):
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
 
-        result_group = QtWidgets.QGroupBox("Review detected outlines")
+        result_group = QtWidgets.QGroupBox("Detected outlines")
+        result_group.setToolTip("Review detected outlines before creating objects.")
         result_layout = QtWidgets.QVBoxLayout(result_group)
         result_layout.addWidget(
             _muted(
@@ -829,7 +880,7 @@ class TracePanel(QtWidgets.QWidget):
             4, QtWidgets.QHeaderView.ResizeMode.Stretch
         )
         result_layout.addWidget(self.result_tree)
-        select_row = QtWidgets.QHBoxLayout()
+        select_row = QtWidgets.QVBoxLayout()
         self.select_direct_button = QtWidgets.QPushButton("Select direct")
         self.select_all_button = QtWidgets.QPushButton("Select all")
         self.select_none_button = QtWidgets.QPushButton("Select none")
@@ -837,7 +888,10 @@ class TracePanel(QtWidgets.QWidget):
         select_row.addWidget(self.select_all_button)
         select_row.addWidget(self.select_none_button)
         result_layout.addLayout(select_row)
-        self.create_button = QtWidgets.QPushButton("Create vector objects")
+        self.create_button = QtWidgets.QPushButton("Create objects")
+        self.create_button.setToolTip(
+            "Create vector objects from the selected detected outlines."
+        )
         self.create_button.setObjectName("primaryButton")
         self.create_button.setEnabled(False)
         result_layout.addWidget(self.create_button)
@@ -995,7 +1049,7 @@ class TracePanel(QtWidgets.QWidget):
     def _update_create_button(self) -> None:
         count = len(self.selected_ids())
         self.create_button.setText(
-            f"Create {count} vector object{'s' if count != 1 else ''}"
+            f"Create {count} object{'s' if count != 1 else ''}"
         )
         self.create_button.setEnabled(self._result_is_current and count > 0)
 

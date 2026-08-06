@@ -34,8 +34,8 @@ a grid whose footprint exceeds the current project work area. A one- or two-cut
 grid can still be saved and positioned manually, but it cannot satisfy the
 automatic matcher's minimum of three features.
 
-Choose **Save template** to add the design to the reusable library, or **Add
-grid to project** to create editable rounded rectangles at the center of the
+Choose **Save template** to add the design to the reusable library, or **Add to
+project** to create editable rounded rectangles at the center of the
 current project. Adding a grid is one undoable project operation. Templates
 created by this designer retain their editable grid recipe, so **Edit grid…**
 can later change their dimensions, radius, rows, columns, and spacing without
