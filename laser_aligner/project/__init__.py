@@ -16,6 +16,7 @@ from .alignment import Alignment, aligned_transforms, distributed_transforms
 from .history import (
     AddLayerCommand,
     AddObjectCommand,
+    AddObjectsCommand,
     AssignLayerCommand,
     Command,
     CommandStack,
@@ -47,6 +48,7 @@ from .toolpath import ProjectJob, generate_project_frame, generate_project_gcode
 __all__ = [
     "AddLayerCommand",
     "AddObjectCommand",
+    "AddObjectsCommand",
     "Alignment",
     "AssignLayerCommand",
     "Bounds",

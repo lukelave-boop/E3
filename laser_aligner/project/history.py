@@ -259,6 +259,45 @@ class AddObjectCommand(Command):
         _, self._actual_index = self.document.remove_object(self.item.id)
 
 
+class AddObjectsCommand(Command):
+    """Add a collection of objects as one undoable operation."""
+
+    def __init__(
+        self,
+        document: ProjectDocument,
+        items: Iterable[SceneObject],
+        index: int | None = None,
+        description: str = "Add objects",
+    ) -> None:
+        self.document = document
+        self.items = list(items)
+        if not self.items:
+            raise ValueError("AddObjectsCommand requires at least one object")
+        self.index = len(document.objects) if index is None else int(index)
+        self.description = description
+        self._indices: list[int] = []
+
+    def redo(self) -> None:
+        if self._indices:
+            records = list(zip(self.items, self._indices, strict=True))
+        else:
+            start = max(0, min(self.index, len(self.document.objects)))
+            records = [(item, start + offset) for offset, item in enumerate(self.items)]
+        self._indices = []
+        for item, index in records:
+            self.document.add_object(item, index)
+            self._indices.append(self.document.objects.index(item))
+
+    def undo(self) -> None:
+        records = sorted(
+            zip(self.items, self._indices, strict=True),
+            key=lambda record: record[1],
+            reverse=True,
+        )
+        for item, _ in records:
+            self.document.remove_object(item.id)
+
+
 class RemoveObjectsCommand(Command):
     def __init__(
         self,
