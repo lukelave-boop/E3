@@ -46,6 +46,9 @@ Native desktop workflow:
   objects
 - Per-layer vector speed, power, pass count, ordering, estimates, and dry frames
 - SQLite material presets and camera focus/sharpness controls
+- Versioned `.e3template` cutting-template library with manual selection,
+  geometry-based automatic matching, rigid alignment review, and one-step undo
+  when aligned cut objects are created
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop
 
@@ -54,6 +57,15 @@ algorithm and a source-wired native review workflow for converting detected
 camera outlines into editable project objects. The complete GUI/camera flow is
 not yet verified. See
 [docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
+
+Reusable label-sheet cutting templates can be created from visible project
+objects, selected manually or ranked against detected sheet geometry, and
+placed by reviewed translation and rotation. Scale is never applied
+automatically. Marker IDs are reserved in the file format but marker detection
+is not implemented. Automatic review uses one frozen corrected-camera frame,
+rejects weak or ambiguous fits, and always leaves final adjustment and approval
+to the operator. See
+[docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md).
 
 ## Deliberately disabled by default
 
@@ -173,7 +185,8 @@ laser_aligner/
   machine/       POSIX serial, simulator, controller safety service
   materials/     SQLite material-preset library
   project/       project model, history, persistence, alignment, toolpaths
-  vision/        workpiece, fiducial, and object-trace detection
+  templates/     reusable cut-template schema, library, and rigid placement
+  vision/        workpiece, fiducial, object tracing, and template alignment
   web/           dependency-free browser interface
 config/          simulation and hardware examples
 docs/            setup, calibration, safety, and architecture notes
@@ -228,6 +241,10 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 - SVG text and embedded images are ignored. Convert text to paths in the design program.
 - CSS stylesheets, clipping paths, masks, and every edge case of the full SVG specification are not supported.
 - The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.
+- Cutting-template identification and alignment have synthetic coverage but
+  have not been verified with real corrected label-sheet images. Placement is
+  rigid translation/rotation only, and `marker_id` is currently metadata rather
+  than an active marker detector.
 - No safety-rated enclosure, interlock, flame detector, or hardware E-stop can be implemented in this software.
 - The exact Creality controller protocol and `S` power range for this particular conversion kit remain unverified.
 - Software stop is not a substitute for immediately removing power with a hardware emergency stop.

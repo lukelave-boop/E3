@@ -31,7 +31,7 @@ Environment:
 
 Results:
 
-- **95 tests passed and 2 POSIX-only tests skipped.**
+- **134 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
@@ -39,7 +39,16 @@ Results:
 - The browser simulator served its health endpoint and HTML interface.
 - The native desktop started, ran, and shut down with Qt's offscreen backend,
   the synthetic camera, and the simulated controller.
+- A focused 39-test cutting-template run covered the portable model/library,
+  synthetic matcher, controller acceptance/cancellation behavior, widgets,
+  overlay, apply/undo, and stale generated-job protection.
+- An actual offscreen `E3MainWindow` smoke test exercised template library
+  refresh, placement, one-command application, and undo.
 - Ruff was not installed in the current virtual environment and was not run.
+
+The template suite also verifies that one captured corrected frame is reused
+for every candidate option group, camera delivery remains frozen during review,
+and stale match or G-code results cannot be applied after relevant state changes.
 
 POSIX serial is selected lazily, so `termios` is not imported by simulator or
 application startup on Windows. Selecting the real serial backend on Windows
@@ -84,6 +93,9 @@ from 2026-08-06 has not been run as a complete Linux suite during this audit.
 | Workpiece, crosshair-grid, and object-trace vision | Tested on Windows with synthetic images |
 | Browser single-SVG G-code | Tested on Windows at the library level |
 | Desktop project model, history, materials, and toolpaths | Tested on Windows |
+| Cutting-template model, library, and rigid instantiation | Tested on Windows |
+| Geometric template matching and candidate ranking | Tested with synthetic features on Windows |
+| Native template save/select/review/apply workflow | Behaviorally tested offscreen; not real-camera verified |
 | Native desktop simulator startup | Smoke-tested offscreen on Windows |
 | Browser simulator startup | Smoke-tested through HTTP on Windows |
 | Machine simulator safety suite | Tested on Windows |
@@ -92,8 +104,9 @@ from 2026-08-06 has not been run as a complete Linux suite during this audit.
 | Real C920 capture/calibration | Implemented for Linux, not physically verified |
 | Real controller motion or laser output | Not physically verified |
 
-Source-presence tests for desktop labels, signals, and method names are not
-equivalent to behavioral GUI tests.
+Source-presence checks remain limited evidence; the cutting-template workflow
+also has behavioral Qt and actual offscreen-window coverage. It is still not a
+substitute for interactive or real-camera testing.
 
 ## Not yet physically verified
 
@@ -112,7 +125,18 @@ conservative until measured on the target machine:
 - lens-calibration residuals from real checkerboard photographs;
 - bed-mapping residuals and repeatability across cold starts;
 - parallax error at different workpiece thicknesses;
+- template-match residuals, ambiguity thresholds, and repeatability on real
+  corrected label sheets;
 - real dry-motion and low-power framing behavior.
+
+Cutting-template placement is deliberately limited to translation and
+rotation. The application reports scale mismatch instead of resizing cut
+geometry. The `.e3template` `marker_id` field is metadata only; no marker
+detector is implemented. Applying a reviewed template creates one undoable
+batch of new project objects. The current match gates are conservative,
+provisional software checks rather than evidence of physical alignment
+accuracy. See
+[docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md).
 
 ## Hardware bring-up gate
 

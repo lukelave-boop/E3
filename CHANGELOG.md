@@ -20,6 +20,32 @@
 - Added one-step undo for a set of traced objects.
 - Added synthetic object-tracing tests and an offline trace inspection tool.
 
+### Cutting templates
+
+- Added versioned `.e3template` files and an atomic reusable template library.
+- Added resilient library scans: malformed entries are reported without hiding
+  valid templates, and duplicate persistent IDs are excluded safely.
+- Added project-to-template normalization for visible cut objects and rigid
+  translation/rotation instantiation with new object IDs.
+- Added per-outer-contour matching features for compound imported SVG paths
+  while excluding contained holes.
+- Added manual template selection, geometry-based candidate ranking with
+  synthetic test coverage, ambiguity and scale-mismatch warnings, and reviewed
+  overlay adjustment.
+- Added one-step batch undo when aligned template objects are created on the
+  active project layer.
+- Reused one frozen corrected frame across candidate settings, rejected weak or
+  unresolved ambiguous matches, and canceled results invalidated by focus or
+  library changes.
+- Invalidated generated G-code and toolpath previews after project revisions so
+  aligned geometry cannot be followed by execution of a stale job.
+- Reserved `marker_id` as schema metadata; marker-based identification is not
+  implemented.
+- Added focused synthetic and offscreen behavioral tests for schema round trips,
+  library behavior, rigid placement, alignment/ranking, review controls,
+  object creation/undo, and stale-state rejection. Real-camera and physical
+  alignment remain unverified.
+
 ### Windows simulation
 
 - Made POSIX serial transport selection lazy so simulator imports remain
@@ -31,6 +57,8 @@
 
 - Added repository-wide development instructions and a current-state snapshot.
 - Reconciled architecture, platform support, test evidence, and roadmap status.
+- Documented the cutting-template workflow, rigid-only placement contract, and
+  real-camera verification boundary.
 
 Unreleased items must not be treated as part of version 0.1.0 until they are
 committed, verified, and included in a release.

@@ -30,13 +30,22 @@ Current branch feature:
 
 - Multi-object camera tracing with color/contrast modes, grid inference,
   reviewed selection, and conversion to project vectors.
+- Versioned label-sheet cutting templates with manual selection, synthetic
+  geometric ranking, rigid translation/rotation review, and one-step batch
+  insertion into a project.
+- Behavioral offscreen coverage for template library controls, one-frame
+  alignment review, stale-result cancellation, object creation, and undo.
 
 These features have different verification levels; see `CURRENT_STATE.md`.
 
-## Milestone 1 — trace validation and release hardening
+## Milestone 1 — trace/template validation and release hardening
 
-- Add behavioral Qt tests for trace review and project-object creation.
+- Add broader behavioral Qt tests for trace review and general project editing.
 - Exercise tracing against real corrected images at known material heights.
+- Build curated label-sheet captures with measured geometry and establish
+  confidence/residual acceptance thresholds for template alignment.
+- Validate the tested explicit-choice behavior for ambiguous look-alike
+  templates against curated real-camera captures.
 - Keep local label/trace captures ignored and excluded from release packages.
 - Run the complete consolidated branch suite on Linux.
 
@@ -57,6 +66,10 @@ milestone. If added later, it needs its own serial transport and tests.
 - Add camera control presets and calibration-image quality guidance.
 - Add coverage visualization and repeatability measurements.
 - Exercise object tracing with real corrected images at known material heights.
+- Exercise selected-template and automatic-template alignment against real
+  corrected sheets without applying scale.
+- Add optional marker identification only after choosing and testing a marker
+  format; the current `marker_id` field is metadata only.
 
 ## Milestone 4 — controller profile
 

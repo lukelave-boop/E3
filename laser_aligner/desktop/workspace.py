@@ -366,6 +366,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self.workspace_scene.addItem(self._camera_item)
         self._toolpath_items: list[QtWidgets.QGraphicsLineItem] = []
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
+        self._template_items: list[QtWidgets.QGraphicsItem] = []
         self._point_pick_active = False
         self.snap_enabled = True
         self.snap_step_mm = 1.0
@@ -515,6 +516,74 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 label.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
                 self.workspace_scene.addItem(label)
                 self._trace_items.append(label)
+
+    def clear_template_preview(self) -> None:
+        for item in self._template_items:
+            self.workspace_scene.removeItem(item)
+        self._template_items.clear()
+
+    def set_template_preview(
+        self,
+        objects: list[SceneObject],
+        detections: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """Draw reviewed template geometry without adding it to the project."""
+
+        self.clear_template_preview()
+        observed_color = QtGui.QColor("#E7B55C")
+        for detection in detections or []:
+            points = detection.get("contour_mm") or detection.get("box_mm") or []
+            if len(points) < 2:
+                continue
+            path = QtGui.QPainterPath()
+            path.moveTo(self.workspace_scene.machine_to_scene(*points[0]))
+            for point in points[1:]:
+                path.lineTo(self.workspace_scene.machine_to_scene(*point))
+            path.closeSubpath()
+            item = QtWidgets.QGraphicsPathItem(path)
+            pen = QtGui.QPen(observed_color)
+            pen.setWidthF(0.35)
+            pen.setCosmetic(True)
+            item.setPen(pen)
+            fill = QtGui.QColor(observed_color)
+            fill.setAlpha(8)
+            item.setBrush(fill)
+            item.setZValue(279.0)
+            item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            item.setToolTip("Observed camera feature")
+            self.workspace_scene.addItem(item)
+            self._template_items.append(item)
+
+        color = QtGui.QColor("#45D7FF")
+        for scene_object in objects:
+            path = ObjectGraphicsItem._path_for_object(scene_object)
+            if path.isEmpty():
+                continue
+            item = QtWidgets.QGraphicsPathItem(path)
+            pen = QtGui.QPen(color)
+            pen.setWidthF(0.55)
+            pen.setCosmetic(True)
+            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            item.setPen(pen)
+            fill = QtGui.QColor(color)
+            fill.setAlpha(12)
+            item.setBrush(fill)
+            item.setPos(
+                scene_object.transform.x_mm,
+                -scene_object.transform.y_mm,
+            )
+            item.setRotation(-scene_object.transform.rotation_deg)
+            transform = QtGui.QTransform()
+            transform.scale(
+                -1.0 if scene_object.transform.mirror_x else 1.0,
+                -1.0 if scene_object.transform.mirror_y else 1.0,
+            )
+            item.setTransform(transform)
+            item.setZValue(280.0)
+            item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            item.setToolTip(f"Template preview: {scene_object.name}")
+            self.workspace_scene.addItem(item)
+            self._template_items.append(item)
 
     def clear_toolpath_preview(self) -> None:
         for item in self._toolpath_items:

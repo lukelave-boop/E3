@@ -41,6 +41,12 @@ from ..project import (
     save_autosave,
     save_project,
 )
+from ..templates import (
+    CutTemplate,
+    TemplateLibrary,
+    instantiate_template,
+    template_from_project,
+)
 from .controller import DesktopController
 from .controls import InspectorTabs, PanelScrollArea, WheelGuard
 from .panels import (
@@ -55,6 +61,7 @@ from .panels import (
     TransformPanel,
 )
 from .qt import require_qt
+from .template_panel import TemplatePanel
 from .workspace import WorkspaceFrame, WorkspaceView
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -126,6 +133,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if application is not None:
             application.installEventFilter(self._wheel_guard)
         self.material_database = MaterialDatabase()
+        self.template_library = TemplateLibrary(
+            self.runtime.settings.app.data_dir / "templates"
+        )
+        self._templates: dict[str, CutTemplate] = {}
         self.document = self._new_document()
         self.history = CommandStack(max_depth=300)
         self.project_path: Path | None = None
@@ -133,10 +144,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job: Any | None = None
         self.last_job_name = ""
         self.last_job_powered = False
+        self.last_job_revision: int | None = None
         self._busy = False
         self._closing = False
         self._expanding_group_selection = False
         self._trace_result: dict[str, Any] | None = None
+        self._template_match_result: dict[str, Any] | None = None
 
         self.setWindowTitle("E3 Positioning System")
         icon_path = Path(__file__).resolve().parent / "assets" / "e3-positioning-system.svg"
@@ -175,6 +188,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         QtCore.QTimer.singleShot(0, self._ensure_window_visible)
         QtCore.QTimer.singleShot(0, self.workspace.fit_work_area)
         self._refresh_document()
+        self._refresh_template_library()
         self.controller.start()
 
     def _new_document(self) -> ProjectDocument:
@@ -209,6 +223,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("open", "Open project…", "Ctrl+O", QtWidgets.QStyle.StandardPixmap.SP_DialogOpenButton)
         action("save", "Save project", "Ctrl+S", QtWidgets.QStyle.StandardPixmap.SP_DialogSaveButton)
         action("save_as", "Save project as…", "Ctrl+Shift+S")
+        action("save_template", "Save project as cutting template…")
         action("import_svg", "Import SVG…", "Ctrl+I")
         action("quit", "Quit", "Ctrl+Q")
         action("undo", "Undo", "Ctrl+Z", QtWidgets.QStyle.StandardPixmap.SP_ArrowBack)
@@ -241,6 +256,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("line", "Add line", "Alt+L")
         action("text", "Add text", "Alt+T")
         action("trace_objects", "Detect / trace camera objects…", "Ctrl+Alt+T")
+        action("template_alignment", "Cutting template alignment…", "Ctrl+Alt+A")
         action("refresh_camera", "Refresh camera", "F5")
         action("generate", "Generate toolpath", "Ctrl+Alt+Enter")
         action("frame", "Generate dry frame", "Ctrl+Shift+F")
@@ -258,6 +274,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["open"].triggered.connect(self.open_project)
         self.actions["save"].triggered.connect(self.save_project)
         self.actions["save_as"].triggered.connect(lambda: self.save_project(save_as=True))
+        self.actions["save_template"].triggered.connect(self.save_current_as_template)
         self.actions["import_svg"].triggered.connect(self.import_svg)
         self.actions["quit"].triggered.connect(self.close)
         self.actions["undo"].triggered.connect(self.history.undo)
@@ -291,6 +308,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["line"].triggered.connect(self.add_line)
         self.actions["text"].triggered.connect(self.add_text)
         self.actions["trace_objects"].triggered.connect(self.open_trace_panel)
+        self.actions["template_alignment"].triggered.connect(self.open_template_panel)
         self.actions["refresh_camera"].triggered.connect(self.controller.refresh_camera_image)
         self.actions["generate"].triggered.connect(self.generate_toolpath)
         self.actions["frame"].triggered.connect(self.generate_frame)
@@ -303,7 +321,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
-        for key in ("new", "open", "save", "save_as", "import_svg"):
+        for key in ("new", "open", "save", "save_as", "save_template", "import_svg"):
             file_menu.addAction(self.actions[key])
         file_menu.addSeparator()
         file_menu.addAction(self.actions["quit"])
@@ -348,6 +366,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             create_menu.addAction(self.actions[key])
         create_menu.addSeparator()
         create_menu.addAction(self.actions["trace_objects"])
+        create_menu.addAction(self.actions["template_alignment"])
 
         laser_menu = self.menuBar().addMenu("&Laser")
         for key in ("generate", "frame", "run", "stop"):
@@ -495,6 +514,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel = ObjectPanel()
         self.transform_panel = TransformPanel()
         self.trace_panel = TracePanel()
+        self.template_panel = TemplatePanel()
         self.camera_panel = CameraPanel()
         self.camera_panel.set_focus_controls(
             dict(self.runtime.settings.camera.controls)
@@ -513,6 +533,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.inspector_tabs.add_panel("objects", "Objects", self.object_panel)
         self.inspector_tabs.add_panel("transform", "Transform", self.transform_panel)
         self.inspector_tabs.add_panel("trace", "Trace", self.trace_panel)
+        self.inspector_tabs.add_panel("templates", "Templates", self.template_panel)
         self.inspector_tabs.add_panel("camera", "Camera", self.camera_panel)
         self.inspector_tabs.add_panel("machine", "Machine", self.machine_panel)
         self.inspector_tabs.add_panel("materials", "Materials", self.material_panel)
@@ -606,9 +627,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.transform_panel.transformEdited.connect(self._transform_edited)
         self.transform_panel.assignLayerRequested.connect(self._assign_layer)
 
-        self.trace_panel.detectRequested.connect(
-            self.controller.detect_trace_objects
-        )
+        self.trace_panel.detectRequested.connect(self._detect_trace_objects)
         self.trace_panel.pickColorRequested.connect(
             self._begin_trace_color_pick
         )
@@ -621,6 +640,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.selectionChanged.connect(
             self._trace_selection_changed
         )
+
+        self.template_panel.saveRequested.connect(self.save_current_as_template)
+        self.template_panel.deleteRequested.connect(self.delete_cut_template)
+        self.template_panel.refreshRequested.connect(self._refresh_template_library)
+        self.template_panel.templateSelected.connect(self._template_selected)
+        self.template_panel.autoMatchRequested.connect(
+            lambda: self._request_template_match(None)
+        )
+        self.template_panel.matchSelectedRequested.connect(
+            self._request_template_match
+        )
+        self.template_panel.placementChanged.connect(
+            self._template_placement_changed
+        )
+        self.template_panel.applyRequested.connect(self._apply_template_objects)
+        self.template_panel.clearRequested.connect(self._clear_template_preview)
 
         self.camera_panel.refreshRequested.connect(self.controller.refresh_camera_image)
         self.camera_panel.liveChanged.connect(self.controller.set_live_camera)
@@ -672,6 +707,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.traceColorReady.connect(
             self._trace_color_ready
         )
+        self.controller.templateMatchReady.connect(
+            self._template_match_ready
+        )
         self.controller.errorOccurred.connect(self.show_error)
         self.controller.notice.connect(self.show_notice)
         self.controller.busyChanged.connect(self._busy_changed)
@@ -722,6 +760,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.transform_panel.set_selection(objects, self.document)
 
     def _history_changed(self, stack: CommandStack) -> None:
+        if (
+            self.last_job is not None
+            and self.last_job_revision != self.document.revision
+        ):
+            self._invalidate_generated_job()
         self.actions["undo"].setEnabled(stack.can_undo)
         self.actions["redo"].setEnabled(stack.can_redo)
         self.actions["undo"].setText(
@@ -731,6 +774,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
             f"Redo {stack.redo_text}" if stack.redo_text else "Redo"
         )
         self._refresh_document(self.workspace.selected_object_ids())
+
+    def _invalidate_generated_job(self) -> None:
+        self.last_job = None
+        self.last_job_name = ""
+        self.last_job_powered = False
+        self.last_job_revision = None
+        if hasattr(self, "gcode_preview"):
+            self.gcode_preview.clear()
+        if hasattr(self, "workspace"):
+            self.workspace.clear_toolpath_preview()
+        if hasattr(self, "job_panel"):
+            self.job_panel.summary.setText("No job generated")
 
     def _document_center(self) -> tuple[float, float]:
         return self.document.work_area.center
@@ -1090,10 +1145,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.active_layer_id = self.document.active_layer_id
         self.history.clear()
         self.history.mark_clean()
-        self.last_job = None
-        self.gcode_preview.clear()
-        self.workspace.clear_toolpath_preview()
+        self._invalidate_generated_job()
         self._clear_trace_preview()
+        self._clear_template_preview(show_message=False)
         self._refresh_document()
 
     def open_project(self) -> None:
@@ -1130,10 +1184,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.active_layer_id = self.document.active_layer_id
         self.history.clear()
         self.history.mark_clean()
-        self.last_job = None
-        self.gcode_preview.clear()
-        self.workspace.clear_toolpath_preview()
+        self._invalidate_generated_job()
         self._clear_trace_preview()
+        self._clear_template_preview(show_message=False)
         self._refresh_document()
 
     def save_project(self, save_as: bool = False) -> bool:
@@ -1177,6 +1230,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self.last_job = job
         self.last_job_name = f"{self.document.name}-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
+        self.last_job_revision = self.document.revision
         layer_by_id = {layer.id: layer for layer in self.document.layers}
         self.last_job_powered = any(
             layer_by_id[item.layer_id].power_percent > 0
@@ -1204,6 +1258,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job = job
         self.last_job_name = f"frame-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
         self.last_job_powered = False
+        self.last_job_revision = self.document.revision
         self.gcode_preview.setPlainText(job.text)
         self.workspace.set_toolpath_preview(job.text)
         self.job_panel.summary.setText(
@@ -1215,6 +1270,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def run_current_job(self) -> None:
         if self.last_job is None:
             self.show_error("Generate a project toolpath or dry frame first")
+            return
+        if self.last_job_revision != self.document.revision:
+            self._invalidate_generated_job()
+            self.show_error("The project changed; regenerate the toolpath before running")
             return
         machine = self.runtime.context.machine.status()
         if not machine.get("connected"):
@@ -1254,6 +1313,273 @@ class E3MainWindow(QtWidgets.QMainWindow):
             arm_phrase=phrase,
         )
 
+    def _refresh_template_library(self, selected_id: str | None = None) -> None:
+        self.controller.cancel_template_match()
+        self._template_match_result = None
+        self.workspace.clear_template_preview()
+        if hasattr(self, "template_panel"):
+            self.template_panel.set_busy(False)
+        catalog = self.template_library.scan()
+        templates = list(catalog.templates)
+        self._templates = {item.id: item for item in templates}
+        summaries = [
+            {
+                "id": item.id,
+                "name": item.name,
+                "description": item.description,
+                "feature_count": len(item.features),
+                "width_mm": item.width_mm,
+                "height_mm": item.height_mm,
+            }
+            for item in templates
+        ]
+        self.template_panel.set_templates(summaries, selected_id=selected_id)
+        if catalog.diagnostics:
+            first = catalog.diagnostics[0]
+            count = len(catalog.diagnostics)
+            self.show_notice(
+                f"Loaded {len(templates)} cutting template"
+                f"{'s' if len(templates) != 1 else ''}; ignored {count} invalid "
+                f"library file{'s' if count != 1 else ''}. "
+                f"First: {first.path.name}: {first.message}"
+            )
+
+    def open_template_panel(self) -> None:
+        selected_id = self.template_panel.current_template_id()
+        self._refresh_template_library(selected_id)
+        self.inspector_tabs.select_panel("templates")
+        self.template_panel.set_calibration_ready(
+            self.runtime.context.bed.calibration is not None
+        )
+        selected_id = self.template_panel.current_template_id()
+        if selected_id:
+            self._set_manual_template_placement(selected_id)
+            self.show_notice(
+                "Template preview ready. Align from the camera or adjust X, Y and rotation manually."
+            )
+        else:
+            self.show_notice(
+                "Create cut geometry, then save the project as a cutting template."
+            )
+
+    def save_current_as_template(self) -> None:
+        if not self.document.visible_output_objects():
+            self.show_notice("Add at least one visible cut object before saving a template")
+            return
+        default_name = self.document.name.strip() or "Label sheet"
+        name, accepted = QtWidgets.QInputDialog.getText(
+            self,
+            "Save cutting template",
+            "Template name:",
+            text=default_name,
+        )
+        name = name.strip()
+        if not accepted or not name:
+            return
+        try:
+            template = template_from_project(
+                self.document.clone(),
+                name,
+                trace_options=self.trace_panel.options(),
+            )
+            path = self.template_library.save(template)
+        except Exception as exc:
+            self.show_error(f"Could not save cutting template: {exc}")
+            return
+        self._refresh_template_library(template.id)
+        self.inspector_tabs.select_panel("templates")
+        self._set_manual_template_placement(template.id)
+        self.show_notice(f"Saved cutting template {template.name} to {path.name}")
+
+    def delete_cut_template(self, template_id: str) -> None:
+        template = self._templates.get(str(template_id))
+        if template is None:
+            self.show_notice("That cutting template is no longer available")
+            self._refresh_template_library()
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Delete cutting template",
+            f"Delete the reusable template '{template.name}'?\n\n"
+            "Existing project objects will not be changed.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            deleted = self.template_library.delete(template.id)
+        except Exception as exc:
+            self.show_error(f"Could not delete cutting template: {exc}")
+            return
+        self._clear_template_preview(show_message=False)
+        self._refresh_template_library()
+        self.show_notice(
+            f"Deleted cutting template {template.name}"
+            if deleted
+            else "That cutting template was already removed"
+        )
+
+    def _set_manual_template_placement(self, template_id: str) -> None:
+        if template_id not in self._templates:
+            return
+        self.controller.cancel_template_match()
+        self._template_match_result = None
+        center_x, center_y = self._document_center()
+        self.template_panel.set_placement(center_x, center_y, 0.0)
+
+    def _template_selected(self, template_id: str) -> None:
+        self.workspace.clear_template_preview()
+        self._set_manual_template_placement(template_id)
+        if (
+            self.runtime.running
+            and self.runtime.context.bed.calibration is not None
+        ):
+            self._request_template_match(template_id)
+        else:
+            self.template_panel.set_match_message(
+                "Manual placement is active. Bed mapping is required for camera alignment."
+            )
+
+    def _request_template_match(self, template_id: str | None = None) -> None:
+        if not self._templates:
+            self.show_notice("No cutting templates are available")
+            return
+        if template_id is not None and template_id not in self._templates:
+            self.show_notice("The selected cutting template is no longer available")
+            return
+        if not self.runtime.running:
+            self.show_notice("Camera services are still starting")
+            return
+        if self.runtime.context.bed.calibration is None:
+            self.show_notice("Bed mapping is required before camera template alignment")
+            return
+        self._clear_trace_preview()
+        snapshots = [
+            CutTemplate.from_dict(item.to_dict())
+            for item in self._templates.values()
+        ]
+        self.template_panel.set_match_message(
+            "Detecting one corrected camera frame and comparing label geometry…"
+        )
+        self.controller.set_template_review_active(True)
+        self.template_panel.set_busy(True)
+        self.controller.match_cut_templates(snapshots, template_id=template_id)
+
+    def _template_match_ready(self, payload: dict[str, Any]) -> None:
+        self.template_panel.set_busy(False)
+        camera_image = payload.get("camera_image")
+        if isinstance(camera_image, QtGui.QImage) and not camera_image.isNull():
+            self._camera_image_ready(camera_image)
+        candidates = [dict(item) for item in payload.get("candidates", [])]
+        self.template_panel.set_rankings(candidates)
+        template_id = str(payload.get("template_id") or "")
+        if template_id and template_id not in self._templates:
+            self.controller.set_template_review_active(False)
+            self._template_match_result = None
+            self.workspace.clear_template_preview()
+            self.template_panel.clear_placement()
+            self.template_panel.set_match_message(
+                "The matched template is no longer in the library. Run alignment again."
+            )
+            return
+        if not payload.get("matched") or not payload.get("template_id"):
+            self.controller.set_template_review_active(False)
+            self._template_match_result = None
+            self.workspace.clear_template_preview()
+            self.template_panel.clear_placement()
+            self.template_panel.set_match_message(
+                str(payload.get("message", "No viable cutting-template match was found."))
+            )
+            self.show_notice(str(payload.get("message", "Template matching complete")))
+            return
+        self._template_match_result = dict(payload)
+        self.template_panel.set_match_result(payload)
+        self.inspector_tabs.select_panel("templates")
+        self.show_notice(str(payload.get("message", "Template alignment ready for review")))
+
+    def _template_placement_changed(self, payload: dict[str, Any]) -> None:
+        template_id = str(payload.get("template_id") or "")
+        template = self._templates.get(template_id)
+        if template is None:
+            self.workspace.clear_template_preview()
+            return
+        try:
+            objects = instantiate_template(
+                template,
+                target_x_mm=float(payload.get("center_x_mm", 0.0)),
+                target_y_mm=float(payload.get("center_y_mm", 0.0)),
+                rotation_deg=float(payload.get("rotation_deg", 0.0)),
+                target_layer_id=self.active_layer_id,
+            )
+        except Exception as exc:
+            self.workspace.clear_template_preview()
+            self.template_panel.clear_placement()
+            self.show_notice(f"Could not preview cutting template: {exc}")
+            return
+        detections: list[dict[str, Any]] = []
+        if (
+            self._template_match_result is not None
+            and self._template_match_result.get("template_id") == template_id
+        ):
+            detections = list(self._template_match_result.get("detections", []))
+        self.workspace.set_template_preview(objects, detections=detections)
+
+    def _apply_template_objects(self, payload: dict[str, Any]) -> None:
+        template_id = str(payload.get("template_id") or "")
+        template = self._templates.get(template_id)
+        if template is None:
+            self.show_notice("Select an available cutting template first")
+            return
+        try:
+            objects = instantiate_template(
+                template,
+                target_x_mm=float(payload.get("center_x_mm", 0.0)),
+                target_y_mm=float(payload.get("center_y_mm", 0.0)),
+                rotation_deg=float(payload.get("rotation_deg", 0.0)),
+                target_layer_id=self.active_layer_id,
+            )
+            area = self.document.work_area
+            outside = [
+                item.name
+                for item in objects
+                if any(not area.contains(x, y) for x, y in item.transform.corners())
+            ]
+            if outside:
+                raise ValueError(
+                    f"{len(outside)} cut object{'s are' if len(outside) != 1 else ' is'} "
+                    "outside the configured work area"
+                )
+            self.history.execute(
+                AddObjectsCommand(
+                    self.document,
+                    objects,
+                    description=f"Apply {template.name} template",
+                )
+            )
+        except Exception as exc:
+            self.show_error(f"Could not apply cutting template: {exc}")
+            return
+        self.workspace.select_objects([item.id for item in objects])
+        self._clear_template_preview(show_message=False)
+        self.show_notice(
+            f"Created {len(objects)} aligned cut object"
+            f"{'s' if len(objects) != 1 else ''} from {template.name}"
+        )
+
+    def _clear_template_preview(self, show_message: bool = True) -> None:
+        self.controller.cancel_template_match()
+        self._template_match_result = None
+        self.workspace.clear_template_preview()
+        if hasattr(self, "template_panel"):
+            self.template_panel.set_busy(False)
+            self.template_panel.clear_placement()
+            if show_message:
+                self.template_panel.set_match_message("Template preview cleared.")
+        if show_message:
+            self.show_notice("Template preview cleared")
+
 
     def open_trace_panel(self) -> None:
         self.inspector_tabs.select_panel("trace")
@@ -1264,10 +1590,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "Trace mode: detect automatically or pick a target color from the camera image."
         )
 
+    def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
+        self._clear_template_preview(show_message=False)
+        self.controller.detect_trace_objects(raw_options)
+
     def _begin_trace_color_pick(self) -> None:
         if self.runtime.context.bed.calibration is None:
             self.show_error("Bed mapping is required before sampling camera color")
             return
+        self._clear_template_preview(show_message=False)
         self.inspector_tabs.select_panel("trace")
         self.workspace.begin_point_pick()
         self.show_notice("Click the center of one target object in the camera image")
@@ -1400,6 +1731,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
     ) -> None:
         self.camera_panel.set_focus_result(payload)
         if payload.get("changed"):
+            self._clear_template_preview(show_message=False)
             self.show_notice(
                 "Camera focus changed. Verify or redo lens and "
                 "bed calibration before precision work."
@@ -1413,6 +1745,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         calibration_ready = bool((status.get("bed") or {}).get("calibrated", False))
         self.camera_panel.set_calibration_ready(calibration_ready)
         self.trace_panel.set_calibration_ready(calibration_ready)
+        self.template_panel.set_calibration_ready(calibration_ready)
         self.machine_panel.set_status(machine)
         if machine:
             self.console_panel.set_lines(list(machine.get("log", [])))

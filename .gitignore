@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+# Local pytest basetemp scratch directories
+/.test-temp-*/
 .ruff_cache/
 .coverage
 htmlcov/

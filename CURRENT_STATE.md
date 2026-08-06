@@ -49,6 +49,9 @@ The repository contains:
 3. Shared camera, calibration, geometry, vision, G-code, and machine services.
 4. A native camera-object tracing workflow whose algorithm and project-command
    layers are tested, but whose real-camera GUI path is not end-to-end verified.
+5. A reusable cutting-template workflow with a versioned library, manual
+   selection, geometric candidate ranking, rigid alignment review, and
+   undoable project-object creation.
 
 The browser remains the complete calibration interface. The desktop reads the
 same calibration files but does not yet provide native calibration wizards.
@@ -90,6 +93,16 @@ CameraService or SyntheticCameraService
   -> machine-coordinate geometry
 ```
 
+Cutting-template path:
+
+```text
+visible project output objects
+  -> normalized .e3template library item
+  -> manual selection or geometric candidate ranking
+  -> reviewed translation + rotation overlay
+  -> one AddObjectsCommand into the active project layer
+```
+
 Execution path:
 
 ```text
@@ -109,15 +122,24 @@ Audit environment:
 
 Results:
 
-- **95 tests passed and 2 POSIX-only tests skipped.**
+- **134 tests passed and 2 POSIX-only tests skipped.**
 - The complete suite collected, including app simulation and machine-service
   tests.
+- A focused cutting-template run passed 39 model, library, matcher, controller,
+  widget, workspace, and desktop-integration tests.
 - The browser simulator served a healthy API response and its HTML interface.
 - The native desktop started with the synthetic camera and simulated controller
   under Qt's offscreen backend, ran its event loop, and shut down cleanly.
+- An offscreen `E3MainWindow` smoke test saved and reloaded a template, created
+  aligned objects as one history command, and undid the operation.
 - The interactive native workflow has not yet been manually exercised on this
   Windows checkout.
 - Ruff was not available in the current virtual environment.
+
+The cutting-template coverage includes versioned persistence, resilient
+catalog scans, compound imported paths, rigid matching, ambiguity and weak-match
+rejection, frozen-frame review, cancellation of stale results, transient
+overlays, object creation/undo, and generated-job revision invalidation.
 
 The two skipped tests require POSIX pseudoterminals and `termios`. The exact
 updated branch has not been run as a complete Linux suite during this audit.
@@ -170,6 +192,8 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
 - `.e3laser` save/load, backup, autosave, and recovery.
 - SQLite material presets.
 - Multi-layer vector toolpaths, dry frames, previews, and estimates.
+- Automatic invalidation of generated G-code and toolpath previews after any
+  project revision changes.
 - Camera focus controls and sharpness measurement.
 - Guarded machine connection, park, diagnostics, run, and software stop.
 
@@ -185,6 +209,33 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
 
 The trace algorithms pass synthetic tests. The native trace workflow has not
 been exercised end to end with the real camera and calibration.
+
+### Reusable cutting templates
+
+- Versioned `.e3template` JSON with atomic, safe-filename library storage.
+- Resilient catalog scans that keep valid unique templates available while
+  reporting malformed files and excluding duplicate persistent IDs.
+- Creation from visible, output-enabled project objects without mutating the
+  source project.
+- Template-local normalization around the combined cut bounds.
+- Per-outer-contour matching features for compound imported SVG paths, with
+  contained holes excluded.
+- Manual library selection and manual center/rotation adjustment.
+- Synthetic geometry-based template ranking, weak-match rejection, and
+  template/pose ambiguity warnings.
+- One corrected frame shared across all candidate trace settings and frozen
+  while an accepted overlay is reviewed.
+- Rigid translation/rotation placement with scale differences reported but
+  never applied.
+- New object identities, active-layer assignment, and one-step batch undo.
+- Optional `marker_id` schema metadata reserved for future identification.
+
+The portable model/library and matcher have focused synthetic tests, and the
+native controls, review overlay, application, undo, stale-result handling, and
+generated-job invalidation have behavioral offscreen coverage. The workflow has
+not been verified with real corrected label-sheet images or physical placement.
+No marker detector is implemented. See
+[docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md).
 
 ## Known gaps
 
@@ -208,7 +259,12 @@ been exercised end to end with the real camera and calibration.
 - No text-to-outline conversion.
 - No image or DXF import.
 - No on-canvas resize/rotation handles or smart guides.
-- No end-to-end GUI automation.
+- No full interactive end-to-end GUI automation.
+- Cutting-template matching uses provisional software acceptance gates, but has
+  no real-camera validation dataset or physically measured accuracy threshold.
+- `marker_id` is stored but no QR/ArUco/marker identification path consumes it.
+- Template placement intentionally supports translation and rotation only; it
+  will not scale geometry to conceal calibration or material-height errors.
 
 ### Hardware
 
@@ -226,9 +282,12 @@ been exercised end to end with the real camera and calibration.
 3. Add Windows CI while retaining Linux Python-version coverage.
 4. Separate portable OpenCV capture from Linux V4L2 discovery/control.
 5. Run the complete current suite on Linux and record the exact result.
-6. Add behavioral Qt tests for project editing and object tracing.
-7. Verify that release archives continue to exclude local camera/trace output.
-8. Only then proceed with documented physical camera/controller bring-up.
+6. Extend behavioral Qt coverage for the remaining project-editing and
+   object-tracing workflows.
+7. Validate template matching against curated corrected camera images at known
+   material heights and define residual/confidence acceptance thresholds.
+8. Verify that release archives continue to exclude local camera/trace output.
+9. Only then proceed with documented physical camera/controller bring-up.
 
 ## Evidence terminology
 
