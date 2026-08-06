@@ -16,7 +16,13 @@ EXCLUDED_PARTS = {
     "build",
     "dist",
 }
-EXCLUDED_FILES = {"config/local.json", ".coverage"}
+EXCLUDED_FILES = {
+    "config/local.json",
+    ".coverage",
+    "label-sheet-test.png",
+    "trace-preview.png",
+    "trace-result.json",
+}
 
 
 def is_excluded(relative: Path) -> bool:

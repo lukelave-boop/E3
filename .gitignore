@@ -22,3 +22,8 @@ pip-wheel-metadata/
 *.before-*
 /core
 /core.*
+
+# Local camera/object-trace experiments and generated previews
+/label-sheet-test.png
+/trace-preview.png
+/trace-result.json
