@@ -67,6 +67,8 @@ class TemplatePanel(QtWidgets.QWidget):
         self._placement_valid = False
         self._calibration_ready = False
         self._busy = False
+        self._camera_match_summary: str | None = None
+        self._camera_match_adjusted = False
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 12)
@@ -172,6 +174,10 @@ class TemplatePanel(QtWidgets.QWidget):
         placement_layout.addRow("Center X", self.x_spin)
         placement_layout.addRow("Center Y", self.y_spin)
         placement_layout.addRow("Rotation", self.rotation_spin)
+        self.placement_help = _muted(
+            "Drag the cyan preview to move it. Drag the round handle to rotate."
+        )
+        placement_layout.addRow(self.placement_help)
 
         nudge_row = QtWidgets.QGridLayout()
         self.nudge_step = self._placement_spin(" mm", 0.01, 10.0, 0.10)
@@ -425,10 +431,30 @@ class TemplatePanel(QtWidgets.QWidget):
         warnings = [str(item) for item in payload.get("warnings", []) if item]
         if warnings:
             status += "\nReview: " + "; ".join(warnings)
-        self.match_status.setText(status)
+        self._camera_match_summary = status
+        self._camera_match_adjusted = False
+        self._render_match_status()
 
     def set_match_message(self, message: str) -> None:
+        self._camera_match_summary = None
+        self._camera_match_adjusted = False
         self.match_status.setText(str(message))
+
+    def set_match_adjusted(self, adjusted: bool) -> None:
+        """Label a reviewed camera pose without discarding its match metrics."""
+
+        if self._camera_match_summary is None:
+            return
+        self._camera_match_adjusted = bool(adjusted)
+        self._render_match_status()
+
+    def _render_match_status(self) -> None:
+        if self._camera_match_summary is None:
+            return
+        status = self._camera_match_summary
+        if self._camera_match_adjusted:
+            status += "\nCamera match adjusted manually; review the frozen overlay."
+        self.match_status.setText(status)
 
     def clear_placement(self) -> None:
         self._placement_valid = False
@@ -444,7 +470,7 @@ class TemplatePanel(QtWidgets.QWidget):
         self._calibration_ready = bool(ready)
         self._update_enabled()
         if not ready:
-            self.match_status.setText(
+            self.set_match_message(
                 "Bed mapping is required before camera template matching. "
                 "Templates can still be saved and positioned manually."
             )

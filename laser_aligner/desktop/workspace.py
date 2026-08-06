@@ -1,10 +1,19 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from typing import Any
 
 from ..gcode.preview import parse_gcode_segments
-from ..project import Bounds, LayerMode, ObjectKind, OperationLayer, ProjectDocument, SceneObject
+from ..project import (
+    Bounds,
+    LayerMode,
+    ObjectKind,
+    OperationLayer,
+    ProjectDocument,
+    SceneObject,
+    Transform,
+)
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -236,6 +245,270 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 self._move_callback(self.object_id, before, after)
 
 
+class _TemplatePreviewDragSurface(QtWidgets.QGraphicsPathItem):
+    """Transparent hit target that moves one rigid template preview."""
+
+    def __init__(
+        self,
+        path: QtGui.QPainterPath,
+        owner: "_TemplatePreviewGraphicsItem",
+    ) -> None:
+        super().__init__(path, owner)
+        self._owner = owner
+        self.setPen(QtGui.QPen(QtCore.Qt.PenStyle.NoPen))
+        self.setBrush(QtGui.QBrush(QtGui.QColor(0, 0, 0, 0)))
+        self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.LeftButton)
+        self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+        self.setToolTip("Drag to move the entire template preview")
+        self.setZValue(1000.0)
+
+    def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+            self._owner.begin_drag(event.scenePos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        self._owner.update_drag(event.scenePos())
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._owner.finish_drag(event.scenePos())
+            self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class _TemplateRotationHandle(QtWidgets.QGraphicsEllipseItem):
+    """Fixed-pixel handle that rotates its template around the reviewed center."""
+
+    _RADIUS_PX = 7.0
+
+    def __init__(self, owner: "_TemplatePreviewGraphicsItem") -> None:
+        radius = self._RADIUS_PX
+        super().__init__(QtCore.QRectF(-radius, -radius, radius * 2.0, radius * 2.0), owner)
+        self._owner = owner
+        self.setFlag(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+            True,
+        )
+        pen = QtGui.QPen(QtGui.QColor("#DDF8FF"))
+        pen.setWidthF(1.5)
+        pen.setCosmetic(True)
+        self.setPen(pen)
+        self.setBrush(QtGui.QColor("#45D7FF"))
+        self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.LeftButton)
+        self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+        self.setToolTip("Drag to rotate the entire template preview")
+        self.setZValue(1002.0)
+
+    def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._owner.begin_rotation(event.scenePos())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        self._owner.update_rotation(event.scenePos())
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._owner.finish_rotation(event.scenePos())
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class _TemplatePreviewGraphicsItem(QtWidgets.QGraphicsItemGroup):
+    """Interactive parent for every cyan path in one reviewed placement."""
+
+    _HANDLE_OFFSET_PX = 24.0
+
+    def __init__(
+        self,
+        objects: list[SceneObject],
+        *,
+        center_x_mm: float,
+        center_y_mm: float,
+        rotation_deg: float,
+        edited_callback: Callable[[float, float, float], None],
+        committed_callback: Callable[[float, float, float], None],
+    ) -> None:
+        super().__init__()
+        # Rotation and drag children must receive their own events instead of
+        # QGraphicsItemGroup redirecting every child event to this parent.
+        self.setHandlesChildEvents(False)
+        self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+        self.setZValue(280.0)
+        self._initial_rotation_deg = Transform.normalized_rotation(rotation_deg)
+        self._center_local = WorkspaceScene.machine_to_scene(center_x_mm, center_y_mm)
+        self._edited_callback = edited_callback
+        self._committed_callback = committed_callback
+        self._drag_start_scene: QtCore.QPointF | None = None
+        self._drag_start_position = QtCore.QPointF()
+        self._drag_moved = False
+        self._rotation_last_angle_deg: float | None = None
+        self._rotation_start_group_deg = 0.0
+        self._rotation_accumulated_deg = 0.0
+        self._rotation_moved = False
+        self.visual_items: list[QtWidgets.QGraphicsPathItem] = []
+
+        hit_path = QtGui.QPainterPath()
+        color = QtGui.QColor("#45D7FF")
+        for scene_object in objects:
+            path = ObjectGraphicsItem._path_for_object(scene_object)
+            if path.isEmpty():
+                continue
+            item = QtWidgets.QGraphicsPathItem(path)
+            pen = QtGui.QPen(color)
+            pen.setWidthF(0.55)
+            pen.setCosmetic(True)
+            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            item.setPen(pen)
+            fill = QtGui.QColor(color)
+            fill.setAlpha(12)
+            item.setBrush(fill)
+            item.setPos(scene_object.transform.x_mm, -scene_object.transform.y_mm)
+            item.setRotation(-scene_object.transform.rotation_deg)
+            transform = QtGui.QTransform()
+            transform.scale(
+                -1.0 if scene_object.transform.mirror_x else 1.0,
+                -1.0 if scene_object.transform.mirror_y else 1.0,
+            )
+            item.setTransform(transform)
+            item.setZValue(280.0)
+            item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            item.setToolTip(f"Template preview: {scene_object.name}")
+            self.addToGroup(item)
+            hit_path.addPath(item.mapToParent(item.path()))
+            self.visual_items.append(item)
+
+        self._geometry_bounds = self.childrenBoundingRect()
+        self.setTransformOriginPoint(self._center_local)
+
+        outline_pen = QtGui.QPen(QtGui.QColor(69, 215, 255, 150))
+        outline_pen.setWidthF(0.35)
+        outline_pen.setCosmetic(True)
+        outline_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        self._outline_item = QtWidgets.QGraphicsRectItem(self._geometry_bounds, self)
+        self._outline_item.setPen(outline_pen)
+        self._outline_item.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+        self._outline_item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+        self._outline_item.setZValue(999.0)
+
+        # Include a modest stroked area so open paths and narrow outlines are
+        # still practical drag targets at normal workspace zoom levels.
+        stroker = QtGui.QPainterPathStroker()
+        stroker.setWidth(1.5)
+        hit_path.addPath(stroker.createStroke(hit_path))
+        self._drag_surface = _TemplatePreviewDragSurface(hit_path, self)
+
+        self._handle_connector = QtWidgets.QGraphicsLineItem(self)
+        connector_pen = QtGui.QPen(QtGui.QColor("#45D7FF"))
+        connector_pen.setWidthF(0.45)
+        connector_pen.setCosmetic(True)
+        self._handle_connector.setPen(connector_pen)
+        self._handle_connector.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+        self._handle_connector.setZValue(1001.0)
+        self.rotation_handle = _TemplateRotationHandle(self)
+        self.set_view_scale(1.0)
+
+    @property
+    def has_geometry(self) -> bool:
+        return bool(self.visual_items)
+
+    def placement(self) -> tuple[float, float, float]:
+        center_scene = self.mapToScene(self._center_local)
+        center_x, center_y = WorkspaceScene.scene_to_machine(center_scene)
+        rotation = Transform.normalized_rotation(
+            self._initial_rotation_deg - self.rotation()
+        )
+        return center_x, center_y, rotation
+
+    def set_view_scale(self, scale: float) -> None:
+        scale = max(abs(float(scale)), 1e-6)
+        anchor = QtCore.QPointF(self._center_local.x(), self._geometry_bounds.top())
+        handle_position = anchor + QtCore.QPointF(0.0, -self._HANDLE_OFFSET_PX / scale)
+        self._handle_connector.setLine(QtCore.QLineF(anchor, handle_position))
+        self.rotation_handle.setPos(handle_position)
+
+    def begin_drag(self, scene_position: QtCore.QPointF) -> None:
+        self._drag_start_scene = QtCore.QPointF(scene_position)
+        self._drag_start_position = self.pos()
+        self._drag_moved = False
+
+    def update_drag(self, scene_position: QtCore.QPointF) -> None:
+        if self._drag_start_scene is None:
+            return
+        delta = QtCore.QPointF(scene_position) - self._drag_start_scene
+        if not delta.isNull():
+            self._drag_moved = True
+        self.setPos(self._drag_start_position + delta)
+        if self._drag_moved:
+            self._emit_edited()
+
+    def finish_drag(self, scene_position: QtCore.QPointF) -> None:
+        if self._drag_start_scene is None:
+            return
+        self.update_drag(scene_position)
+        moved = self._drag_moved
+        self._drag_start_scene = None
+        self._drag_moved = False
+        if not moved:
+            return
+        self._emit_committed()
+
+    def begin_rotation(self, scene_position: QtCore.QPointF) -> None:
+        self._rotation_last_angle_deg = self._pointer_angle(scene_position)
+        self._rotation_start_group_deg = self.rotation()
+        self._rotation_accumulated_deg = 0.0
+        self._rotation_moved = False
+
+    def update_rotation(self, scene_position: QtCore.QPointF) -> None:
+        if self._rotation_last_angle_deg is None:
+            return
+        angle = self._pointer_angle(scene_position)
+        increment = Transform.normalized_rotation(
+            angle - self._rotation_last_angle_deg
+        )
+        self._rotation_last_angle_deg = angle
+        if abs(increment) > 1e-12:
+            self._rotation_moved = True
+            self._rotation_accumulated_deg += increment
+            self.setRotation(
+                self._rotation_start_group_deg - self._rotation_accumulated_deg
+            )
+            self._emit_edited()
+
+    def finish_rotation(self, scene_position: QtCore.QPointF) -> None:
+        if self._rotation_last_angle_deg is None:
+            return
+        self.update_rotation(scene_position)
+        moved = self._rotation_moved
+        self._rotation_last_angle_deg = None
+        self._rotation_moved = False
+        if moved:
+            self._emit_committed()
+
+    def _pointer_angle(self, scene_position: QtCore.QPointF) -> float:
+        center_scene = self.mapToScene(self._center_local)
+        delta_x = scene_position.x() - center_scene.x()
+        delta_y = -(scene_position.y() - center_scene.y())
+        return math.degrees(math.atan2(delta_y, delta_x))
+
+    def _emit_edited(self) -> None:
+        self._edited_callback(*self.placement())
+
+    def _emit_committed(self) -> None:
+        self._committed_callback(*self.placement())
+
+
 
 class RulerWidget(QtWidgets.QWidget):
     def __init__(
@@ -334,6 +607,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     cursorPositionChanged = QtCore.Signal(float, float)
     selectionIdsChanged = QtCore.Signal(list)
     objectMoveCommitted = QtCore.Signal(str, object, object)
+    templatePlacementEdited = QtCore.Signal(float, float, float)
+    templatePlacementCommitted = QtCore.Signal(float, float, float)
     deleteRequested = QtCore.Signal()
     zoomChanged = QtCore.Signal(float)
     pointPicked = QtCore.Signal(float, float)
@@ -367,6 +642,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._toolpath_items: list[QtWidgets.QGraphicsLineItem] = []
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
         self._template_items: list[QtWidgets.QGraphicsItem] = []
+        self._template_preview_item: _TemplatePreviewGraphicsItem | None = None
+        self._template_rotation_handle: _TemplateRotationHandle | None = None
         self._point_pick_active = False
         self.snap_enabled = True
         self.snap_step_mm = 1.0
@@ -375,6 +652,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._space_pan = False
         self._pan_button = QtCore.Qt.MouseButton.NoButton
         self.workspace_scene.selectionChanged.connect(self._emit_selection)
+        self.zoomChanged.connect(self._template_zoom_changed)
         self.fit_work_area()
 
     @property
@@ -518,14 +796,24 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 self._trace_items.append(label)
 
     def clear_template_preview(self) -> None:
+        if self._template_preview_item is not None:
+            if self._template_preview_item.scene() is self.workspace_scene:
+                self.workspace_scene.removeItem(self._template_preview_item)
+            self._template_preview_item = None
+            self._template_rotation_handle = None
         for item in self._template_items:
-            self.workspace_scene.removeItem(item)
+            if item.scene() is self.workspace_scene:
+                self.workspace_scene.removeItem(item)
         self._template_items.clear()
 
     def set_template_preview(
         self,
         objects: list[SceneObject],
         detections: list[dict[str, Any]] | None = None,
+        *,
+        center_x_mm: float | None = None,
+        center_y_mm: float | None = None,
+        rotation_deg: float = 0.0,
     ) -> None:
         """Draw reviewed template geometry without adding it to the project."""
 
@@ -554,36 +842,31 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.workspace_scene.addItem(item)
             self._template_items.append(item)
 
-        color = QtGui.QColor("#45D7FF")
-        for scene_object in objects:
-            path = ObjectGraphicsItem._path_for_object(scene_object)
-            if path.isEmpty():
-                continue
-            item = QtWidgets.QGraphicsPathItem(path)
-            pen = QtGui.QPen(color)
-            pen.setWidthF(0.55)
-            pen.setCosmetic(True)
-            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
-            item.setPen(pen)
-            fill = QtGui.QColor(color)
-            fill.setAlpha(12)
-            item.setBrush(fill)
-            item.setPos(
-                scene_object.transform.x_mm,
-                -scene_object.transform.y_mm,
-            )
-            item.setRotation(-scene_object.transform.rotation_deg)
-            transform = QtGui.QTransform()
-            transform.scale(
-                -1.0 if scene_object.transform.mirror_x else 1.0,
-                -1.0 if scene_object.transform.mirror_y else 1.0,
-            )
-            item.setTransform(transform)
-            item.setZValue(280.0)
-            item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
-            item.setToolTip(f"Template preview: {scene_object.name}")
-            self.workspace_scene.addItem(item)
-            self._template_items.append(item)
+        if not objects:
+            return
+        bounds = objects[0].bounds()
+        for scene_object in objects[1:]:
+            bounds = bounds.union(scene_object.bounds())
+        derived_x, derived_y = bounds.center
+        preview = _TemplatePreviewGraphicsItem(
+            objects,
+            center_x_mm=derived_x if center_x_mm is None else float(center_x_mm),
+            center_y_mm=derived_y if center_y_mm is None else float(center_y_mm),
+            rotation_deg=float(rotation_deg),
+            edited_callback=self.templatePlacementEdited.emit,
+            committed_callback=self.templatePlacementCommitted.emit,
+        )
+        if not preview.has_geometry:
+            return
+        self.workspace_scene.addItem(preview)
+        self._template_preview_item = preview
+        self._template_rotation_handle = preview.rotation_handle
+        self._template_items.extend(preview.visual_items)
+        preview.set_view_scale(abs(self.transform().m11()))
+
+    def _template_zoom_changed(self, scale: float) -> None:
+        if self._template_preview_item is not None:
+            self._template_preview_item.set_view_scale(scale)
 
     def clear_toolpath_preview(self) -> None:
         for item in self._toolpath_items:
@@ -684,7 +967,13 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             item.setSelected(object_id in wanted)
 
     def _emit_selection(self) -> None:
-        self.selectionIdsChanged.emit(self.selected_object_ids())
+        # Qt may deliver a final selectionChanged while tearing the owned
+        # scene down; its Python wrapper can already outlive the C++ scene.
+        try:
+            selected = self.selected_object_ids()
+        except RuntimeError:
+            return
+        self.selectionIdsChanged.emit(selected)
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         self.zoom_by(1.18 if event.angleDelta().y() > 0 else 1.0 / 1.18)

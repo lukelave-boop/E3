@@ -79,6 +79,10 @@
   so a one-template library can always open its workspace preview.
 - Kept manual template placement visible until the operator explicitly starts
   **Align selected template** or automatic camera identification.
+- Added direct manipulation of the transient cyan template preview: dragging a
+  cut moves the complete layout and dragging its round handle rotates the
+  layout about the reviewed center, with numeric placement controls kept in
+  sync and camera detections left fixed for comparison.
 
 ### Documentation
 

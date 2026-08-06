@@ -147,7 +147,8 @@ test. POSIX serial is selected lazily; Linux remains the only hardware platform.
 1. Windows launch scripts, OS-native user-data paths, and CI.
 2. Native lens and camera-to-machine calibration wizards.
 3. Behavioral Qt tests for project editing and object tracing.
-4. On-canvas resize and rotation handles plus smart snap guides.
+4. General project-object resize/rotation handles plus smart snap guides. The
+   transient cutting-template preview already supports rigid drag and rotation.
 5. Guarded jog API and tested controller-specific realtime pause/resume.
 6. DXF/image import and text-to-outline conversion.
 7. Fill and raster engines with overscan and scan-direction tests.

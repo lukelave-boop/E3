@@ -15,7 +15,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget tests")
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtTest, QtWidgets
 
 import laser_aligner.desktop.controller as controller_module
 from laser_aligner.desktop.controller import DesktopController
@@ -48,6 +48,60 @@ def _template_summary(template_id: str, name: str) -> dict[str, object]:
         "width_mm": 90.0,
         "height_mm": 60.0,
     }
+
+
+def _show_workspace(
+    view: WorkspaceView,
+    application: QtWidgets.QApplication,
+) -> None:
+    view.resize(660, 520)
+    view.show()
+    application.processEvents()
+    view.fit_work_area()
+    application.processEvents()
+
+
+def _drag_scene_point(
+    view: WorkspaceView,
+    start: QtCore.QPointF,
+    end: QtCore.QPointF,
+    application: QtWidgets.QApplication,
+) -> tuple[QtCore.QPointF, QtCore.QPointF]:
+    start_view = view.mapFromScene(start)
+    end_view = view.mapFromScene(end)
+    actual_start = view.mapToScene(start_view)
+    actual_end = view.mapToScene(end_view)
+    QtTest.QTest.mousePress(
+        view.viewport(),
+        QtCore.Qt.MouseButton.LeftButton,
+        QtCore.Qt.KeyboardModifier.NoModifier,
+        start_view,
+    )
+    QtTest.QTest.mouseMove(view.viewport(), end_view, 10)
+    QtTest.QTest.mouseRelease(
+        view.viewport(),
+        QtCore.Qt.MouseButton.LeftButton,
+        QtCore.Qt.KeyboardModifier.NoModifier,
+        end_view,
+    )
+    application.processEvents()
+    return actual_start, actual_end
+
+
+def _template_item(view: WorkspaceView, name: str) -> QtWidgets.QGraphicsItem:
+    expected = f"Template preview: {name}"
+    matches = [
+        item for item in view._template_items if item.toolTip() == expected
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def _machine_center(
+    view: WorkspaceView,
+    item: QtWidgets.QGraphicsItem,
+) -> tuple[float, float]:
+    return view.workspace_scene.scene_to_machine(item.sceneBoundingRect().center())
 
 
 class _WorkspaceHarness:
@@ -338,6 +392,40 @@ def test_template_panel_reports_manual_override_selection(
 
     assert selected == ["template-b"]
     assert panel.current_template_id() == "template-b"
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_template_panel_does_not_restore_a_match_after_calibration_is_lost(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    panel.set_templates([_template_summary("template-a", "Alpha labels")])
+    panel.set_calibration_ready(True)
+    panel.set_match_result(
+        {
+            "template_id": "template-a",
+            "center_x_mm": 42.5,
+            "center_y_mm": 73.25,
+            "rotation_deg": 2.0,
+            "confidence": 0.94,
+            "rms_error_mm": 0.18,
+            "matched_count": 11,
+            "feature_count": 12,
+        }
+    )
+    panel.set_match_adjusted(True)
+    assert "94%" in panel.match_status.text()
+    assert "adjusted manually" in panel.match_status.text()
+
+    panel.set_calibration_ready(False)
+    calibration_warning = panel.match_status.text()
+    panel.set_match_adjusted(False)
+
+    assert "Bed mapping is required" in calibration_warning
+    assert panel.match_status.text() == calibration_warning
+    assert "94%" not in panel.match_status.text()
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()
@@ -807,6 +895,279 @@ def test_focus_change_cancels_an_in_flight_template_match() -> None:
     assert "Camera focus changed" in window.notices[0]
 
 
+def test_workspace_template_drag_moves_the_whole_preview(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    layer_id = "preview-layer"
+    left = SceneObject.rectangle(
+        layer_id,
+        name="Left preview cut",
+        center=(90.0, 100.0),
+        width_mm=12.0,
+        height_mm=8.0,
+    )
+    right = SceneObject.rectangle(
+        layer_id,
+        name="Right preview cut",
+        center=(110.0, 100.0),
+        width_mm=12.0,
+        height_mm=8.0,
+    )
+    view.set_template_preview(
+        [left, right],
+        detections=[
+            {
+                "center_mm": [100.0, 100.0],
+                "contour_mm": [
+                    [86.0, 96.0],
+                    [114.0, 96.0],
+                    [114.0, 104.0],
+                    [86.0, 104.0],
+                ],
+            }
+        ],
+        center_x_mm=100.0,
+        center_y_mm=100.0,
+        rotation_deg=0.0,
+    )
+    edited: list[tuple[float, float, float]] = []
+    committed: list[tuple[float, float, float]] = []
+    view.templatePlacementEdited.connect(
+        lambda x, y, rotation: edited.append((x, y, rotation))
+    )
+    view.templatePlacementCommitted.connect(
+        lambda x, y, rotation: committed.append((x, y, rotation))
+    )
+
+    observed = next(
+        item
+        for item in view._template_items
+        if item.toolTip() == "Observed camera feature"
+    )
+    observed_before = observed.sceneBoundingRect()
+    left_item = _template_item(view, left.name)
+    right_item = _template_item(view, right.name)
+    centers_before = (
+        _machine_center(view, left_item),
+        _machine_center(view, right_item),
+    )
+    actual_start, actual_end = _drag_scene_point(
+        view,
+        view.workspace_scene.machine_to_scene(90.0, 100.0),
+        view.workspace_scene.machine_to_scene(105.0, 107.0),
+        qt_application,
+    )
+    start_machine = view.workspace_scene.scene_to_machine(actual_start)
+    end_machine = view.workspace_scene.scene_to_machine(actual_end)
+    expected_dx = end_machine[0] - start_machine[0]
+    expected_dy = end_machine[1] - start_machine[1]
+
+    assert edited
+    assert committed
+    assert committed[-1] == pytest.approx(
+        (100.0 + expected_dx, 100.0 + expected_dy, 0.0),
+        abs=0.35,
+    )
+    centers_after = (
+        _machine_center(view, left_item),
+        _machine_center(view, right_item),
+    )
+    for before, after in zip(centers_before, centers_after, strict=True):
+        assert after == pytest.approx(
+            (before[0] + expected_dx, before[1] + expected_dy),
+            abs=0.35,
+        )
+    assert (
+        centers_after[1][0] - centers_after[0][0],
+        centers_after[1][1] - centers_after[0][1],
+    ) == pytest.approx((20.0, 0.0), abs=0.01)
+    assert observed.sceneBoundingRect() == observed_before
+    assert view.selected_object_ids() == []
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_workspace_template_rotation_uses_the_explicit_center_and_machine_sign(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    layer_id = "preview-layer"
+    left = SceneObject.rectangle(
+        layer_id,
+        name="Left rotation cut",
+        center=(90.0, 100.0),
+        width_mm=12.0,
+        height_mm=8.0,
+    )
+    right = SceneObject.rectangle(
+        layer_id,
+        name="Right rotation cut",
+        center=(110.0, 100.0),
+        width_mm=12.0,
+        height_mm=8.0,
+    )
+    view.set_template_preview(
+        [left, right],
+        center_x_mm=100.0,
+        center_y_mm=100.0,
+        rotation_deg=0.0,
+    )
+    edited: list[tuple[float, float, float]] = []
+    committed: list[tuple[float, float, float]] = []
+    view.templatePlacementEdited.connect(
+        lambda x, y, rotation: edited.append((x, y, rotation))
+    )
+    view.templatePlacementCommitted.connect(
+        lambda x, y, rotation: committed.append((x, y, rotation))
+    )
+
+    handle = view._template_rotation_handle
+    assert handle is not None
+    center_scene = view.workspace_scene.machine_to_scene(100.0, 100.0)
+    handle_scene = handle.sceneBoundingRect().center()
+    handle_vector = handle_scene - center_scene
+    # Convert a positive 90-degree machine rotation into the Y-down scene.
+    target_scene = center_scene + QtCore.QPointF(
+        handle_vector.y(),
+        -handle_vector.x(),
+    )
+    _drag_scene_point(view, handle_scene, target_scene, qt_application)
+
+    assert edited
+    assert committed
+    assert committed[-1][0:2] == pytest.approx((100.0, 100.0), abs=0.01)
+    assert committed[-1][2] == pytest.approx(90.0, abs=1.0)
+    assert _machine_center(view, _template_item(view, left.name)) == pytest.approx(
+        (100.0, 90.0),
+        abs=0.35,
+    )
+    assert _machine_center(view, _template_item(view, right.name)) == pytest.approx(
+        (100.0, 110.0),
+        abs=0.35,
+    )
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_canvas_template_placement_syncs_panel_without_recursive_emission(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    panel.set_templates([_template_summary("template-a", "Alpha labels")])
+    panel.set_placement(100.0, 100.0, 0.0, emit=False)
+    placement_effects: list[dict[str, object]] = []
+    panel.placementChanged.connect(placement_effects.append)
+    harness = SimpleNamespace(
+        template_panel=panel,
+        _template_placement_changed=placement_effects.append,
+        _update_template_match_adjustment=lambda payload: None,
+    )
+
+    E3MainWindow._template_canvas_placement_edited(
+        harness,
+        120.25,
+        81.5,
+        17.0,
+    )
+
+    assert panel.x_spin.value() == pytest.approx(120.25)
+    assert panel.y_spin.value() == pytest.approx(81.5)
+    assert panel.rotation_spin.value() == pytest.approx(17.0)
+    assert placement_effects == []
+
+    E3MainWindow._template_canvas_placement_committed(
+        harness,
+        121.0,
+        82.0,
+        18.5,
+    )
+    qt_application.processEvents()
+
+    assert panel.placement() == {
+        "template_id": "template-a",
+        "center_x_mm": 121.0,
+        "center_y_mm": 82.0,
+        "rotation_deg": 18.5,
+    }
+    assert placement_effects == [panel.placement()]
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_template_controls_do_not_intercept_ordinary_object_drag(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    document = ProjectDocument.new(work_area=Bounds(0.0, 0.0, 220.0, 220.0))
+    ordinary = SceneObject.rectangle(
+        document.active_layer_id,
+        name="Ordinary object",
+        center=(40.0, 40.0),
+        width_mm=12.0,
+        height_mm=8.0,
+    )
+    document.add_object(ordinary)
+    view.set_document(document)
+    preview = SceneObject.rectangle(
+        "preview-layer",
+        name="Remote preview",
+        center=(170.0, 170.0),
+        width_mm=20.0,
+        height_mm=10.0,
+    )
+    view.set_template_preview(
+        [preview],
+        center_x_mm=170.0,
+        center_y_mm=170.0,
+        rotation_deg=0.0,
+    )
+    ordinary_moves: list[tuple[str, object, object]] = []
+    template_edits: list[tuple[float, float, float]] = []
+    template_commits: list[tuple[float, float, float]] = []
+    view.objectMoveCommitted.connect(
+        lambda object_id, before, after: ordinary_moves.append(
+            (object_id, before, after)
+        )
+    )
+    view.templatePlacementEdited.connect(
+        lambda x, y, rotation: template_edits.append((x, y, rotation))
+    )
+    view.templatePlacementCommitted.connect(
+        lambda x, y, rotation: template_commits.append((x, y, rotation))
+    )
+    preview_before = _machine_center(view, _template_item(view, preview.name))
+
+    _drag_scene_point(
+        view,
+        view.workspace_scene.machine_to_scene(40.0, 40.0),
+        view.workspace_scene.machine_to_scene(50.0, 45.0),
+        qt_application,
+    )
+
+    assert len(ordinary_moves) == 1
+    assert ordinary_moves[0][0] == ordinary.id
+    assert ordinary_moves[0][1] == pytest.approx((40.0, 40.0))
+    assert ordinary_moves[0][2] == pytest.approx((50.0, 45.0), abs=0.35)
+    assert template_edits == []
+    assert template_commits == []
+    assert _machine_center(view, _template_item(view, preview.name)) == pytest.approx(
+        preview_before
+    )
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
 def test_workspace_template_preview_is_transient_and_independent(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -857,6 +1218,9 @@ def test_workspace_template_preview_is_transient_and_independent(
                 ]
             }
         ],
+        center_x_mm=46.0,
+        center_y_mm=44.5,
+        rotation_deg=0.0,
     )
 
     assert len(view._template_items) == 3
@@ -886,7 +1250,12 @@ def test_workspace_template_preview_is_transient_and_independent(
     assert view.selected_object_ids() == []
 
     previous_items = list(view._template_items)
-    view.set_template_preview([ellipse])
+    view.set_template_preview(
+        [ellipse],
+        center_x_mm=80.0,
+        center_y_mm=55.0,
+        rotation_deg=0.0,
+    )
     assert len(view._template_items) == 1
     assert all(item.scene() is None for item in previous_items)
     assert len(view._trace_items) == trace_count

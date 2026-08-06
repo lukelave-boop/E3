@@ -31,7 +31,7 @@ Environment:
 
 Results:
 
-- **184 tests passed and 2 POSIX-only tests skipped.**
+- **189 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
@@ -39,9 +39,10 @@ Results:
 - The browser simulator served its health endpoint and HTML interface.
 - The native desktop started, ran, and shut down with Qt's offscreen backend,
   the synthetic camera, and the simulated controller.
-- A focused 39-test cutting-template run covered the portable model/library,
+- A focused 49-test cutting-template run covered the portable model/library,
   synthetic matcher, controller acceptance/cancellation behavior, widgets,
-  overlay, apply/undo, and stale generated-job protection.
+  direct-canvas drag/rotation, overlay, apply/undo, and stale generated-job
+  protection.
 - An actual offscreen `E3MainWindow` smoke test exercised template library
   refresh, placement, one-command application, and undo.
 - A second offscreen `E3MainWindow` smoke test drove the modal designer through
@@ -61,7 +62,8 @@ and designer, exact-ID template replacement, gap/pitch conversion, the
 500-object and work-area gates, and atomic rectangle width/height/radius editing.
 Toolpath coverage also verifies that insignificant floating-point drift at an
 exact work-area boundary is accepted while meaningful overflow remains blocked.
-The complete 184-test suite passed after the authoring and layout-focused runs.
+The complete 189-test suite passed after the direct-manipulation, authoring, and
+layout-focused runs.
 
 POSIX serial is selected lazily, so `termios` is not imported by simulator or
 application startup on Windows. Selecting the real serial backend on Windows
@@ -110,7 +112,7 @@ from 2026-08-06 has not been run as a complete Linux suite during this audit.
 | Geometric template matching and candidate ranking | Tested with synthetic features on Windows |
 | Rectangle-grid builder and editable authoring metadata | Tested with portable model/library checks on Windows |
 | Grid designer and ordinary rectangle radius editing | Behaviorally tested offscreen; not interactively verified |
-| Native template save/select/review/apply workflow | Behaviorally tested offscreen; not real-camera verified |
+| Native template save/select/review/direct-canvas-adjust/apply workflow | Behaviorally tested offscreen; not real-camera verified |
 | Native desktop simulator startup | Smoke-tested offscreen on Windows |
 | Browser simulator startup | Smoke-tested through HTTP on Windows |
 | Machine simulator safety suite | Tested on Windows |
@@ -152,6 +154,11 @@ batch of new project objects. The current match gates are conservative,
 provisional software checks rather than evidence of physical alignment
 accuracy. See
 [docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md).
+
+Before application, the transient cyan cut preview can be dragged as one rigid
+layout and rotated with its round canvas handle. These gestures update the same
+center/rotation values as the numeric controls; they do not resize cuts or move
+the frozen amber camera detections.
 
 Regular-grid templates support at most 500 rounded-rectangle cuts. Their
 authoring recipe stores edge gaps and derives center pitch and footprint; the

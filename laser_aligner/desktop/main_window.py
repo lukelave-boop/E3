@@ -621,6 +621,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.workspace.selectionIdsChanged.connect(self._selection_changed)
         self.workspace.objectMoveCommitted.connect(self._object_moved)
+        self.workspace.templatePlacementEdited.connect(
+            self._template_canvas_placement_edited
+        )
+        self.workspace.templatePlacementCommitted.connect(
+            self._template_canvas_placement_committed
+        )
         self.workspace.deleteRequested.connect(self.delete_selection)
         self.workspace.pointPicked.connect(self._trace_point_picked)
 
@@ -1608,10 +1614,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._template_match_result = None
         center_x, center_y = self._document_center()
         self.template_panel.set_placement(center_x, center_y, 0.0)
-
-    def _template_selected(self, template_id: str) -> None:
-        self.workspace.clear_template_preview()
-        self._set_manual_template_placement(template_id)
         if self.runtime.context.bed.calibration is not None:
             self.template_panel.set_match_message(
                 "Manual placement is active. Choose Align selected template "
@@ -1621,6 +1623,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.template_panel.set_match_message(
                 "Manual placement is active. Bed mapping is required for camera alignment."
             )
+
+    def _template_selected(self, template_id: str) -> None:
+        self.workspace.clear_template_preview()
+        self._set_manual_template_placement(template_id)
 
     def _request_template_match(self, template_id: str | None = None) -> None:
         if not self._templates:
@@ -1685,12 +1691,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if template is None:
             self.workspace.clear_template_preview()
             return
+        center_x = float(payload.get("center_x_mm", 0.0))
+        center_y = float(payload.get("center_y_mm", 0.0))
+        rotation = float(payload.get("rotation_deg", 0.0))
+        self._update_template_match_adjustment(payload)
         try:
             objects = instantiate_template(
                 template,
-                target_x_mm=float(payload.get("center_x_mm", 0.0)),
-                target_y_mm=float(payload.get("center_y_mm", 0.0)),
-                rotation_deg=float(payload.get("rotation_deg", 0.0)),
+                target_x_mm=center_x,
+                target_y_mm=center_y,
+                rotation_deg=rotation,
                 target_layer_id=self.active_layer_id,
             )
         except Exception as exc:
@@ -1704,7 +1714,79 @@ class E3MainWindow(QtWidgets.QMainWindow):
             and self._template_match_result.get("template_id") == template_id
         ):
             detections = list(self._template_match_result.get("detections", []))
-        self.workspace.set_template_preview(objects, detections=detections)
+        self.workspace.set_template_preview(
+            objects,
+            detections=detections,
+            center_x_mm=center_x,
+            center_y_mm=center_y,
+            rotation_deg=rotation,
+        )
+
+    def _template_canvas_placement_edited(
+        self,
+        center_x_mm: float,
+        center_y_mm: float,
+        rotation_deg: float,
+    ) -> None:
+        """Mirror a live canvas gesture into the numeric placement controls."""
+
+        self.template_panel.set_placement(
+            center_x_mm,
+            center_y_mm,
+            rotation_deg,
+            emit=False,
+        )
+        self._update_template_match_adjustment(self.template_panel.placement())
+
+    def _template_canvas_placement_committed(
+        self,
+        center_x_mm: float,
+        center_y_mm: float,
+        rotation_deg: float,
+    ) -> None:
+        """Redraw a completed gesture from the panel's canonical precision."""
+
+        self.template_panel.set_placement(
+            center_x_mm,
+            center_y_mm,
+            rotation_deg,
+            emit=False,
+        )
+        payload = dict(self.template_panel.placement())
+        self._update_template_match_adjustment(payload)
+        QtCore.QTimer.singleShot(
+            0,
+            lambda payload=payload: self._template_placement_changed(payload),
+        )
+
+    def _update_template_match_adjustment(self, payload: dict[str, Any]) -> None:
+        result = self._template_match_result
+        if result is None:
+            return
+        template_id = str(payload.get("template_id") or "")
+        if template_id != str(result.get("template_id") or ""):
+            return
+        tolerance = 0.0005 + 1e-9
+        center_changed = (
+            abs(
+                float(payload.get("center_x_mm", 0.0))
+                - float(result.get("center_x_mm", 0.0))
+            )
+            > tolerance
+            or abs(
+                float(payload.get("center_y_mm", 0.0))
+                - float(result.get("center_y_mm", 0.0))
+            )
+            > tolerance
+        )
+        rotation_delta = (
+            float(payload.get("rotation_deg", 0.0))
+            - float(result.get("rotation_deg", 0.0))
+            + 180.0
+        ) % 360.0 - 180.0
+        self.template_panel.set_match_adjusted(
+            center_changed or abs(rotation_delta) > tolerance
+        )
 
     def _apply_template_objects(self, payload: dict[str, Any]) -> None:
         template_id = str(payload.get("template_id") or "")

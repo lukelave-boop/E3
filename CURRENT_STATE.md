@@ -101,7 +101,7 @@ rectangle-grid recipe or visible project output objects
   -> normalized cut objects and matching features
   -> versioned .e3template library item
   -> manual selection or geometric candidate ranking
-  -> reviewed translation + rotation overlay
+  -> reviewed translation + rotation overlay with synchronized canvas controls
   -> one AddObjectsCommand into the active project layer
 ```
 
@@ -124,10 +124,10 @@ Audit environment:
 
 Results:
 
-- **184 tests passed and 2 POSIX-only tests skipped.**
+- **189 tests passed and 2 POSIX-only tests skipped.**
 - The complete suite collected, including app simulation and machine-service
   tests.
-- A focused cutting-template run passed 39 model, library, matcher, controller,
+- A focused cutting-template run passed 49 model, library, matcher, controller,
   widget, workspace, and desktop-integration tests.
 - The browser simulator served a healthy API response and its HTML interface.
 - The native desktop started with the synthetic camera and simulated controller
@@ -147,7 +147,8 @@ Results:
 The cutting-template coverage includes versioned persistence, resilient
 catalog scans, compound imported paths, rigid matching, ambiguity and weak-match
 rejection, frozen-frame review, cancellation of stale results, transient
-overlays, object creation/undo, and generated-job revision invalidation.
+overlays, direct-canvas rigid drag/rotation, object creation/undo, and
+generated-job revision invalidation.
 
 The authoring update additionally has a 72-test focused integration run covering
 rectangle width/height/radius edits, regular-grid generation, editable authoring
@@ -245,7 +246,8 @@ been exercised end to end with the real camera and calibration.
 - Template-local normalization around the combined cut bounds.
 - Per-outer-contour matching features for compound imported SVG paths, with
   contained holes excluded.
-- Manual library selection and manual center/rotation adjustment.
+- Manual library selection plus synchronized numeric and direct-canvas
+  center/rotation adjustment of the complete transient cut preview.
 - Synthetic geometry-based template ranking, weak-match rejection, and
   template/pose ambiguity warnings.
 - One corrected frame shared across all candidate trace settings and frozen
@@ -288,7 +290,9 @@ No marker detector is implemented. See
 - No fill or raster engine.
 - No text-to-outline conversion.
 - No image or DXF import.
-- No on-canvas resize/rotation handles or smart guides.
+- No on-canvas resize handles, general project-object rotation handles, or
+  smart guides. The transient cutting-template preview has its own rigid-body
+  drag and rotation controls.
 - No full interactive end-to-end GUI automation.
 - Cutting-template matching uses provisional software acceptance gates, but has
   no real-camera validation dataset or physically measured accuracy threshold.

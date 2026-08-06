@@ -63,7 +63,9 @@ not yet verified. See
 
 Reusable label-sheet cutting templates can be created from visible project
 objects, selected manually or ranked against detected sheet geometry, and
-placed by reviewed translation and rotation. Scale is never applied
+placed by reviewed translation and rotation. Drag the cyan preview directly in
+the workspace to move the whole cut layout, or drag its round handle to rotate
+it; the canvas and numeric placement fields remain synchronized. Scale is never applied
 automatically. Marker IDs are reserved in the file format but marker detection
 is not implemented. Automatic review uses one frozen corrected-camera frame,
 rejects weak or ambiguous fits, and always leaves final adjustment and approval

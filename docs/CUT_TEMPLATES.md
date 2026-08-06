@@ -67,7 +67,11 @@ be opened with **Edit grid…**.
    the library against the detected label geometry.
 3. Review the proposed center, rotation, match confidence, residual error, and
    warnings over the frozen camera image used for that exact match.
-4. Nudge the center or rotation when necessary.
+4. Adjust the placement when necessary. Drag any cyan cut to move the entire
+   template, drag the round handle to rotate it about its reviewed center, or
+   use the Center X, Center Y, Rotation, and nudge controls. Canvas gestures and
+   numeric values stay synchronized; amber camera detections remain fixed so
+   the correction can be compared against the captured sheet.
 5. Choose **Create aligned cut objects**. All template objects are added to the
    active project layer as one undoable batch.
 
@@ -142,6 +146,10 @@ Width, height, local geometry, and relative spacing are preserved. Observed
 scale differences are diagnostic warnings and are never applied to cut
 geometry. Unexpected scale can indicate incorrect calibration, parallax,
 camera pose, material height, or the wrong template and must be reviewed.
+Direct canvas editing is also a rigid placement operation: it cannot resize an
+individual cut or change spacing inside the template. Once the reviewed cuts
+are created in the project, they become ordinary project objects rather than a
+persistent template group.
 
 Automatic acceptance currently requires at least three matched features, two
 direct detections, 50% template coverage, 55% confidence, no more than 1.0 mm
@@ -165,9 +173,9 @@ objects; stale generated output is refused before machine access.
 The template model, versioned round trip, atomic and resilient library behavior,
 normalization, compound-path features, rigid instantiation, malformed-schema
 rejection, and geometric alignment/ranking have synthetic automated coverage.
-The controller, widgets, frozen-frame review, transient overlay, object
-application/undo, cancellation, and stale-job guards have offscreen behavioral
-coverage. An actual offscreen desktop window also completed a template
+The controller, widgets, frozen-frame review, transient overlay, direct-canvas
+drag/rotation, object application/undo, cancellation, and stale-job guards have
+offscreen behavioral coverage. An actual offscreen desktop window also completed a template
 save/reload/apply/undo smoke test.
 
 The rectangle-grid builder, editable authoring metadata, exact-ID library
