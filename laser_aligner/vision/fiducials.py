@@ -38,3 +38,130 @@ def detect_aruco_markers(
             }
         )
     return markers
+
+
+def _order_quad(points: np.ndarray) -> np.ndarray:
+    points = np.asarray(points, dtype=np.float32).reshape(4, 2)
+    ordered = np.zeros((4, 2), dtype=np.float32)
+    sums = points.sum(axis=1)
+    diffs = np.diff(points, axis=1).reshape(-1)
+    ordered[0] = points[np.argmin(sums)]
+    ordered[2] = points[np.argmax(sums)]
+    ordered[1] = points[np.argmin(diffs)]
+    ordered[3] = points[np.argmax(diffs)]
+    return ordered
+
+
+def _largest_plate_quad(gray: np.ndarray) -> np.ndarray | None:
+    height, width = gray.shape[:2]
+    image_area = float(height * width)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 35, 110)
+    edges = cv2.morphologyEx(
+        edges,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9)),
+        iterations=2,
+    )
+    contours, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+    candidates = []
+    for contour in contours:
+        area = abs(float(cv2.contourArea(contour)))
+        if area < image_area * 0.08:
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+        if len(approx) != 4 or not cv2.isContourConvex(approx):
+            continue
+        quad = _order_quad(approx.reshape(4, 2))
+        top = np.linalg.norm(quad[1] - quad[0])
+        bottom = np.linalg.norm(quad[2] - quad[3])
+        left = np.linalg.norm(quad[3] - quad[0])
+        right = np.linalg.norm(quad[2] - quad[1])
+        if min(top, bottom, left, right) < 80:
+            continue
+        aspect = ((top + bottom) * 0.5) / max(1.0, (left + right) * 0.5)
+        if 0.65 <= aspect <= 1.55:
+            candidates.append((area, quad))
+    return None if not candidates else max(candidates, key=lambda item: item[0])[1]
+
+
+def _cross_response(gray: np.ndarray) -> np.ndarray:
+    normalized = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+    dark = 255 - normalized
+    size = 41
+    center = size // 2
+    kernel = np.full((size, size), -0.05, dtype=np.float32)
+    kernel[center - 1:center + 2, 5:size - 5] = 1.0
+    kernel[5:size - 5, center - 1:center + 2] = 1.0
+    cv2.circle(kernel, (center, center), 7, 0.35, 1)
+    kernel -= kernel.mean()
+    response = cv2.filter2D(dark.astype(np.float32), cv2.CV_32F, kernel)
+    return cv2.GaussianBlur(response, (5, 5), 0)
+
+
+def detect_crosshair_grid(
+    image: np.ndarray,
+    grid_size: int = 5,
+    plate_size_mm: float = 220.0,
+    coordinates_mm: tuple[float, ...] = (10.0, 60.0, 110.0, 160.0, 210.0),
+) -> dict[str, Any]:
+    if image is None or image.size == 0:
+        return {'detected': False, 'reason': 'Empty image', 'points': []}
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    quad = _largest_plate_quad(gray)
+    if quad is None:
+        return {'detected': False, 'reason': 'Could not find the calibration plate boundary', 'points': []}
+    warp_size = 1000
+    destination = np.array([[0, 0], [999, 0], [999, 999], [0, 999]], dtype=np.float32)
+    image_to_plate = cv2.getPerspectiveTransform(quad, destination)
+    plate_to_image = cv2.getPerspectiveTransform(destination, quad)
+    warped = cv2.warpPerspective(gray, image_to_plate, (warp_size, warp_size))
+    response = _cross_response(warped)
+    expected = [value / plate_size_mm * (warp_size - 1) for value in coordinates_mm]
+    search_radius = 50
+    points = []
+    scores = []
+    for row_top, machine_y in enumerate(reversed(coordinates_mm)):
+        expected_y = expected[len(expected) - 1 - row_top]
+        for col, machine_x in enumerate(coordinates_mm):
+            expected_x = expected[col]
+            x0 = max(0, int(expected_x - search_radius))
+            x1 = min(warp_size, int(expected_x + search_radius + 1))
+            y0 = max(0, int(expected_y - search_radius))
+            y1 = min(warp_size, int(expected_y + search_radius + 1))
+            roi = response[y0:y1, x0:x1]
+            _, peak, _, location = cv2.minMaxLoc(roi)
+            px = float(x0 + location[0])
+            py = float(y0 + location[1])
+            image_point = cv2.perspectiveTransform(np.asarray([[[px, py]]], dtype=np.float32), plate_to_image)[0, 0]
+            row_from_bottom = coordinates_mm.index(machine_y)
+            identifier = row_from_bottom * grid_size + col + 1
+            scores.append(float(peak))
+            points.append({
+                'id': identifier,
+                'image_x': float(image_point[0]),
+                'image_y': float(image_point[1]),
+                'machine_x': float(machine_x),
+                'machine_y': float(machine_y),
+                'label': f'Auto fiducial {identifier}',
+                'score': float(peak),
+            })
+    if len(points) != 25:
+        return {'detected': False, 'reason': f'Detected only {len(points)} of 25 expected locations', 'points': points}
+    score_array = np.asarray(scores, dtype=np.float64)
+    median = float(np.median(score_array))
+    minimum = float(np.min(score_array))
+    confidence = 'high'
+    if median <= 0 or minimum < median * 0.25:
+        confidence = 'low'
+    elif minimum < median * 0.45:
+        confidence = 'medium'
+    points.sort(key=lambda point: point['id'])
+    return {
+        'detected': True,
+        'points': points,
+        'plate_corners': quad.tolist(),
+        'confidence': confidence,
+        'orientation': 'X+ camera-right; Y+ camera-up',
+    }

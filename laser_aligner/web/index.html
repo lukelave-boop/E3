@@ -157,10 +157,31 @@
         <div class="calibration-layout">
           <div class="canvas-panel">
             <canvas id="bedCalibrationCanvas"></canvas>
-            <p class="muted">Click the center of a known mark, enter the exact machine coordinate, then add the point. Spread points across the whole usable area.</p>
+            <p class="muted">Load the coordinate CSV, then click each numbered fiducial in order. The matching machine coordinate is filled automatically.</p>
           </div>
           <aside class="panel compact">
             <h3>Selected correspondence</h3>
+            <label class="checkbox">
+              <input id="temporaryBedMapping" type="checkbox">
+              This calibration is only for a temporary test setup
+            </label>
+            <div id="bedMappingPurpose" class="small-summary">Calibration purpose: final installation</div>
+            <button class="danger ghost full" id="resetForFinalInstallationButton" type="button">
+              Clear test mapping for final installation
+            </button>
+            <label class="file-picker">Load coordinate CSV
+              <input id="bedCoordinateCsvInput" type="file" accept=".csv,text/csv">
+            </label>
+            <div class="button-row stack-on-small">
+              <button id="autoDetectBedButton" type="button">Detect 5×5 calibration plate</button>
+              <button class="secondary" id="acceptDetectedBedButton" type="button" disabled>Accept detected points</button>
+            </div>
+            <div id="autoDetectBedStatus" class="small-summary">Automatic detection has not been run.</div>
+            <div id="bedTargetStatus" class="small-summary">No coordinate CSV loaded.</div>
+            <div class="button-row stack-on-small">
+              <button class="secondary" id="previousBedTargetButton" type="button">Previous fiducial</button>
+              <button class="secondary" id="nextBedTargetButton" type="button">Next fiducial</button>
+            </div>
             <div class="form-grid two">
               <label>Image X (px)<input id="bedImageX" type="number" step="0.01" readonly></label>
               <label>Image Y (px)<input id="bedImageY" type="number" step="0.01" readonly></label>

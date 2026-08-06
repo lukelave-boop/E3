@@ -24,7 +24,7 @@ from .gcode.generator import (
 )
 from .geometry.svg import parse_svg
 from .machine.service import MachineService, list_serial_ports
-from .vision.fiducials import detect_aruco_markers
+from .vision.fiducials import detect_aruco_markers, detect_crosshair_grid
 from .vision.workpiece import detect_workpiece
 
 LOGGER = logging.getLogger(__name__)
@@ -169,6 +169,26 @@ class AppContext:
     def detect_fiducials(self) -> dict[str, Any]:
         image = self.bed_reference()
         return {"markers": detect_aruco_markers(image)}
+
+    def detect_bed_cross_grid(self) -> dict[str, Any]:
+        return detect_crosshair_grid(self.bed_reference())
+
+    def replace_bed_points(self, payload: dict[str, Any]) -> dict[str, Any]:
+        raw_points = payload.get("points")
+        if not isinstance(raw_points, list) or len(raw_points) < self.settings.calibration.bed.minimum_points:
+            raise CalibrationError("Not enough detected bed points to accept")
+        points = [
+            BedPoint(
+                image_x=float(item["image_x"]),
+                image_y=float(item["image_y"]),
+                machine_x=float(item["machine_x"]),
+                machine_y=float(item["machine_y"]),
+                label=str(item.get("label", ""))[:80],
+            )
+            for item in raw_points
+        ]
+        self.bed.replace_points(points)
+        return self.bed.status()
 
     def analyze_svg(self, svg_text: str) -> dict[str, Any]:
         geometry = parse_svg(svg_text)

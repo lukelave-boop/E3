@@ -198,6 +198,10 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, "calibration": self.context.solve_bed()})
             elif path == "/api/calibration/bed/fiducials":
                 self._send_json({"ok": True, **self.context.detect_fiducials()})
+            elif path == "/api/calibration/bed/auto-detect":
+                self._send_json({"ok": True, **self.context.detect_bed_cross_grid()})
+            elif path == "/api/calibration/bed/auto-accept":
+                self._send_json({"ok": True, **self.context.replace_bed_points(payload)})
             elif path == "/api/workspace/capture":
                 image = self.context.rectified_frame(refresh=True)
                 self._send_json({"ok": True, "width": image.shape[1], "height": image.shape[0]})

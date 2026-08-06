@@ -11,11 +11,15 @@ const state = {
   selectedBedPoint: null,
   pendingBedPixel: null,
   bedImage: null,
+  bedTargetPoints: [],
+  bedTargetIndex: 0,
+  detectedBedPoints: [],
   refreshBusy: false,
   dragging: null,
   rotating: null,
 };
 
+const TEMPORARY_BED_MAPPING_KEY = 'laser-aligner-temporary-bed-mapping';
 const $ = (id) => document.getElementById(id);
 const fmt = (value, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—';
 
@@ -180,6 +184,149 @@ function renderBedStatus(bed) {
   drawBedCanvas();
 }
 
+
+function parseSimpleCsvLine(line) {
+  const values = [];
+  let value = '';
+  let quoted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    if (character === '"') {
+      if (quoted && line[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else {
+        quoted = !quoted;
+      }
+    } else if (character === ',' && !quoted) {
+      values.push(value.trim());
+      value = '';
+    } else {
+      value += character;
+    }
+  }
+  values.push(value.trim());
+  return values;
+}
+
+function parseBedCoordinateCsv(text) {
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length < 2) throw new Error('The coordinate CSV has no data rows.');
+  const headers = parseSimpleCsvLine(lines[0]).map((header) => header.toLowerCase());
+  const findColumn = (...names) => names.map((name) => headers.indexOf(name)).find((index) => index >= 0);
+  const idColumn = findColumn('fiducial', 'index', 'id', 'label');
+  const xColumn = findColumn('x_mm', 'machine_x', 'x');
+  const yColumn = findColumn('y_mm', 'machine_y', 'y');
+  if (xColumn === undefined || yColumn === undefined) throw new Error('CSV headers must include x_mm and y_mm.');
+  const points = lines.slice(1).map((line, rowIndex) => {
+    const values = parseSimpleCsvLine(line);
+    const x = Number(values[xColumn]);
+    const y = Number(values[yColumn]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`Invalid coordinate on CSV row ${rowIndex + 2}.`);
+    const identifier = idColumn === undefined || !values[idColumn] ? rowIndex + 1 : values[idColumn];
+    return { identifier: String(identifier), label: `Fiducial ${identifier}`, machine_x: x, machine_y: y };
+  });
+  if (points.length < 4) throw new Error('The coordinate CSV must contain at least four fiducials.');
+  return points;
+}
+
+function showCurrentBedTarget() {
+  const status = $('bedTargetStatus');
+  const points = state.bedTargetPoints;
+  if (!points.length) {
+    status.textContent = 'No coordinate CSV loaded.';
+    return;
+  }
+  state.bedTargetIndex = Math.max(0, Math.min(state.bedTargetIndex, points.length - 1));
+  const point = points[state.bedTargetIndex];
+  $('bedMachineX').value = point.machine_x.toFixed(3);
+  $('bedMachineY').value = point.machine_y.toFixed(3);
+  $('bedPointLabel').value = point.label;
+  status.textContent = `${state.bedTargetIndex + 1} of ${points.length}: ${point.label} — X${point.machine_x} Y${point.machine_y}`;
+}
+
+function moveBedTarget(offset) {
+  if (!state.bedTargetPoints.length) return toast('Load the coordinate CSV first.', true);
+  state.bedTargetIndex = Math.max(0, Math.min(state.bedTargetIndex + offset, state.bedTargetPoints.length - 1));
+  showCurrentBedTarget();
+}
+
+function updateBedMappingPurpose() {
+  const temporary = $('temporaryBedMapping').checked;
+  $('bedMappingPurpose').textContent = temporary
+    ? 'Calibration purpose: TEMPORARY HOME TEST — redo after moving the camera'
+    : 'Calibration purpose: final installation';
+  try {
+    window.localStorage.setItem(TEMPORARY_BED_MAPPING_KEY, temporary ? '1' : '0');
+  } catch {
+    // The label still works when browser storage is unavailable.
+  }
+}
+
+function restoreBedMappingPurpose() {
+  let temporary = false;
+  try {
+    temporary = window.localStorage.getItem(TEMPORARY_BED_MAPPING_KEY) === '1';
+  } catch {
+    temporary = false;
+  }
+  $('temporaryBedMapping').checked = temporary;
+  updateBedMappingPurpose();
+}
+
+$('temporaryBedMapping').addEventListener('change', updateBedMappingPurpose);
+$('autoDetectBedButton').addEventListener('click', async () => {
+  try {
+    const result = await api('/api/calibration/bed/auto-detect', 'POST', {});
+    state.detectedBedPoints = result.points || [];
+    $('acceptDetectedBedButton').disabled = !result.detected || state.detectedBedPoints.length !== 25;
+    $('autoDetectBedStatus').textContent = result.detected
+      ? `Detected ${state.detectedBedPoints.length}/25 fiducials · confidence ${result.confidence} · ${result.orientation}`
+      : `Detection failed: ${result.reason || 'unknown reason'}`;
+    drawBedCanvas();
+    toast(result.detected ? 'Calibration plate detected. Review the yellow markers, then accept them.' : $('autoDetectBedStatus').textContent, !result.detected);
+  } catch (error) {
+    state.detectedBedPoints = [];
+    $('acceptDetectedBedButton').disabled = true;
+    $('autoDetectBedStatus').textContent = `Detection failed: ${error.message}`;
+    drawBedCanvas();
+    toast(error.message, true);
+  }
+});
+
+$('acceptDetectedBedButton').addEventListener('click', async () => {
+  if (state.detectedBedPoints.length !== 25) return toast('A complete set of 25 detected points is required.', true);
+  try {
+    await api('/api/calibration/bed/auto-accept', 'POST', { points: state.detectedBedPoints });
+    state.detectedBedPoints = [];
+    $('acceptDetectedBedButton').disabled = true;
+    $('autoDetectBedStatus').textContent = 'Detected points accepted. Press Solve mapping.';
+    await refreshStatus();
+    toast('Accepted 25 automatically detected fiducials.');
+  } catch (error) {
+    toast(error.message, true);
+  }
+});
+
+$('bedCoordinateCsvInput').addEventListener('change', async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    state.bedTargetPoints = parseBedCoordinateCsv(await file.text());
+    const existingPointCount = state.status?.bed?.points?.length || 0;
+    state.bedTargetIndex = Math.min(existingPointCount, state.bedTargetPoints.length - 1);
+    showCurrentBedTarget();
+    toast(`Loaded ${state.bedTargetPoints.length} fiducial coordinates.`);
+  } catch (error) {
+    state.bedTargetPoints = [];
+    state.bedTargetIndex = 0;
+    showCurrentBedTarget();
+    toast(error.message, true);
+  }
+});
+$('previousBedTargetButton').addEventListener('click', () => moveBedTarget(-1));
+$('nextBedTargetButton').addEventListener('click', () => moveBedTarget(1));
+
 async function loadBedImage() {
   const image = new Image();
   image.onload = () => {
@@ -214,6 +361,12 @@ function drawBedCanvas() {
     context.fillStyle = '#ffffff';
     context.font = '18px sans-serif';
     context.fillText(String(index + 1), point.image_x + 14, point.image_y - 12);
+  });
+  state.detectedBedPoints.forEach((point) => {
+    drawCross(context, point.image_x, point.image_y, '#e7b55c', 15);
+    context.fillStyle = '#e7b55c';
+    context.font = '18px sans-serif';
+    context.fillText(String(point.id), point.image_x + 15, point.image_y + 18);
   });
   if (state.pendingBedPixel) {
     drawCross(context, state.pendingBedPixel.x, state.pendingBedPixel.y, '#ef6a72', 16);
@@ -570,6 +723,10 @@ $('addBedPointButton').addEventListener('click', async () => {
     state.pendingBedPixel = null;
     $('bedImageX').value = '';
     $('bedImageY').value = '';
+    if (state.bedTargetPoints.length && state.bedTargetIndex < state.bedTargetPoints.length - 1) {
+      state.bedTargetIndex += 1;
+      showCurrentBedTarget();
+    }
     await refreshStatus();
     toast('Calibration point added.');
   } catch (error) { toast(error.message, true); }
@@ -588,16 +745,41 @@ $('clearBedButton').addEventListener('click', async () => {
     await api('/api/calibration/bed/clear', 'POST', {});
     state.selectedBedPoint = null;
     state.pendingBedPixel = null;
+    state.bedTargetIndex = 0;
+    showCurrentBedTarget();
     await refreshStatus();
     toast('Bed points and solved mapping cleared.');
   } catch (error) { toast(error.message, true); }
 });
+$('resetForFinalInstallationButton').addEventListener('click', async () => {
+  const confirmed = window.confirm(
+    'Clear all temporary bed points and the solved bed mapping? Lens calibration images and the lens model will be kept.',
+  );
+  if (!confirmed) return;
+  try {
+    await api('/api/calibration/bed/clear', 'POST', {});
+    state.selectedBedPoint = null;
+    state.pendingBedPixel = null;
+    state.bedTargetIndex = 0;
+    $('temporaryBedMapping').checked = false;
+    updateBedMappingPurpose();
+    showCurrentBedTarget();
+    await refreshStatus();
+    await loadBedImage();
+    toast('Temporary bed mapping cleared. Ready for final-location calibration.');
+  } catch (error) {
+    toast(error.message, true);
+  }
+});
+
 $('solveBedButton').addEventListener('click', async () => {
   try {
     await api('/api/calibration/bed/solve', 'POST', {});
     await refreshStatus();
     await refreshWorkspaceImage(true);
-    toast('Bed mapping solved and saved.');
+    toast($('temporaryBedMapping').checked
+      ? 'Temporary test mapping solved. Redo it after the camera is moved.'
+      : 'Final-location bed mapping solved and saved.');
   } catch (error) { toast(error.message, true); }
 });
 $('captureWorkspaceButton').addEventListener('click', async () => {
@@ -657,6 +839,7 @@ $('emergencyStopButton').addEventListener('click', async () => {
   catch (error) { toast(error.message, true); }
 });
 
+restoreBedMappingPurpose();
 refreshStatus(true).then(() => {
   loadBedImage();
   refreshWorkspaceImage(false);
