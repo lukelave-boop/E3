@@ -8,10 +8,9 @@ stationary overhead **Logitech C920**.
 
 > **Project status: early alpha.** The portable geometry, calibration, project,
 > tracing, and G-code layers are under active development. Linux is the only
-> current hardware platform. Windows can run most platform-neutral tests, but
-> both application entry points are presently blocked by an unconditional
-> POSIX serial import. No powered behavior has been verified on the target
-> machine.
+> current hardware platform. Windows supports safe browser and desktop
+> simulation for UI development, but not serial hardware or Linux-specific
+> camera controls. No powered behavior has been verified on the target machine.
 
 Read [CURRENT_STATE.md](CURRENT_STATE.md) for the branch snapshot and
 [PROJECT_STATUS.md](PROJECT_STATUS.md) for the verification boundary. Read
@@ -95,12 +94,28 @@ same calibration files.
 
 ## Windows development status
 
-Most platform-neutral tests and selected Qt widgets run on Windows. The full
-applications do not yet start because `MachineService` imports the POSIX-only
-`termios` transport before selecting the simulator. Windows serial hardware,
-camera discovery/control, launch scripts, and CI are not implemented. Do not
-present Windows as a supported runtime until the blockers in
-[CURRENT_STATE.md](CURRENT_STATE.md) are closed.
+The browser and native desktop applications run on Windows with the synthetic
+camera and simulated controller. POSIX serial code is imported only if the
+serial backend is selected; Windows serial hardware, V4L2 camera controls,
+install/launch scripts, OS-native user-data paths, and CI are not implemented.
+
+From an existing desktop-enabled virtual environment, launch the native UI in
+safe simulation mode:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner.desktop.main `
+  --safe `
+  --config config\default.json
+```
+
+Launch the browser simulator with:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner `
+  --config config\default.json
+```
+
+These commands do not enable real serial hardware.
 
 ## Moving to the real C920
 
@@ -185,18 +200,15 @@ Linux:
 .venv/bin/python tools/make_release.py
 ```
 
-Windows PowerShell currently supports the platform-neutral diagnostic subset:
+Windows PowerShell:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider `
-  --ignore=tests/test_app_simulation.py `
-  --ignore=tests/test_machine.py `
-  --ignore=tests/test_serial_posix.py
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m ruff check .
 ```
 
-This subset is a documented limitation, not the final Windows success
-criterion. Contributors should read [AGENTS.md](AGENTS.md) before making
-changes.
+POSIX pseudoterminal tests skip explicitly on Windows. Contributors should read
+[AGENTS.md](AGENTS.md) before making changes.
 
 ## GitHub setup
 
@@ -210,8 +222,8 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 
 ## Current limitations
 
-- Linux is the only current application/hardware platform; Windows application
-  startup is blocked as described above.
+- Linux is the only current hardware platform. Windows is limited to the
+  synthetic camera and simulated controller.
 - Vector outlines only; filled/raster engraving is not implemented yet.
 - SVG text and embedded images are ignored. Convert text to paths in the design program.
 - CSS stylesheets, clipping paths, masks, and every edge case of the full SVG specification are not supported.

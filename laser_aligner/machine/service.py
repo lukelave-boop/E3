@@ -10,7 +10,7 @@ from typing import Any
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from ..gcode.preview import contains_motion, parse_words, strip_comment
-from .serial_posix import PosixSerial, list_serial_ports
+from .serial_backend import MachineTransport, create_serial_transport, list_serial_ports
 from .simulator import SimulatedTransport
 
 LOGGER = logging.getLogger(__name__)
@@ -60,7 +60,7 @@ class MachineService:
         self.settings = settings
         self.laser_settings = laser_settings
         self.hardware_enabled = hardware_enabled
-        self._transport: PosixSerial | SimulatedTransport | None = None
+        self._transport: MachineTransport | None = None
         self._protocol = "simulator" if settings.backend == "simulator" else settings.protocol
         self._active_port = settings.port
         self._active_baudrate = settings.baudrate
@@ -100,9 +100,9 @@ class MachineService:
             active_port = port or self.settings.port
             active_baudrate = baudrate or self.settings.baudrate
             if self.settings.backend == "simulator":
-                transport: PosixSerial | SimulatedTransport = SimulatedTransport()
+                transport: MachineTransport = SimulatedTransport()
             else:
-                transport = PosixSerial(active_port, active_baudrate)
+                transport = create_serial_transport(active_port, active_baudrate)
             transport.open()
             try:
                 self._transport = transport
@@ -197,7 +197,7 @@ class MachineService:
             except Exception:
                 pass
 
-    def _require_connection(self) -> PosixSerial | SimulatedTransport:
+    def _require_connection(self) -> MachineTransport:
         if not self._connected or self._transport is None:
             raise MachineError("Controller is not connected")
         return self._transport

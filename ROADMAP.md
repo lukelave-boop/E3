@@ -23,6 +23,8 @@ Desktop foundation:
 - Undo/redo, grouping, alignment, distribution, and ordering.
 - Material presets, multi-layer vector toolpaths, preview, and estimates.
 - Guarded machine controls with jogging and pause/resume still disabled.
+- Safe browser and desktop simulator startup on Windows, with POSIX serial
+  selected only on supported systems.
 
 Current branch feature:
 
@@ -40,14 +42,9 @@ These features have different verification levels; see `CURRENT_STATE.md`.
 
 ## Milestone 2 — Windows/Linux development consistency
 
-- Introduce a portable serial transport interface.
-- Import POSIX `termios` code only when the POSIX backend is selected.
-- Make the browser, desktop, app simulation, and machine simulator run on
-  Windows without serial hardware.
-- Skip POSIX pseudoterminal tests explicitly on unsupported platforms.
 - Add Windows CI alongside the existing Linux Python matrix.
 - Introduce OS-native user-data paths for autosaves and material presets.
-- Add PowerShell setup/launch guidance and platform-appropriate CLI messages.
+- Add PowerShell setup/launch scripts and platform-appropriate CLI messages.
 - Separate portable OpenCV capture from Linux V4L2 discovery/control.
 
 Windows hardware control is not required to complete the portable simulator

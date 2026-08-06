@@ -103,17 +103,8 @@ Windows PowerShell:
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
-Until the POSIX import boundary is fixed, the documented Windows diagnostic
-subset is:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider `
-  --ignore=tests/test_app_simulation.py `
-  --ignore=tests/test_machine.py `
-  --ignore=tests/test_serial_posix.py
-```
-
-Do not treat that subset as the final Windows success criterion.
+The full suite must collect on Windows. POSIX pseudoterminal tests should report
+explicit skips there; application and simulator tests must still run.
 
 For desktop changes, distinguish among:
 

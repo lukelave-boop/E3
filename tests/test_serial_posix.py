@@ -1,8 +1,17 @@
 import os
-import pty
 import select
+import threading
+import time
 
-from laser_aligner.machine.serial_posix import PosixSerial
+import pytest
+
+from laser_aligner.config import LaserSettings, MachineSettings
+from laser_aligner.machine.service import MachineService
+
+pytestmark = pytest.mark.skipif(
+    os.name != "posix",
+    reason="POSIX pseudoterminals and termios are unavailable on this platform",
+)
 
 
 def read_master(fd: int, timeout: float = 1.0) -> bytes:
@@ -12,6 +21,10 @@ def read_master(fd: int, timeout: float = 1.0) -> bytes:
 
 
 def test_posix_serial_round_trip_over_pseudoterminal() -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
     master_fd, slave_fd = pty.openpty()
     slave_path = os.ttyname(slave_fd)
     serial = PosixSerial(slave_path, 115200)
@@ -31,14 +44,10 @@ def test_posix_serial_round_trip_over_pseudoterminal() -> None:
         os.close(master_fd)
         os.close(slave_fd)
 
-import threading
-import time
-
-from laser_aligner.config import LaserSettings, MachineSettings
-from laser_aligner.machine.service import MachineService
-
 
 def test_machine_service_over_pseudoterminal() -> None:
+    import pty
+
     master_fd, slave_fd = pty.openpty()
     slave_path = os.ttyname(slave_fd)
     os.set_blocking(master_fd, False)

@@ -31,30 +31,28 @@ Environment:
 
 Results:
 
-- **85 platform-neutral tests passed.**
+- **95 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
-- Selected native panels and the workspace constructed with Qt's offscreen
-  backend.
+- App simulation and machine-service tests passed on Windows.
+- The browser simulator served its health endpoint and HTML interface.
+- The native desktop started, ran, and shut down with Qt's offscreen backend,
+  the synthetic camera, and the simulated controller.
 - Ruff was not installed in the current virtual environment and was not run.
 
-The full suite does not collect on Windows because
-`laser_aligner.machine.service` imports `serial_posix`, which imports `termios`,
-at module import time. This blocks the browser application, desktop application,
-machine simulator tests, app simulation test, and POSIX serial tests even when
-hardware is disabled.
+POSIX serial is selected lazily, so `termios` is not imported by simulator or
+application startup on Windows. Selecting the real serial backend on Windows
+returns a clear unsupported-platform error. The two pseudoterminal tests skip
+because their facilities are POSIX-only.
 
-Current Windows diagnostic command:
+Current Windows test command:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider `
-  --ignore=tests/test_app_simulation.py `
-  --ignore=tests/test_machine.py `
-  --ignore=tests/test_serial_posix.py
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
-This is a limitation record, not a supported-platform acceptance command.
+This verifies safe simulator behavior, not Windows camera or serial hardware.
 
 ## Historically verified on Linux
 
@@ -86,9 +84,9 @@ from 2026-08-06 has not been run as a complete Linux suite during this audit.
 | Workpiece, crosshair-grid, and object-trace vision | Tested on Windows with synthetic images |
 | Browser single-SVG G-code | Tested on Windows at the library level |
 | Desktop project model, history, materials, and toolpaths | Tested on Windows |
-| Selected Qt panels/workspace | Smoke-tested offscreen on Windows |
-| Complete browser simulator | Historically verified on Linux; currently blocked on Windows |
-| Machine simulator safety suite | Historically verified on Linux; currently blocked on Windows |
+| Native desktop simulator startup | Smoke-tested offscreen on Windows |
+| Browser simulator startup | Smoke-tested through HTTP on Windows |
+| Machine simulator safety suite | Tested on Windows |
 | POSIX serial transport | Historically verified through a Linux pseudoterminal |
 | Full interactive desktop workflow | Implemented, not end-to-end verified |
 | Real C920 capture/calibration | Implemented for Linux, not physically verified |

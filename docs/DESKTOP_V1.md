@@ -137,16 +137,14 @@ controller's realtime behavior has been physically verified.
 The Qt windows themselves must still be exercised on the Linux Mint workstation
 because PySide6 and a graphical display are not present in the build environment.
 
-Selected panels and the workspace have since been constructed with Qt's
-offscreen backend on Windows, but this remains a smoke test rather than an
-interactive GUI test. The complete desktop application currently fails before
-startup on Windows because the shared machine service imports the POSIX-only
-`termios` transport unconditionally. Linux remains the only application and
-hardware platform until the transport boundary is made lazy and portable.
+The complete desktop application has since started, run its event loop, and
+shut down under Qt's offscreen backend on Windows with the synthetic camera and
+simulated controller. This remains a smoke test rather than an interactive GUI
+test. POSIX serial is selected lazily; Linux remains the only hardware platform.
 
 ## Next desktop milestones
 
-1. Portable simulator/application startup and CI on Windows and Linux.
+1. Windows launch scripts, OS-native user-data paths, and CI.
 2. Native lens and camera-to-machine calibration wizards.
 3. Behavioral Qt tests for project editing and object tracing.
 4. On-canvas resize and rotation handles plus smart snap guides.

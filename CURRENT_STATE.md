@@ -25,6 +25,10 @@ The object-tracing implementation was consolidated into focused vision,
 project-command, desktop-workflow, offline-tool, and artifact-policy commits.
 The documentation was then reconciled with that state.
 
+The subsequent Windows portability update selects POSIX serial lazily. Safe
+browser and native desktop simulation now start on Windows without loading
+`termios`; serial hardware remains unavailable there.
+
 The local files `label-sheet-test.png`, `trace-preview.png`, and
 `trace-result.json` are preserved for the developer who created them. They are
 ignored by Git and explicitly excluded from release archives; they are not
@@ -105,18 +109,18 @@ Audit environment:
 
 Results:
 
-- **85 platform-neutral tests passed.**
-- Trace, project, persistence, materials, geometry, calibration, and toolpath
-  tests passed.
-- `TracePanel`, `CameraPanel`, `MachinePanel`, and `WorkspaceView` constructed
-  under Qt's offscreen backend.
+- **95 tests passed and 2 POSIX-only tests skipped.**
+- The complete suite collected, including app simulation and machine-service
+  tests.
+- The browser simulator served a healthy API response and its HTML interface.
+- The native desktop started with the synthetic camera and simulated controller
+  under Qt's offscreen backend, ran its event loop, and shut down cleanly.
+- The interactive native workflow has not yet been manually exercised on this
+  Windows checkout.
 - Ruff was not available in the current virtual environment.
 
-The full suite does not collect on Windows because `MachineService` imports the
-POSIX `termios` transport unconditionally. The blocked modules contain the app
-simulation, machine simulator, and POSIX pseudoterminal tests. They contain nine
-test functions; the exact consolidated branch has not been run as a complete
-Linux suite during this audit.
+The two skipped tests require POSIX pseudoterminals and `termios`. The exact
+updated branch has not been run as a complete Linux suite during this audit.
 
 ## Historically verified on Linux
 
@@ -186,10 +190,10 @@ been exercised end to end with the real camera and calibration.
 
 ### Cross-platform
 
-- Applications and the full suite cannot currently start on Windows because of
-  the unconditional POSIX serial import.
-- No Windows serial backend, camera discovery/control layer, launch scripts,
-  installer, or CI job exists.
+- No Windows serial backend, hardware camera discovery/control layer,
+  install/launch scripts, or CI job exists.
+- Selecting real serial hardware on Windows fails clearly and directs the user
+  back to the simulator.
 - Camera hardware handling assumes V4L2 and `/dev/video*`.
 - Desktop autosave and material paths use Linux-style `~/.local/share` paths on
   every OS.
@@ -217,15 +221,14 @@ been exercised end to end with the real camera and calibration.
 
 ## Recommended next sequence
 
-1. Introduce a portable serial transport boundary and lazy platform imports.
-2. Make simulator/application imports and tests pass on Windows.
-3. Skip POSIX pseudoterminal tests cleanly on Windows.
-4. Add Windows launch/setup documentation and OS-native user-data paths.
-5. Add Windows CI while retaining Linux Python-version coverage.
-6. Run the complete current suite on Linux and record the exact result.
-7. Add behavioral Qt tests for project editing and object tracing.
-8. Verify that release archives continue to exclude local camera/trace output.
-9. Only then proceed with documented physical camera/controller bring-up.
+1. Manually exercise the safe native UI on Windows and record usability issues.
+2. Add PowerShell setup/launch scripts and OS-native user-data paths.
+3. Add Windows CI while retaining Linux Python-version coverage.
+4. Separate portable OpenCV capture from Linux V4L2 discovery/control.
+5. Run the complete current suite on Linux and record the exact result.
+6. Add behavioral Qt tests for project editing and object tracing.
+7. Verify that release archives continue to exclude local camera/trace output.
+8. Only then proceed with documented physical camera/controller bring-up.
 
 ## Evidence terminology
 

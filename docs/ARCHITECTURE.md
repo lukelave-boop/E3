@@ -171,20 +171,21 @@ This is an accidental-command boundary, not functional safety.
 | Window layout | Qt `QSettings` |
 
 The hard-coded desktop user-data paths are Linux-oriented and should be
-replaced with an OS-native location abstraction before Windows is supported.
+replaced with an OS-native location abstraction before Windows packaging.
 
 ## Platform boundary
 
-The portable core is intended to work on Windows and Linux, while real hardware
-is currently Linux-only. The existing boundary is incomplete:
+The portable core and simulator run on Windows and Linux, while real hardware
+is currently Linux-only:
 
-- `MachineService` imports the POSIX `termios` transport unconditionally, so
-  simulator/application imports fail on Windows.
+- `machine.serial_backend` exposes the transport protocol and imports the POSIX
+  implementation only when real serial hardware is selected.
+- Unsupported systems report no serial ports and reject real serial selection
+  with a clear simulator-only message.
 - Camera enumeration and controls use `/dev/video*`, V4L2, and `v4l2-ctl`.
 - Launch/install scripts and desktop integration are Linux shell assets.
 - CI currently runs Ubuntu only.
 
-Platform implementations must be selected lazily so an unavailable hardware
-backend does not prevent the simulator or portable libraries from importing.
-See `CURRENT_STATE.md` for the current verification record and recommended
-repair order.
+Platform implementations must remain lazy so unavailable hardware backends do
+not prevent the simulator or portable libraries from importing. See
+`CURRENT_STATE.md` for the verification record and recommended repair order.

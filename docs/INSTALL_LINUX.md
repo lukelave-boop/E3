@@ -2,9 +2,9 @@
 
 The supported starting point is a normal graphical Linux Mint, Ubuntu, or Debian installation on a 64-bit Intel/AMD computer.
 
-Linux is currently the only intended application and hardware platform. The
-portable Windows development boundary and known blockers are recorded in
-[../CURRENT_STATE.md](../CURRENT_STATE.md); they do not change these Linux
+Linux is currently the only intended hardware platform. Safe application
+simulation also runs on Windows; the remaining platform boundary is recorded in
+[../CURRENT_STATE.md](../CURRENT_STATE.md). It does not change these Linux
 installation instructions.
 
 ## 1. Test the old computer before erasing it

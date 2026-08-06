@@ -20,6 +20,13 @@
 - Added one-step undo for a set of traced objects.
 - Added synthetic object-tracing tests and an offline trace inspection tool.
 
+### Windows simulation
+
+- Made POSIX serial transport selection lazy so simulator imports remain
+  portable.
+- Enabled safe browser and native desktop simulator startup on Windows.
+- Made POSIX pseudoterminal tests skip explicitly on unsupported platforms.
+
 ### Documentation
 
 - Added repository-wide development instructions and a current-state snapshot.

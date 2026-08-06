@@ -4,10 +4,15 @@ from __future__ import annotations
 import argparse
 import time
 
-from laser_aligner.machine.serial_posix import PosixSerial, list_serial_ports
+from laser_aligner.errors import MachineError
+from laser_aligner.machine.serial_backend import (
+    MachineTransport,
+    create_serial_transport,
+    list_serial_ports,
+)
 
 
-def collect(port: PosixSerial, seconds: float) -> list[str]:
+def collect(port: MachineTransport, seconds: float) -> list[str]:
     deadline = time.monotonic() + seconds
     lines: list[str] = []
     while time.monotonic() < deadline:
@@ -29,7 +34,7 @@ def main() -> int:
     ports = list_serial_ports()
     if not args.port:
         if not ports:
-            print("No /dev/ttyUSB*, /dev/ttyACM*, or /dev/serial/by-id devices found.")
+            print("No supported serial devices found on this platform.")
             return 1
         print("Available serial ports:")
         for item in ports:
@@ -37,7 +42,10 @@ def main() -> int:
         print("\nRun again with --port PATH to query one device.")
         return 0
 
-    port = PosixSerial(args.port, args.baud)
+    try:
+        port = create_serial_transport(args.port, args.baud)
+    except MachineError as exc:
+        parser.error(str(exc))
     port.open()
     try:
         print(f"Opened {args.port} at {args.baud} baud")
