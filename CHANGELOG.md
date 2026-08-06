@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased — `desktop-v1`
+
+### Committed desktop foundation
+
+- Added a native PySide6 workspace alongside the browser application.
+- Added multi-object, multi-layer `.e3laser` projects with undo/redo, grouping,
+  alignment, distribution, z-ordering, atomic saves, backups, and autosaves.
+- Added SQLite material presets and multi-layer vector toolpath generation.
+- Added corrected-camera overlay, toolpath preview, camera focus controls, and
+  guarded machine panels.
+- Kept jogging and pause/resume visibly disabled pending dedicated core APIs and
+  physical controller verification.
+
+### Camera object tracing
+
+- Added multi-object camera tracing with color/contrast modes, regular-grid
+  inference, reviewed selection, border offsets, and vector-object creation.
+- Added one-step undo for a set of traced objects.
+- Added synthetic object-tracing tests and an offline trace inspection tool.
+
+### Documentation
+
+- Added repository-wide development instructions and a current-state snapshot.
+- Reconciled architecture, platform support, test evidence, and roadmap status.
+
+Unreleased items must not be treated as part of version 0.1.0 until they are
+committed, verified, and included in a release.
+
 ## 0.1.0 — 2026-08-04
 
 - Initial GitHub-ready source tree

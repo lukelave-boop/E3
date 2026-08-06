@@ -14,6 +14,9 @@ For HTTPS instead of SSH, use the repository HTTPS remote and authenticate throu
 
 ## Branches
 
+Read `AGENTS.md` and `CURRENT_STATE.md`, then inspect `git status --short` before
+creating or switching branches. Preserve active uncommitted work.
+
 Use one purpose per branch:
 
 ```bash
@@ -33,5 +36,9 @@ The most useful items are a repository ZIP, a public repository link, a unified 
 - generated G-code
 - logs
 - virtual environments and Python caches
+
+Camera/object-trace inputs, trace previews, and trace-result JSON are also local
+artifacts unless they are deliberately reviewed and added as stable test
+fixtures. Check release ZIP contents before publishing from a dirty tree.
 
 After finalizing the rig, back up the useful calibration JSON files outside Git or add a sanitized machine-profile export feature rather than committing arbitrary images and logs.

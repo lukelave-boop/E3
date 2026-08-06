@@ -4,6 +4,10 @@ The `desktop-v1` foundation adds a native PySide6 workspace without removing the
 existing browser application. Both interfaces use the same calibrated camera,
 geometry, G-code, safety and controller services.
 
+> This document describes the committed desktop foundation. The branch also
+> contains the camera-object tracing workflow described in
+> [OBJECT_TRACE.md](OBJECT_TRACE.md) and [../CURRENT_STATE.md](../CURRENT_STATE.md).
+
 ## Implemented in this milestone
 
 ### Native workspace
@@ -133,13 +137,21 @@ controller's realtime behavior has been physically verified.
 The Qt windows themselves must still be exercised on the Linux Mint workstation
 because PySide6 and a graphical display are not present in the build environment.
 
+Selected panels and the workspace have since been constructed with Qt's
+offscreen backend on Windows, but this remains a smoke test rather than an
+interactive GUI test. The complete desktop application currently fails before
+startup on Windows because the shared machine service imports the POSIX-only
+`termios` transport unconditionally. Linux remains the only application and
+hardware platform until the transport boundary is made lazy and portable.
+
 ## Next desktop milestones
 
-1. Native lens and camera-to-machine calibration wizards.
-2. On-canvas resize and rotation handles plus smart snap guides.
-3. Guarded jog API and tested GRBL realtime pause/resume.
-4. DXF and image import.
-5. Text-to-outline conversion.
-6. Fill and raster engines with overscan and scan-direction tests.
-7. Job history and calibration profiles by material height.
-8. Stable release packaging, update checks and rollback.
+1. Portable simulator/application startup and CI on Windows and Linux.
+2. Native lens and camera-to-machine calibration wizards.
+3. Behavioral Qt tests for project editing and object tracing.
+4. On-canvas resize and rotation handles plus smart snap guides.
+5. Guarded jog API and tested controller-specific realtime pause/resume.
+6. DXF/image import and text-to-outline conversion.
+7. Fill and raster engines with overscan and scan-direction tests.
+8. Job history and calibration profiles by material height.
+9. Stable release packaging, update checks and rollback.

@@ -1,14 +1,27 @@
-# Laser Camera Aligner
+# Laser Camera Aligner / E3 Positioning System
 
-A Linux-first, self-hosted camera alignment application for placing vector artwork on a laser-converted 3D printer. The initial hardware target is an **Ender-3 S1 Pro**, a **Creality 10 W blue-diode laser module**, and a stationary overhead **Logitech C920**.
+A self-hosted camera-alignment and vector-placement application for a
+laser-converted 3D printer. It includes a dependency-light browser calibration
+workflow and a native PySide6 project workspace. The initial hardware target is
+an **Ender-3 S1 Pro**, a **Creality 10 W blue-diode laser module**, and a
+stationary overhead **Logitech C920**.
 
-> **Project status: early alpha.** Simulation, camera calibration, bed mapping, SVG parsing, G-code generation, and the controller abstraction are implemented. Real controller commands, laser power scaling, reachable travel, and laser-head offsets must be measured on the specific machine before hardware execution is enabled.
+> **Project status: early alpha.** The portable geometry, calibration, project,
+> tracing, and G-code layers are under active development. Linux is the only
+> current hardware platform. Windows can run most platform-neutral tests, but
+> both application entry points are presently blocked by an unconditional
+> POSIX serial import. No powered behavior has been verified on the target
+> machine.
 
-See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the exact tested/unverified boundary of this release.
+Read [CURRENT_STATE.md](CURRENT_STATE.md) for the branch snapshot and
+[PROJECT_STATUS.md](PROJECT_STATUS.md) for the verification boundary. Read
+[SAFETY.md](SAFETY.md) before connecting hardware.
 
-## What already works
+## What is implemented
 
-- Browser-based local interface with no paid cloud service
+Shared core and browser workflow:
+
+- Browser-based local calibration and placement interface with no paid cloud service
 - Logitech C920 capture through Linux V4L2/OpenCV
 - Manual focus, exposure, white-balance, and gain locking when exposed by the camera driver
 - Synthetic camera and GRBL-like controller for development without hardware
@@ -24,6 +37,25 @@ See [PROJECT_STATUS.md](PROJECT_STATUS.md) for the exact tested/unverified bound
 - Temporary laser arming, automatic disarming, software stop, and simulation-first defaults
 - Unit tests and GitHub Actions configuration
 
+Native desktop workflow:
+
+- PySide6 machine-coordinate workspace with camera overlay, pan, zoom, grid,
+  rulers, snapping, and toolpath preview
+- Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
+  alignment, distribution, ordering, autosave, backup, and recovery
+- Rectangle, rounded rectangle, ellipse, line, text, and imported SVG-path
+  objects
+- Per-layer vector speed, power, pass count, ordering, estimates, and dry frames
+- SQLite material presets and camera focus/sharpness controls
+- Guarded controller connection, camera-pose parking, diagnostics, job run, and
+  software stop
+
+The desktop branch also contains a synthetically tested object-tracing
+algorithm and a source-wired native review workflow for converting detected
+camera outlines into editable project objects. The complete GUI/camera flow is
+not yet verified. See
+[docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
+
 ## Deliberately disabled by default
 
 The shipped configuration uses a synthetic camera and controller. In a real-hardware profile:
@@ -36,7 +68,7 @@ The shipped configuration uses a synthetic camera and controller. In a real-hard
 
 These are software guardrails, not safety-rated controls.
 
-## Fastest way to try it
+## Fastest way to try it on Linux
 
 On Linux Mint, Ubuntu, or Debian:
 
@@ -50,6 +82,25 @@ cd laser-camera-aligner
 The browser opens to `http://127.0.0.1:8080`. Simulation mode starts with an automatically mapped perspective bed, a test workpiece, and a simulated controller.
 
 Load `sample_data/sample_design.svg`, drag it over the simulated workpiece, generate G-code, type the temporary arming phrase, and run it against the simulator.
+
+For the native desktop after the base installation:
+
+```bash
+./install-desktop.sh
+./run-desktop.sh
+```
+
+The browser remains the complete calibration interface. The desktop reads the
+same calibration files.
+
+## Windows development status
+
+Most platform-neutral tests and selected Qt widgets run on Windows. The full
+applications do not yet start because `MachineService` imports the POSIX-only
+`termios` transport before selecting the simulator. Windows serial hardware,
+camera discovery/control, launch scripts, and CI are not implemented. Do not
+present Windows as a supported runtime until the blockers in
+[CURRENT_STATE.md](CURRENT_STATE.md) are closed.
 
 ## Moving to the real C920
 
@@ -100,10 +151,14 @@ See [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md).
 laser_aligner/
   camera/        C920/V4L2 and synthetic capture
   calibration/   lens model, bed mapping, printable target generation
+  core/          UI-neutral runtime lifecycle
+  desktop/       native PySide6 project workspace
   geometry/      SVG parsing, curves, transforms, units
   gcode/         placement, validation, generation, preview parsing
   machine/       POSIX serial, simulator, controller safety service
-  vision/        workpiece and ArUco detection
+  materials/     SQLite material-preset library
+  project/       project model, history, persistence, alignment, toolpaths
+  vision/        workpiece, fiducial, and object-trace detection
   web/           dependency-free browser interface
 config/          simulation and hardware examples
 docs/            setup, calibration, safety, and architecture notes
@@ -113,6 +168,8 @@ tests/           unit and integration tests
 ```
 
 ## Development commands
+
+Linux:
 
 ```bash
 # Run all tests
@@ -128,6 +185,19 @@ tests/           unit and integration tests
 .venv/bin/python tools/make_release.py
 ```
 
+Windows PowerShell currently supports the platform-neutral diagnostic subset:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider `
+  --ignore=tests/test_app_simulation.py `
+  --ignore=tests/test_machine.py `
+  --ignore=tests/test_serial_posix.py
+```
+
+This subset is a documented limitation, not the final Windows success
+criterion. Contributors should read [AGENTS.md](AGENTS.md) before making
+changes.
+
 ## GitHub setup
 
 ```bash
@@ -140,6 +210,8 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 
 ## Current limitations
 
+- Linux is the only current application/hardware platform; Windows application
+  startup is blocked as described above.
 - Vector outlines only; filled/raster engraving is not implemented yet.
 - SVG text and embedded images are ignored. Convert text to paths in the design program.
 - CSS stylesheets, clipping paths, masks, and every edge case of the full SVG specification are not supported.

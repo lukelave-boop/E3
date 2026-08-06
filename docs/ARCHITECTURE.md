@@ -1,50 +1,190 @@
 # Architecture
 
-## Data flow
+The repository has two user interfaces over a shared camera, calibration,
+geometry, vision, G-code, and machine core.
+
+## Runtime map
 
 ```text
-C920/V4L2
-   │
-   ▼
-CameraService ──► LensModel.undistort()
-   │
-   ▼
-BedMapper.rectify() ──► top-down workspace JPEG
-   │
-   ├──► workpiece contour detector
-   │
-Browser UI ◄────────── local HTTP server
-   │
-   ├── SVG text + placement
-   ▼
-SVG parser ──► placed polylines ──► work-area validation ──► G-code
-                                                        │
-                                                        ▼
-                                            MachineService safety gates
-                                                        │
-                                          simulator or POSIX serial controller
+Browser entry point                     Desktop entry point
+laser_aligner.__main__                  laser_aligner.desktop.main
+          |                                       |
+          v                                       v
+      AppContext <--------------------------- CoreRuntime
+          |                                       |
+          v                                       v
+  AppHTTPServer + web UI                  DesktopController
+          |                                       |
+          v                                       v
+ single-SVG placement                 E3MainWindow + WorkspaceView
+          |                                       |
+          v                                       v
+  gcode.generator                    ProjectDocument + CommandStack
+                                                  |
+                                                  v
+                                         project.toolpath
+          |                                       |
+          +-------------------+-------------------+
+                              v
+                         MachineService
+                              |
+                   +----------+----------+
+                   v                     v
+          SimulatedTransport       platform serial transport
 ```
 
-## Why a dependency-free HTTP layer
+The browser uses `AppContext` directly. The desktop uses `CoreRuntime` as a
+UI-neutral lifecycle wrapper around the same context and performs blocking
+camera/controller work through `DesktopController` worker tasks.
 
-The application uses Python's threaded standard-library HTTP server and plain browser JavaScript. This keeps installation simple on an old Linux computer and avoids requiring Node.js or a large web framework. OpenCV and NumPy remain the primary external runtime dependencies.
+## Module ownership
+
+| Module | Responsibility |
+|---|---|
+| `config.py` | JSON defaults, merging, validation, and resolved paths |
+| `storage.py` | Atomic JSON persistence used by calibration |
+| `camera/` | OpenCV/V4L2 capture, camera controls, and synthetic scenes |
+| `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets |
+| `vision/` | Workpiece, fiducial, crosshair-grid, and camera-object detection |
+| `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
+| `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
+| `project/` | Desktop project schema, commands, save/recovery, alignment, and multi-layer toolpaths |
+| `materials/` | SQLite material-preset library |
+| `machine/` | Safety policy, simulator, protocol probing, and serial transports |
+| `server.py` + `web/` | Local HTTP API and browser UI |
+| `core/` | Shared runtime lifecycle for non-HTTP consumers |
+| `desktop/` | PySide6 window, workspace, panels, tasks, and presentation logic |
+
+Qt and HTTP types must not leak into the project, calibration, geometry,
+vision, G-code, or machine models.
+
+## Camera and calibration flow
+
+```text
+CameraService or SyntheticCameraService
+  -> raw OpenCV BGR frame
+  -> LensModel.undistort() when a lens model exists
+  -> BedMapper.rectify()
+  -> top-down image at configured pixels/mm
+  -> workspace background and optional vision detectors
+```
+
+`LensCalibrator` stores captured checkerboard images, a detection cache, and the
+solved camera model. `BedMapper` stores image/machine point pairs plus forward
+and inverse homographies. Simulation startup creates a synthetic perspective
+scene and a known mapping automatically.
+
+The browser owns the complete lens and bed-calibration UI. The native desktop
+currently consumes those calibration files and displays the corrected image;
+native calibration wizards are not implemented.
+
+## Vision flows
+
+- Rectangular workpiece detection runs on the rectified image and reports
+  machine-coordinate placement hints.
+- ArUco and crosshair-grid detection support bed mapping.
+- The object-tracing pipeline segments color or contrast, optionally fits a
+  regular grid and infers missing cells, then emits rounded or contour geometry
+  in machine millimetres.
+- Inferred trace cells are deliberately not selected by default.
+
+All vision accuracy depends on current lens calibration, bed mapping, camera
+pose, material height, focus, lighting, and resolution.
+
+## Authoring and toolpath flows
+
+### Browser pipeline
+
+```text
+SVG text
+  -> geometry.svg.parse_svg()
+  -> DesignPlacement
+  -> placed polylines
+  -> work-area validation
+  -> gcode.generator.generate_vector_gcode()
+```
+
+This is a single-design workflow. Placement state lives in browser memory and
+generated files are written under the configured application data directory.
+
+### Desktop pipeline
+
+```text
+native shapes / imported SVG / traced outlines
+  -> SceneObject instances
+  -> ProjectDocument operation layers
+  -> undoable CommandStack changes
+  -> project.toolpath.generate_project_gcode()
+  -> multi-layer vector G-code
+```
+
+The desktop supports multiple objects and line-operation layers. Fill, raster,
+text, and image output are represented in the model but rejected explicitly by
+toolpath generation until their engines exist. Unsupported content must never
+be silently dropped.
+
+Both pipelines generate conservative G-code that is revalidated by
+`MachineService` before execution.
 
 ## Coordinate conventions
 
 - Machine X increases to the right.
 - Machine Y increases toward the top/back in the rectified workspace.
-- Browser pixels increase downward, so UI Y conversion is inverted.
-- SVG coordinates also normally increase downward. The placement engine flips SVG Y into machine coordinates so the design appears visually upright on the top-down photograph.
-- Positive design rotation is counter-clockwise in machine coordinates. CSS display rotation uses the opposite sign because browser Y is inverted.
+- Browser and image pixels increase downward, so UI/image Y conversion is
+  inverted.
+- SVG coordinates normally increase downward. Import/placement flips SVG Y so
+  artwork appears visually upright in machine coordinates.
+- Positive project rotation is counter-clockwise in machine coordinates.
+- CSS display rotation uses the opposite sign because browser Y is inverted.
 
-## Calibration files
-
-`data/lens_calibration.json` stores camera intrinsics and distortion. `data/bed_points.json` stores point pairs. `data/bed_calibration.json` stores image-to-machine and inverse homographies plus error data. `data/bed_reference.jpg` stores the fixed-pose image used for point clicking.
-
-Atomic JSON writes reduce corruption from interrupted saves.
+The project's work area is stored in `.e3laser`; the execution boundary also
+uses the configured machine work area. These values must not be allowed to
+silently diverge when a project is run.
 
 ## Machine safety boundary
 
-`MachineService` is the only normal path to the controller. It blocks serial access unless the process is started with `--hardware`, blocks motion until allowed in configuration, limits the diagnostic console to read-only queries and `M5`, requires temporary arming before a powered generated job starts, restricts streamed jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset, checks every XY destination against the configured work area, prevents rapid travel while laser state is active, revokes authorization on stop/disarm, and attempts `M5` on stop/disconnect.
+`MachineService` is the only normal path to the controller. It:
+
+- blocks serial access unless the process is hardware-enabled;
+- blocks motion until configuration allows it;
+- limits diagnostics to read-only queries and `M5`;
+- requires temporary arming for positive-power jobs;
+- restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset;
+- validates every destination against the configured work area;
+- prevents rapid travel while laser state is active;
+- revokes authorization on stop or disarm;
+- attempts `M5` on stop, disconnect, and failure.
 
 This is an accidental-command boundary, not functional safety.
+
+## Persistence map
+
+| Data | Current location |
+|---|---|
+| Main configuration | `config/default.json` plus ignored `config/local.json` |
+| Calibration JSON/images | configured `app.data_dir` |
+| Captures, logs, generated G-code | configured `app.data_dir` |
+| Desktop projects | user-selected `.e3laser` paths |
+| Project backups | adjacent `.e3laser.bak` files |
+| Autosaves | `~/.local/share/e3-positioning-system/backups/` by default |
+| Material presets | `~/.local/share/e3-positioning-system/materials.sqlite` by default |
+| Window layout | Qt `QSettings` |
+
+The hard-coded desktop user-data paths are Linux-oriented and should be
+replaced with an OS-native location abstraction before Windows is supported.
+
+## Platform boundary
+
+The portable core is intended to work on Windows and Linux, while real hardware
+is currently Linux-only. The existing boundary is incomplete:
+
+- `MachineService` imports the POSIX `termios` transport unconditionally, so
+  simulator/application imports fail on Windows.
+- Camera enumeration and controls use `/dev/video*`, V4L2, and `v4l2-ctl`.
+- Launch/install scripts and desktop integration are Linux shell assets.
+- CI currently runs Ubuntu only.
+
+Platform implementations must be selected lazily so an unavailable hardware
+backend does not prevent the simulator or portable libraries from importing.
+See `CURRENT_STATE.md` for the current verification record and recommended
+repair order.
