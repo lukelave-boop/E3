@@ -43,12 +43,15 @@ Native desktop workflow:
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
 - Rectangle, rounded rectangle, ellipse, line, text, and imported SVG-path
-  objects
+  objects, with numeric width/height and corner-radius editing for rectangles
 - Per-layer vector speed, power, pass count, ordering, estimates, and dry frames
 - SQLite material presets and camera focus/sharpness controls
 - Versioned `.e3template` cutting-template library with manual selection,
   geometry-based automatic matching, rigid alignment review, and one-step undo
   when aligned cut objects are created
+- Dedicated regular-grid template designer with a live preview, editable cut
+  size/radius, rows, columns, edge-gap or center-pitch spacing, and direct
+  template-library or project-object creation
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop
 
@@ -66,6 +69,16 @@ is not implemented. Automatic review uses one frozen corrected-camera frame,
 rejects weak or ambiguous fits, and always leaves final adjustment and approval
 to the operator. See
 [docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md).
+
+For a regular label sheet, open **Create > Design grid cutting template…**.
+Enter the rectangle width, height, corner radius, row/column count, and spacing
+as either the clear edge gap or the center-to-center pitch. The designer shows
+the resulting footprint and supports at most 500 cuts. A saved grid keeps its
+editable parameters; custom templates can still be created with **From current
+project…**. Grids with fewer than three cuts remain available for manual
+placement but cannot pass automatic matching. Automatic matching does not
+compare corner radius, so templates that differ only by radius must be selected
+manually.
 
 ## Deliberately disabled by default
 
@@ -185,7 +198,7 @@ laser_aligner/
   machine/       POSIX serial, simulator, controller safety service
   materials/     SQLite material-preset library
   project/       project model, history, persistence, alignment, toolpaths
-  templates/     reusable cut-template schema, library, and rigid placement
+  templates/     reusable templates, grid authoring, library, and rigid placement
   vision/        workpiece, fiducial, object tracing, and template alignment
   web/           dependency-free browser interface
 config/          simulation and hardware examples
@@ -245,6 +258,9 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   have not been verified with real corrected label-sheet images. Placement is
   rigid translation/rotation only, and `marker_id` is currently metadata rather
   than an active marker detector.
+- Automatic template matching cannot distinguish layouts whose matching
+  features differ only in rounded-corner radius; use manual selection and
+  inspect the overlay for those templates.
 - No safety-rated enclosure, interlock, flame detector, or hardware E-stop can be implemented in this software.
 - The exact Creality controller protocol and `S` power range for this particular conversion kit remain unverified.
 - Software stop is not a substitute for immediately removing power with a hardware emergency stop.

@@ -12,6 +12,9 @@ from ..errors import SafetyError, SvgError
 from ..geometry.svg import Polyline, SvgGeometry
 
 
+_PATH_BOUNDS_TOLERANCE_MM = 1e-6
+
+
 @dataclass(slots=True)
 class DesignPlacement:
     center_x_mm: float
@@ -131,17 +134,21 @@ def _program_bounds(paths: list[Polyline]) -> tuple[float, float, float, float]:
 
 def validate_paths(paths: list[Polyline], work_area: WorkArea, margin_mm: float = 0.0) -> None:
     minimum_x, minimum_y, maximum_x, maximum_y = _program_bounds(paths)
+    safe_minimum_x = work_area.x_min + margin_mm
+    safe_maximum_x = work_area.x_max - margin_mm
+    safe_minimum_y = work_area.y_min + margin_mm
+    safe_maximum_y = work_area.y_max - margin_mm
     if (
-        minimum_x < work_area.x_min + margin_mm
-        or maximum_x > work_area.x_max - margin_mm
-        or minimum_y < work_area.y_min + margin_mm
-        or maximum_y > work_area.y_max - margin_mm
+        minimum_x < safe_minimum_x - _PATH_BOUNDS_TOLERANCE_MM
+        or maximum_x > safe_maximum_x + _PATH_BOUNDS_TOLERANCE_MM
+        or minimum_y < safe_minimum_y - _PATH_BOUNDS_TOLERANCE_MM
+        or maximum_y > safe_maximum_y + _PATH_BOUNDS_TOLERANCE_MM
     ):
         raise SafetyError(
             "Placed design exceeds the configured safe work area: "
             f"design X={minimum_x:.2f}..{maximum_x:.2f}, Y={minimum_y:.2f}..{maximum_y:.2f}; "
-            f"safe X={work_area.x_min + margin_mm:.2f}..{work_area.x_max - margin_mm:.2f}, "
-            f"Y={work_area.y_min + margin_mm:.2f}..{work_area.y_max - margin_mm:.2f}"
+            f"safe X={safe_minimum_x:.2f}..{safe_maximum_x:.2f}, "
+            f"Y={safe_minimum_y:.2f}..{safe_maximum_y:.2f}"
         )
 
 

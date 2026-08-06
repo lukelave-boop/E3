@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from ..project import LayerMode, OperationLayer, ProjectDocument, SceneObject, Transform
+from ..project import (
+    LayerMode,
+    ObjectKind,
+    OperationLayer,
+    ProjectDocument,
+    SceneObject,
+    Transform,
+)
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -201,12 +208,14 @@ class LayerPanel(QtWidgets.QWidget):
 
 class TransformPanel(QtWidgets.QWidget):
     transformEdited = QtCore.Signal(str, object)
+    rectangleShapeEdited = QtCore.Signal(str, object, float)
     assignLayerRequested = QtCore.Signal(list, str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._object_id: str | None = None
         self._selected_ids: list[str] = []
+        self._rectangle_selected = False
         self._updating = False
 
         layout = _panel_layout(self)
@@ -219,6 +228,10 @@ class TransformPanel(QtWidgets.QWidget):
         self.y_spin = self._spin(-10000.0, 10000.0, " mm")
         self.width_spin = self._spin(0.001, 10000.0, " mm")
         self.height_spin = self._spin(0.001, 10000.0, " mm")
+        self.corner_radius_spin = self._spin(0.0, 5000.0, " mm")
+        self.corner_radius_spin.setToolTip(
+            "Limited to half of the rectangle's smaller dimension"
+        )
         self.rotation_spin = self._spin(-360.0, 360.0, "°")
         self.mirror_x = QtWidgets.QCheckBox("Mirror horizontally")
         self.mirror_y = QtWidgets.QCheckBox("Mirror vertically")
@@ -226,6 +239,11 @@ class TransformPanel(QtWidgets.QWidget):
         _form_row(form, "Center Y", self.y_spin)
         _form_row(form, "Width", self.width_spin)
         _form_row(form, "Height", self.height_spin)
+        self.corner_radius_label = QtWidgets.QLabel("Corner radius")
+        form.addRow(self.corner_radius_label, self.corner_radius_spin)
+        self.corner_radius_label.setVisible(False)
+        self.corner_radius_spin.setVisible(False)
+        self.corner_radius_spin.setEnabled(False)
         _form_row(form, "Rotation", self.rotation_spin)
         form.addRow(self.mirror_x)
         form.addRow(self.mirror_y)
@@ -242,8 +260,11 @@ class TransformPanel(QtWidgets.QWidget):
             self.width_spin,
             self.height_spin,
             self.rotation_spin,
+            self.corner_radius_spin,
         ):
             widget.editingFinished.connect(self._emit_transform)
+        self.width_spin.valueChanged.connect(self._update_corner_radius_limit)
+        self.height_spin.valueChanged.connect(self._update_corner_radius_limit)
         self.mirror_x.toggled.connect(self._emit_transform)
         self.mirror_y.toggled.connect(self._emit_transform)
         self.layer_combo.activated.connect(self._assign_layer)
@@ -276,6 +297,9 @@ class TransformPanel(QtWidgets.QWidget):
     ) -> None:
         self._selected_ids = [item.id for item in objects]
         self._object_id = objects[0].id if len(objects) == 1 else None
+        self._rectangle_selected = bool(
+            len(objects) == 1 and objects[0].kind == ObjectKind.RECTANGLE
+        )
         self._updating = True
         try:
             enabled = len(objects) == 1
@@ -289,6 +313,9 @@ class TransformPanel(QtWidgets.QWidget):
                 self.mirror_y,
             ):
                 widget.setEnabled(enabled)
+            self.corner_radius_label.setVisible(self._rectangle_selected)
+            self.corner_radius_spin.setVisible(self._rectangle_selected)
+            self.corner_radius_spin.setEnabled(self._rectangle_selected)
             if not objects:
                 self.summary.setText("No object selected")
                 return
@@ -307,6 +334,11 @@ class TransformPanel(QtWidgets.QWidget):
             self.y_spin.setValue(transform.y_mm)
             self.width_spin.setValue(transform.width_mm)
             self.height_spin.setValue(transform.height_mm)
+            self._update_corner_radius_limit()
+            if self._rectangle_selected:
+                self.corner_radius_spin.setValue(
+                    float(item.geometry.get("corner_radius_mm", 0.0))
+                )
             self.rotation_spin.setValue(transform.rotation_deg)
             self.mirror_x.setChecked(transform.mirror_x)
             self.mirror_y.setChecked(transform.mirror_y)
@@ -315,6 +347,11 @@ class TransformPanel(QtWidgets.QWidget):
                 self.layer_combo.setCurrentIndex(index)
         finally:
             self._updating = False
+
+    def _update_corner_radius_limit(self, *args: Any) -> None:
+        del args
+        maximum = min(self.width_spin.value(), self.height_spin.value()) / 2.0
+        self.corner_radius_spin.setMaximum(maximum)
 
     def _emit_transform(self, *args: Any) -> None:
         del args
@@ -329,7 +366,14 @@ class TransformPanel(QtWidgets.QWidget):
             mirror_x=self.mirror_x.isChecked(),
             mirror_y=self.mirror_y.isChecked(),
         )
-        self.transformEdited.emit(self._object_id, transform)
+        if self._rectangle_selected:
+            radius = min(
+                self.corner_radius_spin.value(),
+                min(transform.width_mm, transform.height_mm) / 2.0,
+            )
+            self.rectangleShapeEdited.emit(self._object_id, transform, radius)
+        else:
+            self.transformEdited.emit(self._object_id, transform)
 
     def _assign_layer(self, index: int) -> None:
         if self._updating or not self._selected_ids:

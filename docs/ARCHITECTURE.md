@@ -48,8 +48,8 @@ camera/controller work through `DesktopController` worker tasks.
 | `vision/` | Workpiece, fiducial, crosshair-grid, and camera-object detection |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
-| `project/` | Desktop project schema, commands, save/recovery, alignment, and multi-layer toolpaths |
-| `templates/` | Versioned cut-template schema, atomic library storage, project normalization, and rigid instantiation |
+| `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
+| `templates/` | Versioned cut-template schema, rectangle-grid authoring, atomic library storage, project normalization, and rigid instantiation |
 | `materials/` | SQLite material-preset library |
 | `machine/` | Safety policy, simulator, protocol probing, and serial transports |
 | `server.py` + `web/` | Local HTTP API and browser UI |
@@ -128,16 +128,37 @@ text, and image output are represented in the model but rejected explicitly by
 toolpath generation until their engines exist. Unsupported content must never
 be silently dropped.
 
+For a selected rectangle, the Transform inspector edits width, height, and the
+absolute corner radius. `UpdateObjectShapeCommand` validates and applies the
+transform and geometry together, so a resize that constrains the radius remains
+one undoable document revision. The radius cannot exceed half the smaller
+dimension.
+
 Reusable label-sheet geometry follows a separate portable flow:
 
 ```text
-visible output SceneObjects
-  -> clone and normalize around combined bounds center
-  -> versioned .e3template in the template library
-  -> resilient catalog of valid unique templates plus file diagnostics
-  -> manual selection or geometric ranking against one frozen camera frame
-  -> reviewed rigid center/rotation
-  -> new SceneObject IDs on the active layer through one AddObjectsCommand
+RectangleGridSpec                         visible output SceneObjects
+  | validate <= 500 cells                    | clone project geometry
+  | derive pitch and centered cells          | normalize combined bounds
+  | store editable authoring metadata        |
+  +----------------------+-------------------+
+                         v
+             normalized cut objects and features
+                         |
+                         v
+             versioned .e3template library item
+                         |
+                         v
+             resilient catalog and file diagnostics
+                         |
+                         v
+       manual selection or ranking on one frozen frame
+                         |
+                         v
+            reviewed rigid center and rotation
+                         |
+                         v
+       one AddObjectsCommand into the active project layer
 ```
 
 Templates preserve cut geometry and relative spacing but do not preserve a
@@ -147,6 +168,18 @@ created objects and its speed, power, and pass settings. The optional
 Independent closed outer contours inside one imported SVG path become separate
 matching features; contained hole contours do not. The UI excludes malformed
 or duplicate-ID library entries without hiding unrelated valid templates.
+
+`RectangleGridSpec` is Qt-independent. It stores edge gaps as the canonical
+spacing and derives center pitch and footprint. The desktop designer may accept
+either edge gap or center pitch, but converts to one unambiguous portable recipe.
+Grid authoring metadata is optional: templates built from a project retain
+arbitrary cut geometry and are not inferred or relabeled as editable grids.
+Editing a grid uses exact-ID atomic replacement so a renamed template cannot
+leave a second file with the same persistent ID.
+
+Template matching features contain center, dimensions, and orientation, not
+rounded-corner radius. Templates that differ only in radius cannot be separated
+by geometry ranking and require explicit user selection and overlay review.
 See [CUT_TEMPLATES.md](CUT_TEMPLATES.md) for the format and verification
 boundary.
 

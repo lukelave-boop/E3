@@ -1,11 +1,15 @@
+import pytest
+
 from laser_aligner.project import (
     AddObjectCommand,
     CommandStack,
     DuplicateObjectsCommand,
+    ProjectFormatError,
     ProjectDocument,
     RemoveObjectsCommand,
     SceneObject,
     Transform,
+    UpdateObjectShapeCommand,
     UpdateTransformCommand,
 )
 
@@ -40,6 +44,75 @@ def test_transform_undo_redo():
 
     stack.redo()
     assert item.transform.rotation_deg == 15
+
+
+def test_object_shape_command_updates_transform_and_geometry_once_per_step():
+    document = ProjectDocument.new()
+    item = SceneObject.rectangle(
+        document.active_layer_id,
+        name="Rounded label",
+        center=(10, 20),
+        width_mm=20,
+        height_mm=12,
+        corner_radius_mm=2,
+    )
+    item.group_id = "label-grid"
+    document.add_object(item)
+    stack = CommandStack()
+    original_revision = document.revision
+    original_id = item.id
+    original_layer = item.layer_id
+
+    stack.execute(
+        UpdateObjectShapeCommand(
+            document,
+            item.id,
+            Transform(50, 60, 30, 18, rotation_deg=15),
+            {"corner_radius_mm": 4},
+        )
+    )
+
+    assert document.revision == original_revision + 1
+    assert item.id == original_id
+    assert item.layer_id == original_layer
+    assert item.group_id == "label-grid"
+    assert item.transform.to_dict() == Transform(
+        50, 60, 30, 18, rotation_deg=15
+    ).to_dict()
+    assert item.geometry == {"corner_radius_mm": 4.0}
+
+    assert stack.undo()
+    assert document.revision == original_revision + 2
+    assert item.transform.to_dict() == Transform(10, 20, 20, 12).to_dict()
+    assert item.geometry == {"corner_radius_mm": 2.0}
+    assert item.id == original_id
+    assert item.layer_id == original_layer
+
+    assert stack.redo()
+    assert document.revision == original_revision + 3
+    assert item.transform.to_dict() == Transform(
+        50, 60, 30, 18, rotation_deg=15
+    ).to_dict()
+    assert item.geometry == {"corner_radius_mm": 4.0}
+
+
+def test_object_shape_command_validates_geometry_before_mutating_document():
+    document = ProjectDocument.new()
+    item = SceneObject.rectangle(document.active_layer_id, corner_radius_mm=2)
+    document.add_object(item)
+    revision = document.revision
+
+    with pytest.raises(ProjectFormatError, match="cannot be negative"):
+        UpdateObjectShapeCommand(
+            document,
+            item.id,
+            item.transform.copy(width_mm=25),
+            {"corner_radius_mm": -1},
+        )
+
+    assert document.revision == revision
+    assert item.transform.width_mm == 40
+    assert item.geometry == {"corner_radius_mm": 2.0}
 
 
 def test_new_command_after_undo_clears_redo_branch():

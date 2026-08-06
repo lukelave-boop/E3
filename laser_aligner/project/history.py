@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable
+import copy
 import uuid
+from abc import ABC, abstractmethod
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any
 
 from .model import OperationLayer, ProjectDocument, SceneObject, Transform
@@ -372,6 +373,51 @@ class UpdateObjectPropertiesCommand(Command):
 
     def undo(self) -> None:
         self._apply(self.before)
+
+
+class UpdateObjectShapeCommand(Command):
+    """Atomically replace one object's transform and validated geometry."""
+
+    def __init__(
+        self,
+        document: ProjectDocument,
+        object_id: str,
+        new_transform: Transform,
+        new_geometry: Mapping[str, Any],
+        description: str = "Edit object shape",
+    ) -> None:
+        self.document = document
+        self.object_id = str(object_id)
+        item = document.get_object(self.object_id)
+        self.before_transform = item.transform.copy()
+        self.before_geometry = copy.deepcopy(item.geometry)
+
+        payload = item.to_dict()
+        payload["transform"] = new_transform.to_dict()
+        payload["geometry"] = copy.deepcopy(dict(new_geometry))
+        validated = SceneObject.from_dict(payload)
+        if validated.id != item.id or validated.layer_id != item.layer_id:
+            raise ValueError("Shape replacement must preserve object identity and layer")
+
+        self.after_transform = validated.transform.copy()
+        self.after_geometry = copy.deepcopy(validated.geometry)
+        self.description = description
+
+    def _apply(self, transform: Transform, geometry: Mapping[str, Any]) -> None:
+        item = self.document.get_object(self.object_id)
+        transform_changed = item.transform.to_dict() != transform.to_dict()
+        geometry_changed = item.geometry != geometry
+        if not transform_changed and not geometry_changed:
+            return
+        item.transform = transform.copy()
+        item.geometry = copy.deepcopy(dict(geometry))
+        self.document.touch()
+
+    def redo(self) -> None:
+        self._apply(self.after_transform, self.after_geometry)
+
+    def undo(self) -> None:
+        self._apply(self.before_transform, self.before_geometry)
 
 
 class UpdateTransformCommand(Command):

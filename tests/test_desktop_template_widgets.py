@@ -23,7 +23,11 @@ from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.template_panel import TemplatePanel
 from laser_aligner.desktop.workspace import WorkspaceView
 from laser_aligner.project import Bounds, CommandStack, ProjectDocument, SceneObject
-from laser_aligner.templates import CutTemplate, template_from_project
+from laser_aligner.templates import (
+    CutTemplate,
+    RectangleGridSpec,
+    template_from_project,
+)
 from laser_aligner.vision.object_trace import TraceOptions
 from laser_aligner.vision.template_alignment import TemplateAlignment
 
@@ -77,6 +81,11 @@ class _WindowHarness:
         self._templates = {template.id: template}
         self._template_match_result: dict[str, Any] | None = None
         self.notices: list[str] = []
+        self.trace_panel = SimpleNamespace(options=lambda: TraceOptions().to_dict())
+        self.selected_panels: list[str] = []
+        self.inspector_tabs = SimpleNamespace(
+            select_panel=self.selected_panels.append
+        )
 
     def _clear_template_preview(self, show_message: bool = True) -> None:
         E3MainWindow._clear_template_preview(self, show_message)
@@ -86,6 +95,9 @@ class _WindowHarness:
 
     def show_error(self, message: str) -> None:
         raise AssertionError(message)
+
+    def _document_center(self) -> tuple[float, float]:
+        return self.document.work_area.center
 
 
 class _ActionHarness:
@@ -571,6 +583,110 @@ def test_main_window_applies_template_as_one_undoable_batch(
     assert window.document.objects == []
     assert window.history.redo()
     assert [item.id for item in window.document.objects] == created_ids
+
+
+def test_main_window_adds_designed_grid_as_one_undoable_batch() -> None:
+    source_document = ProjectDocument.new()
+    source_document.add_object(
+        SceneObject.rectangle(source_document.active_layer_id)
+    )
+    window = _WindowHarness(template_from_project(source_document, "Seed"))
+    spec = RectangleGridSpec(
+        name="Six labels",
+        rows=2,
+        columns=3,
+        width_mm=20.0,
+        height_mm=10.0,
+        corner_radius_mm=2.0,
+        horizontal_gap_mm=4.0,
+        vertical_gap_mm=6.0,
+    )
+
+    E3MainWindow._add_rectangle_grid_to_project(window, spec)
+
+    assert len(window.document.objects) == 6
+    assert window.history.depth == 1
+    assert window.history.undo_text == "Create Six labels grid"
+    assert window.workspace.selected_ids == [
+        item.id for item in window.document.objects
+    ]
+    assert window.workspace.clear_count == 1
+    assert window.selected_panels == ["objects"]
+    assert {
+        item.geometry["corner_radius_mm"] for item in window.document.objects
+    } == {2.0}
+    assert window.history.undo()
+    assert window.document.objects == []
+
+
+def test_main_window_accepts_float_noise_at_work_area_boundary() -> None:
+    source_document = ProjectDocument.new()
+    source_document.add_object(
+        SceneObject.rectangle(source_document.active_layer_id)
+    )
+    window = _WindowHarness(template_from_project(source_document, "Seed"))
+    exact_fit = RectangleGridSpec(
+        name="Exact fit",
+        rows=1,
+        columns=3,
+        width_mm=66.668,
+        height_mm=10.0,
+        horizontal_gap_mm=9.998,
+    )
+
+    E3MainWindow._add_rectangle_grid_to_project(window, exact_fit)
+
+    assert len(window.document.objects) == 3
+    assert window.history.depth == 1
+
+    outside = RectangleGridSpec(
+        name="Outside",
+        rows=1,
+        columns=3,
+        width_mm=66.668,
+        height_mm=10.0,
+        horizontal_gap_mm=9.999,
+    )
+    with pytest.raises(ValueError, match="does not fit"):
+        E3MainWindow._add_rectangle_grid_to_project(window, outside)
+    assert len(window.document.objects) == 3
+    assert window.history.depth == 1
+
+
+def test_main_window_edits_rectangle_size_and_radius_in_one_history_step() -> None:
+    source_document = ProjectDocument.new()
+    source_document.add_object(
+        SceneObject.rectangle(source_document.active_layer_id)
+    )
+    window = _WindowHarness(template_from_project(source_document, "Seed"))
+    rectangle = SceneObject.rectangle(
+        window.document.active_layer_id,
+        center=(50.0, 60.0),
+        width_mm=30.0,
+        height_mm=20.0,
+        corner_radius_mm=3.0,
+    )
+    window.document.add_object(rectangle)
+    before_revision = window.document.revision
+
+    E3MainWindow._rectangle_shape_edited(
+        window,
+        rectangle.id,
+        rectangle.transform.copy(width_mm=24.0, height_mm=16.0),
+        5.0,
+    )
+
+    edited = window.document.get_object(rectangle.id)
+    assert edited.transform.width_mm == pytest.approx(24.0)
+    assert edited.transform.height_mm == pytest.approx(16.0)
+    assert edited.geometry["corner_radius_mm"] == pytest.approx(5.0)
+    assert window.document.revision == before_revision + 1
+    assert window.history.depth == 1
+    assert window.history.undo()
+    restored = window.document.get_object(rectangle.id)
+    assert restored.transform.width_mm == pytest.approx(30.0)
+    assert restored.transform.height_mm == pytest.approx(20.0)
+    assert restored.geometry["corner_radius_mm"] == pytest.approx(3.0)
 
 
 def test_document_revision_change_invalidates_generated_job() -> None:

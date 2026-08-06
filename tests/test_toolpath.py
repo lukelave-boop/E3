@@ -12,6 +12,11 @@ from laser_aligner.project import (
     generate_project_frame,
     generate_project_gcode,
 )
+from laser_aligner.templates import (
+    RectangleGridSpec,
+    instantiate_template,
+    template_from_rectangle_grid,
+)
 
 
 def make_document():
@@ -75,6 +80,42 @@ def test_bounds_violation_is_rejected():
 
     with pytest.raises(SafetyError):
         generate_project_gcode(document, LaserSettings(boundary_margin_mm=0))
+
+
+def test_exact_boundary_float_noise_is_safe_but_real_overflow_is_rejected():
+    document = ProjectDocument.new("Exact fit", Bounds(0, 0, 220, 220))
+    exact_fit = RectangleGridSpec(
+        name="Exact fit",
+        rows=1,
+        columns=3,
+        width_mm=66.668,
+        height_mm=10.0,
+        horizontal_gap_mm=9.998,
+    )
+    template = template_from_rectangle_grid(exact_fit)
+    for item in instantiate_template(
+        template,
+        target_x_mm=110.0,
+        target_y_mm=110.0,
+        rotation_deg=0.0,
+        target_layer_id=document.active_layer_id,
+    ):
+        document.add_object(item)
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(boundary_margin_mm=0),
+    )
+    assert job.bounds_mm[0] == pytest.approx(0.0, abs=1e-9)
+    assert job.bounds_mm[2] == pytest.approx(220.0, abs=1e-9)
+
+    outside = document.objects[-1]
+    outside.transform.x_mm += 0.001
+    with pytest.raises(SafetyError):
+        generate_project_gcode(
+            document,
+            LaserSettings(boundary_margin_mm=0),
+        )
 
 
 def test_frame_contains_no_positive_laser_command():

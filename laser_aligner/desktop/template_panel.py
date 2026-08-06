@@ -17,6 +17,8 @@ def _muted(text: str) -> QtWidgets.QLabel:
 class TemplatePanel(QtWidgets.QWidget):
     """Template library, matching, and reviewed rigid-placement controls."""
 
+    newGridRequested = QtCore.Signal()
+    editGridRequested = QtCore.Signal(str)
     saveRequested = QtCore.Signal()
     deleteRequested = QtCore.Signal(str)
     refreshRequested = QtCore.Signal()
@@ -58,13 +60,26 @@ class TemplatePanel(QtWidgets.QWidget):
         self.template_combo.setMinimumContentsLength(22)
         layout.addWidget(self.template_combo)
 
+        designer_buttons = QtWidgets.QHBoxLayout()
+        self.new_grid_button = QtWidgets.QPushButton("New grid…")
+        self.edit_grid_button = QtWidgets.QPushButton("Edit grid…")
+        designer_buttons.addWidget(self.new_grid_button)
+        designer_buttons.addWidget(self.edit_grid_button)
+        layout.addLayout(designer_buttons)
+
+        self.save_button = QtWidgets.QPushButton("From current project…")
+        self.save_button.setToolTip(
+            "Save the visible, output-enabled geometry in the current project "
+            "as a reusable template."
+        )
+        layout.addWidget(self.save_button)
+
         library_buttons = QtWidgets.QHBoxLayout()
-        self.save_button = QtWidgets.QPushButton("Save project as template…")
+        library_buttons.addStretch(1)
         self.refresh_button = QtWidgets.QToolButton()
         self.refresh_button.setText("Refresh")
         self.delete_button = QtWidgets.QToolButton()
         self.delete_button.setText("Delete")
-        library_buttons.addWidget(self.save_button, 1)
         library_buttons.addWidget(self.refresh_button)
         library_buttons.addWidget(self.delete_button)
         layout.addLayout(library_buttons)
@@ -131,6 +146,8 @@ class TemplatePanel(QtWidgets.QWidget):
         layout.addStretch(1)
 
         self.template_combo.currentIndexChanged.connect(self._template_changed)
+        self.new_grid_button.clicked.connect(self.newGridRequested.emit)
+        self.edit_grid_button.clicked.connect(self._edit_grid_clicked)
         self.save_button.clicked.connect(self.saveRequested.emit)
         self.refresh_button.clicked.connect(self.refreshRequested.emit)
         self.delete_button.clicked.connect(self._delete_clicked)
@@ -322,11 +339,31 @@ class TemplatePanel(QtWidgets.QWidget):
         text = f"{feature_count} cuts · {width:.1f} × {height:.1f} mm"
         if description:
             text += f"\n{description}"
+        if bool(item.get("grid_editable", False)):
+            text += "\nEditable parameter grid"
+        else:
+            text += "\nCustom project geometry; grid parameters are not available."
         self.template_summary.setText(text)
 
     def _update_enabled(self) -> None:
         available = bool(self._templates)
+        selected = self._templates.get(self.current_template_id() or "")
+        grid_editable = bool(selected and selected.get("grid_editable", False))
         self.template_combo.setEnabled(available)
+        self.new_grid_button.setEnabled(not self._busy)
+        self.save_button.setEnabled(not self._busy)
+        self.edit_grid_button.setEnabled(grid_editable and not self._busy)
+        if grid_editable:
+            self.edit_grid_button.setToolTip(
+                "Edit this template's dimensions, rows, columns, radius and spacing."
+            )
+        elif selected is None:
+            self.edit_grid_button.setToolTip("Select an editable grid template first.")
+        else:
+            self.edit_grid_button.setToolTip(
+                "This template came from project geometry and has no editable "
+                "grid parameters."
+            )
         self.delete_button.setEnabled(available and not self._busy)
         can_match = available and self._calibration_ready and not self._busy
         self.auto_button.setEnabled(can_match)
@@ -369,6 +406,12 @@ class TemplatePanel(QtWidgets.QWidget):
         template_id = self.current_template_id()
         if template_id:
             self.matchSelectedRequested.emit(template_id)
+
+    def _edit_grid_clicked(self) -> None:
+        template_id = self.current_template_id()
+        item = self._templates.get(template_id or "")
+        if template_id and item and bool(item.get("grid_editable", False)):
+            self.editGridRequested.emit(template_id)
 
     def _delete_clicked(self) -> None:
         template_id = self.current_template_id()

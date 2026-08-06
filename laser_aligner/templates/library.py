@@ -135,6 +135,55 @@ class TemplateLibrary:
         atomic_write_json(destination, validated.to_dict())
         return destination
 
+    def replace(
+        self,
+        template: CutTemplate,
+        *,
+        expected_modified_at: str | None = None,
+    ) -> Path:
+        """Atomically replace the one existing file with this persistent ID.
+
+        Replacement deliberately keeps the original path even when the display
+        name changes.  This prevents a rename from leaving two files with one
+        persistent ID.  Unrelated malformed files do not block replacement,
+        but an absent or duplicate target is rejected.
+        """
+
+        validated = CutTemplate.from_dict(template.to_dict())
+        matches: list[tuple[Path, CutTemplate]] = []
+        for path in self._template_paths():
+            try:
+                current = self.load(path)
+            except (OSError, TemplateFormatError):
+                continue
+            if current.id == validated.id:
+                matches.append((path, current))
+
+        if not matches:
+            raise FileNotFoundError(
+                f"No template with ID {validated.id!r} in {self.root}"
+            )
+        if len(matches) > 1:
+            filenames = ", ".join(path.name for path, _ in matches)
+            raise TemplateFormatError(
+                f"Cannot replace duplicate template ID {validated.id!r}: {filenames}"
+            )
+
+        destination, current = matches[0]
+        if validated.created_at != current.created_at:
+            raise TemplateFormatError(
+                "Replacement must preserve the template creation timestamp"
+            )
+        if (
+            expected_modified_at is not None
+            and current.modified_at != str(expected_modified_at)
+        ):
+            raise TemplateFormatError(
+                "Template changed after it was opened; reload it before saving"
+            )
+        atomic_write_json(destination, validated.to_dict())
+        return destination
+
     def load(self, reference: str | Path) -> CutTemplate:
         """Load by filename/path, falling back to a template ID lookup."""
 

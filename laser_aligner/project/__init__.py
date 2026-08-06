@@ -30,6 +30,7 @@ from .history import (
     UngroupObjectsCommand,
     UpdateLayerCommand,
     UpdateObjectPropertiesCommand,
+    UpdateObjectShapeCommand,
     UpdateTransformCommand,
     UpdateTransformsCommand,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "UngroupObjectsCommand",
     "UpdateLayerCommand",
     "UpdateObjectPropertiesCommand",
+    "UpdateObjectShapeCommand",
     "UpdateTransformCommand",
     "UpdateTransformsCommand",
     "aligned_transforms",

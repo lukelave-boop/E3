@@ -23,6 +23,21 @@
 ### Cutting templates
 
 - Added versioned `.e3template` files and an atomic reusable template library.
+- Added a dedicated rounded-rectangle grid designer with live preview,
+  rows/columns, cut width/height/radius, edge-gap or center-pitch entry, and
+  footprint/pitch/count feedback.
+- Limited generated grids to 500 objects, rejected footprints outside the
+  project work area, and marked grids with fewer than three cuts as manual-only
+  for alignment.
+- Applied a `1e-6` mm numerical tolerance consistently at work-area and
+  G-code bounds checks so exact-fit layouts survive floating-point noise while
+  meaningful overflow remains blocked.
+- Persisted versioned grid-authoring metadata so saved grids can be edited while
+  retaining their template identity; arbitrary project-authored templates are
+  not guessed to be parameter grids.
+- Added direct grid creation in the active project layer as one undoable batch.
+- Added numeric rectangle corner-radius editing alongside width and height in
+  the Transform inspector, applied as one validated undoable shape change.
 - Added resilient library scans: malformed entries are reported without hiding
   valid templates, and duplicate persistent IDs are excluded safely.
 - Added project-to-template normalization for visible cut objects and rigid
@@ -41,6 +56,9 @@
   aligned geometry cannot be followed by execution of a stale job.
 - Reserved `marker_id` as schema metadata; marker-based identification is not
   implemented.
+- Documented that automatic matching does not compare corner radius, so
+  otherwise identical templates that differ only by radius require manual
+  selection.
 - Added focused synthetic and offscreen behavioral tests for schema round trips,
   library behavior, rigid placement, alignment/ranking, review controls,
   object creation/undo, and stale-state rejection. Real-camera and physical

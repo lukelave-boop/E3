@@ -37,19 +37,27 @@ def test_main_window_wires_template_review_and_one_batch_application() -> None:
     workspace = source("workspace.py")
 
     assert 'action("save_template", "Save project as cutting template' in window
+    assert 'action("grid_template_designer", "Design grid cutting template' in window
     assert 'add_panel("templates", "Templates", self.template_panel)' in window
+    assert "self.template_panel.newGridRequested.connect(" in window
+    assert "self.template_panel.editGridRequested.connect(" in window
     assert "self.template_panel.autoMatchRequested.connect(" in window
     assert "self.template_panel.templateSelected.connect(self._template_selected)" in window
     assert "self.template_panel.placementChanged.connect(" in window
     assert "self.template_panel.applyRequested.connect(self._apply_template_objects)" in window
     assert "self.controller.templateMatchReady.connect(" in window
     assert "template_from_project(" in window
+    assert "template_from_rectangle_grid(" in window
+    assert "self.template_library.replace(" in window
+    assert "expected_modified_at=existing.modified_at" in window
     assert "self.document.clone()" in window
     assert "catalog = self.template_library.scan()" in window
     assert "catalog.diagnostics" in window
     assert "instantiate_template(" in window
     assert "target_layer_id=self.active_layer_id" in window
     assert "AddObjectsCommand(" in window
+    assert "self.transform_panel.rectangleShapeEdited.connect(" in window
+    assert "UpdateObjectShapeCommand(" in window
     assert 'description=f"Apply {template.name} template"' in window
     assert "def set_template_preview(" in workspace
     assert "detections: list[dict[str, Any]] | None = None" in workspace

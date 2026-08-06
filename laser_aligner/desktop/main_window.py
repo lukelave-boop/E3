@@ -27,6 +27,7 @@ from ..project import (
     Transform,
     UngroupObjectsCommand,
     UpdateLayerCommand,
+    UpdateObjectShapeCommand,
     UpdateObjectPropertiesCommand,
     UpdateTransformCommand,
     UpdateTransformsCommand,
@@ -43,8 +44,10 @@ from ..project import (
 )
 from ..templates import (
     CutTemplate,
+    RectangleGridSpec,
     TemplateLibrary,
     instantiate_template,
+    template_from_rectangle_grid,
     template_from_project,
 )
 from .controller import DesktopController
@@ -61,6 +64,7 @@ from .panels import (
     TransformPanel,
 )
 from .qt import require_qt
+from .template_designer import GridTemplateDesignerDialog, WORK_AREA_TOLERANCE_MM
 from .template_panel import TemplatePanel
 from .workspace import WorkspaceFrame, WorkspaceView
 
@@ -255,6 +259,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("ellipse", "Add ellipse", "Alt+E")
         action("line", "Add line", "Alt+L")
         action("text", "Add text", "Alt+T")
+        action("grid_template_designer", "Design grid cutting template…")
         action("trace_objects", "Detect / trace camera objects…", "Ctrl+Alt+T")
         action("template_alignment", "Cutting template alignment…", "Ctrl+Alt+A")
         action("refresh_camera", "Refresh camera", "F5")
@@ -307,6 +312,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["ellipse"].triggered.connect(self.add_ellipse)
         self.actions["line"].triggered.connect(self.add_line)
         self.actions["text"].triggered.connect(self.add_text)
+        self.actions["grid_template_designer"].triggered.connect(
+            lambda: self.open_grid_template_designer(None)
+        )
         self.actions["trace_objects"].triggered.connect(self.open_trace_panel)
         self.actions["template_alignment"].triggered.connect(self.open_template_panel)
         self.actions["refresh_camera"].triggered.connect(self.controller.refresh_camera_image)
@@ -365,6 +373,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         for key in ("rectangle", "ellipse", "line", "text"):
             create_menu.addAction(self.actions[key])
         create_menu.addSeparator()
+        create_menu.addAction(self.actions["grid_template_designer"])
         create_menu.addAction(self.actions["trace_objects"])
         create_menu.addAction(self.actions["template_alignment"])
 
@@ -625,6 +634,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel.selectionRequested.connect(self.workspace.select_objects)
         self.object_panel.objectEdited.connect(self._object_edited)
         self.transform_panel.transformEdited.connect(self._transform_edited)
+        self.transform_panel.rectangleShapeEdited.connect(
+            self._rectangle_shape_edited
+        )
         self.transform_panel.assignLayerRequested.connect(self._assign_layer)
 
         self.trace_panel.detectRequested.connect(self._detect_trace_objects)
@@ -642,6 +654,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
         self.template_panel.saveRequested.connect(self.save_current_as_template)
+        self.template_panel.newGridRequested.connect(
+            lambda: self.open_grid_template_designer(None)
+        )
+        self.template_panel.editGridRequested.connect(
+            self.open_grid_template_designer
+        )
         self.template_panel.deleteRequested.connect(self.delete_cut_template)
         self.template_panel.refreshRequested.connect(self._refresh_template_library)
         self.template_panel.templateSelected.connect(self._template_selected)
@@ -1006,6 +1024,31 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.history.execute(UpdateTransformCommand(self.document, object_id, transform))
         self.workspace.select_objects([object_id])
 
+    def _rectangle_shape_edited(
+        self,
+        object_id: str,
+        transform: Transform,
+        corner_radius_mm: float,
+    ) -> None:
+        item = self.document.get_object(object_id)
+        geometry = dict(item.geometry)
+        geometry["corner_radius_mm"] = float(corner_radius_mm)
+        if (
+            item.transform.to_dict() == transform.to_dict()
+            and item.geometry == geometry
+        ):
+            return
+        self.history.execute(
+            UpdateObjectShapeCommand(
+                self.document,
+                object_id,
+                transform,
+                geometry,
+                description=f"Edit {item.name} shape",
+            )
+        )
+        self.workspace.select_objects([object_id])
+
     def _assign_layer(self, object_ids: list[str], layer_id: str) -> None:
         self.history.execute(AssignLayerCommand(self.document, object_ids, layer_id))
         self.workspace.select_objects(object_ids)
@@ -1313,6 +1356,141 @@ class E3MainWindow(QtWidgets.QMainWindow):
             arm_phrase=phrase,
         )
 
+    @staticmethod
+    def _grid_spec_from_template(
+        template: CutTemplate,
+    ) -> RectangleGridSpec | None:
+        try:
+            return RectangleGridSpec.from_template(template)
+        except (TypeError, ValueError):
+            return None
+
+    def open_grid_template_designer(
+        self,
+        template_id: str | None = None,
+    ) -> None:
+        existing: CutTemplate | None = None
+        initial_spec: RectangleGridSpec | None = None
+        if template_id is not None:
+            existing = self._templates.get(str(template_id))
+            if existing is None:
+                self.show_notice("That cutting template is no longer available")
+                self._refresh_template_library()
+                return
+            initial_spec = self._grid_spec_from_template(existing)
+            if initial_spec is None:
+                self.show_notice(
+                    "This template was created from freeform project geometry. "
+                    "Edit its objects in a project, then save a new template."
+                )
+                return
+
+        def submit(action: str, payload: dict[str, Any]) -> None:
+            nonlocal existing
+            spec = RectangleGridSpec.from_dict(payload)
+            if action == "project":
+                self._add_rectangle_grid_to_project(spec)
+            elif action == "save":
+                try:
+                    self._save_rectangle_grid_template(spec, existing=existing)
+                except Exception as exc:
+                    if existing is not None:
+                        try:
+                            latest = self.template_library.get(existing.id)
+                        except Exception:
+                            pass
+                        else:
+                            if latest.modified_at != existing.modified_at:
+                                existing = latest
+                                raise RuntimeError(
+                                    f"{exc}. The latest library version is now "
+                                    "loaded; review your values and press Update "
+                                    "again to replace it."
+                                ) from exc
+                    raise
+            else:
+                raise ValueError(f"Unknown grid-template action: {action}")
+
+        dialog = GridTemplateDesignerDialog(
+            self,
+            editing=existing is not None,
+            max_width_mm=self.document.work_area.width,
+            max_height_mm=self.document.work_area.height,
+            submit_handler=submit,
+        )
+        if initial_spec is not None:
+            dialog.set_spec(initial_spec.to_dict())
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
+
+    def _save_rectangle_grid_template(
+        self,
+        spec: RectangleGridSpec,
+        *,
+        existing: CutTemplate | None = None,
+    ) -> None:
+        template = template_from_rectangle_grid(
+            spec,
+            trace_options=(
+                existing.trace_options
+                if existing is not None
+                else self.trace_panel.options()
+            ),
+            existing=existing,
+        )
+        path = (
+            self.template_library.replace(
+                template,
+                expected_modified_at=existing.modified_at,
+            )
+            if existing is not None
+            else self.template_library.save(template)
+        )
+        self._refresh_template_library(template.id)
+        self.inspector_tabs.select_panel("templates")
+        self._set_manual_template_placement(template.id)
+        verb = "Updated" if existing is not None else "Saved"
+        self.show_notice(
+            f"{verb} grid template {template.name}: "
+            f"{spec.rows} x {spec.columns} cuts in {path.name}"
+        )
+
+    def _add_rectangle_grid_to_project(self, spec: RectangleGridSpec) -> None:
+        template = template_from_rectangle_grid(
+            spec,
+            trace_options=self.trace_panel.options(),
+        )
+        center_x, center_y = self._document_center()
+        objects = instantiate_template(
+            template,
+            target_x_mm=center_x,
+            target_y_mm=center_y,
+            rotation_deg=0.0,
+            target_layer_id=self.active_layer_id,
+        )
+        area = self.document.work_area.expanded(WORK_AREA_TOLERANCE_MM)
+        if any(
+            not area.contains(x, y)
+            for item in objects
+            for x, y in item.transform.corners()
+        ):
+            raise ValueError("The grid does not fit inside the project work area")
+        self._clear_template_preview(show_message=False)
+        self.history.execute(
+            AddObjectsCommand(
+                self.document,
+                objects,
+                description=f"Create {spec.name} grid",
+            )
+        )
+        self.workspace.select_objects([item.id for item in objects])
+        self.inspector_tabs.select_panel("objects")
+        self.show_notice(
+            f"Created {len(objects)} editable rounded rectangles as one undoable grid"
+        )
+
     def _refresh_template_library(self, selected_id: str | None = None) -> None:
         self.controller.cancel_template_match()
         self._template_match_result = None
@@ -1322,17 +1500,19 @@ class E3MainWindow(QtWidgets.QMainWindow):
         catalog = self.template_library.scan()
         templates = list(catalog.templates)
         self._templates = {item.id: item for item in templates}
-        summaries = [
-            {
-                "id": item.id,
-                "name": item.name,
-                "description": item.description,
-                "feature_count": len(item.features),
-                "width_mm": item.width_mm,
-                "height_mm": item.height_mm,
-            }
-            for item in templates
-        ]
+        summaries = []
+        for item in templates:
+            summaries.append(
+                {
+                    "id": item.id,
+                    "name": item.name,
+                    "description": item.description,
+                    "feature_count": len(item.features),
+                    "width_mm": item.width_mm,
+                    "height_mm": item.height_mm,
+                    "grid_editable": self._grid_spec_from_template(item) is not None,
+                }
+            )
         self.template_panel.set_templates(summaries, selected_id=selected_id)
         if catalog.diagnostics:
             first = catalog.diagnostics[0]
@@ -1540,7 +1720,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 rotation_deg=float(payload.get("rotation_deg", 0.0)),
                 target_layer_id=self.active_layer_id,
             )
-            area = self.document.work_area
+            area = self.document.work_area.expanded(WORK_AREA_TOLERANCE_MM)
             outside = [
                 item.name
                 for item in objects

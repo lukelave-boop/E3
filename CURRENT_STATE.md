@@ -51,7 +51,8 @@ The repository contains:
    layers are tested, but whose real-camera GUI path is not end-to-end verified.
 5. A reusable cutting-template workflow with a versioned library, manual
    selection, geometric candidate ranking, rigid alignment review, and
-   undoable project-object creation.
+   undoable project-object creation, plus a dedicated parametric designer for
+   regular rounded-rectangle grids.
 
 The browser remains the complete calibration interface. The desktop reads the
 same calibration files but does not yet provide native calibration wizards.
@@ -96,8 +97,9 @@ CameraService or SyntheticCameraService
 Cutting-template path:
 
 ```text
-visible project output objects
-  -> normalized .e3template library item
+rectangle-grid recipe or visible project output objects
+  -> normalized cut objects and matching features
+  -> versioned .e3template library item
   -> manual selection or geometric candidate ranking
   -> reviewed translation + rotation overlay
   -> one AddObjectsCommand into the active project layer
@@ -122,7 +124,7 @@ Audit environment:
 
 Results:
 
-- **134 tests passed and 2 POSIX-only tests skipped.**
+- **170 tests passed and 2 POSIX-only tests skipped.**
 - The complete suite collected, including app simulation and machine-service
   tests.
 - A focused cutting-template run passed 39 model, library, matcher, controller,
@@ -132,6 +134,9 @@ Results:
   under Qt's offscreen backend, ran its event loop, and shut down cleanly.
 - An offscreen `E3MainWindow` smoke test saved and reloaded a template, created
   aligned objects as one history command, and undid the operation.
+- A second offscreen `E3MainWindow` smoke test drove the modal grid designer,
+  saved and edited a template in place, added four rectangles as one history
+  command, and undid the entire grid insertion.
 - The interactive native workflow has not yet been manually exercised on this
   Windows checkout.
 - Ruff was not available in the current virtual environment.
@@ -140,6 +145,13 @@ The cutting-template coverage includes versioned persistence, resilient
 catalog scans, compound imported paths, rigid matching, ambiguity and weak-match
 rejection, frozen-frame review, cancellation of stale results, transient
 overlays, object creation/undo, and generated-job revision invalidation.
+
+The authoring update additionally has a 72-test focused integration run covering
+rectangle width/height/radius edits, regular-grid generation, editable authoring
+metadata, exact-ID replacement, gap/pitch conversion, live preview, and
+work-area/object-count rejection. An additional toolpath regression verifies
+that microscopic floating-point noise at an exact work-area edge is accepted
+while a real overflow is still rejected. The complete 170-test suite then passed.
 
 The two skipped tests require POSIX pseudoterminals and `termios`. The exact
 updated branch has not been run as a complete Linux suite during this audit.
@@ -186,6 +198,8 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   and corrected-camera overlay.
 - Multiple objects and operation layers.
 - Rectangle, rounded rectangle, ellipse, line, text, and SVG-path objects.
+- Numeric width, height, and corner-radius editing for a selected rectangle,
+  applied as one undoable validated shape change.
 - Transform, mirror, duplicate, delete, group, ungroup, align, distribute, and
   z-order commands.
 - Undo/redo.
@@ -217,6 +231,14 @@ been exercised end to end with the real camera and calibration.
   reporting malformed files and excluding duplicate persistent IDs.
 - Creation from visible, output-enabled project objects without mutating the
   source project.
+- Dedicated regular-grid designer with a live preview, rows/columns, cut
+  width/height/radius, and spacing entered as edge gap or center pitch.
+- A 500-object grid limit and project-work-area validation before either saving
+  a grid template or adding its editable rectangles to the current project.
+- Versioned rectangle-grid authoring metadata, preserving template identity
+  across parameter edits and distinguishing editable grids from arbitrary
+  project-authored geometry.
+- Direct creation of a grid in the active project layer as one undoable batch.
 - Template-local normalization around the combined cut bounds.
 - Per-outer-contour matching features for compound imported SVG paths, with
   contained holes excluded.
@@ -229,6 +251,11 @@ been exercised end to end with the real camera and calibration.
   never applied.
 - New object identities, active-layer assignment, and one-step batch undo.
 - Optional `marker_id` schema metadata reserved for future identification.
+
+Automatic matching requires at least three features; one- and two-cell grids
+remain available for manual placement only. Matching compares feature centers,
+dimensions, and orientation but not rounded-corner radius, so templates that
+differ only in radius require manual selection and overlay review.
 
 The portable model/library and matcher have focused synthetic tests, and the
 native controls, review overlay, application, undo, stale-result handling, and
@@ -262,6 +289,8 @@ No marker detector is implemented. See
 - No full interactive end-to-end GUI automation.
 - Cutting-template matching uses provisional software acceptance gates, but has
   no real-camera validation dataset or physically measured accuracy threshold.
+- Automatic template ranking cannot distinguish otherwise identical layouts
+  whose only difference is rounded-corner radius.
 - `marker_id` is stored but no QR/ArUco/marker identification path consumes it.
 - Template placement intentionally supports translation and rotation only; it
   will not scale geometry to conceal calibration or material-height errors.

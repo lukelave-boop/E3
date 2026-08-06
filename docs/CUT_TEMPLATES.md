@@ -5,23 +5,80 @@ They are separate from `.e3laser` project files: a project is an editable job,
 while an `.e3template` file is a library item that can be identified, aligned,
 reviewed, and instantiated into a project.
 
-## Intended desktop workflow
+## Creating a regular grid template
+
+Choose **Create > Design grid cutting template** or **New grid…** in the
+Templates panel. The dedicated designer provides a live preview and editable:
+
+- template name and description;
+- row and column counts;
+- cut width, cut height, and corner radius;
+- horizontal and vertical spacing, entered either as an edge gap or a
+  center-to-center pitch.
+
+An edge gap is the clear distance between adjacent cut outlines. Center pitch
+is the distance between their centers. The two forms describe the same layout:
+
+```text
+pitch = cut size + edge gap
+footprint = cut size + (count - 1) × pitch
+```
+
+Changing spacing modes preserves the physical layout. Pitch cannot be smaller
+than the corresponding cut dimension, and the corner radius cannot exceed half
+the smaller cut dimension. The status card reports cut count, footprint, pitch,
+and gap while the preview updates.
+
+A grid is limited to 500 cut objects. The designer also blocks saving or adding
+a grid whose footprint exceeds the current project work area. A one- or two-cut
+grid can still be saved and positioned manually, but it cannot satisfy the
+automatic matcher's minimum of three features.
+
+Choose **Save template** to add the design to the reusable library, or **Add
+grid to project** to create editable rounded rectangles at the center of the
+current project. Adding a grid is one undoable project operation. Templates
+created by this designer retain their editable grid recipe, so **Edit grid…**
+can later change their dimensions, radius, rows, columns, and spacing without
+changing the template's persistent identity. Templates created from arbitrary
+project geometry do not claim to be editable grids.
+
+If saving or insertion fails, the designer remains open and keeps every entered
+value so the problem can be corrected and the action retried.
+
+## Creating a template from project geometry
+
+For freeform or mixed geometry:
 
 1. Build the exact cut geometry for one label-sheet layout in a project.
-2. Hide or disable any objects that must not be part of the reusable cut set.
-3. Choose **Save project as cutting template** and provide a name.
-4. Place a printed sheet under the corrected camera.
-5. Either select the template from the library or ask the application to rank
+2. Select a single rectangle and use the **Transform** panel to edit its width,
+   height, and corner radius. Radius is limited to half the smaller dimension.
+3. Hide or disable any objects that must not be part of the reusable cut set.
+4. Choose **From current project…** in the Templates panel and provide a name.
+
+Width, height, and radius edits to an ordinary rectangle are applied together
+as one undoable shape edit. Project-authored templates preserve the resulting
+geometry, but they do not contain a parameter-grid recipe and therefore cannot
+be opened with **Edit grid…**.
+
+## Alignment workflow
+
+1. Place a printed sheet under the corrected camera.
+2. Either select the template from the library or ask the application to rank
    the library against the detected label geometry.
-6. Review the proposed center, rotation, match confidence, residual error, and
+3. Review the proposed center, rotation, match confidence, residual error, and
    warnings over the frozen camera image used for that exact match.
-7. Nudge the center or rotation when necessary.
-8. Choose **Create aligned cut objects**. All template objects are added to the
+4. Nudge the center or rotation when necessary.
+5. Choose **Create aligned cut objects**. All template objects are added to the
    active project layer as one undoable batch.
 
 Manual template selection and placement remain available when automatic
 identification is ambiguous. Sheets with the same visible geometry cannot be
 reliably distinguished by geometry alone.
+
+Automatic matching compares feature centers, width, height, and orientation;
+it does not compare rounded-rectangle corner radius. Two templates that differ
+only in corner radius are therefore indistinguishable to automatic matching.
+Select the intended template manually and review its cut overlay in that case.
 
 ## Template format
 
@@ -41,6 +98,13 @@ Schema version 1 stores:
 - the tracing options captured when the template was created;
 - an optional `marker_id` value;
 - creation/modification timestamps and extensible metadata.
+
+Grid-authored templates use that extensible metadata for a versioned
+`rectangle_grid` authoring recipe. The stored recipe contains the name,
+description, rows, columns, cut dimensions, corner radius, and edge gaps.
+Center pitch and footprint are derived rather than persisted as competing
+values. Editing rebuilds normalized objects and matching features while
+preserving the template ID, creation timestamp, and surviving cell identities.
 
 Only visible, output-enabled project objects are copied. Their positions are
 normalized around the center of their combined bounds. Original project
@@ -105,6 +169,12 @@ The controller, widgets, frozen-frame review, transient overlay, object
 application/undo, cancellation, and stale-job guards have offscreen behavioral
 coverage. An actual offscreen desktop window also completed a template
 save/reload/apply/undo smoke test.
+
+The rectangle-grid builder, editable authoring metadata, exact-ID library
+replacement, work-area/object-count rejection, dedicated designer controls,
+live preview calculations, and ordinary rectangle size/radius editing also
+have focused model, history, and offscreen-widget coverage. This is automated
+software evidence, not an interactive usability or physical alignment result.
 
 It has not yet been verified with a real corrected C920 image, a physically
 measured label sheet, controller motion, or powered laser output. Marker-based

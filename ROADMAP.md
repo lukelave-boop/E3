@@ -33,6 +33,10 @@ Current branch feature:
 - Versioned label-sheet cutting templates with manual selection, synthetic
   geometric ranking, rigid translation/rotation review, and one-step batch
   insertion into a project.
+- Dedicated regular rounded-rectangle grid authoring with live preview,
+  width/height/radius controls, rows/columns, edge-gap or center-pitch input,
+  editable template metadata, and direct one-step insertion into a project.
+- Numeric rectangle width/height/radius editing as one undoable shape change.
 - Behavioral offscreen coverage for template library controls, one-frame
   alignment review, stale-result cancellation, object creation, and undo.
 
@@ -46,6 +50,9 @@ These features have different verification levels; see `CURRENT_STATE.md`.
   confidence/residual acceptance thresholds for template alignment.
 - Validate the tested explicit-choice behavior for ambiguous look-alike
   templates against curated real-camera captures.
+- Include pairs that share centers and dimensions but differ in corner radius;
+  the current matcher intentionally requires manual selection because radius is
+  not part of its observable feature model.
 - Keep local label/trace captures ignored and excluded from release packages.
 - Run the complete consolidated branch suite on Linux.
 
@@ -92,6 +99,9 @@ milestone. If added later, it needs its own serial transport and tests.
 
 Multiple designs, grouping, alignment, layer ordering, and toolpath preview are
 already present in the desktop foundation and are no longer roadmap items.
+Regular rectangle-grid generation and numeric rectangle corner-radius editing
+are also implemented; future authoring work should extend rather than duplicate
+those controls.
 
 ## Milestone 6 — height compensation
 

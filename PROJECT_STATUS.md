@@ -31,7 +31,7 @@ Environment:
 
 Results:
 
-- **134 tests passed and 2 POSIX-only tests skipped.**
+- **170 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
@@ -44,11 +44,21 @@ Results:
   overlay, apply/undo, and stale generated-job protection.
 - An actual offscreen `E3MainWindow` smoke test exercised template library
   refresh, placement, one-command application, and undo.
+- A second offscreen `E3MainWindow` smoke test drove the modal designer through
+  parametric grid save, exact-ID editing, four-object insertion as one command,
+  and one-step undo.
 - Ruff was not installed in the current virtual environment and was not run.
 
 The template suite also verifies that one captured corrected frame is reused
 for every candidate option group, camera delivery remains frozen during review,
 and stale match or G-code results cannot be applied after relevant state changes.
+
+A 72-test focused integration run covers the parametric rectangle-grid builder
+and designer, exact-ID template replacement, gap/pitch conversion, the
+500-object and work-area gates, and atomic rectangle width/height/radius editing.
+Toolpath coverage also verifies that insignificant floating-point drift at an
+exact work-area boundary is accepted while meaningful overflow remains blocked.
+The complete 170-test suite passed after that focused run.
 
 POSIX serial is selected lazily, so `termios` is not imported by simulator or
 application startup on Windows. Selecting the real serial backend on Windows
@@ -95,6 +105,8 @@ from 2026-08-06 has not been run as a complete Linux suite during this audit.
 | Desktop project model, history, materials, and toolpaths | Tested on Windows |
 | Cutting-template model, library, and rigid instantiation | Tested on Windows |
 | Geometric template matching and candidate ranking | Tested with synthetic features on Windows |
+| Rectangle-grid builder and editable authoring metadata | Tested with portable model/library checks on Windows |
+| Grid designer and ordinary rectangle radius editing | Behaviorally tested offscreen; not interactively verified |
 | Native template save/select/review/apply workflow | Behaviorally tested offscreen; not real-camera verified |
 | Native desktop simulator startup | Smoke-tested offscreen on Windows |
 | Browser simulator startup | Smoke-tested through HTTP on Windows |
@@ -137,6 +149,14 @@ batch of new project objects. The current match gates are conservative,
 provisional software checks rather than evidence of physical alignment
 accuracy. See
 [docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md).
+
+Regular-grid templates support at most 500 rounded-rectangle cuts. Their
+authoring recipe stores edge gaps and derives center pitch and footprint; the
+desktop can present either spacing form. Grids with fewer than three cells are
+manual-placement templates because they cannot meet the automatic feature-count
+gate. Corner radius is preserved in cut geometry, but it is not a matching
+feature: otherwise identical templates that differ only by radius cannot be
+automatically distinguished.
 
 ## Hardware bring-up gate
 
