@@ -1,0 +1,740 @@
+from __future__ import annotations
+
+import math
+import uuid
+from dataclasses import asdict, dataclass, field, fields
+from typing import Any, Mapping, Sequence
+
+import cv2
+import numpy as np
+
+from ..config import WorkArea
+
+
+TRACE_MODES = {"auto", "color", "contrast"}
+OUTPUT_MODES = {"rounded", "smoothed", "exact"}
+
+
+@dataclass(slots=True)
+class TraceOptions:
+    detection_mode: str = "auto"
+    target_hue: float | None = None
+    hue_tolerance: float = 14.0
+    min_saturation: int = 45
+    min_area_mm2: float = 30.0
+    max_area_mm2: float = 20_000.0
+    min_width_mm: float = 4.0
+    min_height_mm: float = 3.0
+    confidence_threshold: float = 0.55
+    regular_grid: bool = True
+    infer_missing: bool = True
+    output_mode: str = "rounded"
+    border_offset_mm: float = 0.0
+    smoothing_mm: float = 0.25
+
+    def __post_init__(self) -> None:
+        self.detection_mode = str(self.detection_mode).lower()
+        if self.detection_mode not in TRACE_MODES:
+            raise ValueError(f"Unknown detection mode: {self.detection_mode}")
+        self.target_hue = (
+            None if self.target_hue is None else float(self.target_hue) % 180.0
+        )
+        self.hue_tolerance = max(1.0, min(90.0, float(self.hue_tolerance)))
+        self.min_saturation = max(0, min(255, int(self.min_saturation)))
+        self.min_area_mm2 = max(0.01, float(self.min_area_mm2))
+        self.max_area_mm2 = max(self.min_area_mm2, float(self.max_area_mm2))
+        self.min_width_mm = max(0.1, float(self.min_width_mm))
+        self.min_height_mm = max(0.1, float(self.min_height_mm))
+        self.confidence_threshold = max(
+            0.0, min(1.0, float(self.confidence_threshold))
+        )
+        self.regular_grid = bool(self.regular_grid)
+        self.infer_missing = bool(self.infer_missing)
+        self.output_mode = str(self.output_mode).lower()
+        if self.output_mode not in OUTPUT_MODES:
+            raise ValueError(f"Unknown output mode: {self.output_mode}")
+        self.border_offset_mm = max(
+            -25.0, min(25.0, float(self.border_offset_mm))
+        )
+        self.smoothing_mm = max(0.0, min(10.0, float(self.smoothing_mm)))
+
+    @classmethod
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> "TraceOptions":
+        raw = dict(raw or {})
+        allowed = {item.name for item in fields(cls)}
+        return cls(**{key: value for key, value in raw.items() if key in allowed})
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass(slots=True)
+class TraceDetection:
+    id: str
+    index: int
+    source: str
+    confidence: float
+    score: float
+    shape: str
+    center_mm: tuple[float, float]
+    width_mm: float
+    height_mm: float
+    rotation_deg: float
+    corner_radius_mm: float
+    area_mm2: float
+    contour_mm: list[list[float]]
+    box_mm: list[list[float]]
+    selected_default: bool
+    diagnostics: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        payload = asdict(self)
+        payload["center_mm"] = list(self.center_mm)
+        return payload
+
+
+@dataclass(slots=True)
+class TraceResult:
+    detected: bool
+    detections: list[TraceDetection]
+    mode_used: str
+    target_hue: float | None
+    image_width: int
+    image_height: int
+    direct_count: int
+    inferred_count: int
+    grid: dict[str, Any] | None
+    message: str
+    options: TraceOptions
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "detected": self.detected,
+            "detections": [item.to_dict() for item in self.detections],
+            "mode_used": self.mode_used,
+            "target_hue": self.target_hue,
+            "image_width": self.image_width,
+            "image_height": self.image_height,
+            "direct_count": self.direct_count,
+            "inferred_count": self.inferred_count,
+            "grid": self.grid,
+            "message": self.message,
+            "options": self.options.to_dict(),
+        }
+
+
+def _new_id() -> str:
+    return f"trace-{uuid.uuid4().hex}"
+
+
+def _hue_distance(hue: np.ndarray, target: float) -> np.ndarray:
+    delta = np.abs(hue.astype(np.float32) - float(target))
+    return np.minimum(delta, 180.0 - delta)
+
+
+def auto_target_hue(image: np.ndarray, min_saturation: int = 45) -> float | None:
+    """Find the dominant chromatic hue while discounting neutral backgrounds."""
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    hue = hsv[:, :, 0]
+    saturation = hsv[:, :, 1].astype(np.float32)
+    a = lab[:, :, 1].astype(np.float32) - 128.0
+    b = lab[:, :, 2].astype(np.float32) - 128.0
+    chroma = np.hypot(a, b)
+    weight = np.clip(
+        (saturation - max(15.0, min_saturation * 0.55)) / 180.0,
+        0.0,
+        1.0,
+    ) * np.clip((chroma - 5.0) / 70.0, 0.0, 1.0)
+    if float(weight.sum()) < image.shape[0] * image.shape[1] * 0.005:
+        return None
+    histogram = np.bincount(
+        hue.reshape(-1), weights=weight.reshape(-1), minlength=180
+    ).astype(np.float64)
+    radius = 5
+    padded = np.concatenate((histogram[-radius:], histogram, histogram[:radius]))
+    kernel = np.hanning(radius * 2 + 1)
+    kernel /= max(float(kernel.sum()), 1e-12)
+    smoothed = np.convolve(padded, kernel, mode="same")[radius:-radius]
+    return float(np.argmax(smoothed))
+
+
+def sample_color(
+    image: np.ndarray,
+    pixel_x: float,
+    pixel_y: float,
+    radius_px: int = 5,
+) -> dict[str, Any]:
+    if image is None or image.size == 0:
+        raise ValueError("No image is available for color sampling")
+    height, width = image.shape[:2]
+    x = int(round(float(pixel_x)))
+    y = int(round(float(pixel_y)))
+    radius = max(1, int(radius_px))
+    x0, x1 = max(0, x - radius), min(width, x + radius + 1)
+    y0, y1 = max(0, y - radius), min(height, y + radius + 1)
+    if x0 >= x1 or y0 >= y1:
+        raise ValueError("Color sample lies outside the image")
+    patch = image[y0:y1, x0:x1]
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+    bgr = patch.reshape(-1, 3)
+    median_bgr = np.median(bgr, axis=0)
+    return {
+        "hue": float(np.median(hsv[:, 0])),
+        "saturation": float(np.median(hsv[:, 1])),
+        "value": float(np.median(hsv[:, 2])),
+        "bgr": [int(round(value)) for value in median_bgr],
+        "rgb": [
+            int(round(median_bgr[2])),
+            int(round(median_bgr[1])),
+            int(round(median_bgr[0])),
+        ],
+    }
+
+
+def _color_mask(
+    image: np.ndarray,
+    target_hue: float,
+    options: TraceOptions,
+    pixels_per_mm: float,
+) -> np.ndarray:
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    a = lab[:, :, 1].astype(np.float32) - 128.0
+    b = lab[:, :, 2].astype(np.float32) - 128.0
+    chroma = np.hypot(a, b)
+    mask = (
+        (_hue_distance(hsv[:, :, 0], target_hue) <= options.hue_tolerance)
+        & (hsv[:, :, 1] >= options.min_saturation)
+        & (hsv[:, :, 2] >= 20)
+        & (chroma >= 7.0)
+    ).astype(np.uint8) * 255
+    radius = max(1, int(round(max(1.0, pixels_per_mm * 0.45))))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
+    )
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+
+def _contrast_mask(image: np.ndarray, pixels_per_mm: float) -> np.ndarray:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    scale = max(15, int(round(pixels_per_mm * 8.0)))
+    if scale % 2 == 0:
+        scale += 1
+    background = cv2.GaussianBlur(gray, (scale, scale), 0)
+    contrast = cv2.absdiff(gray, background)
+    threshold = max(8.0, float(np.percentile(contrast, 84)))
+    _, mask = cv2.threshold(contrast, threshold, 255, cv2.THRESH_BINARY)
+    radius = max(1, int(round(max(1.0, pixels_per_mm * 0.75))))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
+    )
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
+    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+
+def _long_axis_rect(contour: np.ndarray) -> dict[str, Any] | None:
+    rect = cv2.minAreaRect(contour.astype(np.float32))
+    box = cv2.boxPoints(rect).astype(np.float64)
+    vectors = np.roll(box, -1, axis=0) - box
+    lengths = np.linalg.norm(vectors, axis=1)
+    if float(lengths.min()) <= 1e-6:
+        return None
+    index = int(np.argmax(lengths))
+    width = float(lengths[index])
+    height = float(lengths[(index + 1) % 4])
+    if height > width:
+        width, height = height, width
+        index = (index + 1) % 4
+    vector = vectors[index] / max(float(lengths[index]), 1e-12)
+    angle = math.degrees(math.atan2(float(vector[1]), float(vector[0])))
+    while angle >= 90.0:
+        angle -= 180.0
+    while angle < -90.0:
+        angle += 180.0
+    return {
+        "center": np.asarray(rect[0], dtype=np.float64),
+        "width": width,
+        "height": height,
+        "angle_image_deg": angle,
+        "box": box,
+    }
+
+
+def _rounded_mask(width: int, height: int, radius: int) -> np.ndarray:
+    width, height = max(2, int(width)), max(2, int(height))
+    radius = max(0, min(int(radius), width // 2, height // 2))
+    mask = np.zeros((height, width), dtype=np.uint8)
+    if radius == 0:
+        mask[:] = 255
+        return mask
+    cv2.rectangle(mask, (radius, 0), (width - radius - 1, height - 1), 255, -1)
+    cv2.rectangle(mask, (0, radius), (width - 1, height - radius - 1), 255, -1)
+    for center in (
+        (radius, radius),
+        (width - radius - 1, radius),
+        (width - radius - 1, height - radius - 1),
+        (radius, height - radius - 1),
+    ):
+        cv2.circle(mask, center, radius, 255, -1)
+    return mask
+
+
+def _rounded_fit(contour: np.ndarray, rectangle: Mapping[str, Any]) -> tuple[float, float]:
+    width = max(4, int(round(float(rectangle["width"]))))
+    height = max(4, int(round(float(rectangle["height"]))))
+    center = np.asarray(rectangle["center"], dtype=np.float64)
+    angle = math.radians(float(rectangle["angle_image_deg"]))
+    u = np.array([math.cos(angle), math.sin(angle)], dtype=np.float64)
+    v = np.array([-u[1], u[0]], dtype=np.float64)
+    local = contour.reshape(-1, 2).astype(np.float64) - center
+    local = np.column_stack((local @ u, local @ v))
+    margin = 4
+    local[:, 0] += width / 2.0 + margin
+    local[:, 1] += height / 2.0 + margin
+    observed = np.zeros((height + 2 * margin, width + 2 * margin), dtype=np.uint8)
+    cv2.fillPoly(observed, [np.round(local).astype(np.int32)], 255)
+    best_radius, best_iou = 0.0, 0.0
+    maximum = int(round(min(width, height) * 0.42))
+    radii = sorted(set([0] + [int(round(x)) for x in np.linspace(1, maximum, 15)]))
+    for radius in radii:
+        candidate = np.zeros_like(observed)
+        candidate[margin:margin + height, margin:margin + width] = _rounded_mask(
+            width, height, radius
+        )
+        intersection = np.count_nonzero((candidate > 0) & (observed > 0))
+        union = np.count_nonzero((candidate > 0) | (observed > 0))
+        iou = 0.0 if union == 0 else float(intersection / union)
+        if iou > best_iou:
+            best_radius, best_iou = float(radius), iou
+    return best_radius, best_iou
+
+
+def _offset_contour(
+    contour: np.ndarray,
+    offset_px: float,
+    smoothing_px: float,
+) -> np.ndarray:
+    contour = contour.reshape(-1, 1, 2).astype(np.int32)
+    x, y, width, height = cv2.boundingRect(contour)
+    margin = max(8, int(math.ceil(abs(offset_px))) + 5)
+    local = contour.copy()
+    local[:, 0, 0] -= x - margin
+    local[:, 0, 1] -= y - margin
+    mask = np.zeros((height + 2 * margin, width + 2 * margin), dtype=np.uint8)
+    cv2.fillPoly(mask, [local], 255)
+    radius = int(round(abs(offset_px)))
+    if radius:
+        kernel = cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+        )
+        mask = (cv2.dilate if offset_px > 0 else cv2.erode)(mask, kernel)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return contour.reshape(-1, 2).astype(np.float64)
+    output = max(contours, key=cv2.contourArea)
+    if smoothing_px > 0:
+        output = cv2.approxPolyDP(output, smoothing_px, True)
+    points = output.reshape(-1, 2).astype(np.float64)
+    points[:, 0] += x - margin
+    points[:, 1] += y - margin
+    return points
+
+
+def _pixel_to_machine(
+    points: np.ndarray,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+) -> np.ndarray:
+    points = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    output = np.empty_like(points)
+    output[:, 0] = work_area.x_min + points[:, 0] / pixels_per_mm
+    output[:, 1] = work_area.y_max - points[:, 1] / pixels_per_mm
+    return output
+
+
+def _machine_geometry(
+    rectangle: Mapping[str, Any],
+    work_area: WorkArea,
+    pixels_per_mm: float,
+    offset_mm: float,
+) -> dict[str, Any]:
+    center = _pixel_to_machine(
+        np.asarray(rectangle["center"]).reshape(1, 2), work_area, pixels_per_mm
+    )[0]
+    width = max(0.01, float(rectangle["width"]) / pixels_per_mm + 2 * offset_mm)
+    height = max(0.01, float(rectangle["height"]) / pixels_per_mm + 2 * offset_mm)
+    rotation = -float(rectangle["angle_image_deg"])
+    radius = max(
+        0.0,
+        float(rectangle.get("radius_px", 0.0)) / pixels_per_mm + offset_mm,
+    )
+    radius = min(radius, width / 2.0, height / 2.0)
+    angle = math.radians(rotation)
+    u = np.array([math.cos(angle), math.sin(angle)])
+    v = np.array([-u[1], u[0]])
+    box = []
+    for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+        point = center + u * sx * width / 2 + v * sy * height / 2
+        box.append([float(point[0]), float(point[1])])
+    return {
+        "center_mm": (float(center[0]), float(center[1])),
+        "width_mm": width,
+        "height_mm": height,
+        "rotation_deg": rotation,
+        "corner_radius_mm": radius,
+        "box_mm": box,
+    }
+
+
+def _candidate(
+    contour: np.ndarray,
+    mask: np.ndarray,
+    options: TraceOptions,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+) -> dict[str, Any] | None:
+    area_px = float(cv2.contourArea(contour))
+    area_mm2 = area_px / pixels_per_mm**2
+    if not options.min_area_mm2 <= area_mm2 <= options.max_area_mm2:
+        return None
+    rectangle = _long_axis_rect(contour)
+    if rectangle is None:
+        return None
+    if (
+        rectangle["width"] / pixels_per_mm < options.min_width_mm
+        or rectangle["height"] / pixels_per_mm < options.min_height_mm
+    ):
+        return None
+    rect_area = max(1.0, rectangle["width"] * rectangle["height"])
+    rectangularity = min(1.0, area_px / rect_area)
+    hull_area = max(1.0, float(cv2.contourArea(cv2.convexHull(contour))))
+    solidity = min(1.0, area_px / hull_area)
+    radius_px, fit_iou = _rounded_fit(contour, rectangle)
+    rectangle["radius_px"] = radius_px
+    region = np.zeros_like(mask)
+    cv2.drawContours(region, [contour], -1, 255, -1)
+    pixels = region > 0
+    coverage = 0.0 if not np.any(pixels) else float(np.mean(mask[pixels] > 0))
+    perimeter = max(1.0, float(cv2.arcLength(contour, True)))
+    compactness = max(0.0, min(1.0, 4.0 * math.pi * area_px / (perimeter * perimeter)))
+    rounded = rectangularity >= 0.78 and solidity >= 0.82 and fit_iou >= 0.82
+    if rounded:
+        shape = "rounded_rectangle"
+        score = (
+            0.48 * fit_iou
+            + 0.18 * rectangularity
+            + 0.14 * solidity
+            + 0.20 * coverage
+        )
+        confidence = max(0.0, min(1.0, (score - 0.35) / 0.55))
+    else:
+        # Non-grid tracing may preserve arbitrary colored silhouettes. A regular
+        # label grid remains intentionally strict so scratches and merged parts
+        # cannot seed false inferred cells.
+        if options.regular_grid or solidity < 0.42 or coverage < 0.42:
+            return None
+        shape = "contour"
+        score = 0.42 * solidity + 0.33 * coverage + 0.25 * compactness
+        confidence = max(0.0, min(1.0, (score - 0.30) / 0.55))
+    geometry = _machine_geometry(
+        rectangle, work_area, pixels_per_mm, options.border_offset_mm
+    )
+    points = _offset_contour(
+        contour,
+        options.border_offset_mm * pixels_per_mm,
+        0.0 if options.output_mode == "exact" else options.smoothing_mm * pixels_per_mm,
+    )
+    contour_mm = _pixel_to_machine(points, work_area, pixels_per_mm)
+    return {
+        "center_px": np.asarray(rectangle["center"], dtype=np.float64),
+        "width_px": float(rectangle["width"]),
+        "height_px": float(rectangle["height"]),
+        "angle_image_deg": float(rectangle["angle_image_deg"]),
+        "radius_px": radius_px,
+        "area_mm2": area_mm2,
+        "score": score,
+        "confidence": confidence,
+        "rectangularity": rectangularity,
+        "solidity": solidity,
+        "fit_iou": fit_iou,
+        "coverage": coverage,
+        "compactness": compactness,
+        "shape": shape,
+        "contour_mm": [[float(x), float(y)] for x, y in contour_mm],
+        **geometry,
+    }
+
+
+def _mean_angle(angles: Sequence[float]) -> float:
+    radians = np.radians(np.asarray(angles, dtype=float) * 2.0)
+    return math.degrees(
+        math.atan2(float(np.sin(radians).mean()), float(np.cos(radians).mean()))
+        / 2.0
+    )
+
+
+def _clusters(values: Sequence[float], tolerance: float) -> list[float]:
+    groups: list[list[float]] = []
+    for value in sorted(float(item) for item in values):
+        if not groups or abs(value - float(np.mean(groups[-1]))) > tolerance:
+            groups.append([value])
+        else:
+            groups[-1].append(value)
+    return [float(np.mean(group)) for group in groups]
+
+
+def _rounded_polyline(
+    center: tuple[float, float],
+    width: float,
+    height: float,
+    rotation: float,
+    radius: float,
+) -> list[list[float]]:
+    radius = max(0.0, min(radius, width / 2, height / 2))
+    local = []
+    for cx, cy, start in (
+        (width / 2 - radius, height / 2 - radius, 0),
+        (-width / 2 + radius, height / 2 - radius, 90),
+        (-width / 2 + radius, -height / 2 + radius, 180),
+        (width / 2 - radius, -height / 2 + radius, 270),
+    ):
+        for step in range(7):
+            angle = math.radians(start + 90 * step / 6)
+            local.append([cx + radius * math.cos(angle), cy + radius * math.sin(angle)])
+    points = np.asarray(local)
+    angle = math.radians(rotation)
+    matrix = np.array([[math.cos(angle), -math.sin(angle)], [math.sin(angle), math.cos(angle)]])
+    world = points @ matrix.T + np.asarray(center)
+    return [[float(x), float(y)] for x, y in world]
+
+
+def _infer_grid(
+    candidates: list[dict[str, Any]],
+    options: TraceOptions,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    if not options.regular_grid or len(candidates) < 4:
+        return [], None
+    widths = np.asarray([item["width_px"] for item in candidates])
+    heights = np.asarray([item["height_px"] for item in candidates])
+    median_width, median_height = float(np.median(widths)), float(np.median(heights))
+    filtered = [
+        item for item in candidates
+        if 0.60 <= item["width_px"] / median_width <= 1.55
+        and 0.60 <= item["height_px"] / median_height <= 1.55
+    ]
+    if len(filtered) < 4:
+        return [], None
+    common_angle = _mean_angle([item["angle_image_deg"] for item in filtered])
+    angle = math.radians(common_angle)
+    u = np.array([math.cos(angle), math.sin(angle)])
+    v = np.array([-u[1], u[0]])
+    centers = np.asarray([item["center_px"] for item in filtered])
+    x_values, y_values = centers @ u, centers @ v
+    columns = _clusters(x_values, max(4.0, median_width * 0.45))
+    rows = _clusters(y_values, max(4.0, median_height * 0.45))
+    if len(columns) < 2 or len(rows) < 2 or len(columns) * len(rows) > 100:
+        return [], None
+
+    def quality(values: Sequence[float]) -> tuple[float, float]:
+        differences = np.diff(np.asarray(values))
+        if not len(differences) or float(np.mean(differences)) <= 1e-6:
+            return 0.0, 0.0
+        cv = float(np.std(differences) / np.mean(differences))
+        return max(0.0, 1.0 - cv / 0.25), float(np.mean(differences))
+
+    x_quality, x_spacing = quality(columns)
+    y_quality, y_spacing = quality(rows)
+    occupancy = len(filtered) / (len(columns) * len(rows))
+    grid_quality = min(x_quality, y_quality) * min(1.0, occupancy / 0.55)
+    if occupancy < 0.45 or grid_quality < 0.45:
+        return [], None
+
+    occupied: set[tuple[int, int]] = set()
+    for item in filtered:
+        point = np.asarray(item["center_px"])
+        x_value, y_value = float(point @ u), float(point @ v)
+        column = int(np.argmin(np.abs(np.asarray(columns) - x_value)))
+        row = int(np.argmin(np.abs(np.asarray(rows) - y_value)))
+        distance = math.hypot(
+            (x_value - columns[column]) / max(x_spacing, median_width),
+            (y_value - rows[row]) / max(y_spacing, median_height),
+        )
+        if distance <= 0.38:
+            occupied.add((row, column))
+
+    inferred = []
+    if options.infer_missing:
+        median_radius = float(np.median([item["radius_px"] for item in filtered]))
+        median_score = float(np.median([item["score"] for item in filtered]))
+        for row, y_value in enumerate(rows):
+            for column, x_value in enumerate(columns):
+                if (row, column) in occupied:
+                    continue
+                center_px = u * x_value + v * y_value
+                center_mm = _pixel_to_machine(center_px.reshape(1, 2), work_area, pixels_per_mm)[0]
+                if not work_area.contains(float(center_mm[0]), float(center_mm[1])):
+                    continue
+                rectangle = {
+                    "center": center_px,
+                    "width": median_width,
+                    "height": median_height,
+                    "angle_image_deg": common_angle,
+                    "radius_px": median_radius,
+                }
+                geometry = _machine_geometry(
+                    rectangle, work_area, pixels_per_mm, options.border_offset_mm
+                )
+                inferred.append({
+                    "center_px": center_px,
+                    "width_px": median_width,
+                    "height_px": median_height,
+                    "angle_image_deg": common_angle,
+                    "radius_px": median_radius,
+                    "area_mm2": median_width * median_height / pixels_per_mm**2,
+                    "score": median_score * grid_quality * 0.72,
+                    "confidence": min(0.68, grid_quality * 0.66),
+                    "rectangularity": 1.0,
+                    "solidity": 1.0,
+                    "fit_iou": 1.0,
+                    "coverage": 0.0,
+                    "compactness": 1.0,
+                    "shape": "rounded_rectangle",
+                    "contour_mm": _rounded_polyline(
+                        geometry["center_mm"], geometry["width_mm"],
+                        geometry["height_mm"], geometry["rotation_deg"],
+                        geometry["corner_radius_mm"],
+                    ),
+                    **geometry,
+                })
+    return inferred, {
+        "rows": len(rows),
+        "columns": len(columns),
+        "occupancy": occupancy,
+        "quality": grid_quality,
+        "rotation_deg": -common_angle,
+        "direct_cells": len(occupied),
+        "missing_cells": len(rows) * len(columns) - len(occupied),
+    }
+
+
+def _to_detection(
+    item: Mapping[str, Any], source: str, options: TraceOptions
+) -> TraceDetection:
+    confidence = float(item["confidence"])
+    return TraceDetection(
+        id=_new_id(), index=0, source=source,
+        confidence=confidence, score=float(item["score"]),
+        shape=str(item.get("shape", "contour")),
+        center_mm=tuple(item["center_mm"]),
+        width_mm=float(item["width_mm"]), height_mm=float(item["height_mm"]),
+        rotation_deg=float(item["rotation_deg"]),
+        corner_radius_mm=float(item["corner_radius_mm"]),
+        area_mm2=float(item["area_mm2"]),
+        contour_mm=[list(point) for point in item["contour_mm"]],
+        box_mm=[list(point) for point in item["box_mm"]],
+        selected_default=(
+            source == "direct" and confidence >= options.confidence_threshold
+        ),
+        diagnostics={
+            "rectangularity": float(item["rectangularity"]),
+            "solidity": float(item["solidity"]),
+            "fit_iou": float(item["fit_iou"]),
+            "color_coverage": float(item["coverage"]),
+            "compactness": float(item.get("compactness", 0.0)),
+        },
+    )
+
+
+def detect_objects(
+    image: np.ndarray,
+    options: TraceOptions | Mapping[str, Any] | None,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+) -> TraceResult:
+    options = options if isinstance(options, TraceOptions) else TraceOptions.from_mapping(options)
+    if image is None or image.size == 0:
+        raise ValueError("No rectified camera image is available")
+    pixels_per_mm = float(pixels_per_mm)
+    if pixels_per_mm <= 0:
+        raise ValueError("pixels_per_mm must be positive")
+
+    target_hue = options.target_hue
+    masks: list[tuple[str, np.ndarray, float | None]] = []
+    if options.detection_mode in {"auto", "color"}:
+        if target_hue is None:
+            target_hue = auto_target_hue(image, options.min_saturation)
+        if target_hue is not None:
+            masks.append((
+                "color",
+                _color_mask(image, target_hue, options, pixels_per_mm),
+                target_hue,
+            ))
+    if options.detection_mode in {"auto", "contrast"}:
+        masks.append(("contrast", _contrast_mask(image, pixels_per_mm), None))
+    if not masks:
+        return TraceResult(
+            False, [], options.detection_mode, target_hue,
+            image.shape[1], image.shape[0], 0, 0, None,
+            "No suitable target color was found", options,
+        )
+
+    best = None
+    for mode, mask, hue in masks:
+        contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        candidates = [
+            candidate for contour in contours
+            if (candidate := _candidate(
+                contour, mask, options, work_area, pixels_per_mm
+            )) is not None
+        ]
+        quality = sum(item["score"] for item in candidates) + 0.35 * len(candidates)
+        if best is None or quality > best[0]:
+            best = (quality, mode, hue, candidates)
+    assert best is not None
+    _, mode_used, chosen_hue, candidates = best
+    if chosen_hue is not None:
+        target_hue = chosen_hue
+
+    if options.regular_grid and len(candidates) >= 4:
+        widths = np.asarray([item["width_px"] for item in candidates])
+        heights = np.asarray([item["height_px"] for item in candidates])
+        median_width, median_height = float(np.median(widths)), float(np.median(heights))
+        candidates = [
+            item for item in candidates
+            if 0.58 <= item["width_px"] / median_width <= 1.60
+            and 0.58 <= item["height_px"] / median_height <= 1.60
+        ]
+
+    inferred, grid = _infer_grid(candidates, options, work_area, pixels_per_mm)
+    detections = [
+        *[_to_detection(item, "direct", options) for item in candidates],
+        *[_to_detection(item, "inferred", options) for item in inferred],
+    ]
+    detections.sort(key=lambda item: (-item.center_mm[1], item.center_mm[0]))
+    for index, detection in enumerate(detections, 1):
+        detection.index = index
+
+    direct_count = sum(item.source == "direct" for item in detections)
+    inferred_count = sum(item.source == "inferred" for item in detections)
+    selected_count = sum(item.selected_default for item in detections)
+    message = (
+        f"Found {direct_count} direct object{'s' if direct_count != 1 else ''}"
+    )
+    if inferred_count:
+        message += (
+            f" and inferred {inferred_count} missing grid "
+            f"position{'s' if inferred_count != 1 else ''}"
+        )
+    message += f"; {selected_count} selected by confidence"
+    if not detections:
+        message = "No objects passed the current filters"
+
+    return TraceResult(
+        bool(detections), detections, mode_used, target_hue,
+        image.shape[1], image.shape[0], direct_count, inferred_count,
+        grid, message, options,
+    )
