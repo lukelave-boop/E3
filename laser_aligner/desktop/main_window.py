@@ -10,6 +10,7 @@ from ..materials import MaterialDatabase, MaterialPreset
 from ..project import (
     AddLayerCommand,
     AddObjectCommand,
+    AddObjectsCommand,
     Alignment,
     AssignLayerCommand,
     Bounds,
@@ -50,6 +51,7 @@ from .panels import (
     MachinePanel,
     MaterialPanel,
     ObjectPanel,
+    TracePanel,
     TransformPanel,
 )
 from .qt import require_qt
@@ -134,6 +136,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._busy = False
         self._closing = False
         self._expanding_group_selection = False
+        self._trace_result: dict[str, Any] | None = None
 
         self.setWindowTitle("E3 Positioning System")
         icon_path = Path(__file__).resolve().parent / "assets" / "e3-positioning-system.svg"
@@ -237,6 +240,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("ellipse", "Add ellipse", "Alt+E")
         action("line", "Add line", "Alt+L")
         action("text", "Add text", "Alt+T")
+        action("trace_objects", "Detect / trace camera objects…", "Ctrl+Alt+T")
         action("refresh_camera", "Refresh camera", "F5")
         action("generate", "Generate toolpath", "Ctrl+Alt+Enter")
         action("frame", "Generate dry frame", "Ctrl+Shift+F")
@@ -286,6 +290,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["ellipse"].triggered.connect(self.add_ellipse)
         self.actions["line"].triggered.connect(self.add_line)
         self.actions["text"].triggered.connect(self.add_text)
+        self.actions["trace_objects"].triggered.connect(self.open_trace_panel)
         self.actions["refresh_camera"].triggered.connect(self.controller.refresh_camera_image)
         self.actions["generate"].triggered.connect(self.generate_toolpath)
         self.actions["frame"].triggered.connect(self.generate_frame)
@@ -341,6 +346,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         create_menu = self.menuBar().addMenu("&Create")
         for key in ("rectangle", "ellipse", "line", "text"):
             create_menu.addAction(self.actions[key])
+        create_menu.addSeparator()
+        create_menu.addAction(self.actions["trace_objects"])
 
         laser_menu = self.menuBar().addMenu("&Laser")
         for key in ("generate", "frame", "run", "stop"):
@@ -378,6 +385,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly
             )
             tools.addWidget(button)
+        tools.addSeparator()
+        tools.addAction(self.actions["trace_objects"])
         tools.addSeparator()
         tools.addAction(self.actions["fit"])
         tools.addAction(self.actions["fit_selection"])
@@ -485,6 +494,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.layer_panel = LayerPanel()
         self.object_panel = ObjectPanel()
         self.transform_panel = TransformPanel()
+        self.trace_panel = TracePanel()
         self.camera_panel = CameraPanel()
         self.camera_panel.set_focus_controls(
             dict(self.runtime.settings.camera.controls)
@@ -502,6 +512,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.inspector_tabs = InspectorTabs(self)
         self.inspector_tabs.add_panel("objects", "Objects", self.object_panel)
         self.inspector_tabs.add_panel("transform", "Transform", self.transform_panel)
+        self.inspector_tabs.add_panel("trace", "Trace", self.trace_panel)
         self.inspector_tabs.add_panel("camera", "Camera", self.camera_panel)
         self.inspector_tabs.add_panel("machine", "Machine", self.machine_panel)
         self.inspector_tabs.add_panel("materials", "Materials", self.material_panel)
@@ -581,6 +592,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.workspace.selectionIdsChanged.connect(self._selection_changed)
         self.workspace.objectMoveCommitted.connect(self._object_moved)
         self.workspace.deleteRequested.connect(self.delete_selection)
+        self.workspace.pointPicked.connect(self._trace_point_picked)
 
         self.palette.layerSelected.connect(self._palette_layer_selected)
         self.layer_panel.activeLayerChanged.connect(self.set_active_layer)
@@ -593,6 +605,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel.objectEdited.connect(self._object_edited)
         self.transform_panel.transformEdited.connect(self._transform_edited)
         self.transform_panel.assignLayerRequested.connect(self._assign_layer)
+
+        self.trace_panel.detectRequested.connect(
+            self.controller.detect_trace_objects
+        )
+        self.trace_panel.pickColorRequested.connect(
+            self._begin_trace_color_pick
+        )
+        self.trace_panel.clearRequested.connect(
+            self._clear_trace_preview
+        )
+        self.trace_panel.createRequested.connect(
+            self._create_traced_objects
+        )
+        self.trace_panel.selectionChanged.connect(
+            self._trace_selection_changed
+        )
 
         self.camera_panel.refreshRequested.connect(self.controller.refresh_camera_image)
         self.camera_panel.liveChanged.connect(self.controller.set_live_camera)
@@ -637,6 +665,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.cameraImageReady.connect(self._camera_image_ready)
         self.controller.cameraFocusChanged.connect(
             self._camera_focus_changed
+        )
+        self.controller.traceResultReady.connect(
+            self._trace_result_ready
+        )
+        self.controller.traceColorReady.connect(
+            self._trace_color_ready
         )
         self.controller.errorOccurred.connect(self.show_error)
         self.controller.notice.connect(self.show_notice)
@@ -1059,6 +1093,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job = None
         self.gcode_preview.clear()
         self.workspace.clear_toolpath_preview()
+        self._clear_trace_preview()
         self._refresh_document()
 
     def open_project(self) -> None:
@@ -1098,6 +1133,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job = None
         self.gcode_preview.clear()
         self.workspace.clear_toolpath_preview()
+        self._clear_trace_preview()
         self._refresh_document()
 
     def save_project(self, save_as: bool = False) -> bool:
@@ -1218,6 +1254,142 @@ class E3MainWindow(QtWidgets.QMainWindow):
             arm_phrase=phrase,
         )
 
+
+    def open_trace_panel(self) -> None:
+        self.inspector_tabs.select_panel("trace")
+        self.trace_panel.set_calibration_ready(
+            self.runtime.context.bed.calibration is not None
+        )
+        self.show_notice(
+            "Trace mode: detect automatically or pick a target color from the camera image."
+        )
+
+    def _begin_trace_color_pick(self) -> None:
+        if self.runtime.context.bed.calibration is None:
+            self.show_error("Bed mapping is required before sampling camera color")
+            return
+        self.inspector_tabs.select_panel("trace")
+        self.workspace.begin_point_pick()
+        self.show_notice("Click the center of one target object in the camera image")
+
+    def _trace_point_picked(self, x_mm: float, y_mm: float) -> None:
+        self.controller.sample_trace_color(x_mm, y_mm)
+
+    def _trace_color_ready(self, payload: dict[str, Any]) -> None:
+        self.trace_panel.set_color_sample(payload)
+        self.inspector_tabs.select_panel("trace")
+        self.show_notice(
+            f"Sampled target color at X{payload['machine_x']:.2f} "
+            f"Y{payload['machine_y']:.2f}"
+        )
+
+    def _trace_result_ready(self, result: dict[str, Any]) -> None:
+        self._trace_result = result
+        self.trace_panel.set_result(result)
+        self.inspector_tabs.select_panel("trace")
+        self.workspace.set_trace_preview(
+            list(result.get("detections", [])),
+            self.trace_panel.selected_ids(),
+        )
+        self.show_notice(str(result.get("message", "Object detection complete")))
+
+    def _trace_selection_changed(self, selected_ids: list[str]) -> None:
+        if self._trace_result is None:
+            return
+        self.workspace.set_trace_preview(
+            list(self._trace_result.get("detections", [])),
+            selected_ids,
+        )
+
+    def _clear_trace_preview(self) -> None:
+        self._trace_result = None
+        self.workspace.clear_trace_preview()
+        if hasattr(self, "trace_panel"):
+            self.trace_panel.clear_result()
+
+    def _trace_detection_to_object(
+        self,
+        detection: dict[str, Any],
+        output_mode: str,
+    ) -> SceneObject:
+        index = int(detection.get("index", 0))
+        name = f"Traced object {index:02d}"
+        center = tuple(float(value) for value in detection["center_mm"])
+        if (
+            output_mode == "rounded"
+            and detection.get("shape") == "rounded_rectangle"
+        ):
+            item = SceneObject.rectangle(
+                self.active_layer_id,
+                name=name,
+                center=center,
+                width_mm=float(detection["width_mm"]),
+                height_mm=float(detection["height_mm"]),
+                corner_radius_mm=float(detection.get("corner_radius_mm", 0.0)),
+            )
+            item.transform = item.transform.copy(
+                rotation_deg=float(detection.get("rotation_deg", 0.0))
+            )
+        else:
+            points = [
+                [float(point[0]), float(point[1])]
+                for point in detection.get("contour_mm", [])
+            ]
+            if len(points) < 3:
+                raise ValueError(f"Trace {index} has no usable contour")
+            item = SceneObject.path(
+                self.active_layer_id,
+                [{"points": points, "closed": True}],
+                name=name,
+                center=center,
+                source_name="camera trace",
+            )
+        item.metadata.update(
+            {
+                "trace_source": detection.get("source", "direct"),
+                "trace_confidence": float(detection.get("confidence", 0.0)),
+                "trace_shape": detection.get("shape", output_mode),
+            }
+        )
+        return item
+
+    def _create_traced_objects(self, payload: dict[str, Any]) -> None:
+        if self._trace_result is None:
+            self.show_error("Run object detection before creating vector paths")
+            return
+        selected = set(str(value) for value in payload.get("selected_ids", []))
+        detections = [
+            item
+            for item in self._trace_result.get("detections", [])
+            if str(item.get("id")) in selected
+        ]
+        if not detections:
+            self.show_notice("Select at least one detected outline")
+            return
+        output_mode = str(payload.get("output_mode", "rounded"))
+        try:
+            objects = [
+                self._trace_detection_to_object(item, output_mode)
+                for item in detections
+            ]
+            command = AddObjectsCommand(
+                self.document,
+                objects,
+                description=f"Create {len(objects)} traced objects",
+            )
+            self.history.execute(command)
+        except Exception as exc:
+            self.show_error(f"Could not create traced objects: {exc}")
+            return
+        self.workspace.clear_trace_preview()
+        self._trace_result = None
+        self.trace_panel.clear_result()
+        self.workspace.select_objects([item.id for item in objects])
+        self.show_notice(
+            f"Created {len(objects)} editable vector object"
+            f"{'s' if len(objects) != 1 else ''}"
+        )
+
     def _camera_image_ready(self, image: QtGui.QImage) -> None:
         self.workspace.set_camera_image(image)
         self.camera_panel.set_image_updated()
@@ -1238,9 +1410,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         camera = status.get("camera")
         machine = status.get("machine")
         self.camera_panel.set_status(camera)
-        self.camera_panel.set_calibration_ready(
-            bool((status.get("bed") or {}).get("calibrated", False))
-        )
+        calibration_ready = bool((status.get("bed") or {}).get("calibrated", False))
+        self.camera_panel.set_calibration_ready(calibration_ready)
+        self.trace_panel.set_calibration_ready(calibration_ready)
         self.machine_panel.set_status(machine)
         if machine:
             self.console_panel.set_lines(list(machine.get("log", [])))

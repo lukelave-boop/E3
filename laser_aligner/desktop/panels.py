@@ -612,6 +612,398 @@ class CameraPanel(QtWidgets.QWidget):
         self.focusSaveRequested.emit(autofocus, value)
 
 
+
+
+class TracePanel(QtWidgets.QWidget):
+    detectRequested = QtCore.Signal(dict)
+    pickColorRequested = QtCore.Signal()
+    clearRequested = QtCore.Signal()
+    createRequested = QtCore.Signal(dict)
+    selectionChanged = QtCore.Signal(list)
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._detections: list[dict[str, Any]] = []
+        self._updating = False
+        self._result_is_current = False
+        layout = _panel_layout(self)
+
+        heading = QtWidgets.QLabel("Detect and trace objects")
+        heading.setObjectName("panelHeading")
+        layout.addWidget(heading)
+        layout.addWidget(
+            _muted(
+                "Detect repeated labels or other contrasting objects in the "
+                "corrected camera image, review every outline, then create "
+                "normal editable vector objects."
+            )
+        )
+
+        source_group = QtWidgets.QGroupBox("Detection source")
+        source_form = _form_layout()
+        source_group.setLayout(source_form)
+        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.addItem("Automatic color / contrast", "auto")
+        self.mode_combo.addItem("Colored objects", "color")
+        self.mode_combo.addItem("High-contrast objects", "contrast")
+        self.target_hue = QtWidgets.QDoubleSpinBox()
+        self.target_hue.setRange(-1.0, 179.0)
+        self.target_hue.setDecimals(0)
+        self.target_hue.setSpecialValueText("Automatic")
+        self.target_hue.setValue(-1.0)
+        self.hue_tolerance = QtWidgets.QDoubleSpinBox()
+        self.hue_tolerance.setRange(1.0, 90.0)
+        self.hue_tolerance.setValue(14.0)
+        self.hue_tolerance.setSuffix(" hue")
+        self.min_saturation = QtWidgets.QSpinBox()
+        self.min_saturation.setRange(0, 255)
+        self.min_saturation.setValue(45)
+        sample_row = QtWidgets.QWidget()
+        sample_layout = QtWidgets.QHBoxLayout(sample_row)
+        sample_layout.setContentsMargins(0, 0, 0, 0)
+        self.pick_color_button = QtWidgets.QPushButton("Pick from image")
+        self.color_swatch = QtWidgets.QLabel()
+        self.color_swatch.setFixedSize(30, 22)
+        self.color_swatch.setStyleSheet(
+            "background: #7B3333; border: 1px solid #66737C; border-radius: 3px;"
+        )
+        sample_layout.addWidget(self.pick_color_button, 1)
+        sample_layout.addWidget(self.color_swatch)
+        _form_row(source_form, "Mode", self.mode_combo)
+        _form_row(source_form, "Target hue", self.target_hue)
+        _form_row(source_form, "Hue tolerance", self.hue_tolerance)
+        _form_row(source_form, "Minimum saturation", self.min_saturation)
+        _form_row(source_form, "Sample", sample_row)
+        layout.addWidget(source_group)
+
+        filter_group = QtWidgets.QGroupBox("Object filters")
+        filter_form = _form_layout()
+        filter_group.setLayout(filter_form)
+        self.min_area = QtWidgets.QDoubleSpinBox()
+        self.min_area.setRange(0.01, 100_000.0)
+        self.min_area.setValue(30.0)
+        self.min_area.setSuffix(" mm²")
+        self.max_area = QtWidgets.QDoubleSpinBox()
+        self.max_area.setRange(0.1, 1_000_000.0)
+        self.max_area.setValue(20_000.0)
+        self.max_area.setSuffix(" mm²")
+        self.min_width = QtWidgets.QDoubleSpinBox()
+        self.min_width.setRange(0.1, 1000.0)
+        self.min_width.setValue(4.0)
+        self.min_width.setSuffix(" mm")
+        self.min_height = QtWidgets.QDoubleSpinBox()
+        self.min_height.setRange(0.1, 1000.0)
+        self.min_height.setValue(3.0)
+        self.min_height.setSuffix(" mm")
+        self.confidence = QtWidgets.QDoubleSpinBox()
+        self.confidence.setRange(0.0, 100.0)
+        self.confidence.setValue(55.0)
+        self.confidence.setSuffix(" %")
+        self.regular_grid = QtWidgets.QCheckBox(
+            "Repeated objects form a regular row/column layout"
+        )
+        self.regular_grid.setChecked(True)
+        self.infer_missing = QtWidgets.QCheckBox(
+            "Show inferred missing/obscured grid positions"
+        )
+        self.infer_missing.setChecked(True)
+        _form_row(filter_form, "Minimum area", self.min_area)
+        _form_row(filter_form, "Maximum area", self.max_area)
+        _form_row(filter_form, "Minimum width", self.min_width)
+        _form_row(filter_form, "Minimum height", self.min_height)
+        _form_row(filter_form, "Auto-select above", self.confidence)
+        filter_form.addRow(self.regular_grid)
+        filter_form.addRow(self.infer_missing)
+        layout.addWidget(filter_group)
+
+        output_group = QtWidgets.QGroupBox("Vector output")
+        output_form = _form_layout()
+        output_group.setLayout(output_form)
+        self.output_mode = QtWidgets.QComboBox()
+        self.output_mode.addItem("Fitted rounded rectangles", "rounded")
+        self.output_mode.addItem("Smoothed visible contours", "smoothed")
+        self.output_mode.addItem("Exact visible contours", "exact")
+        self.border_offset = QtWidgets.QDoubleSpinBox()
+        self.border_offset.setRange(-25.0, 25.0)
+        self.border_offset.setDecimals(2)
+        self.border_offset.setValue(0.0)
+        self.border_offset.setSuffix(" mm")
+        self.smoothing = QtWidgets.QDoubleSpinBox()
+        self.smoothing.setRange(0.0, 10.0)
+        self.smoothing.setDecimals(2)
+        self.smoothing.setValue(0.25)
+        self.smoothing.setSuffix(" mm")
+        _form_row(output_form, "Output shape", self.output_mode)
+        _form_row(output_form, "Border offset", self.border_offset)
+        _form_row(output_form, "Contour smoothing", self.smoothing)
+        layout.addWidget(output_group)
+
+        action_row = QtWidgets.QHBoxLayout()
+        self.detect_button = QtWidgets.QPushButton("Detect objects")
+        self.detect_button.setObjectName("primaryButton")
+        self.clear_button = QtWidgets.QPushButton("Clear preview")
+        action_row.addWidget(self.detect_button, 1)
+        action_row.addWidget(self.clear_button)
+        layout.addLayout(action_row)
+
+        self.status_label = QtWidgets.QLabel(
+            "Capture a clear corrected bed image, then detect objects."
+        )
+        self.status_label.setObjectName("statusCard")
+        self.status_label.setWordWrap(True)
+        layout.addWidget(self.status_label)
+
+        result_group = QtWidgets.QGroupBox("Review detected outlines")
+        result_layout = QtWidgets.QVBoxLayout(result_group)
+        result_layout.addWidget(
+            _muted(
+                "Green outlines are direct detections. Yellow dashed outlines "
+                "are inferred and remain unchecked until you approve them."
+            )
+        )
+        self.result_tree = QtWidgets.QTreeWidget()
+        self.result_tree.setMinimumHeight(220)
+        self.result_tree.setColumnCount(5)
+        self.result_tree.setHeaderLabels(
+            ["Use", "#", "Source", "Confidence", "Size"]
+        )
+        self.result_tree.setRootIsDecorated(False)
+        self.result_tree.setAlternatingRowColors(True)
+        self.result_tree.header().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.result_tree.header().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.result_tree.header().setSectionResizeMode(
+            2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.result_tree.header().setSectionResizeMode(
+            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.result_tree.header().setSectionResizeMode(
+            4, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        result_layout.addWidget(self.result_tree)
+        select_row = QtWidgets.QHBoxLayout()
+        self.select_direct_button = QtWidgets.QPushButton("Select direct")
+        self.select_all_button = QtWidgets.QPushButton("Select all")
+        self.select_none_button = QtWidgets.QPushButton("Select none")
+        select_row.addWidget(self.select_direct_button)
+        select_row.addWidget(self.select_all_button)
+        select_row.addWidget(self.select_none_button)
+        result_layout.addLayout(select_row)
+        self.create_button = QtWidgets.QPushButton("Create vector objects")
+        self.create_button.setObjectName("primaryButton")
+        self.create_button.setEnabled(False)
+        result_layout.addWidget(self.create_button)
+        layout.addWidget(result_group)
+        layout.addStretch(1)
+
+        self.pick_color_button.clicked.connect(self.pickColorRequested)
+        self.detect_button.clicked.connect(
+            lambda: self.detectRequested.emit(self.options())
+        )
+        self.clear_button.clicked.connect(self._clear_clicked)
+        self.create_button.clicked.connect(self._create_clicked)
+        self.result_tree.itemChanged.connect(self._result_changed)
+        self.select_direct_button.clicked.connect(self._select_direct)
+        self.select_all_button.clicked.connect(
+            lambda: self._set_all_checked(True, include_inferred=True)
+        )
+        self.select_none_button.clicked.connect(
+            lambda: self._set_all_checked(False, include_inferred=True)
+        )
+
+        for widget in (
+            self.mode_combo,
+            self.target_hue,
+            self.hue_tolerance,
+            self.min_saturation,
+            self.min_area,
+            self.max_area,
+            self.min_width,
+            self.min_height,
+            self.confidence,
+            self.regular_grid,
+            self.infer_missing,
+            self.output_mode,
+            self.border_offset,
+            self.smoothing,
+        ):
+            if isinstance(widget, QtWidgets.QComboBox):
+                widget.currentIndexChanged.connect(self._mark_stale)
+            elif isinstance(widget, QtWidgets.QAbstractButton):
+                widget.toggled.connect(self._mark_stale)
+            else:
+                widget.valueChanged.connect(self._mark_stale)
+
+    def options(self) -> dict[str, Any]:
+        hue = self.target_hue.value()
+        return {
+            "detection_mode": str(self.mode_combo.currentData()),
+            "target_hue": None if hue < 0 else hue,
+            "hue_tolerance": self.hue_tolerance.value(),
+            "min_saturation": self.min_saturation.value(),
+            "min_area_mm2": self.min_area.value(),
+            "max_area_mm2": self.max_area.value(),
+            "min_width_mm": self.min_width.value(),
+            "min_height_mm": self.min_height.value(),
+            "confidence_threshold": self.confidence.value() / 100.0,
+            "regular_grid": self.regular_grid.isChecked(),
+            "infer_missing": self.infer_missing.isChecked(),
+            "output_mode": str(self.output_mode.currentData()),
+            "border_offset_mm": self.border_offset.value(),
+            "smoothing_mm": self.smoothing.value(),
+        }
+
+    def set_color_sample(self, payload: dict[str, Any]) -> None:
+        self.mode_combo.setCurrentIndex(self.mode_combo.findData("color"))
+        self.target_hue.setValue(float(payload["hue"]))
+        rgb = payload.get("rgb", [128, 64, 64])
+        self.color_swatch.setStyleSheet(
+            "background: rgb(%d,%d,%d); border: 1px solid #AAB4BB; "
+            "border-radius: 3px;" % tuple(int(value) for value in rgb)
+        )
+        self.status_label.setText(
+            f"Sampled hue {float(payload['hue']):.0f} at "
+            f"X{float(payload['machine_x']):.2f} "
+            f"Y{float(payload['machine_y']):.2f}. Press Detect objects."
+        )
+
+    def set_result(self, result: dict[str, Any]) -> None:
+        self._detections = list(result.get("detections", []))
+        self._result_is_current = True
+        self._updating = True
+        try:
+            self.result_tree.clear()
+            for detection in self._detections:
+                item = QtWidgets.QTreeWidgetItem()
+                item.setData(0, QtCore.Qt.ItemDataRole.UserRole, detection["id"])
+                item.setFlags(item.flags() | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    0,
+                    QtCore.Qt.CheckState.Checked
+                    if detection.get("selected_default")
+                    else QtCore.Qt.CheckState.Unchecked,
+                )
+                item.setText(1, str(detection.get("index", "")))
+                source = str(detection.get("source", "direct"))
+                item.setText(2, source.title())
+                item.setText(3, f"{float(detection.get('confidence', 0)) * 100:.0f}%")
+                item.setText(
+                    4,
+                    f"{float(detection.get('width_mm', 0)):.1f} × "
+                    f"{float(detection.get('height_mm', 0)):.1f} mm",
+                )
+                if source == "inferred":
+                    item.setForeground(2, QtGui.QColor("#E7B55C"))
+                self.result_tree.addTopLevelItem(item)
+        finally:
+            self._updating = False
+        self.status_label.setText(str(result.get("message", "Detection complete")))
+        self._update_create_button()
+        self.selectionChanged.emit(self.selected_ids())
+
+    def set_calibration_ready(self, ready: bool) -> None:
+        self.detect_button.setEnabled(bool(ready))
+        self.pick_color_button.setEnabled(bool(ready))
+        if not ready:
+            self.status_label.setText(
+                "Bed mapping is required before camera objects can be traced."
+            )
+
+    def detections(self) -> list[dict[str, Any]]:
+        return list(self._detections)
+
+    def selected_ids(self) -> list[str]:
+        selected = []
+        for row in range(self.result_tree.topLevelItemCount()):
+            item = self.result_tree.topLevelItem(row)
+            if item.checkState(0) == QtCore.Qt.CheckState.Checked:
+                selected.append(str(item.data(0, QtCore.Qt.ItemDataRole.UserRole)))
+        return selected
+
+    def clear_result(self) -> None:
+        self._detections = []
+        self._result_is_current = False
+        self.result_tree.clear()
+        self.create_button.setEnabled(False)
+        self.status_label.setText("Trace preview cleared.")
+
+    def _mark_stale(self, *args: Any) -> None:
+        del args
+        if self._updating or not self._detections:
+            return
+        self._result_is_current = False
+        self.create_button.setEnabled(False)
+        self.status_label.setText(
+            "Trace settings changed. Run Detect objects again before creating paths."
+        )
+
+    def _result_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
+        del item, column
+        if self._updating:
+            return
+        self._update_create_button()
+        self.selectionChanged.emit(self.selected_ids())
+
+    def _update_create_button(self) -> None:
+        count = len(self.selected_ids())
+        self.create_button.setText(
+            f"Create {count} vector object{'s' if count != 1 else ''}"
+        )
+        self.create_button.setEnabled(self._result_is_current and count > 0)
+
+    def _set_all_checked(self, checked: bool, include_inferred: bool) -> None:
+        self._updating = True
+        try:
+            for row in range(self.result_tree.topLevelItemCount()):
+                item = self.result_tree.topLevelItem(row)
+                detection = self._detections[row]
+                if include_inferred or detection.get("source") != "inferred":
+                    item.setCheckState(
+                        0,
+                        QtCore.Qt.CheckState.Checked
+                        if checked
+                        else QtCore.Qt.CheckState.Unchecked,
+                    )
+        finally:
+            self._updating = False
+        self._update_create_button()
+        self.selectionChanged.emit(self.selected_ids())
+
+    def _select_direct(self) -> None:
+        self._updating = True
+        try:
+            for row in range(self.result_tree.topLevelItemCount()):
+                item = self.result_tree.topLevelItem(row)
+                direct = self._detections[row].get("source") == "direct"
+                item.setCheckState(
+                    0,
+                    QtCore.Qt.CheckState.Checked
+                    if direct
+                    else QtCore.Qt.CheckState.Unchecked,
+                )
+        finally:
+            self._updating = False
+        self._update_create_button()
+        self.selectionChanged.emit(self.selected_ids())
+
+    def _clear_clicked(self) -> None:
+        self.clear_result()
+        self.clearRequested.emit()
+
+    def _create_clicked(self) -> None:
+        if not self._result_is_current:
+            return
+        self.createRequested.emit(
+            {
+                "selected_ids": self.selected_ids(),
+                "output_mode": str(self.output_mode.currentData()),
+            }
+        )
+
 class MachinePanel(QtWidgets.QWidget):
     connectRequested = QtCore.Signal()
     disconnectRequested = QtCore.Signal()

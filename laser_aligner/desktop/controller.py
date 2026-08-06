@@ -11,6 +11,7 @@ import numpy as np
 
 from ..camera.controls import apply_controls
 from ..core import CoreRuntime
+from ..vision.object_trace import TraceOptions, detect_objects, sample_color
 from .qt import require_qt
 from .tasks import FunctionTask
 
@@ -54,6 +55,8 @@ class DesktopController(QtCore.QObject):
     notice = QtCore.Signal(str)
     busyChanged = QtCore.Signal(bool)
     cameraFocusChanged = QtCore.Signal(dict)
+    traceResultReady = QtCore.Signal(dict)
+    traceColorReady = QtCore.Signal(dict)
 
     def __init__(
         self,
@@ -348,6 +351,55 @@ class DesktopController(QtCore.QObject):
             self.notice.emit("Applied camera focus")
         if self.runtime.context.bed.calibration is not None:
             self.refresh_camera_image()
+
+
+    def detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
+        def operation() -> dict[str, Any]:
+            context = self.runtime.context
+            if context.bed.calibration is None:
+                raise ValueError(
+                    "Bed mapping is required before tracing camera objects"
+                )
+            image = context.rectified_frame(refresh=True)
+            options = TraceOptions.from_mapping(raw_options)
+            result = detect_objects(
+                image,
+                options,
+                self.runtime.settings.machine.work_area,
+                self.runtime.settings.calibration.bed.pixels_per_mm,
+            )
+            return result.to_dict()
+
+        self._run(
+            operation,
+            on_success=self.traceResultReady.emit,
+            label="Detect and trace objects",
+        )
+
+    def sample_trace_color(self, x_mm: float, y_mm: float) -> None:
+        def operation() -> dict[str, Any]:
+            context = self.runtime.context
+            if context.bed.calibration is None:
+                raise ValueError(
+                    "Bed mapping is required before sampling camera color"
+                )
+            image = context.rectified_frame(refresh=True)
+            area = self.runtime.settings.machine.work_area
+            ppm = float(
+                self.runtime.settings.calibration.bed.pixels_per_mm
+            )
+            pixel_x = (float(x_mm) - area.x_min) * ppm
+            pixel_y = (area.y_max - float(y_mm)) * ppm
+            payload = sample_color(image, pixel_x, pixel_y, radius_px=6)
+            payload["machine_x"] = float(x_mm)
+            payload["machine_y"] = float(y_mm)
+            return payload
+
+        self._run(
+            operation,
+            on_success=self.traceColorReady.emit,
+            label="Sample trace color",
+        )
 
     def connect_machine(self) -> None:
         self._run(

@@ -336,6 +336,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     objectMoveCommitted = QtCore.Signal(str, object, object)
     deleteRequested = QtCore.Signal()
     zoomChanged = QtCore.Signal(float)
+    pointPicked = QtCore.Signal(float, float)
 
     def __init__(self, work_area: Bounds, parent: QtWidgets.QWidget | None = None) -> None:
         self.workspace_scene = WorkspaceScene(work_area)
@@ -364,6 +365,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._camera_item.setVisible(False)
         self.workspace_scene.addItem(self._camera_item)
         self._toolpath_items: list[QtWidgets.QGraphicsLineItem] = []
+        self._trace_items: list[QtWidgets.QGraphicsItem] = []
+        self._point_pick_active = False
         self.snap_enabled = True
         self.snap_step_mm = 1.0
         self._panning = False
@@ -439,6 +442,79 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._camera_item.setTransform(transform)
         self._camera_item.setVisible(True)
 
+
+
+    def begin_point_pick(self) -> None:
+        self._point_pick_active = True
+        self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
+        self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+    def cancel_point_pick(self) -> None:
+        self._point_pick_active = False
+        if not self._panning and not self._space_pan:
+            self.unsetCursor()
+
+    def clear_trace_preview(self) -> None:
+        for item in self._trace_items:
+            self.workspace_scene.removeItem(item)
+        self._trace_items.clear()
+
+    def set_trace_preview(
+        self,
+        detections: list[dict[str, Any]],
+        selected_ids: list[str] | set[str] | None = None,
+    ) -> None:
+        self.clear_trace_preview()
+        selected = set(selected_ids or [])
+        for detection in detections:
+            points = detection.get("contour_mm") or detection.get("box_mm") or []
+            if len(points) < 2:
+                continue
+            path = QtGui.QPainterPath()
+            first = self.workspace_scene.machine_to_scene(*points[0])
+            path.moveTo(first)
+            for point in points[1:]:
+                path.lineTo(self.workspace_scene.machine_to_scene(*point))
+            path.closeSubpath()
+            item = QtWidgets.QGraphicsPathItem(path)
+            is_selected = detection.get("id") in selected
+            is_inferred = detection.get("source") == "inferred"
+            if is_selected and not is_inferred:
+                color = QtGui.QColor("#4FE36F")
+            elif is_selected and is_inferred:
+                color = QtGui.QColor("#E7B55C")
+            elif is_inferred:
+                color = QtGui.QColor("#D98A45")
+            else:
+                color = QtGui.QColor("#8998A3")
+            pen = QtGui.QPen(color)
+            pen.setWidthF(0.55 if is_selected else 0.35)
+            pen.setCosmetic(True)
+            if is_inferred:
+                pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            item.setPen(pen)
+            fill = QtGui.QColor(color)
+            fill.setAlpha(28 if is_selected else 10)
+            item.setBrush(fill)
+            item.setZValue(260.0)
+            item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            self.workspace_scene.addItem(item)
+            self._trace_items.append(item)
+
+            center = detection.get("center_mm")
+            if center and len(center) == 2:
+                label = QtWidgets.QGraphicsSimpleTextItem(str(detection.get("index", "")))
+                label.setBrush(color)
+                label.setFlag(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+                    True,
+                )
+                position = self.workspace_scene.machine_to_scene(*center)
+                label.setPos(position + QtCore.QPointF(1.5, -1.5))
+                label.setZValue(261.0)
+                label.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+                self.workspace_scene.addItem(label)
+                self._trace_items.append(label)
 
     def clear_toolpath_preview(self) -> None:
         for item in self._toolpath_items:
@@ -547,6 +623,19 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
         self.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
+        if (
+            self._point_pick_active
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
+            scene_point = self.mapToScene(event.position().toPoint())
+            x_mm, y_mm = self.workspace_scene.scene_to_machine(scene_point)
+            area = self.workspace_scene.work_area
+            if area.contains(x_mm, y_mm):
+                self._point_pick_active = False
+                self.unsetCursor()
+                self.pointPicked.emit(x_mm, y_mm)
+            event.accept()
+            return
         should_pan = (
             event.button() == QtCore.Qt.MouseButton.MiddleButton
             or (
