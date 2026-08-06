@@ -1,3 +1,0 @@
-[console_scripts]
-e3-positioning-system = laser_aligner.desktop.main:main
-laser-camera-aligner = laser_aligner.__main__:main

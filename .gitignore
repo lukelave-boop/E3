@@ -11,3 +11,14 @@ data/*
 !data/.gitkeep
 *.zip
 *.tar.gz
+
+# Python packaging/build artifacts
+*.egg-info/
+build/
+dist/
+pip-wheel-metadata/
+
+# Temporary backups and crash dumps
+*.before-*
+/core
+/core.*
