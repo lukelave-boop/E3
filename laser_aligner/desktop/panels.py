@@ -12,6 +12,37 @@ def _form_row(layout: QtWidgets.QFormLayout, label: str, widget: QtWidgets.QWidg
     layout.addRow(label, widget)
 
 
+def _panel_layout(widget: QtWidgets.QWidget) -> QtWidgets.QVBoxLayout:
+    widget.setObjectName("controlPanel")
+    widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+    layout = QtWidgets.QVBoxLayout(widget)
+    layout.setContentsMargins(10, 10, 10, 12)
+    layout.setSpacing(10)
+    return layout
+
+
+def _form_layout() -> QtWidgets.QFormLayout:
+    form = QtWidgets.QFormLayout()
+    form.setFieldGrowthPolicy(
+        QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
+    )
+    form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
+    form.setLabelAlignment(
+        QtCore.Qt.AlignmentFlag.AlignLeft
+        | QtCore.Qt.AlignmentFlag.AlignVCenter
+    )
+    form.setHorizontalSpacing(12)
+    form.setVerticalSpacing(8)
+    return form
+
+
+def _muted(text: str) -> QtWidgets.QLabel:
+    label = QtWidgets.QLabel(text)
+    label.setObjectName("mutedLabel")
+    label.setWordWrap(True)
+    return label
+
+
 class LayerPanel(QtWidgets.QWidget):
     activeLayerChanged = QtCore.Signal(str)
     layerEdited = QtCore.Signal(str, dict)
@@ -24,10 +55,10 @@ class LayerPanel(QtWidgets.QWidget):
         self._document: ProjectDocument | None = None
         self._updating = False
 
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = _panel_layout(self)
         self.layer_list = QtWidgets.QListWidget()
         self.layer_list.setAlternatingRowColors(True)
+        self.layer_list.setMinimumHeight(120)
         self.layer_list.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -44,7 +75,7 @@ class LayerPanel(QtWidgets.QWidget):
         button_row.addWidget(self.down_button)
         layout.addLayout(button_row)
 
-        form = QtWidgets.QFormLayout()
+        form = _form_layout()
         self.name_edit = QtWidgets.QLineEdit()
         self.mode_combo = QtWidgets.QComboBox()
         for mode in LayerMode:
@@ -178,13 +209,12 @@ class TransformPanel(QtWidgets.QWidget):
         self._selected_ids: list[str] = []
         self._updating = False
 
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = _panel_layout(self)
         self.summary = QtWidgets.QLabel("No object selected")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
 
-        form = QtWidgets.QFormLayout()
+        form = _form_layout()
         self.x_spin = self._spin(-10000.0, 10000.0, " mm")
         self.y_spin = self._spin(-10000.0, 10000.0, " mm")
         self.width_spin = self._spin(0.001, 10000.0, " mm")
@@ -314,29 +344,129 @@ class CameraPanel(QtWidgets.QWidget):
     lensCalibrationRequested = QtCore.Signal()
     bedCalibrationRequested = QtCore.Signal()
     opacityChanged = QtCore.Signal(float)
+    liveChanged = QtCore.Signal(bool)
+    refreshIntervalChanged = QtCore.Signal(int)
+    focusApplyRequested = QtCore.Signal(bool, int)
+    focusSaveRequested = QtCore.Signal(bool, int)
+    sharpnessRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        self._syncing_focus = False
+        layout = _panel_layout(self)
+
+        heading = QtWidgets.QLabel("Camera and overlay")
+        heading.setObjectName("panelHeading")
+        layout.addWidget(heading)
+
         self.state_label = QtWidgets.QLabel("Camera not started")
+        self.state_label.setObjectName("statusCard")
         self.state_label.setWordWrap(True)
         layout.addWidget(self.state_label)
 
-        self.refresh_button = QtWidgets.QPushButton("Refresh corrected bed image")
-        self.capture_button = QtWidgets.QPushButton("Capture still")
-        self.lens_button = QtWidgets.QPushButton("Lens calibration…")
-        self.bed_button = QtWidgets.QPushButton("Bed alignment…")
-        layout.addWidget(self.refresh_button)
-        layout.addWidget(self.capture_button)
-        layout.addWidget(self.lens_button)
-        layout.addWidget(self.bed_button)
+        overlay_group = QtWidgets.QGroupBox("Corrected bed overlay")
+        overlay_layout = QtWidgets.QVBoxLayout(overlay_group)
+        overlay_layout.setSpacing(8)
 
-        layout.addWidget(QtWidgets.QLabel("Camera overlay opacity"))
+        self.live_check = QtWidgets.QCheckBox("Live corrected overlay")
+        self.live_check.setChecked(True)
+        self.live_rate = QtWidgets.QComboBox()
+        self.live_rate.addItem("0.5 fps", 2000)
+        self.live_rate.addItem("1 fps", 1000)
+        self.live_rate.addItem("2 fps", 500)
+        self.live_rate.setCurrentIndex(self.live_rate.findData(1000))
+        live_row = QtWidgets.QHBoxLayout()
+        live_row.addWidget(self.live_check, 1)
+        live_row.addWidget(QtWidgets.QLabel("Rate"))
+        live_row.addWidget(self.live_rate)
+        overlay_layout.addLayout(live_row)
+
+        self.image_state = QtWidgets.QLabel("Waiting for corrected image")
+        self.image_state.setObjectName("mutedLabel")
+        self.image_state.setWordWrap(True)
+        overlay_layout.addWidget(self.image_state)
+        overlay_layout.addWidget(
+            _muted(
+                "The overlay is geometrically valid only while the machine "
+                "is at the saved camera pose."
+            )
+        )
+
+        opacity_row = QtWidgets.QHBoxLayout()
+        opacity_row.addWidget(QtWidgets.QLabel("Opacity"))
         self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
         self.opacity_slider.setValue(60)
-        layout.addWidget(self.opacity_slider)
+        opacity_row.addWidget(self.opacity_slider, 1)
+        overlay_layout.addLayout(opacity_row)
+
+        refresh_row = QtWidgets.QHBoxLayout()
+        self.refresh_button = QtWidgets.QPushButton("Refresh now")
+        self.capture_button = QtWidgets.QPushButton("Save still image")
+        refresh_row.addWidget(self.refresh_button)
+        refresh_row.addWidget(self.capture_button)
+        overlay_layout.addLayout(refresh_row)
+        layout.addWidget(overlay_group)
+
+        calibration_group = QtWidgets.QGroupBox("Calibration")
+        calibration_layout = QtWidgets.QVBoxLayout(calibration_group)
+        calibration_layout.addWidget(
+            _muted(
+                "Use these guided tools after moving the camera, changing "
+                "resolution, or changing focus."
+            )
+        )
+        calibration_row = QtWidgets.QHBoxLayout()
+        self.lens_button = QtWidgets.QPushButton("Lens calibration…")
+        self.bed_button = QtWidgets.QPushButton("Bed alignment…")
+        calibration_row.addWidget(self.lens_button)
+        calibration_row.addWidget(self.bed_button)
+        calibration_layout.addLayout(calibration_row)
+        layout.addWidget(calibration_group)
+
+        focus_group = QtWidgets.QGroupBox("Focus")
+        focus_layout = QtWidgets.QVBoxLayout(focus_group)
+        focus_layout.setSpacing(8)
+        self.autofocus_check = QtWidgets.QCheckBox("Continuous autofocus")
+        focus_layout.addWidget(self.autofocus_check)
+
+        focus_row = QtWidgets.QHBoxLayout()
+        self.focus_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+        self.focus_slider.setRange(0, 250)
+        self.focus_slider.setSingleStep(5)
+        self.focus_slider.setPageStep(10)
+        self.focus_spin = QtWidgets.QSpinBox()
+        self.focus_spin.setRange(0, 250)
+        self.focus_spin.setSingleStep(5)
+        self.focus_spin.setSuffix(" focus")
+        focus_row.addWidget(self.focus_slider, 1)
+        focus_row.addWidget(self.focus_spin)
+        focus_layout.addLayout(focus_row)
+
+        focus_buttons = QtWidgets.QHBoxLayout()
+        self.apply_focus_button = QtWidgets.QPushButton("Apply")
+        self.measure_button = QtWidgets.QPushButton("Measure sharpness")
+        focus_buttons.addWidget(self.apply_focus_button)
+        focus_buttons.addWidget(self.measure_button)
+        focus_layout.addLayout(focus_buttons)
+
+        self.save_focus_button = QtWidgets.QPushButton(
+            "Save as locked startup focus"
+        )
+        focus_layout.addWidget(self.save_focus_button)
+        self.sharpness_label = QtWidgets.QLabel("Sharpness score: —")
+        self.sharpness_label.setObjectName("statusCard")
+        self.sharpness_label.setWordWrap(True)
+        focus_layout.addWidget(self.sharpness_label)
+        self.focus_warning = QtWidgets.QLabel(
+            "Focus changed. Verify or redo lens and bed calibration before "
+            "precision placement."
+        )
+        self.focus_warning.setObjectName("warningLabel")
+        self.focus_warning.setWordWrap(True)
+        self.focus_warning.setVisible(False)
+        focus_layout.addWidget(self.focus_warning)
+        layout.addWidget(focus_group)
         layout.addStretch(1)
 
         self.refresh_button.clicked.connect(self.refreshRequested)
@@ -346,12 +476,88 @@ class CameraPanel(QtWidgets.QWidget):
         self.opacity_slider.valueChanged.connect(
             lambda value: self.opacityChanged.emit(value / 100.0)
         )
+        self.live_check.toggled.connect(self.liveChanged)
+        self.live_rate.currentIndexChanged.connect(
+            lambda index: self.refreshIntervalChanged.emit(
+                int(self.live_rate.itemData(index))
+            )
+        )
+        self.autofocus_check.toggled.connect(self._autofocus_changed)
+        self.focus_slider.valueChanged.connect(self._slider_changed)
+        self.focus_spin.valueChanged.connect(self._spin_changed)
+        self.apply_focus_button.clicked.connect(self._apply_focus)
+        self.save_focus_button.clicked.connect(self._save_focus)
+        self.measure_button.clicked.connect(self.sharpnessRequested)
+
+    def live_enabled(self) -> bool:
+        return self.live_check.isChecked()
+
+    def refresh_interval_ms(self) -> int:
+        return int(self.live_rate.currentData())
+
+    def focus_settings(self) -> tuple[bool, int]:
+        return self.autofocus_check.isChecked(), self.focus_spin.value()
+
+    def set_focus_controls(self, controls: dict[str, Any]) -> None:
+        automatic = bool(
+            controls.get(
+                "focus_automatic_continuous",
+                controls.get("focus_auto", 0),
+            )
+        )
+        value = max(0, min(250, int(controls.get("focus_absolute", 10))))
+        for widget in (self.autofocus_check, self.focus_slider, self.focus_spin):
+            widget.blockSignals(True)
+        try:
+            self.autofocus_check.setChecked(automatic)
+            self.focus_slider.setValue(value)
+            self.focus_spin.setValue(value)
+        finally:
+            for widget in (self.autofocus_check, self.focus_slider, self.focus_spin):
+                widget.blockSignals(False)
+        self._set_manual_focus_enabled(not automatic)
+
+    def set_focus_result(self, payload: dict[str, Any]) -> None:
+        if "autofocus" in payload:
+            self.set_focus_controls(
+                {
+                    "focus_automatic_continuous": 1 if payload["autofocus"] else 0,
+                    "focus_absolute": payload.get(
+                        "focus_value", self.focus_spin.value()
+                    ),
+                }
+            )
+        if payload.get("sharpness") is not None:
+            self.sharpness_label.setText(
+                f"Sharpness score: {float(payload['sharpness']):.1f}\n"
+                "Higher is sharper; compare values on the same scene."
+            )
+        if payload.get("changed"):
+            self.focus_warning.setVisible(True)
+        skipped = payload.get("skipped") or {}
+        self.sharpness_label.setToolTip(
+            "; ".join(f"{name}: {reason}" for name, reason in skipped.items())
+        )
+
+    def set_calibration_ready(self, ready: bool) -> None:
+        self.live_check.setEnabled(ready)
+        self.live_rate.setEnabled(ready)
+        self.refresh_button.setEnabled(ready)
+        if not ready:
+            self.image_state.setText(
+                "Bed mapping is required for a corrected overlay"
+            )
+
+    def set_image_updated(self) -> None:
+        current = QtCore.QTime.currentTime().toString("HH:mm:ss")
+        mode = "LIVE" if self.live_check.isChecked() else "STILL"
+        self.image_state.setText(f"{mode} overlay updated at {current}")
 
     def set_status(self, status: dict[str, Any] | None) -> None:
         if not status:
             self.state_label.setText("Camera unavailable")
             return
-        connected = status.get("connected", False)
+        connected = bool(status.get("connected", False))
         if connected:
             self.state_label.setText(
                 f"Online · {status.get('width', 0)} × {status.get('height', 0)} · "
@@ -361,6 +567,49 @@ class CameraPanel(QtWidgets.QWidget):
             self.state_label.setText(
                 f"Offline\n{status.get('last_error') or status.get('device', '')}"
             )
+        for widget in (
+            self.autofocus_check,
+            self.apply_focus_button,
+            self.save_focus_button,
+            self.measure_button,
+        ):
+            widget.setEnabled(connected)
+        self._set_manual_focus_enabled(
+            connected and not self.autofocus_check.isChecked()
+        )
+
+    def _set_manual_focus_enabled(self, enabled: bool) -> None:
+        self.focus_slider.setEnabled(enabled)
+        self.focus_spin.setEnabled(enabled)
+
+    def _autofocus_changed(self, enabled: bool) -> None:
+        self._set_manual_focus_enabled(not enabled)
+
+    def _slider_changed(self, value: int) -> None:
+        if self._syncing_focus:
+            return
+        self._syncing_focus = True
+        try:
+            self.focus_spin.setValue(value)
+        finally:
+            self._syncing_focus = False
+
+    def _spin_changed(self, value: int) -> None:
+        if self._syncing_focus:
+            return
+        self._syncing_focus = True
+        try:
+            self.focus_slider.setValue(value)
+        finally:
+            self._syncing_focus = False
+
+    def _apply_focus(self) -> None:
+        autofocus, value = self.focus_settings()
+        self.focusApplyRequested.emit(autofocus, value)
+
+    def _save_focus(self) -> None:
+        autofocus, value = self.focus_settings()
+        self.focusSaveRequested.emit(autofocus, value)
 
 
 class MachinePanel(QtWidgets.QWidget):
@@ -372,23 +621,31 @@ class MachinePanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = _panel_layout(self)
+        heading = QtWidgets.QLabel("Machine control")
+        heading.setObjectName("panelHeading")
+        layout.addWidget(heading)
+
         self.state_label = QtWidgets.QLabel("Disconnected")
+        self.state_label.setObjectName("statusCard")
         self.state_label.setWordWrap(True)
         layout.addWidget(self.state_label)
 
+        connection_group = QtWidgets.QGroupBox("Connection and homing")
+        connection_layout = QtWidgets.QVBoxLayout(connection_group)
         row = QtWidgets.QHBoxLayout()
         self.connect_button = QtWidgets.QPushButton("Connect")
         self.disconnect_button = QtWidgets.QPushButton("Disconnect")
         row.addWidget(self.connect_button)
         row.addWidget(self.disconnect_button)
-        layout.addLayout(row)
+        connection_layout.addLayout(row)
+        self.park_button = QtWidgets.QPushButton(
+            "Home and park at camera pose"
+        )
+        connection_layout.addWidget(self.park_button)
+        layout.addWidget(connection_group)
 
-        self.park_button = QtWidgets.QPushButton("Home and park at camera pose")
-        layout.addWidget(self.park_button)
-
-        jog_group = QtWidgets.QGroupBox("Jog")
+        jog_group = QtWidgets.QGroupBox("Jogging")
         jog_layout = QtWidgets.QGridLayout(jog_group)
         self.jog_step = QtWidgets.QComboBox()
         for value in (0.1, 1.0, 5.0, 10.0, 50.0):
@@ -409,11 +666,28 @@ class MachinePanel(QtWidgets.QWidget):
         jog_layout.addWidget(self.jog_step, 3, 1, 1, 2)
         jog_layout.addWidget(QtWidgets.QLabel("Speed"), 4, 0)
         jog_layout.addWidget(self.jog_speed, 4, 1, 1, 2)
+        jog_note = _muted(
+            "Guarded jogging is not enabled in this build. These controls will "
+            "unlock after the Falcon jog behavior is tested."
+        )
+        jog_layout.addWidget(jog_note, 5, 0, 1, 3)
+        jog_group.setEnabled(False)
         layout.addWidget(jog_group)
 
-        self.stop_button = QtWidgets.QPushButton("Software stop / laser off")
+        safety_group = QtWidgets.QGroupBox("Safety")
+        safety_layout = QtWidgets.QVBoxLayout(safety_group)
+        safety_layout.addWidget(
+            _muted(
+                "Software stop requests feed hold, controller reset, and laser off. "
+                "It does not replace the physical emergency stop."
+            )
+        )
+        self.stop_button = QtWidgets.QPushButton(
+            "Software stop / laser off"
+        )
         self.stop_button.setObjectName("dangerButton")
-        layout.addWidget(self.stop_button)
+        safety_layout.addWidget(self.stop_button)
+        layout.addWidget(safety_group)
         layout.addStretch(1)
 
         self.connect_button.clicked.connect(self.connectRequested)
@@ -440,7 +714,9 @@ class MachinePanel(QtWidgets.QWidget):
         connected = bool(status.get("connected", False))
         armed = bool(status.get("armed", False))
         job = status.get("job", {})
-        state = "RUNNING" if job.get("running") else ("ARMED" if armed else "SAFE")
+        state = "RUNNING" if job.get("running") else (
+            "ARMED" if armed else "SAFE"
+        )
         self.state_label.setText(
             f"{'Connected' if connected else 'Disconnected'} · "
             f"{status.get('protocol', 'unknown')} · {state}\n"
@@ -448,7 +724,9 @@ class MachinePanel(QtWidgets.QWidget):
         )
         self.connect_button.setEnabled(not connected)
         self.disconnect_button.setEnabled(connected)
-        self.park_button.setEnabled(connected and bool(status.get("allow_motion")))
+        self.park_button.setEnabled(
+            connected and bool(status.get("allow_motion"))
+        )
 
 
 class ConsolePanel(QtWidgets.QWidget):
@@ -456,8 +734,7 @@ class ConsolePanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = _panel_layout(self)
         self.output = QtWidgets.QPlainTextEdit()
         self.output.setReadOnly(True)
         self.output.setMaximumBlockCount(1000)
@@ -498,29 +775,41 @@ class JobPanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = _panel_layout(self)
+        heading = QtWidgets.QLabel("Job control")
+        heading.setObjectName("panelHeading")
+        layout.addWidget(heading)
+
         self.summary = QtWidgets.QLabel("No job generated")
+        self.summary.setObjectName("statusCard")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setRange(0, 1000)
         layout.addWidget(self.progress)
 
+        prepare_group = QtWidgets.QGroupBox("Prepare")
+        prepare_layout = QtWidgets.QVBoxLayout(prepare_group)
         self.generate_button = QtWidgets.QPushButton("Generate toolpath")
-        self.frame_button = QtWidgets.QPushButton("Frame bounds")
-        self.start_button = QtWidgets.QPushButton("Start job")
+        self.frame_button = QtWidgets.QPushButton("Generate dry frame")
+        prepare_layout.addWidget(self.generate_button)
+        prepare_layout.addWidget(self.frame_button)
+        layout.addWidget(prepare_group)
+
+        run_group = QtWidgets.QGroupBox("Execution")
+        run_layout = QtWidgets.QVBoxLayout(run_group)
+        self.start_button = QtWidgets.QPushButton("Start current job")
         self.pause_button = QtWidgets.QPushButton("Pause / resume")
+        self.pause_button.setEnabled(False)
+        self.pause_button.setToolTip(
+            "Disabled until Falcon realtime hold/resume is validated."
+        )
         self.stop_button = QtWidgets.QPushButton("Stop")
         self.stop_button.setObjectName("dangerButton")
-        for widget in (
-            self.generate_button,
-            self.frame_button,
-            self.start_button,
-            self.pause_button,
-            self.stop_button,
-        ):
-            layout.addWidget(widget)
+        run_layout.addWidget(self.start_button)
+        run_layout.addWidget(self.pause_button)
+        run_layout.addWidget(self.stop_button)
+        layout.addWidget(run_group)
         layout.addStretch(1)
 
         self.generate_button.clicked.connect(self.generateRequested)
@@ -555,9 +844,9 @@ class ObjectPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._updating = False
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = _panel_layout(self)
         self.tree = QtWidgets.QTreeWidget()
+        self.tree.setMinimumHeight(220)
         self.tree.setColumnCount(4)
         self.tree.setHeaderLabels(["Object", "Layer", "Visible", "Locked"])
         self.tree.setSelectionMode(
@@ -666,16 +955,16 @@ class MaterialPanel(QtWidgets.QWidget):
         self._updating = False
         self._current_id: int | None = None
 
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(6, 6, 6, 6)
+        layout = _panel_layout(self)
         self.search = QtWidgets.QLineEdit()
         self.search.setPlaceholderText("Search material presets")
         layout.addWidget(self.search)
         self.list = QtWidgets.QListWidget()
         self.list.setAlternatingRowColors(True)
+        self.list.setMinimumHeight(170)
         layout.addWidget(self.list, 1)
 
-        form = QtWidgets.QFormLayout()
+        form = _form_layout()
         self.material_edit = QtWidgets.QLineEdit()
         self.name_edit = QtWidgets.QLineEdit()
         self.thickness_spin = QtWidgets.QDoubleSpinBox()
@@ -711,16 +1000,16 @@ class MaterialPanel(QtWidgets.QWidget):
         _form_row(form, "Notes", self.notes_edit)
         layout.addLayout(form)
 
-        row = QtWidgets.QHBoxLayout()
+        actions = QtWidgets.QGridLayout()
         self.new_button = QtWidgets.QPushButton("New")
         self.save_button = QtWidgets.QPushButton("Save")
         self.apply_button = QtWidgets.QPushButton("Apply to active layer")
         self.delete_button = QtWidgets.QPushButton("Delete")
-        row.addWidget(self.new_button)
-        row.addWidget(self.save_button)
-        row.addWidget(self.apply_button)
-        row.addWidget(self.delete_button)
-        layout.addLayout(row)
+        actions.addWidget(self.new_button, 0, 0)
+        actions.addWidget(self.save_button, 0, 1)
+        actions.addWidget(self.apply_button, 1, 0)
+        actions.addWidget(self.delete_button, 1, 1)
+        layout.addLayout(actions)
 
         self.search.textChanged.connect(self.refresh)
         self.list.currentItemChanged.connect(self._selection_changed)

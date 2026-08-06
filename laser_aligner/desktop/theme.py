@@ -151,6 +151,81 @@ QProgressBar::chunk {
     background: #4FC3A1;
     border-radius: 3px;
 }
+
+QDockWidget, QDockWidget > QWidget {
+    background: #10161C;
+}
+QWidget#controlPanel, QWidget#inspectorPage {
+    background: #10161C;
+}
+QScrollArea#inspectorScroll, QScrollArea#inspectorScroll > QWidget,
+QScrollArea#inspectorScroll QWidget#qt_scrollarea_viewport {
+    background: #10161C;
+    border: none;
+}
+QTabWidget#inspectorTabs {
+    background: #10161C;
+}
+QTabWidget#inspectorTabs::pane {
+    background: #10161C;
+    border: 1px solid #2A3944;
+    border-top: none;
+}
+QTabBar#inspectorTabBar {
+    background: #0C1217;
+}
+QTabBar#inspectorTabBar::tab {
+    background: #121B22;
+    border: 1px solid #26343E;
+    border-bottom: 2px solid transparent;
+    min-width: 62px;
+    padding: 7px 9px;
+}
+QTabBar#inspectorTabBar::tab:hover {
+    background: #18252D;
+}
+QTabBar#inspectorTabBar::tab:selected {
+    background: #1B2B32;
+    border-bottom-color: #4FC3A1;
+    color: #F4FAFC;
+}
+QLabel#panelHeading {
+    color: #F0F6F9;
+    font-size: 11pt;
+    font-weight: 700;
+}
+QLabel#mutedLabel {
+    color: #92A1AA;
+}
+QLabel#warningLabel {
+    color: #F2C46D;
+    background: #2B2417;
+    border: 1px solid #6C5426;
+    border-radius: 5px;
+    padding: 7px;
+}
+QLabel#statusCard {
+    background: #0D141A;
+    border: 1px solid #2A3944;
+    border-radius: 5px;
+    padding: 8px;
+}
+QGroupBox {
+    background: #121A20;
+}
+QLineEdit, QAbstractSpinBox, QComboBox, QPushButton {
+    min-height: 26px;
+}
+QCheckBox {
+    spacing: 7px;
+}
+QToolTip {
+    color: #EAF1F5;
+    background: #172129;
+    border: 1px solid #45606F;
+    padding: 5px;
+}
+
 #dangerButton {
     background: #8D2D39;
     border-color: #E35D6A;

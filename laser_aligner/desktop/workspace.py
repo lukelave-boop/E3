@@ -19,11 +19,18 @@ class WorkspaceScene(QtWidgets.QGraphicsScene):
 
     def set_work_area(self, work_area: Bounds) -> None:
         self.work_area = work_area
+        # Keep a generous non-machine margin around the work area.
+        # QGraphicsView cannot scroll when its scene is smaller than the
+        # viewport, which made Space+drag appear to do nothing.
+        pan_margin = max(
+            120.0,
+            max(work_area.width, work_area.height) * 0.75,
+        )
         self.setSceneRect(
-            work_area.x_min - 10.0,
-            -work_area.y_max - 10.0,
-            work_area.width + 20.0,
-            work_area.height + 20.0,
+            work_area.x_min - pan_margin,
+            -work_area.y_max - pan_margin,
+            work_area.width + pan_margin * 2.0,
+            work_area.height + pan_margin * 2.0,
         )
         self.invalidate(self.sceneRect(), QtWidgets.QGraphicsScene.SceneLayer.BackgroundLayer)
 
@@ -361,6 +368,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self.snap_step_mm = 1.0
         self._panning = False
         self._pan_start = QtCore.QPoint()
+        self._space_pan = False
+        self._pan_button = QtCore.Qt.MouseButton.NoButton
         self.workspace_scene.selectionChanged.connect(self._emit_selection)
         self.fit_work_area()
 
@@ -381,6 +390,41 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         rect = QtCore.QRectF(area.x_min, -area.y_max, area.width, area.height)
         self.fitInView(rect.adjusted(-5, -5, 5, 5), QtCore.Qt.AspectRatioMode.KeepAspectRatio)
         self.zoomChanged.emit(abs(self.transform().m11()))
+
+    def fit_selection(self) -> None:
+        selected = [
+            item
+            for item in self.workspace_scene.selectedItems()
+            if isinstance(item, ObjectGraphicsItem)
+        ]
+        if not selected:
+            self.fit_work_area()
+            return
+        rect = QtCore.QRectF()
+        for item in selected:
+            rect = rect.united(item.sceneBoundingRect())
+        if rect.isEmpty():
+            self.fit_work_area()
+            return
+        padding = max(3.0, min(rect.width(), rect.height()) * 0.12)
+        self.fitInView(
+            rect.adjusted(-padding, -padding, padding, padding),
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        )
+        self.zoomChanged.emit(abs(self.transform().m11()))
+
+    def zoom_by(self, factor: float) -> None:
+        current = abs(self.transform().m11())
+        target = current * float(factor)
+        if 0.08 <= target <= 80.0:
+            self.scale(float(factor), float(factor))
+            self.zoomChanged.emit(abs(self.transform().m11()))
+
+    def zoom_in(self) -> None:
+        self.zoom_by(1.18)
+
+    def zoom_out(self) -> None:
+        self.zoom_by(1.0 / 1.18)
 
     def set_camera_image(self, image: QtGui.QImage | None) -> None:
         if image is None or image.isNull():
@@ -498,17 +542,21 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self.selectionIdsChanged.emit(self.selected_object_ids())
 
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
-        factor = 1.18 if event.angleDelta().y() > 0 else 1.0 / 1.18
-        current = abs(self.transform().m11())
-        target = current * factor
-        if 0.08 <= target <= 80.0:
-            self.scale(factor, factor)
-            self.zoomChanged.emit(abs(self.transform().m11()))
+        self.zoom_by(1.18 if event.angleDelta().y() > 0 else 1.0 / 1.18)
         event.accept()
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.MouseButton.MiddleButton:
+        self.setFocus(QtCore.Qt.FocusReason.MouseFocusReason)
+        should_pan = (
+            event.button() == QtCore.Qt.MouseButton.MiddleButton
+            or (
+                event.button() == QtCore.Qt.MouseButton.LeftButton
+                and self._space_pan
+            )
+        )
+        if should_pan:
             self._panning = True
+            self._pan_button = event.button()
             self._pan_start = event.position().toPoint()
             self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
             event.accept()
@@ -529,14 +577,24 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.MouseButton.MiddleButton and self._panning:
+        if self._panning and event.button() == self._pan_button:
             self._panning = False
-            self.unsetCursor()
+            self._pan_button = QtCore.Qt.MouseButton.NoButton
+            self.setCursor(
+                QtCore.Qt.CursorShape.OpenHandCursor
+                if self._space_pan
+                else QtCore.Qt.CursorShape.ArrowCursor
+            )
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pan = True
+            self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
         if event.key() in {QtCore.Qt.Key.Key_Delete, QtCore.Qt.Key.Key_Backspace}:
             self.deleteRequested.emit()
             event.accept()
@@ -546,3 +604,12 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.key() == QtCore.Qt.Key.Key_Space and not event.isAutoRepeat():
+            self._space_pan = False
+            if not self._panning:
+                self.unsetCursor()
+            event.accept()
+            return
+        super().keyReleaseEvent(event)

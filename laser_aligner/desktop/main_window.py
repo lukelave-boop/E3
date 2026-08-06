@@ -41,6 +41,7 @@ from ..project import (
     save_project,
 )
 from .controller import DesktopController
+from .controls import InspectorTabs, PanelScrollArea, WheelGuard
 from .panels import (
     CameraPanel,
     ConsolePanel,
@@ -81,7 +82,8 @@ class LayerPaletteBar(QtWidgets.QWidget):
             button.setChecked(layer.id == active_layer_id)
             button.setToolTip(
                 f"{layer.name}\n{layer.mode.value} · {layer.speed_mm_min:g} mm/min · "
-                f"{layer.power_percent:g}%"
+                f"{layer.power_percent:g}%\n"
+                "Click to make active; selected objects are assigned to this layer."
             )
             button.setFixedSize(28, 24)
             button.setStyleSheet(
@@ -117,6 +119,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.setWindowFlags(window_flags)
         self.runtime = runtime
         self.controller = DesktopController(runtime, self)
+        self._wheel_guard = WheelGuard(self)
+        application = QtWidgets.QApplication.instance()
+        if application is not None:
+            application.installEventFilter(self._wheel_guard)
         self.material_database = MaterialDatabase()
         self.document = self._new_document()
         self.history = CommandStack(max_depth=300)
@@ -151,6 +157,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._create_docks()
         self._create_status_bar()
         self._connect_signals()
+        self.controller.set_live_camera(
+            self.camera_panel.live_enabled(),
+            self.camera_panel.refresh_interval_ms(),
+        )
 
         self.history.add_listener(self._history_changed)
         self._autosave_timer = QtCore.QTimer(self)
@@ -160,6 +170,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         self._restore_window_state()
         QtCore.QTimer.singleShot(0, self._ensure_window_visible)
+        QtCore.QTimer.singleShot(0, self.workspace.fit_work_area)
         self._refresh_document()
         self.controller.start()
 
@@ -216,15 +227,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("raise", "Raise one step", "Ctrl+]")
         action("lower", "Lower one step", "Ctrl+[")
         action("send_back", "Send to back", "Ctrl+Shift+[")
-        action("fit", "Fit work area", "F")
-        action("snap", "Snap to grid", "Ctrl+Shift+G", checkable=True)
+        action("fit", "Fit work area", "Home")
+        action("fit_selection", "Fit selection", "Shift+F")
+        action("zoom_in", "Zoom in", "Ctrl++")
+        action("zoom_out", "Zoom out", "Ctrl+-")
+        action("snap", "Snap to grid", "Ctrl+Alt+G", checkable=True)
         self.actions["snap"].setChecked(True)
-        action("rectangle", "Rectangle", "R", checkable=True)
-        action("ellipse", "Ellipse", "E", checkable=True)
-        action("line", "Line", "L", checkable=True)
-        action("text", "Text", "T", checkable=True)
+        action("rectangle", "Add rectangle", "Alt+R")
+        action("ellipse", "Add ellipse", "Alt+E")
+        action("line", "Add line", "Alt+L")
+        action("text", "Add text", "Alt+T")
         action("refresh_camera", "Refresh camera", "F5")
-        action("generate", "Generate toolpath", "Ctrl+G")
+        action("generate", "Generate toolpath", "Ctrl+Alt+Enter")
         action("frame", "Generate dry frame", "Ctrl+Shift+F")
         action("run", "Run current job", "Ctrl+Enter")
         action("stop", "Software stop / laser off", "Esc")
@@ -264,6 +278,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["lower"].triggered.connect(lambda: self.reorder_selection("lower"))
         self.actions["send_back"].triggered.connect(lambda: self.reorder_selection("back"))
         self.actions["fit"].triggered.connect(self.workspace.fit_work_area)
+        self.actions["fit_selection"].triggered.connect(self.workspace.fit_selection)
+        self.actions["zoom_in"].triggered.connect(self.workspace.zoom_in)
+        self.actions["zoom_out"].triggered.connect(self.workspace.zoom_out)
         self.actions["snap"].toggled.connect(self.workspace.set_snap_enabled)
         self.actions["rectangle"].triggered.connect(self.add_rectangle)
         self.actions["ellipse"].triggered.connect(self.add_ellipse)
@@ -312,6 +329,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         view_menu = self.menuBar().addMenu("&View")
         view_menu.addAction(self.actions["fit"])
+        view_menu.addAction(self.actions["fit_selection"])
+        view_menu.addAction(self.actions["zoom_in"])
+        view_menu.addAction(self.actions["zoom_out"])
         view_menu.addAction(self.actions["snap"])
         view_menu.addSeparator()
         view_menu.addAction(self.actions["minimize_window"])
@@ -344,13 +364,25 @@ class E3MainWindow(QtWidgets.QMainWindow):
         tools.setObjectName("drawingToolbar")
         tools.setOrientation(QtCore.Qt.Orientation.Vertical)
         self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, tools)
-        tool_group = QtGui.QActionGroup(self)
-        tool_group.setExclusive(False)
+        drawing_labels = {
+            "rectangle": "Rectangle",
+            "ellipse": "Ellipse",
+            "line": "Line",
+            "text": "Text",
+        }
         for key in ("rectangle", "ellipse", "line", "text"):
-            tools.addAction(self.actions[key])
-            tool_group.addAction(self.actions[key])
+            button = QtWidgets.QToolButton()
+            button.setDefaultAction(self.actions[key])
+            button.setText(drawing_labels[key])
+            button.setToolButtonStyle(
+                QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly
+            )
+            tools.addWidget(button)
         tools.addSeparator()
         tools.addAction(self.actions["fit"])
+        tools.addAction(self.actions["fit_selection"])
+        tools.addAction(self.actions["zoom_in"])
+        tools.addAction(self.actions["zoom_out"])
         tools.addAction(self.actions["snap"])
         self.snap_combo = QtWidgets.QComboBox()
         self.snap_combo.setToolTip("Grid snap spacing")
@@ -364,28 +396,66 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         tools.addWidget(self.snap_combo)
 
-        align_toolbar = self.addToolBar("Align")
-        align_toolbar.setObjectName("alignToolbar")
-        for key in (
-            "align_left",
-            "align_center_x",
-            "align_right",
-            "align_bottom",
-            "align_center_y",
-            "align_top",
-            "distribute_h",
-            "distribute_v",
-            "bring_front",
-            "raise",
-            "lower",
-            "send_back",
-        ):
-            align_toolbar.addAction(self.actions[key])
+        arrange_toolbar = self.addToolBar("Arrange")
+        arrange_toolbar.setObjectName("arrangeToolbar")
+
+        def arrange_menu_button(
+            title: str,
+            action_keys: tuple[str, ...],
+        ) -> QtWidgets.QToolButton:
+            button = QtWidgets.QToolButton()
+            button.setText(title)
+            button.setPopupMode(
+                QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
+            )
+            menu = QtWidgets.QMenu(button)
+            for action_key in action_keys:
+                menu.addAction(self.actions[action_key])
+            button.setMenu(menu)
+            return button
+
+        arrange_toolbar.addWidget(
+            arrange_menu_button(
+                "Align",
+                (
+                    "align_left",
+                    "align_center_x",
+                    "align_right",
+                    "align_bottom",
+                    "align_center_y",
+                    "align_top",
+                ),
+            )
+        )
+        arrange_toolbar.addWidget(
+            arrange_menu_button(
+                "Distribute",
+                ("distribute_h", "distribute_v"),
+            )
+        )
+        arrange_toolbar.addWidget(
+            arrange_menu_button(
+                "Order",
+                ("bring_front", "raise", "lower", "send_back"),
+            )
+        )
 
         job_toolbar = self.addToolBar("Job")
         job_toolbar.setObjectName("jobToolbar")
+        job_labels = {
+            "generate": "Toolpath",
+            "frame": "Frame",
+            "run": "Run",
+            "stop": "Stop",
+        }
         for key in ("generate", "frame", "run", "stop"):
-            job_toolbar.addAction(self.actions[key])
+            button = QtWidgets.QToolButton()
+            button.setDefaultAction(self.actions[key])
+            button.setText(job_labels[key])
+            button.setToolButtonStyle(
+                QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly
+            )
+            job_toolbar.addWidget(button)
 
         self.palette = LayerPaletteBar()
         palette_toolbar = QtWidgets.QToolBar("Layer palette", self)
@@ -416,57 +486,76 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel = ObjectPanel()
         self.transform_panel = TransformPanel()
         self.camera_panel = CameraPanel()
+        self.camera_panel.set_focus_controls(
+            dict(self.runtime.settings.camera.controls)
+        )
         self.machine_panel = MachinePanel()
         self.material_panel = MaterialPanel(self.material_database)
         self.console_panel = ConsolePanel()
         self.job_panel = JobPanel()
         self.gcode_preview = QtWidgets.QPlainTextEdit()
         self.gcode_preview.setReadOnly(True)
-        self.gcode_preview.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        self.gcode_preview.setLineWrapMode(
+            QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap
+        )
+
+        self.inspector_tabs = InspectorTabs(self)
+        self.inspector_tabs.add_panel("objects", "Objects", self.object_panel)
+        self.inspector_tabs.add_panel("transform", "Transform", self.transform_panel)
+        self.inspector_tabs.add_panel("camera", "Camera", self.camera_panel)
+        self.inspector_tabs.add_panel("machine", "Machine", self.machine_panel)
+        self.inspector_tabs.add_panel("materials", "Materials", self.material_panel)
+        self.inspector_tabs.add_panel("job", "Job", self.job_panel)
 
         right = QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         bottom = QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
-        self.layer_dock = self._dock("Cuts / Layers", "layersDock", self.layer_panel, right)
-        self.object_dock = self._dock("Objects", "objectsDock", self.object_panel, right)
-        self.transform_dock = self._dock("Transform", "transformDock", self.transform_panel, right)
-        self.camera_dock = self._dock("Camera", "cameraDock", self.camera_panel, right)
-        self.machine_dock = self._dock("Move / Machine", "machineDock", self.machine_panel, right)
-        self.material_dock = self._dock("Material library", "materialDock", self.material_panel, right)
-        self.job_dock = self._dock("Job control", "jobDock", self.job_panel, right)
-        self.console_dock = self._dock("Console", "consoleDock", self.console_panel, bottom)
-        self.preview_dock = self._dock("G-code preview", "gcodeDock", self.gcode_preview, bottom)
+        self.layer_scroll = PanelScrollArea(self.layer_panel, self)
+        self.layer_scroll.setProperty("panelKey", "layers")
+        self.layer_dock = self._dock(
+            "Cuts / Layers",
+            "layersDock",
+            self.layer_scroll,
+            right,
+        )
+        self.inspector_dock = self._dock(
+            "Inspector",
+            "inspectorDock",
+            self.inspector_tabs,
+            right,
+        )
+        self.inspector_dock.setMinimumWidth(360)
+        self.console_dock = self._dock(
+            "Console",
+            "consoleDock",
+            self.console_panel,
+            bottom,
+        )
+        self.preview_dock = self._dock(
+            "G-code preview",
+            "gcodeDock",
+            self.gcode_preview,
+            bottom,
+        )
+
         self.splitDockWidget(
             self.layer_dock,
-            self.object_dock,
+            self.inspector_dock,
             QtCore.Qt.Orientation.Vertical,
         )
-        for dock in (
-            self.transform_dock,
-            self.camera_dock,
-            self.machine_dock,
-            self.material_dock,
-            self.job_dock,
-        ):
-            self.tabifyDockWidget(self.object_dock, dock)
         self.tabifyDockWidget(self.console_dock, self.preview_dock)
         self.resizeDocks(
-            [self.layer_dock, self.object_dock],
-            [310, 360],
+            [self.layer_dock, self.inspector_dock],
+            [280, 430],
             QtCore.Qt.Orientation.Vertical,
         )
         self.layer_dock.raise_()
-        self.object_dock.raise_()
+        self.inspector_dock.raise_()
         self.console_dock.raise_()
 
         dock_menu = self.menuBar().addMenu("&Panels")
         for dock in (
             self.layer_dock,
-            self.object_dock,
-            self.transform_dock,
-            self.camera_dock,
-            self.machine_dock,
-            self.material_dock,
-            self.job_dock,
+            self.inspector_dock,
             self.console_dock,
             self.preview_dock,
         ):
@@ -474,9 +563,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _create_status_bar(self) -> None:
         self.cursor_label = QtWidgets.QLabel("X —  Y —")
+        self.selection_label = QtWidgets.QLabel("0 objects selected")
         self.zoom_label = QtWidgets.QLabel("Zoom —")
         self.runtime_label = QtWidgets.QLabel("Starting core services…")
         self.statusBar().addWidget(self.cursor_label)
+        self.statusBar().addWidget(self.selection_label)
         self.statusBar().addPermanentWidget(self.zoom_label)
         self.statusBar().addPermanentWidget(self.runtime_label)
 
@@ -491,7 +582,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.workspace.objectMoveCommitted.connect(self._object_moved)
         self.workspace.deleteRequested.connect(self.delete_selection)
 
-        self.palette.layerSelected.connect(self.set_active_layer)
+        self.palette.layerSelected.connect(self._palette_layer_selected)
         self.layer_panel.activeLayerChanged.connect(self.set_active_layer)
         self.layer_panel.layerEdited.connect(self._layer_edited)
         self.layer_panel.addLayerRequested.connect(self.add_layer)
@@ -504,8 +595,21 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.transform_panel.assignLayerRequested.connect(self._assign_layer)
 
         self.camera_panel.refreshRequested.connect(self.controller.refresh_camera_image)
+        self.camera_panel.liveChanged.connect(self.controller.set_live_camera)
+        self.camera_panel.refreshIntervalChanged.connect(
+            self.controller.set_live_camera_interval
+        )
         self.camera_panel.captureRequested.connect(self.controller.capture_camera_still)
         self.camera_panel.opacityChanged.connect(self.workspace.set_camera_opacity)
+        self.camera_panel.focusApplyRequested.connect(
+            self.controller.apply_camera_focus
+        )
+        self.camera_panel.focusSaveRequested.connect(
+            self.controller.save_camera_focus
+        )
+        self.camera_panel.sharpnessRequested.connect(
+            self.controller.measure_camera_sharpness
+        )
         self.camera_panel.lensCalibrationRequested.connect(
             lambda: self._calibration_message("Lens calibration")
         )
@@ -530,7 +634,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.job_panel.stopRequested.connect(self.controller.emergency_stop)
 
         self.controller.statusChanged.connect(self._runtime_status)
-        self.controller.cameraImageReady.connect(self.workspace.set_camera_image)
+        self.controller.cameraImageReady.connect(self._camera_image_ready)
+        self.controller.cameraFocusChanged.connect(
+            self._camera_focus_changed
+        )
         self.controller.errorOccurred.connect(self.show_error)
         self.controller.notice.connect(self.show_notice)
         self.controller.busyChanged.connect(self._busy_changed)
@@ -571,6 +678,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     self._expanding_group_selection = False
                 object_ids = list(expanded)
         objects = [known[object_id] for object_id in object_ids]
+        count = len(objects)
+        self.selection_label.setText(
+            "0 objects selected"
+            if count == 0
+            else f"{count} object{'s' if count != 1 else ''} selected"
+        )
         self.object_panel.set_selection(object_ids)
         self.transform_panel.set_selection(objects, self.document)
 
@@ -593,6 +706,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.active_layer_id = layer_id
         self.layer_panel.set_document(self.document, layer_id)
         self.palette.set_layers(self.document.layers, layer_id)
+
+    def _palette_layer_selected(self, layer_id: str) -> None:
+        self.set_active_layer(layer_id)
+        selected = self.workspace.selected_object_ids()
+        changed = [
+            object_id
+            for object_id in selected
+            if self.document.get_object(object_id).layer_id != layer_id
+        ]
+        if changed:
+            layer = self.document.get_layer(layer_id)
+            self._assign_layer(changed, layer_id)
+            self.show_notice(
+                f"Assigned {len(changed)} selected object"
+                f"{'s' if len(changed) != 1 else ''} to {layer.name}"
+            )
 
     def apply_material_preset(self, preset: MaterialPreset) -> None:
         layer = self.document.get_layer(self.active_layer_id)
@@ -1089,11 +1218,29 @@ class E3MainWindow(QtWidgets.QMainWindow):
             arm_phrase=phrase,
         )
 
+    def _camera_image_ready(self, image: QtGui.QImage) -> None:
+        self.workspace.set_camera_image(image)
+        self.camera_panel.set_image_updated()
+
+    def _camera_focus_changed(
+        self,
+        payload: dict[str, Any],
+    ) -> None:
+        self.camera_panel.set_focus_result(payload)
+        if payload.get("changed"):
+            self.show_notice(
+                "Camera focus changed. Verify or redo lens and "
+                "bed calibration before precision work."
+            )
+
     def _runtime_status(self, status: dict[str, Any]) -> None:
         state = status.get("runtime_state", "unknown")
         camera = status.get("camera")
         machine = status.get("machine")
         self.camera_panel.set_status(camera)
+        self.camera_panel.set_calibration_ready(
+            bool((status.get("bed") or {}).get("calibrated", False))
+        )
         self.machine_panel.set_status(machine)
         if machine:
             self.console_panel.set_lines(list(machine.get("log", [])))
@@ -1213,23 +1360,35 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _reset_window_size(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        settings.remove("mainWindow/geometry-v2")
+        settings.remove("mainWindow/geometry-v3")
         self.showNormal()
         self._ensure_window_visible(reset_size=True)
 
     def _restore_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        geometry = settings.value("mainWindow/geometry-v2")
-        state = settings.value("mainWindow/state-v2")
+        geometry = settings.value("mainWindow/geometry-v3")
+        state = settings.value("mainWindow/state-v3")
         restored_geometry = bool(geometry and self.restoreGeometry(geometry))
         if state:
             self.restoreState(state)
+        inspector_index = int(
+            settings.value("mainWindow/inspector-tab-v3", 0)
+        )
+        if hasattr(self, "inspector_tabs"):
+            self.inspector_tabs.setCurrentIndex(
+                max(0, min(inspector_index, self.inspector_tabs.count() - 1))
+            )
         self._ensure_window_visible(reset_size=not restored_geometry)
 
     def _save_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        settings.setValue("mainWindow/geometry-v2", self.saveGeometry())
-        settings.setValue("mainWindow/state-v2", self.saveState())
+        settings.setValue("mainWindow/geometry-v3", self.saveGeometry())
+        settings.setValue("mainWindow/state-v3", self.saveState())
+        if hasattr(self, "inspector_tabs"):
+            settings.setValue(
+                "mainWindow/inspector-tab-v3",
+                self.inspector_tabs.currentIndex(),
+            )
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         if self._closing:
