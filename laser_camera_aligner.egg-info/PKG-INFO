@@ -14,6 +14,8 @@ Description-Content-Type: text/markdown
 License-File: LICENSE
 Requires-Dist: numpy<3,>=1.24
 Requires-Dist: opencv-contrib-python-headless<5,>=4.8
+Provides-Extra: desktop
+Requires-Dist: PySide6<7,>=6.7; extra == "desktop"
 Dynamic: license-file
 
 # Laser Camera Aligner

@@ -165,3 +165,93 @@ def detect_crosshair_grid(
         'confidence': confidence,
         'orientation': 'X+ camera-right; Y+ camera-up',
     }
+
+
+def detect_crosshairs_near(
+    image: np.ndarray,
+    expected_points: list[dict[str, Any]],
+    search_radius_px: int = 55,
+) -> dict[str, Any]:
+    """Refine approximate crosshair locations without needing a plate boundary."""
+    if image is None or image.size == 0:
+        return {"detected": False, "reason": "Empty image", "points": []}
+    if len(expected_points) != 25:
+        return {
+            "detected": False,
+            "reason": f"Need 25 expected locations; received {len(expected_points)}",
+            "points": [],
+        }
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+    response = _cross_response(gray)
+    height, width = gray.shape[:2]
+    refined = []
+    scores = []
+
+    for target in expected_points:
+        expected_x = float(target["image_x"])
+        expected_y = float(target["image_y"])
+        x0 = max(0, int(round(expected_x)) - search_radius_px)
+        x1 = min(width, int(round(expected_x)) + search_radius_px + 1)
+        y0 = max(0, int(round(expected_y)) - search_radius_px)
+        y1 = min(height, int(round(expected_y)) + search_radius_px + 1)
+        roi = response[y0:y1, x0:x1]
+        if roi.size == 0:
+            return {
+                "detected": False,
+                "reason": f"Search area for fiducial {target['id']} is outside the image",
+                "points": refined,
+            }
+
+        _, peak, _, location = cv2.minMaxLoc(roi)
+        px = float(x0 + location[0])
+        py = float(y0 + location[1])
+
+        radius = 7
+        lx0 = max(0, int(px) - radius)
+        lx1 = min(width, int(px) + radius + 1)
+        ly0 = max(0, int(py) - radius)
+        ly1 = min(height, int(py) + radius + 1)
+        local = response[ly0:ly1, lx0:lx1]
+        local = np.maximum(local - float(np.percentile(local, 35)), 0)
+        total = float(local.sum())
+        if total > 0:
+            yy, xx = np.mgrid[ly0:ly1, lx0:lx1]
+            px = float((xx * local).sum() / total)
+            py = float((yy * local).sum() / total)
+
+        scores.append(float(peak))
+        refined.append(
+            {
+                "id": int(target["id"]),
+                "image_x": px,
+                "image_y": py,
+                "machine_x": float(target["machine_x"]),
+                "machine_y": float(target["machine_y"]),
+                "label": f"Auto fiducial {int(target['id'])}",
+                "score": float(peak),
+                "seed_x": expected_x,
+                "seed_y": expected_y,
+                "shift_px": float(np.hypot(px - expected_x, py - expected_y)),
+            }
+        )
+
+    score_array = np.asarray(scores, dtype=np.float64)
+    median = float(np.median(score_array))
+    minimum = float(np.min(score_array))
+    max_shift = max(point["shift_px"] for point in refined)
+
+    confidence = "high"
+    if median <= 0 or minimum < median * 0.22 or max_shift > search_radius_px * 0.9:
+        confidence = "low"
+    elif minimum < median * 0.42 or max_shift > search_radius_px * 0.65:
+        confidence = "medium"
+
+    refined.sort(key=lambda point: point["id"])
+    return {
+        "detected": True,
+        "points": refined,
+        "confidence": confidence,
+        "orientation": "Seeded from current mapping; refined to nearby burned crosses",
+        "maximum_seed_shift_px": float(max_shift),
+    }

@@ -22,15 +22,26 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Image Processing"
 ]
 
+[project.optional-dependencies]
+desktop = [
+  "PySide6>=6.7,<7"
+]
+
 [project.scripts]
 laser-camera-aligner = "laser_aligner.__main__:main"
+e3-positioning-system = "laser_aligner.desktop.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["laser_aligner*"]
 
 [tool.setuptools.package-data]
-laser_aligner = ["web/*.html", "web/*.js", "web/*.css"]
+laser_aligner = [
+  "web/*.html",
+  "web/*.js",
+  "web/*.css",
+  "desktop/assets/*.svg"
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

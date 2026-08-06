@@ -24,7 +24,7 @@ from .gcode.generator import (
 )
 from .geometry.svg import parse_svg
 from .machine.service import MachineService, list_serial_ports
-from .vision.fiducials import detect_aruco_markers, detect_crosshair_grid
+from .vision.fiducials import detect_aruco_markers, detect_crosshair_grid, detect_crosshairs_near
 from .vision.workpiece import detect_workpiece
 
 LOGGER = logging.getLogger(__name__)
@@ -171,7 +171,37 @@ class AppContext:
         return {"markers": detect_aruco_markers(image)}
 
     def detect_bed_cross_grid(self) -> dict[str, Any]:
-        return detect_crosshair_grid(self.bed_reference())
+        image = self.bed_reference()
+        coordinates = (20.0, 65.0, 110.0, 155.0, 200.0)
+
+        if self.bed.calibration is None:
+            return {
+                "detected": False,
+                "reason": (
+                    "A rough existing bed mapping is required for boundary-independent "
+                    "detection. Keep the current manual mapping, capture the burned grid, "
+                    "then run detection."
+                ),
+                "points": [],
+            }
+
+        expected_points: list[dict[str, Any]] = []
+        identifier = 1
+        for machine_y in coordinates:
+            for machine_x in coordinates:
+                image_x, image_y = self.bed.mm_to_image(machine_x, machine_y)
+                expected_points.append(
+                    {
+                        "id": identifier,
+                        "image_x": image_x,
+                        "image_y": image_y,
+                        "machine_x": machine_x,
+                        "machine_y": machine_y,
+                    }
+                )
+                identifier += 1
+
+        return detect_crosshairs_near(image, expected_points, search_radius_px=65)
 
     def replace_bed_points(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_points = payload.get("points")
