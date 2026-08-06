@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import logging
 import re
+import threading
 import time
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import cv2
 import numpy as np
@@ -34,6 +36,7 @@ _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 class AppContext:
     def __init__(self, settings: Settings, hardware_enabled: bool = False):
         self.settings = settings
+        self.hardware_enabled = bool(hardware_enabled)
         settings.app.data_dir.mkdir(parents=True, exist_ok=True)
         for directory in ("captures", "calibration", "generated", "logs"):
             (settings.app.data_dir / directory).mkdir(parents=True, exist_ok=True)
@@ -47,6 +50,9 @@ class AppContext:
         self.bed_reference_path = settings.app.data_dir / "bed_reference.jpg"
         self.workspace_path = settings.app.data_dir / "captures" / "workspace.jpg"
         self._camera_start_error: str | None = None
+        self._simulation_workspace_lock = threading.RLock()
+        self._simulation_workspace_image: np.ndarray | None = None
+        self._simulation_workspace_info: dict[str, Any] | None = None
 
     def start(self) -> None:
         if self.settings.camera.autostart:
@@ -71,6 +77,7 @@ class AppContext:
                 LOGGER.error("Simulator did not connect: %s", exc)
 
     def stop(self) -> None:
+        self.clear_simulation_workspace_frame()
         try:
             self.machine.disconnect()
         finally:
@@ -112,6 +119,9 @@ class AppContext:
         return self.camera_frame(undistort=True)
 
     def rectified_frame(self, refresh: bool = True) -> np.ndarray:
+        with self._simulation_workspace_lock:
+            if self._simulation_workspace_image is not None:
+                return self._simulation_workspace_image.copy()
         if not refresh and self.workspace_path.exists():
             image = cv2.imread(str(self.workspace_path), cv2.IMREAD_COLOR)
             if image is not None:
@@ -121,6 +131,93 @@ class AppContext:
         self.workspace_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(self.workspace_path), rectified, [cv2.IMWRITE_JPEG_QUALITY, 96])
         return rectified
+
+    @property
+    def simulation_workspace_frame_supported(self) -> bool:
+        """Whether a memory-only corrected test frame is safe in this process."""
+
+        return bool(
+            self.settings.app.simulation
+            and self.settings.machine.backend == "simulator"
+            and not self.hardware_enabled
+        )
+
+    @property
+    def has_simulation_workspace_frame(self) -> bool:
+        with self._simulation_workspace_lock:
+            return self._simulation_workspace_image is not None
+
+    def simulation_workspace_frame_info(self) -> dict[str, Any] | None:
+        with self._simulation_workspace_lock:
+            return copy.deepcopy(self._simulation_workspace_info)
+
+    def simulation_workspace_frame_status(self) -> dict[str, Any] | None:
+        """Return lightweight source state for frequently-polled status payloads."""
+
+        with self._simulation_workspace_lock:
+            if self._simulation_workspace_info is None:
+                return None
+            return {
+                key: self._simulation_workspace_info[key]
+                for key in (
+                    "active",
+                    "source_name",
+                    "width",
+                    "height",
+                    "pixels_per_mm",
+                )
+            }
+
+    def set_simulation_workspace_frame(
+        self,
+        image: np.ndarray,
+        *,
+        source_name: str,
+        metadata: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Freeze one corrected full-bed frame for safe simulation workflows."""
+
+        if not self.simulation_workspace_frame_supported:
+            raise RuntimeError(
+                "Test images require simulation mode, the simulator machine backend, "
+                "and a process without hardware access"
+            )
+        if not isinstance(image, np.ndarray) or image.size == 0:
+            raise ValueError("The corrected test image is empty")
+        if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
+            raise ValueError("The corrected test image must be an 8-bit BGR image")
+        work_area = self.settings.machine.work_area
+        pixels_per_mm = float(self.settings.calibration.bed.pixels_per_mm)
+        expected_width = max(1, int(round(work_area.width * pixels_per_mm)))
+        expected_height = max(1, int(round(work_area.height * pixels_per_mm)))
+        actual_height, actual_width = image.shape[:2]
+        if (actual_width, actual_height) != (expected_width, expected_height):
+            raise ValueError(
+                "The corrected test image must cover the complete work area at "
+                f"{pixels_per_mm:g} px/mm: expected {expected_width}x{expected_height}, "
+                f"got {actual_width}x{actual_height}"
+            )
+        label = str(source_name).strip()
+        if not label:
+            raise ValueError("The test-image source name must not be empty")
+        info = {
+            "active": True,
+            "source_name": label,
+            "width": expected_width,
+            "height": expected_height,
+            "pixels_per_mm": pixels_per_mm,
+            "metadata": copy.deepcopy(dict(metadata or {})),
+        }
+        replacement = np.ascontiguousarray(image).copy()
+        with self._simulation_workspace_lock:
+            self._simulation_workspace_image = replacement
+            self._simulation_workspace_info = info
+        return copy.deepcopy(info)
+
+    def clear_simulation_workspace_frame(self) -> None:
+        with self._simulation_workspace_lock:
+            self._simulation_workspace_image = None
+            self._simulation_workspace_info = None
 
     def synthetic_scene(self, scene: str) -> None:
         if not isinstance(self.camera, SyntheticCameraService):
@@ -319,6 +416,7 @@ class AppContext:
             "camera": camera_status,
             "lens": self.lens.status(),
             "bed": self.bed.status(),
+            "simulation_workspace_frame": self.simulation_workspace_frame_status(),
             "machine": self.machine.status(),
             "devices": {
                 "cameras": list_video_devices(),

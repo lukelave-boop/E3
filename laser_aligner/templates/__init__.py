@@ -17,6 +17,12 @@ from .model import (
     instantiate_template,
     template_from_project,
 )
+from .synthetic import (
+    SyntheticFeatureGroundTruth,
+    SyntheticTemplateFrame,
+    SyntheticTemplateGroundTruth,
+    generate_template_test_frame,
+)
 
 __all__ = [
     "TEMPLATE_EXTENSION",
@@ -32,7 +38,11 @@ __all__ = [
     "TemplateCatalog",
     "TemplateDiagnostic",
     "TemplateLibrary",
+    "SyntheticFeatureGroundTruth",
+    "SyntheticTemplateFrame",
+    "SyntheticTemplateGroundTruth",
     "build_rectangle_grid_objects",
+    "generate_template_test_frame",
     "instantiate_template",
     "template_from_rectangle_grid",
     "template_from_project",

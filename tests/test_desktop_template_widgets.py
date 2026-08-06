@@ -22,7 +22,13 @@ from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.template_panel import TemplatePanel
 from laser_aligner.desktop.workspace import WorkspaceView
-from laser_aligner.project import Bounds, CommandStack, ProjectDocument, SceneObject
+from laser_aligner.project import (
+    AddObjectCommand,
+    Bounds,
+    CommandStack,
+    ProjectDocument,
+    SceneObject,
+)
 from laser_aligner.templates import (
     CutTemplate,
     RectangleGridSpec,
@@ -514,6 +520,104 @@ def test_template_panel_rejects_unknown_or_deleted_match_ids(
     qt_application.processEvents()
 
 
+def test_template_panel_simulation_test_image_controls_are_stateful(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    panel.set_templates([_template_summary("template-a", "Alpha labels")])
+
+    assert panel.test_image_group.isHidden()
+    assert not panel.load_test_image_button.isEnabled()
+    assert not panel.generate_test_image_button.isEnabled()
+    assert not panel.return_to_camera_button.isEnabled()
+
+    loaded: list[bool] = []
+    generated: list[bool] = []
+    returned: list[bool] = []
+    panel.loadTestImageRequested.connect(lambda: loaded.append(True))
+    panel.generateTestImageRequested.connect(lambda: generated.append(True))
+    panel.returnToCameraRequested.connect(lambda: returned.append(True))
+
+    panel.set_test_image_available(True)
+    assert not panel.test_image_group.isHidden()
+    assert panel.test_image_source.text() == "Synthetic camera"
+    assert panel.load_test_image_button.isEnabled()
+    assert panel.generate_test_image_button.isEnabled()
+    assert not panel.return_to_camera_button.isEnabled()
+    panel.load_test_image_button.click()
+    panel.generate_test_image_button.click()
+    assert loaded == [True]
+    assert generated == [True]
+
+    panel.set_test_image_source(True, "Generated: Alpha labels")
+    assert "TEST IMAGE" in panel.test_image_source.text()
+    assert "FROZEN" in panel.test_image_source.text()
+    assert "Alpha labels" in panel.test_image_source.text()
+    assert panel.return_to_camera_button.isEnabled()
+    panel.return_to_camera_button.click()
+    assert returned == [True]
+
+    panel.set_busy(True)
+    assert not panel.load_test_image_button.isEnabled()
+    assert not panel.generate_test_image_button.isEnabled()
+    assert not panel.return_to_camera_button.isEnabled()
+    panel.set_busy(False)
+
+    panel.set_templates([])
+    assert panel.load_test_image_button.isEnabled()
+    assert not panel.generate_test_image_button.isEnabled()
+    assert panel.return_to_camera_button.isEnabled()
+
+    panel.set_test_image_available(False)
+    assert panel.test_image_group.isHidden()
+    assert panel.test_image_source.text() == "Synthetic camera"
+    assert not panel.load_test_image_button.isEnabled()
+    assert not panel.generate_test_image_button.isEnabled()
+    assert not panel.return_to_camera_button.isEnabled()
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_template_panel_unrelated_busy_round_trip_preserves_match_summary(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    panel.set_templates([_template_summary("template-a", "Alpha labels")])
+    panel.set_calibration_ready(True)
+    panel.set_match_result(
+        {
+            "template_id": "template-a",
+            "center_x_mm": 102.0,
+            "center_y_mm": 97.5,
+            "rotation_deg": 3.0,
+            "confidence": 0.94,
+            "rms_error_mm": 0.18,
+            "matched_count": 11,
+            "feature_count": 12,
+        }
+    )
+    summary = panel.match_status.text()
+    assert "94% match" in summary
+    assert "0.18 mm RMS" in summary
+
+    panel.set_busy(True)
+    assert panel.match_status.text() == summary
+    assert not panel.auto_button.isEnabled()
+    assert not panel.match_selected_button.isEnabled()
+    assert not panel.apply_button.isEnabled()
+
+    panel.set_busy(False)
+    assert panel.match_status.text() == summary
+    assert panel.auto_button.isEnabled()
+    assert panel.match_selected_button.isEnabled()
+    assert panel.apply_button.isEnabled()
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
 def test_controller_rejects_a_single_feature_template_match() -> None:
     alignment = _alignment(
         matched_count=1,
@@ -743,6 +847,64 @@ def test_main_window_applies_template_as_one_undoable_batch(
     assert window.document.objects == []
     assert window.history.redo()
     assert [item.id for item in window.document.objects] == created_ids
+
+
+def test_test_image_source_changes_clear_only_frame_specific_review_state() -> None:
+    document = ProjectDocument.new(
+        work_area=Bounds(0.0, 0.0, 220.0, 220.0)
+    )
+    history = CommandStack()
+    history.execute(
+        AddObjectCommand(
+            document,
+            SceneObject.rectangle(document.active_layer_id),
+        )
+    )
+
+    class SourceSwitchHarness:
+        def __init__(self) -> None:
+            self.document = document
+            self.history = history
+            self.trace_clear_count = 0
+            self.template_clear_messages: list[bool] = []
+            self.selected_panels: list[str] = []
+            self.return_count = 0
+            self.inspector_tabs = SimpleNamespace(
+                select_panel=self.selected_panels.append
+            )
+            self.controller = SimpleNamespace(
+                return_to_synthetic_camera=self._return_to_camera
+            )
+
+        def _clear_trace_preview(self) -> None:
+            self.trace_clear_count += 1
+
+        def _clear_template_preview(self, show_message: bool = True) -> None:
+            self.template_clear_messages.append(show_message)
+
+        def _return_to_camera(self) -> None:
+            self.return_count += 1
+
+    harness = SourceSwitchHarness()
+    initial_revision = document.revision
+    initial_history_depth = history.depth
+
+    E3MainWindow._test_image_source_replaced(harness)
+
+    assert harness.trace_clear_count == 1
+    assert harness.template_clear_messages == [False]
+    assert harness.selected_panels == ["templates"]
+    assert harness.return_count == 0
+    assert document.revision == initial_revision
+    assert history.depth == initial_history_depth
+
+    E3MainWindow.return_to_synthetic_camera(harness)
+
+    assert harness.trace_clear_count == 2
+    assert harness.template_clear_messages == [False, False]
+    assert harness.return_count == 1
+    assert document.revision == initial_revision
+    assert history.depth == initial_history_depth
 
 
 def test_main_window_adds_designed_grid_as_one_undoable_batch() -> None:
@@ -1270,6 +1432,54 @@ def test_workspace_template_preview_is_transient_and_independent(
 
     view.clear_trace_preview()
     view.clear_toolpath_preview()
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_workspace_trace_preview_prefers_vector_contour_with_legacy_fallback(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    detection = {
+        "id": "trace-vector",
+        "index": 1,
+        "source": "direct",
+        "center_mm": [50.0, 60.0],
+        "contour_mm": [[10.0, 10.0], [90.0, 10.0], [90.0, 90.0]],
+        "vector_contour_mm": [
+            [40.0, 50.0],
+            [60.0, 50.0],
+            [60.0, 70.0],
+            [40.0, 70.0],
+        ],
+    }
+
+    view.set_trace_preview([detection], {"trace-vector"})
+    proposed = next(
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    )
+    proposed_bounds = proposed.path().boundingRect()
+    assert proposed_bounds.left() == pytest.approx(40.0)
+    assert proposed_bounds.right() == pytest.approx(60.0)
+    assert proposed_bounds.top() == pytest.approx(-70.0)
+    assert proposed_bounds.bottom() == pytest.approx(-50.0)
+
+    detection.pop("vector_contour_mm")
+    view.set_trace_preview([detection], {"trace-vector"})
+    fallback = next(
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    )
+    fallback_bounds = fallback.path().boundingRect()
+    assert fallback_bounds.left() == pytest.approx(10.0)
+    assert fallback_bounds.right() == pytest.approx(90.0)
+    assert fallback_bounds.top() == pytest.approx(-90.0)
+    assert fallback_bounds.bottom() == pytest.approx(-10.0)
+
     view.close()
     view.deleteLater()
     qt_application.processEvents()

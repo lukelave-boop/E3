@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import pytest
 
 from laser_aligner.config import WorkArea
 from laser_aligner.vision.object_trace import (
     TraceOptions,
+    _long_axis_rect,
+    _rounded_fit,
+    _rounded_mask,
     auto_target_hue,
     detect_objects,
     sample_color,
@@ -98,6 +102,12 @@ def test_repeated_label_grid_detects_and_infers_occluded_objects():
     assert result.direct_count >= 12
     assert result.inferred_count >= 2
     assert all(not item.selected_default for item in result.detections if item.source == "inferred")
+    assert all(item.vector_contour_mm for item in result.detections)
+    assert all(
+        item.vector_contour_mm == item.contour_mm
+        for item in result.detections
+        if item.source == "inferred"
+    )
 
     direct = [item for item in result.detections if item.source == "direct"]
     median_width = float(np.median([item.width_mm for item in direct]))
@@ -141,6 +151,73 @@ def test_border_offset_expands_fitted_output():
     base_width = float(np.median([item.width_mm for item in base.detections]))
     expanded_width = float(np.median([item.width_mm for item in expanded.detections]))
     assert abs((expanded_width - base_width) - 2.0) < 0.2
+
+
+def test_rounded_fit_supports_near_capsule_corner_radii():
+    image = np.full((400, 400, 3), (210, 210, 210), dtype=np.uint8)
+    x, y, width, height, radius = 100, 150, 200, 80, 38
+    color = (35, 55, 220)
+    cv2.rectangle(
+        image,
+        (x + radius, y),
+        (x + width - radius, y + height),
+        color,
+        -1,
+    )
+    cv2.rectangle(
+        image,
+        (x, y + radius),
+        (x + width, y + height - radius),
+        color,
+        -1,
+    )
+    for center in (
+        (x + radius, y + radius),
+        (x + width - radius, y + radius),
+        (x + width - radius, y + height - radius),
+        (x + radius, y + height - radius),
+    ):
+        cv2.circle(image, center, radius, color, -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            min_saturation=50,
+            min_area_mm2=10,
+            min_width_mm=10,
+            min_height_mm=10,
+            regular_grid=False,
+            output_mode="rounded",
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        4.0,
+    )
+
+    assert result.direct_count == 1
+    assert result.detections[0].corner_radius_mm == pytest.approx(9.5, abs=0.75)
+
+
+@pytest.mark.parametrize(
+    ("width", "height", "radius"),
+    ((312, 84, 12), (314, 86, 12), (315, 87, 37)),
+)
+def test_rounded_fit_recovers_discrete_mask_radius_without_off_by_one(
+    width: int,
+    height: int,
+    radius: int,
+) -> None:
+    mask = _rounded_mask(width, height, radius)
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    assert len(contours) == 1
+    rectangle = _long_axis_rect(contours[0])
+    assert rectangle is not None
+
+    fitted_radius, fitted_iou = _rounded_fit(contours[0], rectangle)
+
+    assert fitted_radius == pytest.approx(radius)
+    assert fitted_iou == pytest.approx(1.0)
 
 
 def test_non_grid_mode_accepts_mixed_sizes():
@@ -204,3 +281,4 @@ def test_non_grid_mode_preserves_irregular_colored_silhouette():
     detection = result.detections[0]
     assert detection.shape == "contour"
     assert len(detection.contour_mm) >= 6
+    assert detection.vector_contour_mm == detection.contour_mm

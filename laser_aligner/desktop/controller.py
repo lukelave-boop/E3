@@ -68,6 +68,7 @@ class DesktopController(QtCore.QObject):
     traceResultReady = QtCore.Signal(dict)
     traceColorReady = QtCore.Signal(dict)
     templateMatchReady = QtCore.Signal(dict)
+    simulationFrameChanged = QtCore.Signal(dict)
 
     def __init__(
         self,
@@ -80,6 +81,10 @@ class DesktopController(QtCore.QObject):
         self._active_tasks = 0
         self._tasks: set[FunctionTask] = set()
         self._camera_refresh_in_flight = False
+        self._camera_refresh_generation: int | None = None
+        self._camera_source_generation = 0
+        self._trace_request_id = 0
+        self._trace_review_active = False
         self._template_match_request_id = 0
         self._template_review_active = False
         self._live_camera_enabled = False
@@ -103,13 +108,14 @@ class DesktopController(QtCore.QObject):
         self.poll_status()
         if self.runtime.context.bed.calibration is not None:
             self.refresh_camera_image()
-            if self._live_camera_enabled and not self._template_review_active:
-                self._camera_live_timer.start()
+            self._sync_camera_timer()
         self.notice.emit("Core services started")
 
     def stop(self) -> None:
         self._poll_timer.stop()
         self._camera_live_timer.stop()
+        self._trace_request_id += 1
+        self._trace_review_active = False
         self._template_match_request_id += 1
         self._template_review_active = False
         self.thread_pool.waitForDone(5000)
@@ -179,40 +185,153 @@ class DesktopController(QtCore.QObject):
         if (
             not self.runtime.running
             or self._camera_refresh_in_flight
-            or self._template_review_active
+            or self._camera_review_active()
             or self.runtime.context.bed.calibration is None
         ):
             return
+        if self.runtime.context.has_simulation_workspace_frame:
+            self.cameraImageReady.emit(
+                image_to_qimage(self.runtime.context.rectified_frame(refresh=True))
+            )
+            return
+        source_generation = self._camera_source_generation
         self._camera_refresh_in_flight = True
+        self._camera_refresh_generation = source_generation
         task = self._run(
             lambda: image_to_qimage(self.runtime.context.rectified_frame(refresh=True)),
-            on_success=self._camera_refresh_ready,
+            on_success=lambda image, source_generation=source_generation: (
+                self._camera_refresh_ready(image, source_generation)
+            ),
+            on_failure=lambda message, source_generation=source_generation: (
+                self._camera_refresh_failed(message, source_generation)
+            ),
             label="Corrected bed-image refresh",
             show_busy=False,
         )
         task.signals.finished.connect(
-            self._camera_refresh_finished,
+            lambda source_generation=source_generation: (
+                self._camera_refresh_finished(source_generation)
+            ),
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
 
     @QtCore.Slot()
-    def _camera_refresh_finished(self) -> None:
+    def _camera_refresh_finished(
+        self,
+        source_generation: int | None = None,
+    ) -> None:
+        if (
+            source_generation is not None
+            and source_generation != self._camera_refresh_generation
+        ):
+            return
         self._camera_refresh_in_flight = False
+        self._camera_refresh_generation = None
 
-    @QtCore.Slot(object)
-    def _camera_refresh_ready(self, image: QtGui.QImage) -> None:
-        if not self._template_review_active:
+    def _camera_refresh_ready(
+        self,
+        image: QtGui.QImage,
+        source_generation: int | None = None,
+    ) -> None:
+        if (
+            source_generation is not None
+            and source_generation != self._camera_source_generation
+        ):
+            return
+        if not self._camera_review_active():
             self.cameraImageReady.emit(image)
+
+    def _camera_refresh_failed(
+        self,
+        message: str,
+        source_generation: int,
+    ) -> None:
+        if source_generation != self._camera_source_generation:
+            return
+        self.errorOccurred.emit(f"Corrected bed-image refresh failed: {message}")
+
+    def _sync_camera_timer(self) -> None:
+        context = getattr(self.runtime, "context", None)
+        test_frame_active = bool(
+            context is not None
+            and getattr(context, "has_simulation_workspace_frame", False)
+        )
+        should_run = bool(
+            self._live_camera_enabled
+            and self.runtime.running
+            and not self._camera_review_active()
+            and not test_frame_active
+        )
+        if should_run:
+            self._camera_live_timer.start()
+        else:
+            self._camera_live_timer.stop()
+
+    def _camera_review_active(self) -> bool:
+        return self._template_review_active or self._trace_review_active
+
+    def _resume_live_camera_after_review(self, was_held: bool) -> None:
+        self._sync_camera_timer()
+        if (
+            was_held
+            and not self._camera_review_active()
+            and self._live_camera_enabled
+        ):
+            self.refresh_camera_image()
+
+    def activate_simulation_workspace_frame(
+        self,
+        image: np.ndarray,
+        *,
+        source_name: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Activate one frozen corrected frame behind all desktop vision tools."""
+
+        info = self.runtime.context.set_simulation_workspace_frame(
+            image,
+            source_name=source_name,
+            metadata=metadata,
+        )
+        self._camera_source_generation += 1
+        self._camera_refresh_in_flight = False
+        self._camera_refresh_generation = None
+        self._trace_request_id += 1
+        self._trace_review_active = False
+        self._template_match_request_id += 1
+        self._template_review_active = False
+        self._sync_camera_timer()
+        self.cameraImageReady.emit(image_to_qimage(self.runtime.context.rectified_frame()))
+        self.simulationFrameChanged.emit(info)
+        self.notice.emit(f"Using frozen test image: {source_name}")
+        return info
+
+    def return_to_synthetic_camera(self) -> None:
+        """Clear the ephemeral corrected-frame override and resume live simulation."""
+
+        if not self.runtime.context.has_simulation_workspace_frame:
+            return
+        self.runtime.context.clear_simulation_workspace_frame()
+        self._camera_source_generation += 1
+        self._camera_refresh_in_flight = False
+        self._camera_refresh_generation = None
+        self._trace_request_id += 1
+        self._trace_review_active = False
+        self._template_match_request_id += 1
+        self._template_review_active = False
+        self.simulationFrameChanged.emit(
+            {"active": False, "source_name": "Synthetic camera", "metadata": {}}
+        )
+        self._sync_camera_timer()
+        self.refresh_camera_image()
+        self.notice.emit("Returned to the synthetic camera")
 
     def set_template_review_active(self, active: bool) -> None:
         """Freeze live-camera replacement while an alignment overlay is reviewed."""
 
+        was_held = self._camera_review_active()
         self._template_review_active = bool(active)
-        if self._template_review_active:
-            self._camera_live_timer.stop()
-        elif self._live_camera_enabled and self.runtime.running:
-            self._camera_live_timer.start()
-            self.refresh_camera_image()
+        self._resume_live_camera_after_review(was_held)
 
     def cancel_template_match(self) -> None:
         """Invalidate any in-flight match result and resume normal camera updates."""
@@ -220,29 +339,26 @@ class DesktopController(QtCore.QObject):
         self._template_match_request_id += 1
         self.set_template_review_active(False)
 
+    def cancel_trace_detection(self) -> None:
+        """Invalidate trace work and release only the trace camera hold."""
+
+        self._trace_request_id += 1
+        was_held = self._camera_review_active()
+        self._trace_review_active = False
+        self._resume_live_camera_after_review(was_held)
+
     def set_live_camera(self, enabled: bool, interval_ms: int | None = None) -> None:
         self._live_camera_enabled = bool(enabled)
         if interval_ms is not None:
             self.set_live_camera_interval(interval_ms)
-        if (
-            self._live_camera_enabled
-            and self.runtime.running
-            and not self._template_review_active
-        ):
-            self._camera_live_timer.start()
+        self._sync_camera_timer()
+        if self._camera_live_timer.isActive():
             self.refresh_camera_image()
-        else:
-            self._camera_live_timer.stop()
 
     def set_live_camera_interval(self, interval_ms: int) -> None:
         self._live_camera_interval_ms = max(250, min(10_000, int(interval_ms)))
         self._camera_live_timer.setInterval(self._live_camera_interval_ms)
-        if (
-            self._live_camera_enabled
-            and self.runtime.running
-            and not self._template_review_active
-        ):
-            self._camera_live_timer.start()
+        self._sync_camera_timer()
 
     def capture_camera_still(self) -> None:
         self._run(
@@ -401,8 +517,12 @@ class DesktopController(QtCore.QObject):
         if self.runtime.context.bed.calibration is not None:
             self.refresh_camera_image()
 
+    def detect_trace_objects(self, raw_options: dict[str, Any]) -> int:
+        self._trace_request_id += 1
+        request_id = self._trace_request_id
+        self._trace_review_active = True
+        self._sync_camera_timer()
 
-    def detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
         def operation() -> dict[str, Any]:
             context = self.runtime.context
             if context.bed.calibration is None:
@@ -417,13 +537,43 @@ class DesktopController(QtCore.QObject):
                 self.runtime.settings.machine.work_area,
                 self.runtime.settings.calibration.bed.pixels_per_mm,
             )
-            return result.to_dict()
+            payload = result.to_dict()
+            payload["request_id"] = request_id
+            payload["camera_image"] = image_to_qimage(image)
+            return payload
 
         self._run(
             operation,
-            on_success=self.traceResultReady.emit,
+            on_success=lambda payload: self._trace_detection_complete(
+                request_id,
+                payload,
+            ),
+            on_failure=lambda message: self._trace_detection_failed(
+                request_id,
+                message,
+            ),
             label="Detect and trace objects",
         )
+        return request_id
+
+    @QtCore.Slot(int, object)
+    def _trace_detection_complete(
+        self,
+        request_id: int,
+        payload: dict[str, Any],
+    ) -> None:
+        if request_id != self._trace_request_id:
+            return
+        self.traceResultReady.emit(payload)
+
+    @QtCore.Slot(int, str)
+    def _trace_detection_failed(self, request_id: int, message: str) -> None:
+        if request_id != self._trace_request_id:
+            return
+        was_held = self._camera_review_active()
+        self._trace_review_active = False
+        self._resume_live_camera_after_review(was_held)
+        self.errorOccurred.emit(f"Detect and trace objects failed: {message}")
 
     @staticmethod
     def _template_viability_reasons(

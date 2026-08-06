@@ -43,13 +43,13 @@ camera/controller work through `DesktopController` worker tasks.
 |---|---|
 | `config.py` | JSON defaults, merging, validation, and resolved paths |
 | `storage.py` | Atomic JSON persistence used by calibration |
-| `camera/` | OpenCV/V4L2 capture, camera controls, and synthetic scenes |
+| `camera/` | OpenCV/V4L2 capture, camera controls, synthetic scenes, and portable corrected-test-image validation |
 | `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets |
 | `vision/` | Workpiece, fiducial, crosshair-grid, and camera-object detection |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
-| `templates/` | Versioned cut-template schema, rectangle-grid authoring, atomic library storage, project normalization, and rigid instantiation |
+| `templates/` | Versioned cut-template schema, rectangle-grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
 | `materials/` | SQLite material-preset library |
 | `machine/` | Safety policy, simulator, protocol probing, and serial transports |
 | `server.py` + `web/` | Local HTTP API and browser UI |
@@ -70,6 +70,19 @@ CameraService or SyntheticCameraService
   -> workspace background and optional vision detectors
 ```
 
+In safe simulation only, `AppContext` can replace the final corrected frame
+with a thread-safe, memory-only override. The source is either a validated
+top-down full-bed PNG/JPEG or a deterministic frame generated from template
+features at a known pose. `rectified_frame()` then exposes that same frozen
+frame to the workspace, object tracer, and template matcher. Source-generation
+tokens reject stale live-camera results, and clearing the override restores the
+synthetic camera. Template and trace review holds compose independently: either
+one prevents a live refresh from replacing the exact frame under review. Trace
+request tokens also reject late detection callbacks after a new request, clear,
+source change, or shutdown. The override is never written to the capture cache
+or project file and is unavailable when hardware access or a non-simulator
+machine backend is enabled.
+
 `LensCalibrator` stores captured checkerboard images, a detection cache, and the
 solved camera model. `BedMapper` stores image/machine point pairs plus forward
 and inverse homographies. Simulation startup creates a synthetic perspective
@@ -85,8 +98,15 @@ native calibration wizards are not implemented.
   machine-coordinate placement hints.
 - ArUco and crosshair-grid detection support bed mapping.
 - The object-tracing pipeline segments color or contrast, optionally fits a
-  regular grid and infers missing cells, then emits rounded or contour geometry
-  in machine millimetres.
+  regular grid and infers missing cells, then records both the observed raster
+  contour and the proposed vector geometry in machine millimetres.
+- Rounded-rectangle output fits center, dimensions, rotation, and radius and
+  emits an analytic rounded vector. Simplified and exact modes preserve
+  pixel-derived contours; simplification is a bounded polygon reduction, not a
+  curve-fitting operation.
+- The workspace previews the proposed vector that object creation will consume.
+  The exact analyzed frame is delivered with the result and remains frozen
+  until the review is cleared or committed.
 - Inferred trace cells are deliberately not selected by default.
 - Template alignment compares unordered machine-coordinate detections with
   normalized template features, ranks rigid rotation/translation candidates,
@@ -195,6 +215,10 @@ Both pipelines generate conservative G-code that is revalidated by
 - SVG coordinates normally increase downward. Import/placement flips SVG Y so
   artwork appears visually upright in machine coordinates.
 - Positive project rotation is counter-clockwise in machine coordinates.
+- Corrected-image coordinates address pixel centers: OpenCV pixel `(i, j)` maps
+  directly through the bed transform. The desktop offsets the Qt pixmap by
+  `(-0.5, -0.5)` local pixels so its displayed centers, vector overlays, color
+  picking, and vision output share that convention.
 - Template feature coordinates are local to the center of the combined cut
   bounds. Placement rotates those local coordinates and then translates them
   into machine coordinates; it never applies scale.
@@ -232,6 +256,7 @@ This is an accidental-command boundary, not functional safety.
 | Autosaves | `~/.local/share/e3-positioning-system/backups/` by default |
 | Material presets | `~/.local/share/e3-positioning-system/materials.sqlite` by default |
 | Cutting templates | configured application data directory under `templates/` |
+| Active alignment test image | memory only; never persisted automatically |
 | Window layout | Qt `QSettings` |
 
 The hard-coded desktop user-data paths are Linux-oriented and should be

@@ -212,6 +212,14 @@ QLabel#statusCard {
     border-radius: 5px;
     padding: 8px;
 }
+QLabel#testImageBadge {
+    color: #FFF3D6;
+    background: #6C4B16;
+    border: 1px solid #E7B55C;
+    border-radius: 5px;
+    padding: 6px 10px;
+    font-weight: 700;
+}
 QGroupBox {
     background: #121A20;
 }

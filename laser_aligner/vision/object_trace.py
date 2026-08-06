@@ -83,6 +83,7 @@ class TraceDetection:
     corner_radius_mm: float
     area_mm2: float
     contour_mm: list[list[float]]
+    vector_contour_mm: list[list[float]]
     box_mm: list[list[float]]
     selected_default: bool
     diagnostics: dict[str, Any] = field(default_factory=dict)
@@ -282,8 +283,11 @@ def _rounded_mask(width: int, height: int, radius: int) -> np.ndarray:
 
 
 def _rounded_fit(contour: np.ndarray, rectangle: Mapping[str, Any]) -> tuple[float, float]:
-    width = max(4, int(round(float(rectangle["width"]))))
-    height = max(4, int(round(float(rectangle["height"]))))
+    # minAreaRect measures the center-to-center span of the outermost raster
+    # samples. A run from pixel 0 through pixel N-1 therefore reports N-1, not
+    # N. Reconstruct the discrete extent before comparing candidate masks.
+    width = max(4, int(round(float(rectangle["width"]))) + 1)
+    height = max(4, int(round(float(rectangle["height"]))) + 1)
     center = np.asarray(rectangle["center"], dtype=np.float64)
     angle = math.radians(float(rectangle["angle_image_deg"]))
     u = np.array([math.cos(angle), math.sin(angle)], dtype=np.float64)
@@ -291,21 +295,35 @@ def _rounded_fit(contour: np.ndarray, rectangle: Mapping[str, Any]) -> tuple[flo
     local = contour.reshape(-1, 2).astype(np.float64) - center
     local = np.column_stack((local @ u, local @ v))
     margin = 4
-    local[:, 0] += width / 2.0 + margin
-    local[:, 1] += height / 2.0 + margin
+    local[:, 0] += (width - 1) / 2.0 + margin
+    local[:, 1] += (height - 1) / 2.0 + margin
     observed = np.zeros((height + 2 * margin, width + 2 * margin), dtype=np.uint8)
     cv2.fillPoly(observed, [np.round(local).astype(np.int32)], 255)
     best_radius, best_iou = 0.0, 0.0
-    maximum = int(round(min(width, height) * 0.42))
-    radii = sorted(set([0] + [int(round(x)) for x in np.linspace(1, maximum, 15)]))
-    for radius in radii:
+    maximum = int(round(min(width, height) * 0.50))
+    coarse_step = max(1, int(math.ceil(maximum / 24.0)))
+    coarse_radii = list(range(0, maximum + 1, coarse_step))
+    if not coarse_radii or coarse_radii[-1] != maximum:
+        coarse_radii.append(maximum)
+
+    def evaluate(radius: int) -> float:
         candidate = np.zeros_like(observed)
         candidate[margin:margin + height, margin:margin + width] = _rounded_mask(
             width, height, radius
         )
         intersection = np.count_nonzero((candidate > 0) & (observed > 0))
         union = np.count_nonzero((candidate > 0) | (observed > 0))
-        iou = 0.0 if union == 0 else float(intersection / union)
+        return 0.0 if union == 0 else float(intersection / union)
+
+    for radius in coarse_radii:
+        iou = evaluate(radius)
+        if iou > best_iou:
+            best_radius, best_iou = float(radius), iou
+
+    fine_start = max(0, int(best_radius) - coarse_step)
+    fine_end = min(maximum, int(best_radius) + coarse_step)
+    for radius in range(fine_start, fine_end + 1):
+        iou = evaluate(radius)
         if iou > best_iou:
             best_radius, best_iou = float(radius), iou
     return best_radius, best_iou
@@ -447,6 +465,18 @@ def _candidate(
         0.0 if options.output_mode == "exact" else options.smoothing_mm * pixels_per_mm,
     )
     contour_mm = _pixel_to_machine(points, work_area, pixels_per_mm)
+    observed_contour_mm = [[float(x), float(y)] for x, y in contour_mm]
+    vector_contour_mm = (
+        _rounded_polyline(
+            geometry["center_mm"],
+            geometry["width_mm"],
+            geometry["height_mm"],
+            geometry["rotation_deg"],
+            geometry["corner_radius_mm"],
+        )
+        if options.output_mode == "rounded" and shape == "rounded_rectangle"
+        else observed_contour_mm
+    )
     return {
         "center_px": np.asarray(rectangle["center"], dtype=np.float64),
         "width_px": float(rectangle["width"]),
@@ -462,7 +492,8 @@ def _candidate(
         "coverage": coverage,
         "compactness": compactness,
         "shape": shape,
-        "contour_mm": [[float(x), float(y)] for x, y in contour_mm],
+        "contour_mm": observed_contour_mm,
+        "vector_contour_mm": vector_contour_mm,
         **geometry,
     }
 
@@ -491,8 +522,12 @@ def _rounded_polyline(
     height: float,
     rotation: float,
     radius: float,
+    segments_per_corner: int = 8,
 ) -> list[list[float]]:
+    """Sample the fitted rounded rectangle used by rounded-vector output."""
+
     radius = max(0.0, min(radius, width / 2, height / 2))
+    segments = max(1, int(segments_per_corner))
     local = []
     for cx, cy, start in (
         (width / 2 - radius, height / 2 - radius, 0),
@@ -500,8 +535,8 @@ def _rounded_polyline(
         (-width / 2 + radius, -height / 2 + radius, 180),
         (width / 2 - radius, -height / 2 + radius, 270),
     ):
-        for step in range(7):
-            angle = math.radians(start + 90 * step / 6)
+        for step in range(segments + 1):
+            angle = math.radians(start + 90 * step / segments)
             local.append([cx + radius * math.cos(angle), cy + radius * math.sin(angle)])
     points = np.asarray(local)
     angle = math.radians(rotation)
@@ -588,6 +623,11 @@ def _infer_grid(
                 geometry = _machine_geometry(
                     rectangle, work_area, pixels_per_mm, options.border_offset_mm
                 )
+                rounded_contour = _rounded_polyline(
+                    geometry["center_mm"], geometry["width_mm"],
+                    geometry["height_mm"], geometry["rotation_deg"],
+                    geometry["corner_radius_mm"],
+                )
                 inferred.append({
                     "center_px": center_px,
                     "width_px": median_width,
@@ -603,11 +643,8 @@ def _infer_grid(
                     "coverage": 0.0,
                     "compactness": 1.0,
                     "shape": "rounded_rectangle",
-                    "contour_mm": _rounded_polyline(
-                        geometry["center_mm"], geometry["width_mm"],
-                        geometry["height_mm"], geometry["rotation_deg"],
-                        geometry["corner_radius_mm"],
-                    ),
+                    "contour_mm": rounded_contour,
+                    "vector_contour_mm": rounded_contour,
                     **geometry,
                 })
     return inferred, {
@@ -635,6 +672,10 @@ def _to_detection(
         corner_radius_mm=float(item["corner_radius_mm"]),
         area_mm2=float(item["area_mm2"]),
         contour_mm=[list(point) for point in item["contour_mm"]],
+        vector_contour_mm=[
+            list(point)
+            for point in item.get("vector_contour_mm", item["contour_mm"])
+        ],
         box_mm=[list(point) for point in item["box_mm"]],
         selected_default=(
             source == "direct" and confidence >= options.confidence_threshold

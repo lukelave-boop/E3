@@ -18,6 +18,9 @@ geometry, G-code, safety and controller services.
 - Physical machine-coordinate workspace with adaptive grid, rulers, origin,
   pan, zoom and selectable snap spacing
 - Corrected camera image behind the workspace with adjustable opacity
+- Safe-simulation controls to load a corrected full-bed test image or generate
+  one from a selected cutting template, with a persistent frozen-source badge,
+  then restore the synthetic camera
 - Selection, drag movement, numeric size/position/rotation, mirror, duplicate,
   delete, group/ungroup, alignment, distribution and z-order controls
 - Basic rectangle, rounded rectangle, ellipse, line and text creation

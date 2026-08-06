@@ -19,6 +19,20 @@
   inference, reviewed selection, border offsets, and vector-object creation.
 - Added one-step undo for a set of traced objects.
 - Added synthetic object-tracing tests and an offline trace inspection tool.
+- Made fitted rounded-rectangle results preview the same clean proposed vector
+  that will be created instead of the simplified camera-pixel contour.
+- Renamed the contour control to **Simplify tolerance**, limited it to
+  **Simplified contours**, and exposed fitted dimensions and corner radius in
+  the results table.
+- Preserved exact preview placement when irregular contours become project
+  paths by centering them from their actual bounds.
+- Froze the analyzed camera frame throughout trace review and rejected stale
+  asynchronous results after a new request, clear, source change, or shutdown.
+- Registered Qt camera pixels to the OpenCV/BedMapper pixel-center convention,
+  removing the half-pixel overlay shift that looked outside on top/left edges
+  and inside on bottom/right edges at high zoom.
+- Corrected the rounded-fit raster extent from a pixel-center span to a pixel
+  count, removing a one-pixel radius underestimate on ideal rounded masks.
 
 ### Cutting templates
 
@@ -52,6 +66,16 @@
 - Reused one frozen corrected frame across candidate settings, rejected weak or
   unresolved ambiguous matches, and canceled results invalidated by focus or
   library changes.
+- Added a safe-simulation alignment source that can load a corrected full-bed
+  PNG/JPEG or deterministically generate a selected template at known X/Y and
+  rotation with optional noise and missing labels. The frozen frame feeds the
+  normal tracer and matcher, remains memory-only, and can be cleared to restore
+  the synthetic camera.
+- Added source-generation guards, a persistent workspace warning, and camera
+  control gating so stale or misleading live-camera state cannot replace a
+  frozen test image during review.
+- Made maximum-size synthetic grids render through per-label pixel regions
+  instead of repeated full-bed buffers.
 - Invalidated generated G-code and toolpath previews after project revisions so
   aligned geometry cannot be followed by execution of a stale job.
 - Reserved `marker_id` as schema metadata; marker-based identification is not

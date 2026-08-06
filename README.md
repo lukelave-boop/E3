@@ -52,13 +52,16 @@ Native desktop workflow:
 - Dedicated regular-grid template designer with a live preview, editable cut
   size/radius, rows, columns, edge-gap or center-pitch spacing, and direct
   template-library or project-object creation
+- Simulation-only frozen alignment images loaded from PNG/JPEG or generated
+  deterministically from a selected template at a known pose
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop
 
-The desktop branch also contains a synthetically tested object-tracing
-algorithm and a source-wired native review workflow for converting detected
-camera outlines into editable project objects. The complete GUI/camera flow is
-not yet verified. See
+The desktop branch also contains a synthetically and behaviorally tested
+object-tracing workflow for converting detected camera outlines into editable
+project objects. Rounded-label output previews the same fitted vector that will
+be created, while pixel contours remain available for irregular objects. The
+real-camera GUI flow is not yet verified. See
 [docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
 
 Reusable label-sheet cutting templates can be created from visible project
@@ -81,6 +84,20 @@ project…**. Grids with fewer than three cuts remain available for manual
 placement but cannot pass automatic matching. Automatic matching does not
 compare corner radius, so templates that differ only by radius must be selected
 manually.
+
+In safe simulation, the Templates panel can exercise the same detection and
+alignment path without a physical camera. Choose **Load test image…** for an
+already corrected, top-down image of the complete work area, or select a
+template and choose **Generate from selected template…**. Generated images
+provide known center X/Y and rotation controls plus deterministic noise and a
+missing-label count. The chosen image remains frozen while **Auto identify and
+align** or **Align selected template** runs. Choose **Return to synthetic
+camera** to clear the override and resume the normal simulated camera feed.
+Loaded-image dimensions must describe the configured full bed at one uniform
+pixel scale; images are resized to the configured corrected-frame resolution
+but are not lens-corrected, perspective-rectified, cropped, or calibrated by
+the loader. See
+[docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md#testing-alignment-without-hardware).
 
 ## Deliberately disabled by default
 
@@ -257,9 +274,12 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 - CSS stylesheets, clipping paths, masks, and every edge case of the full SVG specification are not supported.
 - The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.
 - Cutting-template identification and alignment have synthetic coverage but
-  have not been verified with real corrected label-sheet images. Placement is
-  rigid translation/rotation only, and `marker_id` is currently metadata rather
-  than an active marker detector.
+  have not been verified with real corrected label-sheet images. The desktop's
+  loaded/generated test-frame workflow verifies software behavior only; it
+  cannot validate lens/bed calibration, parallax, camera pose, material height,
+  controller motion, or laser accuracy. Placement is rigid translation/rotation
+  only, and `marker_id` is currently metadata rather than an active marker
+  detector.
 - Automatic template matching cannot distinguish layouts whose matching
   features differ only in rounded-corner radius; use manual selection and
   inspect the overlay for those templates.

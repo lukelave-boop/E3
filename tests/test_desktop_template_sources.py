@@ -27,7 +27,8 @@ def test_controller_matches_templates_off_thread_and_ignores_stale_results() -> 
     assert "request_id != self._template_match_request_id" in controller
     assert "def cancel_template_match(" in controller
     assert "def set_template_review_active(" in controller
-    assert "or self._template_review_active" in controller
+    assert "def _camera_review_active(" in controller
+    assert "self._template_review_active or self._trace_review_active" in controller
     assert "image = context.rectified_frame(refresh=True)" in controller
     assert "image_to_qimage(image)" in controller
 
@@ -64,3 +65,19 @@ def test_main_window_wires_template_review_and_one_batch_application() -> None:
     assert "last_job_revision != self.document.revision" in window
     assert "def _invalidate_generated_job(" in window
     assert "regenerate the toolpath before running" in window
+
+
+def test_desktop_wires_simulation_test_images_into_the_shared_camera_pipeline() -> None:
+    window = source("main_window.py")
+    controller = source("controller.py")
+
+    assert "self.template_panel.loadTestImageRequested.connect(" in window
+    assert "self.template_panel.generateTestImageRequested.connect(" in window
+    assert "self.template_panel.returnToCameraRequested.connect(" in window
+    assert "self.controller.simulationFrameChanged.connect(" in window
+    assert "load_corrected_test_image(" in window
+    assert "generate_template_test_frame(" in window
+    assert "submit_handler=submit" in window
+    assert "def activate_simulation_workspace_frame(" in controller
+    assert "def return_to_synthetic_camera(" in controller
+    assert "self.runtime.context.rectified_frame(refresh=True)" in controller

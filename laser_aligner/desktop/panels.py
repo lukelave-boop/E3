@@ -413,6 +413,10 @@ class CameraPanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._syncing_focus = False
+        self._calibration_ready = False
+        self._camera_connected = False
+        self._test_frame_active = False
+        self._test_frame_label = ""
         layout = _panel_layout(self)
 
         heading = QtWidgets.QLabel("Camera and overlay")
@@ -450,6 +454,11 @@ class CameraPanel(QtWidgets.QWidget):
         self.image_state = QtWidgets.QLabel("Waiting for corrected image")
         self.image_state.setObjectName("mutedLabel")
         self.image_state.setWordWrap(True)
+        self.image_state.setMinimumWidth(0)
+        self.image_state.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
         overlay_layout.addWidget(self.image_state)
         overlay_layout.addWidget(
             _muted(
@@ -608,24 +617,66 @@ class CameraPanel(QtWidgets.QWidget):
         )
 
     def set_calibration_ready(self, ready: bool) -> None:
-        self.live_check.setEnabled(ready)
-        self.live_rate.setEnabled(ready)
-        self.refresh_button.setEnabled(ready)
-        if not ready:
+        self._calibration_ready = bool(ready)
+        overlay_enabled = self._calibration_ready and not self._test_frame_active
+        self.live_check.setEnabled(overlay_enabled)
+        self.live_rate.setEnabled(overlay_enabled)
+        self.refresh_button.setEnabled(overlay_enabled)
+        if not ready and not self._test_frame_active:
             self.image_state.setText(
                 "Bed mapping is required for a corrected overlay"
             )
 
     def set_image_updated(self) -> None:
+        if self._test_frame_active:
+            self._render_test_frame_status()
+            return
         current = QtCore.QTime.currentTime().toString("HH:mm:ss")
         mode = "LIVE" if self.live_check.isChecked() else "STILL"
         self.image_state.setText(f"{mode} overlay updated at {current}")
+
+    def set_test_frame_source(self, active: bool, label: str = "") -> None:
+        """Keep camera controls honest while an in-memory test frame is frozen."""
+
+        self._test_frame_active = bool(active)
+        self._test_frame_label = str(label).strip()
+        if not self._test_frame_active:
+            self.image_state.setToolTip("")
+        self.capture_button.setEnabled(not self._test_frame_active)
+        self.lens_button.setEnabled(not self._test_frame_active)
+        self.bed_button.setEnabled(not self._test_frame_active)
+        self.set_calibration_ready(self._calibration_ready)
+        self._update_focus_enabled()
+        if self._test_frame_active:
+            self._render_test_frame_status()
+        elif self._calibration_ready:
+            self.image_state.setText("Waiting for synthetic camera image")
+            self.image_state.setToolTip("")
+
+    def _render_test_frame_status(self) -> None:
+        label = self._test_frame_label or "Corrected simulation frame"
+        self.image_state.setText(f"TEST IMAGE · FROZEN\n{label}")
+        self.image_state.setToolTip(label)
+
+    def _update_focus_enabled(self) -> None:
+        enabled = self._camera_connected and not self._test_frame_active
+        for widget in (
+            self.autofocus_check,
+            self.apply_focus_button,
+            self.save_focus_button,
+            self.measure_button,
+        ):
+            widget.setEnabled(enabled)
+        self._set_manual_focus_enabled(
+            enabled and not self.autofocus_check.isChecked()
+        )
 
     def set_status(self, status: dict[str, Any] | None) -> None:
         if not status:
             self.state_label.setText("Camera unavailable")
             return
         connected = bool(status.get("connected", False))
+        self._camera_connected = connected
         if connected:
             self.state_label.setText(
                 f"Online · {status.get('width', 0)} × {status.get('height', 0)} · "
@@ -635,23 +686,15 @@ class CameraPanel(QtWidgets.QWidget):
             self.state_label.setText(
                 f"Offline\n{status.get('last_error') or status.get('device', '')}"
             )
-        for widget in (
-            self.autofocus_check,
-            self.apply_focus_button,
-            self.save_focus_button,
-            self.measure_button,
-        ):
-            widget.setEnabled(connected)
-        self._set_manual_focus_enabled(
-            connected and not self.autofocus_check.isChecked()
-        )
+        self._update_focus_enabled()
 
     def _set_manual_focus_enabled(self, enabled: bool) -> None:
-        self.focus_slider.setEnabled(enabled)
-        self.focus_spin.setEnabled(enabled)
+        resolved = bool(enabled) and not self._test_frame_active
+        self.focus_slider.setEnabled(resolved)
+        self.focus_spin.setEnabled(resolved)
 
     def _autofocus_changed(self, enabled: bool) -> None:
-        self._set_manual_focus_enabled(not enabled)
+        self._set_manual_focus_enabled(self._camera_connected and not enabled)
 
     def _slider_changed(self, value: int) -> None:
         if self._syncing_focus:
@@ -812,12 +855,17 @@ class TracePanel(QtWidgets.QWidget):
         output_form = _form_layout()
         output_group.setLayout(output_form)
         self.output_mode = QtWidgets.QComboBox()
-        self.output_mode.addItem("Rounded rects", "rounded")
-        self.output_mode.addItem("Smooth contours", "smoothed")
+        self.output_mode.addItem("Fitted rounded rectangles", "rounded")
+        self.output_mode.addItem("Simplified contours", "smoothed")
         self.output_mode.addItem("Exact contours", "exact")
+        self.output_mode.setMinimumWidth(0)
+        self.output_mode.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.output_mode.setToolTip(
-            "Choose fitted rounded rectangles, smoothed visible contours, "
-            "or exact visible contours."
+            "Choose fitted rounded rectangles, simplified pixel contours, "
+            "or the exact pixel-derived contours."
         )
         self.border_offset = QtWidgets.QDoubleSpinBox()
         self.border_offset.setRange(-25.0, 25.0)
@@ -829,9 +877,17 @@ class TracePanel(QtWidgets.QWidget):
         self.smoothing.setDecimals(2)
         self.smoothing.setValue(0.25)
         self.smoothing.setSuffix(" mm")
+        smoothing_tip = (
+            "Maximum contour simplification tolerance for Simplified contours. "
+            "Lower values preserve more edge detail. This setting does not "
+            "apply to fitted rounded rectangles or Exact contours."
+        )
+        self.smoothing.setToolTip(smoothing_tip)
+        self.smoothing_label = QtWidgets.QLabel("Simplify tolerance")
+        self.smoothing_label.setToolTip(smoothing_tip)
         _form_row(output_form, "Output shape", self.output_mode)
         _form_row(output_form, "Border offset", self.border_offset)
-        _form_row(output_form, "Contour smoothing", self.smoothing)
+        output_form.addRow(self.smoothing_label, self.smoothing)
         layout.addWidget(output_group)
 
         self.detect_button = QtWidgets.QPushButton("Detect objects")
@@ -852,15 +908,16 @@ class TracePanel(QtWidgets.QWidget):
         result_layout = QtWidgets.QVBoxLayout(result_group)
         result_layout.addWidget(
             _muted(
-                "Green outlines are direct detections. Yellow dashed outlines "
-                "are inferred and remain unchecked until you approve them."
+                "Green outlines show the proposed vector output. Gray outlines "
+                "are unselected direct detections. Yellow or orange dashed "
+                "outlines are inferred and remain unchecked until you approve them."
             )
         )
         self.result_tree = QtWidgets.QTreeWidget()
         self.result_tree.setMinimumHeight(220)
         self.result_tree.setColumnCount(5)
         self.result_tree.setHeaderLabels(
-            ["Use", "#", "Source", "Confidence", "Size"]
+            ["Use", "#", "Source", "Confidence", "Geometry"]
         )
         self.result_tree.setRootIsDecorated(False)
         self.result_tree.setAlternatingRowColors(True)
@@ -912,6 +969,7 @@ class TracePanel(QtWidgets.QWidget):
         self.select_none_button.clicked.connect(
             lambda: self._set_all_checked(False, include_inferred=True)
         )
+        self.output_mode.currentIndexChanged.connect(self._sync_output_controls)
 
         for widget in (
             self.mode_combo,
@@ -935,6 +993,7 @@ class TracePanel(QtWidgets.QWidget):
                 widget.toggled.connect(self._mark_stale)
             else:
                 widget.valueChanged.connect(self._mark_stale)
+        self._sync_output_controls()
 
     def options(self) -> dict[str, Any]:
         hue = self.target_hue.value()
@@ -994,6 +1053,25 @@ class TracePanel(QtWidgets.QWidget):
                     f"{float(detection.get('width_mm', 0)):.1f} × "
                     f"{float(detection.get('height_mm', 0)):.1f} mm",
                 )
+                shape = str(detection.get("shape", "contour"))
+                if shape == "rounded_rectangle":
+                    radius = float(detection.get("corner_radius_mm", 0.0))
+                    item.setText(4, f"{item.text(4)} · R {radius:.2f} mm")
+                    geometry_tip = (
+                        "Fitted rounded rectangle: "
+                        f"{float(detection.get('width_mm', 0)):.2f} × "
+                        f"{float(detection.get('height_mm', 0)):.2f} mm, "
+                        f"corner radius {radius:.2f} mm, rotation "
+                        f"{float(detection.get('rotation_deg', 0)):.2f}°."
+                    )
+                else:
+                    geometry_tip = (
+                        "Irregular detected contour. Fitted rounded-rectangle "
+                        "output is unavailable for this outline, so contour "
+                        "geometry will be used."
+                    )
+                for column in range(self.result_tree.columnCount()):
+                    item.setToolTip(column, geometry_tip)
                 if source == "inferred":
                     item.setForeground(2, QtGui.QColor("#E7B55C"))
                 self.result_tree.addTopLevelItem(item)
@@ -1038,6 +1116,12 @@ class TracePanel(QtWidgets.QWidget):
         self.status_label.setText(
             "Trace settings changed. Run Detect objects again before creating paths."
         )
+
+    def _sync_output_controls(self, *args: Any) -> None:
+        del args
+        smoothing_enabled = self.output_mode.currentData() == "smoothed"
+        self.smoothing_label.setEnabled(smoothing_enabled)
+        self.smoothing.setEnabled(smoothing_enabled)
 
     def _result_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         del item, column

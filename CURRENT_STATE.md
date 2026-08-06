@@ -29,6 +29,12 @@ The subsequent Windows portability update selects POSIX serial lazily. Safe
 browser and native desktop simulation now start on Windows without loading
 `termios`; serial hardware remains unavailable there.
 
+The current desktop update adds a simulation-only, memory-resident corrected
+camera source. An operator can load a full-bed PNG/JPEG or generate a selected
+template at a known pose, run the normal trace and alignment pipeline on the
+frozen frame, and then restore the synthetic camera. This path is unavailable
+when hardware access or a non-simulator machine backend is enabled.
+
 The local files `label-sheet-test.png`, `trace-preview.png`, and
 `trace-result.json` are preserved for the developer who created them. They are
 ignored by Git and explicitly excluded from release archives; they are not
@@ -52,7 +58,8 @@ The repository contains:
 5. A reusable cutting-template workflow with a versioned library, manual
    selection, geometric candidate ranking, rigid alignment review, and
    undoable project-object creation, plus a dedicated parametric designer for
-   regular rounded-rectangle grids.
+   regular rounded-rectangle grids and a safe-simulation alignment-image
+   workflow.
 
 The browser remains the complete calibration interface. The desktop reads the
 same calibration files but does not yet provide native calibration wizards.
@@ -90,6 +97,7 @@ Shared camera/vision path:
 CameraService or SyntheticCameraService
   -> optional LensModel.undistort
   -> BedMapper.rectify
+  -> optional memory-only corrected-frame override in safe simulation
   -> workpiece / fiducial / object-trace detection
   -> machine-coordinate geometry
 ```
@@ -100,6 +108,7 @@ Cutting-template path:
 rectangle-grid recipe or visible project output objects
   -> normalized cut objects and matching features
   -> versioned .e3template library item
+  -> optional deterministic known-pose corrected test frame
   -> manual selection or geometric candidate ranking
   -> reviewed translation + rotation overlay with synchronized canvas controls
   -> one AddObjectsCommand into the active project layer
@@ -124,11 +133,11 @@ Audit environment:
 
 Results:
 
-- **189 tests passed and 2 POSIX-only tests skipped.**
+- **250 tests passed and 2 POSIX-only tests skipped.**
 - The complete suite collected, including app simulation and machine-service
   tests.
-- A focused cutting-template run passed 49 model, library, matcher, controller,
-  widget, workspace, and desktop-integration tests.
+- Focused template/test-image runs passed their model, library, renderer,
+  matcher, controller, widget, workspace, and desktop-integration checks.
 - The browser simulator served a healthy API response and its HTML interface.
 - The native desktop started with the synthetic camera and simulated controller
   under Qt's offscreen backend, ran its event loop, and shut down cleanly.
@@ -140,6 +149,18 @@ Results:
 - Layout regression tests cover both Save and Update designer actions, compact
   600 x 430 logical screens, 360 px inspector viewports, and 13 pt text without
   hidden horizontal content.
+- Generated corrected frames pass the real color/contrast detector and rigid
+  matcher at known poses. The desktop controller path recovers a known pose,
+  source switching rejects stale camera results, and the 500-feature renderer
+  is structurally verified to use local pixel regions instead of full-bed work
+  per feature.
+- Trace regressions verify that rounded output previews a clean proposed vector
+  matching its fitted width, height, rotation, and radius; the analyzed frame
+  stays frozen during review; stale callbacks are rejected; and exact or
+  simplified contours retain their previewed world placement when created.
+  Corrected-image pixel centers are also registered to their OpenCV/BedMapper
+  machine coordinates without a half-pixel overlay shift, and ideal discrete
+  rounded masks recover their radius without a center-span off-by-one.
 - The interactive native workflow has not yet been manually exercised on this
   Windows checkout.
 - Ruff was not available in the current virtual environment.
@@ -147,15 +168,14 @@ Results:
 The cutting-template coverage includes versioned persistence, resilient
 catalog scans, compound imported paths, rigid matching, ambiguity and weak-match
 rejection, frozen-frame review, cancellation of stale results, transient
-overlays, direct-canvas rigid drag/rotation, object creation/undo, and
-generated-job revision invalidation.
-
-The authoring update additionally has a 72-test focused integration run covering
-rectangle width/height/radius edits, regular-grid generation, editable authoring
-metadata, exact-ID replacement, gap/pitch conversion, live preview, and
-work-area/object-count rejection. An additional toolpath regression verifies
-that microscopic floating-point noise at an exact work-area edge is accepted
-while a real overflow is still rejected. The complete 184-test suite then passed.
+overlays, direct-canvas rigid drag/rotation, object creation/undo, generated-job
+revision invalidation, strict full-bed image validation, copy-isolated in-memory
+source state, deterministic known-pose rendering, source/timer restoration, and
+control/badge state. Rectangle width/height/radius edits, regular-grid
+generation, editable authoring metadata, exact-ID replacement, gap/pitch
+conversion, live preview, and work-area/object-count rejection remain covered.
+Toolpath coverage also verifies that microscopic floating-point noise at an
+exact work-area edge is accepted while a real overflow is still rejected.
 
 The two skipped tests require POSIX pseudoterminals and `termios`. The exact
 updated branch has not been run as a complete Linux suite during this audit.
@@ -214,19 +234,27 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   project revision changes.
 - Camera focus controls and sharpness measurement.
 - Guarded machine connection, park, diagnostics, run, and software stop.
+- Simulation-only loading or deterministic generation of frozen corrected
+  alignment frames, with camera-control gating and a persistent workspace badge.
 
 ### Camera-object tracing
 
 - Automatic color/contrast detection.
 - Click-to-sample hue.
 - Direct and inferred regular-grid detections.
-- Rounded, smoothed, and exact outlines.
+- Analytic fitted rounded rectangles plus simplified and exact pixel-derived
+  contours.
+- Separate observed and proposed-vector contours, with the workspace preview
+  showing the geometry that object creation will consume.
 - Border offsets.
 - Review and selective conversion to editable project objects.
+- One captured corrected frame held across detection review, with monotonic
+  request cancellation and stale-result rejection.
 - One-step undo for a created detection set.
 
-The trace algorithms pass synthetic tests. The native trace workflow has not
-been exercised end to end with the real camera and calibration.
+The trace algorithms and native review lifecycle pass synthetic and offscreen
+behavioral tests. The workflow has not been exercised end to end with the real
+camera and calibration.
 
 ### Reusable cutting templates
 
@@ -252,6 +280,13 @@ been exercised end to end with the real camera and calibration.
   template/pose ambiguity warnings.
 - One corrected frame shared across all candidate trace settings and frozen
   while an accepted overlay is reviewed.
+- Safe-simulation loading of corrected full-bed PNG/JPEG images with a strict
+  uniform-scale contract and Unicode-safe paths.
+- Deterministic corrected-frame generation from a selected template at known
+  X/Y/rotation, with optional noise and missing labels; maximum-size grids use
+  per-label rendering regions.
+- One in-memory test frame shared by the workspace, tracer, and matcher, with
+  stale-source rejection and explicit restoration of the synthetic camera.
 - Rigid translation/rotation placement with scale differences reported but
   never applied.
 - New object identities, active-layer assignment, and one-step batch undo.
@@ -262,11 +297,12 @@ remain available for manual placement only. Matching compares feature centers,
 dimensions, and orientation but not rounded-corner radius, so templates that
 differ only in radius require manual selection and overlay review.
 
-The portable model/library and matcher have focused synthetic tests, and the
-native controls, review overlay, application, undo, stale-result handling, and
-generated-job invalidation have behavioral offscreen coverage. The workflow has
-not been verified with real corrected label-sheet images or physical placement.
-No marker detector is implemented. See
+The portable model/library, generator, and matcher have focused synthetic tests,
+and the native controls, review overlay, test-source lifecycle, application,
+undo, stale-result handling, and generated-job invalidation have behavioral
+offscreen coverage. The generated frame is intentionally idealized and the
+workflow has not been verified with real corrected label-sheet images or
+physical placement. No marker detector is implemented. See
 [docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md).
 
 ## Known gaps
@@ -296,6 +332,13 @@ No marker detector is implemented. See
 - No full interactive end-to-end GUI automation.
 - Cutting-template matching uses provisional software acceptance gates, but has
   no real-camera validation dataset or physically measured accuracy threshold.
+- Object tracing has no sub-pixel edge estimator or real-camera accuracy
+  dataset. At the default 4 pixels/mm, one corrected-image pixel is 0.25 mm;
+  fitted dimensions and radii remain raster- and threshold-dependent.
+- Loaded test images must already be corrected full-bed views; the loader does
+  not infer bed corners or calibrate an ordinary photograph. Generated images
+  reuse ideal template geometry and therefore cannot expose lens, homography,
+  parallax, material-height, lighting, or mounting errors.
 - Automatic template ranking cannot distinguish otherwise identical layouts
   whose only difference is rounded-corner radius.
 - `marker_id` is stored but no QR/ArUco/marker identification path consumes it.
@@ -313,7 +356,8 @@ No marker detector is implemented. See
 
 ## Recommended next sequence
 
-1. Manually exercise the safe native UI on Windows and record usability issues.
+1. Manually exercise the safe native UI on Windows, including loaded and
+   generated alignment images, and record usability issues.
 2. Add PowerShell setup/launch scripts and OS-native user-data paths.
 3. Add Windows CI while retaining Linux Python-version coverage.
 4. Separate portable OpenCV capture from Linux V4L2 discovery/control.

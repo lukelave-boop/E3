@@ -635,10 +635,24 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._document: ProjectDocument | None = None
         self._items_by_id: dict[str, ObjectGraphicsItem] = {}
         self._camera_item = QtWidgets.QGraphicsPixmapItem()
+        # OpenCV and BedMapper coordinates address pixel centers, while Qt's
+        # default pixmap bounds place the first center at (0.5, 0.5). Keep the
+        # displayed raster registered to the same machine coordinates used by
+        # vision results instead of introducing a half-pixel right/down shift.
+        self._camera_item.setOffset(-0.5, -0.5)
         self._camera_item.setZValue(-500.0)
         self._camera_item.setOpacity(0.60)
         self._camera_item.setVisible(False)
         self.workspace_scene.addItem(self._camera_item)
+        self._test_frame_badge = QtWidgets.QLabel("TEST IMAGE · FROZEN", self.viewport())
+        self._test_frame_badge.setObjectName("testImageBadge")
+        self._test_frame_badge.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents,
+            True,
+        )
+        self._test_frame_badge.setToolTip("Frozen corrected simulation frame")
+        self._test_frame_badge.adjustSize()
+        self._test_frame_badge.hide()
         self._toolpath_items: list[QtWidgets.QGraphicsLineItem] = []
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
         self._template_items: list[QtWidgets.QGraphicsItem] = []
@@ -721,7 +735,23 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._camera_item.setTransform(transform)
         self._camera_item.setVisible(True)
 
+    def set_test_frame_source(self, active: bool, label: str = "") -> None:
+        """Keep the frozen-source warning visible even when inspector docks are hidden."""
 
+        description = str(label).strip() or "Frozen corrected simulation frame"
+        self._test_frame_badge.setToolTip(description)
+        self._test_frame_badge.setVisible(bool(active))
+        if active:
+            self._test_frame_badge.adjustSize()
+            self._position_test_frame_badge()
+            self._test_frame_badge.raise_()
+
+    def _position_test_frame_badge(self) -> None:
+        self._test_frame_badge.move(12, 12)
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._position_test_frame_badge()
 
     def begin_point_pick(self) -> None:
         self._point_pick_active = True
@@ -746,7 +776,12 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self.clear_trace_preview()
         selected = set(selected_ids or [])
         for detection in detections:
-            points = detection.get("contour_mm") or detection.get("box_mm") or []
+            points = (
+                detection.get("vector_contour_mm")
+                or detection.get("contour_mm")
+                or detection.get("box_mm")
+                or []
+            )
             if len(points) < 2:
                 continue
             path = QtGui.QPainterPath()

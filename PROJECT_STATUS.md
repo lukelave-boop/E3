@@ -31,7 +31,7 @@ Environment:
 
 Results:
 
-- **189 tests passed and 2 POSIX-only tests skipped.**
+- **250 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
@@ -39,10 +39,10 @@ Results:
 - The browser simulator served its health endpoint and HTML interface.
 - The native desktop started, ran, and shut down with Qt's offscreen backend,
   the synthetic camera, and the simulated controller.
-- A focused 49-test cutting-template run covered the portable model/library,
-  synthetic matcher, controller acceptance/cancellation behavior, widgets,
-  direct-canvas drag/rotation, overlay, apply/undo, and stale generated-job
-  protection.
+- Focused cutting-template and test-image runs covered the portable
+  model/library, deterministic renderer, real detector/matcher, controller
+  acceptance and source-generation behavior, widgets, direct-canvas
+  drag/rotation, overlay, apply/undo, and stale generated-job protection.
 - An actual offscreen `E3MainWindow` smoke test exercised template library
   refresh, placement, one-command application, and undo.
 - A second offscreen `E3MainWindow` smoke test drove the modal designer through
@@ -51,19 +51,29 @@ Results:
 - Focused layout regressions verify unclipped Save/Update actions, a compact
   600 x 430 logical designer, and the Templates, Camera, Trace, and Transform
   inspectors at 360 px with 13 pt text.
+- Focused trace regressions verify fitted rounded-vector preview geometry,
+  radius reporting, contour placement parity between preview and creation,
+  frozen analyzed-frame review, stale asynchronous result rejection, and exact
+  pixel-center registration between corrected images and vector overlays.
+  Perfect rounded raster masks recover their known integer-pixel radii.
 - Ruff was not installed in the current virtual environment and was not run.
 
-The template suite also verifies that one captured corrected frame is reused
-for every candidate option group, camera delivery remains frozen during review,
-and stale match or G-code results cannot be applied after relevant state changes.
+The template suite also verifies that one corrected frame is reused for every
+candidate option group, camera delivery remains frozen during review, and stale
+camera, match, or G-code results cannot be applied after relevant state changes.
+It exercises Unicode-safe corrected-image loading, strict uniform-scale aspect
+validation, copy-isolated memory-only source state, generated color/contrast
+frames at known poses, controller pose recovery, live-timer restoration, camera
+control gating, and the persistent frozen-source badge. The maximum 500-feature
+renderer has a structural regression proving that label blending stays within
+local pixel regions.
 
-A 72-test focused integration run covers the parametric rectangle-grid builder
-and designer, exact-ID template replacement, gap/pitch conversion, the
-500-object and work-area gates, and atomic rectangle width/height/radius editing.
-Toolpath coverage also verifies that insignificant floating-point drift at an
-exact work-area boundary is accepted while meaningful overflow remains blocked.
-The complete 189-test suite passed after the direct-manipulation, authoring, and
-layout-focused runs.
+The parametric rectangle-grid builder and designer, exact-ID template
+replacement, gap/pitch conversion, 500-object and work-area gates, and atomic
+rectangle width/height/radius editing remain covered. Toolpath coverage also
+verifies that insignificant floating-point drift at an exact work-area boundary
+is accepted while meaningful overflow remains blocked. The complete 230-test
+suite passed after the test-image integration and review fixes.
 
 POSIX serial is selected lazily, so `termios` is not imported by simulator or
 application startup on Windows. Selecting the real serial backend on Windows
@@ -106,10 +116,12 @@ from 2026-08-06 has not been run as a complete Linux suite during this audit.
 | SVG parsing and transforms | Tested on Windows with representative SVG cases |
 | Lens-cache and bed-homography logic | Tested on Windows with synthetic data |
 | Workpiece, crosshair-grid, and object-trace vision | Tested on Windows with synthetic images |
+| Native trace preview/review/create lifecycle | Behaviorally tested offscreen on Windows; not real-camera verified |
 | Browser single-SVG G-code | Tested on Windows at the library level |
 | Desktop project model, history, materials, and toolpaths | Tested on Windows |
 | Cutting-template model, library, and rigid instantiation | Tested on Windows |
 | Geometric template matching and candidate ranking | Tested with synthetic features on Windows |
+| Frozen corrected test-image source and generated known-pose alignment | Behaviorally tested in safe simulation on Windows; not real-camera verified |
 | Rectangle-grid builder and editable authoring metadata | Tested with portable model/library checks on Windows |
 | Grid designer and ordinary rectangle radius editing | Behaviorally tested offscreen; not interactively verified |
 | Native template save/select/review/direct-canvas-adjust/apply workflow | Behaviorally tested offscreen; not real-camera verified |
@@ -159,6 +171,13 @@ Before application, the transient cyan cut preview can be dragged as one rigid
 layout and rotated with its round canvas handle. These gestures update the same
 center/rotation values as the numeric controls; they do not resize cuts or move
 the frozen amber camera detections.
+
+In safe simulation, the corrected frame can instead come from a validated
+full-bed PNG/JPEG or a deterministic template render with known X/Y/rotation,
+noise, and missing-label settings. The source is memory-only and unavailable in
+a hardware-enabled process. This verifies software flow, not camera correction,
+bed calibration, parallax, physical placement, controller motion, or laser
+accuracy.
 
 Regular-grid templates support at most 500 rounded-rectangle cuts. Their
 authoring recipe stores edge gaps and derives center pitch and footprint; the
