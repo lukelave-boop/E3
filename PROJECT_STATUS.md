@@ -31,7 +31,7 @@ Environment:
 
 Results:
 
-- **182 tests passed and 2 POSIX-only tests skipped.**
+- **183 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
@@ -61,7 +61,7 @@ and designer, exact-ID template replacement, gap/pitch conversion, the
 500-object and work-area gates, and atomic rectangle width/height/radius editing.
 Toolpath coverage also verifies that insignificant floating-point drift at an
 exact work-area boundary is accepted while meaningful overflow remains blocked.
-The complete 182-test suite passed after the authoring and layout-focused runs.
+The complete 183-test suite passed after the authoring and layout-focused runs.
 
 POSIX serial is selected lazily, so `termios` is not imported by simulator or
 application startup on Windows. Selecting the real serial backend on Windows

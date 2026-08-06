@@ -303,10 +303,29 @@ def test_template_panel_reports_manual_override_selection(
     selected: list[str] = []
     panel.templateSelected.connect(selected.append)
 
-    panel.template_combo.setCurrentIndex(panel.template_combo.findData("template-b"))
+    index = panel.template_combo.findData("template-b")
+    panel.template_combo.setCurrentIndex(index)
+    panel.template_combo.activated.emit(index)
 
     assert selected == ["template-b"]
     assert panel.current_template_id() == "template-b"
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_template_panel_reactivates_the_only_selected_template(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    panel.set_templates([_template_summary("template-a", "Alpha labels")])
+    selected: list[str] = []
+    panel.templateSelected.connect(selected.append)
+
+    assert panel.template_combo.currentIndex() == 0
+    panel.template_combo.activated.emit(0)
+
+    assert selected == ["template-a"]
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()

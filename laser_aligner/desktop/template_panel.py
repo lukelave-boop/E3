@@ -219,6 +219,11 @@ class TemplatePanel(QtWidgets.QWidget):
         layout.addStretch(1)
 
         self.template_combo.currentIndexChanged.connect(self._template_changed)
+        # ``activated`` also fires when the user explicitly chooses the item
+        # that is already current. That matters when the library contains one
+        # template: there is no index change, but the choice should still open
+        # its placement preview.
+        self.template_combo.activated.connect(self._template_activated)
         self.new_grid_button.clicked.connect(self.newGridRequested.emit)
         self.edit_grid_button.clicked.connect(self._edit_grid_clicked)
         self.save_button.clicked.connect(self.saveRequested.emit)
@@ -500,6 +505,9 @@ class TemplatePanel(QtWidgets.QWidget):
             self._placement_valid = False
         self._show_template_summary()
         self._update_enabled()
+
+    def _template_activated(self, index: int) -> None:
+        del index
         if self._updating:
             return
         template_id = self.current_template_id()

@@ -75,6 +75,8 @@
 - Made the Templates, Camera, Trace, and Transform inspectors tolerate narrow
   docks and larger text without hiding controls; concise responsive labels keep
   their full meaning in tooltips.
+- Made an explicit choice of the already-selected template activate placement,
+  so a one-template library can always open its workspace preview.
 
 ### Documentation
 
