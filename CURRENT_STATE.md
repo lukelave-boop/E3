@@ -124,7 +124,7 @@ Audit environment:
 
 Results:
 
-- **183 tests passed and 2 POSIX-only tests skipped.**
+- **184 tests passed and 2 POSIX-only tests skipped.**
 - The complete suite collected, including app simulation and machine-service
   tests.
 - A focused cutting-template run passed 39 model, library, matcher, controller,
@@ -154,7 +154,7 @@ rectangle width/height/radius edits, regular-grid generation, editable authoring
 metadata, exact-ID replacement, gap/pitch conversion, live preview, and
 work-area/object-count rejection. An additional toolpath regression verifies
 that microscopic floating-point noise at an exact work-area edge is accepted
-while a real overflow is still rejected. The complete 183-test suite then passed.
+while a real overflow is still rejected. The complete 184-test suite then passed.
 
 The two skipped tests require POSIX pseudoterminals and `termios`. The exact
 updated branch has not been run as a complete Linux suite during this audit.

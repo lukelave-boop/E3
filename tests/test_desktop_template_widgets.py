@@ -100,6 +100,35 @@ class _WindowHarness:
         return self.document.work_area.center
 
 
+class _TemplateSelectionHarness:
+    def __init__(self, panel: TemplatePanel) -> None:
+        self.template_panel = panel
+        self._templates = {"template-a": object()}
+        self._template_match_result: dict[str, Any] | None = None
+        self.preview_clear_count = 0
+        self.match_requests: list[str | None] = []
+        self.workspace = SimpleNamespace(
+            clear_template_preview=self._clear_template_preview
+        )
+        self.controller = SimpleNamespace(cancel_template_match=lambda: None)
+        self.runtime = SimpleNamespace(
+            running=True,
+            context=SimpleNamespace(bed=SimpleNamespace(calibration=object())),
+        )
+
+    def _clear_template_preview(self) -> None:
+        self.preview_clear_count += 1
+
+    def _document_center(self) -> tuple[float, float]:
+        return (110.0, 110.0)
+
+    def _set_manual_template_placement(self, template_id: str) -> None:
+        E3MainWindow._set_manual_template_placement(self, template_id)
+
+    def _request_template_match(self, template_id: str | None = None) -> None:
+        self.match_requests.append(template_id)
+
+
 class _ActionHarness:
     def __init__(self) -> None:
         self.enabled = False
@@ -326,6 +355,30 @@ def test_template_panel_reactivates_the_only_selected_template(
     panel.template_combo.activated.emit(0)
 
     assert selected == ["template-a"]
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_selecting_template_keeps_manual_preview_until_camera_match_is_requested(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    panel.set_templates([_template_summary("template-a", "Alpha labels")])
+    harness = _TemplateSelectionHarness(panel)
+
+    E3MainWindow._template_selected(harness, "template-a")
+
+    assert harness.preview_clear_count == 1
+    assert harness.match_requests == []
+    assert panel.placement() == {
+        "template_id": "template-a",
+        "center_x_mm": 110.0,
+        "center_y_mm": 110.0,
+        "rotation_deg": 0.0,
+    }
+    assert panel.apply_button.isEnabled()
+    assert "Align selected template" in panel.match_status.text()
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()

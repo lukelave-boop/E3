@@ -77,6 +77,8 @@
   their full meaning in tooltips.
 - Made an explicit choice of the already-selected template activate placement,
   so a one-template library can always open its workspace preview.
+- Kept manual template placement visible until the operator explicitly starts
+  **Align selected template** or automatic camera identification.
 
 ### Documentation
 

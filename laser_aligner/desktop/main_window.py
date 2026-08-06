@@ -1612,11 +1612,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _template_selected(self, template_id: str) -> None:
         self.workspace.clear_template_preview()
         self._set_manual_template_placement(template_id)
-        if (
-            self.runtime.running
-            and self.runtime.context.bed.calibration is not None
-        ):
-            self._request_template_match(template_id)
+        if self.runtime.context.bed.calibration is not None:
+            self.template_panel.set_match_message(
+                "Manual placement is active. Choose Align selected template "
+                "to replace it with a camera alignment."
+            )
         else:
             self.template_panel.set_match_message(
                 "Manual placement is active. Bed mapping is required for camera alignment."
