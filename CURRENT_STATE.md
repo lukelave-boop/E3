@@ -133,14 +133,15 @@ Audit environment:
 
 Results:
 
-- **250 tests passed and 2 POSIX-only tests skipped.**
+- **307 tests passed and 2 POSIX-only tests skipped.**
 - The complete suite collected, including app simulation and machine-service
   tests.
 - Focused template/test-image runs passed their model, library, renderer,
   matcher, controller, widget, workspace, and desktop-integration checks.
 - The browser simulator served a healthy API response and its HTML interface.
 - The native desktop started with the synthetic camera and simulated controller
-  under Qt's offscreen backend, ran its event loop, and shut down cleanly.
+  under both Qt's offscreen backend and a native Windows 1600 x 900 visual
+  render, ran its event loop, and shut down cleanly.
 - An offscreen `E3MainWindow` smoke test saved and reloaded a template, created
   aligned objects as one history command, and undid the operation.
 - A second offscreen `E3MainWindow` smoke test drove the modal grid designer,
@@ -161,8 +162,12 @@ Results:
   Corrected-image pixel centers are also registered to their OpenCV/BedMapper
   machine coordinates without a half-pixel overlay shift, and ideal discrete
   rounded masks recover their radius without a center-span off-by-one.
-- The interactive native workflow has not yet been manually exercised on this
-  Windows checkout.
+- Transient canvas geometry now has a dynamic key: selected Trace results are
+  solid green, aligned template cuts are solid cyan, and fixed camera evidence
+  is dashed amber. Alignment review uses the same smooth fitted camera boundary
+  as Trace and keeps both lines visible when they overlap.
+- The native shell has been visually checked on Windows in safe simulation;
+  extended manual interaction and real camera/controller use remain unverified.
 - Ruff was not available in the current virtual environment.
 
 The cutting-template coverage includes versioned persistence, resilient
@@ -220,10 +225,22 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
 
 - Native workspace with machine coordinates, grid, rulers, pan, zoom, snap,
   and corrected-camera overlay.
+- LightBurn-inspired desktop hierarchy with original compact icons, a bright
+  drafting bed, a non-hideable responsive runtime/safety strip, always-present
+  numeric properties, split design/laser inspector stacks, and a fixed 30-color
+  operation palette.
 - Multiple objects and operation layers.
 - Rectangle, rounded rectangle, ellipse, line, text, and SVG-path objects.
+- Persistent press-drag-release rectangle drawing with a live active-layer
+  outline, endpoint snapping, normalized drag direction, exact-size commit,
+  immediate selection, and one-step undo/redo.
 - Numeric width, height, and corner-radius editing for a selected rectangle,
   applied as one undoable validated shape change.
+- Direct single-object corner resize and rotation handles with live preview,
+  anchored-corner resizing, 15-degree Shift snapping, and undoable commits.
+- Five-column operation summaries for mode, speed/power, output, and
+  visibility, with inline toggles, operation-color editing, ordering controls,
+  and explicit no-toolpath labeling for fill/raster modes.
 - Transform, mirror, duplicate, delete, group, ungroup, align, distribute, and
   z-order commands.
 - Undo/redo.
@@ -276,6 +293,8 @@ camera and calibration.
   contained holes excluded.
 - Manual library selection plus synchronized numeric and direct-canvas
   center/rotation adjustment of the complete transient cut preview.
+- A role-labeled overlay key and color-independent solid/dashed styling for
+  distinguishing aligned cut geometry from camera-detected feature edges.
 - Synthetic geometry-based template ranking, weak-match rejection, and
   template/pose ambiguity warnings.
 - One corrected frame shared across all candidate trace settings and frozen
@@ -284,7 +303,8 @@ camera and calibration.
   uniform-scale contract and Unicode-safe paths.
 - Deterministic corrected-frame generation from a selected template at known
   X/Y/rotation, with optional noise and missing labels; maximum-size grids use
-  per-label rendering regions.
+  per-label rendering regions and exact discrete rounded silhouettes that do
+  not introduce a detectable antialias fringe.
 - One in-memory test frame shared by the workspace, tracer, and matcher, with
   stale-source rejection and explicit restoration of the synthetic camera.
 - Rigid translation/rotation placement with scale differences reported but
@@ -326,9 +346,13 @@ physical placement. No marker detector is implemented. See
 - No fill or raster engine.
 - No text-to-outline conversion.
 - No image or DXF import.
-- No on-canvas resize handles, general project-object rotation handles, or
-  smart guides. The transient cutting-template preview has its own rigid-body
-  drag and rotation controls.
+- Ellipse and line creation remain one-shot centered inserts; only rectangles
+  currently have the persistent canvas drawing interaction.
+- Single visible, unlocked objects have corner resize and rotation handles.
+  Shared multi-selection transform boxes, node editing, proportional resize
+  gestures, and smart guides are not implemented. The transient
+  cutting-template preview retains its separate rigid-body drag and rotation
+  controls.
 - No full interactive end-to-end GUI automation.
 - Cutting-template matching uses provisional software acceptance gates, but has
   no real-camera validation dataset or physically measured accuracy threshold.

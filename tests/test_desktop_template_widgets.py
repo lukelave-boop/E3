@@ -1398,7 +1398,7 @@ def test_workspace_template_preview_is_transient_and_independent(
         for item in view._template_items
         if item.toolTip() == "Template preview: Template rectangle"
     )
-    assert observed.zValue() == pytest.approx(279.0)
+    assert observed.zValue() == pytest.approx(282.0)
     assert observed.acceptedMouseButtons() == QtCore.Qt.MouseButton.NoButton
     assert first.pos().x() == pytest.approx(12.0)
     assert first.pos().y() == pytest.approx(-34.0)
@@ -1480,6 +1480,109 @@ def test_workspace_trace_preview_prefers_vector_contour_with_legacy_fallback(
     assert fallback_bounds.top() == pytest.approx(-90.0)
     assert fallback_bounds.bottom() == pytest.approx(-10.0)
 
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_alignment_overlay_key_names_cut_and_camera_geometry_and_prefers_vector(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    template_cut = SceneObject.rectangle(
+        "preview-layer",
+        name="Aligned label cut",
+        center=(50.0, 60.0),
+        width_mm=20.0,
+        height_mm=20.0,
+        corner_radius_mm=3.0,
+    )
+    detection = {
+        "contour_mm": [[10.0, 10.0], [90.0, 10.0], [90.0, 90.0]],
+        "vector_contour_mm": [
+            [40.0, 50.0],
+            [60.0, 50.0],
+            [60.0, 70.0],
+            [40.0, 70.0],
+        ],
+    }
+
+    view.set_template_preview(
+        [template_cut],
+        detections=[detection],
+        center_x_mm=50.0,
+        center_y_mm=60.0,
+    )
+
+    entries = {label: style for label, _, style in view._overlay_legend.entries}
+    assert entries == {
+        "Camera edge (amber)": QtCore.Qt.PenStyle.DashLine,
+        "Aligned template cut (cyan)": QtCore.Qt.PenStyle.SolidLine,
+    }
+    assert view._overlay_legend.isVisibleTo(view)
+    observed = next(
+        item
+        for item in view._template_items
+        if item.toolTip() == "Observed camera feature"
+    )
+    observed_bounds = observed.path().boundingRect()
+    assert observed_bounds.left() == pytest.approx(40.0)
+    assert observed_bounds.right() == pytest.approx(60.0)
+    assert observed_bounds.top() == pytest.approx(-70.0)
+    assert observed_bounds.bottom() == pytest.approx(-50.0)
+    assert observed.pen().style() == QtCore.Qt.PenStyle.DashLine
+    assert observed.zValue() > view._template_preview_item.zValue()
+    assert _template_item(view, template_cut.name).pen().style() == (
+        QtCore.Qt.PenStyle.SolidLine
+    )
+
+    view.clear_template_preview()
+    assert not view._overlay_legend.isVisible()
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_overlay_key_combines_trace_and_toolpath_line_types(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    view.set_trace_preview(
+        [
+            {
+                "id": "direct",
+                "source": "direct",
+                "contour_mm": [[10.0, 10.0], [20.0, 10.0], [20.0, 20.0]],
+            },
+            {
+                "id": "inferred",
+                "source": "inferred",
+                "contour_mm": [[30.0, 10.0], [40.0, 10.0], [40.0, 20.0]],
+            },
+        ],
+        {"direct", "inferred"},
+    )
+    view.set_toolpath_preview("G90\nG0 X5 Y5\nM4 S100\nG1 X10 Y10\nM5\nG1 X15 Y15\n")
+
+    labels = [entry[0] for entry in view._overlay_legend.entries]
+    assert labels == [
+        "Selected trace (green)",
+        "Inferred trace (amber)",
+        "Rapid travel",
+        "Powered toolpath",
+        "Laser-off move",
+    ]
+
+    view.clear_trace_preview()
+    assert [entry[0] for entry in view._overlay_legend.entries] == [
+        "Rapid travel",
+        "Powered toolpath",
+        "Laser-off move",
+    ]
+    view.clear_toolpath_preview()
+    assert not view._overlay_legend.isVisible()
     view.close()
     view.deleteLater()
     qt_application.processEvents()

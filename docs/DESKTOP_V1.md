@@ -13,19 +13,96 @@ geometry, G-code, safety and controller services.
 ### Native workspace
 
 - Native `QMainWindow` application shell with persistent dock and window layout
-- Dockable Cuts/Layers, Objects, Transform, Camera, Move/Machine, Material
-  Library, Job, Console and G-code panels
+- Split right-side design tabs for Cuts/Layers, Cameras, Objects, Shape
+  Properties, Templates, and Trace, plus Laser, Machine, and Material Library
+  execution tabs; Console and G-code remain optional docks
 - Physical machine-coordinate workspace with adaptive grid, rulers, origin,
   pan, zoom and selectable snap spacing
 - Corrected camera image behind the workspace with adjustable opacity
 - Safe-simulation controls to load a corrected full-bed test image or generate
   one from a selected cutting template, with a persistent frozen-source badge,
   then restore the synthetic camera
-- Selection, drag movement, numeric size/position/rotation, mirror, duplicate,
-  delete, group/ungroup, alignment, distribution and z-order controls
-- Basic rectangle, rounded rectangle, ellipse, line and text creation
+- Selection, drag movement, direct corner resize and rotation handles, numeric
+  size/position/rotation, mirror, duplicate, delete, group/ungroup, alignment,
+  distribution and z-order controls
+- Persistent press-drag-release rectangle drawing plus basic rounded rectangle,
+  ellipse, line and text creation
 - Existing SVG parser connected to the native project document
 - Visual toolpath preview distinguishing rapid, powered and unpowered moves
+
+### Current control-surface layout
+
+The desktop shell now follows a LightBurn-inspired information hierarchy
+without copying LightBurn branding or changing the E3 machine-control model:
+
+1. Traditional File, Edit, Tools, Arrange, Laser Tools, Window, and Help menus
+   retain every existing command.
+2. Original icon-only File/Edit/Arrange/Job controls share one compact command
+   row above the workspace.
+3. A non-hideable runtime strip always reports simulation or hardware
+   authority, controller connection, and motion permission. Its software-stop
+   action remains enabled during ordinary background work. It stays inline on
+   wide windows and moves to its own row below 1100 logical pixels so STOP can
+   never disappear into toolbar overflow.
+4. An always-present two-row property bar exposes X, Y, width, height,
+   percentage scaling, aspect lock, rotation, millimetre/inch display,
+   mirroring, and contextual rectangle radius. Controls disable when the
+   selection cannot be edited instead of making the toolbar collapse.
+5. A compact left rail holds selection, creation, trace/template, fit, zoom,
+   and snap tools.
+6. The central machine-coordinate workspace uses a near-white adaptive grid,
+   thin light rulers, no permanent scroll-bar chrome, auto-fit until the user
+   zooms or pans, and an 18% corrected-camera overlay by default. A dynamic
+   key identifies transient Trace, camera-detection, template-cut, and toolpath
+   lines by both role and line style.
+7. The right side uses two vertically split tab stacks: design and operation
+   editing above, laser execution and materials below.
+8. A fixed 30-color bottom palette assigns selected objects to existing
+   operations; clicking an unused color creates a matching operation. The
+   status bar reports direct-edit affordances and live workspace feedback.
+
+Console and G-code Preview remain dockable from the Window menu but start
+hidden so the workspace has more room. Generating or framing a job opens the
+G-code Preview. **Window > Reset workspace layout** restores the maintained
+default arrangement. Window geometry and dock state use the versioned Qt
+settings key `v5`, so stale layouts from the earlier shell do not override the
+new default.
+
+Direct resize/rotation handles appear only for one visible, unlocked object on
+a visible layer. Resizing keeps the opposite corner fixed; holding Shift while
+rotating snaps to 15-degree increments. The document is not mutated during the
+live preview. Releasing the handle commits through the existing command stack,
+so undo/redo and generated-job invalidation remain consistent. Rectangle
+radius clamping is part of the same atomic history command.
+
+Rectangle is an exclusive persistent drawing tool rather than a fixed-size
+insert command. Pressing it changes no project state. Dragging on empty bed
+space previews a square-cornered rectangle in the active operation color and
+reports live width/height; release creates and selects exactly one object through
+the command stack. Both endpoints obey the current snap setting, every drag
+direction is normalized, and zero-size drags are ignored. The tool remains
+active for repeated rectangles. Select or a canvas right-click exits drawing;
+middle-button and Space-drag still pan. Escape remains reserved for software
+stop / laser off.
+
+The Operations/Layers table summarizes layer color/name, mode, speed/power,
+Output, and Show state. Inline toggles, ordering controls, the quick editor,
+and operation color selection all update the existing project-layer model.
+Fill and raster layers remain representable but are labeled as having no
+toolpath because those engines are not implemented.
+
+### Feature-preservation map
+
+| Existing capability | Current surface | Preservation boundary |
+|---|---|---|
+| Project file, import, undo/redo, and object commands | Menus, global toolbars, left rail, and context bar | Existing `ProjectDocument` commands and history stack remain authoritative |
+| Machine authority, arming, execution, and stop | Persistent runtime strip plus Machine and Job inspectors | `DesktopController` and `MachineService` gates are unchanged; the strip is status/presentation only |
+| Camera overlay, focus, and corrected test sources | Camera inspector and workspace | Existing camera/controller lifecycle is unchanged |
+| Object tracing | Trace tool and inspector | Existing frozen-frame review and object-creation path is unchanged |
+| Cutting templates and alignment | Templates tool, inspector, and grid designer | Existing rigid placement, review, and one-command apply path is unchanged |
+| Operation layers and materials | Operations/Layers table, bottom palette, and Materials inspector | Existing layer schema, ordering, presets, and explicit unsupported-mode checks are retained |
+| Toolpath generation, framing, preview, and run | Job toolbar, Job inspector, and on-demand G-code Preview | Existing generation, revision invalidation, validation, arming, and execution path is unchanged |
+| Browser calibration and placement application | Browser application | Intentionally unchanged by the desktop-only redesign |
 
 ### Project and operations model
 
@@ -150,8 +227,9 @@ test. POSIX serial is selected lazily; Linux remains the only hardware platform.
 1. Windows launch scripts, OS-native user-data paths, and CI.
 2. Native lens and camera-to-machine calibration wizards.
 3. Behavioral Qt tests for project editing and object tracing.
-4. General project-object resize/rotation handles plus smart snap guides. The
-   transient cutting-template preview already supports rigid drag and rotation.
+4. Multi-selection transform boxes, proportional canvas resizing, node
+   editing, and smart snap guides. Single-object resize/rotation and transient
+   cutting-template drag/rotation are already implemented.
 5. Guarded jog API and tested controller-specific realtime pause/resume.
 6. DXF/image import and text-to-outline conversion.
 7. Fill and raster engines with overscan and scan-direction tests.

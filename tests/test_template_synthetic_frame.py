@@ -239,6 +239,57 @@ def test_rounded_trace_vector_follows_the_fitted_geometry_without_faceting():
     ) < 0.08
 
 
+def test_axis_aligned_generated_grid_has_no_antialias_detection_expansion():
+    options = TraceOptions(
+        detection_mode="color",
+        target_hue=2,
+        min_saturation=35,
+        min_area_mm2=40.0,
+        min_width_mm=5.0,
+        min_height_mm=4.0,
+        regular_grid=False,
+        infer_missing=False,
+        output_mode="rounded",
+    )
+    template = template_from_rectangle_grid(
+        RectangleGridSpec(
+            name="Axis-aligned 8 x 2 rounded labels",
+            rows=8,
+            columns=2,
+            width_mm=78.0,
+            height_mm=21.0,
+            corner_radius_mm=3.0,
+            horizontal_gap_mm=9.6,
+            vertical_gap_mm=3.0,
+        ),
+        trace_options=options.to_dict(),
+    )
+    area = WorkArea(0.0, 220.0, 0.0, 220.0)
+    frame = generate_template_test_frame(
+        template,
+        area,
+        4.0,
+        center_x_mm=110.0,
+        center_y_mm=110.0,
+        rotation_deg=0.0,
+        noise_stddev=0.0,
+    )
+
+    result = detect_objects(frame.image, options, area, 4.0)
+    alignment = align_template(template, result.detections)
+
+    assert result.direct_count == 16
+    assert all(item.width_mm == pytest.approx(78.0, abs=0.01) for item in result.detections)
+    assert all(item.height_mm == pytest.approx(21.0, abs=0.01) for item in result.detections)
+    assert all(
+        item.corner_radius_mm == pytest.approx(3.0, abs=0.01)
+        for item in result.detections
+    )
+    assert alignment.translation_mm == pytest.approx((110.0, 110.0), abs=0.01)
+    assert alignment.dimension_scale_ratio == pytest.approx(1.0, abs=0.001)
+    assert alignment.rms_error_mm == pytest.approx(0.05, abs=0.01)
+
+
 def test_contrast_frame_exercises_the_templates_contrast_trace_options():
     template = _grid_template(detection_mode="contrast")
     area = WorkArea(0.0, 100.0, 0.0, 80.0)

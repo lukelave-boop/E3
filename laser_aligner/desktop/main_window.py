@@ -18,6 +18,8 @@ from ..project import (
     CommandStack,
     DuplicateObjectsCommand,
     GroupObjectsCommand,
+    LayerMode,
+    ObjectKind,
     OperationLayer,
     ProjectDocument,
     RemoveLayerCommand,
@@ -53,7 +55,9 @@ from ..templates import (
     template_from_project,
 )
 from .controller import DesktopController
-from .controls import InspectorTabs, PanelScrollArea, WheelGuard
+from .context_bar import ContextPropertyBar
+from .controls import InspectorTabs, WheelGuard
+from .icons import action_icon, apply_action_icons
 from .panels import (
     CameraPanel,
     ConsolePanel,
@@ -66,6 +70,7 @@ from .panels import (
     TransformPanel,
 )
 from .qt import require_qt
+from .runtime_strip import RuntimeSafetyStrip
 from .template_designer import GridTemplateDesignerDialog, WORK_AREA_TOLERANCE_MM
 from .template_panel import TemplatePanel
 from .template_test_image import TemplateTestImageDialog
@@ -74,16 +79,67 @@ from .workspace import WorkspaceFrame, WorkspaceView
 QtCore, QtGui, QtWidgets = require_qt()
 
 
+LAYER_PALETTE_COLORS = (
+    "#101010", "#185CFF", "#F02C3D", "#2DD12D", "#E5DA19",
+    "#FF8A18", "#18C9D4", "#ED23D2", "#8A8A8A", "#25358E",
+    "#A71927", "#178A35", "#9A941A", "#A75E1D", "#15828A",
+    "#9A248B", "#B2B2B2", "#5367B5", "#B35F70", "#61B471",
+    "#B9B35D", "#C88A56", "#5EAFB5", "#B065A8", "#D0D0D0",
+    "#7184DC", "#DA7D8A", "#83CB91", "#D6CD77", "#DD9B68",
+)
+
+
 class LayerPaletteBar(QtWidgets.QWidget):
     layerSelected = QtCore.Signal(str)
+    addLayerRequested = QtCore.Signal()
+    presetLayerRequested = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self._layout = QtWidgets.QHBoxLayout(self)
-        self._layout.setContentsMargins(5, 2, 5, 2)
-        self._layout.setSpacing(3)
+        outer = QtWidgets.QHBoxLayout(self)
+        outer.setContentsMargins(2, 1, 2, 1)
+        outer.setSpacing(3)
         self._buttons: dict[str, QtWidgets.QToolButton] = {}
-        self._layout.addStretch(1)
+        self._preset_buttons: dict[int, QtWidgets.QToolButton] = {}
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+
+        self._scroll = QtWidgets.QScrollArea()
+        self._scroll.setObjectName("layerPaletteScroll")
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._scroll.setMinimumWidth(70)
+        self._scroll.setFixedHeight(31)
+        self._scroll.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self._button_host = QtWidgets.QWidget()
+        self._button_host.setObjectName("layerPaletteButtonHost")
+        self._layout = QtWidgets.QHBoxLayout(self._button_host)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(2)
+        self._layout.setSizeConstraint(
+            QtWidgets.QLayout.SizeConstraint.SetMinimumSize
+        )
+        self._scroll.setWidget(self._button_host)
+        outer.addWidget(self._scroll, 1)
+
+        self.add_button = QtWidgets.QToolButton()
+        self.add_button.setText("+")
+        self.add_button.setToolTip("Create a new operation layer")
+        self.add_button.setAccessibleName("Add operation layer")
+        self.add_button.setFixedSize(26, 24)
+        self.add_button.clicked.connect(self.addLayerRequested)
+        outer.addWidget(self.add_button)
 
     def set_layers(self, layers: list[OperationLayer], active_layer_id: str) -> None:
         while self._layout.count():
@@ -92,27 +148,68 @@ class LayerPaletteBar(QtWidgets.QWidget):
             if widget is not None:
                 widget.deleteLater()
         self._buttons.clear()
-        for layer in layers:
+        self._preset_buttons.clear()
+
+        swatch_count = max(len(LAYER_PALETTE_COLORS), len(layers))
+        for index in range(swatch_count):
+            layer = layers[index] if index < len(layers) else None
+            color_value = (
+                layer.color
+                if layer is not None
+                else LAYER_PALETTE_COLORS[index % len(LAYER_PALETTE_COLORS)]
+            )
             button = QtWidgets.QToolButton()
             button.setCheckable(True)
-            button.setChecked(layer.id == active_layer_id)
-            button.setToolTip(
-                f"{layer.name}\n{layer.mode.value} · {layer.speed_mm_min:g} mm/min · "
-                f"{layer.power_percent:g}%\n"
-                "Click to make active; selected objects are assigned to this layer."
-            )
-            button.setFixedSize(28, 24)
+            button.setChecked(layer is not None and layer.id == active_layer_id)
+            button.setText(f"{index:02d}")
+            if layer is not None:
+                button.setAccessibleName(f"Operation {index:02d}: {layer.name}")
+                mode_status = (
+                    "Line toolpath"
+                    if layer.mode == LayerMode.LINE
+                    else f"{layer.mode.value.title()} · no toolpath in this build"
+                )
+                button.setToolTip(
+                    f"{index:02d} · {layer.name}\n"
+                    f"{mode_status} · {layer.speed_mm_min:g} mm/min · "
+                    f"{layer.power_percent:g}%\n"
+                    f"Output {'on' if layer.output_enabled else 'off'} · "
+                    f"{'shown' if layer.visible else 'hidden'}\n"
+                    "Click to make active; selected objects are assigned to this layer."
+                )
+                button.clicked.connect(
+                    lambda checked=False, layer_id=layer.id: self.layerSelected.emit(
+                        layer_id
+                    )
+                )
+                self._buttons[layer.id] = button
+            else:
+                button.setAccessibleName(f"Unused operation color {index:02d}")
+                button.setToolTip(
+                    f"{index:02d} · unused operation color\n"
+                    "Click to create a new line operation with this color."
+                )
+                button.clicked.connect(
+                    lambda checked=False, color=color_value: self.presetLayerRequested.emit(
+                        color
+                    )
+                )
+            button.setFixedSize(27, 23)
+            swatch = QtGui.QColor(color_value)
+            foreground = "#07130F" if swatch.lightnessF() >= 0.58 else "#FFFFFF"
             button.setStyleSheet(
                 "QToolButton {"
-                f"background: {layer.color}; border: 2px solid "
-                f"{'#F5F8FA' if layer.id == active_layer_id else '#26343E'};"
-                "border-radius: 4px;"
+                f"background: {color_value}; color: {foreground}; border: 1px solid "
+                f"{'#FFFFFF' if layer is not None and layer.id == active_layer_id else '#303030'};"
+                "border-radius: 2px; padding: 0; font-size: 8pt;"
                 "}"
             )
-            button.clicked.connect(lambda checked=False, layer_id=layer.id: self.layerSelected.emit(layer_id))
             self._layout.addWidget(button)
-            self._buttons[layer.id] = button
+            self._preset_buttons[index] = button
+
         self._layout.addStretch(1)
+        self._button_host.adjustSize()
+        self._scroll.horizontalScrollBar().setValue(0)
 
 
 class E3MainWindow(QtWidgets.QMainWindow):
@@ -163,7 +260,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if icon_path.exists():
             self.setWindowIcon(QtGui.QIcon(str(icon_path)))
         self.setMinimumSize(900, 600)
-        self.resize(1180, 720)
+        self.resize(1320, 820)
         self.setDockOptions(
             QtWidgets.QMainWindow.DockOption.AllowNestedDocks
             | QtWidgets.QMainWindow.DockOption.AllowTabbedDocks
@@ -179,6 +276,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._create_toolbars()
         self._create_docks()
         self._create_status_bar()
+        self._default_window_state = self.saveState(5)
         self._connect_signals()
         self.controller.set_live_camera(
             self.camera_panel.live_enabled(),
@@ -258,7 +356,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("zoom_out", "Zoom out", "Ctrl+-")
         action("snap", "Snap to grid", "Ctrl+Alt+G", checkable=True)
         self.actions["snap"].setChecked(True)
-        action("rectangle", "Add rectangle", "Alt+R")
+        action("select_tool", "Select tool", checkable=True)
+        action("rectangle", "Draw rectangle", "Alt+R", checkable=True)
         action("ellipse", "Add ellipse", "Alt+E")
         action("line", "Add line", "Alt+L")
         action("text", "Add text", "Alt+T")
@@ -273,7 +372,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("minimize_window", "Minimize window", "Ctrl+M")
         action("maximize_window", "Maximize / restore window", "Ctrl+Shift+M")
         action("reset_window_size", "Reset window size")
+        action("reset_workspace_layout", "Reset workspace layout")
         action("about", "About E3 Positioning System")
+
+        self._drawing_action_group = QtGui.QActionGroup(self)
+        self._drawing_action_group.setExclusive(True)
+        self._drawing_action_group.addAction(self.actions["select_tool"])
+        self._drawing_action_group.addAction(self.actions["rectangle"])
+        self.actions["select_tool"].setChecked(True)
+
+        apply_action_icons(self.actions, size=20)
 
         self.actions["undo"].setEnabled(False)
         self.actions["redo"].setEnabled(False)
@@ -311,7 +419,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["zoom_in"].triggered.connect(self.workspace.zoom_in)
         self.actions["zoom_out"].triggered.connect(self.workspace.zoom_out)
         self.actions["snap"].toggled.connect(self.workspace.set_snap_enabled)
-        self.actions["rectangle"].triggered.connect(self.add_rectangle)
+        self.actions["select_tool"].triggered.connect(
+            lambda checked=False: self._activate_selection_tool()
+        )
+        self.actions["rectangle"].triggered.connect(
+            lambda checked=False: self.add_rectangle()
+        )
         self.actions["ellipse"].triggered.connect(self.add_ellipse)
         self.actions["line"].triggered.connect(self.add_line)
         self.actions["text"].triggered.connect(self.add_text)
@@ -328,6 +441,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["minimize_window"].triggered.connect(self.showMinimized)
         self.actions["maximize_window"].triggered.connect(self._toggle_maximized)
         self.actions["reset_window_size"].triggered.connect(self._reset_window_size)
+        self.actions["reset_workspace_layout"].triggered.connect(
+            self._reset_workspace_layout
+        )
         self.actions["about"].triggered.connect(self.show_about)
 
     def _create_menus(self) -> None:
@@ -343,6 +459,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         edit_menu.addSeparator()
         edit_menu.addAction(self.actions["group"])
         edit_menu.addAction(self.actions["ungroup"])
+
+        tools_menu = self.menuBar().addMenu("&Tools")
+        for key in ("rectangle", "ellipse", "line", "text"):
+            tools_menu.addAction(self.actions[key])
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.actions["grid_template_designer"])
+        tools_menu.addAction(self.actions["trace_objects"])
+        tools_menu.addAction(self.actions["template_alignment"])
+        tools_menu.addSeparator()
+        tools_menu.addAction(self.actions["refresh_camera"])
 
         align_menu = self.menuBar().addMenu("&Arrange")
         for key in (
@@ -361,28 +487,19 @@ class E3MainWindow(QtWidgets.QMainWindow):
         for key in ("bring_front", "raise", "lower", "send_back"):
             align_menu.addAction(self.actions[key])
 
-        view_menu = self.menuBar().addMenu("&View")
-        view_menu.addAction(self.actions["fit"])
-        view_menu.addAction(self.actions["fit_selection"])
-        view_menu.addAction(self.actions["zoom_in"])
-        view_menu.addAction(self.actions["zoom_out"])
-        view_menu.addAction(self.actions["snap"])
-        view_menu.addSeparator()
-        view_menu.addAction(self.actions["minimize_window"])
-        view_menu.addAction(self.actions["maximize_window"])
-        view_menu.addAction(self.actions["reset_window_size"])
-
-        create_menu = self.menuBar().addMenu("&Create")
-        for key in ("rectangle", "ellipse", "line", "text"):
-            create_menu.addAction(self.actions[key])
-        create_menu.addSeparator()
-        create_menu.addAction(self.actions["grid_template_designer"])
-        create_menu.addAction(self.actions["trace_objects"])
-        create_menu.addAction(self.actions["template_alignment"])
-
-        laser_menu = self.menuBar().addMenu("&Laser")
+        laser_menu = self.menuBar().addMenu("&Laser Tools")
         for key in ("generate", "frame", "run", "stop"):
             laser_menu.addAction(self.actions[key])
+
+        self.window_menu = self.menuBar().addMenu("&Window")
+        self.window_menu.addAction(self.actions["minimize_window"])
+        self.window_menu.addAction(self.actions["maximize_window"])
+        self.window_menu.addAction(self.actions["reset_window_size"])
+        self.window_menu.addAction(self.actions["reset_workspace_layout"])
+        self.window_menu.addSeparator()
+        for key in ("fit", "fit_selection", "zoom_in", "zoom_out", "snap"):
+            self.window_menu.addAction(self.actions[key])
+        self.window_menu.addSeparator()
 
         help_menu = self.menuBar().addMenu("&Help")
         help_menu.addAction(self.actions["about"])
@@ -390,54 +507,67 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _create_toolbars(self) -> None:
         file_toolbar = self.addToolBar("File")
         file_toolbar.setObjectName("fileToolbar")
+        file_toolbar.setIconSize(QtCore.QSize(20, 20))
+        file_toolbar.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
         for key in ("new", "open", "save", "import_svg"):
             file_toolbar.addAction(self.actions[key])
 
         edit_toolbar = self.addToolBar("Edit")
         edit_toolbar.setObjectName("editToolbar")
-        for key in ("undo", "redo", "duplicate", "delete"):
+        edit_toolbar.setIconSize(QtCore.QSize(20, 20))
+        edit_toolbar.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly
+        )
+        for key in ("undo", "redo", "duplicate", "delete", "group", "ungroup"):
             edit_toolbar.addAction(self.actions[key])
 
         tools = QtWidgets.QToolBar("Drawing tools", self)
         tools.setObjectName("drawingToolbar")
         tools.setOrientation(QtCore.Qt.Orientation.Vertical)
+        tools.setIconSize(QtCore.QSize(22, 22))
+        tools.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        tools.setMinimumWidth(40)
+        tools.setMaximumWidth(44)
         self.addToolBar(QtCore.Qt.ToolBarArea.LeftToolBarArea, tools)
-        drawing_labels = {
-            "rectangle": "Rectangle",
-            "ellipse": "Ellipse",
-            "line": "Line",
-            "text": "Text",
-        }
-        for key in ("rectangle", "ellipse", "line", "text"):
-            button = QtWidgets.QToolButton()
-            button.setDefaultAction(self.actions[key])
-            button.setText(drawing_labels[key])
-            button.setToolButtonStyle(
-                QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly
-            )
-            tools.addWidget(button)
+
+        for key in ("select_tool", "line", "rectangle", "ellipse", "text"):
+            tools.addAction(self.actions[key])
         tools.addSeparator()
-        tools.addAction(self.actions["trace_objects"])
+        for key in (
+            "grid_template_designer",
+            "trace_objects",
+            "template_alignment",
+        ):
+            tools.addAction(self.actions[key])
         tools.addSeparator()
-        tools.addAction(self.actions["fit"])
-        tools.addAction(self.actions["fit_selection"])
-        tools.addAction(self.actions["zoom_in"])
-        tools.addAction(self.actions["zoom_out"])
-        tools.addAction(self.actions["snap"])
-        self.snap_combo = QtWidgets.QComboBox()
-        self.snap_combo.setToolTip("Grid snap spacing")
-        for step in (0.1, 0.5, 1.0, 2.0, 5.0, 10.0):
-            self.snap_combo.addItem(f"{step:g} mm", step)
-        self.snap_combo.setCurrentIndex(self.snap_combo.findData(1.0))
-        self.snap_combo.currentIndexChanged.connect(
-            lambda index: self.workspace.set_snap_step(
-                float(self.snap_combo.itemData(index))
-            )
+        for key in ("fit", "fit_selection", "zoom_in", "zoom_out"):
+            tools.addAction(self.actions[key])
+
+        snap_button = QtWidgets.QToolButton()
+        snap_button.setDefaultAction(self.actions["snap"])
+        snap_button.setPopupMode(
+            QtWidgets.QToolButton.ToolButtonPopupMode.MenuButtonPopup
         )
-        tools.addWidget(self.snap_combo)
+        snap_button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        snap_menu = QtWidgets.QMenu(snap_button)
+        snap_group = QtGui.QActionGroup(snap_menu)
+        snap_group.setExclusive(True)
+        for step in (0.1, 0.5, 1.0, 2.0, 5.0, 10.0):
+            step_action = snap_menu.addAction(f"{step:g} mm grid")
+            step_action.setCheckable(True)
+            step_action.setChecked(step == 1.0)
+            step_action.triggered.connect(
+                lambda checked=False, value=step: self.workspace.set_snap_step(value)
+            )
+            snap_group.addAction(step_action)
+        snap_button.setMenu(snap_menu)
+        tools.addWidget(snap_button)
 
         arrange_toolbar = self.addToolBar("Arrange")
         arrange_toolbar.setObjectName("arrangeToolbar")
+        arrange_toolbar.setIconSize(QtCore.QSize(20, 20))
 
         def arrange_menu_button(
             title: str,
@@ -445,6 +575,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         ) -> QtWidgets.QToolButton:
             button = QtWidgets.QToolButton()
             button.setText(title)
+            button.setIcon(action_icon(title.lower(), size=20))
+            button.setIconSize(QtCore.QSize(20, 20))
+            button.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+            button.setToolTip(f"{title} selected objects")
+            button.setAccessibleName(f"{title} selected objects")
             button.setPopupMode(
                 QtWidgets.QToolButton.ToolButtonPopupMode.InstantPopup
             )
@@ -482,20 +617,41 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         job_toolbar = self.addToolBar("Job")
         job_toolbar.setObjectName("jobToolbar")
-        job_labels = {
-            "generate": "Toolpath",
-            "frame": "Frame",
-            "run": "Run",
-            "stop": "Stop",
-        }
-        for key in ("generate", "frame", "run", "stop"):
-            button = QtWidgets.QToolButton()
-            button.setDefaultAction(self.actions[key])
-            button.setText(job_labels[key])
-            button.setToolButtonStyle(
-                QtCore.Qt.ToolButtonStyle.ToolButtonTextOnly
-            )
-            job_toolbar.addWidget(button)
+        job_toolbar.setIconSize(QtCore.QSize(20, 20))
+        job_toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
+        job_toolbar.addAction(self.actions["refresh_camera"])
+        job_toolbar.addSeparator()
+        for key in ("generate", "frame", "run"):
+            job_toolbar.addAction(self.actions[key])
+
+        self.safety_toolbar = QtWidgets.QToolBar("Runtime and safety", self)
+        self.safety_toolbar.setObjectName("safetyToolbar")
+        self.safety_toolbar.setMovable(False)
+        self.safety_toolbar.setFloatable(False)
+        self.safety_toolbar.setAllowedAreas(
+            QtCore.Qt.ToolBarArea.TopToolBarArea
+        )
+        self.safety_toolbar.setContextMenuPolicy(
+            QtCore.Qt.ContextMenuPolicy.PreventContextMenu
+        )
+        self.safety_toolbar.toggleViewAction().setEnabled(False)
+        self.runtime_strip = RuntimeSafetyStrip(self)
+        self.runtime_strip.set_chrome_mode(True)
+        self.safety_toolbar.addWidget(self.runtime_strip)
+        self.addToolBar(
+            QtCore.Qt.ToolBarArea.TopToolBarArea,
+            self.safety_toolbar,
+        )
+        self._safety_on_own_row = False
+
+        self.addToolBarBreak(QtCore.Qt.ToolBarArea.TopToolBarArea)
+        context_toolbar = QtWidgets.QToolBar("Selection properties", self)
+        context_toolbar.setObjectName("contextToolbar")
+        context_toolbar.setMovable(False)
+        context_toolbar.setFloatable(False)
+        self.context_bar = ContextPropertyBar(self)
+        context_toolbar.addWidget(self.context_bar)
+        self.addToolBar(QtCore.Qt.ToolBarArea.TopToolBarArea, context_toolbar)
 
         self.palette = LayerPaletteBar()
         palette_toolbar = QtWidgets.QToolBar("Layer palette", self)
@@ -544,33 +700,42 @@ class E3MainWindow(QtWidgets.QMainWindow):
             QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap
         )
 
+        # Match the drafting-first hierarchy: artwork/operation inspectors above,
+        # laser execution and material controls below.  Keeping two tab groups
+        # avoids a single oversized inspector stack and leaves the canvas dominant.
         self.inspector_tabs = InspectorTabs(self)
+        self.inspector_tabs.setTabPosition(QtWidgets.QTabWidget.TabPosition.South)
+        self.inspector_tabs.add_panel("layers", "Cuts / Layers", self.layer_panel)
+        self.inspector_tabs.add_panel("camera", "Cameras", self.camera_panel)
         self.inspector_tabs.add_panel("objects", "Objects", self.object_panel)
-        self.inspector_tabs.add_panel("transform", "Transform", self.transform_panel)
-        self.inspector_tabs.add_panel("trace", "Trace", self.trace_panel)
+        self.inspector_tabs.add_panel(
+            "transform", "Shape Properties", self.transform_panel
+        )
         self.inspector_tabs.add_panel("templates", "Templates", self.template_panel)
-        self.inspector_tabs.add_panel("camera", "Camera", self.camera_panel)
-        self.inspector_tabs.add_panel("machine", "Machine", self.machine_panel)
-        self.inspector_tabs.add_panel("materials", "Materials", self.material_panel)
-        self.inspector_tabs.add_panel("job", "Job", self.job_panel)
+        self.inspector_tabs.add_panel("trace", "Trace", self.trace_panel)
+
+        self.job_tabs = InspectorTabs(self)
+        self.job_tabs.setTabPosition(QtWidgets.QTabWidget.TabPosition.South)
+        self.job_tabs.add_panel("job", "Laser", self.job_panel)
+        self.job_tabs.add_panel("machine", "Machine", self.machine_panel)
+        self.job_tabs.add_panel("materials", "Material Library", self.material_panel)
 
         right = QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         bottom = QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
-        self.layer_scroll = PanelScrollArea(self.layer_panel, self)
-        self.layer_scroll.setProperty("panelKey", "layers")
         self.layer_dock = self._dock(
             "Cuts / Layers",
             "layersDock",
-            self.layer_scroll,
-            right,
-        )
-        self.inspector_dock = self._dock(
-            "Inspector",
-            "inspectorDock",
             self.inspector_tabs,
             right,
         )
-        self.inspector_dock.setMinimumWidth(360)
+        self.inspector_dock = self._dock(
+            "Laser",
+            "inspectorDock",
+            self.job_tabs,
+            right,
+        )
+        self.layer_dock.setMinimumWidth(420)
+        self.inspector_dock.setMinimumWidth(420)
         self.console_dock = self._dock(
             "Console",
             "consoleDock",
@@ -592,27 +757,34 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.tabifyDockWidget(self.console_dock, self.preview_dock)
         self.resizeDocks(
             [self.layer_dock, self.inspector_dock],
-            [280, 430],
+            [410, 300],
             QtCore.Qt.Orientation.Vertical,
         )
         self.layer_dock.raise_()
         self.inspector_dock.raise_()
-        self.console_dock.raise_()
+        self.console_dock.hide()
+        self.preview_dock.hide()
 
-        dock_menu = self.menuBar().addMenu("&Panels")
         for dock in (
             self.layer_dock,
             self.inspector_dock,
             self.console_dock,
             self.preview_dock,
         ):
-            dock_menu.addAction(dock.toggleViewAction())
+            self.window_menu.addAction(dock.toggleViewAction())
 
     def _create_status_bar(self) -> None:
+        self.direct_edit_label = QtWidgets.QLabel("Move  •  Size  •  Rotate")
+        self.direct_edit_label.setObjectName("directEditStatus")
+        self.direct_edit_label.setToolTip(
+            "Drag an object to move it; use its corner and rotation handles for "
+            "direct editing. Hold Shift while rotating for 15° snapping."
+        )
         self.cursor_label = QtWidgets.QLabel("X —  Y —")
         self.selection_label = QtWidgets.QLabel("0 objects selected")
         self.zoom_label = QtWidgets.QLabel("Zoom —")
         self.runtime_label = QtWidgets.QLabel("Starting core services…")
+        self.statusBar().addWidget(self.direct_edit_label)
         self.statusBar().addWidget(self.cursor_label)
         self.statusBar().addWidget(self.selection_label)
         self.statusBar().addPermanentWidget(self.zoom_label)
@@ -627,6 +799,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.workspace.selectionIdsChanged.connect(self._selection_changed)
         self.workspace.objectMoveCommitted.connect(self._object_moved)
+        self.workspace.objectTransformCommitted.connect(
+            self._object_transform_committed
+        )
         self.workspace.templatePlacementEdited.connect(
             self._template_canvas_placement_edited
         )
@@ -635,8 +810,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.workspace.deleteRequested.connect(self.delete_selection)
         self.workspace.pointPicked.connect(self._trace_point_picked)
+        self.workspace.creationToolChanged.connect(self._creation_tool_changed)
+        self.workspace.rectangleDraftChanged.connect(self._rectangle_draft_changed)
+        self.workspace.rectangleDrawCommitted.connect(
+            self._rectangle_draw_committed
+        )
 
         self.palette.layerSelected.connect(self._palette_layer_selected)
+        self.palette.addLayerRequested.connect(self.add_layer)
+        self.palette.presetLayerRequested.connect(self.add_palette_layer)
         self.layer_panel.activeLayerChanged.connect(self.set_active_layer)
         self.layer_panel.layerEdited.connect(self._layer_edited)
         self.layer_panel.addLayerRequested.connect(self.add_layer)
@@ -650,6 +832,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._rectangle_shape_edited
         )
         self.transform_panel.assignLayerRequested.connect(self._assign_layer)
+        self.context_bar.transformEdited.connect(self._transform_edited)
+        self.context_bar.rectangleShapeEdited.connect(
+            self._rectangle_shape_edited
+        )
 
         self.trace_panel.detectRequested.connect(self._detect_trace_objects)
         self.trace_panel.pickColorRequested.connect(
@@ -734,6 +920,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.job_panel.startRequested.connect(self.run_current_job)
         self.job_panel.pauseRequested.connect(self.controller.pause_resume)
         self.job_panel.stopRequested.connect(self.controller.emergency_stop)
+        self.runtime_strip.stopRequested.connect(self.controller.emergency_stop)
 
         self.controller.statusChanged.connect(self._runtime_status)
         self.controller.cameraImageReady.connect(self._camera_image_ready)
@@ -759,6 +946,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _refresh_document(self, selected_ids: list[str] | None = None) -> None:
         if not any(layer.id == self.active_layer_id for layer in self.document.layers):
             self.active_layer_id = self.document.active_layer_id
+        if self.workspace.creation_tool == "rectangle":
+            self.workspace.set_creation_color(
+                self.document.get_layer(self.active_layer_id).color
+            )
         self.workspace.set_document(self.document)
         self.layer_panel.set_document(self.document, self.active_layer_id)
         self.object_panel.set_document(
@@ -793,13 +984,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 object_ids = list(expanded)
         objects = [known[object_id] for object_id in object_ids]
         count = len(objects)
-        self.selection_label.setText(
-            "0 objects selected"
-            if count == 0
-            else f"{count} object{'s' if count != 1 else ''} selected"
-        )
+        if not objects:
+            selection_text = "0 objects selected"
+        else:
+            bounds = objects[0].bounds()
+            for item in objects[1:]:
+                bounds = bounds.union(item.bounds())
+            selection_text = (
+                f"{count} object{'s' if count != 1 else ''} selected · "
+                f"{bounds.width:.3f} × {bounds.height:.3f} mm"
+            )
+        self.selection_label.setText(selection_text)
         self.object_panel.set_selection(object_ids)
         self.transform_panel.set_selection(objects, self.document)
+        self.context_bar.set_selection(objects, self.document)
 
     def _history_changed(self, stack: CommandStack) -> None:
         if (
@@ -833,8 +1031,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         return self.document.work_area.center
 
     def set_active_layer(self, layer_id: str) -> None:
-        self.document.get_layer(layer_id)
+        layer = self.document.get_layer(layer_id)
         self.active_layer_id = layer_id
+        if self.workspace.creation_tool == "rectangle":
+            self.workspace.set_creation_color(layer.color)
         self.layer_panel.set_document(self.document, layer_id)
         self.palette.set_layers(self.document.layers, layer_id)
 
@@ -871,15 +1071,28 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def add_layer(self) -> None:
+        self._create_layer()
+
+    def add_palette_layer(self, color: str) -> None:
+        self._create_layer(color=str(color))
+
+    def _create_layer(self, color: str | None = None) -> None:
+        selected = self.workspace.selected_object_ids()
         index = len(self.document.layers)
         layer = OperationLayer(
             name=f"Layer {index + 1:02d}",
-            color=self.document.next_layer_color(),
+            color=color or self.document.next_layer_color(),
             priority=index,
         )
         self.history.execute(AddLayerCommand(self.document, layer))
         self.active_layer_id = layer.id
         self._refresh_document()
+        if selected:
+            self._assign_layer(selected, layer.id)
+            self.show_notice(
+                f"Created {layer.name} and assigned {len(selected)} selected object"
+                f"{'s' if len(selected) != 1 else ''}"
+            )
 
     def move_layer(self, layer_id: str, delta: int) -> None:
         order = [layer.id for layer in self.document.layers]
@@ -932,19 +1145,72 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.history.execute(command)
         self.workspace.select_objects([item.id])
 
+    def _activate_selection_tool(self, *, show_message: bool = True) -> None:
+        self.actions["select_tool"].setChecked(True)
+        self.workspace.set_creation_tool(None)
+        self.workspace.cancel_point_pick()
+        self.workspace.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+        if show_message:
+            self.show_notice("Selection tool active")
+
     def add_rectangle(self) -> None:
+        layer = self.document.get_layer(self.active_layer_id)
+        self.actions["rectangle"].setChecked(True)
+        self.workspace.set_creation_tool("rectangle", color=layer.color)
+        self.show_notice(
+            "Rectangle tool: drag between opposite corners; choose Select or "
+            "right-click the canvas to finish."
+        )
+
+    def _creation_tool_changed(self, tool: str) -> None:
+        drawing_rectangle = tool == "rectangle"
+        self.actions["rectangle"].setChecked(drawing_rectangle)
+        self.actions["select_tool"].setChecked(not drawing_rectangle)
+        if drawing_rectangle:
+            self.direct_edit_label.setText("Rectangle | drag to draw")
+            self.direct_edit_label.setToolTip(
+                "Drag between opposite corners. The active operation color is "
+                "used; choose Select or right-click the canvas to finish."
+            )
+        else:
+            self.direct_edit_label.setText("Move | Size | Rotate")
+            self.direct_edit_label.setToolTip(
+                "Drag an object to move it; use its corner and rotation handles "
+                "for direct editing. Hold Shift while rotating for 15-degree snapping."
+            )
+
+    def _rectangle_draft_changed(self, bounds: Bounds | None) -> None:
+        if bounds is None:
+            if self.workspace.creation_tool == "rectangle":
+                self.direct_edit_label.setText("Rectangle | drag to draw")
+            return
+        self.direct_edit_label.setText(
+            f"Rectangle | W {bounds.width:.3f}  H {bounds.height:.3f} mm"
+        )
+
+    def _rectangle_draw_committed(
+        self,
+        center_x_mm: float,
+        center_y_mm: float,
+        width_mm: float,
+        height_mm: float,
+    ) -> None:
         self._add_object(
             SceneObject.rectangle(
                 self.active_layer_id,
-                center=self._document_center(),
-                width_mm=40.0,
-                height_mm=25.0,
-                corner_radius_mm=3.0,
+                center=(center_x_mm, center_y_mm),
+                width_mm=width_mm,
+                height_mm=height_mm,
+                corner_radius_mm=0.0,
             ),
             "Add rectangle",
         )
+        self.show_notice(
+            f"Rectangle created: {width_mm:.3f} x {height_mm:.3f} mm"
+        )
 
     def add_ellipse(self) -> None:
+        self._activate_selection_tool(show_message=False)
         self._add_object(
             SceneObject.ellipse(
                 self.active_layer_id,
@@ -956,6 +1222,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def add_line(self) -> None:
+        self._activate_selection_tool(show_message=False)
         self._add_object(
             SceneObject.line(
                 self.active_layer_id,
@@ -966,6 +1233,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def add_text(self) -> None:
+        self._activate_selection_tool(show_message=False)
         text, accepted = QtWidgets.QInputDialog.getText(
             self,
             "Create text",
@@ -1026,6 +1294,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
         )
         self.workspace.select_objects([member.id for member in members])
+
+    def _object_transform_committed(
+        self,
+        object_id: str,
+        before: Transform,
+        after: Transform,
+    ) -> None:
+        item = self.document.get_object(object_id)
+        if item.transform.to_dict() != before.to_dict():
+            self.workspace.refresh_object(object_id)
+            self.show_notice("The object changed; direct transform was cancelled")
+            return
+        if item.kind == ObjectKind.RECTANGLE:
+            radius = min(
+                float(item.geometry.get("corner_radius_mm", 0.0)),
+                min(after.width_mm, after.height_mm) / 2.0,
+            )
+            self._rectangle_shape_edited(object_id, after, radius)
+            return
+        self._transform_edited(object_id, after)
 
     def _object_edited(self, object_id: str, changes: dict[str, Any]) -> None:
         item = self.document.get_object(object_id)
@@ -1308,6 +1596,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.gcode_preview.setPlainText(job.text)
         self.workspace.set_toolpath_preview(job.text)
+        self.preview_dock.show()
+        self.preview_dock.raise_()
         self.job_panel.summary.setText(
             f"{job.path_count} paths · {job.cut_length_mm:.1f} mm cut · "
             f"{job.travel_length_mm:.1f} mm travel · "
@@ -1331,6 +1621,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_revision = self.document.revision
         self.gcode_preview.setPlainText(job.text)
         self.workspace.set_toolpath_preview(job.text)
+        self.preview_dock.show()
+        self.preview_dock.raise_()
         self.job_panel.summary.setText(
             f"Dry frame · bounds X{job.bounds_mm[0]:.2f}..{job.bounds_mm[2]:.2f} "
             f"Y{job.bounds_mm[1]:.2f}..{job.bounds_mm[3]:.2f}"
@@ -2009,6 +2301,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self.runtime.context.bed.calibration is None:
             self.show_error("Bed mapping is required before sampling camera color")
             return
+        self._activate_selection_tool(show_message=False)
         self._clear_template_preview(show_message=False)
         self.inspector_tabs.select_panel("trace")
         self.workspace.begin_point_pick()
@@ -2171,6 +2464,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.set_calibration_ready(calibration_ready)
         self.template_panel.set_calibration_ready(calibration_ready)
         self.machine_panel.set_status(machine)
+        self.runtime_strip.set_status(status)
         if machine:
             self.console_panel.set_lines(list(machine.get("log", [])))
             self.job_panel.set_job_status(machine.get("job"))
@@ -2190,6 +2484,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _busy_changed(self, busy: bool) -> None:
         self._busy = busy
         self.template_panel.set_busy(busy)
+        self.runtime_strip.set_busy(busy)
         self.statusBar().showMessage("Working…" if busy else "", 0 if busy else 1000)
 
     def _calibration_message(self, title: str) -> None:
@@ -2260,8 +2555,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         maximum_height = max(600, available.height() - margin_y)
 
         if reset_size:
-            width = min(1180, maximum_width)
-            height = min(720, maximum_height)
+            width = min(1320, maximum_width)
+            height = min(820, maximum_height)
         else:
             width = min(max(self.width(), self.minimumWidth()), maximum_width)
             height = min(max(self.height(), self.minimumHeight()), maximum_height)
@@ -2288,36 +2583,89 @@ class E3MainWindow(QtWidgets.QMainWindow):
         else:
             self.showMaximized()
 
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        if hasattr(self, "safety_toolbar"):
+            self._update_chrome_toolbar_layout()
+
+    def _update_chrome_toolbar_layout(self, *, force: bool = False) -> None:
+        """Keep STOP inline on wide screens and guaranteed visible on narrow ones."""
+
+        own_row = self.width() < 1100
+        if not force and own_row == self._safety_on_own_row:
+            return
+        self.removeToolBarBreak(self.safety_toolbar)
+        if own_row:
+            self.insertToolBarBreak(self.safety_toolbar)
+        self._safety_on_own_row = own_row
+
     def _reset_window_size(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings.remove("mainWindow/geometry-v5")
+        settings.remove("mainWindow/geometry-v4")
         settings.remove("mainWindow/geometry-v3")
         self.showNormal()
         self._ensure_window_visible(reset_size=True)
 
+    def _reset_workspace_layout(self) -> None:
+        settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings.remove("mainWindow/state-v5")
+        settings.remove("mainWindow/state-v4")
+        settings.remove("mainWindow/state-v3")
+        settings.remove("mainWindow/inspector-tab-v5")
+        settings.remove("mainWindow/inspector-tab-v4")
+        settings.remove("mainWindow/inspector-tab-v3")
+        settings.remove("mainWindow/job-tab-v5")
+        self.restoreState(self._default_window_state, 5)
+        self.inspector_tabs.setCurrentIndex(0)
+        self.job_tabs.setCurrentIndex(0)
+        self.layer_dock.show()
+        self.inspector_dock.show()
+        self.show_notice("Workspace layout reset")
+
     def _restore_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        geometry = settings.value("mainWindow/geometry-v3")
-        state = settings.value("mainWindow/state-v3")
+        geometry = settings.value("mainWindow/geometry-v5")
+        if geometry is None:
+            geometry = settings.value("mainWindow/geometry-v4")
+        if geometry is None:
+            geometry = settings.value("mainWindow/geometry-v3")
+        state = settings.value("mainWindow/state-v5")
         restored_geometry = bool(geometry and self.restoreGeometry(geometry))
         if state:
-            self.restoreState(state)
+            self.restoreState(state, 5)
+        # The runtime authority and software-stop control are intentionally not
+        # user-hideable, including when an older saved layout says otherwise.
+        self.safety_toolbar.show()
+        self.safety_toolbar.toggleViewAction().setEnabled(False)
         inspector_index = int(
-            settings.value("mainWindow/inspector-tab-v3", 0)
+            settings.value("mainWindow/inspector-tab-v5", 0)
         )
         if hasattr(self, "inspector_tabs"):
             self.inspector_tabs.setCurrentIndex(
                 max(0, min(inspector_index, self.inspector_tabs.count() - 1))
             )
+        if hasattr(self, "job_tabs"):
+            job_index = int(settings.value("mainWindow/job-tab-v5", 0))
+            self.job_tabs.setCurrentIndex(
+                max(0, min(job_index, self.job_tabs.count() - 1))
+            )
+        self._update_chrome_toolbar_layout(force=True)
         self._ensure_window_visible(reset_size=not restored_geometry)
 
     def _save_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        settings.setValue("mainWindow/geometry-v3", self.saveGeometry())
-        settings.setValue("mainWindow/state-v3", self.saveState())
+        settings.setValue("mainWindow/geometry-v5", self.saveGeometry())
+        settings.setValue("mainWindow/state-v5", self.saveState(5))
         if hasattr(self, "inspector_tabs"):
             settings.setValue(
-                "mainWindow/inspector-tab-v3",
+                "mainWindow/inspector-tab-v5",
                 self.inspector_tabs.currentIndex(),
+            )
+        if hasattr(self, "job_tabs"):
+            settings.setValue(
+                "mainWindow/job-tab-v5",
+                self.job_tabs.currentIndex(),
             )
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:

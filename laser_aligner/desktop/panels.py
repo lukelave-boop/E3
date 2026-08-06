@@ -28,6 +28,17 @@ def _panel_layout(widget: QtWidgets.QWidget) -> QtWidgets.QVBoxLayout:
     return layout
 
 
+def _dense_panel_layout(widget: QtWidgets.QWidget) -> QtWidgets.QVBoxLayout:
+    """Layout for frequently used dock controls where workspace space matters."""
+
+    widget.setObjectName("controlPanel")
+    widget.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+    layout = QtWidgets.QVBoxLayout(widget)
+    layout.setContentsMargins(4, 4, 4, 5)
+    layout.setSpacing(5)
+    return layout
+
+
 def _form_layout() -> QtWidgets.QFormLayout:
     form = QtWidgets.QFormLayout()
     form.setFieldGrowthPolicy(
@@ -62,54 +73,166 @@ class LayerPanel(QtWidgets.QWidget):
         self._document: ProjectDocument | None = None
         self._updating = False
 
-        layout = _panel_layout(self)
-        self.layer_list = QtWidgets.QListWidget()
+        layout = _dense_panel_layout(self)
+
+        self.layer_list = _LayerOperationsTree()
+        self.layer_list.setObjectName("operationsLayerTree")
         self.layer_list.setAlternatingRowColors(True)
-        self.layer_list.setMinimumHeight(120)
+        self.layer_list.setMinimumHeight(104)
         self.layer_list.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
+        self.layer_list.setRootIsDecorated(False)
+        self.layer_list.setUniformRowHeights(True)
+        self.layer_list.setIndentation(0)
+        self.layer_list.setIconSize(QtCore.QSize(12, 12))
+        self.layer_list.setColumnCount(5)
+        self.layer_list.setHeaderLabels(
+            ["Layer", "Mode", "Spd / Pwr", "Out", "Show"]
+        )
+        self.layer_list.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        header = self.layer_list.header()
+        header.setStretchLastSection(False)
+        # The two stretch columns may need to collapse on a 360 px inspector
+        # with large system text. The selected-operation editor still exposes
+        # every value without relying on the abbreviated table cells.
+        header.setMinimumSectionSize(28)
+        header.setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        header.setSectionResizeMode(
+            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        header.setSectionResizeMode(
+            2, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        header.setSectionResizeMode(
+            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
+        header.setSectionResizeMode(
+            4, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        )
         layout.addWidget(self.layer_list, 1)
 
-        button_row = QtWidgets.QHBoxLayout()
-        self.add_button = QtWidgets.QPushButton("Add")
-        self.remove_button = QtWidgets.QPushButton("Remove")
-        self.up_button = QtWidgets.QPushButton("Up")
-        self.down_button = QtWidgets.QPushButton("Down")
-        button_row.addWidget(self.add_button)
-        button_row.addWidget(self.remove_button)
-        button_row.addWidget(self.up_button)
-        button_row.addWidget(self.down_button)
-        layout.addLayout(button_row)
+        editor = QtWidgets.QWidget()
+        editor.setObjectName("layerQuickSettings")
+        editor_layout = QtWidgets.QVBoxLayout(editor)
+        editor_layout.setContentsMargins(0, 0, 0, 0)
+        editor_layout.setSpacing(4)
 
-        form = _form_layout()
+        identity_row = QtWidgets.QHBoxLayout()
+        identity_row.setSpacing(4)
         self.name_edit = QtWidgets.QLineEdit()
+        self.name_edit.setPlaceholderText("Operation name")
+        self.color_button = QtWidgets.QPushButton("")
+        self.color_button.setFixedWidth(30)
+        self.color_button.setAccessibleName("Operation color")
+        self.color_button.setToolTip(
+            "Choose the operation color used in the workspace and bottom palette."
+        )
         self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.mode_combo.setMinimumContentsLength(8)
+        self.mode_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         for mode in LayerMode:
-            self.mode_combo.addItem(mode.value.title(), mode.value)
+            supported = mode == LayerMode.LINE
+            label = (
+                mode.value.title()
+                if supported
+                else f"{mode.value.title()} · no toolpath"
+            )
+            self.mode_combo.addItem(label, mode.value)
+            item = self.mode_combo.model().item(self.mode_combo.count() - 1)
+            if item is not None and not supported:
+                item.setToolTip(
+                    f"{mode.value.title()} toolpaths are not implemented in this build."
+                )
+        identity_row.addWidget(self.color_button)
+        identity_row.addWidget(self.name_edit, 1)
+        identity_row.addWidget(self.mode_combo)
+        editor_layout.addLayout(identity_row)
+
+        settings_row = QtWidgets.QHBoxLayout()
+        settings_row.setSpacing(4)
         self.speed_spin = QtWidgets.QDoubleSpinBox()
         self.speed_spin.setRange(1.0, 100000.0)
         self.speed_spin.setDecimals(1)
-        self.speed_spin.setSuffix(" mm/min")
+        self.speed_spin.setToolTip("Operation speed in millimetres per minute")
+        self.speed_spin.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.power_spin = QtWidgets.QDoubleSpinBox()
         self.power_spin.setRange(0.0, 100.0)
         self.power_spin.setDecimals(1)
         self.power_spin.setSuffix(" %")
+        self.power_spin.setToolTip("Maximum laser power for this operation")
+        self.power_spin.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.passes_spin = QtWidgets.QSpinBox()
         self.passes_spin.setRange(1, 999)
-        self.output_check = QtWidgets.QCheckBox("Output enabled")
-        self.visible_check = QtWidgets.QCheckBox("Visible")
-        _form_row(form, "Name", self.name_edit)
-        _form_row(form, "Mode", self.mode_combo)
-        _form_row(form, "Speed", self.speed_spin)
-        _form_row(form, "Power", self.power_spin)
-        _form_row(form, "Passes", self.passes_spin)
-        form.addRow(self.output_check)
-        form.addRow(self.visible_check)
-        layout.addLayout(form)
+        self.passes_spin.setToolTip("Number of passes")
+        self.passes_spin.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        settings_row.addWidget(QtWidgets.QLabel("Speed"))
+        settings_row.addWidget(self.speed_spin, 3)
+        settings_row.addWidget(QtWidgets.QLabel("Passes"))
+        settings_row.addWidget(self.passes_spin, 1)
+        settings_row.addWidget(QtWidgets.QLabel("Max Pwr"))
+        settings_row.addWidget(self.power_spin, 2)
+        editor_layout.addLayout(settings_row)
+
+        action_row = QtWidgets.QHBoxLayout()
+        action_row.setSpacing(4)
+        self.add_button = QtWidgets.QPushButton("+")
+        self.add_button.setToolTip("Add operation")
+        self.add_button.setAccessibleName("Add operation")
+        self.remove_button = QtWidgets.QPushButton("−")
+        self.remove_button.setToolTip("Remove selected operation")
+        self.remove_button.setAccessibleName("Remove selected operation")
+        self.up_button = QtWidgets.QPushButton("↑")
+        self.up_button.setToolTip("Move selected operation up")
+        self.up_button.setAccessibleName("Move selected operation up")
+        self.down_button = QtWidgets.QPushButton("↓")
+        self.down_button.setToolTip("Move selected operation down")
+        self.down_button.setAccessibleName("Move selected operation down")
+        for button in (
+            self.add_button,
+            self.remove_button,
+            self.up_button,
+            self.down_button,
+        ):
+            button.setFixedWidth(30)
+            action_row.addWidget(button)
+        self.output_check = QtWidgets.QCheckBox("Output")
+        self.output_check.setToolTip("Include this operation when generating a job.")
+        self.visible_check = QtWidgets.QCheckBox("Show")
+        self.visible_check.setToolTip("Show this operation in the workspace.")
+        action_row.addStretch(1)
+        action_row.addWidget(self.output_check)
+        action_row.addWidget(self.visible_check)
+        editor_layout.addLayout(action_row)
+        self.mode_notice = _muted("")
+        self.mode_notice.setObjectName("warningLabel")
+        self.mode_notice.hide()
+        editor_layout.addWidget(self.mode_notice)
+        layout.addWidget(editor)
 
         self.layer_list.currentItemChanged.connect(self._selection_changed)
+        self.layer_list.itemChanged.connect(self._table_item_changed)
         self.add_button.clicked.connect(self.addLayerRequested)
+        self.color_button.clicked.connect(self._choose_color)
         self.remove_button.clicked.connect(self._remove_clicked)
         self.up_button.clicked.connect(lambda: self._move_clicked(-1))
         self.down_button.clicked.connect(lambda: self._move_clicked(1))
@@ -129,20 +252,79 @@ class LayerPanel(QtWidgets.QWidget):
             self.layer_list.clear()
             selected_row = 0
             for row, layer in enumerate(document.layers):
-                item = QtWidgets.QListWidgetItem(layer.name)
+                item = _LayerOperationsItem(
+                    [
+                        layer.name,
+                        layer.mode.value.title(),
+                        self._operation_summary(layer),
+                        "",
+                        "",
+                    ]
+                )
                 item.setData(QtCore.Qt.ItemDataRole.UserRole, layer.id)
                 swatch = QtGui.QPixmap(14, 14)
                 swatch.fill(QtGui.QColor(layer.color))
-                item.setIcon(QtGui.QIcon(swatch))
+                item.setIcon(0, QtGui.QIcon(swatch))
+                item.setTextAlignment(
+                    1, QtCore.Qt.AlignmentFlag.AlignCenter
+                )
+                item.setTextAlignment(
+                    2,
+                    QtCore.Qt.AlignmentFlag.AlignRight
+                    | QtCore.Qt.AlignmentFlag.AlignVCenter,
+                )
+                item.setTextAlignment(
+                    3, QtCore.Qt.AlignmentFlag.AlignCenter
+                )
+                item.setTextAlignment(
+                    4, QtCore.Qt.AlignmentFlag.AlignCenter
+                )
+                item.setFlags(
+                    item.flags()
+                    | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+                    | QtCore.Qt.ItemFlag.ItemIsSelectable
+                )
+                item.setCheckState(
+                    3,
+                    QtCore.Qt.CheckState.Checked
+                    if layer.output_enabled
+                    else QtCore.Qt.CheckState.Unchecked,
+                )
+                item.setCheckState(
+                    4,
+                    QtCore.Qt.CheckState.Checked
+                    if layer.visible
+                    else QtCore.Qt.CheckState.Unchecked,
+                )
+                details = (
+                    f"{layer.speed_mm_min:g} mm/min · {layer.power_percent:g}% power · "
+                    f"{layer.passes} pass{'es' if layer.passes != 1 else ''}"
+                )
+                item.setToolTip(2, details)
+                if layer.mode != LayerMode.LINE:
+                    item.setText(1, f"{layer.mode.value.title()} !")
+                    item.setToolTip(
+                        1,
+                        f"{layer.mode.value.title()} is stored in the project, but "
+                        "this build cannot generate that toolpath.",
+                    )
                 if not layer.visible:
-                    item.setForeground(QtGui.QColor("#65727C"))
-                self.layer_list.addItem(item)
+                    muted = QtGui.QBrush(QtGui.QColor("#65727C"))
+                    for column in range(self.layer_list.columnCount()):
+                        item.setForeground(column, muted)
+                self.layer_list.addTopLevelItem(item)
                 if layer.id == active_layer_id:
                     selected_row = row
             self.layer_list.setCurrentRow(selected_row)
-            self._show_layer(document.layers[selected_row])
+            if document.layers:
+                self._show_layer(document.layers[selected_row])
+            self._update_action_states()
         finally:
             self._updating = False
+
+    @staticmethod
+    def _operation_summary(layer: OperationLayer) -> str:
+        return f"{layer.speed_mm_min:g} / {layer.power_percent:g}%"
 
     def current_layer_id(self) -> str | None:
         item = self.layer_list.currentItem()
@@ -150,20 +332,49 @@ class LayerPanel(QtWidgets.QWidget):
 
     def _selection_changed(
         self,
-        current: QtWidgets.QListWidgetItem | None,
-        previous: QtWidgets.QListWidgetItem | None,
+        current: QtWidgets.QTreeWidgetItem | None,
+        previous: QtWidgets.QTreeWidgetItem | None,
     ) -> None:
         del previous
         if self._updating or current is None or self._document is None:
             return
         layer_id = str(current.data(QtCore.Qt.ItemDataRole.UserRole))
         self._show_layer(self._document.get_layer(layer_id))
+        self._update_action_states()
         self.activeLayerChanged.emit(layer_id)
+
+    def _table_item_changed(
+        self,
+        item: QtWidgets.QTreeWidgetItem,
+        column: int,
+    ) -> None:
+        if self._updating or column not in {3, 4}:
+            return
+        layer_id = str(item.data(0, QtCore.Qt.ItemDataRole.UserRole))
+        if not layer_id:
+            return
+        self.layerEdited.emit(
+            layer_id,
+            {
+                "output_enabled": item.checkState(3)
+                == QtCore.Qt.CheckState.Checked,
+                "visible": item.checkState(4) == QtCore.Qt.CheckState.Checked,
+            },
+        )
 
     def _show_layer(self, layer: OperationLayer) -> None:
         self._updating = True
         try:
             self.name_edit.setText(layer.name)
+            swatch = QtGui.QColor(layer.color)
+            foreground = "#07130F" if swatch.lightnessF() >= 0.58 else "#FFFFFF"
+            self.color_button.setStyleSheet(
+                "QPushButton {"
+                f"background: {layer.color}; color: {foreground};"
+                "border: 1px solid #70818B;"
+                "}"
+            )
+            self.color_button.setProperty("layerColor", layer.color)
             self.mode_combo.setCurrentIndex(
                 max(0, self.mode_combo.findData(layer.mode.value))
             )
@@ -172,8 +383,42 @@ class LayerPanel(QtWidgets.QWidget):
             self.passes_spin.setValue(layer.passes)
             self.output_check.setChecked(layer.output_enabled)
             self.visible_check.setChecked(layer.visible)
+            unsupported = layer.mode != LayerMode.LINE
+            self.output_check.setToolTip(
+                (
+                    "This unsupported operation will stop toolpath generation "
+                    "while Output is checked. Uncheck Output to exclude it."
+                )
+                if unsupported
+                else "Include this operation when generating a job."
+            )
+            self.mode_notice.setText(
+                (
+                    f"{layer.mode.value.title()} is stored for project compatibility, "
+                    "but it cannot generate a toolpath in this build."
+                )
+                if unsupported
+                else ""
+            )
+            self.mode_notice.setVisible(unsupported)
         finally:
             self._updating = False
+
+    def _choose_color(self) -> None:
+        if self._updating:
+            return
+        layer_id = self.current_layer_id()
+        if layer_id is None or self._document is None:
+            return
+        layer = self._document.get_layer(layer_id)
+        selected = QtWidgets.QColorDialog.getColor(
+            QtGui.QColor(layer.color),
+            self,
+            "Choose operation color",
+        )
+        if not selected.isValid():
+            return
+        self.layerEdited.emit(layer_id, {"color": selected.name()})
 
     def _emit_edit(self, *args: Any) -> None:
         del args
@@ -204,6 +449,90 @@ class LayerPanel(QtWidgets.QWidget):
         layer_id = self.current_layer_id()
         if layer_id is not None:
             self.moveLayerRequested.emit(layer_id, int(delta))
+
+    def _update_action_states(self) -> None:
+        count = self.layer_list.count()
+        row = self.layer_list.currentRow()
+        has_current = row >= 0
+        self.remove_button.setEnabled(has_current and count > 1)
+        self.up_button.setEnabled(has_current and row > 0)
+        self.down_button.setEnabled(has_current and row < count - 1)
+
+
+class _LayerOperationsItem(QtWidgets.QTreeWidgetItem):
+    """Tree item with the common QListWidgetItem text() convenience."""
+
+    def text(self, column: int = 0) -> str:
+        return super().text(column)
+
+    def setText(self, *args: Any) -> None:
+        if len(args) == 1:
+            super().setText(0, args[0])
+            return
+        super().setText(*args)
+
+    def data(self, *args: Any) -> Any:
+        if len(args) == 1:
+            return super().data(0, args[0])
+        return super().data(*args)
+
+    def setData(self, *args: Any) -> None:
+        if len(args) == 2:
+            super().setData(0, args[0], args[1])
+            return
+        super().setData(*args)
+
+    def icon(self, column: int = 0) -> QtGui.QIcon:
+        return super().icon(column)
+
+    def setIcon(self, *args: Any) -> None:
+        if len(args) == 1:
+            super().setIcon(0, args[0])
+            return
+        super().setIcon(*args)
+
+    def foreground(self, column: int = 0) -> QtGui.QBrush:
+        return super().foreground(column)
+
+    def setForeground(self, *args: Any) -> None:
+        if len(args) == 1:
+            super().setForeground(0, args[0])
+            return
+        super().setForeground(*args)
+
+    def checkState(self, column: int = 0) -> QtCore.Qt.CheckState:
+        return super().checkState(column)
+
+    def setCheckState(self, *args: Any) -> None:
+        if len(args) == 1:
+            super().setCheckState(0, args[0])
+            return
+        super().setCheckState(*args)
+
+
+class _LayerOperationsTree(QtWidgets.QTreeWidget):
+    """QTreeWidget with the small QListWidget API used by older integrations."""
+
+    def count(self) -> int:
+        return self.topLevelItemCount()
+
+    def item(self, row: int) -> QtWidgets.QTreeWidgetItem | None:
+        return self.topLevelItem(row)
+
+    def addItem(self, item: QtWidgets.QTreeWidgetItem) -> None:
+        self.addTopLevelItem(item)
+
+    def currentRow(self) -> int:
+        current = self.currentItem()
+        return -1 if current is None else self.indexOfTopLevelItem(current)
+
+    def setCurrentRow(self, row: int) -> None:
+        item = self.topLevelItem(row)
+        if item is None:
+            self.clearSelection()
+            self.setCurrentItem(None)
+            return
+        self.setCurrentItem(item)
 
 
 class TransformPanel(QtWidgets.QWidget):
@@ -471,7 +800,7 @@ class CameraPanel(QtWidgets.QWidget):
         opacity_row.addWidget(QtWidgets.QLabel("Opacity"))
         self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setValue(60)
+        self.opacity_slider.setValue(18)
         opacity_row.addWidget(self.opacity_slider, 1)
         overlay_layout.addLayout(opacity_row)
 
@@ -1195,32 +1524,29 @@ class MachinePanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = _panel_layout(self)
-        heading = QtWidgets.QLabel("Machine control")
-        heading.setObjectName("panelHeading")
-        layout.addWidget(heading)
+        layout = _dense_panel_layout(self)
 
         self.state_label = QtWidgets.QLabel("Disconnected")
         self.state_label.setObjectName("statusCard")
         self.state_label.setWordWrap(True)
         layout.addWidget(self.state_label)
 
-        connection_group = QtWidgets.QGroupBox("Connection and homing")
-        connection_layout = QtWidgets.QVBoxLayout(connection_group)
-        row = QtWidgets.QHBoxLayout()
+        connection_row = QtWidgets.QHBoxLayout()
+        connection_row.setSpacing(4)
         self.connect_button = QtWidgets.QPushButton("Connect")
         self.disconnect_button = QtWidgets.QPushButton("Disconnect")
-        row.addWidget(self.connect_button)
-        row.addWidget(self.disconnect_button)
-        connection_layout.addLayout(row)
-        self.park_button = QtWidgets.QPushButton(
-            "Home and park at camera pose"
-        )
-        connection_layout.addWidget(self.park_button)
-        layout.addWidget(connection_group)
+        self.park_button = QtWidgets.QPushButton("Home / park")
+        self.park_button.setToolTip("Home and park at the configured camera pose")
+        connection_row.addWidget(self.connect_button)
+        connection_row.addWidget(self.disconnect_button)
+        connection_row.addWidget(self.park_button)
+        layout.addLayout(connection_row)
 
-        jog_group = QtWidgets.QGroupBox("Jogging")
+        jog_group = QtWidgets.QGroupBox("Jogging unavailable")
         jog_layout = QtWidgets.QGridLayout(jog_group)
+        jog_layout.setContentsMargins(6, 10, 6, 6)
+        jog_layout.setHorizontalSpacing(4)
+        jog_layout.setVerticalSpacing(3)
         self.jog_step = QtWidgets.QComboBox()
         for value in (0.1, 1.0, 5.0, 10.0, 50.0):
             self.jog_step.addItem(f"{value:g} mm", value)
@@ -1236,32 +1562,33 @@ class MachinePanel(QtWidgets.QWidget):
         jog_layout.addWidget(left, 1, 0)
         jog_layout.addWidget(right, 1, 2)
         jog_layout.addWidget(down, 2, 1)
-        jog_layout.addWidget(QtWidgets.QLabel("Step"), 3, 0)
-        jog_layout.addWidget(self.jog_step, 3, 1, 1, 2)
-        jog_layout.addWidget(QtWidgets.QLabel("Speed"), 4, 0)
-        jog_layout.addWidget(self.jog_speed, 4, 1, 1, 2)
+        jog_layout.addWidget(QtWidgets.QLabel("Step"), 0, 3)
+        jog_layout.addWidget(self.jog_step, 0, 4)
+        jog_layout.addWidget(QtWidgets.QLabel("Speed"), 1, 3)
+        jog_layout.addWidget(self.jog_speed, 1, 4)
+        jog_layout.setColumnStretch(4, 1)
         jog_note = _muted(
             "Guarded jogging is not enabled in this build. These controls will "
             "unlock after the Falcon jog behavior is tested."
         )
-        jog_layout.addWidget(jog_note, 5, 0, 1, 3)
+        jog_layout.addWidget(jog_note, 3, 0, 1, 5)
         jog_group.setEnabled(False)
         layout.addWidget(jog_group)
 
-        safety_group = QtWidgets.QGroupBox("Safety")
-        safety_layout = QtWidgets.QVBoxLayout(safety_group)
-        safety_layout.addWidget(
-            _muted(
-                "Software stop requests feed hold, controller reset, and laser off. "
-                "It does not replace the physical emergency stop."
-            )
+        safety_row = QtWidgets.QHBoxLayout()
+        safety_row.setSpacing(6)
+        self.safety_note = _muted(
+            "Software stop requests feed hold, controller reset, and laser off. "
+            "It does not replace the physical emergency stop."
         )
-        self.stop_button = QtWidgets.QPushButton(
-            "Software stop / laser off"
-        )
+        self.stop_button = QtWidgets.QPushButton("STOP / LASER OFF")
         self.stop_button.setObjectName("dangerButton")
-        safety_layout.addWidget(self.stop_button)
-        layout.addWidget(safety_group)
+        self.stop_button.setToolTip(
+            "Software stop; use the physical emergency stop in an actual emergency."
+        )
+        safety_row.addWidget(self.safety_note, 1)
+        safety_row.addWidget(self.stop_button)
+        layout.addLayout(safety_row)
         layout.addStretch(1)
 
         self.connect_button.clicked.connect(self.connectRequested)
@@ -1292,8 +1619,8 @@ class MachinePanel(QtWidgets.QWidget):
             "ARMED" if armed else "SAFE"
         )
         self.state_label.setText(
-            f"{'Connected' if connected else 'Disconnected'} · "
-            f"{status.get('protocol', 'unknown')} · {state}\n"
+            f"{'Connected' if connected else 'Disconnected'} | "
+            f"{status.get('protocol', 'unknown')} | {state} | "
             f"Motion {'enabled' if status.get('allow_motion') else 'blocked'}"
         )
         self.connect_button.setEnabled(not connected)
@@ -1349,10 +1676,7 @@ class JobPanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = _panel_layout(self)
-        heading = QtWidgets.QLabel("Job control")
-        heading.setObjectName("panelHeading")
-        layout.addWidget(heading)
+        layout = _dense_panel_layout(self)
 
         self.summary = QtWidgets.QLabel("No job generated")
         self.summary.setObjectName("statusCard")
@@ -1360,30 +1684,36 @@ class JobPanel(QtWidgets.QWidget):
         layout.addWidget(self.summary)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setRange(0, 1000)
+        self.progress.setFixedHeight(18)
         layout.addWidget(self.progress)
 
-        prepare_group = QtWidgets.QGroupBox("Prepare")
-        prepare_layout = QtWidgets.QVBoxLayout(prepare_group)
-        self.generate_button = QtWidgets.QPushButton("Generate toolpath")
-        self.frame_button = QtWidgets.QPushButton("Generate dry frame")
-        prepare_layout.addWidget(self.generate_button)
-        prepare_layout.addWidget(self.frame_button)
-        layout.addWidget(prepare_group)
+        prepare_row = QtWidgets.QHBoxLayout()
+        prepare_row.setSpacing(4)
+        prepare_row.addWidget(QtWidgets.QLabel("Prepare"))
+        self.generate_button = QtWidgets.QPushButton("Generate")
+        self.generate_button.setToolTip("Generate the current project toolpath")
+        self.frame_button = QtWidgets.QPushButton("Dry frame")
+        self.frame_button.setToolTip("Generate a laser-off dry framing program")
+        prepare_row.addWidget(self.generate_button, 1)
+        prepare_row.addWidget(self.frame_button, 1)
+        layout.addLayout(prepare_row)
 
-        run_group = QtWidgets.QGroupBox("Execution")
-        run_layout = QtWidgets.QVBoxLayout(run_group)
-        self.start_button = QtWidgets.QPushButton("Start current job")
-        self.pause_button = QtWidgets.QPushButton("Pause / resume")
+        run_row = QtWidgets.QHBoxLayout()
+        run_row.setSpacing(4)
+        run_row.addWidget(QtWidgets.QLabel("Run"))
+        self.start_button = QtWidgets.QPushButton("Start")
+        self.start_button.setToolTip("Start the currently generated job")
+        self.pause_button = QtWidgets.QPushButton("Pause")
         self.pause_button.setEnabled(False)
         self.pause_button.setToolTip(
             "Disabled until Falcon realtime hold/resume is validated."
         )
         self.stop_button = QtWidgets.QPushButton("Stop")
         self.stop_button.setObjectName("dangerButton")
-        run_layout.addWidget(self.start_button)
-        run_layout.addWidget(self.pause_button)
-        run_layout.addWidget(self.stop_button)
-        layout.addWidget(run_group)
+        run_row.addWidget(self.start_button, 1)
+        run_row.addWidget(self.pause_button, 1)
+        run_row.addWidget(self.stop_button, 1)
+        layout.addLayout(run_row)
         layout.addStretch(1)
 
         self.generate_button.clicked.connect(self.generateRequested)

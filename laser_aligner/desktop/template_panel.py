@@ -227,7 +227,9 @@ class TemplatePanel(QtWidgets.QWidget):
         placement_layout.addRow("Center Y", self.y_spin)
         placement_layout.addRow("Rotation", self.rotation_spin)
         self.placement_help = _muted(
-            "Drag the cyan preview to move it. Drag the round handle to rotate."
+            "Solid cyan lines are aligned template cuts; dashed amber lines are "
+            "camera detections. Drag a cyan cut to move the template, or drag the "
+            "round handle to rotate it."
         )
         placement_layout.addRow(self.placement_help)
 

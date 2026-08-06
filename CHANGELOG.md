@@ -13,6 +13,41 @@
 - Kept jogging and pause/resume visibly disabled pending dedicated core APIs and
   physical controller verification.
 
+### Desktop control surface
+
+- Reorganized the native window around a LightBurn-inspired information
+  hierarchy while retaining E3 terminology, behavior, and safety boundaries.
+- Replaced the large text-button shell with original icon-only command bars, a
+  compact drawing rail, a bright gridded drafting bed, thin rulers, and hidden
+  canvas scroll bars while retaining direct middle-button/Space panning.
+- Added a non-hideable runtime strip showing simulation/hardware authority,
+  controller connection, motion permission, and a persistent software-stop
+  action with the physical emergency-stop disclaimer. It shares the command row
+  on wide screens and moves to a guaranteed-visible row on narrow screens.
+- Added a selection-aware numeric property bar for position, size, rotation,
+  percentage scaling, aspect locking, millimetre/inch display, mirroring, and
+  rectangle corner radius.
+- Added direct single-object corner resize and rotation handles with live
+  preview, anchored resizing, Shift rotation snapping, stale-model protection,
+  and atomic undo/redo commits.
+- Replaced fixed center insertion for rectangles with a persistent canvas draw
+  tool: press-drag-release shows a live active-operation-colored outline,
+  creates the exact snapped dimensions as one undoable command, selects the new
+  object, and remains active for consecutive rectangles.
+- Made Select and Rectangle exclusive visible tool modes. Select or a canvas
+  right-click exits rectangle drawing; middle-button and Space-drag panning
+  retain priority, and Escape remains the software-stop shortcut.
+- Reworked Operations/Layers into an orderable five-column operation summary
+  with inline Output/Show controls, color editing, and explicit unsupported
+  fill/raster toolpath status.
+- Added a fixed 30-color numbered operation palette; existing colors assign
+  selected objects and unused swatches create a matching operation. Added split
+  design and laser inspector stacks, a dedicated Window menu, resettable v5
+  layout, and workspace-first defaults with Console and G-code Preview on demand.
+- Fixed the native view paint path so the light bed and adaptive grid remain
+  visible without a camera frame; the corrected image now sits subtly over the
+  drafting surface at 18% default opacity.
+
 ### Camera object tracing
 
 - Added multi-object camera tracing with color/contrast modes, regular-grid
@@ -33,6 +68,9 @@
   and inside on bottom/right edges at high zoom.
 - Corrected the rounded-fit raster extent from a pixel-center span to a pixel
   count, removing a one-pixel radius underestimate on ideal rounded masks.
+- Added a dynamic on-canvas overlay key with explicit color roles and distinct
+  line styles: selected Trace results are solid green, aligned template cuts
+  are solid cyan, and camera-detected label edges are dashed amber.
 
 ### Cutting templates
 
@@ -76,6 +114,12 @@
   frozen test image during review.
 - Made maximum-size synthetic grids render through per-label pixel regions
   instead of repeated full-bed buffers.
+- Made alignment review reuse the smooth fitted camera boundary shown by Trace,
+  and draw its amber dashes over the cyan cut line so both remain identifiable
+  when the fit is exact.
+- Replaced the generated test image's chromatic antialiased silhouette with an
+  exact discrete rounded mask. This removes the one-pixel false size expansion
+  while preserving antialiasing for printed detail inside each label.
 - Invalidated generated G-code and toolpath previews after project revisions so
   aligned geometry cannot be followed by execution of a stale job.
 - Reserved `marker_id` as schema metadata; marker-based identification is not

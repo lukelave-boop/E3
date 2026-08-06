@@ -31,5 +31,8 @@ def test_toolbars_are_compact():
     text = source("main_window.py")
     assert 'setObjectName("arrangeToolbar")' in text
     assert 'setObjectName("alignToolbar")' not in text
-    assert "drawing_labels = {" in text
-    assert "job_labels = {" in text
+    assert "apply_action_icons(self.actions" in text
+    assert "ToolButtonIconOnly" in text
+    assert 'tools.addAction(self.actions[key])' in text
+    assert "drawing_labels = {" not in text
+    assert "job_labels = {" not in text

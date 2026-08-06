@@ -31,7 +31,7 @@ Environment:
 
 Results:
 
-- **250 tests passed and 2 POSIX-only tests skipped.**
+- **307 tests passed and 2 POSIX-only tests skipped.**
 - Project model/history, persistence, materials, SVG/geometry, homography,
   lens-cache behavior, workpiece/fiducial detection, object tracing, and both
   G-code pipelines passed their available tests.
@@ -39,6 +39,9 @@ Results:
 - The browser simulator served its health endpoint and HTML interface.
 - The native desktop started, ran, and shut down with Qt's offscreen backend,
   the synthetic camera, and the simulated controller.
+- A native Windows 1600 x 900 safe-simulation render verified the compact icon
+  chrome, responsive persistent STOP control, fitted light drafting bed,
+  corrected-camera blend, split inspector stacks, and fixed color palette.
 - Focused cutting-template and test-image runs covered the portable
   model/library, deterministic renderer, real detector/matcher, controller
   acceptance and source-generation behavior, widgets, direct-canvas
@@ -51,11 +54,23 @@ Results:
 - Focused layout regressions verify unclipped Save/Update actions, a compact
   600 x 430 logical designer, and the Templates, Camera, Trace, and Transform
   inspectors at 360 px with 13 pt text.
+- Focused desktop-shell regressions cover selection-aware numeric controls,
+  the persistent runtime/safety strip, compact Operations/Layers behavior,
+  operation color editing, and direct resize/rotation handles with atomic
+  history integration.
+- Focused rectangle-drawing regressions cover non-mutating tool activation,
+  live preview, four drag directions, endpoint snapping, degenerate no-ops,
+  repeated creation, Select/right-click cancellation, Space-pan priority,
+  minimum-size float tolerance, direct handle editing while the tool remains
+  active, immediate selection, and one-command undo/redo.
 - Focused trace regressions verify fitted rounded-vector preview geometry,
   radius reporting, contour placement parity between preview and creation,
   frozen analyzed-frame review, stale asynchronous result rejection, and exact
   pixel-center registration between corrected images and vector overlays.
   Perfect rounded raster masks recover their known integer-pixel radii.
+- Focused alignment-review regressions verify the role-labeled overlay key,
+  solid cyan aligned cuts, dashed amber camera edges drawn above coincident cut
+  lines, and exact 78 x 21 mm / 3 mm-radius generated label geometry.
 - Ruff was not installed in the current virtual environment and was not run.
 
 The template suite also verifies that one corrected frame is reused for every
@@ -72,8 +87,8 @@ The parametric rectangle-grid builder and designer, exact-ID template
 replacement, gap/pitch conversion, 500-object and work-area gates, and atomic
 rectangle width/height/radius editing remain covered. Toolpath coverage also
 verifies that insignificant floating-point drift at an exact work-area boundary
-is accepted while meaningful overflow remains blocked. The complete 230-test
-suite passed after the test-image integration and review fixes.
+is accepted while meaningful overflow remains blocked. The complete 307-test
+suite passed after the desktop control-surface integration and review fixes.
 
 POSIX serial is selected lazily, so `termios` is not imported by simulator or
 application startup on Windows. Selecting the real serial backend on Windows
@@ -125,6 +140,9 @@ from 2026-08-06 has not been run as a complete Linux suite during this audit.
 | Rectangle-grid builder and editable authoring metadata | Tested with portable model/library checks on Windows |
 | Grid designer and ordinary rectangle radius editing | Behaviorally tested offscreen; not interactively verified |
 | Native template save/select/review/direct-canvas-adjust/apply workflow | Behaviorally tested offscreen; not real-camera verified |
+| Native desktop control surface, operation table, and context controls | Behaviorally tested offscreen on Windows; not yet interactively verified after the redesign |
+| Single-object canvas resize/rotation and undo/redo | Behaviorally tested offscreen on Windows |
+| Persistent canvas rectangle drawing and undo/redo | Behaviorally tested and visually rendered offscreen on Windows |
 | Native desktop simulator startup | Smoke-tested offscreen on Windows |
 | Browser simulator startup | Smoke-tested through HTTP on Windows |
 | Machine simulator safety suite | Tested on Windows |

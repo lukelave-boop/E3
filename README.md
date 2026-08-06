@@ -38,17 +38,24 @@ Shared core and browser workflow:
 
 Native desktop workflow:
 
+- LightBurn-inspired compact icon chrome with a bright drafting bed, persistent
+  runtime/safety status, always-present selection properties, split design and
+  laser inspector stacks, and a fixed 30-color operation palette
 - PySide6 machine-coordinate workspace with camera overlay, pan, zoom, grid,
   rulers, snapping, and toolpath preview
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
 - Rectangle, rounded rectangle, ellipse, line, text, and imported SVG-path
   objects, with numeric width/height and corner-radius editing for rectangles
+- Persistent rectangle drawing directly on the bed with a live active-layer
+  preview, snapping, immediate selection, and undo/redo-backed commits
+- Direct single-object corner resizing and rotation on the canvas, including
+  fixed-size handles, Shift-to-snap rotation, and undo/redo-backed commits
 - Per-layer vector speed, power, pass count, ordering, estimates, and dry frames
 - SQLite material presets and camera focus/sharpness controls
 - Versioned `.e3template` cutting-template library with manual selection,
-  geometry-based automatic matching, rigid alignment review, and one-step undo
-  when aligned cut objects are created
+  geometry-based automatic matching, role-labeled camera/cut overlays, rigid
+  alignment review, and one-step undo when aligned cut objects are created
 - Dedicated regular-grid template designer with a live preview, editable cut
   size/radius, rows, columns, edge-gap or center-pitch spacing, and direct
   template-library or project-object creation

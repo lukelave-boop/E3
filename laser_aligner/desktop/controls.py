@@ -39,7 +39,7 @@ class PanelScrollArea(QtWidgets.QScrollArea):
         self.setWidget(panel)
 
         palette = self.palette()
-        background = QtGui.QColor("#10161C")
+        background = QtGui.QColor("#1E1E1E")
         palette.setColor(QtGui.QPalette.ColorRole.Window, background)
         palette.setColor(QtGui.QPalette.ColorRole.Base, background)
         self.setPalette(palette)

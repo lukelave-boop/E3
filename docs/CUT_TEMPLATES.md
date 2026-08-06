@@ -70,8 +70,10 @@ be opened with **Edit grid…**.
 4. Adjust the placement when necessary. Drag any cyan cut to move the entire
    template, drag the round handle to rotate it about its reviewed center, or
    use the Center X, Center Y, Rotation, and nudge controls. Canvas gestures and
-   numeric values stay synchronized; amber camera detections remain fixed so
-   the correction can be compared against the captured sheet.
+   numeric values stay synchronized. Solid cyan lines are the aligned cut
+   template; dashed amber camera detections remain fixed so the correction can
+   be compared against the captured sheet. The on-canvas key identifies every
+   transient overlay currently visible.
 5. Choose **Create aligned cut objects**. All template objects are added to the
    active project layer as one undoable batch.
 

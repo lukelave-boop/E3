@@ -32,18 +32,36 @@ def test_inspector_pages_are_opaque_and_scrollable():
     assert "wheelScrollContainer" in controls
     assert "QWidget#inspectorPage" in theme
     assert "QTabWidget#inspectorTabs::pane" in theme
-    assert "background: #10161C" in theme
+    assert "background: #1E1E1E" in theme
 
 
-def test_main_window_uses_one_inspector_instead_of_tabified_docks():
+def test_main_window_uses_lightburn_style_design_and_job_inspector_stacks():
     text = source("main_window.py")
     assert "self.inspector_tabs = InspectorTabs" in text
+    assert "self.job_tabs = InspectorTabs" in text
     assert 'self.inspector_dock = self._dock(' in text
     assert '"Objects", self.object_panel' in text
-    assert '"Camera", self.camera_panel' in text
+    assert '"Cameras", self.camera_panel' in text
+    assert '"Cuts / Layers", self.layer_panel' in text
+    assert '"Laser", self.job_panel' in text
     assert "self.object_dock =" not in text
     assert "self.camera_dock =" not in text
-    assert "mainWindow/state-v3" in text
+    assert "mainWindow/state-v5" in text
+
+
+def test_main_window_has_context_properties_and_persistent_safety_strip():
+    text = source("main_window.py")
+    context = source("context_bar.py")
+    runtime = source("runtime_strip.py")
+
+    assert "self.context_bar = ContextPropertyBar" in text
+    assert "self.runtime_strip = RuntimeSafetyStrip" in text
+    assert "self.context_bar.set_selection" in text
+    assert "self.runtime_strip.stopRequested.connect" in text
+    assert "self.safety_toolbar.toggleViewAction().setEnabled(False)" in text
+    assert "self.safety_toolbar.show()" in text
+    assert "class ContextPropertyBar" in context
+    assert "class RuntimeSafetyStrip" in runtime
 
 
 def test_camera_focus_controls_are_present_and_persistent():

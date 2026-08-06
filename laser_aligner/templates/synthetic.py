@@ -225,27 +225,89 @@ def _machine_to_pixels(
     return output
 
 
+def _canonical_rounded_mask(width: int, height: int, radius: int) -> np.ndarray:
+    """Return the discrete rounded silhouette expected by object tracing."""
+
+    width = max(2, int(width))
+    height = max(2, int(height))
+    radius = max(0, min(int(radius), width // 2, height // 2))
+    mask = np.zeros((height, width), dtype=np.uint8)
+    if radius == 0:
+        mask[:] = 255
+        return mask
+    cv2.rectangle(mask, (radius, 0), (width - radius - 1, height - 1), 255, -1)
+    cv2.rectangle(mask, (0, radius), (width - 1, height - radius - 1), 255, -1)
+    for center in (
+        (radius, radius),
+        (width - radius - 1, radius),
+        (width - radius - 1, height - radius - 1),
+        (radius, height - radius - 1),
+    ):
+        cv2.circle(mask, center, radius, 255, -1)
+    return mask
+
+
 def _label_region(
-    polygon_px: np.ndarray,
+    width_mm: float,
+    height_mm: float,
+    radius_mm: float,
+    center_mm: tuple[float, float],
+    rotation_deg: float,
+    work_area: WorkArea,
+    pixels_per_mm: float,
     image_width: int,
     image_height: int,
 ) -> _LabelRegion | None:
-    """Rasterize a polygon into a small clipped region instead of a bed mask."""
+    """Place an exact rounded silhouette into a small clipped image region.
 
-    points = np.asarray(polygon_px, dtype=np.int32).reshape(-1, 2)
-    if not len(points):
-        return None
-    # Two pixels retain fillPoly's anti-aliased edge without allocating beyond
-    # the corrected frame.  OpenCV safely clips negative shifted coordinates.
-    x_min = max(0, int(points[:, 0].min()) - 2)
-    y_min = max(0, int(points[:, 1].min()) - 2)
-    x_max = min(image_width, int(points[:, 0].max()) + 3)
-    y_max = min(image_height, int(points[:, 1].max()) + 3)
+    A chromatic antialiased polygon fringe survives color segmentation and
+    expands a generated label by one pixel.  Build the same discrete rounded
+    mask used by the fitter, then rotate it with nearest-neighbour sampling so
+    synthetic camera geometry remains a faithful test reference.
+    """
+
+    ppm = float(pixels_per_mm)
+    mask_width = max(2, int(round(width_mm * ppm)) + 1)
+    mask_height = max(2, int(round(height_mm * ppm)) + 1)
+    mask_radius = max(0, int(round(radius_mm * ppm)))
+    source = _canonical_rounded_mask(mask_width, mask_height, mask_radius)
+    source_center = ((mask_width - 1) / 2.0, (mask_height - 1) / 2.0)
+    target_center = _machine_to_pixels(
+        np.asarray((center_mm,), dtype=np.float64),
+        work_area,
+        ppm,
+    )[0]
+    matrix = cv2.getRotationMatrix2D(source_center, float(rotation_deg), 1.0)
+    matrix[0, 2] += float(target_center[0]) - source_center[0]
+    matrix[1, 2] += float(target_center[1]) - source_center[1]
+
+    corners = np.asarray(
+        (
+            (0.0, 0.0, 1.0),
+            (mask_width - 1.0, 0.0, 1.0),
+            (mask_width - 1.0, mask_height - 1.0, 1.0),
+            (0.0, mask_height - 1.0, 1.0),
+        ),
+        dtype=np.float64,
+    )
+    transformed = corners @ matrix.T
+    x_min = max(0, int(math.floor(float(transformed[:, 0].min()))) - 2)
+    y_min = max(0, int(math.floor(float(transformed[:, 1].min()))) - 2)
+    x_max = min(image_width, int(math.ceil(float(transformed[:, 0].max()))) + 3)
+    y_max = min(image_height, int(math.ceil(float(transformed[:, 1].max()))) + 3)
     if x_min >= x_max or y_min >= y_max:
         return None
-    shifted = points - np.asarray((x_min, y_min), dtype=np.int32)
-    mask = np.zeros((y_max - y_min, x_max - x_min), dtype=np.uint8)
-    cv2.fillPoly(mask, [shifted], 255, cv2.LINE_AA)
+    local_matrix = matrix.copy()
+    local_matrix[0, 2] -= x_min
+    local_matrix[1, 2] -= y_min
+    mask = cv2.warpAffine(
+        source,
+        local_matrix,
+        (x_max - x_min, y_max - y_min),
+        flags=cv2.INTER_NEAREST,
+        borderMode=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
     return _LabelRegion(x_min, y_min, x_max, y_max, mask)
 
 
@@ -470,10 +532,17 @@ def generate_template_test_frame(
         feature_truth.append(truth)
         if not rendered:
             continue
-        polygon_px = np.round(
-            _machine_to_pixels(world_polygon, work_area, ppm)
-        ).astype(np.int32)
-        region = _label_region(polygon_px, image_width, image_height)
+        region = _label_region(
+            feature.width_mm,
+            feature.height_mm,
+            _feature_radius_mm(feature, object_corner_radii),
+            (float(world_center[0]), float(world_center[1])),
+            world_rotation,
+            work_area,
+            ppm,
+            image_width,
+            image_height,
+        )
         if region is None:
             continue
         label_image = region.image_view(image)
