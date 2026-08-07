@@ -123,6 +123,36 @@ The fine translation belongs to camera-to-machine registration. It is not a
 laser-head mounting offset and does not modify `laser.spot_offset_x_mm` or
 `laser.spot_offset_y_mm`.
 
+### Dense local correction
+
+If the remaining error changes by bed position after the homography and fine
+translation are stable, use **Dense local correction (5 × 5)**. Run its dry
+path first, then the guarded powered 25-cross job on a clean, restrained
+sacrificial surface at calibration height. The reviewed mesh is a bounded
+nonlinear residual layer over the existing map and can be reset independently.
+
+The mesh is applied consistently to camera-to-machine conversion,
+machine-to-camera placement, and image rectification. It rejects missing or
+low-confidence marks, corrections over 3 mm, and abrupt local distortion.
+After applying it, use the 4 × 4 mesh check on **Accuracy validation**. Its 16
+interstitial marks were not used for fitting; passing requires at most 0.30 mm
+RMS and 0.60 mm maximum error.
+
+If that first independent check has a coherent bounded residual, **Apply
+reviewed validation refinement** becomes available. This applies one guarded
+update to the existing mesh; it cannot be repeated against the same mesh. Use a
+new sheet, the clean reverse side, or another clean restrained surface before
+running **Prepare dry/powered shifted confirmation**. The shifted 16 positions
+are different from both the original 25 fit marks and the 16 refinement marks.
+Only that fresh confirmation result is the final accuracy measurement.
+
+A failed fit is still a review result. The captured image and all 25 measured
+positions remain visible. One occluded or clearly unreliable grid detection can
+be excluded automatically and shown in amber as **INFERRED**; its mesh node is
+estimated from the other 24 cells. Two unreliable cells, excessive fitted
+movement, or excessive local distortion keep application disabled. Every
+inferred fit still requires the independent 4×4 holdout validation.
+
 ## 5. Accuracy validation
 
 This is the independent holdout check for a translation or full-bed refinement.

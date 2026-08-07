@@ -76,6 +76,22 @@ def test_machine_service_over_pseudoterminal() -> None:
                     commands.append(line)
                     if line == "$I":
                         os.write(master_fd, b"[VER:1.1h.test:PTY]\r\nok\r\n")
+                    elif line == "$G":
+                        os.write(
+                            master_fd,
+                            b"[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]\r\nok\r\n",
+                        )
+                    elif line == "$#":
+                        os.write(
+                            master_fd,
+                            b"[G54:0.000,0.000,0.000]\r\n"
+                            b"[G55:0.000,0.000,0.000]\r\n"
+                            b"[G56:0.000,0.000,0.000]\r\n"
+                            b"[G57:0.000,0.000,0.000]\r\n"
+                            b"[G58:0.000,0.000,0.000]\r\n"
+                            b"[G59:0.000,0.000,0.000]\r\n"
+                            b"[G92:0.000,0.000,0.000]\r\nok\r\n",
+                        )
                     else:
                         os.write(master_fd, b"ok\r\n")
                 else:

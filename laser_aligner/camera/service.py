@@ -4,9 +4,9 @@ import glob
 import logging
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import cv2
 import numpy as np
@@ -144,6 +144,33 @@ class CameraService:
             if self._frame is None:
                 raise CameraError("No camera frame is available")
             return self._frame.copy()
+
+    def frame_sequence(self) -> int:
+        """Return the monotonically increasing count of captured live frames."""
+        with self._lock:
+            return self._frames_read
+
+    def snapshot_after(self, sequence: int, timeout: float = 6.0) -> np.ndarray:
+        """Wait for and return a frame captured after ``sequence``.
+
+        This prevents calibration workflows from analyzing the cached frame
+        that was current before a machine-positioning operation completed.
+        """
+        deadline = time.monotonic() + max(0.0, float(timeout))
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._frames_read > int(sequence) and self._frame is not None:
+                    return self._frame.copy()
+                connected = self._connected
+                last_error = self._last_error
+            if not connected:
+                raise CameraError("Camera disconnected while waiting for a fresh frame")
+            if last_error:
+                raise CameraError(last_error)
+            time.sleep(0.02)
+        raise CameraError(
+            f"Camera did not provide a fresh frame within {float(timeout):g} seconds"
+        )
 
     def jpeg(self, quality: int | None = None) -> bytes:
         frame = self.snapshot()

@@ -32,6 +32,83 @@ def test_bed_homography_round_trip(tmp_path: Path) -> None:
     assert rectified.shape[:2] == (440, 440)
 
 
+def test_residual_mesh_round_trip_persists_and_resets(tmp_path: Path) -> None:
+    area = WorkArea(x_min=0, x_max=200, y_min=0, y_max=200)
+    mapper = BedMapper(tmp_path, BedCalibrationSettings(), area)
+    for point in (
+        BedPoint(0, 0, 0, 0),
+        BedPoint(200, 0, 200, 0),
+        BedPoint(200, 200, 200, 200),
+        BedPoint(0, 200, 0, 200),
+    ):
+        mapper.add_point(point)
+    mapper.solve(201, 201)
+    nodes = np.linspace(20, 180, 5)
+    corrections = np.zeros((5, 5, 2))
+    corrections[:, :, 0] = np.linspace(0.1, 0.5, 5)[None, :]
+    corrections[:, :, 1] = np.linspace(-0.2, 0.2, 5)[:, None]
+    mapper.apply_residual_mesh(nodes, nodes, corrections, fit_rms_mm=0.1, fit_max_mm=0.2)
+
+    machine = mapper.image_to_mm(90, 120)
+    assert machine != pytest.approx((90, 120))
+    assert mapper.mm_to_image(*machine) == pytest.approx((90, 120), abs=1e-7)
+
+    reloaded = BedMapper(tmp_path, BedCalibrationSettings(), area)
+    assert reloaded.mm_to_image(*machine) == pytest.approx((90, 120), abs=1e-7)
+    reloaded.reset_residual_mesh()
+    assert reloaded.image_to_mm(90, 120) == pytest.approx((90, 120))
+
+
+def test_residual_mesh_rejects_excessive_local_gradient(tmp_path: Path) -> None:
+    mapper = BedMapper(tmp_path, BedCalibrationSettings(), WorkArea(x_max=200, y_max=200))
+    for point in (
+        BedPoint(0, 0, 0, 0),
+        BedPoint(200, 0, 200, 0),
+        BedPoint(200, 200, 200, 200),
+        BedPoint(0, 200, 0, 200),
+    ):
+        mapper.add_point(point)
+    mapper.solve(201, 201)
+    nodes = np.linspace(20, 180, 5)
+    corrections = np.zeros((5, 5, 2))
+    corrections[2, 2, 0] = 4.0
+    with pytest.raises(Exception, match="3 mm safety bound"):
+        mapper.apply_residual_mesh(nodes, nodes, corrections, fit_rms_mm=0.1, fit_max_mm=0.2)
+
+
+def test_residual_mesh_allows_one_stale_guarded_refinement(tmp_path: Path) -> None:
+    mapper = BedMapper(tmp_path, BedCalibrationSettings(), WorkArea(x_max=200, y_max=200))
+    for point in (
+        BedPoint(0, 0, 0, 0),
+        BedPoint(200, 0, 200, 0),
+        BedPoint(200, 200, 200, 200),
+        BedPoint(0, 200, 0, 200),
+    ):
+        mapper.add_point(point)
+    mapper.solve(201, 201)
+    nodes = np.linspace(20, 180, 5)
+    mapper.apply_residual_mesh(nodes, nodes, np.zeros((5, 5, 2)), fit_rms_mm=0.1, fit_max_mm=0.2)
+    assert mapper.calibration is not None
+    created_at = mapper.calibration.residual_mesh.created_at
+    delta = np.zeros((5, 5, 2))
+    delta[:, :, 1] = -0.4
+    mapper.refine_residual_mesh(
+        delta,
+        analyzed_mesh_created_at=created_at,
+        predicted_rms_mm=0.1,
+        predicted_max_mm=0.2,
+    )
+    assert mapper.calibration.residual_mesh.refinement_count == 1
+    assert mapper.image_to_mm(100, 100)[1] == pytest.approx(99.6)
+    with pytest.raises(Exception, match="already been refined"):
+        mapper.refine_residual_mesh(
+            delta,
+            analyzed_mesh_created_at=created_at,
+            predicted_rms_mm=0.1,
+            predicted_max_mm=0.2,
+        )
+
+
 def test_bed_mapping_can_reverse_saved_x_axis_and_resolve(tmp_path: Path) -> None:
     area = WorkArea(x_min=10, x_max=210, y_min=20, y_max=180)
     mapper = BedMapper(tmp_path, BedCalibrationSettings(), area)

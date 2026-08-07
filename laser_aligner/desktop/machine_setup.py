@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import time
 from dataclasses import asdict
 from typing import Any
 
@@ -13,6 +14,8 @@ from ..core import CoreRuntime
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+_POST_PARK_CAMERA_SETTLE_SECONDS = 6.0
 
 
 def _qimage(image: np.ndarray) -> QtGui.QImage:
@@ -77,6 +80,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._bed_target_index = 0
         self._fine_registration_analysis: dict[str, Any] | None = None
         self._fine_registration_measurements: list[dict[str, Any]] = []
+        self._dense_analysis: dict[str, Any] | None = None
+        self._dense_validation_analysis: dict[str, Any] | None = None
         self._registration_table_updating = False
         self.setWindowTitle("Machine Setup")
         self.setMinimumSize(900, 680)
@@ -94,6 +99,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
         warning.setWordWrap(True)
         warning.setObjectName("warningLabel")
         layout.addWidget(warning)
+        connection_row = QtWidgets.QHBoxLayout()
+        self.machine_connection_status = QtWidgets.QLabel()
+        self.machine_connection_status.setObjectName("machineSetupConnectionStatus")
+        self.machine_connection_button = QtWidgets.QPushButton("Connect machine")
+        self.machine_connection_button.setMinimumWidth(170)
+        self.machine_connection_button.clicked.connect(self.toggle_machine_connection)
+        connection_row.addWidget(self.machine_connection_status, 1)
+        connection_row.addWidget(self.machine_connection_button)
+        layout.addLayout(connection_row)
         preferences_note = QtWidgets.QLabel(
             "Setup remembers this window, selected tab, simulation scene, cross sizes, "
             "marking speeds, and saved axis orientation. Marking power intentionally "
@@ -256,18 +270,14 @@ class MachineSetupDialog(QtWidgets.QDialog):
             toggle.setMinimumHeight(30)
         self.axis_mapping_status = QtWidgets.QLabel()
         self.axis_mapping_status.setWordWrap(True)
-        self.save_axis_mapping = QtWidgets.QPushButton(
-            "Confirm and save displayed axis states"
-        )
+        self.save_axis_mapping = QtWidgets.QPushButton("Confirm and save displayed axis states")
         axis_layout.addWidget(self.reverse_x)
         axis_layout.addWidget(self.reverse_y)
         axis_layout.addWidget(self.axis_mapping_status)
         axis_layout.addWidget(self.save_axis_mapping)
         right.addWidget(axis_group)
         clear = QtWidgets.QPushButton("Clear mapping and points")
-        for index, button in enumerate(
-            (park, capture, remove, detect, import_csv, solve, clear)
-        ):
+        for index, button in enumerate((park, capture, remove, detect, import_csv, solve, clear)):
             controls.addWidget(button, index // 2, index % 2)
         right.addLayout(controls)
         park.clicked.connect(self.park)
@@ -276,12 +286,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         detect.clicked.connect(self.detect_cross_grid)
         import_csv.clicked.connect(self.import_coordinate_csv)
         solve.clicked.connect(self.solve_bed)
-        self.reverse_x.toggled.connect(
-            lambda checked: self.set_bed_axis_reversed("x", checked)
-        )
-        self.reverse_y.toggled.connect(
-            lambda checked: self.set_bed_axis_reversed("y", checked)
-        )
+        self.reverse_x.toggled.connect(lambda checked: self.set_bed_axis_reversed("x", checked))
+        self.reverse_y.toggled.connect(lambda checked: self.set_bed_axis_reversed("y", checked))
         self.save_axis_mapping.clicked.connect(self.confirm_axis_mapping_state)
         clear.clicked.connect(self.clear_bed)
         layout.addLayout(right, 2)
@@ -348,37 +354,61 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         right.addWidget(self.registration_results, 1)
         correction_row = QtWidgets.QHBoxLayout()
-        self.apply_registration_button = QtWidgets.QPushButton(
-            "Apply reviewed translation"
-        )
+        self.apply_registration_button = QtWidgets.QPushButton("Apply reviewed translation")
         self.apply_registration_button.setEnabled(False)
         reset = QtWidgets.QPushButton("Reset fine translation")
         correction_row.addWidget(self.apply_registration_button)
         correction_row.addWidget(reset)
         right.addLayout(correction_row)
         map_row = QtWidgets.QHBoxLayout()
-        self.apply_registration_map_button = QtWidgets.QPushButton(
-            "Apply reviewed full-bed map"
-        )
+        self.apply_registration_map_button = QtWidgets.QPushButton("Apply reviewed full-bed map")
         self.apply_registration_map_button.setEnabled(False)
         reset_map = QtWidgets.QPushButton("Reset full-bed refinement")
         map_row.addWidget(self.apply_registration_map_button)
         map_row.addWidget(reset_map)
         right.addLayout(map_row)
+        dense_box = QtWidgets.QGroupBox("Dense local correction (5 × 5)")
+        dense_layout = QtWidgets.QVBoxLayout(dense_box)
+        dense_note = QtWidgets.QLabel(
+            "Use after the full-bed map and translation are stable. Burns 25 crosses, "
+            "fits a bounded local residual mesh, and keeps the current map as its reset base."
+        )
+        dense_note.setWordWrap(True)
+        dense_layout.addWidget(dense_note)
+        dense_prepare = QtWidgets.QHBoxLayout()
+        dense_dry = QtWidgets.QPushButton("Prepare dry 5×5 path")
+        dense_powered = QtWidgets.QPushButton("Prepare powered 5×5 job")
+        dense_prepare.addWidget(dense_dry)
+        dense_prepare.addWidget(dense_powered)
+        dense_layout.addLayout(dense_prepare)
+        dense_capture = QtWidgets.QPushButton("Home / park, capture and fit 25 marks")
+        dense_layout.addWidget(dense_capture)
+        self.dense_status = QtWidgets.QLabel("No dense-grid capture analyzed")
+        self.dense_status.setWordWrap(True)
+        dense_layout.addWidget(self.dense_status)
+        dense_actions = QtWidgets.QHBoxLayout()
+        self.apply_dense_button = QtWidgets.QPushButton("Apply reviewed local mesh")
+        self.apply_dense_button.setEnabled(False)
+        reset_dense = QtWidgets.QPushButton("Reset local mesh")
+        dense_actions.addWidget(self.apply_dense_button)
+        dense_actions.addWidget(reset_dense)
+        dense_layout.addLayout(dense_actions)
+        right.addWidget(dense_box)
         layout.addLayout(right, 2)
 
         dry.clicked.connect(lambda: self.prepare_registration_job(False))
         powered.clicked.connect(lambda: self.prepare_registration_job(True))
         capture.clicked.connect(self.capture_fine_registration)
         self.apply_registration_button.clicked.connect(self.apply_fine_registration)
-        self.apply_registration_map_button.clicked.connect(
-            self.apply_fine_registration_homography
-        )
+        self.apply_registration_map_button.clicked.connect(self.apply_fine_registration_homography)
         reset.clicked.connect(self.reset_fine_registration)
         reset_map.clicked.connect(self.reset_fine_registration_homography)
-        self.registration_results.itemChanged.connect(
-            self.registration_measurement_changed
-        )
+        dense_dry.clicked.connect(lambda: self.prepare_dense_job(False))
+        dense_powered.clicked.connect(lambda: self.prepare_dense_job(True))
+        dense_capture.clicked.connect(self.capture_dense_calibration)
+        self.apply_dense_button.clicked.connect(self.apply_dense_calibration)
+        reset_dense.clicked.connect(self.reset_dense_calibration)
+        self.registration_results.itemChanged.connect(self.registration_measurement_changed)
         self.tabs.addTab(tab, "4 · Fine registration")
 
     def _build_check_tab(self) -> None:
@@ -414,9 +444,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.validation_speed.setRange(1.0, 50000.0)
         self.validation_speed.setDecimals(0)
         self.validation_speed.setSuffix(" mm/min")
-        self.validation_speed.setValue(
-            self.context.settings.laser.engrave_feed_mm_min
-        )
+        self.validation_speed.setValue(self.context.settings.laser.engrave_feed_mm_min)
         form.addRow("Verified marking power", self.validation_power)
         form.addRow("Cross size", self.validation_mark_size)
         form.addRow("Marking speed", self.validation_speed)
@@ -428,10 +456,25 @@ class MachineSetupDialog(QtWidgets.QDialog):
         prepare_row.addWidget(validation_dry)
         prepare_row.addWidget(validation_powered)
         right.addLayout(prepare_row)
-        validation_capture = QtWidgets.QPushButton(
-            "Home / park, capture and score holdouts"
-        )
+        validation_capture = QtWidgets.QPushButton("Home / park, capture and score holdouts")
         right.addWidget(validation_capture)
+        dense_validation_row = QtWidgets.QHBoxLayout()
+        dense_validation_dry = QtWidgets.QPushButton("Prepare dry 4×4 mesh check")
+        dense_validation_powered = QtWidgets.QPushButton("Prepare powered 4×4 mesh check")
+        dense_validation_row.addWidget(dense_validation_dry)
+        dense_validation_row.addWidget(dense_validation_powered)
+        right.addLayout(dense_validation_row)
+        dense_validation_capture = QtWidgets.QPushButton("Home / park, capture and score 16 interstitial marks")
+        right.addWidget(dense_validation_capture)
+        self.apply_dense_validation_refinement_button = QtWidgets.QPushButton("Apply reviewed validation refinement")
+        self.apply_dense_validation_refinement_button.setEnabled(False)
+        right.addWidget(self.apply_dense_validation_refinement_button)
+        confirmation_row = QtWidgets.QHBoxLayout()
+        confirmation_dry = QtWidgets.QPushButton("Prepare dry shifted confirmation")
+        confirmation_powered = QtWidgets.QPushButton("Prepare powered shifted confirmation")
+        confirmation_row.addWidget(confirmation_dry)
+        confirmation_row.addWidget(confirmation_powered)
+        right.addLayout(confirmation_row)
         self.validation_status = QtWidgets.QLabel("No validation capture analyzed")
         self.validation_status.setWordWrap(True)
         right.addWidget(self.validation_status)
@@ -468,18 +511,30 @@ class MachineSetupDialog(QtWidgets.QDialog):
         right.addWidget(diagnostics)
         layout.addLayout(right, 2)
 
-        validation_dry.clicked.connect(
-            lambda: self.prepare_accuracy_validation_job(False)
-        )
-        validation_powered.clicked.connect(
-            lambda: self.prepare_accuracy_validation_job(True)
-        )
+        validation_dry.clicked.connect(lambda: self.prepare_accuracy_validation_job(False))
+        validation_powered.clicked.connect(lambda: self.prepare_accuracy_validation_job(True))
         validation_capture.clicked.connect(self.capture_accuracy_validation)
+        dense_validation_dry.clicked.connect(lambda: self.prepare_dense_validation_job(False))
+        dense_validation_powered.clicked.connect(lambda: self.prepare_dense_validation_job(True))
+        dense_validation_capture.clicked.connect(self.capture_dense_validation)
+        self.apply_dense_validation_refinement_button.clicked.connect(self.apply_dense_validation_refinement)
+        confirmation_dry.clicked.connect(lambda: self.prepare_dense_validation_job(False, confirmation=True))
+        confirmation_powered.clicked.connect(lambda: self.prepare_dense_validation_job(True, confirmation=True))
         workpiece.clicked.connect(self.detect_workpiece)
         fiducials.clicked.connect(self.detect_fiducials)
         self.tabs.addTab(tab, "5 · Accuracy validation")
 
     def refresh_all(self) -> None:
+        machine = self.context.machine.status()
+        connected = bool(machine.get("connected"))
+        protocol = str(machine.get("protocol") or "controller")
+        port = str(machine.get("port") or "")
+        self.machine_connection_status.setText(
+            f"Machine connected · {protocol} · {port}"
+            if connected
+            else f"Machine offline · {port or 'no active connection'}"
+        )
+        self.machine_connection_button.setText("Disconnect machine" if connected else "Connect machine")
         camera = asdict(self.context.camera.status())
         self.camera_status.setText(
             f"{'Online' if camera.get('connected') else 'Offline'} · {camera.get('width', 0)} × "
@@ -520,6 +575,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
             values = (point["label"], point["image_x"], point["image_y"], point["machine_x"], point["machine_y"])
             for column, value in enumerate(values):
                 self.points.setItem(row, column, QtWidgets.QTableWidgetItem(str(value)))
+
+    def toggle_machine_connection(self) -> None:
+        connected = bool(self.context.machine.status().get("connected"))
+        result = self._message(
+            "Machine connection",
+            self.context.machine.disconnect if connected else self.context.machine.connect,
+        )
+        if result is not None or connected:
+            self.refresh_all()
 
     def refresh_camera(self) -> None:
         image = self._message("Camera preview", lambda: self.context.camera_frame(undistort=False))
@@ -715,9 +779,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             blocker = QtCore.QSignalBlocker(toggle)
             toggle.setChecked(reversed_axis)
             del blocker
-            toggle.setText(
-                f"Reverse {axis.upper()} mapping — {'ON' if reversed_axis else 'OFF'}"
-            )
+            toggle.setText(f"Reverse {axis.upper()} mapping — {'ON' if reversed_axis else 'OFF'}")
             if mapping and not recorded:
                 messages.append(f"{axis.upper()} was inferred from a legacy saved map")
             toggle.setEnabled(bool(bed.get("calibrated")))
@@ -747,8 +809,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             "mapping is re-solved. Use it only when a laser-off direction check or repeated "
             "homed measurements prove that camera and controller directions are "
             f"opposite on {axis}. The state persists across restarts.\n\nContinue?",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -776,8 +837,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             "points. Confirm only after a laser-off direction check.\n\n"
             f"X: {'REVERSED' if state['x']['reversed'] else 'NORMAL'}\n"
             f"Y: {'REVERSED' if state['y']['reversed'] else 'NORMAL'}\n\nContinue?",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -785,12 +845,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         result = self._message(
             "Save axis orientation",
             lambda: (
-                self.context.bed.set_machine_axis_reversed(
-                    "x", state["x"]["reversed"]
-                ),
-                self.context.bed.set_machine_axis_reversed(
-                    "y", state["y"]["reversed"]
-                ),
+                self.context.bed.set_machine_axis_reversed("x", state["x"]["reversed"]),
+                self.context.bed.set_machine_axis_reversed("y", state["y"]["reversed"]),
             ),
         )
         if result is not None:
@@ -801,9 +857,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         geometry = self._settings.value("machineSetup/geometry-v1")
         if geometry:
             self.restoreGeometry(geometry)
-        self.tabs.setCurrentIndex(
-            max(0, min(self.tabs.count() - 1, int(self._settings.value("machineSetup/tab", 0))))
-        )
+        self.tabs.setCurrentIndex(max(0, min(self.tabs.count() - 1, int(self._settings.value("machineSetup/tab", 0)))))
         scene = str(self._settings.value("machineSetup/syntheticScene", "bed"))
         scene_index = self.synthetic_scene.findData(scene)
         if scene_index >= 0:
@@ -821,9 +875,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def _save_preferences(self) -> None:
         self._settings.setValue("machineSetup/geometry-v1", self.saveGeometry())
         self._settings.setValue("machineSetup/tab", self.tabs.currentIndex())
-        self._settings.setValue(
-            "machineSetup/syntheticScene", self.synthetic_scene.currentData()
-        )
+        self._settings.setValue("machineSetup/syntheticScene", self.synthetic_scene.currentData())
         for key, widget in (
             ("registrationMarkSize", self.registration_mark_size),
             ("registrationSpeed", self.registration_speed),
@@ -859,8 +911,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "visible-marking power on a restrained sacrificial surface inside the "
                 "required enclosure. The main window will still require the normal "
                 "powered-job confirmation and arming phrase.\n\nContinue?",
-                QtWidgets.QMessageBox.StandardButton.Yes
-                | QtWidgets.QMessageBox.StandardButton.Cancel,
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
             )
             if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -881,7 +932,17 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def capture_fine_registration(self) -> None:
         def operation() -> tuple[np.ndarray, dict[str, Any]]:
             self.context.machine.prepare_photo_position()
-            image = self.context.camera_frame(undistort=True)
+            # The physical GRBL-derived controller acknowledges the queued
+            # park sequence before this slow bed has necessarily stopped.
+            # Fresh frames alone are therefore insufficient: allow the full
+            # measured settle window, then require frames captured after it.
+            time.sleep(_POST_PARK_CAMERA_SETTLE_SECONDS)
+            sequence = self.context.camera.frame_sequence() + 2
+            image = self.context.camera_frame(
+                undistort=True,
+                after_sequence=sequence,
+                timeout=6.0,
+            )
             return image, self.context.analyze_fine_registration_image(image)
 
         result = self._message("Fine registration", operation)
@@ -909,9 +970,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self._fine_registration_measurements = []
             self.apply_registration_button.setEnabled(False)
             self.apply_registration_map_button.setEnabled(False)
-            self.registration_status.setText(
-                payload.get("reason", "Registration marks were not detected")
-            )
+            self.registration_status.setText(payload.get("reason", "Registration marks were not detected"))
             return
         self._fine_registration_measurements = list(payload.get("measurements", []))
         self._populate_registration_results(
@@ -924,16 +983,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._fine_registration_analysis = analysis
         self.apply_registration_button.setEnabled(bool(analysis.get("can_apply_translation")))
         refinement = analysis.get("full_map_refinement")
-        can_apply_map = isinstance(refinement, dict) and bool(
-            refinement.get("can_apply_full_map")
-        )
+        can_apply_map = isinstance(refinement, dict) and bool(refinement.get("can_apply_full_map"))
         self.apply_registration_map_button.setEnabled(can_apply_map)
         excluded = [int(value) for value in analysis.get("excluded_ids", [])]
-        exclusion_text = (
-            " · excluded " + ", ".join(f"#{value}" for value in excluded)
-            if excluded
-            else ""
-        )
+        exclusion_text = " · excluded " + ", ".join(f"#{value}" for value in excluded) if excluded else ""
         status = (
             f"{analysis['classification'].replace('_', ' ').title()} · "
             f"proposed correction X{analysis['correction_x_mm']:+.3f} "
@@ -942,14 +995,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
             f"{analysis['reason']}"
         )
         if isinstance(refinement, dict):
-            ransac_outliers = [
-                int(value) for value in refinement.get("ransac_outlier_ids", [])
-            ]
+            ransac_outliers = [int(value) for value in refinement.get("ransac_outlier_ids", [])]
             outlier_text = (
-                " · geometric outlier "
-                + ", ".join(f"#{value}" for value in ransac_outliers)
-                if ransac_outliers
-                else ""
+                " · geometric outlier " + ", ".join(f"#{value}" for value in ransac_outliers) if ransac_outliers else ""
             )
             status += (
                 f"\nFull-bed fit: {refinement['inlier_count']}/"
@@ -970,14 +1018,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.registration_results.setRowCount(len(measurements))
         for row, item in enumerate(measurements):
             use = QtWidgets.QTableWidgetItem()
-            use.setFlags(
-                QtCore.Qt.ItemFlag.ItemIsEnabled
-                | QtCore.Qt.ItemFlag.ItemIsUserCheckable
-            )
+            use.setFlags(QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsUserCheckable)
             use.setCheckState(
-                QtCore.Qt.CheckState.Unchecked
-                if int(item["id"]) in excluded_ids
-                else QtCore.Qt.CheckState.Checked
+                QtCore.Qt.CheckState.Unchecked if int(item["id"]) in excluded_ids else QtCore.Qt.CheckState.Checked
             )
             use.setToolTip(
                 "Uncheck only when the preview clearly shows an obstructed, damaged, "
@@ -994,19 +1037,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 f"{item['error_y_mm']:+.3f}",
             )
             for column, value in enumerate(values):
-                self.registration_results.setItem(
-                    row, column + 1, QtWidgets.QTableWidgetItem(str(value))
-                )
+                self.registration_results.setItem(row, column + 1, QtWidgets.QTableWidgetItem(str(value)))
         self._registration_table_updating = False
 
-    def registration_measurement_changed(
-        self, item: QtWidgets.QTableWidgetItem
-    ) -> None:
-        if (
-            self._registration_table_updating
-            or item.column() != 0
-            or not self._fine_registration_measurements
-        ):
+    def registration_measurement_changed(self, item: QtWidgets.QTableWidgetItem) -> None:
+        if self._registration_table_updating or item.column() != 0 or not self._fine_registration_measurements:
             return
         excluded_ids = []
         for row, measurement in enumerate(self._fine_registration_measurements):
@@ -1021,15 +1056,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
             ),
         )
         if analysis is None:
-            previous = set(
-                int(value)
-                for value in (self._fine_registration_analysis or {}).get(
-                    "excluded_ids", []
-                )
-            )
-            self._populate_registration_results(
-                self._fine_registration_measurements, previous
-            )
+            previous = set(int(value) for value in (self._fine_registration_analysis or {}).get("excluded_ids", []))
+            self._populate_registration_results(self._fine_registration_measurements, previous)
             return
         self._show_registration_analysis(analysis)
 
@@ -1045,8 +1073,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             f"Apply the reviewed camera-map translation X{correction_x:+.3f} "
             f"Y{correction_y:+.3f} mm?\n\nThis changes camera placement, not "
             "laser-head offset configuration. It can be reset from this tab.",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -1064,17 +1091,12 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     def apply_fine_registration_homography(self) -> None:
         analysis = self._fine_registration_analysis
-        refinement = (
-            analysis.get("full_map_refinement") if isinstance(analysis, dict) else None
-        )
-        if not isinstance(refinement, dict) or not refinement.get(
-            "can_apply_full_map"
-        ):
+        refinement = analysis.get("full_map_refinement") if isinstance(analysis, dict) else None
+        if not isinstance(refinement, dict) or not refinement.get("can_apply_full_map"):
             return
         outliers = [int(value) for value in refinement.get("ransac_outlier_ids", [])]
         outlier_text = (
-            "\nGeometric outlier excluded by the fit: "
-            + ", ".join(f"#{value}" for value in outliers)
+            "\nGeometric outlier excluded by the fit: " + ", ".join(f"#{value}" for value in outliers)
             if outliers
             else ""
         )
@@ -1086,8 +1108,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             f"Maximum modeled bed correction: {refinement['correction_max_mm']:.3f} mm"
             f"{outlier_text}\n\nThis is calibration, not a safety function. The previous "
             "solved map will be retained for Reset full-bed refinement.",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -1108,15 +1129,12 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self,
             "Reset fine registration",
             "Remove the applied fine-registration translation and restore the solved bed map?",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
             return
-        result = self._message(
-            "Reset fine registration", self.context.reset_fine_registration
-        )
+        result = self._message("Reset fine registration", self.context.reset_fine_registration)
         if result is not None:
             self._fine_registration_analysis = None
             self.apply_registration_button.setEnabled(False)
@@ -1129,8 +1147,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self,
             "Reset full-bed refinement",
             "Restore the solved bed map saved immediately before the reviewed full-bed refinement?",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -1146,6 +1163,143 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.refresh_all()
             self.calibrationChanged.emit()
 
+    def prepare_dense_job(self, powered: bool) -> None:
+        if powered:
+            answer = QtWidgets.QMessageBox.warning(
+                self,
+                "Prepare powered dense calibration",
+                "This prepares 25 powered crosses on a clean, restrained sacrificial "
+                "surface. Use only a previously verified marking power. Continue?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+                QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+        job = self._message(
+            "Dense local correction",
+            lambda: self.context.prepare_dense_calibration_job(
+                powered=powered,
+                power_percent=self.registration_power.value(),
+                mark_size_mm=self.registration_mark_size.value(),
+                speed_mm_min=self.registration_speed.value(),
+            ),
+        )
+        if job is not None:
+            self.registrationJobPrepared.emit(job)
+            self.accept()
+
+    def capture_dense_calibration(self) -> None:
+        def operation() -> tuple[np.ndarray, dict[str, Any]]:
+            self.context.machine.prepare_photo_position()
+            time.sleep(_POST_PARK_CAMERA_SETTLE_SECONDS)
+            sequence = self.context.camera.frame_sequence() + 2
+            image = self.context.camera_frame(undistort=True, after_sequence=sequence, timeout=6.0)
+            return image, self.context.analyze_dense_calibration_image(image)
+
+        result = self._message("Dense local correction", operation)
+        if result is None:
+            return
+        image, payload = result
+        analysis = payload.get("analysis")
+        inferred_ids = (
+            set(int(value) for value in analysis.get("inferred_ids", [])) if isinstance(analysis, dict) else set()
+        )
+        preview = image.copy()
+        for point in payload.get("points", []):
+            center = (int(round(point["image_x"])), int(round(point["image_y"])))
+            color = (0, 165, 255) if int(point["id"]) in inferred_ids else (0, 220, 0)
+            cv2.circle(preview, center, 11, color, 2, cv2.LINE_AA)
+            cv2.putText(
+                preview,
+                str(point["id"]),
+                (center[0] + 12, center[1] - 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.42,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+        self.registration_preview.set_image(preview)
+        if not isinstance(analysis, dict):
+            self._dense_analysis = None
+            self.apply_dense_button.setEnabled(False)
+            self.dense_status.setText(payload.get("reason", "Dense marks were not detected"))
+            return
+        self._populate_dense_results(list(payload.get("measurements", [])))
+        self._dense_analysis = analysis
+        self.apply_dense_button.setEnabled(bool(analysis.get("can_apply")))
+        self.dense_status.setText(
+            f"{analysis['classification'].replace('_', ' ').title()} · fit "
+            f"{analysis['fit_rms_mm']:.3f} mm RMS · "
+            f"{analysis['fit_max_mm']:.3f} mm maximum · proposed mesh correction "
+            f"{analysis['correction_max_mm']:.3f} mm maximum\n{analysis['reason']}"
+        )
+
+    def _populate_dense_results(self, measurements: list[dict[str, Any]]) -> None:
+        self._registration_table_updating = True
+        self.registration_results.setRowCount(len(measurements))
+        for row, item in enumerate(measurements):
+            inferred = bool(item.get("inferred"))
+            indicator = QtWidgets.QTableWidgetItem("INFERRED" if inferred else "OK")
+            if inferred:
+                indicator.setForeground(QtGui.QColor("#ffb347"))
+                indicator.setToolTip("This camera detection was excluded; the mesh node is inferred from its neighbors")
+            self.registration_results.setItem(row, 0, indicator)
+            values = (
+                item["id"],
+                f"{item['machine_x']:.3f}",
+                f"{item['machine_y']:.3f}",
+                f"{item['observed_x']:.3f}",
+                f"{item['observed_y']:.3f}",
+                f"{item['error_x_mm']:+.3f}",
+                f"{item['error_y_mm']:+.3f}",
+            )
+            for column, value in enumerate(values, start=1):
+                cell = QtWidgets.QTableWidgetItem(str(value))
+                if inferred:
+                    cell.setForeground(QtGui.QColor("#ffb347"))
+                self.registration_results.setItem(row, column, cell)
+        self._registration_table_updating = False
+
+    def apply_dense_calibration(self) -> None:
+        analysis = self._dense_analysis
+        if not analysis or not analysis.get("can_apply"):
+            return
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "Apply dense local correction",
+            "Apply this reviewed nonlinear 5×5 correction mesh? The current homography "
+            "remains underneath and Reset local mesh removes only this layer.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        if (
+            self._message("Apply dense local correction", lambda: self.context.apply_dense_calibration(analysis))
+            is not None
+        ):
+            self._dense_analysis = None
+            self.apply_dense_button.setEnabled(False)
+            self.refresh_all()
+            self.calibrationChanged.emit()
+
+    def reset_dense_calibration(self) -> None:
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Reset local correction mesh",
+            "Remove only the dense local correction layer?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        if self._message("Reset local correction mesh", self.context.reset_dense_calibration) is not None:
+            self._dense_analysis = None
+            self.apply_dense_button.setEnabled(False)
+            self.refresh_all()
+            self.calibrationChanged.emit()
+
     def prepare_accuracy_validation_job(self, powered: bool) -> None:
         if powered:
             answer = QtWidgets.QMessageBox.warning(
@@ -1155,8 +1309,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "sacrificial surface at the calibrated height and only a previously "
                 "verified visible-marking power. The main window still requires its "
                 "normal powered-job confirmation and arming phrase.\n\nContinue?",
-                QtWidgets.QMessageBox.StandardButton.Yes
-                | QtWidgets.QMessageBox.StandardButton.Cancel,
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
             )
             if answer != QtWidgets.QMessageBox.StandardButton.Yes:
@@ -1177,7 +1330,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def capture_accuracy_validation(self) -> None:
         def operation() -> tuple[np.ndarray, dict[str, Any]]:
             self.context.machine.prepare_photo_position()
-            image = self.context.camera_frame(undistort=True)
+            time.sleep(_POST_PARK_CAMERA_SETTLE_SECONDS)
+            sequence = self.context.camera.frame_sequence() + 2
+            image = self.context.camera_frame(
+                undistort=True,
+                after_sequence=sequence,
+                timeout=6.0,
+            )
             return image, self.context.analyze_accuracy_validation_image(image)
 
         result = self._message("Accuracy validation", operation)
@@ -1188,9 +1347,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if not isinstance(analysis, dict):
             self.validation_preview.set_image(image)
             self.validation_results.setRowCount(0)
-            self.validation_status.setText(
-                payload.get("reason", "Validation holdouts were not detected")
-            )
+            self.validation_status.setText(payload.get("reason", "Validation holdouts were not detected"))
             return
 
         measurements = list(analysis.get("measurements", []))
@@ -1231,9 +1388,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 f"{item['error_mm']:.3f}",
             )
             for column, value in enumerate(values):
-                self.validation_results.setItem(
-                    row, column, QtWidgets.QTableWidgetItem(str(value))
-                )
+                self.validation_results.setItem(row, column, QtWidgets.QTableWidgetItem(str(value)))
         self.validation_status.setText(
             f"{analysis['classification'].upper()} · RMS "
             f"{analysis['rms_error_mm']:.3f} / ≤{analysis['rms_limit_mm']:.3f} mm · "
@@ -1242,6 +1397,177 @@ class MachineSetupDialog(QtWidgets.QDialog):
             f"{analysis['mean_error_x_mm']:+.3f} Y"
             f"{analysis['mean_error_y_mm']:+.3f} mm\n{analysis['reason']}"
         )
+
+    def prepare_dense_validation_job(self, powered: bool, *, confirmation: bool = False) -> None:
+        if powered:
+            answer = QtWidgets.QMessageBox.warning(
+                self,
+                "Prepare powered dense confirmation" if confirmation else "Prepare powered dense validation",
+                "This prepares 16 fresh shifted confirmation crosses. Use a new or clean "
+                "restrained surface and verified marking power. Continue?"
+                if confirmation
+                else "This prepares 16 independent interstitial crosses. Use a clean, "
+                "restrained sacrificial surface and verified marking power. Continue?",
+                QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+                QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+        job = self._message(
+            "Dense mesh validation",
+            lambda: self.context.prepare_dense_calibration_job(
+                powered=powered,
+                power_percent=self.validation_power.value(),
+                mark_size_mm=self.validation_mark_size.value(),
+                speed_mm_min=self.validation_speed.value(),
+                validation=True,
+                confirmation=confirmation,
+            ),
+        )
+        if job is not None:
+            self.validationJobPrepared.emit(job)
+            self.accept()
+
+    def capture_dense_validation(self) -> None:
+        def operation() -> tuple[np.ndarray, dict[str, Any]]:
+            self.context.machine.prepare_photo_position()
+            time.sleep(_POST_PARK_CAMERA_SETTLE_SECONDS)
+            sequence = self.context.camera.frame_sequence() + 2
+            image = self.context.camera_frame(undistort=True, after_sequence=sequence, timeout=6.0)
+            return image, self.context.analyze_dense_calibration_image(image)
+
+        result = self._message("Dense mesh validation", operation)
+        if result is None:
+            return
+        image, payload = result
+        analysis = payload.get("analysis")
+        if not isinstance(analysis, dict):
+            self.validation_preview.set_image(image)
+            self.validation_status.setText(payload.get("reason", "Dense holdouts were not detected"))
+            return
+        self._dense_validation_analysis = analysis
+        refinement = analysis.get("refinement")
+        can_refine = isinstance(refinement, dict) and bool(refinement.get("can_refine"))
+        self.apply_dense_validation_refinement_button.setEnabled(can_refine)
+        measurements = list(analysis.get("measurements", []))
+        by_id = {int(item["id"]): item for item in measurements}
+        preview = image.copy()
+        rms_limit = float(analysis["rms_limit_mm"])
+        max_limit = float(analysis["max_limit_mm"])
+        for point in payload.get("points", []):
+            identifier = int(point["id"])
+            measurement = by_id.get(identifier)
+            if measurement is None:
+                continue
+            expected_x, expected_y = self.context.bed.mm_to_image(
+                float(measurement["machine_x"]),
+                float(measurement["machine_y"]),
+            )
+            expected = (int(round(expected_x)), int(round(expected_y)))
+            detected = (
+                int(round(float(point["image_x"]))),
+                int(round(float(point["image_y"]))),
+            )
+            error = float(measurement["error_mm"])
+            color = (0, 220, 0) if error <= rms_limit else (0, 165, 255) if error <= max_limit else (0, 0, 255)
+            # Cyan is the commanded location predicted by the active map;
+            # the colored circle is the cross center actually detected.
+            cv2.drawMarker(
+                preview,
+                expected,
+                (255, 255, 0),
+                cv2.MARKER_TILTED_CROSS,
+                18,
+                2,
+                cv2.LINE_AA,
+            )
+            cv2.line(preview, expected, detected, color, 2, cv2.LINE_AA)
+            cv2.circle(preview, detected, 11, color, 2, cv2.LINE_AA)
+            cv2.putText(
+                preview,
+                str(identifier),
+                (detected[0] + 13, detected[1] - 7),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.48,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+        cv2.putText(
+            preview,
+            "cyan X = commanded  colored circle = detected",
+            (18, 32),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            (255, 255, 0),
+            2,
+            cv2.LINE_AA,
+        )
+        self.validation_preview.set_image(preview)
+        self.validation_results.setRowCount(len(measurements))
+        for row, item in enumerate(measurements):
+            values = (
+                item["id"],
+                f"{item['machine_x']:.3f}",
+                f"{item['machine_y']:.3f}",
+                f"{item['observed_x']:.3f}",
+                f"{item['observed_y']:.3f}",
+                f"{item['error_x_mm']:+.3f}",
+                f"{item['error_y_mm']:+.3f}",
+                f"{item['error_mm']:.3f}",
+            )
+            for column, value in enumerate(values):
+                cell = QtWidgets.QTableWidgetItem(str(value))
+                error = float(item["error_mm"])
+                if error > max_limit:
+                    cell.setForeground(QtGui.QColor("#ff6666"))
+                elif error > rms_limit:
+                    cell.setForeground(QtGui.QColor("#ffb347"))
+                self.validation_results.setItem(row, column, cell)
+        self.validation_status.setText(
+            f"{analysis['classification'].upper()} · RMS {analysis['rms_error_mm']:.3f} "
+            f"/ ≤{analysis['rms_limit_mm']:.3f} mm · maximum "
+            f"{analysis['max_error_mm']:.3f} / ≤{analysis['max_limit_mm']:.3f} mm\n"
+            "Preview: cyan X = commanded position; numbered colored circle = detected cross; "
+            "line = measured error"
+            + (
+                f"\nRefinement available · predicted RMS "
+                f"{refinement['predicted_rms_mm']:.3f} mm · predicted maximum "
+                f"{refinement['predicted_max_mm']:.3f} mm"
+                if can_refine
+                else ""
+            )
+        )
+
+    def apply_dense_validation_refinement(self) -> None:
+        analysis = self._dense_validation_analysis
+        refinement = analysis.get("refinement") if isinstance(analysis, dict) else None
+        if not isinstance(refinement, dict) or not refinement.get("can_refine"):
+            return
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "Apply validation refinement",
+            "Apply this bounded update to the existing local mesh? This result must then "
+            "be checked using fresh marks from the shifted confirmation job. The original "
+            "base map remains recoverable with Reset local mesh.",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        result = self._message(
+            "Apply validation refinement",
+            lambda: self.context.apply_dense_validation_refinement(analysis),
+        )
+        if result is not None:
+            self._dense_validation_analysis = None
+            self.apply_dense_validation_refinement_button.setEnabled(False)
+            self.validation_status.setText(
+                "Validation refinement applied. Use a fresh sheet or clean side, then run "
+                "the shifted dry and powered confirmation jobs."
+            )
+            self.refresh_all()
+            self.calibrationChanged.emit()
 
     def detect_workpiece(self) -> None:
         result = self._message("Workpiece detection", self.context.detect_workpiece)

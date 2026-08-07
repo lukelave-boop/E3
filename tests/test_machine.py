@@ -119,7 +119,7 @@ def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
     assert recorded[2] == ("G21", 6.0, True)
     assert recorded[3] == ("G90", 6.0, True)
     assert recorded[4][1:] == (6.0, True)
-    assert recorded[5] == ("G4 P0", 120.0, True)
+    assert recorded[5] == ("G4 P0.01", 120.0, True)
     assert settings.read_timeout == 1.0
 
 
@@ -162,6 +162,58 @@ def test_grbl_home_park_uses_planner_barrier_not_realtime_idle_polling(
         "G0 X110.000 Y105.000 F3000.000",
     ]
     assert result["idle_responses"] == ["ok"]
+    assert result["coordinate_state"] == {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+
+
+def test_serial_job_rejects_work_offset_changed_after_home_park(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class OffsetTransport(SimulatedTransport):
+        g54_x = 0.0
+
+        def write_line(self, line: str) -> None:
+            if line.strip().upper() == "$#":
+                for code in range(54, 60):
+                    x = self.g54_x if code == 54 else 0.0
+                    self._queue.put(f"[G{code}:{x:.3f},0.000,0.000]")
+                self._queue.put("[G92:0.000,0.000,0.000]")
+                self._queue.put("ok")
+                return
+            super().write_line(line)
+
+    transport = OffsetTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda port, baudrate: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=True,
+            photo_x=110,
+            photo_y=105,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    try:
+        machine.prepare_photo_position()
+        transport.g54_x = 2.5
+        with pytest.raises(SafetyError, match=r"G54 changed.*2\.5"):
+            machine.start_job(
+                "G21\nG90\nM5\nG0 X10 Y10 F1000\nM5\n",
+                "shifted.gcode",
+            )
+        assert not machine.status()["coordinate_reference_ready"]
+    finally:
+        machine.disconnect()
 
 
 def test_command_timeout_identifies_the_command(

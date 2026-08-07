@@ -22,6 +22,10 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 - Verify that Home / park succeeds after every controller connection or reset.
   The desktop repeats this homing/parking preflight automatically at job start;
   a failed preflight blocks motion and arming.
+- On GRBL, Home / park records the active `G54`-`G59` and `G92` offsets. Every
+  subsequent absolute-motion job re-reads them and is blocked if they changed
+  after the parked camera alignment. This detects coordinate-state drift but
+  does not prove that an unchanged offset matches the one used for calibration.
 - Verify any configured laser-spot offset and inspect the generated controller
   bounds; a wrong sign moves the beam farther from the intended location.
 - For fine registration, run the dry eight-cross path first. Use only a

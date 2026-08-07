@@ -61,6 +61,59 @@ class BedCalibrationBackup:
 
 
 @dataclass(slots=True)
+class BedResidualMesh:
+    """Small, locally interpolated correction layered over the bed homography."""
+
+    x_nodes_mm: np.ndarray
+    y_nodes_mm: np.ndarray
+    corrections_mm: np.ndarray
+    created_at: float
+    fit_rms_mm: float
+    fit_max_mm: float
+    refinement_count: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "schema_version": 1,
+            "x_nodes_mm": self.x_nodes_mm.tolist(),
+            "y_nodes_mm": self.y_nodes_mm.tolist(),
+            "corrections_mm": self.corrections_mm.tolist(),
+            "created_at": self.created_at,
+            "fit_rms_mm": self.fit_rms_mm,
+            "fit_max_mm": self.fit_max_mm,
+            "refinement_count": self.refinement_count,
+        }
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> BedResidualMesh:
+        x_nodes = np.asarray(raw["x_nodes_mm"], dtype=np.float64)
+        y_nodes = np.asarray(raw["y_nodes_mm"], dtype=np.float64)
+        corrections = np.asarray(raw["corrections_mm"], dtype=np.float64)
+        if (
+            x_nodes.ndim != 1
+            or y_nodes.ndim != 1
+            or len(x_nodes) < 2
+            or len(y_nodes) < 2
+            or corrections.shape != (len(y_nodes), len(x_nodes), 2)
+            or not np.isfinite(x_nodes).all()
+            or not np.isfinite(y_nodes).all()
+            or not np.isfinite(corrections).all()
+            or np.any(np.diff(x_nodes) <= 0)
+            or np.any(np.diff(y_nodes) <= 0)
+        ):
+            raise ValueError("Invalid residual correction mesh")
+        return cls(
+            x_nodes_mm=x_nodes,
+            y_nodes_mm=y_nodes,
+            corrections_mm=corrections,
+            created_at=float(raw["created_at"]),
+            fit_rms_mm=float(raw["fit_rms_mm"]),
+            fit_max_mm=float(raw["fit_max_mm"]),
+            refinement_count=int(raw.get("refinement_count", 0)),
+        )
+
+
+@dataclass(slots=True)
 class BedCalibration:
     image_to_machine: np.ndarray
     machine_to_image: np.ndarray
@@ -78,6 +131,7 @@ class BedCalibration:
     refinement_created_at: float | None = None
     axis_reversed_x: bool | None = None
     axis_reversed_y: bool | None = None
+    residual_mesh: BedResidualMesh | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +161,7 @@ class BedCalibration:
                     }
                 ),
             },
+            "residual_mesh": (None if self.residual_mesh is None else self.residual_mesh.to_dict()),
         }
 
     @classmethod
@@ -128,27 +183,16 @@ class BedCalibration:
             registration_x_mm=float(registration.get("translation_x_mm", 0.0)),
             registration_y_mm=float(registration.get("translation_y_mm", 0.0)),
             registration_created_at=(
-                None
-                if registration.get("created_at") is None
-                else float(registration["created_at"])
+                None if registration.get("created_at") is None else float(registration["created_at"])
             ),
-            refinement_base=(
-                None if not isinstance(base, dict) else BedCalibrationBackup.from_dict(base)
-            ),
-            refinement_created_at=(
+            refinement_base=(None if not isinstance(base, dict) else BedCalibrationBackup.from_dict(base)),
+            refinement_created_at=(None if refinement.get("created_at") is None else float(refinement["created_at"])),
+            axis_reversed_x=(None if axis_mapping.get("reverse_x") is None else bool(axis_mapping["reverse_x"])),
+            axis_reversed_y=(None if axis_mapping.get("reverse_y") is None else bool(axis_mapping["reverse_y"])),
+            residual_mesh=(
                 None
-                if refinement.get("created_at") is None
-                else float(refinement["created_at"])
-            ),
-            axis_reversed_x=(
-                None
-                if axis_mapping.get("reverse_x") is None
-                else bool(axis_mapping["reverse_x"])
-            ),
-            axis_reversed_y=(
-                None
-                if axis_mapping.get("reverse_y") is None
-                else bool(axis_mapping["reverse_y"])
+                if not isinstance(raw.get("residual_mesh"), dict)
+                else BedResidualMesh.from_dict(raw["residual_mesh"])
             ),
         )
 
@@ -227,19 +271,11 @@ class BedMapper:
 
         return {
             "x": {
-                "reversed": (
-                    inferred("x")
-                    if calibration.axis_reversed_x is None
-                    else calibration.axis_reversed_x
-                ),
+                "reversed": (inferred("x") if calibration.axis_reversed_x is None else calibration.axis_reversed_x),
                 "recorded": calibration.axis_reversed_x is not None,
             },
             "y": {
-                "reversed": (
-                    inferred("y")
-                    if calibration.axis_reversed_y is None
-                    else calibration.axis_reversed_y
-                ),
+                "reversed": (inferred("y") if calibration.axis_reversed_y is None else calibration.axis_reversed_y),
                 "recorded": calibration.axis_reversed_y is not None,
             },
         }
@@ -345,19 +381,18 @@ class BedMapper:
         analysis: dict[str, Any] | None = None,
     ) -> BedCalibration:
         calibration = self._require()
-        correction = np.asarray(
-            [float(correction_x_mm), float(correction_y_mm)], dtype=np.float64
-        )
+        correction = np.asarray([float(correction_x_mm), float(correction_y_mm)], dtype=np.float64)
         if not np.isfinite(correction).all():
             raise CalibrationError("Fine-registration correction must be finite")
-        total = np.asarray(
-            [calibration.registration_x_mm, calibration.registration_y_mm],
-            dtype=np.float64,
-        ) + correction
-        if float(np.linalg.norm(total)) > 5.0 + 1e-9:
-            raise CalibrationError(
-                "Fine-registration translation exceeds the 5 mm limit; redo the full bed mapping"
+        total = (
+            np.asarray(
+                [calibration.registration_x_mm, calibration.registration_y_mm],
+                dtype=np.float64,
             )
+            + correction
+        )
+        if float(np.linalg.norm(total)) > 5.0 + 1e-9:
+            raise CalibrationError("Fine-registration translation exceeds the 5 mm limit; redo the full bed mapping")
         transform = np.asarray(
             [
                 [1.0, 0.0, correction[0]],
@@ -415,31 +450,17 @@ class BedMapper:
         calibration = self._require()
         if not analysis.get("can_apply_full_map"):
             raise CalibrationError("The reviewed full-bed refinement did not pass its gates")
-        analyzed_base = np.asarray(
-            analysis.get("base_image_to_machine", []), dtype=np.float64
-        )
+        analyzed_base = np.asarray(analysis.get("base_image_to_machine", []), dtype=np.float64)
         if analyzed_base.shape != (3, 3) or not np.allclose(
             analyzed_base, calibration.image_to_machine, rtol=1e-10, atol=1e-10
         ):
-            raise CalibrationError(
-                "The bed map changed after this refinement was analyzed; recapture the marks"
-            )
+            raise CalibrationError("The bed map changed after this refinement was analyzed; recapture the marks")
         if calibration.refinement_base is not None:
-            raise CalibrationError(
-                "A full-bed refinement is already applied; reset it before applying another"
-            )
-        if math.hypot(
-            calibration.registration_x_mm, calibration.registration_y_mm
-        ) > 1e-12:
-            raise CalibrationError(
-                "Reset the fine-registration translation before applying a full-bed refinement"
-            )
+            raise CalibrationError("A full-bed refinement is already applied; reset it before applying another")
+        if math.hypot(calibration.registration_x_mm, calibration.registration_y_mm) > 1e-12:
+            raise CalibrationError("Reset the fine-registration translation before applying a full-bed refinement")
         proposed = np.asarray(image_to_machine, dtype=np.float64)
-        if (
-            proposed.shape != (3, 3)
-            or not np.isfinite(proposed).all()
-            or abs(float(np.linalg.det(proposed))) < 1e-12
-        ):
+        if proposed.shape != (3, 3) or not np.isfinite(proposed).all() or abs(float(np.linalg.det(proposed))) < 1e-12:
             raise CalibrationError("The proposed full-bed refinement is invalid")
         inverse = np.linalg.inv(proposed)
         if not np.isfinite(inverse).all():
@@ -459,16 +480,9 @@ class BedMapper:
             ],
             dtype=np.float64,
         )
-        mapped = cv2.perspectiveTransform(
-            corners.reshape(-1, 1, 2), relative
-        ).reshape(-1, 2)
-        if (
-            not np.isfinite(mapped).all()
-            or float(np.max(np.linalg.norm(mapped - corners, axis=1))) > 8.0
-        ):
-            raise CalibrationError(
-                "The proposed full-bed refinement moves part of the bed by more than 8 mm"
-            )
+        mapped = cv2.perspectiveTransform(corners.reshape(-1, 1, 2), relative).reshape(-1, 2)
+        if not np.isfinite(mapped).all() or float(np.max(np.linalg.norm(mapped - corners, axis=1))) > 8.0:
+            raise CalibrationError("The proposed full-bed refinement moves part of the bed by more than 8 mm")
 
         backup = BedCalibrationBackup(
             image_to_machine=calibration.image_to_machine.copy(),
@@ -499,12 +513,8 @@ class BedMapper:
         backup = calibration.refinement_base
         if backup is None:
             return calibration
-        if math.hypot(
-            calibration.registration_x_mm, calibration.registration_y_mm
-        ) > 1e-12:
-            raise CalibrationError(
-                "Reset the fine-registration translation before resetting the full-bed refinement"
-            )
+        if math.hypot(calibration.registration_x_mm, calibration.registration_y_mm) > 1e-12:
+            raise CalibrationError("Reset the fine-registration translation before resetting the full-bed refinement")
         self._calibration = replace(
             calibration,
             image_to_machine=backup.image_to_machine,
@@ -520,17 +530,118 @@ class BedMapper:
         self._persist_calibration()
         return self._calibration
 
+    @staticmethod
+    def _mesh_correction(mesh: BedResidualMesh, points_mm: np.ndarray) -> np.ndarray:
+        """Vectorized bilinear interpolation, clamped to the calibrated mesh edge."""
+        points = np.asarray(points_mm, dtype=np.float64).reshape(-1, 2)
+        x = np.clip(points[:, 0], mesh.x_nodes_mm[0], mesh.x_nodes_mm[-1])
+        y = np.clip(points[:, 1], mesh.y_nodes_mm[0], mesh.y_nodes_mm[-1])
+        ix = np.clip(np.searchsorted(mesh.x_nodes_mm, x) - 1, 0, len(mesh.x_nodes_mm) - 2)
+        iy = np.clip(np.searchsorted(mesh.y_nodes_mm, y) - 1, 0, len(mesh.y_nodes_mm) - 2)
+        x0, x1 = mesh.x_nodes_mm[ix], mesh.x_nodes_mm[ix + 1]
+        y0, y1 = mesh.y_nodes_mm[iy], mesh.y_nodes_mm[iy + 1]
+        tx = ((x - x0) / (x1 - x0))[:, None]
+        ty = ((y - y0) / (y1 - y0))[:, None]
+        c00 = mesh.corrections_mm[iy, ix]
+        c10 = mesh.corrections_mm[iy, ix + 1]
+        c01 = mesh.corrections_mm[iy + 1, ix]
+        c11 = mesh.corrections_mm[iy + 1, ix + 1]
+        return c00 * (1 - tx) * (1 - ty) + c10 * tx * (1 - ty) + c01 * (1 - tx) * ty + c11 * tx * ty
+
+    def apply_residual_mesh(
+        self,
+        x_nodes_mm: np.ndarray,
+        y_nodes_mm: np.ndarray,
+        corrections_mm: np.ndarray,
+        *,
+        fit_rms_mm: float,
+        fit_max_mm: float,
+    ) -> BedCalibration:
+        calibration = self._require()
+        if calibration.residual_mesh is not None:
+            raise CalibrationError("A local correction mesh is already applied; reset it first")
+        mesh = BedResidualMesh(
+            np.asarray(x_nodes_mm, dtype=np.float64),
+            np.asarray(y_nodes_mm, dtype=np.float64),
+            np.asarray(corrections_mm, dtype=np.float64),
+            time.time(),
+            float(fit_rms_mm),
+            float(fit_max_mm),
+            0,
+        )
+        # Reuse strict persistence validation and bound both displacement and
+        # local distortion before allowing this nonlinear map into service.
+        mesh = BedResidualMesh.from_dict(mesh.to_dict())
+        magnitudes = np.linalg.norm(mesh.corrections_mm, axis=2)
+        if float(np.max(magnitudes)) > 3.0:
+            raise CalibrationError("Local correction exceeds the 3 mm safety bound")
+        dx = np.diff(mesh.corrections_mm, axis=1) / np.diff(mesh.x_nodes_mm)[None, :, None]
+        dy = np.diff(mesh.corrections_mm, axis=0) / np.diff(mesh.y_nodes_mm)[:, None, None]
+        if float(np.max(np.abs(dx))) > 0.08 or float(np.max(np.abs(dy))) > 0.08:
+            raise CalibrationError("Local correction changes too sharply between neighboring cells")
+        self._calibration = replace(calibration, residual_mesh=mesh)
+        self._persist_calibration()
+        return self._calibration
+
+    def refine_residual_mesh(
+        self,
+        delta_corrections_mm: np.ndarray,
+        *,
+        analyzed_mesh_created_at: float,
+        predicted_rms_mm: float,
+        predicted_max_mm: float,
+    ) -> BedCalibration:
+        calibration = self._require()
+        current = calibration.residual_mesh
+        if current is None:
+            raise CalibrationError("Apply the dense local correction before refining it")
+        if current.refinement_count != 0:
+            raise CalibrationError("The local mesh has already been refined; run shifted confirmation instead")
+        if not math.isclose(current.created_at, float(analyzed_mesh_created_at), rel_tol=0.0, abs_tol=1e-6):
+            raise CalibrationError("The local mesh changed after validation; capture a new validation grid")
+        delta = np.asarray(delta_corrections_mm, dtype=np.float64)
+        if delta.shape != current.corrections_mm.shape or not np.isfinite(delta).all():
+            raise CalibrationError("The proposed validation refinement is invalid")
+        if float(np.max(np.linalg.norm(delta, axis=2))) > 1.5:
+            raise CalibrationError("Validation refinement exceeds the 1.5 mm update bound")
+        updated = current.corrections_mm + delta
+        # Validate the total field through the same displacement and gradient
+        # gates used by the original mesh before replacing it atomically.
+        replacement = BedResidualMesh(
+            x_nodes_mm=current.x_nodes_mm.copy(),
+            y_nodes_mm=current.y_nodes_mm.copy(),
+            corrections_mm=updated,
+            created_at=time.time(),
+            fit_rms_mm=float(predicted_rms_mm),
+            fit_max_mm=float(predicted_max_mm),
+            refinement_count=1,
+        )
+        replacement = BedResidualMesh.from_dict(replacement.to_dict())
+        if float(np.max(np.linalg.norm(updated, axis=2))) > 3.0:
+            raise CalibrationError("Refined local correction exceeds the 3 mm total bound")
+        dx = np.diff(updated, axis=1) / np.diff(current.x_nodes_mm)[None, :, None]
+        dy = np.diff(updated, axis=0) / np.diff(current.y_nodes_mm)[:, None, None]
+        if float(np.max(np.abs(dx))) > 0.08 or float(np.max(np.abs(dy))) > 0.08:
+            raise CalibrationError("Refined correction changes too sharply between cells")
+        self._calibration = replace(calibration, residual_mesh=replacement)
+        self._persist_calibration()
+        return self._calibration
+
+    def reset_residual_mesh(self) -> BedCalibration:
+        calibration = self._require()
+        if calibration.residual_mesh is None:
+            return calibration
+        self._calibration = replace(calibration, residual_mesh=None)
+        self._persist_calibration()
+        return self._calibration
+
     def solve(self, image_width: int, image_height: int) -> BedCalibration:
         if len(self._points) < self.settings.minimum_points:
             raise CalibrationError(
                 f"Need at least {self.settings.minimum_points} point pairs; have {len(self._points)}"
             )
-        image_points = np.asarray(
-            [[point.image_x, point.image_y] for point in self._points], dtype=np.float64
-        )
-        machine_points = np.asarray(
-            [[point.machine_x, point.machine_y] for point in self._points], dtype=np.float64
-        )
+        image_points = np.asarray([[point.image_x, point.image_y] for point in self._points], dtype=np.float64)
+        machine_points = np.asarray([[point.machine_x, point.machine_y] for point in self._points], dtype=np.float64)
         if len(self._points) == 4:
             homography, mask = cv2.findHomography(image_points, machine_points, method=0)
         else:
@@ -548,9 +659,9 @@ class BedMapper:
         if abs(determinant) < 1e-12:
             raise CalibrationError("Solved homography is singular")
         inverse = np.linalg.inv(homography)
-        predicted = cv2.perspectiveTransform(
-            image_points.astype(np.float32).reshape(-1, 1, 2), homography
-        ).reshape(-1, 2)
+        predicted = cv2.perspectiveTransform(image_points.astype(np.float32).reshape(-1, 1, 2), homography).reshape(
+            -1, 2
+        )
         errors = np.linalg.norm(predicted - machine_points, axis=1)
         inlier_mask = np.ones(len(self._points), dtype=bool) if mask is None else mask.reshape(-1).astype(bool)
         inlier_errors = errors[inlier_mask]
@@ -567,12 +678,8 @@ class BedMapper:
             inlier_count=int(np.sum(inlier_mask)),
             point_count=len(self._points),
             created_at=time.time(),
-            axis_reversed_x=(
-                False if self._calibration is None else self._calibration.axis_reversed_x
-            ),
-            axis_reversed_y=(
-                False if self._calibration is None else self._calibration.axis_reversed_y
-            ),
+            axis_reversed_x=(False if self._calibration is None else self._calibration.axis_reversed_x),
+            axis_reversed_y=(False if self._calibration is None else self._calibration.axis_reversed_y),
         )
         payload = calibration.to_dict()
         payload["points"] = [asdict(point) for point in self._points]
@@ -591,11 +698,18 @@ class BedMapper:
         calibration = self._require()
         point = np.asarray([[[image_x, image_y]]], dtype=np.float64)
         result = cv2.perspectiveTransform(point, calibration.image_to_machine)[0, 0]
+        if calibration.residual_mesh is not None:
+            result = result + self._mesh_correction(calibration.residual_mesh, result.reshape(1, 2))[0]
         return float(result[0]), float(result[1])
 
     def mm_to_image(self, machine_x: float, machine_y: float) -> tuple[float, float]:
         calibration = self._require()
-        point = np.asarray([[[machine_x, machine_y]]], dtype=np.float64)
+        base_point = np.asarray([[machine_x, machine_y]], dtype=np.float64)
+        if calibration.residual_mesh is not None:
+            target = base_point.copy()
+            for _ in range(12):
+                base_point = target - self._mesh_correction(calibration.residual_mesh, base_point)
+        point = base_point.reshape(1, 1, 2)
         result = cv2.perspectiveTransform(point, calibration.machine_to_image)[0, 0]
         return float(result[0]), float(result[1])
 
@@ -623,6 +737,27 @@ class BedMapper:
         ppm = float(pixels_per_mm or self.settings.pixels_per_mm)
         output_width = max(1, int(round(self.work_area.width * ppm)))
         output_height = max(1, int(round(self.work_area.height * ppm)))
+        if calibration.residual_mesh is not None:
+            canvas_x = self.work_area.x_min + np.arange(output_width) / ppm
+            canvas_y = self.work_area.y_max - np.arange(output_height) / ppm
+            xx, yy = np.meshgrid(canvas_x, canvas_y)
+            target = np.column_stack((xx.ravel(), yy.ravel()))
+            base = target.copy()
+            for _ in range(12):
+                base = target - self._mesh_correction(calibration.residual_mesh, base)
+            source = (
+                cv2.perspectiveTransform(base.reshape(-1, 1, 2), calibration.machine_to_image)
+                .reshape(output_height, output_width, 2)
+                .astype(np.float32)
+            )
+            return cv2.remap(
+                image,
+                source[:, :, 0],
+                source[:, :, 1],
+                cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT,
+                borderValue=(35, 35, 35),
+            )
         matrix = self.image_to_canvas_matrix(ppm)
         return cv2.warpPerspective(
             image,

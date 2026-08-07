@@ -2,6 +2,39 @@
 
 ## Unreleased — `desktop-v1`
 
+- Added a reviewed, rollbackable 5×5 local residual correction for
+  position-dependent camera-to-laser error. The bounded mesh is used in both
+  mapping directions and image rectification, with an independent 16-point
+  interstitial validation workflow and 0.30 mm RMS / 0.60 mm maximum targets.
+- Dense-map safety rejections now remain on the review screen. The captured
+  image and all measurements are shown, and one camera-occluded grid cell may
+  be excluded and conservatively inferred from the other 24. It is highlighted
+  as **INFERRED** and still requires independent holdout validation; two bad
+  cells or a fit outside the movement/smoothness gates cannot be applied.
+- Dense 4×4 validation now overlays every numbered detected center, its cyan
+  commanded-map position, and the error vector between them. Matching table
+  rows use the same pass/warning/failure colors so detections can be audited
+  against overlapping calibration marks.
+- Added a one-time reviewed validation refinement for a coherent 16-point
+  residual, with stale-map, confidence, update-size, total-displacement, and
+  local-gradient gates. A separate checker-shifted 16-point confirmation job
+  uses fresh positions and is required after refinement; the same validation
+  measurements cannot be reused to claim accuracy.
+
+- Added a GRBL coordinate-state preflight. Home/park records the active
+  workspace plus its `G54`-`G59` and `G92` offsets through read-only `$G`/`$#`
+  queries; absolute-motion jobs are blocked if that state changes before
+  streaming, and the reference is exposed in status and controller logs.
+- Fixed calibration analysis consuming a cached pre-park camera image. GRBL
+  park completion now uses a positive `G4 P0.01` synchronization dwell, and
+  registration/validation allow a six-second physical settling interval before
+  waiting for three newly captured frames with a separate six-second freshness
+  timeout. This also excludes fresh frames captured while the slow bed is still
+  completing its queued park move.
+- Added a persistent machine connection status and Connect/Disconnect button to
+  the Machine Setup window so calibration recovery does not require closing the
+  dialog.
+
 - Stopped recurring camera-refresh failures from opening a modal dialog every
   refresh cycle. One camera fault is acknowledged once, subsequent failures are
   suppressed until recovery or an explicit Refresh camera retry, and successful

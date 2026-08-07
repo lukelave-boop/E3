@@ -61,8 +61,8 @@ Native desktop workflow:
 - SQLite material presets and camera focus/sharpness controls
 - Native Machine Setup for camera controls and preview, checkerboard lens
   calibration, manual/CSV/automatic bed mapping, eight-point fine registration,
-  reviewed translation/full-bed refinement with rollback, and guided five-point
-  holdout accuracy validation
+  reviewed translation/full-bed refinement with rollback, bounded 5×5 local
+  correction, and independent 4×4 holdout validation
 - Versioned `.e3template` cutting-template library with manual selection,
   geometry-based automatic matching, role-labeled camera/cut overlays, rigid
   alignment review, and one-step undo when aligned cut objects are created

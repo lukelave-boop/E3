@@ -46,8 +46,14 @@ class SimulatedTransport:
             self._queue.put("$32=1")
             self._queue.put("ok")
             return
-        if cleaned in {"$G", "$#"}:
+        if cleaned == "$G":
             self._queue.put("[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]")
+            self._queue.put("ok")
+            return
+        if cleaned == "$#":
+            for code in range(54, 60):
+                self._queue.put(f"[G{code}:0.000,0.000,0.000]")
+            self._queue.put("[G92:0.000,0.000,0.000]")
             self._queue.put("ok")
             return
         if cleaned in {"$H", "G28"}:

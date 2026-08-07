@@ -70,17 +70,32 @@ pose, waits for idle, and only then arms and starts each hardware job. The core
 rejects serial motion or arming when that coordinate-reference preflight has
 not succeeded in the current connection.
 
+For GRBL controllers, this preflight also reads `$G` and `$#` after parking and
+records the active `G54`-`G59` workspace, its XYZ offset, and `G92`. Immediately
+before an absolute-motion job, the same read-only queries are repeated. A
+workspace or offset change blocks the job and invalidates the coordinate
+reference. The recorded values are included in machine status and the
+controller log for alignment diagnosis. An unchanged value is consistency
+evidence for that Home/park cycle; it does not independently prove that an old
+bed calibration was made with the same controller state.
+
 Home/park allows at least six seconds for acknowledgement of each setup and
 park command; homing and final motion completion retain their separate
 120-second limits. The GRBL `$H` acknowledgement received after its endstop
-sequence allows the procedure to continue. After the park move, `G4 P0`
-supplies a planner-synchronization
-barrier without adding a dwell; this avoids depending on optional or
+sequence allows the procedure to continue. After the park move, `G4 P0.01`
+supplies a short positive planner-synchronization dwell; this avoids depending on optional or
 controller-specific realtime `<Idle...>` status reports. This allowance is
 scoped to the coordinate-reference preflight. Normal streamed job lines still
 use `machine.read_timeout`, so a slow setup response does not silently weaken
 failure detection throughout a job. Timeout messages name the command that
 failed.
+
+Fine-registration and accuracy-validation capture allow a six-second physical
+settling interval after Home/park returns, then wait for three additional new
+camera frames with a six-second freshness timeout. The observed slow
+GRBL-derived controller can acknowledge its queued park sequence before the bed
+has physically stopped; fresh-but-mid-motion and cached pre-motion frames are
+both excluded from analysis.
 
 ## Phase 5: minimum controlled optical test
 

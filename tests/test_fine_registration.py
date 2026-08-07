@@ -10,15 +10,134 @@ from laser_aligner.calibration.bed import BedCalibration, BedMapper, BedPoint
 from laser_aligner.calibration.registration import (
     accuracy_validation_targets,
     analyze_accuracy_measurements,
+    analyze_dense_mesh_measurements,
+    analyze_dense_validation_refinement,
     analyze_homography_refinement,
     analyze_registration_measurements,
+    dense_confirmation_targets,
+    dense_mesh_targets,
+    dense_validation_targets,
     generate_registration_program,
     registration_targets,
     review_registration_measurements,
     suggested_registration_exclusions,
 )
-from laser_aligner.config import BedCalibrationSettings, LaserSettings, WorkArea, load_settings
+from laser_aligner.config import (
+    BedCalibrationSettings,
+    LaserSettings,
+    WorkArea,
+    load_settings,
+)
 from laser_aligner.errors import CalibrationError
+
+
+def test_dense_mesh_targets_form_complete_five_by_five_grid() -> None:
+    targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
+    assert len(targets) == 25
+    assert len({target.machine_x for target in targets}) == 5
+    assert len({target.machine_y for target in targets}) == 5
+
+
+def test_shifted_confirmation_targets_are_distinct_from_fit_and_refinement() -> None:
+    area = WorkArea(x_min=10, x_max=210, y_min=10, y_max=210)
+    fit = {(item.machine_x, item.machine_y) for item in dense_mesh_targets(area)}
+    refinement = {(item.machine_x, item.machine_y) for item in dense_validation_targets(area)}
+    confirmation = dense_confirmation_targets(area)
+    confirmation_points = {(item.machine_x, item.machine_y) for item in confirmation}
+    assert len(confirmation) == 16
+    assert confirmation_points.isdisjoint(fit)
+    assert confirmation_points.isdisjoint(refinement)
+
+
+def test_validation_refinement_predicts_removal_of_consistent_y_bias() -> None:
+    area = WorkArea(x_min=10, x_max=210, y_min=10, y_max=210)
+    targets = dense_validation_targets(area)
+    measurements = [
+        {
+            "id": item.id,
+            "machine_x": item.machine_x,
+            "machine_y": item.machine_y,
+            "observed_x": item.machine_x + 0.05,
+            "observed_y": item.machine_y + 0.45,
+            "score": 1.0,
+            "seed_shift_px": 1.0,
+        }
+        for item in targets
+    ]
+    nodes = np.asarray([40.0, 75.0, 110.0, 145.0, 180.0])
+    result = analyze_dense_validation_refinement(measurements, nodes, nodes)
+    assert result["can_refine"] is True
+    assert result["predicted_rms_mm"] < 0.20
+    assert result["update_max_mm"] < 1.5
+
+
+def test_dense_mesh_analysis_fits_bounded_position_dependent_correction() -> None:
+    targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
+    measurements = []
+    for target in targets:
+        error_x = 0.0015 * (target.machine_y - 110.0)
+        error_y = 0.45 - 0.002 * (target.machine_y - 110.0)
+        measurements.append(
+            {
+                "id": target.id,
+                "machine_x": target.machine_x,
+                "machine_y": target.machine_y,
+                "observed_x": target.machine_x + error_x,
+                "observed_y": target.machine_y + error_y,
+                "score": 1.0,
+                "seed_shift_px": 1.0,
+            }
+        )
+    result = analyze_dense_mesh_measurements(measurements)
+    assert result["can_apply"] is True
+    assert np.asarray(result["corrections_mm"]).shape == (5, 5, 2)
+
+
+def test_dense_mesh_analysis_infers_one_occluded_grid_cell() -> None:
+    targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
+    measurements = [
+        {
+            "id": target.id,
+            "machine_x": target.machine_x,
+            "machine_y": target.machine_y,
+            "observed_x": target.machine_x + (4.0 if target.id == 1 else 0.2),
+            "observed_y": target.machine_y,
+            "score": 1.0,
+            "seed_shift_px": 1.0,
+        }
+        for target in targets
+    ]
+
+    result = analyze_dense_mesh_measurements(measurements)
+
+    assert result["can_apply"] is True
+    assert result["over_bound_ids"] == [1]
+    assert result["inferred_ids"] == [1]
+    assert result["measurements"][0]["over_correction_bound"] is True
+    assert result["measurements"][0]["inferred"] is True
+    assert "#1" in result["reason"]
+
+
+def test_dense_mesh_analysis_rejects_two_unreliable_grid_cells() -> None:
+    targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
+    measurements = [
+        {
+            "id": target.id,
+            "machine_x": target.machine_x,
+            "machine_y": target.machine_y,
+            "observed_x": target.machine_x + (4.0 if target.id in {1, 25} else 0.2),
+            "observed_y": target.machine_y,
+            "score": 1.0,
+            "seed_shift_px": 1.0,
+        }
+        for target in targets
+    ]
+
+    result = analyze_dense_mesh_measurements(measurements)
+
+    assert result["can_apply"] is False
+    assert result["inferred_ids"] == [1, 25]
+    assert "More than one" in result["reason"]
 
 
 def _measurements(errors: list[tuple[float, float]]) -> list[dict[str, float]]:
@@ -40,9 +159,7 @@ def _measurements(errors: list[tuple[float, float]]) -> list[dict[str, float]]:
             "observed_x": x + error_x,
             "observed_y": y + error_y,
         }
-        for index, ((x, y), (error_x, error_y)) in enumerate(
-            zip(commanded, errors, strict=True), start=1
-        )
+        for index, ((x, y), (error_x, error_y)) in enumerate(zip(commanded, errors, strict=True), start=1)
     ]
 
 
@@ -53,17 +170,12 @@ def test_registration_program_has_sparse_safe_dry_and_powered_variants() -> None
         boundary_margin_mm=5,
         travel_feed_mm_min=2000,
     )
-    targets = registration_targets(
-        work_area, mark_size_mm=5, boundary_margin_mm=laser.boundary_margin_mm
-    )
+    targets = registration_targets(work_area, mark_size_mm=5, boundary_margin_mm=laser.boundary_margin_mm)
 
     assert len(targets) == 8
     assert len({(target.machine_x, target.machine_y) for target in targets}) == 8
     assert (targets[6].machine_x, targets[6].machine_y) == pytest.approx((85, 185))
-    assert all(
-        work_area.contains(target.machine_x, target.machine_y, 7.5)
-        for target in targets
-    )
+    assert all(work_area.contains(target.machine_x, target.machine_y, 7.5) for target in targets)
 
     dry = generate_registration_program(
         targets,
@@ -115,9 +227,9 @@ def test_accuracy_validation_uses_five_distinct_holdout_targets() -> None:
     assert [(item.machine_x, item.machine_y) for item in holdouts] == pytest.approx(
         [(60, 60), (160, 60), (110, 110), (60, 160), (160, 160)]
     )
-    assert not {
-        (item.machine_x, item.machine_y) for item in holdouts
-    }.intersection((item.machine_x, item.machine_y) for item in registration)
+    assert not {(item.machine_x, item.machine_y) for item in holdouts}.intersection(
+        (item.machine_x, item.machine_y) for item in registration
+    )
 
 
 def test_accuracy_validation_reports_pass_and_fail_against_fixed_limits() -> None:
@@ -165,9 +277,7 @@ def test_accuracy_validation_rejects_low_confidence_holdout() -> None:
 
 
 def test_registration_analysis_accepts_only_consistent_translation() -> None:
-    analysis = analyze_registration_measurements(
-        _measurements([(-3.0, -0.75)] * 8)
-    )
+    analysis = analyze_registration_measurements(_measurements([(-3.0, -0.75)] * 8))
 
     assert analysis["classification"] == "translation"
     assert analysis["can_apply_translation"] is True
@@ -199,9 +309,7 @@ def test_registration_analysis_rejects_position_dependent_error() -> None:
 def test_registration_review_can_exclude_one_clear_detection_outlier() -> None:
     errors = [(-3.0, -0.75)] * 8
     errors[6] = (-9.0, -12.0)
-    all_measurements = analyze_registration_measurements(_measurements(errors))[
-        "measurements"
-    ]
+    all_measurements = analyze_registration_measurements(_measurements(errors))["measurements"]
     all_measurements[6]["seed_shift_px"] = 60.0
 
     suggested = suggested_registration_exclusions(all_measurements)
@@ -217,9 +325,7 @@ def test_registration_review_can_exclude_one_clear_detection_outlier() -> None:
 
 
 def test_registration_review_rejects_excluding_more_than_two_marks() -> None:
-    measurements = analyze_registration_measurements(
-        _measurements([(-3.0, -0.75)] * 8)
-    )["measurements"]
+    measurements = analyze_registration_measurements(_measurements([(-3.0, -0.75)] * 8))["measurements"]
 
     with pytest.raises(CalibrationError, match="At most two"):
         review_registration_measurements(measurements, [1, 2, 3])
@@ -233,9 +339,7 @@ def _homography_measurements(
         [[item["machine_x"], item["machine_y"]] for item in measurements],
         dtype=np.float64,
     )
-    image_points = cv2.perspectiveTransform(
-        targets.reshape(-1, 1, 2), np.linalg.inv(homography)
-    ).reshape(-1, 2)
+    image_points = cv2.perspectiveTransform(targets.reshape(-1, 1, 2), np.linalg.inv(homography)).reshape(-1, 2)
     for item, image_point in zip(measurements, image_points, strict=True):
         item["image_x"] = float(image_point[0])
         item["image_y"] = float(image_point[1])
@@ -434,9 +538,7 @@ def test_dry_registration_session_cannot_be_analyzed_as_burned_marks(
             speed_mm_min=1200,
         )
         with pytest.raises(CalibrationError, match="dry motion only"):
-            context.analyze_fine_registration_image(
-                context.camera_frame(undistort=True)
-            )
+            context.analyze_fine_registration_image(context.camera_frame(undistort=True))
     finally:
         context.stop()
 
@@ -472,9 +574,7 @@ def test_dry_accuracy_validation_cannot_be_analyzed_as_burned_holdouts(
         assert "M3 " not in job.program.text
         assert "M4 " not in job.program.text
         with pytest.raises(CalibrationError, match="dry motion only"):
-            context.analyze_accuracy_validation_image(
-                context.camera_frame(undistort=True)
-            )
+            context.analyze_accuracy_validation_image(context.camera_frame(undistort=True))
     finally:
         context.stop()
 

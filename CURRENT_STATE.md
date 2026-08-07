@@ -45,6 +45,19 @@ camera-map translation within a 5 mm cumulative limit. Validated G-code can be
 exported from the desktop. The browser remains available, but no operator
 capability requires it.
 
+Machine Setup additionally provides an implemented but not yet physically
+verified 5×5 dense local-correction workflow for residual error that varies by
+bed position. It preserves the current homography underneath, bounds node
+movement and local gradients, maps consistently in both directions, and can be
+removed independently. A 4×4 interstitial job validates positions not used for
+fitting with 0.30 mm RMS and 0.60 mm maximum software gates.
+
+One coherent failed interstitial result can now produce a reviewed, bounded,
+one-time mesh refinement. The refinement is tied to the exact mesh revision and
+cannot be applied twice. Final verification uses a separately generated shifted
+16-point pattern on fresh material; this refinement and confirmation workflow
+is automated-test verified but has not yet been physically run.
+
 Machine Setup now stores explicit X/Y mapping-orientation flags with the bed
 calibration and presents unambiguous NORMAL/OFF and REVERSED/ON controls. Legacy
 maps infer their current effective orientation and remain visibly marked as
@@ -55,6 +68,11 @@ directory. Marking power intentionally resets to zero each time Setup opens.
 All desktop checkbox-based boolean options now use the same compact gray-OFF,
 green-ON switch presentation; the Machine Setup X/Y controls use those switches
 instead of one-shot reversal buttons.
+
+Machine Setup now also presents the shared controller connection state and a
+Connect/Disconnect action above every calibration tab. It uses the existing
+guarded `MachineService`; connecting does not bypass hardware authority,
+motion, homing, or arming gates.
 
 Live camera-refresh errors are now latched before the first modal notification.
 The operator acknowledges one Camera unavailable message; timer-driven repeats
@@ -86,9 +104,22 @@ still required a GRBL realtime `<Idle...>` report after `$H`; the physical
 controller completed its double-touch homing cycle but did not provide the
 expected report, first exposing a later six-second setup timeout and then the
 120-second idle timeout. Home/park now continues from the `$H` acknowledgement
-received after the endstop sequence and sends `G4 P0` after the park move as a
-planner-synchronization barrier. This correction is automated-test verified
+received after the endstop sequence and sends `G4 P0.01` after the park move as
+a short positive planner-synchronization dwell. Fine-registration and
+accuracy-validation analysis also allows six seconds for the physical bed to
+settle after Home/park returns and then waits for three additional frames, with
+a separate six-second freshness timeout. This excludes both cached pre-motion
+images and fresh frames captured while the slow bed is still completing its
+queued park move. This correction is automated-test verified
 but still requires a repeated physical Home/park check.
+
+GRBL Home/park now captures the active workspace and the active `G54`-`G59`
+and `G92` offsets using read-only `$G`/`$#` queries. Absolute-motion jobs
+re-query that state immediately before streaming and are rejected if it changed
+after the camera-position reference was established. The snapshot is exposed
+in machine status and logged for diagnosis. Focused simulator-backed serial
+tests cover unchanged-state acceptance and changed-offset rejection; real
+Falcon responses and a physical rejection test remain unverified.
 
 The native window title now begins with the application name, package version,
 and a short fingerprint of the installed application files before the project

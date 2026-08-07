@@ -52,14 +52,21 @@ def test_desktop_identity_does_not_request_an_x11_title_suffix():
 
 
 def test_machine_setup_registration_job_uses_the_normal_main_job_pipeline():
-    source = (
-        Path(__file__).resolve().parents[1]
-        / "laser_aligner"
-        / "desktop"
-        / "main_window.py"
-    ).read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "laser_aligner" / "desktop" / "main_window.py").read_text(
+        encoding="utf-8"
+    )
 
     assert "registrationJobPrepared.connect(self._load_fine_registration_job)" in source
     assert "validationJobPrepared.connect(self._load_fine_registration_job)" in source
     assert "self.last_job_powered = bool(registration_job.powered)" in source
     assert "self.workspace.set_toolpath_preview(job.text)" in source
+
+
+def test_dense_validation_preview_identifies_commanded_and_detected_points():
+    source = (Path(__file__).resolve().parents[1] / "laser_aligner" / "desktop" / "machine_setup.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert "cyan X = commanded" in source
+    assert "colored circle = detected" in source
+    assert "cv2.line(preview, expected, detected" in source

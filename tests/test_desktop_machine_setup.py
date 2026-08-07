@@ -71,6 +71,26 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert not dialog.reverse_x.isChecked()
         assert dialog.reverse_x.text() == "Reverse X mapping — OFF"
         assert "saved in the bed calibration" in dialog.axis_mapping_status.text()
+        assert dialog.machine_connection_status.text().startswith("Machine connected")
+        assert dialog.machine_connection_button.text() == "Disconnect machine"
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_machine_setup_can_disconnect_and_reconnect_machine(
+    qt_application: QtWidgets.QApplication, tmp_path: Path
+) -> None:
+    runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    try:
+        dialog.toggle_machine_connection()
+        assert not runtime.context.machine.status()["connected"]
+        assert dialog.machine_connection_button.text() == "Connect machine"
+
+        dialog.toggle_machine_connection()
+        assert runtime.context.machine.status()["connected"]
+        assert dialog.machine_connection_button.text() == "Disconnect machine"
     finally:
         dialog.close()
         runtime.stop()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from collections import deque
@@ -23,6 +24,15 @@ _STREAM_G_CODES = {0, 1, 21, 90}
 _STREAM_M_CODES = {3, 4, 5}
 _STREAM_LETTERS = {"G", "M", "X", "Y", "F", "S"}
 _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS = 6.0
+_GRBL_COORDINATE_EPSILON_MM = 0.001
+_GRBL_WORK_COORDINATE_CODES = {f"G{number}" for number in range(54, 60)}
+_GRBL_OFFSET_PATTERN = re.compile(
+    r"^\[(G5[4-9]|G92):\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)),\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)),\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\]$",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True)
@@ -71,6 +81,7 @@ class MachineService:
         self._active_baudrate = settings.baudrate
         self._connected = False
         self._coordinate_reference_ready = settings.backend == "simulator"
+        self._coordinate_state_reference: dict[str, Any] | None = None
         self._armed_until = 0.0
         self._lock = threading.RLock()
         self._job = JobStatus()
@@ -116,6 +127,7 @@ class MachineService:
                 self._active_port = "simulator" if self.settings.backend == "simulator" else active_port
                 self._active_baudrate = active_baudrate
                 self._coordinate_reference_ready = self.settings.backend == "simulator"
+                self._coordinate_state_reference = None
                 self._armed_until = 0.0
                 if self.settings.backend == "simulator":
                     self._protocol = "grbl"
@@ -179,6 +191,7 @@ class MachineService:
             self._transport = None
             self._connected = False
             self._coordinate_reference_ready = False
+            self._coordinate_state_reference = None
             self._armed_until = 0.0
             self._job_laser_authorized = False
 
@@ -333,18 +346,115 @@ class MachineService:
     def _wait_for_motion_complete(self, timeout: float = 120.0) -> list[str]:
         """Wait behind all previously accepted planner motion.
 
-        GRBL's ``G4 P0`` enters the planner synchronization path without adding
-        a dwell. This is more portable across GRBL-derived controllers than
+        GRBL's short positive ``G4`` dwell enters the planner synchronization
+        path after preceding motion. This is more portable across GRBL-derived controllers than
         requiring a particular realtime ``?`` status-report shape. Marlin has
         a dedicated synchronization command.
         """
 
-        command = "G4 P0" if self._protocol == "grbl" else "M400"
+        command = "G4 P0.01" if self._protocol == "grbl" else "M400"
         return self.send_command(
             command,
             timeout=timeout,
             _internal_motion=True,
         )
+
+    @staticmethod
+    def _parse_grbl_coordinate_state(
+        modal_responses: list[str],
+        offset_responses: list[str],
+    ) -> dict[str, Any]:
+        active_workspace: str | None = None
+        for response in modal_responses:
+            upper = response.strip().upper()
+            if not upper.startswith("[GC:"):
+                continue
+            words = upper[4:-1].split() if upper.endswith("]") else upper[4:].split()
+            active_workspace = next(
+                (word for word in words if word in _GRBL_WORK_COORDINATE_CODES),
+                None,
+            )
+            break
+
+        offsets: dict[str, list[float]] = {}
+        for response in offset_responses:
+            match = _GRBL_OFFSET_PATTERN.match(response.strip())
+            if match is None:
+                continue
+            offsets[match.group(1).upper()] = [
+                float(match.group(2)),
+                float(match.group(3)),
+                float(match.group(4)),
+            ]
+        if active_workspace is None:
+            raise MachineError("GRBL did not report an active G54-G59 work-coordinate system")
+        if active_workspace not in offsets or "G92" not in offsets:
+            raise MachineError(
+                "GRBL did not report the active work offset and G92 offset in response to $#"
+            )
+        return {
+            "active_workspace": active_workspace,
+            "active_offset_mm": offsets[active_workspace],
+            "g92_offset_mm": offsets["G92"],
+        }
+
+    def _read_grbl_coordinate_state(self) -> dict[str, Any]:
+        modal = self.send_command(
+            "$G",
+            timeout=max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout),
+        )
+        offsets = self.send_command(
+            "$#",
+            timeout=max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout),
+        )
+        return self._parse_grbl_coordinate_state(modal, offsets)
+
+    @staticmethod
+    def _coordinate_state_difference(
+        reference: dict[str, Any], current: dict[str, Any]
+    ) -> str | None:
+        if current["active_workspace"] != reference["active_workspace"]:
+            return (
+                f"active workspace changed from {reference['active_workspace']} "
+                f"to {current['active_workspace']}"
+            )
+        for label, key in (
+            (current["active_workspace"], "active_offset_mm"),
+            ("G92", "g92_offset_mm"),
+        ):
+            before = reference[key]
+            after = current[key]
+            if any(
+                abs(float(after[index]) - float(before[index]))
+                > _GRBL_COORDINATE_EPSILON_MM
+                for index in range(3)
+            ):
+                return f"{label} changed from {before} mm to {after} mm"
+        return None
+
+    def _verify_grbl_coordinate_state(self) -> dict[str, Any]:
+        current = self._read_grbl_coordinate_state()
+        reference = self._coordinate_state_reference
+        if reference is None:
+            raise SafetyError(
+                "Home / park did not record a GRBL work-coordinate reference for this connection"
+            )
+        difference = self._coordinate_state_difference(reference, current)
+        if difference is not None:
+            self._coordinate_reference_ready = False
+            self._coordinate_state_reference = None
+            raise SafetyError(
+                "GRBL coordinate state changed after Home / park: "
+                f"{difference}. The job was blocked; Home / park and realign the camera job."
+            )
+        return current
+
+    @staticmethod
+    def _coordinate_state_summary(state: dict[str, Any]) -> str:
+        workspace = state["active_workspace"]
+        active = ",".join(f"{float(value):g}" for value in state["active_offset_mm"])
+        g92 = ",".join(f"{float(value):g}" for value in state["g92_offset_mm"])
+        return f"{workspace}=[{active}] mm; G92=[{g92}] mm"
 
     def prepare_photo_position(self) -> dict[str, Any]:
         """Home if configured, then park XY at the repeatable camera pose.
@@ -381,6 +491,7 @@ class MachineService:
             transcript.append({"command": command, "responses": responses})
 
         self._coordinate_reference_ready = self.settings.backend == "simulator"
+        self._coordinate_state_reference = None
         try:
             execute("M5")
             if self.settings.home_before_photo:
@@ -401,15 +512,28 @@ class MachineService:
                 ),
             )
             idle_responses = self._wait_for_motion_complete(timeout=120.0)
+            coordinate_state = (
+                self._read_grbl_coordinate_state()
+                if self.settings.backend == "serial" and self._protocol == "grbl"
+                else None
+            )
+            if coordinate_state is not None:
+                self._append_log(
+                    "INFO",
+                    "Home / park GRBL coordinate reference: "
+                    + self._coordinate_state_summary(coordinate_state),
+                )
         except Exception:
             self._coordinate_reference_ready = False
             raise
         self._coordinate_reference_ready = True
+        self._coordinate_state_reference = coordinate_state
         return {
             "position": {"x": x, "y": y, "z": self.settings.photo_z},
             "homed": self.settings.home_before_photo,
             "transcript": transcript,
             "idle_responses": idle_responses,
+            "coordinate_state": coordinate_state,
             "warning": (
                 "photo_position.z is recorded but is not moved automatically; set laser focus/material height manually."
                 if self.settings.photo_z is not None
@@ -561,6 +685,12 @@ class MachineService:
                     "Home / park must complete after this controller connection or reset "
                     "before an absolute-motion job can start"
                 )
+            if (
+                requires_motion
+                and self.settings.backend == "serial"
+                and self._protocol == "grbl"
+            ):
+                self._verify_grbl_coordinate_state()
             if requires_laser_authorization and not self.armed:
                 raise SafetyError("This program contains laser-enable commands and must be armed immediately before starting")
             self._job_laser_authorized = requires_laser_authorization
@@ -604,6 +734,7 @@ class MachineService:
             error = str(exc)
             if self.settings.backend == "serial":
                 self._coordinate_reference_ready = False
+                self._coordinate_state_reference = None
             LOGGER.error("Controller job failed: %s", exc)
             try:
                 if self._transport is not None:
@@ -628,11 +759,13 @@ class MachineService:
                     self._append_log("TX", "GRBL feed hold + soft reset")
                     if self.settings.backend == "serial":
                         self._coordinate_reference_ready = False
+                        self._coordinate_state_reference = None
                 elif emergency and self._protocol == "marlin":
                     transport.write_line("M112")
                     self._append_log("TX", "M112")
                     if self.settings.backend == "serial":
                         self._coordinate_reference_ready = False
+                        self._coordinate_state_reference = None
                 transport.write_line("M5")
                 self._append_log("TX", "M5")
             except Exception:
@@ -653,6 +786,7 @@ class MachineService:
             "baudrate": self._active_baudrate,
             "allow_motion": self.settings.allow_motion,
             "coordinate_reference_ready": self._coordinate_reference_ready,
+            "coordinate_state_reference": self._coordinate_state_reference,
             "armed": self.armed,
             "armed_until": self._armed_until if self.armed else None,
             "arm_phrase": self.ARM_PHRASE,
