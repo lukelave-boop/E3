@@ -42,6 +42,13 @@ class _SimulationFrameContext:
     def __init__(self) -> None:
         self.has_simulation_workspace_frame = False
         self.bed = SimpleNamespace(calibration=object())
+        self.camera = SimpleNamespace(
+            status=lambda: SimpleNamespace(
+                connected=True,
+                frames_read=1,
+                last_error=None,
+            )
+        )
         self.frame = np.full((8, 8, 3), (20, 80, 180), dtype=np.uint8)
 
     def set_simulation_workspace_frame(
@@ -69,7 +76,7 @@ class _SimulationFrameContext:
 
 def _controller() -> tuple[DesktopController, _SimulationFrameContext]:
     context = _SimulationFrameContext()
-    runtime = SimpleNamespace(running=True, context=context)
+    runtime = SimpleNamespace(running=True, context=context, status=lambda: {})
     return DesktopController(runtime), context
 
 
@@ -88,13 +95,29 @@ def test_controller_drops_stale_camera_refresh_delivery_and_cleanup(
     assert delivered == [image]
 
     errors: list[str] = []
-    controller.errorOccurred.connect(errors.append)
+    controller.cameraErrorOccurred.connect(errors.append)
     controller._camera_refresh_failed("old source unavailable", 3)
     assert errors == []
     controller._camera_refresh_failed("current source unavailable", 4)
-    assert errors == [
-        "Corrected bed-image refresh failed: current source unavailable"
-    ]
+    assert len(errors) == 1
+    assert "current source unavailable" in errors[0]
+
+    controller._camera_refresh_failed("current source unavailable", 4)
+    controller._camera_refresh_failed("a different recurring read detail", 4)
+    assert len(errors) == 1
+
+    recoveries: list[str] = []
+    controller.notice.connect(recoveries.append)
+    controller._camera_refresh_ready(image, 4)
+    assert recoveries == ["Camera image updates recovered"]
+    controller._camera_refresh_failed("camera busy again", 4)
+    assert len(errors) == 2
+
+    retries: list[bool] = []
+    controller.refresh_camera_image = lambda: retries.append(True)  # type: ignore[method-assign]
+    controller.retry_camera_image()
+    assert controller._camera_error_latched is None
+    assert retries == [True]
 
     controller._camera_refresh_in_flight = True
     controller._camera_refresh_generation = 4
@@ -104,6 +127,43 @@ def test_controller_drops_stale_camera_refresh_delivery_and_cleanup(
     controller._camera_refresh_finished(4)
     assert not controller._camera_refresh_in_flight
     assert controller._camera_refresh_generation is None
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_explicit_camera_retry_reopens_failed_device_before_refresh(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    context.camera.status = lambda: SimpleNamespace(
+        connected=False,
+        frames_read=0,
+        last_error="device busy",
+    )
+    context.restart_camera = lambda: {"connected": True}
+    launched: list[dict[str, Any]] = []
+
+    def fake_run(callback: Any, **kwargs: Any) -> object:
+        launched.append({"callback": callback, **kwargs})
+        return object()
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    notices: list[str] = []
+    controller.notice.connect(notices.append)
+    refreshes: list[bool] = []
+    controller.refresh_camera_image = lambda: refreshes.append(True)  # type: ignore[method-assign]
+
+    controller.retry_camera_image()
+
+    assert controller._camera_reconnect_in_flight
+    assert notices == ["Reopening camera…"]
+    assert launched[0]["callback"]() == {"connected": True}
+    launched[0]["on_success"]({"connected": True})
+    assert not controller._camera_reconnect_in_flight
+    assert notices[-1] == "Camera reopened successfully"
+    assert refreshes == [True]
 
     controller._camera_live_timer.stop()
     controller.deleteLater()

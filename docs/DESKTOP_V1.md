@@ -13,6 +13,8 @@ geometry, G-code, safety and controller services.
 ### Native workspace
 
 - Native `QMainWindow` application shell with persistent dock and window layout
+- Build-first native window title showing the application name, release version,
+  short source revision, current project, and unsaved-change marker
 - Split right-side design tabs for Cuts/Layers, Cameras, Objects, Shape
   Properties, Templates, and Trace, plus Laser, Machine, and Material Library
   execution tabs; Console and G-code remain optional docks
@@ -28,12 +30,18 @@ geometry, G-code, safety and controller services.
 - Persistent press-drag-release rectangle drawing plus basic rounded rectangle,
   ellipse, line and text creation
 - Existing SVG parser connected to the native project document
-- Visual toolpath preview distinguishing rapid, powered and unpowered moves
+- Dedicated exact-job Preview distinguishing rapid, powered and unpowered
+  moves, with time scrubbing, animated playback, move coordinates, power,
+  timing/distance statistics, display controls, and PNG export
 
 ### Current control-surface layout
 
 The desktop shell now follows a LightBurn-inspired information hierarchy
 without copying LightBurn branding or changing the E3 machine-control model:
+
+- Boolean options use one consistent compact switch: gray with the control on
+  the left for off, and green with the control on the right for on. Disabled
+  switches remain visibly unavailable rather than appearing active.
 
 1. Traditional File, Edit, Tools, Arrange, Laser Tools, Window, and Help menus
    retain every existing command.
@@ -61,9 +69,10 @@ without copying LightBurn branding or changing the E3 machine-control model:
    operations; clicking an unused color creates a matching operation. The
    status bar reports direct-edit affordances and live workspace feedback.
 
-Console and G-code Preview remain dockable from the Window menu but start
-hidden so the workspace has more room. Generating or framing a job opens the
-G-code Preview. **Window > Reset workspace layout** restores the maintained
+Console and raw G-code remain dockable from the Window menu but start hidden so
+the workspace has more room. Generating or framing a job opens the dedicated
+graphical Preview; raw G-code remains available for diagnostics. **Window >
+Reset workspace layout** restores the maintained
 default arrangement. Window geometry and dock state use the versioned Qt
 settings key `v5`, so stale layouts from the earlier shell do not override the
 new default.
@@ -88,8 +97,10 @@ stop / laser off.
 The Operations/Layers table summarizes layer color/name, mode, speed/power,
 Output, and Show state. Inline toggles, ordering controls, the quick editor,
 and operation color selection all update the existing project-layer model.
-Fill and raster layers remain representable but are labeled as having no
-toolpath because those engines are not implemented.
+Fill and raster layers generate scanline toolpaths. Their quick editor exposes
+line interval and scan angle; raster additionally exposes laser-off overscan.
+Imported raster images currently use a fixed 50% luminance threshold and the
+operation's maximum power.
 
 ### Feature-preservation map
 
@@ -101,8 +112,8 @@ toolpath because those engines are not implemented.
 | Object tracing | Trace tool and inspector | Existing frozen-frame review and object-creation path is unchanged |
 | Cutting templates and alignment | Templates tool, inspector, and grid designer | Existing rigid placement, review, and one-command apply path is unchanged |
 | Operation layers and materials | Operations/Layers table, bottom palette, and Materials inspector | Existing layer schema, ordering, presets, and explicit unsupported-mode checks are retained |
-| Toolpath generation, framing, preview, and run | Job toolbar, Job inspector, and on-demand G-code Preview | Existing generation, revision invalidation, validation, arming, and execution path is unchanged |
-| Browser calibration and placement application | Browser application | Intentionally unchanged by the desktop-only redesign |
+| Toolpath generation, framing, preview, and run | Job toolbar, Job inspector, dedicated graphical Preview, and on-demand raw G-code | Preview parses the exact finalized stream; existing revision invalidation, validation, arming, and execution gates are unchanged |
+| Browser calibration and placement application | Native Machine Setup plus richer desktop project workflow | Browser remains an optional legacy single-SVG surface; no operator capability requires it |
 
 ### Project and operations model
 
@@ -121,16 +132,30 @@ toolpath because those engines are not implemented.
 - Per-layer speed, power and pass count
 - Nearest-path travel ordering and time/distance estimates
 - Dry framing generation
-- Unsupported fill, raster, text and image output is rejected explicitly rather
-  than being silently omitted
+- Immutable preview plans parsed from the exact finalized G-code stream, with
+  layer/pass/source metadata stored only in controller-ignored comments
+- Prepared-job status reports maximum planned power independently from live
+  controller execution progress
+- Closed-vector fill, binary vector raster, and imported threshold-image raster
+  output with bounds-checked laser-off overscan
+- Unsupported text output, open fill geometry, missing raster assets, and empty
+  threshold results are rejected explicitly rather than silently omitted
 - Zero-power vector layers never emit `M3` or `M4`
 - Existing camera and controller status in native dock panels
-- Guarded controller connect, home/park, diagnostics, software stop and job run
+- Guarded controller connect, diagnostics, software stop and job run; hardware
+  Start automatically homes and parks before arming and execution
 - Powered output still requires the exact temporary arming phrase
 
-The existing browser calibration workflow remains the validated calibration UI
-while native lens/bed calibration dialogs are built. The desktop camera panel
-already uses the same corrected-camera core.
+Native Machine Setup exposes raw camera preview and controls, synthetic scenes,
+checkerboard capture/solve, manual and CSV-assisted bed points, automatic 5×5
+grid detection, residual review, eight-point fine registration, workpiece
+detection, and fiducial inspection. Fine registration prepares jobs through the
+normal preview/run path. It can apply either a bounded consistent camera-map
+translation or a separately gated seven-inlier full-bed homography refinement,
+with explicit review, confirmation, persistence, and rollback. The desktop
+then provides a separate five-point holdout job with automatic fixed-limit
+accuracy scoring and no calibration mutation. The desktop camera panel and
+setup dialog use the same corrected-camera core.
 
 ## Installation
 
@@ -225,13 +250,12 @@ test. POSIX serial is selected lazily; Linux remains the only hardware platform.
 ## Next desktop milestones
 
 1. Windows launch scripts, OS-native user-data paths, and CI.
-2. Native lens and camera-to-machine calibration wizards.
-3. Behavioral Qt tests for project editing and object tracing.
+2. Behavioral Qt tests for project editing and object tracing.
 4. Multi-selection transform boxes, proportional canvas resizing, node
    editing, and smart snap guides. Single-object resize/rotation and transient
    cutting-template drag/rotation are already implemented.
 5. Guarded jog API and tested controller-specific realtime pause/resume.
 6. DXF/image import and text-to-outline conversion.
-7. Fill and raster engines with overscan and scan-direction tests.
+7. Grayscale/dithered image modes and embedded portable project assets.
 8. Job history and calibration profiles by material height.
 9. Stable release packaging, update checks and rollback.

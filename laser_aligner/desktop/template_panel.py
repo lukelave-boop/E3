@@ -327,11 +327,14 @@ class TemplatePanel(QtWidgets.QWidget):
         )
         direction = (
             QtWidgets.QBoxLayout.Direction.TopToBottom
-            if pair_width > content_width
+            if content_width < 400 or pair_width > content_width
             else QtWidgets.QBoxLayout.Direction.LeftToRight
         )
         if self.designer_buttons.direction() != direction:
             self.designer_buttons.setDirection(direction)
+
+        for push_button in self.findChildren(QtWidgets.QPushButton):
+            push_button.setMinimumHeight(push_button.fontMetrics().height() + 10)
 
         for button in (
             self.save_button,
@@ -345,7 +348,7 @@ class TemplatePanel(QtWidgets.QWidget):
         ):
             available = max(0, button.width())
             required = button.fontMetrics().horizontalAdvance(button.full_text) + 30
-            button.use_compact_text(required > available)
+            button.use_compact_text(content_width < 400 or required > available)
 
     @staticmethod
     def _placement_spin(

@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "laser_aligner" / "desktop"
 
@@ -31,6 +30,15 @@ def test_controller_matches_templates_off_thread_and_ignores_stale_results() -> 
     assert "self._template_review_active or self._trace_review_active" in controller
     assert "image = context.rectified_frame(refresh=True)" in controller
     assert "image_to_qimage(image)" in controller
+
+
+def test_hardware_job_start_homes_and_parks_before_arming() -> None:
+    controller = source("controller.py")
+    operation = controller[controller.index("    def run_job(") : controller.index("    def pause_resume(")]
+
+    assert 'machine.settings.backend == "serial"' in operation
+    assert operation.index("machine.prepare_photo_position()") < operation.index("machine.arm(arm_phrase)")
+    assert operation.index("machine.arm(arm_phrase)") < operation.index("machine.start_job(gcode, name)")
 
 
 def test_main_window_wires_template_review_and_one_batch_application() -> None:

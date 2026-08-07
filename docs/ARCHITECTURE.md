@@ -44,7 +44,7 @@ camera/controller work through `DesktopController` worker tasks.
 | `config.py` | JSON defaults, merging, validation, and resolved paths |
 | `storage.py` | Atomic JSON persistence used by calibration |
 | `camera/` | OpenCV/V4L2 capture, camera controls, synthetic scenes, and portable corrected-test-image validation |
-| `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets |
+| `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets, bounded fine registration, and holdout accuracy scoring |
 | `vision/` | Workpiece, fiducial, crosshair-grid, and camera-object detection |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
@@ -85,12 +85,29 @@ machine backend is enabled.
 
 `LensCalibrator` stores captured checkerboard images, a detection cache, and the
 solved camera model. `BedMapper` stores image/machine point pairs plus forward
-and inverse homographies. Simulation startup creates a synthetic perspective
-scene and a known mapping automatically.
+and inverse homographies. A reviewed fine-registration result may compose one
+persisted, resettable translation onto that homography. Its separate full-map
+path fits raw image coordinates to commanded mark coordinates with RANSAC,
+checks inlier count, bed coverage, residual, orientation, scale, and modeled
+whole-bed displacement, then retains the previous solved map as a rollback
+snapshot. A new full solve clears both refinements. The Qt-independent
+registration model owns those gates; Qt only presents review and confirmation.
+Simulation startup creates a synthetic perspective scene and a known mapping
+automatically.
 
-The browser owns the complete lens and bed-calibration UI. The native desktop
-currently consumes those calibration files and displays the corrected image;
-native calibration wizards are not implemented.
+The same Qt-independent model defines five accuracy-validation holdouts and
+fixed pass/fail limits. `AppContext` binds each validation session to the exact
+active homography, persists the generated job/capture/report, and rejects stale
+or dry-only sessions. The desktop sends both calibration and validation jobs
+through the ordinary guarded preview/run pipeline; validation has no write path
+to `BedMapper`.
+
+The native `MachineSetupDialog` owns the primary camera, lens, bed-mapping,
+fine-registration, and alignment-check workflow. It calls `AppContext`,
+`LensCalibrator`, `BedMapper`, and the portable registration model without
+introducing Qt into those modules. The browser retains the legacy coarse
+calibration surface; fine registration is desktop-only. Only one UI process
+should own a physical camera at a time.
 
 ## Vision flows
 
@@ -140,13 +157,26 @@ native shapes / imported SVG / traced outlines
   -> ProjectDocument operation layers
   -> undoable CommandStack changes
   -> project.toolpath.generate_project_gcode()
-  -> multi-layer vector G-code
+  -> finalized multi-layer vector G-code + controller-ignored E3 metadata
+  -> gcode.job_plan.build_job_plan()
+  -> immutable JobPlan used by the dedicated desktop Preview
+  -> the same finalized G-code text is exported or submitted to MachineService
 ```
 
-The desktop supports multiple objects and line-operation layers. Fill, raster,
-text, and image output are represented in the model but rejected explicitly by
-toolpath generation until their engines exist. Unsupported content must never
-be silently dropped.
+`JobPlan` models the final stream rather than a second approximation of the
+project geometry. It records motion order, elapsed time, feed, controller power,
+layer/pass/source context, and the physical laser-spot coordinates recovered
+from the generated offset comment. Preview-only choices such as travel
+visibility, playback speed, color inversion, and power shading never mutate the
+program. Project revision changes invalidate both the program and its Preview.
+
+The desktop supports line, fill, and raster operation layers. Fill and binary
+raster convert closed vector silhouettes into angled scanline segments. Raster
+images resolve their explicit asset path and threshold pixels at 50%; missing,
+undecodable, or empty assets are rejected. Raster lead-in/out overscan remains
+laser-off and both desired scanlines and corrected controller/overscan paths
+are bounds checked. Text-to-path and grayscale/dithered power modulation remain
+unsupported and must never be silently dropped.
 
 For a selected rectangle, the Transform inspector edits width, height, and the
 absolute corner radius. `UpdateObjectShapeCommand` validates and applies the
@@ -215,6 +245,12 @@ Both pipelines generate conservative G-code that is revalidated by
 - SVG coordinates normally increase downward. Import/placement flips SVG Y so
   artwork appears visually upright in machine coordinates.
 - Positive project rotation is counter-clockwise in machine coordinates.
+- Project, camera, and template coordinates describe the desired physical
+  laser-spot location. `laser.spot_offset_*_mm` is the physical spot relative
+  to the commanded controller reference, so generated motion subtracts that
+  vector. The unshifted spot path and shifted controller path are both checked
+  against the configured work area. G-code comments carry the offset so the
+  desktop preview converts controller motion back to the physical spot path.
 - Corrected-image coordinates address pixel centers: OpenCV pixel `(i, j)` maps
   directly through the bed transform. The desktop offsets the Qt pixmap by
   `(-0.5, -0.5)` local pixels so its displayed centers, vector overlays, color
@@ -234,13 +270,21 @@ silently diverge when a project is run.
 
 - blocks serial access unless the process is hardware-enabled;
 - blocks motion until configuration allows it;
+- blocks serial motion and arming until homing/parking establishes the current
+  connection's absolute coordinate reference;
 - limits diagnostics to read-only queries and `M5`;
 - requires temporary arming for positive-power jobs;
 - restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset;
 - validates every destination against the configured work area;
+- validates offset-corrected controller destinations as well as uncorrected
+  physical spot geometry;
 - prevents rapid travel while laser state is active;
 - revokes authorization on stop or disarm;
 - attempts `M5` on stop, disconnect, and failure.
+
+The desktop job-start path performs `M5 → home → park → idle wait → arm → run`.
+Controller reset, reconnect, emergency stop, or job failure invalidates the
+session reference. Simulation does not require a hardware homing preflight.
 
 This is an accidental-command boundary, not functional safety.
 

@@ -58,18 +58,18 @@ def test_layer_panel_summarizes_operations_and_preserves_list_api(
     assert panel.layer_list.item(0).text(1) == "Line"
     assert panel.layer_list.item(0).text(2) == "1250 / 42.5%"
     assert panel.layer_list.item(0).checkState(3) == QtCore.Qt.CheckState.Checked
-    assert panel.layer_list.item(1).text(1) == "Fill !"
+    assert panel.layer_list.item(1).text(1) == "Fill"
     assert panel.layer_list.item(1).checkState(3) == QtCore.Qt.CheckState.Unchecked
     assert panel.layer_list.item(1).checkState(4) == QtCore.Qt.CheckState.Unchecked
     assert panel.current_layer_id() == document.layers[1].id
-    assert panel.mode_notice.isVisibleTo(panel)
-    assert "cannot generate a toolpath" in panel.mode_notice.text()
-    assert "stop toolpath generation" in panel.output_check.toolTip()
+    assert not panel.mode_notice.isVisibleTo(panel)
+    assert panel.scan_row.isVisibleTo(panel)
+    assert "Include this operation" in panel.output_check.toolTip()
 
     fill_index = panel.mode_combo.findData(LayerMode.FILL.value)
     raster_index = panel.mode_combo.findData(LayerMode.RASTER.value)
-    assert "no toolpath" in panel.mode_combo.itemText(fill_index)
-    assert "no toolpath" in panel.mode_combo.itemText(raster_index)
+    assert panel.mode_combo.itemText(fill_index) == "Fill"
+    assert panel.mode_combo.itemText(raster_index) == "Raster"
 
     panel.close()
     panel.deleteLater()
@@ -132,7 +132,7 @@ def test_unused_palette_swatch_requests_a_matching_new_operation(
     assert requested == [LAYER_PALETTE_COLORS[1]]
 
 
-def test_bottom_palette_describes_unsupported_and_disabled_operations(
+def test_bottom_palette_describes_fill_and_disabled_operations(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     layer = OperationLayer(
@@ -148,7 +148,7 @@ def test_bottom_palette_describes_unsupported_and_disabled_operations(
     qt_application.processEvents()
 
     tooltip = palette._buttons[layer.id].toolTip()
-    assert "Fill · no toolpath in this build" in tooltip
+    assert "Fill toolpath" in tooltip
     assert "Output off · hidden" in tooltip
     assert palette._buttons[layer.id].isEnabled()
     assert palette._buttons[layer.id].isChecked()

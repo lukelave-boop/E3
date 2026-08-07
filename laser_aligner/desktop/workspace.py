@@ -202,6 +202,15 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 font,
                 str(scene_object.geometry.get("text", "Text")),
             )
+        elif kind == ObjectKind.IMAGE:
+            path.addRect(
+                QtCore.QRectF(
+                    -object_transform.width_mm / 2.0,
+                    -object_transform.height_mm / 2.0,
+                    object_transform.width_mm,
+                    object_transform.height_mm,
+                )
+            )
         return path
 
     def apply_model(self, scene_object: SceneObject, layer: OperationLayer) -> None:
@@ -233,9 +242,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
             pen.setWidthF(0.35)
             pen.setCosmetic(True)
             self.setPen(pen)
-            if layer.mode == LayerMode.FILL:
+            if layer.mode in {LayerMode.FILL, LayerMode.RASTER}:
                 fill = QtGui.QColor(color)
-                fill.setAlpha(65)
+                fill.setAlpha(65 if layer.mode == LayerMode.FILL else 28)
                 self.setBrush(fill)
             else:
                 self.setBrush(QtCore.Qt.BrushStyle.NoBrush)
@@ -1263,6 +1272,10 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._point_pick_active = True
         self.setCursor(QtCore.Qt.CursorShape.CrossCursor)
         self.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+    @property
+    def point_pick_active(self) -> bool:
+        return self._point_pick_active
 
     def cancel_point_pick(self) -> None:
         self._point_pick_active = False

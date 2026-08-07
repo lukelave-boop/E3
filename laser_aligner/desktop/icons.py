@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from .qt import require_qt
-
 
 QtCore, QtGui, _QtWidgets = require_qt()
 
@@ -388,6 +387,26 @@ def _draw_generate(glyph: _GlyphPainter) -> None:
         glyph.painter.drawEllipse(QtCore.QPointF(*point), 1.8, 1.8)
 
 
+def _draw_preview(glyph: _GlyphPainter) -> None:
+    """Draw a monitor containing a small toolpath and playback head."""
+
+    glyph.painter.drawRoundedRect(QtCore.QRectF(2.5, 3.5, 19, 14), 1.8, 1.8)
+    glyph.painter.drawLine(QtCore.QPointF(9, 21), QtCore.QPointF(15, 21))
+    glyph.painter.drawLine(QtCore.QPointF(12, 17.5), QtCore.QPointF(12, 21))
+    glyph.pen(glyph.accent, 1.6)
+    glyph.painter.drawPath(
+        _path(
+            ("M", 5.5, 14),
+            ("L", 8.5, 8),
+            ("L", 12, 12),
+            ("L", 18.5, 6.5),
+        )
+    )
+    glyph.brush(glyph.accent)
+    glyph.no_pen()
+    glyph.painter.drawEllipse(QtCore.QPointF(18.5, 6.5), 1.5, 1.5)
+
+
 def _draw_frame(glyph: _GlyphPainter) -> None:
     glyph.pen(style=QtCore.Qt.PenStyle.DashLine)
     glyph.painter.drawRect(QtCore.QRectF(4, 5, 16, 14))
@@ -453,6 +472,7 @@ _DRAWERS: dict[str, Callable[[_GlyphPainter], None]] = {
     "save_as": _draw_save,
     "save_template": _draw_save,
     "import_svg": _draw_import,
+    "import_image": _draw_import,
     "undo": _draw_undo,
     "redo": _draw_redo,
     "delete": _draw_delete,
@@ -476,6 +496,7 @@ _DRAWERS: dict[str, Callable[[_GlyphPainter], None]] = {
     "distribute": _draw_distribute,
     "order": _draw_order,
     "generate": _draw_generate,
+    "preview": _draw_preview,
     "frame": _draw_frame,
     "run": _draw_run,
     "stop": _draw_stop,
@@ -498,6 +519,7 @@ ACTION_ICON_NAMES: Mapping[str, str] = {
     "raise": "order",
     "lower": "order",
     "send_back": "order",
+    "preview_job": "preview",
 }
 
 

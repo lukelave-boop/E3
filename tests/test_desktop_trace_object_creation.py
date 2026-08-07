@@ -111,6 +111,22 @@ def test_recognized_rounded_trace_keeps_fitted_rectangle_transform() -> None:
     assert "trace_detector_center_mm" not in item.metadata
 
 
+def test_normalized_grid_trace_creates_named_grid_cell_with_metadata() -> None:
+    detection = _contour_detection(shape="rounded_rectangle")
+    detection["diagnostics"] = {
+        "grid_normalized": True,
+        "grid_row": 2,
+        "grid_column": 4,
+    }
+
+    item = _create_trace_object(detection, "rounded")
+
+    assert item.name == "Grid R3 C5"
+    assert item.metadata["trace_grid_normalized"] is True
+    assert item.metadata["trace_grid_row"] == 2
+    assert item.metadata["trace_grid_column"] == 4
+
+
 def test_successful_trace_object_creation_releases_camera_review() -> None:
     document = ProjectDocument.new()
     cancellations: list[bool] = []

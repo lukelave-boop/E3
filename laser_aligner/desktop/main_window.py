@@ -6,7 +6,9 @@ from typing import Any
 
 from ..camera import load_corrected_test_image
 from ..core import CoreRuntime
+from ..gcode.job_plan import build_job_plan, restart_program_from_move
 from ..geometry.svg import parse_svg
+from ..identity import application_identity, application_window_title
 from ..materials import MaterialDatabase, MaterialPreset
 from ..project import (
     AddLayerCommand,
@@ -22,26 +24,27 @@ from ..project import (
     ObjectKind,
     OperationLayer,
     ProjectDocument,
+    ProjectJob,
     RemoveLayerCommand,
+    RemoveObjectsCommand,
     ReorderLayersCommand,
     ReorderObjectsCommand,
-    RemoveObjectsCommand,
     SceneObject,
     Transform,
     UngroupObjectsCommand,
     UpdateLayerCommand,
-    UpdateObjectShapeCommand,
     UpdateObjectPropertiesCommand,
+    UpdateObjectShapeCommand,
     UpdateTransformCommand,
     UpdateTransformsCommand,
     aligned_transforms,
     autosave_is_newer,
+    autosave_path,
     clear_autosave,
     distributed_transforms,
     generate_project_frame,
     generate_project_gcode,
     load_project,
-    autosave_path,
     save_autosave,
     save_project,
 )
@@ -51,13 +54,15 @@ from ..templates import (
     TemplateLibrary,
     generate_template_test_frame,
     instantiate_template,
-    template_from_rectangle_grid,
     template_from_project,
+    template_from_rectangle_grid,
 )
-from .controller import DesktopController
 from .context_bar import ContextPropertyBar
+from .controller import DesktopController
 from .controls import InspectorTabs, WheelGuard
 from .icons import action_icon, apply_action_icons
+from .job_preview import JobPreviewDialog
+from .machine_setup import MachineSetupDialog
 from .panels import (
     CameraPanel,
     ConsolePanel,
@@ -71,7 +76,7 @@ from .panels import (
 )
 from .qt import require_qt
 from .runtime_strip import RuntimeSafetyStrip
-from .template_designer import GridTemplateDesignerDialog, WORK_AREA_TOLERANCE_MM
+from .template_designer import WORK_AREA_TOLERANCE_MM, GridTemplateDesignerDialog
 from .template_panel import TemplatePanel
 from .template_test_image import TemplateTestImageDialog
 from .workspace import WorkspaceFrame, WorkspaceView
@@ -164,11 +169,7 @@ class LayerPaletteBar(QtWidgets.QWidget):
             button.setText(f"{index:02d}")
             if layer is not None:
                 button.setAccessibleName(f"Operation {index:02d}: {layer.name}")
-                mode_status = (
-                    "Line toolpath"
-                    if layer.mode == LayerMode.LINE
-                    else f"{layer.mode.value.title()} · no toolpath in this build"
-                )
+                mode_status = f"{layer.mode.value.title()} toolpath"
                 button.setToolTip(
                     f"{index:02d} · {layer.name}\n"
                     f"{mode_status} · {layer.speed_mm_min:g} mm/min · "
@@ -249,13 +250,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_name = ""
         self.last_job_powered = False
         self.last_job_revision: int | None = None
+        self._job_preview_dialog: JobPreviewDialog | None = None
         self._busy = False
         self._closing = False
         self._expanding_group_selection = False
         self._trace_result: dict[str, Any] | None = None
         self._template_match_result: dict[str, Any] | None = None
 
-        self.setWindowTitle("E3 Positioning System")
+        self._application_identity = application_identity()
+        self.setWindowTitle(self._application_identity)
         icon_path = Path(__file__).resolve().parent / "assets" / "e3-positioning-system.svg"
         if icon_path.exists():
             self.setWindowIcon(QtGui.QIcon(str(icon_path)))
@@ -330,6 +333,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("save_as", "Save project as…", "Ctrl+Shift+S")
         action("save_template", "Save project as cutting template…")
         action("import_svg", "Import SVG…", "Ctrl+I")
+        action("import_image", "Import raster image…", "Ctrl+Shift+I")
         action("quit", "Quit", "Ctrl+Q")
         action("undo", "Undo", "Ctrl+Z", QtWidgets.QStyle.StandardPixmap.SP_ArrowBack)
         action("redo", "Redo", "Ctrl+Shift+Z", QtWidgets.QStyle.StandardPixmap.SP_ArrowForward)
@@ -365,8 +369,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("trace_objects", "Detect / trace camera objects…", "Ctrl+Alt+T")
         action("template_alignment", "Cutting template alignment…", "Ctrl+Alt+A")
         action("refresh_camera", "Refresh camera", "F5")
+        action("machine_setup", "Machine Setup…", "Ctrl+Alt+M")
         action("generate", "Generate toolpath", "Ctrl+Alt+Enter")
+        action("optimize_paths", "Optimize path ordering")
+        action("preview_job", "Preview generated job", "Alt+P")
         action("frame", "Generate dry frame", "Ctrl+Shift+F")
+        action("export_gcode", "Export generated G-code…", "Ctrl+Shift+E")
         action("run", "Run current job", "Ctrl+Enter")
         action("stop", "Software stop / laser off", "Esc")
         action("minimize_window", "Minimize window", "Ctrl+M")
@@ -385,6 +393,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         self.actions["undo"].setEnabled(False)
         self.actions["redo"].setEnabled(False)
+        self.actions["export_gcode"].setEnabled(False)
+        self.actions["optimize_paths"].setCheckable(True)
+        self.actions["optimize_paths"].setChecked(True)
 
         self.actions["new"].triggered.connect(self.new_project)
         self.actions["open"].triggered.connect(self.open_project)
@@ -392,6 +403,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["save_as"].triggered.connect(lambda: self.save_project(save_as=True))
         self.actions["save_template"].triggered.connect(self.save_current_as_template)
         self.actions["import_svg"].triggered.connect(self.import_svg)
+        self.actions["import_image"].triggered.connect(self.import_image)
         self.actions["quit"].triggered.connect(self.close)
         self.actions["undo"].triggered.connect(self.history.undo)
         self.actions["redo"].triggered.connect(self.history.redo)
@@ -433,9 +445,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.actions["trace_objects"].triggered.connect(self.open_trace_panel)
         self.actions["template_alignment"].triggered.connect(self.open_template_panel)
-        self.actions["refresh_camera"].triggered.connect(self.controller.refresh_camera_image)
+        self.actions["refresh_camera"].triggered.connect(self.controller.retry_camera_image)
+        self.actions["machine_setup"].triggered.connect(self.open_machine_setup)
         self.actions["generate"].triggered.connect(self.generate_toolpath)
+        self.actions["preview_job"].triggered.connect(self.show_job_preview)
         self.actions["frame"].triggered.connect(self.generate_frame)
+        self.actions["export_gcode"].triggered.connect(self.export_gcode)
         self.actions["run"].triggered.connect(self.run_current_job)
         self.actions["stop"].triggered.connect(self.controller.emergency_stop)
         self.actions["minimize_window"].triggered.connect(self.showMinimized)
@@ -448,7 +463,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _create_menus(self) -> None:
         file_menu = self.menuBar().addMenu("&File")
-        for key in ("new", "open", "save", "save_as", "save_template", "import_svg"):
+        for key in (
+            "new",
+            "open",
+            "save",
+            "save_as",
+            "save_template",
+            "import_svg",
+            "import_image",
+        ):
             file_menu.addAction(self.actions[key])
         file_menu.addSeparator()
         file_menu.addAction(self.actions["quit"])
@@ -469,6 +492,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         tools_menu.addAction(self.actions["template_alignment"])
         tools_menu.addSeparator()
         tools_menu.addAction(self.actions["refresh_camera"])
+        tools_menu.addAction(self.actions["machine_setup"])
 
         align_menu = self.menuBar().addMenu("&Arrange")
         for key in (
@@ -488,7 +512,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
             align_menu.addAction(self.actions[key])
 
         laser_menu = self.menuBar().addMenu("&Laser Tools")
-        for key in ("generate", "frame", "run", "stop"):
+        for key in (
+            "generate",
+            "optimize_paths",
+            "preview_job",
+            "frame",
+            "export_gcode",
+            "run",
+            "stop",
+        ):
             laser_menu.addAction(self.actions[key])
 
         self.window_menu = self.menuBar().addMenu("&Window")
@@ -621,7 +653,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         job_toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         job_toolbar.addAction(self.actions["refresh_camera"])
         job_toolbar.addSeparator()
-        for key in ("generate", "frame", "run"):
+        for key in ("generate", "preview_job", "frame", "run"):
             job_toolbar.addAction(self.actions[key])
 
         self.safety_toolbar = QtWidgets.QToolBar("Runtime and safety", self)
@@ -882,7 +914,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.return_to_synthetic_camera
         )
 
-        self.camera_panel.refreshRequested.connect(self.controller.refresh_camera_image)
+        self.camera_panel.refreshRequested.connect(self.controller.retry_camera_image)
         self.camera_panel.liveChanged.connect(self.controller.set_live_camera)
         self.camera_panel.refreshIntervalChanged.connect(
             self.controller.set_live_camera_interval
@@ -899,10 +931,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.controller.measure_camera_sharpness
         )
         self.camera_panel.lensCalibrationRequested.connect(
-            lambda: self._calibration_message("Lens calibration")
+            lambda: self.open_machine_setup(1)
         )
         self.camera_panel.bedCalibrationRequested.connect(
-            lambda: self._calibration_message("Bed alignment")
+            lambda: self.open_machine_setup(2)
         )
 
         self.machine_panel.connectRequested.connect(self.controller.connect_machine)
@@ -933,6 +965,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.traceColorReady.connect(
             self._trace_color_ready
         )
+        self.controller.traceColorFailed.connect(
+            self._trace_color_failed
+        )
         self.controller.templateMatchReady.connect(
             self._template_match_ready
         )
@@ -940,6 +975,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._simulation_frame_changed
         )
         self.controller.errorOccurred.connect(self.show_error)
+        self.controller.cameraErrorOccurred.connect(self.show_camera_error)
         self.controller.notice.connect(self.show_notice)
         self.controller.busyChanged.connect(self._busy_changed)
 
@@ -1020,12 +1056,21 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_name = ""
         self.last_job_powered = False
         self.last_job_revision = None
+        preview_dialog = getattr(self, "_job_preview_dialog", None)
+        if preview_dialog is not None:
+            preview_dialog.close()
+            self._job_preview_dialog = None
         if hasattr(self, "gcode_preview"):
             self.gcode_preview.clear()
         if hasattr(self, "workspace"):
             self.workspace.clear_toolpath_preview()
-        if hasattr(self, "job_panel"):
-            self.job_panel.summary.setText("No job generated")
+        clear_prepared_job = getattr(
+            getattr(self, "job_panel", None), "clear_prepared_job", None
+        )
+        if clear_prepared_job is not None:
+            clear_prepared_job()
+        if hasattr(self, "actions") and "export_gcode" in self.actions:
+            self.actions["export_gcode"].setEnabled(False)
 
     def _document_center(self) -> tuple[float, float]:
         return self.document.work_area.center
@@ -1492,6 +1537,53 @@ class E3MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             self.show_error(f"Could not import SVG: {exc}")
 
+    def import_image(self) -> None:
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import raster image",
+            str(Path.home()),
+            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+        )
+        if not filename:
+            return
+        image = QtGui.QImage(filename)
+        if image.isNull() or image.width() <= 0 or image.height() <= 0:
+            self.show_error("Could not decode the selected raster image")
+            return
+        layer = self.document.get_layer(self.active_layer_id)
+        if layer.mode != LayerMode.RASTER:
+            layer = OperationLayer(
+                name=f"Raster {len(self.document.layers) + 1:02d}",
+                color=self.document.next_layer_color(),
+                mode=LayerMode.RASTER,
+                priority=len(self.document.layers),
+            )
+            self.history.execute(
+                AddLayerCommand(self.document, layer, description="Add raster layer")
+            )
+            self.active_layer_id = layer.id
+        width_mm = min(80.0, self.document.work_area.width * 0.5)
+        height_mm = width_mm * image.height() / image.width()
+        if height_mm > self.document.work_area.height * 0.5:
+            height_mm = self.document.work_area.height * 0.5
+            width_mm = height_mm * image.width() / image.height()
+        item = SceneObject(
+            name=Path(filename).stem,
+            kind=ObjectKind.IMAGE,
+            layer_id=layer.id,
+            transform=Transform(
+                *self._document_center(),
+                width_mm=width_mm,
+                height_mm=height_mm,
+            ),
+            geometry={"asset": str(Path(filename).resolve())},
+        )
+        self._add_object(item, "Import raster image")
+        self.show_notice(
+            "Imported threshold raster image; dark pixels below 50% engrave at "
+            "the operation's maximum power"
+        )
+
     def new_project(self) -> None:
         if not self._confirm_discard_changes():
             return
@@ -1582,6 +1674,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             job = generate_project_gcode(
                 self.document,
                 self.runtime.settings.laser,
+                optimize_order=self.actions["optimize_paths"].isChecked(),
+                start_position=self._planned_job_start_position(),
             )
         except Exception as exc:
             self.show_error(f"Toolpath generation failed: {exc}")
@@ -1595,23 +1689,28 @@ class E3MainWindow(QtWidgets.QMainWindow):
             for item in self.document.visible_output_objects()
         )
         self.gcode_preview.setPlainText(job.text)
+        self.actions["export_gcode"].setEnabled(True)
         self.workspace.set_toolpath_preview(job.text)
-        self.preview_dock.show()
-        self.preview_dock.raise_()
-        self.job_panel.summary.setText(
+        self._set_prepared_job_status(
             f"{job.path_count} paths · {job.cut_length_mm:.1f} mm cut · "
             f"{job.travel_length_mm:.1f} mm travel · "
             f"estimated {job.estimated_seconds:.1f} s"
+            + self._laser_spot_offset_summary(),
         )
         generated_dir = self.runtime.settings.app.data_dir / "generated"
         generated_dir.mkdir(parents=True, exist_ok=True)
         path = generated_dir / self.last_job_name
         path.write_text(job.text, encoding="utf-8")
         self.show_notice(f"Generated and validated {path.name}")
+        self.show_job_preview()
 
     def generate_frame(self) -> None:
         try:
-            job = generate_project_frame(self.document, self.runtime.settings.laser)
+            job = generate_project_frame(
+                self.document,
+                self.runtime.settings.laser,
+                start_position=self._planned_job_start_position(),
+            )
         except Exception as exc:
             self.show_error(f"Frame generation failed: {exc}")
             return
@@ -1620,14 +1719,160 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_powered = False
         self.last_job_revision = self.document.revision
         self.gcode_preview.setPlainText(job.text)
+        self.actions["export_gcode"].setEnabled(True)
         self.workspace.set_toolpath_preview(job.text)
-        self.preview_dock.show()
-        self.preview_dock.raise_()
-        self.job_panel.summary.setText(
+        self._set_prepared_job_status(
             f"Dry frame · bounds X{job.bounds_mm[0]:.2f}..{job.bounds_mm[2]:.2f} "
             f"Y{job.bounds_mm[1]:.2f}..{job.bounds_mm[3]:.2f}"
+            + self._laser_spot_offset_summary(),
         )
         self.show_notice("Dry frame generated; no laser-enable command is present")
+        self.show_job_preview()
+
+    def _planned_job_start_position(self) -> tuple[float, float]:
+        machine = self.runtime.settings.machine
+        return float(machine.photo_x), float(machine.photo_y)
+
+    def _current_job_plan(self) -> Any | None:
+        if self.last_job is None:
+            return None
+        plan = getattr(self.last_job, "plan", None)
+        if plan is not None:
+            return plan
+        return build_job_plan(
+            self.last_job.text,
+            power_max=self.runtime.settings.laser.power_max,
+            default_feed_mm_min=self.runtime.settings.laser.travel_feed_mm_min,
+            start_position=self._planned_job_start_position(),
+        )
+
+    def _set_prepared_job_status(self, summary: str) -> None:
+        plan = self._current_job_plan()
+        controller_power = 0.0 if plan is None else float(plan.maximum_power)
+        power_percent = (
+            0.0
+            if plan is None
+            else controller_power / max(1, plan.power_max) * 100.0
+        )
+        self.job_panel.set_prepared_job(
+            summary,
+            power_percent=power_percent,
+            controller_power=controller_power,
+        )
+
+    def show_job_preview(self) -> None:
+        plan = self._current_job_plan()
+        if plan is None:
+            self.show_error("Generate a project toolpath or dry frame first")
+            return
+        if self.last_job_revision != self.document.revision:
+            self._invalidate_generated_job()
+            self.show_error("The project changed; regenerate before previewing")
+            return
+        previous_dialog = getattr(self, "_job_preview_dialog", None)
+        if previous_dialog is not None:
+            previous_dialog.close()
+        area = self.document.work_area
+        dialog = JobPreviewDialog(
+            plan,
+            (area.x_min, area.x_max, area.y_min, area.y_max),
+            self.last_job_name or self.document.name,
+            self,
+        )
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.destroyed.connect(
+            lambda _object=None, target=dialog: self._preview_dialog_destroyed(target)
+        )
+        dialog.startHereRequested.connect(self._prepare_start_here)
+        self._job_preview_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _preview_dialog_destroyed(self, dialog: JobPreviewDialog) -> None:
+        if getattr(self, "_job_preview_dialog", None) is dialog:
+            self._job_preview_dialog = None
+
+    def _prepare_start_here(self, move_index: int) -> None:
+        plan = self._current_job_plan()
+        if plan is None or self.last_job_revision != self.document.revision:
+            self._invalidate_generated_job()
+            self.show_error("The project changed; regenerate before using Start Here")
+            return
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "Prepare Start Here job",
+            f"This will replace the prepared job with a guarded program beginning "
+            f"at preview move {move_index + 1}. Earlier moves will not run.\n\n"
+            "The machine will not start. Review the replacement Preview and dry "
+            "frame before execution.",
+            QtWidgets.QMessageBox.StandardButton.Ok
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Ok:
+            return
+        try:
+            text, restarted = restart_program_from_move(
+                plan,
+                move_index,
+                power_mode=self.runtime.settings.laser.power_mode,
+            )
+        except ValueError as exc:
+            self.show_error(str(exc))
+            return
+        self.last_job = ProjectJob(
+            text=text,
+            bounds_mm=restarted.bounds_mm,
+            cut_length_mm=restarted.cut_distance_mm,
+            travel_length_mm=restarted.travel_distance_mm,
+            estimated_seconds=restarted.total_seconds,
+            path_count=sum(1 for move in restarted.moves if move.laser_on),
+            point_count=len(restarted.moves),
+            plan=restarted,
+        )
+        self.last_job_name = f"start-here-move-{move_index + 1}.gcode"
+        self.last_job_powered = restarted.powered
+        self.gcode_preview.setPlainText(text)
+        self.workspace.set_toolpath_preview(text)
+        self._set_prepared_job_status(
+            f"Start Here at original move {move_index + 1} · "
+            f"{restarted.cut_distance_mm:.1f} mm cut · "
+            f"estimated {restarted.total_seconds:.1f} s"
+        )
+        self.show_notice("Prepared Start Here job; machine has not started")
+        self.show_job_preview()
+
+    def _laser_spot_offset_summary(self) -> str:
+        laser = self.runtime.settings.laser
+        if (
+            abs(laser.spot_offset_x_mm) < 1e-12
+            and abs(laser.spot_offset_y_mm) < 1e-12
+        ):
+            return ""
+        return (
+            f" · spot offset X{laser.spot_offset_x_mm:g} "
+            f"Y{laser.spot_offset_y_mm:g} mm"
+        )
+
+    def export_gcode(self) -> None:
+        if self.last_job is None:
+            self.show_error("Generate a project toolpath or dry frame first")
+            return
+        path, _ = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export validated G-code",
+            self.last_job_name or "job.gcode",
+            "G-code (*.gcode *.nc);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(self.last_job.text, encoding="utf-8")
+        except OSError as exc:
+            self.show_error(f"Could not export G-code: {exc}")
+            return
+        self.show_notice(f"Exported {Path(path).name}")
 
     def run_current_job(self) -> None:
         if self.last_job is None:
@@ -1652,7 +1897,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "Powered laser job",
                 "This program contains powered laser output.\n\n"
                 "Confirm the enclosure, extraction, material, focus and hardware "
-                "emergency stop before continuing.",
+                "emergency stop before continuing. Hardware will home and park "
+                "automatically before arming and starting the job.",
                 QtWidgets.QMessageBox.StandardButton.Ok
                 | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
@@ -1674,6 +1920,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.last_job_name,
             arm_phrase=phrase,
         )
+        if self.runtime.settings.machine.backend == "serial":
+            self.show_notice("Homing and parking before job start…")
 
     @staticmethod
     def _grid_spec_from_template(
@@ -2301,13 +2549,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self.runtime.context.bed.calibration is None:
             self.show_error("Bed mapping is required before sampling camera color")
             return
+        if self.workspace.point_pick_active:
+            self.workspace.cancel_point_pick()
+            self.trace_panel.set_color_pick_active(False)
+            self.show_notice("Color picking cancelled")
+            return
         self._activate_selection_tool(show_message=False)
         self._clear_template_preview(show_message=False)
         self.inspector_tabs.select_panel("trace")
         self.workspace.begin_point_pick()
+        self.trace_panel.set_color_pick_active(True)
         self.show_notice("Click the center of one target object in the camera image")
 
     def _trace_point_picked(self, x_mm: float, y_mm: float) -> None:
+        self.trace_panel.set_color_pick_active(True, sampling=True)
         self.controller.sample_trace_color(x_mm, y_mm)
 
     def _trace_color_ready(self, payload: dict[str, Any]) -> None:
@@ -2317,6 +2572,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             f"Sampled target color at X{payload['machine_x']:.2f} "
             f"Y{payload['machine_y']:.2f}"
         )
+
+    def _trace_color_failed(self, message: str) -> None:
+        self.trace_panel.set_color_pick_failed(message)
+        self.show_error(f"Sample trace color failed: {message}")
 
     def _trace_result_ready(self, result: dict[str, Any]) -> None:
         camera_image = result.get("camera_image")
@@ -2353,6 +2612,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
     ) -> SceneObject:
         index = int(detection.get("index", 0))
         name = f"Traced object {index:02d}"
+        diagnostics = detection.get("diagnostics") or {}
+        if diagnostics.get("grid_normalized"):
+            name = (
+                f"Grid R{int(diagnostics.get('grid_row', 0)) + 1} "
+                f"C{int(diagnostics.get('grid_column', 0)) + 1}"
+            )
         center = tuple(float(value) for value in detection["center_mm"])
         if (
             output_mode == "rounded"
@@ -2401,6 +2666,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "trace_shape": detection.get("shape", output_mode),
             }
         )
+        if diagnostics.get("grid_normalized"):
+            item.metadata.update(
+                {
+                    "trace_grid_normalized": True,
+                    "trace_grid_row": int(diagnostics.get("grid_row", 0)),
+                    "trace_grid_column": int(diagnostics.get("grid_column", 0)),
+                }
+            )
         return item
 
     def _create_traced_objects(self, payload: dict[str, Any]) -> None:
@@ -2467,6 +2740,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.runtime_strip.set_status(status)
         if machine:
             self.console_panel.set_lines(list(machine.get("log", [])))
+            self.job_panel.set_machine_status(machine)
             self.job_panel.set_job_status(machine.get("job"))
         if state == "running":
             camera_state = "camera online" if camera and camera.get("connected") else "camera offline"
@@ -2487,15 +2761,45 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.runtime_strip.set_busy(busy)
         self.statusBar().showMessage("Working…" if busy else "", 0 if busy else 1000)
 
-    def _calibration_message(self, title: str) -> None:
-        QtWidgets.QMessageBox.information(
-            self,
-            title,
-            "The desktop shell is now using the same camera/calibration core as the "
-            "browser application. The native step-by-step calibration dialogs are "
-            "the next desktop milestone; the existing browser wizard remains the "
-            "validated calibration interface for this branch.",
+    def open_machine_setup(self, tab_index: int = 0) -> None:
+        was_live = self.camera_panel.live_enabled()
+        self.controller.set_live_camera(False)
+        dialog = MachineSetupDialog(self.runtime, self)
+        dialog.tabs.setCurrentIndex(tab_index)
+        dialog.calibrationChanged.connect(self.controller.poll_status)
+        dialog.calibrationChanged.connect(self.controller.refresh_camera_image)
+        dialog.registrationJobPrepared.connect(self._load_fine_registration_job)
+        dialog.validationJobPrepared.connect(self._load_fine_registration_job)
+        dialog.exec()
+        self.controller.set_live_camera(was_live, self.camera_panel.refresh_interval_ms())
+        self.controller.poll_status()
+
+    def _load_fine_registration_job(self, registration_job: Any) -> None:
+        job = registration_job.program
+        self.last_job = job
+        self.last_job_name = registration_job.filename
+        self.last_job_powered = bool(registration_job.powered)
+        self.last_job_revision = self.document.revision
+        self.gcode_preview.setPlainText(job.text)
+        self.actions["export_gcode"].setEnabled(True)
+        self.workspace.set_toolpath_preview(job.text)
+        mode = (
+            f"powered at {registration_job.power_percent:g}%"
+            if registration_job.powered
+            else "dry motion only"
         )
+        display_name = str(
+            getattr(registration_job, "display_name", "Fine registration")
+        )
+        self._set_prepared_job_status(
+            f"{display_name} · {len(registration_job.targets)} crosses · {mode} · "
+            f"bounds X{job.bounds_mm[0]:.2f}..{job.bounds_mm[2]:.2f} "
+            f"Y{job.bounds_mm[1]:.2f}..{job.bounds_mm[3]:.2f}",
+        )
+        self.show_notice(
+            f"{display_name} job loaded. Review the G-code preview and run the dry path first."
+        )
+        self.show_job_preview()
 
     def show_notice(self, message: str) -> None:
         self.statusBar().showMessage(message, 7000)
@@ -2504,11 +2808,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.statusBar().showMessage(message, 10000)
         QtWidgets.QMessageBox.critical(self, "E3 Positioning System", message)
 
+    def show_camera_error(self, message: str) -> None:
+        """Acknowledge one latched camera fault without recurring focus theft."""
+        self.statusBar().showMessage(message.split("\n", 1)[0], 15000)
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Camera unavailable",
+            message,
+            QtWidgets.QMessageBox.StandardButton.Ok,
+        )
+
     def show_about(self) -> None:
         QtWidgets.QMessageBox.about(
             self,
             "About E3 Positioning System",
             "<h2>E3 Positioning System</h2>"
+            f"<p>{self._application_identity}</p>"
             "<p>Native camera-assisted laser design and control workspace for the "
             "Ender-3 S1 Pro, Creality Falcon controller and Logitech C920.</p>"
             "<p>This is an original interface built on the existing E3 calibrated "
@@ -2534,9 +2849,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         return True
 
     def _update_title(self) -> None:
-        dirty = "" if self.history.is_clean else " *"
         filename = self.project_path.name if self.project_path else self.document.name
-        self.setWindowTitle(f"{filename}{dirty} — E3 Positioning System")
+        self.setWindowTitle(
+            application_window_title(filename, dirty=not self.history.is_clean)
+        )
 
     def _available_geometry(self) -> QtCore.QRect:
         screen = self.screen() or QtGui.QGuiApplication.primaryScreen()

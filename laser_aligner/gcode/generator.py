@@ -11,7 +11,6 @@ from ..config import WorkArea
 from ..errors import SafetyError, SvgError
 from ..geometry.svg import Polyline, SvgGeometry
 
-
 _PATH_BOUNDS_TOLERANCE_MM = 1e-6
 
 
@@ -34,6 +33,8 @@ class ToolpathOptions:
     travel_feed_mm_min: float = 3000.0
     engrave_feed_mm_min: float = 1200.0
     boundary_margin_mm: float = 0.0
+    spot_offset_x_mm: float = 0.0
+    spot_offset_y_mm: float = 0.0
     optimize_order: bool = True
     include_return_move: bool = False
     return_x_mm: float = 0.0
@@ -132,7 +133,45 @@ def _program_bounds(paths: list[Polyline]) -> tuple[float, float, float, float]:
     return float(minimum[0]), float(minimum[1]), float(maximum[0]), float(maximum[1])
 
 
-def validate_paths(paths: list[Polyline], work_area: WorkArea, margin_mm: float = 0.0) -> None:
+def _controller_paths(
+    paths: list[Polyline],
+    options: ToolpathOptions,
+) -> list[Polyline]:
+    offset = np.array(
+        [options.spot_offset_x_mm, options.spot_offset_y_mm],
+        dtype=np.float64,
+    )
+    if not np.isfinite(offset).all():
+        raise ValueError("laser spot offsets must be finite")
+    return [
+        Polyline(
+            path.points.astype(np.float64, copy=True) - offset,
+            closed=path.closed,
+            source_tag=path.source_tag,
+        )
+        for path in paths
+    ]
+
+
+def _spot_offset_comment(options: ToolpathOptions) -> str | None:
+    if (
+        abs(options.spot_offset_x_mm) < 1e-12
+        and abs(options.spot_offset_y_mm) < 1e-12
+    ):
+        return None
+    return (
+        "; Laser spot offset (spot = controller + offset): "
+        f"X{_fmt(options.spot_offset_x_mm)} Y{_fmt(options.spot_offset_y_mm)}"
+    )
+
+
+def validate_paths(
+    paths: list[Polyline],
+    work_area: WorkArea,
+    margin_mm: float = 0.0,
+    *,
+    coordinate_label: str = "design",
+) -> None:
     minimum_x, minimum_y, maximum_x, maximum_y = _program_bounds(paths)
     safe_minimum_x = work_area.x_min + margin_mm
     safe_maximum_x = work_area.x_max - margin_mm
@@ -145,8 +184,9 @@ def validate_paths(paths: list[Polyline], work_area: WorkArea, margin_mm: float 
         or maximum_y > safe_maximum_y + _PATH_BOUNDS_TOLERANCE_MM
     ):
         raise SafetyError(
-            "Placed design exceeds the configured safe work area: "
-            f"design X={minimum_x:.2f}..{maximum_x:.2f}, Y={minimum_y:.2f}..{maximum_y:.2f}; "
+            "Path exceeds the configured safe work area: "
+            f"{coordinate_label} X={minimum_x:.2f}..{maximum_x:.2f}, "
+            f"Y={minimum_y:.2f}..{maximum_y:.2f}; "
             f"safe X={safe_minimum_x:.2f}..{safe_maximum_x:.2f}, "
             f"Y={safe_minimum_y:.2f}..{safe_maximum_y:.2f}"
         )
@@ -201,13 +241,21 @@ def generate_vector_gcode(
         raise ValueError("power_mode must be M3 or M4")
     if not 0 <= options.power <= options.power_max:
         raise ValueError("power must be between zero and power_max")
-    paths = place_geometry(geometry, placement)
-    validate_paths(paths, work_area, options.boundary_margin_mm)
+    design_paths = place_geometry(geometry, placement)
+    validate_paths(design_paths, work_area, options.boundary_margin_mm)
+    bounds = _program_bounds(design_paths)
+    paths = _controller_paths(design_paths, options)
+    validate_paths(
+        paths,
+        work_area,
+        options.boundary_margin_mm,
+        coordinate_label="controller path after laser spot correction",
+    )
     start = np.array([work_area.x_min, work_area.y_min], dtype=np.float64)
     if options.optimize_order:
         paths = _nearest_order(paths, start)
 
-    bounds = _program_bounds(paths)
+    controller_bounds = _program_bounds(paths)
     lines = [
         "; Laser Camera Aligner vector job",
         f"; Source: {_safe_comment(design_name)}",
@@ -218,6 +266,13 @@ def generate_vector_gcode(
         "G90 ; absolute positioning",
         "M5 ; laser off before motion",
     ]
+    offset_comment = _spot_offset_comment(options)
+    if offset_comment is not None:
+        lines[4:4] = [
+            offset_comment,
+            f"; Controller bounds: X{_fmt(controller_bounds[0])}..{_fmt(controller_bounds[2])} "
+            f"Y{_fmt(controller_bounds[1])}..{_fmt(controller_bounds[3])}",
+        ]
     current = start.copy()
     travel_length = 0.0
     cut_length = 0.0
@@ -276,6 +331,14 @@ def generate_frame_gcode(
     )
     paths = [Polyline(rectangle, closed=True, source_tag="frame")]
     validate_paths(paths, work_area, options.boundary_margin_mm)
+    controller_paths = _controller_paths(paths, options)
+    validate_paths(
+        controller_paths,
+        work_area,
+        options.boundary_margin_mm,
+        coordinate_label="controller path after laser spot correction",
+    )
+    controller_rectangle = controller_paths[0].points
     effective_power = options.power if laser_enabled else 0
     lines = [
         "; Laser Camera Aligner framing pass",
@@ -283,18 +346,36 @@ def generate_frame_gcode(
         "G21",
         "G90",
         "M5",
-        f"G0 X{_fmt(min_x)} Y{_fmt(min_y)} F{_fmt(options.travel_feed_mm_min)}",
     ]
+    offset_comment = _spot_offset_comment(options)
+    if offset_comment is not None:
+        controller_bounds = _program_bounds(controller_paths)
+        lines.extend(
+            [
+                offset_comment,
+                f"; Controller bounds: X{_fmt(controller_bounds[0])}..{_fmt(controller_bounds[2])} "
+                f"Y{_fmt(controller_bounds[1])}..{_fmt(controller_bounds[3])}",
+            ]
+        )
+    lines.append(
+        f"G0 X{_fmt(controller_rectangle[0, 0])} "
+        f"Y{_fmt(controller_rectangle[0, 1])} F{_fmt(options.travel_feed_mm_min)}"
+    )
     if effective_power > 0:
         lines.append(f"{options.power_mode.upper()} S{effective_power}")
-    for point in rectangle[1:]:
+    for point in controller_rectangle[1:]:
         lines.append(f"G1 X{_fmt(point[0])} Y{_fmt(point[1])} F{_fmt(options.travel_feed_mm_min)}")
     lines.extend(["M5", ""])
     return GcodeProgram(
         text="\n".join(lines),
         bounds_mm=bounds_mm,
         cut_length_mm=_path_length(rectangle),
-        travel_length_mm=float(np.linalg.norm(rectangle[0] - np.array([work_area.x_min, work_area.y_min]))),
+        travel_length_mm=float(
+            np.linalg.norm(
+                controller_rectangle[0]
+                - np.array([work_area.x_min, work_area.y_min])
+            )
+        ),
         path_count=1,
         point_count=len(rectangle),
     )

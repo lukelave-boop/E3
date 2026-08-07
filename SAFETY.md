@@ -15,14 +15,64 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 - Remove flammable debris from the enclosure.
 - Confirm focus, workpiece restraint, cable clearance, and unobstructed axis travel.
 - Run the generated dry framing pass first; it contains no `M3` or `M4` laser-enable command.
+- Inspect the dedicated generated-job Preview, including maximum planned power,
+  powered/travel motion, bounds, and warnings. Preview is a review aid, not a
+  safety function and not a substitute for dry framing.
 - Verify the generated bounds and the machine coordinate origin.
+- Verify that Home / park succeeds after every controller connection or reset.
+  The desktop repeats this homing/parking preflight automatically at job start;
+  a failed preflight blocks motion and arming.
+- Verify any configured laser-spot offset and inspect the generated controller
+  bounds; a wrong sign moves the beam farther from the intended location.
+- For fine registration, run the dry eight-cross path first. Use only a
+  previously established visible-marking power on a clean, restrained
+  sacrificial surface; inspect every detected point before applying a result.
+- For accuracy validation, run the separate dry five-cross holdout path before
+  preparing its powered job. Validation reports camera-to-laser error but is not
+  a safety test or proof that unattended operation is safe.
 - Keep the operator present for the entire job.
 
 ## Software guardrails in this repository
 
-The default project profile is simulation-only. Real serial access requires `--hardware`; real motion requires `machine.allow_motion`; positive laser commands require temporary arming; arming expires automatically before job start and is cleared after every job; low-power framing is disabled; streamed jobs are restricted to a conservative G-code subset; generated paths are checked against a configured rectangular work area; rapid travel is blocked while laser state is active; and `M5` is placed before travel and at job end.
+The default project profile is simulation-only. Real serial access requires
+`--hardware`; real motion requires `machine.allow_motion` and a successfully
+homed coordinate reference for the current connection; the desktop homes and
+parks before each hardware job, then arms only after that preflight. Positive
+laser commands require temporary arming; arming is cleared after every job;
+low-power framing is disabled; streamed jobs are restricted to a conservative
+G-code subset; generated paths are checked against a configured rectangular
+work area; rapid travel is blocked while laser state is active; and `M5` is
+placed before travel and at job end.
+
+Fine registration may apply only a reviewed, multi-point global camera-map
+translation no larger than 5 mm. Low-confidence, excessive, or
+position-dependent results are rejected as translations. A separate reviewed
+full-bed homography refinement requires at least seven geometric inliers, broad
+bed coverage, bounded residuals, preserved orientation/local scale, and bounded
+modeled movement across the bed. It is confirmation-gated and retains the prior
+map for rollback. These are alignment guardrails, not safety functions or proof
+of beam location.
+
+Independent accuracy validation uses a separate guarded five-cross job. It
+requires every holdout detection, rejects dry-only and stale-map sessions, and
+reports fixed RMS/maximum acceptance limits without modifying calibration.
 
 These controls reduce accidental commands. They do not meet any functional-safety performance level and do not make an open Class 4 laser safe.
+
+The desktop graphical Preview is constructed from the exact finalized G-code
+text and is invalidated when the project changes. Its display and playback
+controls cannot edit that text or bypass generation, homing, motion, arming,
+bounds, streamed-command, rapid-with-laser, stop, or disconnect checks. A
+correct-looking Preview is not proof that the controller, calibration, focus,
+workpiece, or physical beam path is correct.
+
+Fill and raster scanlines can create much longer powered jobs than outlines.
+Raster overscan motion is emitted only with the laser off and is included in
+controller-space bounds validation. Imported images use a binary 50% threshold;
+inspect the powered pattern and maximum power in Preview. A Start Here program
+intentionally omits earlier motion. It is prepared only at a complete move
+boundary, begins with `G21`, `G90`, and `M5`, positions with the laser off, and
+does not bypass the ordinary dry-frame, homing, arming, or execution gates.
 
 ## Camera sensor protection
 

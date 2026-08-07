@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 # Shared scene colors for the high-contrast drafting surface.  Workspace code
 # may import this mapping instead of duplicating chrome-dependent color values.
 DRAFTING_COLORS = {
@@ -324,9 +323,35 @@ QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {
     background: #424242;
 }
 QCheckBox, QRadioButton {
-    spacing: 5px;
+    spacing: 7px;
 }
-QCheckBox::indicator, QRadioButton::indicator {
+QCheckBox::indicator {
+    width: 30px;
+    height: 16px;
+    border: 1px solid #777777;
+    border-radius: 8px;
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #E8E8E8, stop: 0.42 #E8E8E8,
+        stop: 0.43 #4A4A4A, stop: 1 #4A4A4A
+    );
+}
+QCheckBox::indicator:hover {
+    border-color: #B8C0C8;
+}
+QCheckBox::indicator:checked {
+    border-color: #55D6A8;
+    background: qlineargradient(
+        x1: 0, y1: 0, x2: 1, y2: 0,
+        stop: 0 #20C978, stop: 0.57 #20C978,
+        stop: 0.58 #F4F4F4, stop: 1 #F4F4F4
+    );
+}
+QCheckBox::indicator:disabled {
+    border-color: #4A4A4A;
+    background: #333333;
+}
+QRadioButton::indicator {
     width: 13px;
     height: 13px;
 }

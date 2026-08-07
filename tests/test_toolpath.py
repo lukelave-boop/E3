@@ -1,5 +1,8 @@
 import re
+from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
 from laser_aligner.config import LaserSettings
@@ -44,6 +47,37 @@ def test_project_gcode_is_bracketed_by_laser_off():
     assert job.text.rstrip().endswith("; End of E3 project job")
     assert job.path_count == 1
     assert job.cut_length_mm > 200
+
+
+def test_project_gcode_applies_laser_spot_offset_but_keeps_design_bounds():
+    baseline = generate_project_gcode(make_document(), LaserSettings(power_max=1000))
+    corrected = generate_project_gcode(
+        make_document(),
+        LaserSettings(
+            power_max=1000,
+            spot_offset_x_mm=-28,
+            spot_offset_y_mm=-8,
+        ),
+    )
+
+    assert corrected.bounds_mm == pytest.approx(baseline.bounds_mm)
+    assert "spot = controller + offset): X-28 Y-8" in corrected.text
+    assert "; Controller bounds: X99.9..176.1 Y92.6..143.4" in corrected.text
+
+
+def test_project_offset_rejects_shifted_controller_bounds():
+    document = make_document()
+    document.objects[0].transform.x_mm = 165
+
+    with pytest.raises(SafetyError):
+        generate_project_gcode(
+            document,
+            LaserSettings(
+                boundary_margin_mm=0,
+                spot_offset_x_mm=-28,
+                spot_offset_y_mm=-8,
+            ),
+        )
 
 
 def test_multiple_layers_keep_distinct_power_and_speed():
@@ -135,12 +169,94 @@ def test_zero_power_layer_does_not_emit_laser_enable():
     assert "Layer power is zero" in job.text
 
 
-def test_unsupported_fill_layer_is_rejected_instead_of_silently_omitted():
+def test_fill_layer_emits_bounded_scanlines_and_exact_preview():
     document = make_document()
     document.layers[0].mode = LayerMode.FILL
+    document.layers[0].line_interval_mm = 2.0
 
-    with pytest.raises(ValueError, match="fill output"):
+    job = generate_project_gcode(document, LaserSettings(power_max=1000))
+
+    assert job.path_count > 10
+    assert "\"mode\":\"fill\"" in job.text
+    assert job.plan is not None and job.plan.powered
+    assert job.plan.maximum_power == pytest.approx(100.0)
+    assert all(
+        document.work_area.contains(move.end_x, move.end_y)
+        for move in job.plan.moves
+    )
+
+
+def test_raster_layer_scans_vector_silhouette_and_image_assets(tmp_path: Path):
+    document = make_document()
+    document.layers[0].mode = LayerMode.RASTER
+    document.layers[0].line_interval_mm = 2.0
+
+    job = generate_project_gcode(document, LaserSettings())
+    assert job.path_count > 10
+    assert "\"mode\":\"raster\"" in job.text
+    assert job.plan is not None
+    assert any(
+        not move.laser_on and not move.rapid and move.layer_name == "Line 01"
+        for move in job.plan.moves
+    )
+
+    image_path = tmp_path / "pixels.png"
+    image = np.full((10, 20), 255, dtype=np.uint8)
+    image[:, 4:16] = 0
+    assert cv2.imwrite(str(image_path), image)
+    document.objects = [
+        SceneObject(
+            name="Pixels",
+            kind="image",
+            layer_id=document.active_layer_id,
+            geometry={"asset": str(image_path)},
+            transform={
+                "x_mm": 110,
+                "y_mm": 110,
+                "width_mm": 40,
+                "height_mm": 20,
+            },
+        )
+    ]
+    image_job = generate_project_gcode(document, LaserSettings())
+    assert image_job.plan is not None and image_job.plan.powered
+    assert image_job.bounds_mm[0] == pytest.approx(98.0)
+    assert image_job.bounds_mm[2] == pytest.approx(122.0)
+
+
+def test_raster_image_requires_a_decodable_asset() -> None:
+    document = ProjectDocument.new("Missing raster", Bounds(0, 0, 100, 100))
+    document.layers[0].mode = LayerMode.RASTER
+    document.add_object(
+        SceneObject(
+            name="Missing",
+            kind="image",
+            layer_id=document.active_layer_id,
+            geometry={"asset": "/does/not/exist.png"},
+        )
+    )
+
+    with pytest.raises(ValueError, match="does not exist"):
         generate_project_gcode(document, LaserSettings())
+
+
+def test_raster_overscan_is_bounds_checked() -> None:
+    document = ProjectDocument.new("Raster edge", Bounds(0, 0, 100, 100))
+    layer = document.layers[0]
+    layer.mode = LayerMode.RASTER
+    layer.line_interval_mm = 2.0
+    layer.overscan_percent = 10.0
+    document.add_object(
+        SceneObject.rectangle(
+            layer.id,
+            center=(50, 50),
+            width_mm=100,
+            height_mm=20,
+        )
+    )
+
+    with pytest.raises(SafetyError, match="raster overscan"):
+        generate_project_gcode(document, LaserSettings(boundary_margin_mm=0))
 
 
 def test_text_output_is_rejected_until_outline_conversion_exists():
@@ -182,3 +298,15 @@ def test_layer_priority_controls_emission_order():
     job = generate_project_gcode(document, LaserSettings())
 
     assert job.text.index("; Layer Second") < job.text.index("; Layer First")
+
+
+def test_planner_choice_is_recorded_in_exact_preview_plan() -> None:
+    optimized = generate_project_gcode(make_document(), LaserSettings(), optimize_order=True)
+    source = generate_project_gcode(make_document(), LaserSettings(), optimize_order=False)
+
+    assert optimized.plan is not None
+    assert source.plan is not None
+    assert optimized.plan.planner_mode == "nearest path"
+    assert source.plan.planner_mode == "source order"
+    assert optimized.plan.source_order_travel_mm is not None
+    assert optimized.plan.planner_savings_mm >= 0

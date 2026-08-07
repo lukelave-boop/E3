@@ -1,8 +1,8 @@
 # Laser Camera Aligner / E3 Positioning System
 
 A self-hosted camera-alignment and vector-placement application for a
-laser-converted 3D printer. It includes a dependency-light browser calibration
-workflow and a native PySide6 project workspace. The initial hardware target is
+laser-converted 3D printer. It includes a native PySide6 project and machine
+setup workspace plus a legacy dependency-light browser workflow. The initial hardware target is
 an **Ender-3 S1 Pro**, a **Creality 10 W blue-diode laser module**, and a
 stationary overhead **Logitech C920**.
 
@@ -10,7 +10,9 @@ stationary overhead **Logitech C920**.
 > tracing, and G-code layers are under active development. Linux is the only
 > current hardware platform. Windows supports safe browser and desktop
 > simulation for UI development, but not serial hardware or Linux-specific
-> camera controls. No powered behavior has been verified on the target machine.
+> camera controls. Powered alignment experiments are recorded in
+> `CURRENT_STATE.md`, but the controller/profile and final physical accuracy
+> are not yet verified configurations.
 
 Read [CURRENT_STATE.md](CURRENT_STATE.md) for the branch snapshot and
 [PROJECT_STATUS.md](PROJECT_STATUS.md) for the verification boundary. Read
@@ -51,8 +53,16 @@ Native desktop workflow:
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
   fixed-size handles, Shift-to-snap rotation, and undo/redo-backed commits
-- Per-layer vector speed, power, pass count, ordering, estimates, and dry frames
+- Per-layer line, fill, and binary-raster speed, power, pass count, ordering,
+  scan interval/angle, laser-off raster overscan, estimates, and dry frames
+- Dedicated exact-job Preview with a time scrubber, animated playback up to
+  40×, cut/travel visibility, power shading, live move coordinates, timing and
+  distance statistics, and PNG export
 - SQLite material presets and camera focus/sharpness controls
+- Native Machine Setup for camera controls and preview, checkerboard lens
+  calibration, manual/CSV/automatic bed mapping, eight-point fine registration,
+  reviewed translation/full-bed refinement with rollback, and guided five-point
+  holdout accuracy validation
 - Versioned `.e3template` cutting-template library with manual selection,
   geometry-based automatic matching, role-labeled camera/cut overlays, rigid
   alignment review, and one-step undo when aligned cut objects are created
@@ -63,11 +73,19 @@ Native desktop workflow:
   deterministically from a selected template at a known pose
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop
+- Validated G-code export; no operator capability requires the browser UI
+
+See [docs/MACHINE_SETUP.md](docs/MACHINE_SETUP.md) for the native calibration
+workflow and browser-parity map, and [docs/JOB_PREVIEW.md](docs/JOB_PREVIEW.md)
+for the generated-job review workflow.
 
 The desktop branch also contains a synthetically and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable
 project objects. Rounded-label output previews the same fitted vector that will
-be created, while pixel contours remain available for irregular objects. The
+be created. Repeated rounded-label grids can share one fitted cell geometry and
+lattice so damaged observations and inferred gaps produce corresponding
+identical row/column objects, while pixel contours remain available for
+irregular objects. The
 real-camera GUI flow is not yet verified. See
 [docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
 
@@ -114,6 +132,9 @@ The shipped configuration uses a synthetic camera and controller. In a real-hard
 - Motion remains blocked until `machine.allow_motion` is explicitly changed.
 - Positive laser commands require temporary arming with the phrase displayed in the UI.
 - Low-power laser framing is disabled, and the default dry-frame file contains no `M3`/`M4` laser-enable command at all.
+- Laser-head mounting offsets default to zero. Real-hardware profiles can set
+  `laser.spot_offset_x_mm` and `laser.spot_offset_y_mm`; generated jobs show the
+  applied values and validate both desired spot and shifted controller bounds.
 - The server binds only to `127.0.0.1`.
 
 These are software guardrails, not safety-rated controls.
@@ -140,8 +161,8 @@ For the native desktop after the base installation:
 ./run-desktop.sh
 ```
 
-The browser remains the complete calibration interface. The desktop reads the
-same calibration files.
+The desktop includes the complete native Machine Setup workflow. The browser
+uses the same calibration files and remains available as a legacy alternative.
 
 ## Windows development status
 
@@ -276,7 +297,9 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 
 - Linux is the only current hardware platform. Windows is limited to the
   synthetic camera and simulated controller.
-- Vector outlines only; filled/raster engraving is not implemented yet.
+- Line vectors, closed-vector fills, binary vector rasters, and imported
+  threshold raster images are supported. Text-to-path and grayscale/dithered
+  raster power modulation are not implemented.
 - SVG text and embedded images are ignored. Convert text to paths in the design program.
 - CSS stylesheets, clipping paths, masks, and every edge case of the full SVG specification are not supported.
 - The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.

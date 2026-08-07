@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "laser_aligner" / "desktop"
 
@@ -21,7 +20,7 @@ def test_trace_panel_and_controller_are_wired():
     workspace = source("workspace.py")
 
     assert "class TracePanel" in panels
-    assert "Pick from image" in panels
+    assert "click the target in the corrected camera image" in panels
     assert "Create vector objects" in panels
     assert "def detect_trace_objects" in controller
     assert "def sample_trace_color" in controller

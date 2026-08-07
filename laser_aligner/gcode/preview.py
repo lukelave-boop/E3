@@ -8,6 +8,12 @@ from dataclasses import dataclass
 # ("G1X10"). The parser intentionally handles both forms because many
 # controllers and CAM programs emit compact lines.
 _WORD_RE = re.compile(r"([A-Za-z])\s*([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)")
+_SPOT_OFFSET_RE = re.compile(
+    r"^\s*;\s*Laser spot offset .*?X\s*"
+    r"([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)\s+Y\s*"
+    r"([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -36,6 +42,15 @@ def strip_comment(line: str) -> str:
             break
         line = line[:start] + line[end + 1 :]
     return line.strip()
+
+
+def parse_spot_offset_comment(line: str) -> tuple[float, float] | None:
+    """Return the physical laser-spot offset recorded in a generated program."""
+
+    match = _SPOT_OFFSET_RE.match(line)
+    if match is None:
+        return None
+    return float(match.group(1)), float(match.group(2))
 
 
 def parse_words(line: str, *, require_full_match: bool = False) -> list[GcodeWord]:
@@ -92,8 +107,13 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
     absolute = True
     laser_on = False
     power = 0.0
+    spot_offset_x = spot_offset_y = 0.0
     segments: list[GcodeSegment] = []
     for raw_line in text.splitlines():
+        spot_offset = parse_spot_offset_comment(raw_line)
+        if spot_offset is not None:
+            spot_offset_x, spot_offset_y = spot_offset
+            continue
         line = strip_comment(raw_line)
         if not line:
             continue
@@ -133,10 +153,10 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
             if new_x != x or new_y != y:
                 segments.append(
                     GcodeSegment(
-                        start_x=x,
-                        start_y=y,
-                        end_x=new_x,
-                        end_y=new_y,
+                        start_x=x + spot_offset_x,
+                        start_y=y + spot_offset_y,
+                        end_x=new_x + spot_offset_x,
+                        end_y=new_y + spot_offset_y,
                         rapid=movement == 0,
                         laser_on=laser_on,
                         power=power,

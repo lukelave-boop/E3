@@ -60,11 +60,12 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
                     "hardware_enabled": True,
                     "connected": True,
                     "allow_motion": True,
+                    "coordinate_reference_ready": True,
                 }
             },
             "HARDWARE ENABLED",
             "Connected",
-            "Motion enabled",
+            "Motion ready",
         ),
     ],
 )
@@ -104,6 +105,27 @@ def test_runtime_strip_defaults_to_locked_disconnected_and_blocked(
     assert strip.motion_label.text() == "Motion blocked"
 
 
+def test_runtime_strip_marks_unreferenced_serial_motion_as_home_required(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    strip = RuntimeSafetyStrip()
+    strip.resize(900, 60)
+    strip.show()
+    strip.set_status(
+        {
+            "backend": "serial",
+            "hardware_enabled": True,
+            "connected": True,
+            "allow_motion": True,
+            "coordinate_reference_ready": False,
+        }
+    )
+    qt_application.processEvents()
+
+    assert strip.motion_label.text() == "HOME REQUIRED"
+    assert "blocked" in strip.motion_label.toolTip().lower()
+
+
 def test_stop_remains_enabled_while_busy_and_emits_request(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -118,6 +140,7 @@ def test_stop_remains_enabled_while_busy_and_emits_request(
             "hardware_enabled": True,
             "connected": True,
             "allow_motion": True,
+            "coordinate_reference_ready": True,
             "job": {"running": True},
         }
     )
@@ -165,6 +188,7 @@ def test_compact_strip_keeps_stop_text_visible_at_900px_with_large_font(
             "hardware_enabled": True,
             "connected": True,
             "allow_motion": True,
+            "coordinate_reference_ready": True,
         }
     )
     qt_application.processEvents()
@@ -174,7 +198,7 @@ def test_compact_strip_keeps_stop_text_visible_at_900px_with_large_font(
     assert not strip.heading.isVisible()
     assert strip.mode_label.text() == "HARDWARE ENABLED"
     assert strip.connection_label.text() == "ONLINE"
-    assert strip.motion_label.text() == "MOTION ON"
+    assert strip.motion_label.text() == "MOTION READY"
     assert strip.stop_button.text().splitlines() == ["STOP", "LASER OFF"]
     assert strip.stop_button.isVisible()
     assert strip.stop_button.isEnabled()

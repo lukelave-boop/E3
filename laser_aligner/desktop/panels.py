@@ -142,18 +142,7 @@ class LayerPanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
         for mode in LayerMode:
-            supported = mode == LayerMode.LINE
-            label = (
-                mode.value.title()
-                if supported
-                else f"{mode.value.title()} · no toolpath"
-            )
-            self.mode_combo.addItem(label, mode.value)
-            item = self.mode_combo.model().item(self.mode_combo.count() - 1)
-            if item is not None and not supported:
-                item.setToolTip(
-                    f"{mode.value.title()} toolpaths are not implemented in this build."
-                )
+            self.mode_combo.addItem(mode.value.title(), mode.value)
         identity_row.addWidget(self.color_button)
         identity_row.addWidget(self.name_edit, 1)
         identity_row.addWidget(self.mode_combo)
@@ -192,6 +181,33 @@ class LayerPanel(QtWidgets.QWidget):
         settings_row.addWidget(QtWidgets.QLabel("Max Pwr"))
         settings_row.addWidget(self.power_spin, 2)
         editor_layout.addLayout(settings_row)
+
+        self.scan_row = QtWidgets.QWidget()
+        scan_layout = QtWidgets.QHBoxLayout(self.scan_row)
+        scan_layout.setContentsMargins(0, 0, 0, 0)
+        scan_layout.setSpacing(4)
+        self.interval_spin = QtWidgets.QDoubleSpinBox()
+        self.interval_spin.setRange(0.02, 10.0)
+        self.interval_spin.setDecimals(3)
+        self.interval_spin.setSuffix(" mm")
+        self.interval_spin.setToolTip("Distance between fill/raster scan lines")
+        self.angle_spin = QtWidgets.QDoubleSpinBox()
+        self.angle_spin.setRange(-180.0, 180.0)
+        self.angle_spin.setDecimals(1)
+        self.angle_spin.setSuffix("°")
+        self.angle_spin.setToolTip("Fill/raster scan angle")
+        self.overscan_spin = QtWidgets.QDoubleSpinBox()
+        self.overscan_spin.setRange(0.0, 100.0)
+        self.overscan_spin.setDecimals(1)
+        self.overscan_spin.setSuffix(" %")
+        self.overscan_spin.setToolTip("Laser-off lead-in/out for raster rows")
+        scan_layout.addWidget(QtWidgets.QLabel("Interval"))
+        scan_layout.addWidget(self.interval_spin, 1)
+        scan_layout.addWidget(QtWidgets.QLabel("Angle"))
+        scan_layout.addWidget(self.angle_spin, 1)
+        scan_layout.addWidget(QtWidgets.QLabel("Overscan"))
+        scan_layout.addWidget(self.overscan_spin, 1)
+        editor_layout.addWidget(self.scan_row)
 
         action_row = QtWidgets.QHBoxLayout()
         action_row.setSpacing(4)
@@ -238,9 +254,13 @@ class LayerPanel(QtWidgets.QWidget):
         self.down_button.clicked.connect(lambda: self._move_clicked(1))
         self.name_edit.editingFinished.connect(self._emit_edit)
         self.mode_combo.currentIndexChanged.connect(self._emit_edit)
+        self.mode_combo.currentIndexChanged.connect(self._sync_scan_controls)
         self.speed_spin.valueChanged.connect(self._emit_edit)
         self.power_spin.valueChanged.connect(self._emit_edit)
         self.passes_spin.valueChanged.connect(self._emit_edit)
+        self.interval_spin.valueChanged.connect(self._emit_edit)
+        self.angle_spin.valueChanged.connect(self._emit_edit)
+        self.overscan_spin.valueChanged.connect(self._emit_edit)
         self.output_check.toggled.connect(self._emit_edit)
         self.visible_check.toggled.connect(self._emit_edit)
 
@@ -301,13 +321,6 @@ class LayerPanel(QtWidgets.QWidget):
                     f"{layer.passes} pass{'es' if layer.passes != 1 else ''}"
                 )
                 item.setToolTip(2, details)
-                if layer.mode != LayerMode.LINE:
-                    item.setText(1, f"{layer.mode.value.title()} !")
-                    item.setToolTip(
-                        1,
-                        f"{layer.mode.value.title()} is stored in the project, but "
-                        "this build cannot generate that toolpath.",
-                    )
                 if not layer.visible:
                     muted = QtGui.QBrush(QtGui.QColor("#65727C"))
                     for column in range(self.layer_list.columnCount()):
@@ -381,26 +394,14 @@ class LayerPanel(QtWidgets.QWidget):
             self.speed_spin.setValue(layer.speed_mm_min)
             self.power_spin.setValue(layer.power_percent)
             self.passes_spin.setValue(layer.passes)
+            self.interval_spin.setValue(layer.line_interval_mm)
+            self.angle_spin.setValue(layer.scan_angle_deg)
+            self.overscan_spin.setValue(layer.overscan_percent)
             self.output_check.setChecked(layer.output_enabled)
             self.visible_check.setChecked(layer.visible)
-            unsupported = layer.mode != LayerMode.LINE
-            self.output_check.setToolTip(
-                (
-                    "This unsupported operation will stop toolpath generation "
-                    "while Output is checked. Uncheck Output to exclude it."
-                )
-                if unsupported
-                else "Include this operation when generating a job."
-            )
-            self.mode_notice.setText(
-                (
-                    f"{layer.mode.value.title()} is stored for project compatibility, "
-                    "but it cannot generate a toolpath in this build."
-                )
-                if unsupported
-                else ""
-            )
-            self.mode_notice.setVisible(unsupported)
+            self.output_check.setToolTip("Include this operation when generating a job.")
+            self.mode_notice.hide()
+            self._sync_scan_controls()
         finally:
             self._updating = False
 
@@ -435,9 +436,19 @@ class LayerPanel(QtWidgets.QWidget):
                 "speed_mm_min": self.speed_spin.value(),
                 "power_percent": self.power_spin.value(),
                 "passes": self.passes_spin.value(),
+                "line_interval_mm": self.interval_spin.value(),
+                "scan_angle_deg": self.angle_spin.value(),
+                "overscan_percent": self.overscan_spin.value(),
                 "output_enabled": self.output_check.isChecked(),
                 "visible": self.visible_check.isChecked(),
             },
+        )
+
+    def _sync_scan_controls(self, *args: Any) -> None:
+        del args
+        self.scan_row.setVisible(self.mode_combo.currentData() != LayerMode.LINE.value)
+        self.overscan_spin.setEnabled(
+            self.mode_combo.currentData() == LayerMode.RASTER.value
         )
 
     def _remove_clicked(self) -> None:
@@ -1066,6 +1077,10 @@ class TracePanel(QtWidgets.QWidget):
         self._detections: list[dict[str, Any]] = []
         self._updating = False
         self._result_is_current = False
+        self._sampled_bgr: list[int] | None = None
+        self._sampled_hue: float | None = None
+        self._color_pick_active = False
+        self._calibration_ready = False
         layout = _panel_layout(self)
 
         heading = QtWidgets.QLabel("Trace objects")
@@ -1108,7 +1123,7 @@ class TracePanel(QtWidgets.QWidget):
         sample_layout.setContentsMargins(0, 0, 0, 0)
         self.pick_color_button = QtWidgets.QPushButton("Pick color")
         self.pick_color_button.setToolTip(
-            "Pick from image to choose a target color."
+            "Click, then click the target in the corrected camera image."
         )
         self.color_swatch = QtWidgets.QLabel()
         self.color_swatch.setFixedSize(30, 22)
@@ -1167,6 +1182,13 @@ class TracePanel(QtWidgets.QWidget):
             "Show grid positions inferred behind missing or obscured objects."
         )
         self.infer_missing.setChecked(True)
+        self.normalize_grid = QtWidgets.QCheckBox("Make grid cells identical")
+        self.normalize_grid.setToolTip(
+            "Fit one repeated-object model to the grid. Every accepted and "
+            "inferred cell receives the same width, height, corner radius, "
+            "and rotation, with its center snapped to the fitted lattice."
+        )
+        self.normalize_grid.setChecked(True)
         _form_row(filter_form, "Minimum area", self.min_area)
         _form_row(filter_form, "Maximum area", self.max_area)
         _form_row(filter_form, "Minimum width", self.min_width)
@@ -1178,6 +1200,7 @@ class TracePanel(QtWidgets.QWidget):
         filter_form.addRow(confidence_label, self.confidence)
         filter_form.addRow(self.regular_grid)
         filter_form.addRow(self.infer_missing)
+        filter_form.addRow(self.normalize_grid)
         layout.addWidget(filter_group)
 
         output_group = QtWidgets.QGroupBox("Vector output")
@@ -1267,9 +1290,15 @@ class TracePanel(QtWidgets.QWidget):
         )
         result_layout.addWidget(self.result_tree)
         select_row = QtWidgets.QVBoxLayout()
+        self.select_grid_button = QtWidgets.QPushButton("Select complete grid")
+        self.select_grid_button.setToolTip(
+            "Select every fitted grid cell, including reviewed inferred gaps."
+        )
+        self.select_grid_button.setEnabled(False)
         self.select_direct_button = QtWidgets.QPushButton("Select direct")
         self.select_all_button = QtWidgets.QPushButton("Select all")
         self.select_none_button = QtWidgets.QPushButton("Select none")
+        select_row.addWidget(self.select_grid_button)
         select_row.addWidget(self.select_direct_button)
         select_row.addWidget(self.select_all_button)
         select_row.addWidget(self.select_none_button)
@@ -1291,6 +1320,9 @@ class TracePanel(QtWidgets.QWidget):
         self.clear_button.clicked.connect(self._clear_clicked)
         self.create_button.clicked.connect(self._create_clicked)
         self.result_tree.itemChanged.connect(self._result_changed)
+        self.select_grid_button.clicked.connect(
+            lambda: self._set_all_checked(True, include_inferred=True)
+        )
         self.select_direct_button.clicked.connect(self._select_direct)
         self.select_all_button.clicked.connect(
             lambda: self._set_all_checked(True, include_inferred=True)
@@ -1299,6 +1331,7 @@ class TracePanel(QtWidgets.QWidget):
             lambda: self._set_all_checked(False, include_inferred=True)
         )
         self.output_mode.currentIndexChanged.connect(self._sync_output_controls)
+        self.regular_grid.toggled.connect(self._sync_output_controls)
 
         for widget in (
             self.mode_combo,
@@ -1312,6 +1345,7 @@ class TracePanel(QtWidgets.QWidget):
             self.confidence,
             self.regular_grid,
             self.infer_missing,
+            self.normalize_grid,
             self.output_mode,
             self.border_offset,
             self.smoothing,
@@ -1326,9 +1360,22 @@ class TracePanel(QtWidgets.QWidget):
 
     def options(self) -> dict[str, Any]:
         hue = self.target_hue.value()
+        sampled_color_is_current = (
+            self._sampled_bgr is not None
+            and self._sampled_hue is not None
+            and hue >= 0
+            and min(
+                abs(hue - self._sampled_hue),
+                180.0 - abs(hue - self._sampled_hue),
+            )
+            < 0.5
+        )
         return {
             "detection_mode": str(self.mode_combo.currentData()),
             "target_hue": None if hue < 0 else hue,
+            "target_bgr": (
+                list(self._sampled_bgr) if sampled_color_is_current else None
+            ),
             "hue_tolerance": self.hue_tolerance.value(),
             "min_saturation": self.min_saturation.value(),
             "min_area_mm2": self.min_area.value(),
@@ -1338,18 +1385,25 @@ class TracePanel(QtWidgets.QWidget):
             "confidence_threshold": self.confidence.value() / 100.0,
             "regular_grid": self.regular_grid.isChecked(),
             "infer_missing": self.infer_missing.isChecked(),
+            "normalize_grid": self.normalize_grid.isChecked(),
             "output_mode": str(self.output_mode.currentData()),
             "border_offset_mm": self.border_offset.value(),
             "smoothing_mm": self.smoothing.value(),
         }
 
     def set_color_sample(self, payload: dict[str, Any]) -> None:
+        self.set_color_pick_active(False)
         self.mode_combo.setCurrentIndex(self.mode_combo.findData("color"))
-        self.target_hue.setValue(float(payload["hue"]))
+        self._sampled_hue = float(payload["hue"])
+        self.target_hue.setValue(self._sampled_hue)
+        self._sampled_bgr = [int(value) for value in payload.get("bgr", [])]
+        if len(self._sampled_bgr) != 3:
+            self._sampled_bgr = None
         rgb = payload.get("rgb", [128, 64, 64])
+        red, green, blue = (int(value) for value in rgb)
         self.color_swatch.setStyleSheet(
-            "background: rgb(%d,%d,%d); border: 1px solid #AAB4BB; "
-            "border-radius: 3px;" % tuple(int(value) for value in rgb)
+            f"background: rgb({red},{green},{blue}); "
+            "border: 1px solid #AAB4BB; border-radius: 3px;"
         )
         self.status_label.setText(
             f"Sampled hue {float(payload['hue']):.0f} at "
@@ -1357,8 +1411,30 @@ class TracePanel(QtWidgets.QWidget):
             f"Y{float(payload['machine_y']):.2f}. Press Detect objects."
         )
 
+    def set_color_pick_active(self, active: bool, *, sampling: bool = False) -> None:
+        self._color_pick_active = bool(active)
+        if sampling:
+            self.pick_color_button.setText("Sampling…")
+            self.pick_color_button.setEnabled(False)
+            self.status_label.setText("Sampling the selected camera point…")
+        elif active:
+            self.pick_color_button.setText("Cancel color pick")
+            self.pick_color_button.setEnabled(True)
+            self.status_label.setText(
+                "COLOR PICK ACTIVE — click inside the target on the camera image."
+            )
+        else:
+            self.pick_color_button.setText("Pick color")
+            self.pick_color_button.setEnabled(self._calibration_ready)
+
+    def set_color_pick_failed(self, message: str) -> None:
+        self.set_color_pick_active(False)
+        self.status_label.setText(f"Color sampling failed: {message}")
+
     def set_result(self, result: dict[str, Any]) -> None:
         self._detections = list(result.get("detections", []))
+        grid = result.get("grid") or {}
+        grid_normalized = bool(grid.get("normalized"))
         self._result_is_current = True
         self._updating = True
         try:
@@ -1393,6 +1469,21 @@ class TracePanel(QtWidgets.QWidget):
                         f"corner radius {radius:.2f} mm, rotation "
                         f"{float(detection.get('rotation_deg', 0)):.2f}°."
                     )
+                    diagnostics = detection.get("diagnostics") or {}
+                    if diagnostics.get("grid_normalized"):
+                        row = int(diagnostics.get("grid_row", 0)) + 1
+                        column = int(diagnostics.get("grid_column", 0)) + 1
+                        geometry_tip += (
+                            f" Fitted grid cell row {row}, column {column}; "
+                            "its geometry and center were normalized against "
+                            "the repeated-object lattice."
+                        )
+                        if "observed_width_mm" in diagnostics:
+                            geometry_tip += (
+                                " Raw observation was "
+                                f"{float(diagnostics['observed_width_mm']):.2f} × "
+                                f"{float(diagnostics['observed_height_mm']):.2f} mm."
+                            )
                 else:
                     geometry_tip = (
                         "Irregular detected contour. Fitted rounded-rectangle "
@@ -1406,13 +1497,23 @@ class TracePanel(QtWidgets.QWidget):
                 self.result_tree.addTopLevelItem(item)
         finally:
             self._updating = False
+        self.select_grid_button.setEnabled(grid_normalized and bool(self._detections))
+        if grid_normalized:
+            self.select_grid_button.setText(
+                f"Select complete {int(grid.get('columns', 0))} × "
+                f"{int(grid.get('rows', 0))} grid"
+            )
+        else:
+            self.select_grid_button.setText("Select complete grid")
         self.status_label.setText(str(result.get("message", "Detection complete")))
         self._update_create_button()
         self.selectionChanged.emit(self.selected_ids())
 
     def set_calibration_ready(self, ready: bool) -> None:
+        self._calibration_ready = bool(ready)
         self.detect_button.setEnabled(bool(ready))
-        self.pick_color_button.setEnabled(bool(ready))
+        if not self._color_pick_active:
+            self.pick_color_button.setEnabled(bool(ready))
         if not ready:
             self.status_label.setText(
                 "Bed mapping is required before camera objects can be traced."
@@ -1433,6 +1534,8 @@ class TracePanel(QtWidgets.QWidget):
         self._detections = []
         self._result_is_current = False
         self.result_tree.clear()
+        self.select_grid_button.setText("Select complete grid")
+        self.select_grid_button.setEnabled(False)
         self.create_button.setEnabled(False)
         self.status_label.setText("Trace preview cleared.")
 
@@ -1451,6 +1554,11 @@ class TracePanel(QtWidgets.QWidget):
         smoothing_enabled = self.output_mode.currentData() == "smoothed"
         self.smoothing_label.setEnabled(smoothing_enabled)
         self.smoothing.setEnabled(smoothing_enabled)
+        grid_enabled = self.regular_grid.isChecked()
+        self.infer_missing.setEnabled(grid_enabled)
+        self.normalize_grid.setEnabled(
+            grid_enabled and self.output_mode.currentData() == "rounded"
+        )
 
     def _result_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         del item, column
@@ -1621,7 +1729,14 @@ class MachinePanel(QtWidgets.QWidget):
         self.state_label.setText(
             f"{'Connected' if connected else 'Disconnected'} | "
             f"{status.get('protocol', 'unknown')} | {state} | "
-            f"Motion {'enabled' if status.get('allow_motion') else 'blocked'}"
+            + (
+                "HOME REQUIRED"
+                if connected
+                and status.get("backend") == "serial"
+                and status.get("allow_motion")
+                and not status.get("coordinate_reference_ready", False)
+                else f"Motion {'ready' if status.get('allow_motion') else 'blocked'}"
+            )
         )
         self.connect_button.setEnabled(not connected)
         self.disconnect_button.setEnabled(connected)
@@ -1682,9 +1797,13 @@ class JobPanel(QtWidgets.QWidget):
         self.summary.setObjectName("statusCard")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
+        self.execution_label = QtWidgets.QLabel("Controller idle · no job started")
+        self.execution_label.setWordWrap(True)
+        layout.addWidget(self.execution_label)
         self.progress = QtWidgets.QProgressBar()
         self.progress.setRange(0, 1000)
         self.progress.setFixedHeight(18)
+        self.progress.setFormat("Execution 0%")
         layout.addWidget(self.progress)
 
         prepare_row = QtWidgets.QHBoxLayout()
@@ -1729,16 +1848,51 @@ class JobPanel(QtWidgets.QWidget):
         completed = int(job.get("completed_lines", 0) or 0)
         progress = 0.0 if total <= 0 else completed / total
         self.progress.setValue(int(round(progress * 1000)))
+        self.progress.setFormat(f"Execution {progress * 100:.0f}%")
         if running:
-            self.summary.setText(
+            self.execution_label.setText(
                 f"Running {job.get('name', 'job')} · {completed}/{total} lines"
             )
         elif job.get("error"):
-            self.summary.setText(f"Stopped: {job['error']}")
+            self.execution_label.setText(f"Controller stopped: {job['error']}")
         elif total:
-            self.summary.setText(f"Idle · last job {completed}/{total} lines")
+            self.execution_label.setText(
+                f"Controller idle · last job {completed}/{total} lines"
+            )
         else:
-            self.summary.setText("No active controller job")
+            self.execution_label.setText("Controller idle · no job started")
+
+    def set_prepared_job(
+        self,
+        summary: str,
+        *,
+        power_percent: float,
+        controller_power: float,
+    ) -> None:
+        self.summary.setText(
+            f"Prepared · {summary} · max power {power_percent:.1f}% / "
+            f"S{controller_power:g}"
+        )
+
+    def clear_prepared_job(self) -> None:
+        self.summary.setText("No job generated")
+
+    def set_machine_status(self, machine: dict[str, Any] | None) -> None:
+        machine = machine or {}
+        connected = bool(machine.get("connected", False))
+        reference_ready = bool(
+            machine.get(
+                "coordinate_reference_ready",
+                machine.get("backend") == "simulator",
+            )
+        )
+        runnable = connected and bool(machine.get("allow_motion", False))
+        self.start_button.setEnabled(runnable)
+        self.start_button.setToolTip(
+            "Start the current job; hardware will home and park first"
+            if connected and not reference_ready
+            else "Start the currently generated job"
+        )
 
 
 class ObjectPanel(QtWidgets.QWidget):

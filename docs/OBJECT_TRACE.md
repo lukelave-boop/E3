@@ -6,8 +6,11 @@ objects.
 
 > **Verification status:** the detector, proposed-vector preview, frozen-frame
 > review lifecycle, object placement, and batch undo behavior pass synthetic
-> and offscreen tests on Windows. The workflow has not been exercised end to
-> end with the real C920, current physical calibration, or target hardware. See
+> and offscreen tests on Windows and Linux. Earlier Trace revisions were used
+> with the real C920 and exposed the color, silhouette, and inconsistent-grid
+> defects described in the repository state. The normalized-grid detector has
+> been checked read-only against a current C920 corrected capture, but its new
+> created-object result has not yet been physically cut. See
 > [../CURRENT_STATE.md](../CURRENT_STATE.md).
 
 ## Recommended label workflow
@@ -16,12 +19,16 @@ objects.
    flat and use even lighting. In safe simulation, load or generate a frozen
    test image instead.
 2. Open **Trace** in the Inspector.
-3. Choose **Auto detect**, **By color**, or **By contrast**. For a colored
-   label, **Pick color** can sample the center of one object from the image.
+3. Choose **Auto detect**, **By color**, or **By contrast**. To sample an
+   object, press **Pick color**, wait for the button to read **Cancel color
+   pick**, then click the center of the object in the corrected camera image.
+   The button reads **Sampling…** while the frame is read and the swatch updates
+   when sampling succeeds. A failure is shown directly in the Trace inspector.
 4. Set the minimum/maximum area and minimum dimensions so dust, sheet edges,
    and unrelated artwork are excluded.
-5. For a repeated label sheet, leave **Use grid** enabled. Enable **Infer gaps**
-   only when you want suggested positions for missing or obscured cells.
+5. For a repeated label sheet, leave **Use grid** and **Make grid cells
+   identical** enabled. Enable **Infer gaps** only when you want suggested
+   positions for missing or obscured cells.
 6. Choose the vector output described below and set any **Border offset**.
 7. Press **Detect objects**.
 8. Review the numbered overlay and the **Geometry** column:
@@ -29,7 +36,8 @@ objects.
    - gray: unselected direct detection;
    - yellow or orange dashed: inferred grid position.
 9. Check only outlines that are correct. Inferred cells are intentionally
-   unchecked by default.
+   unchecked by default. When the fitted grid is correct, **Select complete
+   C × R grid** selects direct and inferred cells together for explicit review.
 10. Press **Create objects**. The selected set is inserted as one undoable
     operation.
 
@@ -63,17 +71,35 @@ when created, so rotated or asymmetric traces do not shift after approval.
 
 - **Auto detect** evaluates color and contrast results and uses the stronger
   candidate set.
-- **By color** segments a hue while tolerating brightness changes. Use **Pick
-  color** when automatic hue selection chooses the wrong artwork.
-- **By contrast** uses locally normalized luminance and works best when the
-  target silhouette contrasts strongly with its backing surface.
+- **By color** uses hue for automatic/manual numeric targets. **Pick color**
+  additionally retains the sampled BGR/Lab color, allowing neutral gray and
+  low-saturation objects to be separated from a warmer or cooler backing
+  surface while tolerating moderate lighting variation.
+- **By contrast** evaluates both local detail and signed large-scale luminance.
+  The large-scale candidates preserve a darker or lighter filled silhouette
+  instead of fitting the expanded outer edge of a local contrast halo.
 
 ## Regular-grid inference
 
 Grid inference is conservative and intended for repeated objects of similar
-size. Missing cells are visual suggestions, not observed edges, and are never
-selected automatically. Do not use inference as a substitute for a clear view;
-move the laser head away whenever practical.
+size. It first chooses the dominant mutually similar shape family, fits regular
+row and column spacing, keeps only the best candidate in each cell, and rejects
+unrelated or duplicate contours.
+
+With **Fitted rounded rectangles** and **Make grid cells identical**, every
+accepted direct cell and inferred gap uses one robust shared width, height,
+corner radius, and rotation. Centers are snapped to the fitted lattice. The raw
+direct observation remains in diagnostics and the Geometry tooltip, but the
+green preview and created project rectangle use the normalized geometry. Grid
+objects are named by row and column when created.
+
+Missing cells are visual suggestions, not observed edges, and are never
+selected automatically. Inspect the proposed complete lattice before using
+**Select complete grid**. Do not use inference as a substitute for a clear
+view; move the laser head away whenever practical. Grid normalization is
+intentionally unavailable for simplified or exact contours because making
+arbitrary pixel contours identical would require choosing a separate canonical
+path.
 
 ## Frozen review behavior
 

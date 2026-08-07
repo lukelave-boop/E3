@@ -71,9 +71,13 @@
     "engrave_feed_mm_min": 1200.0,
     "curve_tolerance_mm": 0.15,
     "boundary_margin_mm": 0.0,
+    "spot_offset_x_mm": 0.0,
+    "spot_offset_y_mm": 0.0,
     "arm_timeout_seconds": 60,
     "allow_low_power_frame": false,
-    "return_to_photo_position": false
+    "return_to_photo_position": false,
+    "preview_acceleration_mm_s2": 500.0,
+    "preview_command_delay_ms": 0.0
   },
   "vision": {
     "workpiece_min_area_ratio": 0.03,

@@ -5,7 +5,6 @@ from typing import Any
 
 from .qt import require_qt
 
-
 QtCore, QtGui, QtWidgets = require_qt()
 
 
@@ -45,6 +44,8 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self._mode_description = "Machine backend without process-level hardware access."
         self._connected = False
         self._motion_enabled = False
+        self._coordinate_reference_ready = False
+        self._serial_backend = False
 
         layout = QtWidgets.QHBoxLayout(self)
         self._layout = layout
@@ -121,6 +122,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
 
         machine = self._machine_payload(status)
         backend = str(machine.get("backend", "")).strip().lower()
+        self._serial_backend = backend == "serial"
         hardware_enabled = bool(machine.get("hardware_enabled", False))
 
         if backend == "simulator":
@@ -141,6 +143,9 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             )
         self._connected = bool(machine.get("connected", False))
         self._motion_enabled = bool(machine.get("allow_motion", False))
+        self._coordinate_reference_ready = bool(
+            machine.get("coordinate_reference_ready", backend == "simulator")
+        )
         self._render_status()
 
         # Status refreshes, disconnection, and ordinary background work must not
@@ -188,18 +193,41 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             else "Controller is disconnected.",
         )
 
-        motion_text = (
-            "MOTION ON" if self._motion_enabled else "MOTION OFF"
-        ) if self._compact or self._chrome_mode else (
-            "Motion enabled" if self._motion_enabled else "Motion blocked"
+        reference_required = (
+            self._serial_backend
+            and self._connected
+            and self._motion_enabled
+            and not self._coordinate_reference_ready
         )
+        if reference_required:
+            motion_text = (
+                "HOME REQUIRED"
+                if self._compact or self._chrome_mode
+                else "Home required"
+            )
+            motion_style = "statusBad"
+            motion_description = (
+                "Absolute machine motion is blocked until Home / park establishes "
+                "the coordinate reference for this controller session."
+            )
+        else:
+            motion_text = (
+                "MOTION READY" if self._motion_enabled else "MOTION OFF"
+            ) if self._compact or self._chrome_mode else (
+                "Motion ready" if self._motion_enabled else "Motion blocked"
+            )
+            motion_style = "statusWarning" if self._motion_enabled else "statusGood"
+            motion_description = (
+                "Configuration permits guarded machine motion and the required "
+                "coordinate reference is ready."
+                if self._motion_enabled
+                else "Configuration blocks machine motion."
+            )
         self._set_indicator(
             self.motion_label,
             motion_text,
-            "statusWarning" if self._motion_enabled else "statusGood",
-            "Configuration permits guarded machine motion."
-            if self._motion_enabled
-            else "Configuration blocks machine motion.",
+            motion_style,
+            motion_description,
         )
 
     @property

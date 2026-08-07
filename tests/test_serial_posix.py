@@ -6,6 +6,7 @@ import time
 import pytest
 
 from laser_aligner.config import LaserSettings, MachineSettings
+from laser_aligner.errors import SafetyError
 from laser_aligner.machine.service import MachineService
 
 pytestmark = pytest.mark.skipif(
@@ -88,7 +89,7 @@ def test_machine_service_over_pseudoterminal() -> None:
             protocol="grbl",
             port=slave_path,
             allow_motion=True,
-            home_before_photo=False,
+            home_before_photo=True,
             photo_x=100,
             photo_y=100,
             read_timeout=1.0,
@@ -98,14 +99,22 @@ def test_machine_service_over_pseudoterminal() -> None:
     )
     try:
         machine.connect()
+        assert not machine.status()["coordinate_reference_ready"]
+        with pytest.raises(SafetyError, match="Home / park"):
+            machine.start_job(
+                "G21\nG90\nM5\nG0X10Y10F1000\nM5\n",
+                "unreferenced.gcode",
+            )
         parked = machine.prepare_photo_position()
         assert parked["position"]["x"] == 100
+        assert machine.status()["coordinate_reference_ready"]
         machine.arm(machine.ARM_PHRASE)
         machine.start_job("G21\nG90\nM5\nG0X10Y10F1000\nM4S5\nG1X20Y20F500\nM5\n", "pty.gcode")
         deadline = time.monotonic() + 3
         while machine.status()["job"]["running"] and time.monotonic() < deadline:
             time.sleep(0.01)
         assert machine.status()["job"]["error"] is None
+        assert "$H" in commands
         assert "G0 X100.000 Y100.000 F3000.000" in commands
         assert "M4S5" in commands
     finally:

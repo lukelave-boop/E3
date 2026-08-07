@@ -2,6 +2,25 @@
 
 ## Unreleased — `desktop-v1`
 
+- Stopped recurring camera-refresh failures from opening a modal dialog every
+  refresh cycle. One camera fault is acknowledged once, subsequent failures are
+  suppressed until recovery or an explicit Refresh camera retry, and successful
+  recovery is reported without stealing focus.
+- Made explicit Refresh camera perform a real device reconnect when the camera
+  is offline, has no frames, or reports a read fault. Reopening runs outside the
+  GUI thread and a successful reopen immediately refreshes camera status and the
+  corrected workspace image.
+
+- Made Machine Setup axis orientation explicit and persistent: X/Y now show
+  NORMAL/OFF or REVERSED/ON, legacy maps are visibly inferred rather than
+  falsely shown off, and confirmation can record an inferred state without
+  changing calibration points. Setup also restores its window, tab, simulation
+  scene, cross sizes, and marking speeds while intentionally resetting marking
+  power to zero.
+- Replaced ambiguous checkbox indicators throughout the desktop with a
+  consistent compact gray-OFF/green-ON switch treatment, including the saved
+  X/Y mapping-orientation controls.
+
 ### Committed desktop foundation
 
 - Added a native PySide6 workspace alongside the browser application.
@@ -14,6 +33,54 @@
   physical controller verification.
 
 ### Desktop control surface
+
+- Fixed Home/park on GRBL-derived controllers that acknowledge `$H` after the
+  endstop sequence but do not return the expected realtime `<Idle...>` report.
+  The procedure now continues from that acknowledgement, and the subsequent
+  park move uses a zero-duration
+  `G4 P0` planner barrier with the existing 120-second completion limit.
+- Made controller acknowledgement failures identify the exact command, so a
+  setup timeout distinguishes `M5`, `$H`, `G21`, `G90`, the park move, and its
+  completion barrier.
+
+- Added a dedicated exact-job graphical Preview opened by generation and dry
+  framing. It provides time scrubbing, animated playback from 0.1× to 40×,
+  cut/travel display, optional controller-power shading and inversion, current
+  feed/power/X/Y/layer/pass details, timing and distance statistics, warnings,
+  fit/zoom/pan, and PNG export.
+- Built Preview from an immutable parse of the exact finalized G-code submitted
+  to the existing guarded execution path, including controller-ignored
+  layer/pass/source metadata and physical laser-spot offset recovery.
+- Separated prepared-job maximum power from live controller execution status so
+  idle polling no longer replaces a generated `20% / S200` summary with
+  `no active controller job / 0%`.
+- Added an original monitor/toolpath glyph for the Preview toolbar action so
+  the icon-only Job toolbar no longer falls back to showing the action words.
+- Added per-operation Preview visibility, dynamic generated-layer legends, and
+  cut/time/maximum-power statistics.
+- Added selectable source-order or nearest-path planning and records the exact
+  planner in controller-ignored job metadata and the Preview heading.
+- Added real bounded closed-vector fill, binary vector raster, and imported
+  50%-threshold image raster G-code. Scan interval/angle are editable; raster
+  overscan is laser-off, timed, and controller-space bounds checked.
+- Added acceleration and command-latency-aware Preview timing configuration.
+- Added guarded **Prepare Start Here** at reviewed move boundaries. Replacement
+  programs restore absolute millimetres, laser-off positioning, layer/pass
+  context and power, then require the unchanged normal execution gates.
+
+- Added a build-first native title-bar identity containing the application name,
+  release version, and short source revision before the current project name.
+  Source launches fingerprint the installed application files, while packaged
+  builds can supply `E3_POSITIONING_SYSTEM_REVISION` explicitly.
+- Suppressed Qt/X11's automatic application-name title suffix because the
+  build-first caption already contains the product name.
+- Added native **Machine Setup** tabs for camera controls, synthetic scenes,
+  checkerboard lens calibration, manual/CSV/automatic bed mapping, residual
+  review, workpiece detection, and ArUco inspection.
+- Routed the Camera inspector's calibration buttons into the native workflow
+  and paused its live overlay while setup owns capture actions.
+- Added validated G-code export and documented desktop parity with every
+  operator capability in the legacy browser workflow.
 
 - Reorganized the native window around a LightBurn-inspired information
   hierarchy while retaining E3 terminology, behavior, and safety boundaries.
@@ -52,8 +119,19 @@
 
 - Added multi-object camera tracing with color/contrast modes, regular-grid
   inference, reviewed selection, border offsets, and vector-object creation.
+- Made regular-grid tracing fit a dominant repeated-shape family and one shared
+  lattice. Rounded output can now repair malformed direct cells, reject
+  duplicate/noisy candidates, synthesize gaps with identical geometry, and
+  select the reviewed complete grid in one action.
 - Added one-step undo for a set of traced objects.
 - Added synthetic object-tracing tests and an offline trace inspection tool.
+- Made camera color sampling visibly enter a canvas-pick state, report sampling
+  failures in the Trace inspector, and carry the sampled BGR color through the
+  detector instead of reducing every sample to a saturated hue.
+- Added neutral-color segmentation and signed large-scale contrast masks for
+  real-image-like textured backgrounds. Filled rounded rectangles now compete
+  as silhouettes instead of being represented only by an expanded local edge
+  halo.
 - Made fitted rounded-rectangle results preview the same clean proposed vector
   that will be created instead of the simplified camera-pixel contour.
 - Renamed the contour control to **Simplify tolerance**, limited it to
@@ -71,6 +149,50 @@
 - Added a dynamic on-canvas overlay key with explicit color roles and distinct
   line styles: selected Trace results are solid green, aligned template cuts
   are solid cyan, and camera-detected label edges are dashed amber.
+
+### Laser spot coordinates
+
+- Added zero-default X/Y laser-spot offsets using the convention `spot =
+  controller + offset`, with shared desktop/browser generation.
+- Validate both the desired physical spot geometry and the offset-corrected
+  controller path. Generated programs record both bounds, and the desktop
+  preview removes the controller correction so it remains aligned with the
+  corrected camera image.
+- Rejected and removed the provisional local X −28 mm, Y −8 mm correction
+  after a second physical cut moved farther from the target. The laser-burned
+  bed map already references the spot; session homing and axis orientation now
+  require laser-off verification before another powered test.
+- Added per-connection coordinate-reference tracking. Serial motion and arming
+  are rejected until homing/parking succeeds; reconnect, reset, emergency stop,
+  and job failure invalidate the reference.
+- Made desktop hardware Start run `M5`, home, park, and wait idle before arming
+  and execution, removing the need for a separate manual Home / park action.
+- Increased only Home/park setup-command acknowledgements to at least six
+  seconds for slower controllers; normal job streaming retains its configured
+  acknowledgement timeout.
+- Added explicit X/Y bed-point reversal controls because a symmetric cross grid
+  cannot determine controller-axis sign from image geometry alone.
+- Added a native eight-point fine-registration workflow. It prepares dry or
+  normally guarded powered cross jobs, captures fresh marks at the homed camera
+  pose, reports commanded/observed residuals, distinguishes global translation
+  from position-dependent error, and refuses unsafe or excessive corrections.
+- Persisted an explicit, resettable bed-map translation separately from the
+  zero-default laser-head offset. Application is confirmation-gated, limited to
+  5 mm cumulative magnitude, and allowed only for a consistent multi-point
+  result; a full bed solve clears the fine translation.
+- Added reviewed inclusion checkboxes for fine-registration measurements. Up to
+  two clearly obstructed or false detections may be excluded while remaining
+  visible; at least six marks and every original confidence/scatter gate remain
+  mandatory. The future lower target is moved away from the photo-pose head
+  obstruction observed in the first physical run.
+- Added a separate reviewed full-bed homography refinement for position-dependent
+  fine-registration results. It requires seven RANSAC inliers, broad coverage,
+  bounded residual/warp/scale checks, explicit confirmation, and preserves the
+  prior solved map for reset; it never weakens the translation thresholds.
+- Added guided independent accuracy validation with five holdout crosses. Dry
+  and powered jobs use the normal guarded pipeline; automatic capture reports
+  per-point, RMS, maximum, and mean error against fixed limits, rejects missing,
+  low-confidence, dry-only, or stale-map sessions, and cannot change calibration.
 
 ### Cutting templates
 

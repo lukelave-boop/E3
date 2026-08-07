@@ -68,7 +68,21 @@ def test_action_icon_mapping_applies_known_icons_only(
     assert not actions["rectangle"].icon().isNull()
     assert actions["about"].icon().isNull()
     assert not action_icon("run").isNull()
+    assert not action_icon("preview_job").isNull()
     assert "stop" in ACTION_ICON_NAMES
+
+
+def test_preview_action_receives_monitor_icon(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    del qt_application
+    action = QtGui.QAction("Preview generated job")
+
+    updated = apply_action_icons({"preview_job": action}, size=20)
+
+    assert updated == ("preview_job",)
+    assert not action.icon().isNull()
+    assert "preview" in available_icon_names()
 
 
 def test_invalid_icon_requests_fail_clearly(
@@ -89,6 +103,9 @@ def test_theme_keeps_compact_chrome_and_light_drafting_contract() -> None:
     assert 'QDockWidget::title' in DARK_STYLESHEET
     assert 'padding: 3px 6px' in DARK_STYLESHEET
     assert 'min-height: 20px' in DARK_STYLESHEET
+    assert 'QCheckBox::indicator:checked' in DARK_STYLESHEET
+    assert 'border-radius: 8px' in DARK_STYLESHEET
+    assert '#20C978' in DARK_STYLESHEET
     assert DRAFTING_COLORS["bed"] == "#FAFAFA"
     assert DRAFTING_COLORS["minor_grid"] != DRAFTING_COLORS["major_grid"]
     assert DRAFTING_COLORS["outside"] != DRAFTING_COLORS["bed"]

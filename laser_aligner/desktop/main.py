@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import sys
 from pathlib import Path
+from typing import Any
 
+from .. import __version__
+from ..identity import APPLICATION_NAME
 from .qt import PYSIDE6_IMPORT_ERROR, require_qt
 
 
@@ -40,6 +43,15 @@ def _default_config() -> Path | None:
     return default if default.exists() else None
 
 
+def configure_application_identity(application: Any) -> None:
+    application.setApplicationName(APPLICATION_NAME)
+    # X11 appends a non-empty application display name to native window titles.
+    # Each E3 window supplies its own complete caption, so leave this empty to
+    # avoid a second "— E3 Positioning System" suffix in the title bar.
+    application.setApplicationDisplayName("")
+    application.setApplicationVersion(__version__)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     arguments = parser.parse_args(argv)
@@ -59,8 +71,7 @@ def main(argv: list[str] | None = None) -> int:
     from .theme import apply_dark_theme
 
     application = QtWidgets.QApplication([sys.argv[0]])
-    application.setApplicationName("E3 Positioning System")
-    application.setApplicationDisplayName("E3 Positioning System")
+    configure_application_identity(application)
     application.setOrganizationName("E3")
     application.setOrganizationDomain("local.e3-positioning-system")
     apply_dark_theme(application)

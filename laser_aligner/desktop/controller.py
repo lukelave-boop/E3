@@ -62,11 +62,13 @@ class DesktopController(QtCore.QObject):
     statusChanged = QtCore.Signal(dict)
     cameraImageReady = QtCore.Signal(object)
     errorOccurred = QtCore.Signal(str)
+    cameraErrorOccurred = QtCore.Signal(str)
     notice = QtCore.Signal(str)
     busyChanged = QtCore.Signal(bool)
     cameraFocusChanged = QtCore.Signal(dict)
     traceResultReady = QtCore.Signal(dict)
     traceColorReady = QtCore.Signal(dict)
+    traceColorFailed = QtCore.Signal(str)
     templateMatchReady = QtCore.Signal(dict)
     simulationFrameChanged = QtCore.Signal(dict)
 
@@ -83,6 +85,8 @@ class DesktopController(QtCore.QObject):
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation: int | None = None
         self._camera_source_generation = 0
+        self._camera_error_latched: str | None = None
+        self._camera_reconnect_in_flight = False
         self._trace_request_id = 0
         self._trace_review_active = False
         self._template_match_request_id = 0
@@ -185,6 +189,7 @@ class DesktopController(QtCore.QObject):
         if (
             not self.runtime.running
             or self._camera_refresh_in_flight
+            or self._camera_reconnect_in_flight
             or self._camera_review_active()
             or self.runtime.context.bed.calibration is None
         ):
@@ -215,6 +220,53 @@ class DesktopController(QtCore.QObject):
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
 
+    def retry_camera_image(self) -> None:
+        """Refresh a healthy camera or release/reopen a failed camera device."""
+        self._camera_error_latched = None
+        if not self.runtime.running or self._camera_reconnect_in_flight:
+            return
+        status = self.runtime.context.camera.status()
+        needs_reconnect = bool(
+            not status.connected
+            or status.frames_read <= 0
+            or status.last_error
+        )
+        if not needs_reconnect:
+            self.refresh_camera_image()
+            return
+        self._camera_source_generation += 1
+        source_generation = self._camera_source_generation
+        self._camera_refresh_in_flight = False
+        self._camera_refresh_generation = None
+        self._camera_reconnect_in_flight = True
+        self.notice.emit("Reopening camera…")
+        self._run(
+            self.runtime.context.restart_camera,
+            on_success=lambda _status, generation=source_generation: (
+                self._camera_reconnect_ready(generation)
+            ),
+            on_failure=lambda message, generation=source_generation: (
+                self._camera_reconnect_failed(message, generation)
+            ),
+            label="Camera reconnect",
+            show_busy=False,
+        )
+
+    def _camera_reconnect_ready(self, source_generation: int) -> None:
+        if source_generation != self._camera_source_generation:
+            return
+        self._camera_reconnect_in_flight = False
+        self._camera_error_latched = None
+        self.notice.emit("Camera reopened successfully")
+        self.poll_status()
+        self.refresh_camera_image()
+
+    def _camera_reconnect_failed(self, message: str, source_generation: int) -> None:
+        if source_generation != self._camera_source_generation:
+            return
+        self._camera_reconnect_in_flight = False
+        self._camera_refresh_failed(message, source_generation)
+
     @QtCore.Slot()
     def _camera_refresh_finished(
         self,
@@ -240,6 +292,9 @@ class DesktopController(QtCore.QObject):
             return
         if not self._camera_review_active():
             self.cameraImageReady.emit(image)
+        if self._camera_error_latched is not None:
+            self._camera_error_latched = None
+            self.notice.emit("Camera image updates recovered")
 
     def _camera_refresh_failed(
         self,
@@ -248,7 +303,15 @@ class DesktopController(QtCore.QObject):
     ) -> None:
         if source_generation != self._camera_source_generation:
             return
-        self.errorOccurred.emit(f"Corrected bed-image refresh failed: {message}")
+        if self._camera_error_latched is not None:
+            return
+        self._camera_error_latched = str(message)
+        self.cameraErrorOccurred.emit(
+            "Camera image updates failed. Another application may have exclusive "
+            "control of the camera. Automatic refresh will continue silently; close "
+            "the other application and use Refresh camera to retry.\n\n"
+            f"Details: {message}"
+        )
 
     def _sync_camera_timer(self) -> None:
         context = getattr(self.runtime, "context", None)
@@ -294,6 +357,7 @@ class DesktopController(QtCore.QObject):
             metadata=metadata,
         )
         self._camera_source_generation += 1
+        self._camera_error_latched = None
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation = None
         self._trace_request_id += 1
@@ -313,6 +377,7 @@ class DesktopController(QtCore.QObject):
             return
         self.runtime.context.clear_simulation_workspace_frame()
         self._camera_source_generation += 1
+        self._camera_error_latched = None
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation = None
         self._trace_request_id += 1
@@ -957,6 +1022,7 @@ class DesktopController(QtCore.QObject):
         self._run(
             operation,
             on_success=self.traceColorReady.emit,
+            on_failure=self.traceColorFailed.emit,
             label="Sample trace color",
         )
 
@@ -986,14 +1052,19 @@ class DesktopController(QtCore.QObject):
 
     def run_job(self, gcode: str, name: str, *, arm_phrase: str | None = None) -> None:
         def operation() -> dict[str, Any]:
+            machine = self.runtime.context.machine
+            if machine.settings.backend == "serial":
+                machine.prepare_photo_position()
             if arm_phrase is not None:
-                self.runtime.context.machine.arm(arm_phrase)
-            return self.runtime.context.machine.start_job(gcode, name)
+                machine.arm(arm_phrase)
+            return machine.start_job(gcode, name)
 
         self._run(
             operation,
-            on_success=lambda _: self._machine_changed(f"Started {name}"),
-            label="Start job",
+            on_success=lambda _: self._machine_changed(
+                f"Homed, parked, and started {name}"
+            ),
+            label="Home, park, and start job",
         )
 
     def pause_resume(self) -> None:

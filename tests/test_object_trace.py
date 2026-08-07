@@ -76,6 +76,126 @@ def test_color_sample_returns_red_hue():
     assert sample["rgb"][0] > sample["rgb"][1]
 
 
+def _neutral_wood_scene() -> tuple[np.ndarray, tuple[int, int, int]]:
+    height, width = 600, 900
+    rng = np.random.default_rng(20260806)
+    x_gradient = np.linspace(-10, 12, width, dtype=np.float32)[None, :]
+    y_gradient = np.linspace(8, -7, height, dtype=np.float32)[:, None]
+    image = np.empty((height, width, 3), dtype=np.float32)
+    image[:, :, 0] = 174 + x_gradient * 0.35 + y_gradient * 0.2
+    image[:, :, 1] = 194 + x_gradient * 0.55 + y_gradient * 0.35
+    image[:, :, 2] = 218 + x_gradient + y_gradient
+    image += rng.normal(0.0, 2.2, image.shape)
+    for x in range(25, width, 43):
+        cv2.line(image, (x, 0), (x + 5, height - 1), (160, 183, 211), 2)
+    image = np.clip(image, 0, 255).astype(np.uint8)
+
+    x, y, object_width, object_height, radius = 250, 220, 360, 100, 14
+    fill = (142, 148, 153)
+    cv2.rectangle(
+        image,
+        (x + radius, y),
+        (x + object_width - radius, y + object_height),
+        fill,
+        -1,
+    )
+    cv2.rectangle(
+        image,
+        (x, y + radius),
+        (x + object_width, y + object_height - radius),
+        fill,
+        -1,
+    )
+    for center in (
+        (x + radius, y + radius),
+        (x + object_width - radius, y + radius),
+        (x + object_width - radius, y + object_height - radius),
+        (x + radius, y + object_height - radius),
+    ):
+        cv2.circle(image, center, radius, fill, -1)
+    # Real coloring is neither flat nor clean; retain enough internal texture
+    # to ensure the detector does not depend on a synthetic uniform fill.
+    for offset in range(12, object_width - 8, 31):
+        cv2.line(
+            image,
+            (x + offset, y + 8),
+            (x + offset - 5, y + object_height - 8),
+            (135, 141, 147),
+            1,
+        )
+    return image, fill
+
+
+def test_sampled_neutral_color_detects_object_on_textured_wood():
+    image, target_bgr = _neutral_wood_scene()
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            target_bgr=target_bgr,
+            min_saturation=45,
+            min_area_mm2=100,
+            min_width_mm=20,
+            min_height_mm=10,
+            regular_grid=False,
+        ),
+        WorkArea(0.0, 225.0, 0.0, 150.0),
+        4.0,
+    )
+
+    assert result.direct_count == 1
+    detection = result.detections[0]
+    assert detection.width_mm == pytest.approx(90.0, abs=1.5)
+    assert detection.height_mm == pytest.approx(25.0, abs=1.5)
+
+
+def test_sampled_neutral_color_still_respects_maximum_area_rejection():
+    image, target_bgr = _neutral_wood_scene()
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            target_bgr=target_bgr,
+            min_area_mm2=100,
+            max_area_mm2=1_000,
+            min_width_mm=20,
+            min_height_mm=10,
+            regular_grid=False,
+        ),
+        WorkArea(0.0, 225.0, 0.0, 150.0),
+        4.0,
+    )
+
+    assert not result.detected
+    assert result.direct_count == 0
+
+
+def test_contrast_region_detects_fill_instead_of_expanded_edge_halo():
+    image, _ = _neutral_wood_scene()
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            min_area_mm2=100,
+            min_width_mm=20,
+            min_height_mm=10,
+            regular_grid=False,
+        ),
+        WorkArea(0.0, 225.0, 0.0, 150.0),
+        4.0,
+    )
+
+    close_matches = [
+        item
+        for item in result.detections
+        if abs(item.width_mm - 90.0) <= 2.0
+        and abs(item.height_mm - 25.0) <= 2.0
+    ]
+    assert close_matches
+
+
 def test_repeated_label_grid_detects_and_infers_occluded_objects():
     options = TraceOptions(
         detection_mode="color",
@@ -98,6 +218,7 @@ def test_repeated_label_grid_detects_and_infers_occluded_objects():
     assert result.grid is not None
     assert result.grid["rows"] == 8
     assert result.grid["columns"] == 2
+    assert result.grid["normalized"] is True
     assert len(result.detections) == 16
     assert result.direct_count >= 12
     assert result.inferred_count >= 2
@@ -108,6 +229,13 @@ def test_repeated_label_grid_detects_and_infers_occluded_objects():
         for item in result.detections
         if item.source == "inferred"
     )
+    assert len({item.width_mm for item in result.detections}) == 1
+    assert len({item.height_mm for item in result.detections}) == 1
+    assert len({item.corner_radius_mm for item in result.detections}) == 1
+    assert len({item.rotation_deg for item in result.detections}) == 1
+    assert all(
+        item.diagnostics["grid_normalized"] for item in result.detections
+    )
 
     direct = [item for item in result.detections if item.source == "direct"]
     median_width = float(np.median([item.width_mm for item in direct]))
@@ -115,6 +243,42 @@ def test_repeated_label_grid_detects_and_infers_occluded_objects():
     assert 72.0 <= median_width <= 78.0
     assert 16.0 <= median_height <= 20.0
     assert max(abs(item.rotation_deg) for item in direct) < 2.0
+
+
+def test_repeated_grid_repairs_one_malformed_direct_cell() -> None:
+    image = _label_scene(obscure=False)
+    # Extend one label with same-hue material. It remains recognizable as a
+    # grid member but its raw fitted width is substantially wrong.
+    cv2.rectangle(image, (718, 578), (748, 620), (35, 42, 225), -1)
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            min_saturation=35,
+            min_area_mm2=20,
+            min_width_mm=20,
+            min_height_mm=8,
+            regular_grid=True,
+            infer_missing=True,
+            normalize_grid=True,
+            output_mode="rounded",
+        ),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert result.grid["rows"] == 8
+    assert result.grid["columns"] == 2
+    assert len(result.detections) == 16
+    assert len({item.width_mm for item in result.detections}) == 1
+    observed_widths = [
+        float(item.diagnostics["observed_width_mm"])
+        for item in result.detections
+        if item.source == "direct"
+    ]
+    assert max(observed_widths) - min(observed_widths) >= 5.0
 
 
 def test_border_offset_expands_fitted_output():

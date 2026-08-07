@@ -175,10 +175,10 @@ def detect_crosshairs_near(
     """Refine approximate crosshair locations without needing a plate boundary."""
     if image is None or image.size == 0:
         return {"detected": False, "reason": "Empty image", "points": []}
-    if len(expected_points) != 25:
+    if not expected_points:
         return {
             "detected": False,
-            "reason": f"Need 25 expected locations; received {len(expected_points)}",
+            "reason": "Need at least one expected crosshair location",
             "points": [],
         }
 

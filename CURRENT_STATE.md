@@ -35,6 +35,246 @@ template at a known pose, run the normal trace and alignment pipeline on the
 frozen frame, and then restore the synthetic camera. This path is unavailable
 when hardware access or a non-simulator machine backend is enabled.
 
+The desktop now also owns a native Machine Setup workflow covering configured
+camera controls, raw preview, checkerboard lens calibration, manual and
+CSV-assisted bed mapping, 5×5 cross-grid detection, residual review, and
+workpiece/fiducial checks. It now includes a separate eight-point fine-
+registration stage that prepares dry or normally guarded powered cross jobs,
+classifies multi-point residuals, and can apply only a reviewed global
+camera-map translation within a 5 mm cumulative limit. Validated G-code can be
+exported from the desktop. The browser remains available, but no operator
+capability requires it.
+
+Machine Setup now stores explicit X/Y mapping-orientation flags with the bed
+calibration and presents unambiguous NORMAL/OFF and REVERSED/ON controls. Legacy
+maps infer their current effective orientation and remain visibly marked as
+unrecorded until the operator confirms them after a laser-off direction check;
+that confirmation does not mirror points. Window geometry, selected tab,
+simulation scene, cross sizes, and marking speeds persist in the active data
+directory. Marking power intentionally resets to zero each time Setup opens.
+All desktop checkbox-based boolean options now use the same compact gray-OFF,
+green-ON switch presentation; the Machine Setup X/Y controls use those switches
+instead of one-shot reversal buttons.
+
+Live camera-refresh errors are now latched before the first modal notification.
+The operator acknowledges one Camera unavailable message; timer-driven repeats
+remain silent until a frame succeeds or the operator explicitly selects Refresh
+camera. Recovery clears the latch and posts a non-modal status notice. This
+prevents a camera owned by another application from repeatedly stealing focus.
+Explicit Refresh camera now distinguishes a healthy capture from an offline,
+frame-less, or faulted one. A failed capture is released and the configured
+V4L2 device is reopened asynchronously before the corrected image is retried.
+
+The current Trace repair makes color picking an explicit, visible canvas state,
+reports sampling failures in-panel, retains an actual sampled BGR/Lab color for
+neutral targets, and evaluates signed large-scale contrast masks so a filled
+object can be fitted from its silhouette rather than an expanded local edge
+halo. These paths are covered with textured, unevenly lit, neutral rounded-
+rectangle fixtures and offscreen picker integration tests. Repeated rounded
+objects can now fit a dominant shape family and regular lattice, reject noisy
+or duplicate candidates, and normalize every accepted or inferred grid cell to
+one shared width, height, corner radius, and rotation. The normalized 2×2 fit
+was also checked read-only against the current corrected C920 capture: all four
+cells produced identical `81.77 × 20.97 mm` geometry. Created-object placement
+from this new normalized result has not yet been physically cut.
+
+Home/park setup and park commands now receive a scoped minimum six-second
+acknowledgement window for the slow controller observed in the real workflow.
+Homing and park-completion waits remain 120 seconds; ordinary streamed job
+lines retain the configured `machine.read_timeout`. The first implementation
+still required a GRBL realtime `<Idle...>` report after `$H`; the physical
+controller completed its double-touch homing cycle but did not provide the
+expected report, first exposing a later six-second setup timeout and then the
+120-second idle timeout. Home/park now continues from the `$H` acknowledgement
+received after the endstop sequence and sends `G4 P0` after the park move as a
+planner-synchronization barrier. This correction is automated-test verified
+but still requires a repeated physical Home/park check.
+
+The native window title now begins with the application name, package version,
+and a short fingerprint of the installed application files before the project
+name. This makes restarted source builds visibly distinguishable; release
+packaging can override the fingerprint with
+`E3_POSITIONING_SYSTEM_REVISION`. Its application display name is intentionally
+empty because Qt/X11 otherwise appends a duplicate product-name suffix to the
+complete native caption; the application name itself remains configured.
+
+The desktop now opens a dedicated graphical Preview after project generation,
+dry framing, and registration/validation job preparation. An immutable
+`JobPlan` is parsed from the exact finalized G-code stream and retains
+controller-ignored layer/pass/source context, physical laser-spot coordinates,
+per-move timing/feed/power, and cut/travel statistics. The Preview provides
+scrubbing, animated playback, display-only travel/power/inversion controls,
+live move details, warnings, fit/pan/zoom, PNG export, per-operation visibility
+and statistics, keyboard timeline navigation, and a dynamic generated-layer
+legend. Generation can use source or nearest-path order, and Preview reports
+the latter's rapid-travel savings against source order. Closed-vector fill,
+binary vector raster, fixed-threshold raster image import, raster overscan, and
+configurable acceleration/command-delay time estimation feed the same exact
+program model. A confirmation-gated **Prepare Start Here** action creates a new
+bounded absolute-mm program at a reviewed move boundary without starting the
+machine. Prepared maximum
+power is displayed independently from controller execution progress, fixing
+the idle-polling presentation that previously replaced a generated power value
+with `no active controller job / 0%`. Project revisions invalidate the plan and
+close its Preview. The existing generation, homing, arming, validation, and
+streaming path is unchanged.
+
+## Verified in the current Linux checkout
+
+- **385 tests passed** with Qt using the offscreen platform.
+- Exact-job Preview verification covers final-stream parsing, immutable move
+  context, spot-offset recovery, powered-rapid warnings, time scrubbing,
+  keyboard timeline navigation, operation visibility, planner comparison,
+  fill/raster generation, threshold image rastering, overscan bounds rejection,
+  guarded Start Here rebuilding, PNG rendering, and separation of prepared
+  maximum power from controller progress. The complete dialog was also rendered
+  and visually inspected offscreen at 1120 × 760. Interactive desktop use and
+  real-hardware execution of this Preview revision remain unverified.
+- The icon-only Job toolbar now renders Preview as an original monitor/toolpath
+  glyph rather than falling back to the action text. The glyph was rendered and
+  visually inspected at high resolution in addition to its Qt mapping test.
+- Build-identity verification covers content-sensitive source revisions,
+  sanitized packaging overrides, and build-first project window titles.
+- Full `E3MainWindow` construction under Qt's offscreen platform displayed the
+  build-first identity in the native title bar.
+- Focused coordinate-reference verification covers rejection of serial motion
+  and arming before homing, successful home/park acceptance, emergency-reset
+  invalidation, desktop preflight ordering, X/Y mapping reversal, and the
+  hardware/simulation status presentation.
+- Focused Trace verification covers the complete button-to-canvas picker state,
+  sampled neutral-color acceptance, configured maximum-area rejection, and
+  contrast recovery of a filled rounded rectangle on a noisy wood-like image.
+  It also covers repeated-grid normalization, repair of one malformed direct
+  cell, common grid-object creation metadata, and explicit complete-grid
+  selection including inferred cells.
+- Focused Home/park verification confirms that setup acknowledgements use six
+  seconds without changing the normal one-second test streaming timeout.
+- Focused laser-offset verification covers zero-default configuration,
+  configured-value loading and excessive-value rejection, desktop and browser
+  coordinate correction, dry-frame correction, camera-aligned preview, and
+  rejection when corrected controller motion would leave the work area.
+- Focused Machine Setup tests cover native tab availability, safe runtime
+  authority, synthetic preview capture, manual bed-point add/delete, and
+  explicit axis-reversal and fine-registration controls. They now also cover
+  axis-state persistence across mapper/application reopen, legacy-state
+  confirmation without point mutation, prominent reversed-state presentation,
+  and persistence of non-power setup preferences.
+- Focused desktop-controller tests cover stale camera callbacks, one-notice
+  latching across repeated and changing refresh errors, recovery reset, and
+  explicit operator retry, including release/reopen before image refresh.
+- Focused fine-registration verification covers bounded target placement,
+  laser-off and powered G-code sequencing, zero-power rejection, sparse-cross
+  detection, translation classification, position-dependent rejection,
+  persistent translation application/reset, the 5 mm cumulative limit,
+  seven-inlier full-map acceptance, six-inlier and low-confidence rejection,
+  and persistent full-map rollback.
+- Focused accuracy-validation verification covers distinct holdout placement,
+  fixed-limit pass/fail classification, low-confidence rejection, laser-off
+  session rejection, powered synthetic capture, persistence, stale-map
+  rejection, and native job handoff.
+- Files changed for Trace, build identity, coordinate-reference gating, bed
+  mapping, and fine registration pass Ruff.
+- Repository-wide Ruff currently reports 66 pre-existing findings outside this
+  change; the repository as a whole is not lint-clean.
+- Fine-registration capture, reviewed exclusion, and a later 8/8-inlier
+  full-map application have been interactively exercised against the C920.
+  Independent five-point holdout validation then passed physically with
+  `0.258 mm` RMS, `0.417 mm` maximum error, and mean X `+0.019`, Y `+0.078 mm`.
+
+## Physical observation requiring confirmation
+
+On 2026-08-06, a real powered rounded-rectangle job exposed a repeatable-looking
+tool-reference displacement. The hardware profile selected GRBL over the
+configured serial device, but the exact controller model and firmware identity
+were not recorded, so this is **not** a physically verified configuration.
+
+- Configuration at the time: work area X/Y `10..210` mm, boundary margin 5 mm,
+  zero software spot offset, `M4 S500`, 2000 mm/min, one pass.
+- Generated desired/controller bounds (offset was zero):
+  X `86.326..164.326`, Y `115.585..135.585` mm; commanded center
+  `(125.326, 125.585)` mm.
+- The corrected 4 px/mm camera capture at
+  `data/captures/workspace.jpg` placed the new cut center at approximately
+  `(97.6, 117.3)` mm.
+- Observed spot displacement was therefore approximately
+  `(-27.7, -8.3)` mm. A provisional X `-28` mm, Y `-8` mm spot correction was
+  tested, but a second cut moved still farther from the target. The later job
+  commanded its X center about `+27.7` mm while the observed cut moved about
+  `-27.7` mm in the corrected image. The ignored local profile has therefore
+  been returned to zero spot offset; the provisional values must not be reused.
+
+The bed map was solved from controller-positioned laser-burned crosses, so it
+already references the laser spot. The failed correction instead exposes an
+unresolved controller/workspace coordinate-reference problem. The operator
+confirmed that Home / park completed before the second job, ruling out omitted
+manual homing as the cause of this miss. The near-equal, opposite X response
+was strong evidence that saved bed-point X labels were mirrored relative to the
+controller. At that stage axis reversal was physically unverified and a
+laser-off check was required. That check was not performed; the subsequent
+powered result nevertheless confirmed the direction diagnosis.
+
+The operator subsequently applied **Reverse X mapping** and performed a powered
+10% rounded-rectangle job on 2026-08-06 at 20:10 despite the requested
+laser-off check. The generated bounds were X `55..133`, Y `111..131` mm with
+zero software spot offset. In the corrected 4 px/mm capture saved at 20:12, the
+new burn is nearly coincident with the intended shaded rectangle. Visual
+comparison places the remaining displacement at approximately 3 mm toward
+negative X and no more than roughly 1 mm in Y, but overlapping old marks, burn
+width, and the manually positioned target make that estimate unsuitable as a
+calibration value. This physically confirms that X reversal removed the major
+error; it does not yet verify final accuracy or justify a new spot offset.
+
+The next hardware action should be a laser-off homed dry frame followed by an
+independently measured, sparse fine-registration check rather than another
+overlapping full rectangle. Do not encode the estimated residual until
+controller identity/firmware, work-coordinate offsets, homing state, workpiece
+restraint, and X/Y directions are recorded and the displacement repeats at
+multiple bed locations.
+
+The first eight-point fine-registration job was physically marked and captured
+on 2026-08-06 at 20:39. Seven detector overlays visually matched their crosses;
+point 7 was obstructed by the laser head at the photography pose and produced
+an obvious false result of approximately X `-8.46`, Y `-12.18` mm. Excluding
+that point leaves a proposed camera-map correction of approximately X `+2.67`,
+Y `+2.40` mm, but the remaining scatter is `1.23` mm RMS with a `2.24` mm
+maximum. That is position-dependent under the current acceptance thresholds,
+so no translation has been applied. The review UI now retains explicit Use
+checkboxes, permits at most two reviewed exclusions, and moves the corresponding
+future target away from the head/park corner.
+
+The fine-registration review now also computes a separate, confirmation-gated
+full-bed homography refinement directly from camera pixels and commanded mark
+coordinates. It requires seven geometric inliers, broad coverage, bounded
+residual/scale/whole-bed movement, and retains the prior solved map for reset.
+The latest saved physical recapture at 20:47 was evaluated without applying it.
+Its low-confidence review excluded points 2 and 7; of the remaining six, RANSAC
+retained only points 1, 3, 4, 5, and 8 and rejected point 6. Its five-inlier
+result is therefore refused. A fresh physical run using the relocated point 7
+is required; the new full-map apply and rollback controls are automated-test
+verified but not physically verified.
+
+A subsequent physical capture at 21:03 detected all eight relocated marks. It
+reported a translation candidate of approximately X `+3.019`, Y `+1.512` mm
+with `0.613` mm centered scatter, and a full-map fit with 8/8 inliers, `0.262`
+mm in-sample RMS, 53% convex-hull bed coverage, and `4.641` mm maximum modeled
+bed correction. The operator applied that reviewed full-bed refinement; the
+previous solved map is retained in `bed_calibration.json` for reset. This is a
+physical application of the workflow, not yet an independent accuracy
+verification.
+
+Machine Setup now includes a separate five-point Accuracy validation workflow.
+It prepares dry or normally guarded powered holdout jobs, binds the session to
+the active homography, homes/parks for capture, and automatically reports
+per-point, RMS, maximum, and mean error. A pass requires all five confident
+detections, no more than `0.5 mm` RMS error, and no more than `1.0 mm` maximum
+error. Dry-only and stale-map sessions are rejected, and validation has no path
+that mutates calibration. On 2026-08-06 at 21:21, an independent powered
+holdout capture passed: all five marks were detected, RMS error was `0.258 mm`,
+maximum error was `0.417 mm`, and mean error was X `+0.019`, Y `+0.078 mm`.
+This verifies the saved camera-to-laser map for that restrained surface,
+material height, camera pose, controller connection, and session; it is not a
+safety certification or a guarantee after the setup changes.
+
 The local files `label-sheet-test.png`, `trace-preview.png`, and
 `trace-result.json` are preserved for the developer who created them. They are
 ignored by Git and explicitly excluded from release archives; they are not
@@ -47,22 +287,23 @@ normal `git status` intentionally omits them.
 
 The repository contains:
 
-1. A dependency-light browser application for camera calibration, single-SVG
+1. A dependency-light legacy browser application for camera calibration, single-SVG
    placement, G-code generation, and guarded controller execution.
-2. A PySide6 desktop application with a native workspace, multi-object
+2. A PySide6 desktop application with native machine setup, a native workspace, multi-object
    projects, operation layers, undo/redo, project persistence, materials,
    toolpath preview, and guarded machine controls.
 3. Shared camera, calibration, geometry, vision, G-code, and machine services.
-4. A native camera-object tracing workflow whose algorithm and project-command
-   layers are tested, but whose real-camera GUI path is not end-to-end verified.
+4. A native camera-object tracing workflow whose earlier real-camera use exposed
+   defects now covered by synthetic/offscreen tests; the newest normalized-grid
+   created-object result still awaits a physical cut check.
 5. A reusable cutting-template workflow with a versioned library, manual
    selection, geometric candidate ranking, rigid alignment review, and
    undoable project-object creation, plus a dedicated parametric designer for
    regular rounded-rectangle grids and a safe-simulation alignment-image
    workflow.
 
-The browser remains the complete calibration interface. The desktop reads the
-same calibration files but does not yet provide native calibration wizards.
+The desktop is now the primary complete calibration interface. The browser
+retains an equivalent single-SVG workflow but is not required for setup.
 
 ## Architecture
 
@@ -240,7 +481,7 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   anchored-corner resizing, 15-degree Shift snapping, and undoable commits.
 - Five-column operation summaries for mode, speed/power, output, and
   visibility, with inline toggles, operation-color editing, ordering controls,
-  and explicit no-toolpath labeling for fill/raster modes.
+  and scan interval, angle, and raster overscan controls.
 - Transform, mirror, duplicate, delete, group, ungroup, align, distribute, and
   z-order commands.
 - Undo/redo.
@@ -251,6 +492,11 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   project revision changes.
 - Camera focus controls and sharpness measurement.
 - Guarded machine connection, park, diagnostics, run, and software stop.
+- Native Machine Setup with camera control application, raw preview, synthetic
+  scenes, checkerboard capture/solve, manual and CSV-assisted point entry,
+  automatic 5×5 grid detection, bed-map solve/residuals, eight-point fine
+  registration, workpiece detection, and fiducial inspection.
+- Validated generated-G-code export.
 - Simulation-only loading or deterministic generation of frozen corrected
   alignment frames, with camera-control gating and a persistent workspace badge.
 
@@ -340,12 +586,12 @@ physical placement. No marker detector is implemented. See
 
 ### Desktop and authoring
 
-- No native calibration wizards.
 - No guarded jog implementation.
 - No tested pause/resume behavior.
-- No fill or raster engine.
 - No text-to-outline conversion.
-- No image or DXF import.
+- No DXF import. Raster image import currently stores an external absolute
+  asset path and uses a fixed binary threshold; embedded portable assets,
+  grayscale power modulation, and dithering are not implemented.
 - Ellipse and line creation remain one-shot centered inserts; only rectangles
   currently have the persistent canvas drawing interaction.
 - Single visible, unlocked objects have corner resize and rotation handles.
@@ -371,12 +617,15 @@ physical placement. No marker detector is implemented. See
 
 ### Hardware
 
-- Controller firmware/protocol and power scale are unverified.
-- Machine coordinates, axis directions, work limits, offsets, and photo pose
-  are unverified.
+- GRBL is selected and powered output has been observed, but controller
+  identity/firmware and the power scale remain unverified.
+- The physical cut response confirmed that the saved X map required reversal,
+  but machine limits, final offsets, repeatability, and photo-pose accuracy
+  remain unverified.
 - C920 controls, real calibration residuals, repeatability, and parallax are
   unverified.
-- No powered laser behavior is verified.
+- Powered output has been observed, but placement was displaced and no powered
+  behavior is yet verified.
 
 ## Recommended next sequence
 

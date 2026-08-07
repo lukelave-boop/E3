@@ -97,6 +97,7 @@ def test_select_and_rectangle_actions_are_exclusive_tools(
             )
             self.controller = SimpleNamespace(
                 refresh_camera_image=lambda: None,
+                retry_camera_image=lambda: None,
                 emergency_stop=lambda: stops.append("stop"),
             )
 

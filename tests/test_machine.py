@@ -3,8 +3,9 @@ import time
 import pytest
 
 from laser_aligner.config import LaserSettings, MachineSettings
-from laser_aligner.errors import SafetyError
+from laser_aligner.errors import MachineError, SafetyError
 from laser_aligner.machine.service import MachineService
+from laser_aligner.machine.simulator import SimulatedTransport
 
 
 def wait_for_job(machine: MachineService, timeout: float = 3.0) -> None:
@@ -80,6 +81,178 @@ def test_prepare_photo_position_in_simulation() -> None:
         assert machine._transport is not None
         assert machine._transport.x == pytest.approx(110)
         assert machine._transport.y == pytest.approx(105)
+    finally:
+        machine.disconnect()
+
+
+def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = MachineSettings(
+        backend="simulator",
+        photo_x=110,
+        photo_y=105,
+        home_before_photo=True,
+        read_timeout=1.0,
+    )
+    machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
+    machine.connect()
+    recorded: list[tuple[str, float | None, bool]] = []
+
+    def record_command(
+        command: str,
+        timeout: float | None = None,
+        *,
+        _internal_motion: bool = False,
+    ) -> list[str]:
+        recorded.append((command, timeout, _internal_motion))
+        return ["ok"]
+
+    monkeypatch.setattr(machine, "send_command", record_command)
+    try:
+        machine.prepare_photo_position()
+    finally:
+        machine.disconnect()
+
+    assert recorded[0] == ("M5", 6.0, True)
+    assert recorded[1] == ("$H", 120.0, True)
+    assert recorded[2] == ("G21", 6.0, True)
+    assert recorded[3] == ("G90", 6.0, True)
+    assert recorded[4][1:] == (6.0, True)
+    assert recorded[5] == ("G4 P0", 120.0, True)
+    assert settings.read_timeout == 1.0
+
+
+def test_grbl_home_park_uses_planner_barrier_not_realtime_idle_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda port, baudrate: SimulatedTransport(),
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=True,
+            photo_x=110,
+            photo_y=105,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    monkeypatch.setattr(
+        machine,
+        "_wait_until_idle",
+        lambda timeout: pytest.fail("Home / park must not depend on realtime status"),
+    )
+    try:
+        result = machine.prepare_photo_position()
+    finally:
+        machine.disconnect()
+
+    commands = [item["command"] for item in result["transcript"]]
+    assert commands == [
+        "M5",
+        "$H",
+        "G21",
+        "G90",
+        "G0 X110.000 Y105.000 F3000.000",
+    ]
+    assert result["idle_responses"] == ["ok"]
+
+
+def test_command_timeout_identifies_the_command(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = MachineService(
+        MachineSettings(backend="simulator"),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    monkeypatch.setattr(
+        machine,
+        "_wait_for_ack",
+        lambda timeout: (_ for _ in ()).throw(
+            MachineError(f"Controller did not acknowledge command within {timeout:g} seconds")
+        ),
+    )
+    try:
+        with pytest.raises(MachineError, match=r"Command 'M5' failed.*6 seconds"):
+            machine.prepare_photo_position()
+    finally:
+        machine.disconnect()
+
+
+def test_serial_motion_and_arming_require_home_park_in_each_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda port, baudrate: SimulatedTransport(),
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=True,
+            photo_x=110,
+            photo_y=105,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    try:
+        assert not machine.status()["coordinate_reference_ready"]
+        with pytest.raises(SafetyError, match="Home / park"):
+            machine.start_job(
+                "G21\nG90\nM5\nG0 X10 Y10 F1000\nM5\n",
+                "unreferenced.gcode",
+            )
+        with pytest.raises(SafetyError, match="Home / park"):
+            machine.arm(machine.ARM_PHRASE)
+
+        machine.prepare_photo_position()
+        assert machine.status()["coordinate_reference_ready"]
+        machine.start_job(
+            "G21\nG90\nM5\nG0 X10 Y10 F1000\nM5\n",
+            "referenced.gcode",
+        )
+        wait_for_job(machine)
+        assert machine.status()["job"]["error"] is None
+
+        machine.stop_job(emergency=True)
+        assert not machine.status()["coordinate_reference_ready"]
+    finally:
+        machine.disconnect()
+
+
+def test_serial_home_park_rejects_motion_without_homing_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda port, baudrate: SimulatedTransport(),
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=False,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    try:
+        with pytest.raises(SafetyError, match="home_before_photo=true"):
+            machine.prepare_photo_position()
     finally:
         machine.disconnect()
 

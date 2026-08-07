@@ -5,9 +5,10 @@ import logging
 import re
 import threading
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import cv2
 import numpy as np
@@ -15,6 +16,18 @@ import numpy as np
 from . import __version__
 from .calibration.bed import BedMapper, BedPoint
 from .calibration.lens import LensCalibrator
+from .calibration.registration import (
+    AccuracyValidationJob,
+    FineRegistrationJob,
+    accuracy_validation_targets,
+    analyze_accuracy_measurements,
+    analyze_homography_refinement,
+    analyze_registration_measurements,
+    generate_registration_program,
+    registration_targets,
+    review_registration_measurements,
+    suggested_registration_exclusions,
+)
 from .camera.service import CameraService, SyntheticCameraService, list_video_devices
 from .config import Settings
 from .errors import CalibrationError
@@ -26,7 +39,8 @@ from .gcode.generator import (
 )
 from .geometry.svg import parse_svg
 from .machine.service import MachineService, list_serial_ports
-from .vision.fiducials import detect_aruco_markers, detect_crosshair_grid, detect_crosshairs_near
+from .storage import atomic_write_json, read_json
+from .vision.fiducials import detect_aruco_markers, detect_crosshairs_near
 from .vision.workpiece import detect_workpiece
 
 LOGGER = logging.getLogger(__name__)
@@ -49,6 +63,10 @@ class AppContext:
         self.machine = MachineService(settings.machine, settings.laser, hardware_enabled=hardware_enabled)
         self.bed_reference_path = settings.app.data_dir / "bed_reference.jpg"
         self.workspace_path = settings.app.data_dir / "captures" / "workspace.jpg"
+        self.fine_registration_path = settings.app.data_dir / "fine_registration.json"
+        self.accuracy_validation_path = (
+            settings.app.data_dir / "accuracy_validation.json"
+        )
         self._camera_start_error: str | None = None
         self._simulation_workspace_lock = threading.RLock()
         self._simulation_workspace_image: np.ndarray | None = None
@@ -82,6 +100,16 @@ class AppContext:
             self.machine.disconnect()
         finally:
             self.camera.stop()
+
+    def restart_camera(self) -> dict[str, Any]:
+        """Release and reopen the configured camera after an explicit retry."""
+        try:
+            self.camera.restart()
+        except Exception as exc:
+            self._camera_start_error = str(exc)
+            raise
+        self._camera_start_error = None
+        return asdict(self.camera.status())
 
     def camera_frame(self, undistort: bool = True) -> np.ndarray:
         frame = self.camera.snapshot()
@@ -300,6 +328,399 @@ class AppContext:
 
         return detect_crosshairs_near(image, expected_points, search_radius_px=65)
 
+    def prepare_fine_registration_job(
+        self,
+        *,
+        powered: bool,
+        power_percent: float,
+        mark_size_mm: float,
+        speed_mm_min: float,
+    ) -> FineRegistrationJob:
+        if self.bed.calibration is None:
+            raise CalibrationError("Solve the bed mapping before fine registration")
+        targets = registration_targets(
+            self.settings.machine.work_area,
+            mark_size_mm=mark_size_mm,
+            boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+        )
+        program = generate_registration_program(
+            targets,
+            self.settings.laser,
+            self.settings.machine.work_area,
+            mark_size_mm=mark_size_mm,
+            power_percent=power_percent,
+            powered=powered,
+            speed_mm_min=speed_mm_min,
+        )
+        filename = f"fine-registration-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
+        generated_path = self.settings.app.data_dir / "generated" / filename
+        generated_path.write_text(program.text, encoding="utf-8")
+        atomic_write_json(
+            self.fine_registration_path,
+            {
+                "schema_version": 1,
+                "created_at": time.time(),
+                "filename": filename,
+                "powered": powered,
+                "power_percent": power_percent if powered else 0.0,
+                "mark_size_mm": mark_size_mm,
+                "speed_mm_min": speed_mm_min,
+                "targets": [target.to_dict() for target in targets],
+            },
+        )
+        return FineRegistrationJob(
+            program=program,
+            filename=filename,
+            targets=targets,
+            powered=powered,
+            power_percent=power_percent if powered else 0.0,
+            mark_size_mm=mark_size_mm,
+        )
+
+    def prepare_accuracy_validation_job(
+        self,
+        *,
+        powered: bool,
+        power_percent: float,
+        mark_size_mm: float,
+        speed_mm_min: float,
+    ) -> AccuracyValidationJob:
+        calibration = self.bed.calibration
+        if calibration is None:
+            raise CalibrationError("Solve the bed mapping before accuracy validation")
+        targets = accuracy_validation_targets(
+            self.settings.machine.work_area,
+            mark_size_mm=mark_size_mm,
+            boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+        )
+        program = generate_registration_program(
+            targets,
+            self.settings.laser,
+            self.settings.machine.work_area,
+            mark_size_mm=mark_size_mm,
+            power_percent=power_percent,
+            powered=powered,
+            speed_mm_min=speed_mm_min,
+            design_name="accuracy-validation-holdout-crosses",
+        )
+        filename = f"accuracy-validation-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
+        generated_path = self.settings.app.data_dir / "generated" / filename
+        generated_path.write_text(program.text, encoding="utf-8")
+        atomic_write_json(
+            self.accuracy_validation_path,
+            {
+                "schema_version": 1,
+                "created_at": time.time(),
+                "filename": filename,
+                "powered": powered,
+                "power_percent": power_percent if powered else 0.0,
+                "mark_size_mm": mark_size_mm,
+                "speed_mm_min": speed_mm_min,
+                "targets": [target.to_dict() for target in targets],
+                "image_to_machine": calibration.image_to_machine.tolist(),
+            },
+        )
+        return AccuracyValidationJob(
+            program=program,
+            filename=filename,
+            targets=targets,
+            powered=powered,
+            power_percent=power_percent if powered else 0.0,
+            mark_size_mm=mark_size_mm,
+        )
+
+    def analyze_accuracy_validation_image(
+        self, image: np.ndarray
+    ) -> dict[str, Any]:
+        calibration = self.bed.calibration
+        if calibration is None:
+            raise CalibrationError("Solve the bed mapping before accuracy validation")
+        session = read_json(self.accuracy_validation_path, {})
+        raw_targets = session.get("targets") if isinstance(session, dict) else None
+        if not isinstance(raw_targets, list) or len(raw_targets) != 5:
+            raise CalibrationError(
+                "Prepare the accuracy-validation mark job before capturing its marks"
+            )
+        if not bool(session.get("powered")):
+            raise CalibrationError(
+                "The prepared validation job is dry motion only. After reviewing it, "
+                "prepare and run the powered holdout job before analyzing marks."
+            )
+        prepared_map = np.asarray(session.get("image_to_machine", []), dtype=np.float64)
+        if prepared_map.shape != (3, 3) or not np.allclose(
+            prepared_map,
+            calibration.image_to_machine,
+            rtol=1e-10,
+            atol=1e-10,
+        ):
+            raise CalibrationError(
+                "The bed map changed after this validation job was prepared; prepare a new job"
+            )
+
+        expected_points = []
+        for item in raw_targets:
+            machine_x = float(item["machine_x"])
+            machine_y = float(item["machine_y"])
+            image_x, image_y = self.bed.mm_to_image(machine_x, machine_y)
+            expected_points.append(
+                {
+                    "id": int(item["id"]),
+                    "image_x": image_x,
+                    "image_y": image_y,
+                    "machine_x": machine_x,
+                    "machine_y": machine_y,
+                }
+            )
+        detection = detect_crosshairs_near(
+            image,
+            expected_points,
+            search_radius_px=55,
+        )
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        capture_path = (
+            self.settings.app.data_dir
+            / "captures"
+            / f"accuracy-validation-{timestamp}.jpg"
+        )
+        if not cv2.imwrite(str(capture_path), image, [cv2.IMWRITE_JPEG_QUALITY, 98]):
+            raise RuntimeError("Could not save the accuracy-validation capture")
+        if not detection.get("detected"):
+            return {**detection, "capture_path": str(capture_path)}
+
+        measurements = []
+        for point in detection["points"]:
+            observed_x, observed_y = self.bed.image_to_mm(
+                float(point["image_x"]), float(point["image_y"])
+            )
+            measurements.append(
+                {
+                    "id": int(point["id"]),
+                    "machine_x": float(point["machine_x"]),
+                    "machine_y": float(point["machine_y"]),
+                    "observed_x": observed_x,
+                    "observed_y": observed_y,
+                    "image_x": float(point["image_x"]),
+                    "image_y": float(point["image_y"]),
+                    "score": float(point["score"]),
+                    "seed_shift_px": float(point["shift_px"]),
+                }
+            )
+        analysis = analyze_accuracy_measurements(measurements)
+        updated_session = dict(session)
+        updated_session.update(
+            {
+                "capture_path": str(capture_path),
+                "captured_at": time.time(),
+                "detection_confidence": detection.get("confidence"),
+                "analysis": analysis,
+                "measurements": analysis["measurements"],
+            }
+        )
+        atomic_write_json(self.accuracy_validation_path, updated_session)
+        return {
+            "detected": True,
+            "confidence": detection.get("confidence"),
+            "points": detection["points"],
+            "measurements": analysis["measurements"],
+            "analysis": analysis,
+            "capture_path": str(capture_path),
+        }
+
+    def analyze_fine_registration_image(self, image: np.ndarray) -> dict[str, Any]:
+        if self.bed.calibration is None:
+            raise CalibrationError("Solve the bed mapping before fine registration")
+        session = read_json(self.fine_registration_path, {})
+        raw_targets = session.get("targets") if isinstance(session, dict) else None
+        if not isinstance(raw_targets, list) or len(raw_targets) < 4:
+            raise CalibrationError(
+                "Prepare the fine-registration mark job before capturing its marks"
+            )
+        if not bool(session.get("powered")):
+            raise CalibrationError(
+                "The prepared registration job is dry motion only. After reviewing it, "
+                "prepare and run the powered mark job before analyzing marks."
+            )
+        expected_points = []
+        for item in raw_targets:
+            machine_x = float(item["machine_x"])
+            machine_y = float(item["machine_y"])
+            image_x, image_y = self.bed.mm_to_image(machine_x, machine_y)
+            expected_points.append(
+                {
+                    "id": int(item["id"]),
+                    "image_x": image_x,
+                    "image_y": image_y,
+                    "machine_x": machine_x,
+                    "machine_y": machine_y,
+                }
+            )
+        detection = detect_crosshairs_near(
+            image,
+            expected_points,
+            search_radius_px=55,
+        )
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        capture_path = self.settings.app.data_dir / "captures" / f"fine-registration-{timestamp}.jpg"
+        if not cv2.imwrite(str(capture_path), image, [cv2.IMWRITE_JPEG_QUALITY, 98]):
+            raise RuntimeError("Could not save the fine-registration capture")
+        if not detection.get("detected"):
+            return {
+                **detection,
+                "capture_path": str(capture_path),
+            }
+
+        measurements = []
+        for point in detection["points"]:
+            observed_x, observed_y = self.bed.image_to_mm(
+                float(point["image_x"]), float(point["image_y"])
+            )
+            measurements.append(
+                {
+                    "id": int(point["id"]),
+                    "machine_x": float(point["machine_x"]),
+                    "machine_y": float(point["machine_y"]),
+                    "observed_x": observed_x,
+                    "observed_y": observed_y,
+                    "image_x": float(point["image_x"]),
+                    "image_y": float(point["image_y"]),
+                    "score": float(point["score"]),
+                    "seed_shift_px": float(point["shift_px"]),
+                }
+            )
+        all_measurements = analyze_registration_measurements(measurements)["measurements"]
+        suggested_exclusions = suggested_registration_exclusions(all_measurements)
+        if len(suggested_exclusions) > 2:
+            analysis = analyze_registration_measurements(all_measurements)
+            analysis.update(
+                {
+                    "classification": "invalid",
+                    "can_apply_translation": False,
+                    "reason": (
+                        "More than two cross detections are invalid; recapture the marks "
+                        "instead of excluding them"
+                    ),
+                    "available_point_count": len(all_measurements),
+                    "excluded_ids": [],
+                }
+            )
+        else:
+            analysis = review_registration_measurements(
+                all_measurements, suggested_exclusions
+            )
+            analysis["full_map_refinement"] = self._analyze_full_map_refinement(
+                all_measurements, suggested_exclusions
+            )
+        updated_session = dict(session)
+        updated_session.update(
+            {
+                "capture_path": str(capture_path),
+                "captured_at": time.time(),
+                "detection_confidence": detection.get("confidence"),
+                "analysis": analysis,
+                "measurements": all_measurements,
+            }
+        )
+        atomic_write_json(self.fine_registration_path, updated_session)
+        return {
+            "detected": True,
+            "confidence": detection.get("confidence"),
+            "points": detection["points"],
+            "measurements": all_measurements,
+            "analysis": analysis,
+            "capture_path": str(capture_path),
+        }
+
+    def review_fine_registration_measurements(
+        self,
+        measurements: list[dict[str, Any]],
+        excluded_ids: list[int],
+    ) -> dict[str, Any]:
+        analysis = review_registration_measurements(measurements, excluded_ids)
+        analysis["full_map_refinement"] = self._analyze_full_map_refinement(
+            measurements, excluded_ids
+        )
+        session = read_json(self.fine_registration_path, {})
+        if isinstance(session, dict):
+            updated_session = dict(session)
+            updated_session["analysis"] = analysis
+            updated_session["measurements"] = measurements
+            atomic_write_json(self.fine_registration_path, updated_session)
+        return analysis
+
+    def _analyze_full_map_refinement(
+        self,
+        measurements: list[dict[str, Any]],
+        excluded_ids: list[int],
+    ) -> dict[str, Any]:
+        calibration = self.bed.calibration
+        if calibration is None:
+            raise CalibrationError("Bed calibration has not been solved")
+        result = analyze_homography_refinement(
+            measurements,
+            excluded_ids,
+            calibration.image_to_machine,
+            self.settings.machine.work_area,
+        )
+        if calibration.refinement_base is not None:
+            result.update(
+                {
+                    "classification": "invalid",
+                    "can_apply_full_map": False,
+                    "reason": (
+                        "A full-bed refinement is already applied; reset it before "
+                        "reviewing another"
+                    ),
+                }
+            )
+        elif abs(calibration.registration_x_mm) > 1e-12 or abs(
+            calibration.registration_y_mm
+        ) > 1e-12:
+            result.update(
+                {
+                    "classification": "invalid",
+                    "can_apply_full_map": False,
+                    "reason": (
+                        "Reset the fine-registration translation before applying a "
+                        "full-bed refinement"
+                    ),
+                }
+            )
+        return result
+
+    def apply_fine_registration(self, analysis: dict[str, Any]) -> dict[str, Any]:
+        if not analysis.get("can_apply_translation"):
+            raise CalibrationError(
+                "This result is not a safe global translation; do not apply it"
+            )
+        calibration = self.bed.apply_registration_translation(
+            float(analysis["correction_x_mm"]),
+            float(analysis["correction_y_mm"]),
+            analysis=analysis,
+        )
+        return calibration.to_dict()
+
+    def apply_fine_registration_homography(
+        self, analysis: dict[str, Any]
+    ) -> dict[str, Any]:
+        refinement = analysis.get("full_map_refinement")
+        if not isinstance(refinement, dict) or not refinement.get(
+            "can_apply_full_map"
+        ):
+            raise CalibrationError(
+                "This capture did not pass the reviewed full-bed refinement gates"
+            )
+        calibration = self.bed.apply_registration_homography(
+            np.asarray(refinement["image_to_machine"], dtype=np.float64),
+            analysis=refinement,
+        )
+        return calibration.to_dict()
+
+    def reset_fine_registration(self) -> dict[str, Any]:
+        return self.bed.reset_registration_translation().to_dict()
+
+    def reset_fine_registration_homography(self) -> dict[str, Any]:
+        return self.bed.reset_registration_homography().to_dict()
+
     def replace_bed_points(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_points = payload.get("points")
         if not isinstance(raw_points, list) or len(raw_points) < self.settings.calibration.bed.minimum_points:
@@ -348,6 +769,8 @@ class AppContext:
             travel_feed_mm_min=float(payload.get("travel_feed_mm_min", laser.travel_feed_mm_min)),
             engrave_feed_mm_min=float(payload.get("engrave_feed_mm_min", laser.engrave_feed_mm_min)),
             boundary_margin_mm=laser.boundary_margin_mm,
+            spot_offset_x_mm=laser.spot_offset_x_mm,
+            spot_offset_y_mm=laser.spot_offset_y_mm,
             optimize_order=bool(payload.get("optimize_order", True)),
             include_return_move=laser.return_to_photo_position,
             return_x_mm=self.settings.machine.photo_x,

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import math
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields
-from typing import Any, Mapping, Sequence
+from typing import Any
 
 import cv2
 import numpy as np
 
 from ..config import WorkArea
-
 
 TRACE_MODES = {"auto", "color", "contrast"}
 OUTPUT_MODES = {"rounded", "smoothed", "exact"}
@@ -19,6 +19,7 @@ OUTPUT_MODES = {"rounded", "smoothed", "exact"}
 class TraceOptions:
     detection_mode: str = "auto"
     target_hue: float | None = None
+    target_bgr: tuple[int, int, int] | list[int] | None = None
     hue_tolerance: float = 14.0
     min_saturation: int = 45
     min_area_mm2: float = 30.0
@@ -28,6 +29,7 @@ class TraceOptions:
     confidence_threshold: float = 0.55
     regular_grid: bool = True
     infer_missing: bool = True
+    normalize_grid: bool = True
     output_mode: str = "rounded"
     border_offset_mm: float = 0.0
     smoothing_mm: float = 0.25
@@ -39,6 +41,12 @@ class TraceOptions:
         self.target_hue = (
             None if self.target_hue is None else float(self.target_hue) % 180.0
         )
+        if self.target_bgr is not None:
+            if len(self.target_bgr) != 3:
+                raise ValueError("target_bgr must contain exactly three channels")
+            self.target_bgr = tuple(
+                max(0, min(255, int(value))) for value in self.target_bgr
+            )
         self.hue_tolerance = max(1.0, min(90.0, float(self.hue_tolerance)))
         self.min_saturation = max(0, min(255, int(self.min_saturation)))
         self.min_area_mm2 = max(0.01, float(self.min_area_mm2))
@@ -50,6 +58,7 @@ class TraceOptions:
         )
         self.regular_grid = bool(self.regular_grid)
         self.infer_missing = bool(self.infer_missing)
+        self.normalize_grid = bool(self.normalize_grid)
         self.output_mode = str(self.output_mode).lower()
         if self.output_mode not in OUTPUT_MODES:
             raise ValueError(f"Unknown output mode: {self.output_mode}")
@@ -59,7 +68,7 @@ class TraceOptions:
         self.smoothing_mm = max(0.0, min(10.0, float(self.smoothing_mm)))
 
     @classmethod
-    def from_mapping(cls, raw: Mapping[str, Any] | None) -> "TraceOptions":
+    def from_mapping(cls, raw: Mapping[str, Any] | None) -> TraceOptions:
         raw = dict(raw or {})
         allowed = {item.name for item in fields(cls)}
         return cls(**{key: value for key, value in raw.items() if key in allowed})
@@ -204,12 +213,31 @@ def _color_mask(
     a = lab[:, :, 1].astype(np.float32) - 128.0
     b = lab[:, :, 2].astype(np.float32) - 128.0
     chroma = np.hypot(a, b)
-    mask = (
+    hue_mask = (
         (_hue_distance(hsv[:, :, 0], target_hue) <= options.hue_tolerance)
         & (hsv[:, :, 1] >= options.min_saturation)
         & (hsv[:, :, 2] >= 20)
         & (chroma >= 7.0)
-    ).astype(np.uint8) * 255
+    )
+    if options.target_bgr is not None:
+        target = np.asarray(options.target_bgr, dtype=np.uint8).reshape(1, 1, 3)
+        target_lab = cv2.cvtColor(target, cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+        lab_float = lab.astype(np.float32)
+        delta = lab_float - target_lab
+        # Lightness varies across a real bed much more than chroma. Weight it
+        # less heavily so one sampled neutral or colored surface remains
+        # selectable under uneven illumination while still separating it from
+        # the warmer wood backing.
+        distance = np.sqrt(
+            0.16 * delta[:, :, 0] ** 2
+            + delta[:, :, 1] ** 2
+            + delta[:, :, 2] ** 2
+        )
+        lab_tolerance = max(10.0, options.hue_tolerance)
+        mask_bool = (distance <= lab_tolerance) & (hsv[:, :, 2] >= 12)
+    else:
+        mask_bool = hue_mask
+    mask = mask_bool.astype(np.uint8) * 255
     radius = max(1, int(round(max(1.0, pixels_per_mm * 0.45))))
     kernel = cv2.getStructuringElement(
         cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
@@ -233,6 +261,39 @@ def _contrast_mask(image: np.ndarray, pixels_per_mm: float) -> np.ndarray:
     )
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=3)
     return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+
+
+def _contrast_region_masks(
+    image: np.ndarray,
+    pixels_per_mm: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Segment darker and lighter regions without expanding their edges.
+
+    The local absolute-contrast mask is useful for small artwork, but a filled
+    object becomes a thick edge band whose external contour lies several
+    millimetres outside the object. A much larger background estimate and a
+    signed difference preserve the filled silhouette instead. Both masks are
+    retained because real targets may be either darker or lighter than the bed.
+    """
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    scale = max(31, int(round(pixels_per_mm * 36.0)))
+    if scale % 2 == 0:
+        scale += 1
+    background = cv2.GaussianBlur(gray, (scale, scale), 0)
+    radius = max(1, int(round(max(1.0, pixels_per_mm * 0.5))))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
+    )
+    masks: list[np.ndarray] = []
+    for difference in (background - gray, gray - background):
+        positive = difference[difference > 0]
+        adaptive = 0.0 if positive.size == 0 else float(np.percentile(positive, 78))
+        threshold = max(6.0, adaptive)
+        mask = (difference >= threshold).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        masks.append(cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1))
+    return masks[0], masks[1]
 
 
 def _long_axis_rect(contour: np.ndarray) -> dict[str, Any] | None:
@@ -550,19 +611,63 @@ def _infer_grid(
     options: TraceOptions,
     work_area: WorkArea,
     pixels_per_mm: float,
-) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+) -> tuple[
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    dict[str, Any] | None,
+]:
     if not options.regular_grid or len(candidates) < 4:
-        return [], None
-    widths = np.asarray([item["width_px"] for item in candidates])
-    heights = np.asarray([item["height_px"] for item in candidates])
-    median_width, median_height = float(np.median(widths)), float(np.median(heights))
+        return candidates, [], None
+
+    def angle_distance(first: float, second: float) -> float:
+        difference = abs(float(first) - float(second)) % 180.0
+        return min(difference, 180.0 - difference)
+
+    # Select the largest mutually similar shape family instead of taking a
+    # global median that can be pulled toward sheet edges, shadows, or merged
+    # components. A damaged member can still be recognized as a cell later,
+    # but unrelated geometry must not define the grid's canonical shape.
+    shape_families: list[list[dict[str, Any]]] = []
+    for anchor in candidates:
+        family = [
+            item
+            for item in candidates
+            if 0.68 <= float(item["width_px"]) / float(anchor["width_px"]) <= 1.47
+            and 0.68
+            <= float(item["height_px"]) / float(anchor["height_px"])
+            <= 1.47
+            and angle_distance(
+                float(item["angle_image_deg"]),
+                float(anchor["angle_image_deg"]),
+            )
+            <= 12.0
+        ]
+        shape_families.append(family)
+    filtered = max(
+        shape_families,
+        key=lambda family: (
+            len(family),
+            sum(float(item["score"]) for item in family),
+        ),
+    )
+    if len(filtered) < 4:
+        return candidates, [], None
+
+    widths = np.asarray([item["width_px"] for item in filtered])
+    heights = np.asarray([item["height_px"] for item in filtered])
+    median_width = float(np.median(widths))
+    median_height = float(np.median(heights))
     filtered = [
-        item for item in candidates
-        if 0.60 <= item["width_px"] / median_width <= 1.55
-        and 0.60 <= item["height_px"] / median_height <= 1.55
+        item
+        for item in filtered
+        if 0.72 <= float(item["width_px"]) / median_width <= 1.38
+        and 0.72 <= float(item["height_px"]) / median_height <= 1.38
     ]
     if len(filtered) < 4:
-        return [], None
+        return candidates, [], None
+    median_width = float(np.median([item["width_px"] for item in filtered]))
+    median_height = float(np.median([item["height_px"] for item in filtered]))
+    median_radius = float(np.median([item["radius_px"] for item in filtered]))
     common_angle = _mean_angle([item["angle_image_deg"] for item in filtered])
     angle = math.radians(common_angle)
     u = np.array([math.cos(angle), math.sin(angle)])
@@ -572,23 +677,46 @@ def _infer_grid(
     columns = _clusters(x_values, max(4.0, median_width * 0.45))
     rows = _clusters(y_values, max(4.0, median_height * 0.45))
     if len(columns) < 2 or len(rows) < 2 or len(columns) * len(rows) > 100:
-        return [], None
+        return candidates, [], None
 
-    def quality(values: Sequence[float]) -> tuple[float, float]:
-        differences = np.diff(np.asarray(values))
-        if not len(differences) or float(np.mean(differences)) <= 1e-6:
-            return 0.0, 0.0
-        cv = float(np.std(differences) / np.mean(differences))
-        return max(0.0, 1.0 - cv / 0.25), float(np.mean(differences))
+    def regular_axis(
+        values: Sequence[float], object_extent: float
+    ) -> tuple[list[float], float, float]:
+        observed = np.asarray(sorted(float(item) for item in values), dtype=np.float64)
+        differences = np.diff(observed)
+        if not len(differences) or float(np.min(differences)) <= 1e-6:
+            return [], 0.0, 0.0
+        seed = float(np.percentile(differences, 25))
+        if seed <= object_extent * 0.82:
+            return [], 0.0, 0.0
+        steps = np.clip(np.rint(differences / seed), 1, 5).astype(int)
+        indices = np.concatenate(([0], np.cumsum(steps))).astype(np.float64)
+        centered_indices = indices - float(np.mean(indices))
+        centered_values = observed - float(np.mean(observed))
+        denominator = float(np.dot(centered_indices, centered_indices))
+        if denominator <= 1e-9:
+            return [], 0.0, 0.0
+        spacing = float(np.dot(centered_indices, centered_values) / denominator)
+        if spacing <= object_extent * 0.82:
+            return [], 0.0, 0.0
+        origin = float(np.mean(observed - indices * spacing))
+        predicted = origin + indices * spacing
+        residual_rms = float(
+            np.sqrt(np.mean(np.square(observed - predicted)))
+        )
+        quality = max(0.0, 1.0 - residual_rms / max(spacing * 0.14, 1.0))
+        expanded = [
+            float(origin + index * spacing)
+            for index in range(int(indices[-1]) + 1)
+        ]
+        return expanded, quality, spacing
 
-    x_quality, x_spacing = quality(columns)
-    y_quality, y_spacing = quality(rows)
-    occupancy = len(filtered) / (len(columns) * len(rows))
-    grid_quality = min(x_quality, y_quality) * min(1.0, occupancy / 0.55)
-    if occupancy < 0.45 or grid_quality < 0.45:
-        return [], None
+    columns, x_quality, x_spacing = regular_axis(columns, median_width)
+    rows, y_quality, y_spacing = regular_axis(rows, median_height)
+    if len(columns) < 2 or len(rows) < 2 or len(columns) * len(rows) > 100:
+        return candidates, [], None
 
-    occupied: set[tuple[int, int]] = set()
+    cell_members: dict[tuple[int, int], tuple[float, dict[str, Any]]] = {}
     for item in filtered:
         point = np.asarray(item["center_px"])
         x_value, y_value = float(point @ u), float(point @ v)
@@ -598,63 +726,150 @@ def _infer_grid(
             (x_value - columns[column]) / max(x_spacing, median_width),
             (y_value - rows[row]) / max(y_spacing, median_height),
         )
-        if distance <= 0.38:
-            occupied.add((row, column))
+        if distance > 0.38:
+            continue
+        cell = (row, column)
+        rank = float(item["score"]) - distance * 0.25
+        previous = cell_members.get(cell)
+        if previous is None or rank > previous[0]:
+            cell_members[cell] = (rank, item)
 
-    inferred = []
-    if options.infer_missing:
-        median_radius = float(np.median([item["radius_px"] for item in filtered]))
-        median_score = float(np.median([item["score"] for item in filtered]))
-        for row, y_value in enumerate(rows):
-            for column, x_value in enumerate(columns):
-                if (row, column) in occupied:
-                    continue
-                center_px = u * x_value + v * y_value
-                center_mm = _pixel_to_machine(center_px.reshape(1, 2), work_area, pixels_per_mm)[0]
-                if not work_area.contains(float(center_mm[0]), float(center_mm[1])):
-                    continue
-                rectangle = {
-                    "center": center_px,
-                    "width": median_width,
-                    "height": median_height,
-                    "angle_image_deg": common_angle,
-                    "radius_px": median_radius,
-                }
-                geometry = _machine_geometry(
-                    rectangle, work_area, pixels_per_mm, options.border_offset_mm
-                )
-                rounded_contour = _rounded_polyline(
-                    geometry["center_mm"], geometry["width_mm"],
-                    geometry["height_mm"], geometry["rotation_deg"],
-                    geometry["corner_radius_mm"],
-                )
-                inferred.append({
+    occupancy = len(cell_members) / (len(columns) * len(rows))
+    grid_quality = min(x_quality, y_quality) * min(1.0, occupancy / 0.55)
+    if occupancy < 0.45 or grid_quality < 0.45:
+        return candidates, [], None
+
+    normalize = bool(options.normalize_grid and options.output_mode == "rounded")
+
+    def canonical_candidate(
+        item: Mapping[str, Any] | None,
+        row: int,
+        column: int,
+        *,
+        inferred: bool,
+    ) -> dict[str, Any] | None:
+        center_px = u * columns[column] + v * rows[row]
+        rectangle = {
+            "center": center_px,
+            "width": median_width,
+            "height": median_height,
+            "angle_image_deg": common_angle,
+            "radius_px": median_radius,
+        }
+        geometry = _machine_geometry(
+            rectangle, work_area, pixels_per_mm, options.border_offset_mm
+        )
+        if not all(
+            work_area.contains(float(x), float(y)) for x, y in geometry["box_mm"]
+        ):
+            return None
+        rounded_contour = _rounded_polyline(
+            geometry["center_mm"],
+            geometry["width_mm"],
+            geometry["height_mm"],
+            geometry["rotation_deg"],
+            geometry["corner_radius_mm"],
+        )
+        if inferred:
+            median_score = float(
+                np.median([value[1]["score"] for value in cell_members.values()])
+            )
+            return {
+                "center_px": center_px,
+                "width_px": median_width,
+                "height_px": median_height,
+                "angle_image_deg": common_angle,
+                "radius_px": median_radius,
+                "area_mm2": median_width * median_height / pixels_per_mm**2,
+                "score": median_score * grid_quality * 0.72,
+                "confidence": min(0.68, grid_quality * 0.66),
+                "rectangularity": 1.0,
+                "solidity": 1.0,
+                "fit_iou": 1.0,
+                "coverage": 0.0,
+                "compactness": 1.0,
+                "shape": "rounded_rectangle",
+                "contour_mm": rounded_contour,
+                "vector_contour_mm": rounded_contour,
+                "grid_row": row,
+                "grid_column": column,
+                "grid_normalized": True,
+                **geometry,
+            }
+
+        assert item is not None
+        output = dict(item)
+        output.update(
+            {
+                "grid_row": row,
+                "grid_column": column,
+                "grid_normalized": normalize,
+                "observed_center_mm": list(item["center_mm"]),
+                "observed_width_mm": float(item["width_mm"]),
+                "observed_height_mm": float(item["height_mm"]),
+                "observed_rotation_deg": float(item["rotation_deg"]),
+                "observed_corner_radius_mm": float(item["corner_radius_mm"]),
+            }
+        )
+        if normalize:
+            output.update(
+                {
                     "center_px": center_px,
                     "width_px": median_width,
                     "height_px": median_height,
                     "angle_image_deg": common_angle,
                     "radius_px": median_radius,
                     "area_mm2": median_width * median_height / pixels_per_mm**2,
-                    "score": median_score * grid_quality * 0.72,
-                    "confidence": min(0.68, grid_quality * 0.66),
-                    "rectangularity": 1.0,
-                    "solidity": 1.0,
-                    "fit_iou": 1.0,
-                    "coverage": 0.0,
-                    "compactness": 1.0,
                     "shape": "rounded_rectangle",
-                    "contour_mm": rounded_contour,
                     "vector_contour_mm": rounded_contour,
                     **geometry,
-                })
-    return inferred, {
+                }
+            )
+        return output
+
+    direct = []
+    for (row, column), (_, item) in sorted(cell_members.items()):
+        candidate = canonical_candidate(item, row, column, inferred=False)
+        if candidate is not None:
+            direct.append(candidate)
+
+    inferred = []
+    if options.infer_missing:
+        for row in range(len(rows)):
+            for column in range(len(columns)):
+                if (row, column) in cell_members:
+                    continue
+                candidate = canonical_candidate(None, row, column, inferred=True)
+                if candidate is not None:
+                    inferred.append(candidate)
+
+    canonical_geometry = _machine_geometry(
+        {
+            "center": u * columns[0] + v * rows[0],
+            "width": median_width,
+            "height": median_height,
+            "angle_image_deg": common_angle,
+            "radius_px": median_radius,
+        },
+        work_area,
+        pixels_per_mm,
+        options.border_offset_mm,
+    )
+    return direct, inferred, {
         "rows": len(rows),
         "columns": len(columns),
         "occupancy": occupancy,
         "quality": grid_quality,
         "rotation_deg": -common_angle,
-        "direct_cells": len(occupied),
-        "missing_cells": len(rows) * len(columns) - len(occupied),
+        "direct_cells": len(direct),
+        "missing_cells": len(inferred),
+        "rejected_candidates": len(candidates) - len(direct),
+        "normalized": normalize,
+        "cell_width_mm": float(canonical_geometry["width_mm"]),
+        "cell_height_mm": float(canonical_geometry["height_mm"]),
+        "cell_corner_radius_mm": float(canonical_geometry["corner_radius_mm"]),
+        "column_pitch_mm": x_spacing / pixels_per_mm,
+        "row_pitch_mm": y_spacing / pixels_per_mm,
     }
 
 
@@ -686,6 +901,28 @@ def _to_detection(
             "fit_iou": float(item["fit_iou"]),
             "color_coverage": float(item["coverage"]),
             "compactness": float(item.get("compactness", 0.0)),
+            **(
+                {
+                    "grid_normalized": bool(item.get("grid_normalized", False)),
+                    "grid_row": int(item["grid_row"]),
+                    "grid_column": int(item["grid_column"]),
+                }
+                if "grid_row" in item and "grid_column" in item
+                else {}
+            ),
+            **(
+                {
+                    "observed_center_mm": list(item["observed_center_mm"]),
+                    "observed_width_mm": float(item["observed_width_mm"]),
+                    "observed_height_mm": float(item["observed_height_mm"]),
+                    "observed_rotation_deg": float(item["observed_rotation_deg"]),
+                    "observed_corner_radius_mm": float(
+                        item["observed_corner_radius_mm"]
+                    ),
+                }
+                if "observed_center_mm" in item
+                else {}
+            ),
         },
     )
 
@@ -696,7 +933,11 @@ def detect_objects(
     work_area: WorkArea,
     pixels_per_mm: float,
 ) -> TraceResult:
-    options = options if isinstance(options, TraceOptions) else TraceOptions.from_mapping(options)
+    options = (
+        options
+        if isinstance(options, TraceOptions)
+        else TraceOptions.from_mapping(options)
+    )
     if image is None or image.size == 0:
         raise ValueError("No rectified camera image is available")
     pixels_per_mm = float(pixels_per_mm)
@@ -716,6 +957,8 @@ def detect_objects(
             ))
     if options.detection_mode in {"auto", "contrast"}:
         masks.append(("contrast", _contrast_mask(image, pixels_per_mm), None))
+        for region_mask in _contrast_region_masks(image, pixels_per_mm):
+            masks.append(("contrast", region_mask, None))
     if not masks:
         return TraceResult(
             False, [], options.detection_mode, target_hue,
@@ -740,17 +983,9 @@ def detect_objects(
     if chosen_hue is not None:
         target_hue = chosen_hue
 
-    if options.regular_grid and len(candidates) >= 4:
-        widths = np.asarray([item["width_px"] for item in candidates])
-        heights = np.asarray([item["height_px"] for item in candidates])
-        median_width, median_height = float(np.median(widths)), float(np.median(heights))
-        candidates = [
-            item for item in candidates
-            if 0.58 <= item["width_px"] / median_width <= 1.60
-            and 0.58 <= item["height_px"] / median_height <= 1.60
-        ]
-
-    inferred, grid = _infer_grid(candidates, options, work_area, pixels_per_mm)
+    candidates, inferred, grid = _infer_grid(
+        candidates, options, work_area, pixels_per_mm
+    )
     detections = [
         *[_to_detection(item, "direct", options) for item in candidates],
         *[_to_detection(item, "inferred", options) for item in inferred],
@@ -769,6 +1004,11 @@ def detect_objects(
         message += (
             f" and inferred {inferred_count} missing grid "
             f"position{'s' if inferred_count != 1 else ''}"
+        )
+    if grid and grid.get("normalized"):
+        message += (
+            f"; fitted identical {int(grid['columns'])} × "
+            f"{int(grid['rows'])} grid cells"
         )
     message += f"; {selected_count} selected by confidence"
     if not detections:

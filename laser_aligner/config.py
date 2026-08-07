@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import copy
 import json
+import math
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 
 class ConfigError(ValueError):
@@ -120,9 +122,16 @@ class LaserSettings:
     engrave_feed_mm_min: float = 1200.0
     curve_tolerance_mm: float = 0.15
     boundary_margin_mm: float = 0.0
+    # Physical laser spot position relative to the controller's commanded
+    # carriage/tool-reference position. To place the spot at a design point,
+    # generated motion subtracts this vector from the design coordinates.
+    spot_offset_x_mm: float = 0.0
+    spot_offset_y_mm: float = 0.0
     arm_timeout_seconds: int = 60
     allow_low_power_frame: bool = False
     return_to_photo_position: bool = False
+    preview_acceleration_mm_s2: float = 500.0
+    preview_command_delay_ms: float = 0.0
 
 
 @dataclass(slots=True)
@@ -199,7 +208,11 @@ class Settings:
                 "travel_feed_mm_min": self.laser.travel_feed_mm_min,
                 "engrave_feed_mm_min": self.laser.engrave_feed_mm_min,
                 "curve_tolerance_mm": self.laser.curve_tolerance_mm,
+                "spot_offset_x_mm": self.laser.spot_offset_x_mm,
+                "spot_offset_y_mm": self.laser.spot_offset_y_mm,
                 "allow_low_power_frame": self.laser.allow_low_power_frame,
+                "preview_acceleration_mm_s2": self.laser.preview_acceleration_mm_s2,
+                "preview_command_delay_ms": self.laser.preview_command_delay_ms,
             },
         }
 
@@ -268,9 +281,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "engrave_feed_mm_min": 1200.0,
         "curve_tolerance_mm": 0.15,
         "boundary_margin_mm": 0.0,
+        "spot_offset_x_mm": 0.0,
+        "spot_offset_y_mm": 0.0,
         "arm_timeout_seconds": 60,
         "allow_low_power_frame": False,
         "return_to_photo_position": False,
+        "preview_acceleration_mm_s2": 500.0,
+        "preview_command_delay_ms": 0.0,
     },
     "vision": {
         "workpiece_min_area_ratio": 0.03,
@@ -340,8 +357,24 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("laser.boundary_margin_mm cannot be negative")
     if margin * 2 >= min(float(area["x_max"]) - float(area["x_min"]), float(area["y_max"]) - float(area["y_min"])):
         raise ConfigError("laser.boundary_margin_mm leaves no usable work area")
+    maximum_offset = max(
+        float(area["x_max"]) - float(area["x_min"]),
+        float(area["y_max"]) - float(area["y_min"]),
+    )
+    for key in ("spot_offset_x_mm", "spot_offset_y_mm"):
+        value = float(laser[key])
+        if not math.isfinite(value):
+            raise ConfigError(f"laser.{key} must be finite")
+        if abs(value) > maximum_offset:
+            raise ConfigError(
+                f"laser.{key} cannot exceed the configured work-area span"
+            )
     if int(laser["arm_timeout_seconds"]) <= 0:
         raise ConfigError("laser.arm_timeout_seconds must be positive")
+    if float(laser["preview_acceleration_mm_s2"]) <= 0:
+        raise ConfigError("laser.preview_acceleration_mm_s2 must be positive")
+    if float(laser["preview_command_delay_ms"]) < 0:
+        raise ConfigError("laser.preview_command_delay_ms cannot be negative")
     vision = raw["vision"]
     if not 0 < float(vision["workpiece_min_area_ratio"]) < 1:
         raise ConfigError("vision.workpiece_min_area_ratio must be between 0 and 1")
@@ -441,9 +474,15 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             engrave_feed_mm_min=float(raw["laser"]["engrave_feed_mm_min"]),
             curve_tolerance_mm=float(raw["laser"]["curve_tolerance_mm"]),
             boundary_margin_mm=float(raw["laser"]["boundary_margin_mm"]),
+            spot_offset_x_mm=float(raw["laser"]["spot_offset_x_mm"]),
+            spot_offset_y_mm=float(raw["laser"]["spot_offset_y_mm"]),
             arm_timeout_seconds=int(raw["laser"]["arm_timeout_seconds"]),
             allow_low_power_frame=bool(raw["laser"]["allow_low_power_frame"]),
             return_to_photo_position=bool(raw["laser"]["return_to_photo_position"]),
+            preview_acceleration_mm_s2=float(
+                raw["laser"]["preview_acceleration_mm_s2"]
+            ),
+            preview_command_delay_ms=float(raw["laser"]["preview_command_delay_ms"]),
         ),
         vision=VisionSettings(
             workpiece_min_area_ratio=float(raw["vision"]["workpiece_min_area_ratio"]),

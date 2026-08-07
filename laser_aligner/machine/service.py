@@ -10,7 +10,11 @@ from typing import Any
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from ..gcode.preview import contains_motion, parse_words, strip_comment
-from .serial_backend import MachineTransport, create_serial_transport, list_serial_ports
+from .serial_backend import (
+    MachineTransport,
+    create_serial_transport,
+)
+from .serial_backend import list_serial_ports as list_serial_ports
 from .simulator import SimulatedTransport
 
 LOGGER = logging.getLogger(__name__)
@@ -18,6 +22,7 @@ _QUERY_COMMANDS = {"$I", "$$", "$G", "$#", "M105", "M114", "M115", "M503"}
 _STREAM_G_CODES = {0, 1, 21, 90}
 _STREAM_M_CODES = {3, 4, 5}
 _STREAM_LETTERS = {"G", "M", "X", "Y", "F", "S"}
+_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS = 6.0
 
 
 @dataclass(slots=True)
@@ -65,6 +70,7 @@ class MachineService:
         self._active_port = settings.port
         self._active_baudrate = settings.baudrate
         self._connected = False
+        self._coordinate_reference_ready = settings.backend == "simulator"
         self._armed_until = 0.0
         self._lock = threading.RLock()
         self._job = JobStatus()
@@ -109,6 +115,7 @@ class MachineService:
                 self._connected = True
                 self._active_port = "simulator" if self.settings.backend == "simulator" else active_port
                 self._active_baudrate = active_baudrate
+                self._coordinate_reference_ready = self.settings.backend == "simulator"
                 self._armed_until = 0.0
                 if self.settings.backend == "simulator":
                     self._protocol = "grbl"
@@ -120,6 +127,7 @@ class MachineService:
                 transport.close()
                 self._transport = None
                 self._connected = False
+                self._coordinate_reference_ready = False
                 self._armed_until = 0.0
                 raise
             self._append_log("INFO", f"connected using {self._protocol}")
@@ -170,6 +178,7 @@ class MachineService:
                 self._transport.close()
             self._transport = None
             self._connected = False
+            self._coordinate_reference_ready = False
             self._armed_until = 0.0
             self._job_laser_authorized = False
 
@@ -178,6 +187,11 @@ class MachineService:
             raise SafetyError("Arming phrase did not match")
         if not self._connected:
             raise MachineError("Controller is not connected")
+        if self.settings.backend == "serial" and not self._coordinate_reference_ready:
+            raise SafetyError(
+                "Home / park must complete after this controller connection or reset "
+                "before laser control can be armed"
+            )
         if self._job.running:
             raise MachineError("Cannot change arming state while a job is running")
         self._armed_until = time.time() + self.laser_settings.arm_timeout_seconds
@@ -262,7 +276,11 @@ class MachineService:
         transport = self._require_connection()
         transport.write_line(cleaned)
         self._append_log("TX", cleaned)
-        return self._wait_for_ack(timeout or self.settings.read_timeout)
+        acknowledgement_timeout = timeout or self.settings.read_timeout
+        try:
+            return self._wait_for_ack(acknowledgement_timeout)
+        except MachineError as exc:
+            raise MachineError(f"Command {cleaned!r} failed: {exc}") from exc
 
     def _wait_for_ack(self, timeout: float) -> list[str]:
         transport = self._require_connection()
@@ -312,6 +330,22 @@ class MachineService:
             time.sleep(0.1)
         raise MachineError(f"Controller did not become idle within {timeout:g} seconds")
 
+    def _wait_for_motion_complete(self, timeout: float = 120.0) -> list[str]:
+        """Wait behind all previously accepted planner motion.
+
+        GRBL's ``G4 P0`` enters the planner synchronization path without adding
+        a dwell. This is more portable across GRBL-derived controllers than
+        requiring a particular realtime ``?`` status-report shape. Marlin has
+        a dedicated synchronization command.
+        """
+
+        command = "G4 P0" if self._protocol == "grbl" else "M400"
+        return self.send_command(
+            command,
+            timeout=timeout,
+            _internal_motion=True,
+        )
+
     def prepare_photo_position(self) -> dict[str, Any]:
         """Home if configured, then park XY at the repeatable camera pose.
 
@@ -321,6 +355,11 @@ class MachineService:
         if self._job.running:
             raise MachineError("Cannot move to the photography position while a job is running")
         self._require_connection()
+        if self.settings.backend == "serial" and not self.settings.home_before_photo:
+            raise SafetyError(
+                "Serial hardware requires machine.home_before_photo=true so Home / park "
+                "can establish a repeatable absolute coordinate reference"
+            )
         x = float(self.settings.photo_x)
         y = float(self.settings.photo_y)
         if not self.settings.work_area.contains(x, y, self.laser_settings.boundary_margin_mm):
@@ -329,20 +368,43 @@ class MachineService:
         transcript: list[dict[str, Any]] = []
 
         def execute(command: str, timeout: float | None = None) -> None:
-            responses = self.send_command(command, timeout=timeout, _internal_motion=True)
+            acknowledgement_timeout = (
+                max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout)
+                if timeout is None
+                else timeout
+            )
+            responses = self.send_command(
+                command,
+                timeout=acknowledgement_timeout,
+                _internal_motion=True,
+            )
             transcript.append({"command": command, "responses": responses})
 
-        execute("M5")
-        if self.settings.home_before_photo:
-            execute("$H" if self._protocol == "grbl" else "G28", timeout=max(120.0, self.settings.read_timeout))
-            self._wait_until_idle(timeout=120.0)
-        execute("G21")
-        execute("G90")
-        execute(
-            f"G0 X{x:.3f} Y{y:.3f} F{float(self.laser_settings.travel_feed_mm_min):.3f}",
-            timeout=max(4.0, self.settings.read_timeout),
-        )
-        idle_responses = self._wait_until_idle(timeout=120.0)
+        self._coordinate_reference_ready = self.settings.backend == "simulator"
+        try:
+            execute("M5")
+            if self.settings.home_before_photo:
+                execute(
+                    "$H" if self._protocol == "grbl" else "G28",
+                    timeout=max(120.0, self.settings.read_timeout),
+                )
+                # A successful homing acknowledgement is the completion
+                # barrier. Some GRBL-derived controllers do not emit standard
+                # realtime <Idle...> reports after homing.
+            execute("G21")
+            execute("G90")
+            execute(
+                f"G0 X{x:.3f} Y{y:.3f} F{float(self.laser_settings.travel_feed_mm_min):.3f}",
+                timeout=max(
+                    _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS,
+                    self.settings.read_timeout,
+                ),
+            )
+            idle_responses = self._wait_for_motion_complete(timeout=120.0)
+        except Exception:
+            self._coordinate_reference_ready = False
+            raise
+        self._coordinate_reference_ready = True
         return {
             "position": {"x": x, "y": y, "z": self.settings.photo_z},
             "homed": self.settings.home_before_photo,
@@ -489,6 +551,16 @@ class MachineService:
                 raise MachineError("A controller job is already running")
             self._require_connection()
             lines, requires_laser_authorization = self._analyze_program(text)
+            requires_motion = any(contains_motion(line) for line in lines)
+            if (
+                requires_motion
+                and self.settings.backend == "serial"
+                and not self._coordinate_reference_ready
+            ):
+                raise SafetyError(
+                    "Home / park must complete after this controller connection or reset "
+                    "before an absolute-motion job can start"
+                )
             if requires_laser_authorization and not self.armed:
                 raise SafetyError("This program contains laser-enable commands and must be armed immediately before starting")
             self._job_laser_authorized = requires_laser_authorization
@@ -530,6 +602,8 @@ class MachineService:
             self._wait_for_ack(self.settings.read_timeout)
         except Exception as exc:
             error = str(exc)
+            if self.settings.backend == "serial":
+                self._coordinate_reference_ready = False
             LOGGER.error("Controller job failed: %s", exc)
             try:
                 if self._transport is not None:
@@ -552,9 +626,13 @@ class MachineService:
                 if emergency and self._protocol == "grbl":
                     transport.write_raw(b"!\x18")
                     self._append_log("TX", "GRBL feed hold + soft reset")
+                    if self.settings.backend == "serial":
+                        self._coordinate_reference_ready = False
                 elif emergency and self._protocol == "marlin":
                     transport.write_line("M112")
                     self._append_log("TX", "M112")
+                    if self.settings.backend == "serial":
+                        self._coordinate_reference_ready = False
                 transport.write_line("M5")
                 self._append_log("TX", "M5")
             except Exception:
@@ -574,6 +652,7 @@ class MachineService:
             "port": self._active_port,
             "baudrate": self._active_baudrate,
             "allow_motion": self.settings.allow_motion,
+            "coordinate_reference_ready": self._coordinate_reference_ready,
             "armed": self.armed,
             "armed_until": self._armed_until if self.armed else None,
             "arm_phrase": self.ARM_PHRASE,

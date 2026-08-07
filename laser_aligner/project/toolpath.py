@@ -2,14 +2,16 @@ from __future__ import annotations
 
 import math
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 
 import numpy as np
 
 from ..config import LaserSettings, WorkArea
-from ..geometry.svg import Polyline
 from ..gcode.generator import ToolpathOptions, generate_frame_gcode, validate_paths
+from ..gcode.job_plan import JobPlan, build_job_plan, e3_metadata_line
+from ..geometry.svg import Polyline
 from .model import LayerMode, ObjectKind, OperationLayer, ProjectDocument, SceneObject
 
 
@@ -23,6 +25,7 @@ class ProjectJob:
     path_count: int
     point_count: int
     layer_summaries: list[dict[str, Any]] = field(default_factory=list)
+    plan: JobPlan | None = None
 
 
 def _fmt(value: float) -> str:
@@ -169,6 +172,38 @@ def _length(points: np.ndarray) -> float:
     return float(np.linalg.norm(np.diff(points, axis=0), axis=1).sum())
 
 
+def _controller_paths(
+    paths: list[Polyline],
+    laser: LaserSettings,
+) -> list[Polyline]:
+    offset = np.array(
+        [laser.spot_offset_x_mm, laser.spot_offset_y_mm],
+        dtype=np.float64,
+    )
+    if not np.isfinite(offset).all():
+        raise ValueError("laser spot offsets must be finite")
+    return [
+        Polyline(
+            path.points.astype(np.float64, copy=True) - offset,
+            closed=path.closed,
+            source_tag=path.source_tag,
+        )
+        for path in paths
+    ]
+
+
+def _raster_motion_points(path: Polyline, overscan_percent: float) -> np.ndarray:
+    points = path.points
+    if len(points) != 2 or overscan_percent <= 0:
+        return points.copy()
+    vector = points[1] - points[0]
+    length = float(np.linalg.norm(vector))
+    if length <= 1e-12:
+        return points.copy()
+    extension = vector / length * (length * overscan_percent / 100.0)
+    return np.vstack([points[0] - extension, points[0], points[1], points[1] + extension])
+
+
 def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyline]:
     paths: list[Polyline] = []
     for item in document.objects:
@@ -177,12 +212,142 @@ def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyl
     return paths
 
 
+def _scanline_paths(item: SceneObject, layer: OperationLayer) -> list[Polyline]:
+    outlines = object_polylines(item)
+    if not outlines or any(not path.closed for path in outlines):
+        raise ValueError(
+            f"{layer.mode.value.title()} output requires closed vector geometry: "
+            f"{item.name}"
+        )
+    angle = math.radians(layer.scan_angle_deg)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    to_scan = np.array([[cosine, sine], [-sine, cosine]], dtype=np.float64)
+    from_scan = to_scan.T
+    polygons = [path.points @ to_scan.T for path in outlines]
+    all_points = np.vstack(polygons)
+    y_min = float(all_points[:, 1].min())
+    y_max = float(all_points[:, 1].max())
+    interval = float(layer.line_interval_mm)
+    y = math.ceil((y_min - 1e-9) / interval) * interval
+    segments: list[Polyline] = []
+    row = 0
+    while y <= y_max + 1e-9:
+        intersections: list[float] = []
+        for polygon in polygons:
+            for start, end in zip(polygon[:-1], polygon[1:], strict=False):
+                low_y = min(float(start[1]), float(end[1]))
+                high_y = max(float(start[1]), float(end[1]))
+                if high_y - low_y <= 1e-12 or not (low_y <= y < high_y):
+                    continue
+                ratio = (y - float(start[1])) / (float(end[1]) - float(start[1]))
+                intersections.append(float(start[0]) + ratio * (float(end[0]) - float(start[0])))
+        intersections.sort()
+        for index in range(0, len(intersections) - 1, 2):
+            start_x, end_x = intersections[index : index + 2]
+            if end_x - start_x <= 1e-9:
+                continue
+            scan_points = np.array([[start_x, y], [end_x, y]], dtype=np.float64)
+            if row % 2:
+                scan_points = scan_points[::-1].copy()
+            points = scan_points @ from_scan.T
+            segments.append(
+                Polyline(points, closed=False, source_tag=item.name)
+            )
+        row += 1
+        y += interval
+    if not segments:
+        raise ValueError(f"{layer.mode.value.title()} produced no scanlines: {item.name}")
+    return segments
+
+
+def _image_raster_paths(item: SceneObject, layer: OperationLayer) -> list[Polyline]:
+    from pathlib import Path
+
+    import cv2
+
+    asset = Path(str(item.geometry.get("asset", ""))).expanduser()
+    if not asset.is_file():
+        raise ValueError(f"Raster image asset does not exist: {asset}")
+    image = cv2.imread(str(asset), cv2.IMREAD_GRAYSCALE)
+    if image is None or image.size == 0:
+        raise ValueError(f"Raster image asset could not be decoded: {asset}")
+    height, width = image.shape
+    row_count = max(1, int(math.ceil(item.transform.height_mm / layer.line_interval_mm)))
+    output: list[Polyline] = []
+    for row_index in range(row_count):
+        local_y = -0.5 + (row_index + 0.5) / row_count
+        source_y = min(height - 1, int((row_index + 0.5) / row_count * height))
+        dark = image[source_y] < 128
+        runs: list[tuple[int, int]] = []
+        start: int | None = None
+        for column, enabled in enumerate(dark):
+            if enabled and start is None:
+                start = column
+            if start is not None and (not enabled or column == width - 1):
+                end = column + 1 if enabled and column == width - 1 else column
+                runs.append((start, end))
+                start = None
+        if row_index % 2:
+            runs.reverse()
+        for start_column, end_column in runs:
+            local = np.array(
+                [
+                    [start_column / width - 0.5, local_y],
+                    [end_column / width - 0.5, local_y],
+                ],
+                dtype=np.float64,
+            )
+            if row_index % 2:
+                local = local[::-1].copy()
+            output.append(
+                Polyline(
+                    _transform_points(local, item),
+                    closed=False,
+                    source_tag=item.name,
+                )
+            )
+    if not output:
+        raise ValueError(f"Raster image contains no pixels below the 50% threshold: {item.name}")
+    return output
+
+
+def _operation_paths(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    layer_objects: list[SceneObject],
+) -> list[Polyline]:
+    if layer.mode == LayerMode.LINE:
+        return _layer_paths(document, layer)
+    unsupported = [
+        item.name
+        for item in layer_objects
+        if item.kind in {ObjectKind.TEXT, ObjectKind.LINE}
+        or (item.kind == ObjectKind.IMAGE and layer.mode != LayerMode.RASTER)
+    ]
+    if unsupported:
+        raise ValueError(
+            f"{layer.mode.value.title()} output is not implemented for: "
+            + ", ".join(unsupported)
+        )
+    return [
+        path
+        for item in layer_objects
+        for path in (
+            _image_raster_paths(item, layer)
+            if item.kind == ObjectKind.IMAGE
+            else _scanline_paths(item, layer)
+        )
+    ]
+
+
 def generate_project_gcode(
     document: ProjectDocument,
     laser: LaserSettings,
     *,
     power_max: int | None = None,
     optimize_order: bool = True,
+    start_position: tuple[float, float] | None = None,
 ) -> ProjectJob:
     """Generate one guarded vector program containing all enabled line layers."""
     document.validate()
@@ -193,10 +358,14 @@ def generate_project_gcode(
         y_min=document.work_area.y_min,
         y_max=document.work_area.y_max,
     )
-    start = np.array([work_area.x_min, work_area.y_min], dtype=np.float64)
+    start = np.array(
+        start_position or (work_area.x_min, work_area.y_min),
+        dtype=np.float64,
+    )
     current = start.copy()
 
     all_paths: list[Polyline] = []
+    all_controller_paths: list[Polyline] = []
     layer_plans: list[tuple[OperationLayer, list[Polyline]]] = []
     for layer in sorted(document.layers, key=lambda item: item.priority):
         if not layer.visible or not layer.output_enabled:
@@ -208,15 +377,11 @@ def generate_project_gcode(
         ]
         if not layer_objects:
             continue
-        if layer.mode != LayerMode.LINE:
-            raise ValueError(
-                f"Layer {layer.name!r} uses {layer.mode.value} output, which is not "
-                "implemented in desktop v1 yet"
-            )
         unsupported = [
             item.name
             for item in layer_objects
-            if item.kind not in {
+            if layer.mode == LayerMode.LINE
+            and item.kind not in {
                 ObjectKind.RECTANGLE,
                 ObjectKind.ELLIPSE,
                 ObjectKind.LINE,
@@ -228,20 +393,44 @@ def generate_project_gcode(
             raise ValueError(
                 "Vector output is not implemented for: " + ", ".join(unsupported)
             )
-        paths = _layer_paths(document, layer)
-        if not paths:
+        design_paths = _operation_paths(document, layer, layer_objects)
+        if not design_paths:
             continue
-        validate_paths(paths, work_area, laser.boundary_margin_mm)
-        if optimize_order:
-            paths = _nearest_order(paths, current)
-        current = paths[-1].points[-1]
+        validate_paths(design_paths, work_area, laser.boundary_margin_mm)
+        paths = _controller_paths(design_paths, laser)
+        validate_paths(
+            paths,
+            work_area,
+            laser.boundary_margin_mm,
+            coordinate_label="controller path after laser spot correction",
+        )
+        controller_motion_paths = (
+            [
+                Polyline(
+                    _raster_motion_points(path, layer.overscan_percent),
+                    closed=False,
+                    source_tag=path.source_tag,
+                )
+                for path in paths
+            ]
+            if layer.mode == LayerMode.RASTER
+            else paths
+        )
+        validate_paths(
+            controller_motion_paths,
+            work_area,
+            laser.boundary_margin_mm,
+            coordinate_label="raster overscan path after laser spot correction",
+        )
         layer_plans.append((layer, paths))
-        all_paths.extend(paths)
+        all_paths.extend(design_paths)
+        all_controller_paths.extend(controller_motion_paths)
 
     if not all_paths:
         raise ValueError("The project contains no enabled vector line paths")
 
     bounds = _bounds(all_paths)
+    controller_bounds = _bounds(all_controller_paths)
     lines = [
         "; E3 Positioning System project job",
         f"; Project: {document.name.replace(';', ',')[:120]}",
@@ -252,13 +441,32 @@ def generate_project_gcode(
         "G90 ; absolute positioning",
         "M5 ; laser off before any motion",
     ]
+    lines.insert(
+        4,
+        e3_metadata_line(
+            "job",
+            {
+                "planner": "nearest path" if optimize_order else "source order",
+                "start_x": float(start[0]),
+                "start_y": float(start[1]),
+            },
+        ),
+    )
+    if abs(laser.spot_offset_x_mm) >= 1e-12 or abs(laser.spot_offset_y_mm) >= 1e-12:
+        lines[4:4] = [
+            "; Laser spot offset (spot = controller + offset): "
+            f"X{_fmt(laser.spot_offset_x_mm)} Y{_fmt(laser.spot_offset_y_mm)}",
+            f"; Controller bounds: X{_fmt(controller_bounds[0])}..{_fmt(controller_bounds[2])} "
+            f"Y{_fmt(controller_bounds[1])}..{_fmt(controller_bounds[3])}",
+        ]
     current = start.copy()
     travel_length = 0.0
     cut_length = 0.0
-    estimated_seconds = 0.0
     point_count = 0
     path_count = 0
     summaries: list[dict[str, Any]] = []
+    source_order_travel = 0.0
+    planned_order_travel = 0.0
 
     for layer, paths in layer_plans:
         power = layer.controller_power(controller_power_max)
@@ -269,21 +477,65 @@ def generate_project_gcode(
             f"{layer.speed_mm_min:g} mm/min · {layer.power_percent:g}% · "
             f"{layer.passes} pass(es)"
         )
+        lines.append(
+            e3_metadata_line(
+                "layer",
+                {
+                    "id": layer.id,
+                    "name": layer.name,
+                    "color": layer.color,
+                    "power_percent": layer.power_percent,
+                    "mode": layer.mode.value,
+                },
+            )
+        )
         for pass_index in range(layer.passes):
             lines.append(f"; Pass {pass_index + 1}/{layer.passes}")
+            lines.append(
+                e3_metadata_line(
+                    "pass",
+                    {"index": pass_index + 1, "count": layer.passes},
+                )
+            )
+            comparison_position = current.copy()
+            for source_path in paths:
+                source_motion = (
+                    _raster_motion_points(source_path, layer.overscan_percent)
+                    if layer.mode == LayerMode.RASTER
+                    else source_path.points
+                )
+                source_order_travel += float(
+                    np.linalg.norm(source_motion[0] - comparison_position)
+                )
+                comparison_position = source_motion[-1]
             ordered = _nearest_order(paths, current) if optimize_order else paths
             for path in ordered:
                 points = path.points
                 if len(points) < 2:
                     continue
-                travel = float(np.linalg.norm(points[0] - current))
+                lines.append(e3_metadata_line("path", {"name": path.source_tag}))
+                raster_motion = (
+                    _raster_motion_points(path, layer.overscan_percent)
+                    if layer.mode == LayerMode.RASTER
+                    else points
+                )
+                travel_target = raster_motion[0]
+                travel = float(np.linalg.norm(travel_target - current))
+                planned_order_travel += travel
                 layer_travel += travel
                 travel_length += travel
-                estimated_seconds += travel / max(laser.travel_feed_mm_min, 1.0) * 60.0
                 lines.append(
-                    f"G0 X{_fmt(points[0, 0])} Y{_fmt(points[0, 1])} "
+                    f"G0 X{_fmt(travel_target[0])} Y{_fmt(travel_target[1])} "
                     f"F{_fmt(laser.travel_feed_mm_min)}"
                 )
+                if layer.mode == LayerMode.RASTER and len(raster_motion) == 4:
+                    lead_in = float(np.linalg.norm(raster_motion[1] - raster_motion[0]))
+                    lines.append(
+                        f"G1 X{_fmt(points[0, 0])} Y{_fmt(points[0, 1])} "
+                        f"F{_fmt(layer.speed_mm_min)}"
+                    )
+                    layer_travel += lead_in
+                    travel_length += lead_in
                 if power > 0:
                     lines.append(f"{laser.power_mode.upper()} S{power}")
                 else:
@@ -297,10 +549,18 @@ def generate_project_gcode(
                 distance = _length(points)
                 layer_cut += distance
                 cut_length += distance
-                estimated_seconds += distance / layer.speed_mm_min * 60.0
                 point_count += len(points)
                 path_count += 1
                 current = points[-1]
+                if layer.mode == LayerMode.RASTER and len(raster_motion) == 4:
+                    lead_out = float(np.linalg.norm(raster_motion[3] - raster_motion[2]))
+                    lines.append(
+                        f"G1 X{_fmt(raster_motion[3, 0])} Y{_fmt(raster_motion[3, 1])} "
+                        f"F{_fmt(layer.speed_mm_min)}"
+                    )
+                    layer_travel += lead_out
+                    travel_length += lead_out
+                    current = raster_motion[3]
         summaries.append(
             {
                 "layer_id": layer.id,
@@ -314,22 +574,49 @@ def generate_project_gcode(
             }
         )
 
-    lines.extend(["M5", "; End of E3 project job", ""])
+    planner_savings = max(0.0, source_order_travel - planned_order_travel)
+    lines.extend(
+        [
+            e3_metadata_line(
+                "planner",
+                {
+                    "source_order_travel_mm": source_order_travel,
+                    "planned_order_travel_mm": planned_order_travel,
+                    "savings_mm": planner_savings,
+                },
+            ),
+            "M5",
+            "; End of E3 project job",
+            "",
+        ]
+    )
+    text = "\n".join(lines)
+    plan = build_job_plan(
+        text,
+        power_max=controller_power_max,
+        default_feed_mm_min=laser.travel_feed_mm_min,
+        start_position=(float(start[0]), float(start[1])),
+        acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+        command_delay_ms=laser.preview_command_delay_ms,
+    )
     return ProjectJob(
-        text="\n".join(lines),
+        text=text,
         bounds_mm=bounds,
         cut_length_mm=cut_length,
         travel_length_mm=travel_length,
-        estimated_seconds=estimated_seconds,
+        estimated_seconds=plan.total_seconds,
         path_count=path_count,
         point_count=point_count,
         layer_summaries=summaries,
+        plan=plan,
     )
 
 
 def generate_project_frame(
     document: ProjectDocument,
     laser: LaserSettings,
+    *,
+    start_position: tuple[float, float] | None = None,
 ) -> ProjectJob:
     objects = document.visible_output_objects()
     paths = [path for item in objects for path in object_polylines(item)]
@@ -349,19 +636,27 @@ def generate_project_frame(
         travel_feed_mm_min=laser.travel_feed_mm_min,
         engrave_feed_mm_min=laser.travel_feed_mm_min,
         boundary_margin_mm=laser.boundary_margin_mm,
+        spot_offset_x_mm=laser.spot_offset_x_mm,
+        spot_offset_y_mm=laser.spot_offset_y_mm,
         optimize_order=False,
     )
     program = generate_frame_gcode(bounds, options, work_area, laser_enabled=False)
-    estimated = (
-        program.cut_length_mm + program.travel_length_mm
-    ) / max(laser.travel_feed_mm_min, 1.0) * 60.0
+    plan = build_job_plan(
+        program.text,
+        power_max=laser.power_max,
+        default_feed_mm_min=laser.travel_feed_mm_min,
+        start_position=start_position or (work_area.x_min, work_area.y_min),
+        acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+        command_delay_ms=laser.preview_command_delay_ms,
+    )
     return ProjectJob(
         text=program.text,
         bounds_mm=program.bounds_mm,
         cut_length_mm=program.cut_length_mm,
         travel_length_mm=program.travel_length_mm,
-        estimated_seconds=estimated,
+        estimated_seconds=plan.total_seconds,
         path_count=program.path_count,
         point_count=program.point_count,
         layer_summaries=[],
+        plan=plan,
     )
