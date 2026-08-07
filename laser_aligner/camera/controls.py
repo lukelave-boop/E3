@@ -4,8 +4,8 @@ import logging
 import re
 import shutil
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Mapping
 
 LOGGER = logging.getLogger(__name__)
 _CONTROL_RE = re.compile(r"^\s*([a-zA-Z0-9_]+)\s+0x[0-9a-fA-F]+\s+\([^)]*\)\s*:\s*(.*)$")

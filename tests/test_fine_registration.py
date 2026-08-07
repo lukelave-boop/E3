@@ -6,8 +6,6 @@ import numpy as np
 import pytest
 
 from laser_aligner.app import AppContext
-from laser_aligner.camera.controls import ControlResult
-from laser_aligner.camera.service import FrameBurst
 from laser_aligner.calibration.bed import BedCalibration, BedMapper, BedPoint
 from laser_aligner.calibration.registration import (
     accuracy_validation_targets,
@@ -24,6 +22,8 @@ from laser_aligner.calibration.registration import (
     review_registration_measurements,
     suggested_registration_exclusions,
 )
+from laser_aligner.camera.controls import ControlResult
+from laser_aligner.camera.service import FrameBurst
 from laser_aligner.config import (
     BedCalibrationSettings,
     LaserSettings,

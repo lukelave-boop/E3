@@ -2,8 +2,12 @@
 
 Snapshot: **2026-08-07**
 
-Branch: **`codex/precision-camera-capture`**, based on `desktop-v1` at
-**`223ea2e`**
+Branch: **`desktop-v1`**
+
+The Linux-machine work through **`15c2c7a`** was preserved and pushed before
+the precision-camera feature commit **`99450df`** was integrated by cherry-pick.
+The integrated commit is **`5fd6d70`**; a later documentation/lint-only commit
+may supersede this snapshot hash without changing hardware behavior.
 
 Baseline before consolidation: **`778532b` — Polish desktop controls and add camera focus workflow**
 
@@ -22,7 +26,7 @@ when verification, platform support, known gaps, or active feature work changes.
 
 ## Repository status at this snapshot
 
-The active uncommitted feature work adds precision multi-frame camera capture
+The integrated feature work adds precision multi-frame camera capture
 for clarity-sensitive analysis. Fine registration and accuracy validation now
 wait for settling, discard buffered frames, require unique fresh frames,
 aggregate subpixel cross centers with median/MAD rejection, and reject excessive
@@ -34,13 +38,14 @@ camera/detection variation to be distinguished from homing/pose variation.
 Trace, matching, workspace capture, and calibration stills use a stable sharp
 frame; continuous preview and streaming remain immediate single-frame paths.
 
-This precision-capture revision is software-verified on Windows with 95 focused
-tests. A full run reaches 394 passing and 2 skipped tests, with two pre-existing
-narrow-panel layout assertions failing in this checkout. Ruff is not installed
-in the current Windows virtual environment. Real C920/V4L2 control readback,
-capture timing, vibration settling, jitter thresholds, homing repeatability,
-and physical fine-alignment accuracy remain to be verified on the Linux laser
-machine before these defaults are treated as proven hardware settings.
+The integrated Linux checkout passes all 412 automated tests. Precision capture
+is covered for genuinely fresh unique frames, configurable settling/discard and
+burst counts, camera-control readback, sharp-frame selection, temporal
+median/MAD rejection, jitter limits, persisted diagnostics, home-first capture,
+and guarded no-home recapture. Real C920/V4L2 control readback, capture timing,
+vibration settling, jitter thresholds, homing repeatability, and physical
+fine-alignment accuracy remain to be verified on the laser machine before these
+defaults are treated as proven hardware settings.
 
 The object-tracing implementation was consolidated into focused vision,
 project-command, desktop-workflow, offline-tool, and artifact-policy commits.
@@ -173,7 +178,7 @@ streaming path is unchanged.
 
 ## Verified in the current Linux checkout
 
-- **385 tests passed** with Qt using the offscreen platform.
+- **412 tests passed** with Qt using the offscreen platform.
 - Exact-job Preview verification covers final-stream parsing, immutable move
   context, spot-offset recovery, powered-rapid warnings, time scrubbing,
   keyboard timeline navigation, operation visibility, planner comparison,
@@ -224,9 +229,14 @@ streaming path is unchanged.
   fixed-limit pass/fail classification, low-confidence rejection, laser-off
   session rejection, powered synthetic capture, persistence, stale-map
   rejection, and native job handoff.
+- Focused precision-capture verification covers configurable settling,
+  genuinely fresh discarded frames, unique multi-frame bursts, camera-control
+  reapplication/readback, sharp-frame selection, median/MAD temporal outlier
+  rejection, per-mark jitter reporting/rejection, home-first capture, no-home
+  recapture, and persisted diagnostics.
 - Files changed for Trace, build identity, coordinate-reference gating, bed
   mapping, and fine registration pass Ruff.
-- Repository-wide Ruff currently reports 66 pre-existing findings outside this
+- Repository-wide Ruff currently reports 64 pre-existing findings outside this
   change; the repository as a whole is not lint-clean.
 - Fine-registration capture, reviewed exclusion, and a later 8/8-inlier
   full-map application have been interactively exercised against the C920.
