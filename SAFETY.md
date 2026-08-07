@@ -60,6 +60,11 @@ of beam location.
 Independent accuracy validation uses a separate guarded five-cross job. It
 requires every holdout detection, rejects dry-only and stale-map sessions, and
 reports fixed RMS/maximum acceptance limits without modifying calibration.
+Precision capture and **Recapture without homing** are measurement operations:
+they do not arm the laser or send motion. The recapture control is available
+only after the current Machine Setup session establishes the camera pose. Its
+jitter and control-readback diagnostics improve rejection of unreliable
+measurements, but are not safety functions or proof of beam location.
 
 These controls reduce accidental commands. They do not meet any functional-safety performance level and do not make an open Class 4 laser safe.
 

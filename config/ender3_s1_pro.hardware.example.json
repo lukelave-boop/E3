@@ -23,6 +23,16 @@
       "white_balance_automatic": 0,
       "white_balance_temperature": 4500,
       "gain": 0
+    },
+    "precision_capture": {
+      "settle_seconds": 1.5,
+      "discard_frames": 8,
+      "sample_frames": 15,
+      "timeout_seconds": 8.0,
+      "minimum_valid_frames": 9,
+      "mad_multiplier": 3.5,
+      "outlier_floor_px": 0.25,
+      "max_jitter_rms_px": 0.75
     }
   },
   "machine": {

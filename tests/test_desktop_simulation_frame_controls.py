@@ -69,8 +69,14 @@ class _SimulationFrameContext:
     def clear_simulation_workspace_frame(self) -> None:
         self.has_simulation_workspace_frame = False
 
-    def rectified_frame(self, refresh: bool = True) -> np.ndarray:
+    def rectified_frame(
+        self,
+        refresh: bool = True,
+        *,
+        precision: bool = False,
+    ) -> np.ndarray:
         del refresh
+        del precision
         return self.frame.copy()
 
 

@@ -63,12 +63,23 @@ vision, G-code, or machine models.
 
 ```text
 CameraService or SyntheticCameraService
-  -> raw OpenCV BGR frame
+  -> sequence-numbered raw OpenCV BGR frame
+  -> immediate snapshot for live preview, or precision FrameBurst for analysis
+     (settle, unique-frame discard, control reapply/readback, fresh samples)
   -> LensModel.undistort() when a lens model exists
   -> BedMapper.rectify()
   -> top-down image at configured pixels/mm
   -> workspace background and optional vision detectors
 ```
+
+Fine registration and accuracy validation detect every expected cross in every
+burst frame, aggregate each center with median/MAD rejection, and reject the
+result when too few samples survive or temporal jitter exceeds the configured
+limit. Their persisted reports include frame sequences, sharpness, camera
+control status, inlier/outlier counts, and jitter. Trace, template matching,
+workspace captures, and calibration stills use the sharpest frame from the
+same stable capture path; continuous UI preview and streaming remain single
+frame operations.
 
 In safe simulation only, `AppContext` can replace the final corrected frame
 with a thread-safe, memory-only override. The source is either a validated

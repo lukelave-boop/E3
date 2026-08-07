@@ -719,8 +719,14 @@ def test_controller_uses_one_frozen_frame_for_all_template_option_groups(
                 )
             )
 
-        def rectified_frame(self, refresh: bool = True) -> np.ndarray:
+        def rectified_frame(
+            self,
+            refresh: bool = True,
+            *,
+            precision: bool = False,
+        ) -> np.ndarray:
             assert refresh
+            assert precision
             self.frame_calls += 1
             return frame
 

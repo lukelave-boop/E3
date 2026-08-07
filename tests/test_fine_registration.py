@@ -6,6 +6,8 @@ import numpy as np
 import pytest
 
 from laser_aligner.app import AppContext
+from laser_aligner.camera.controls import ControlResult
+from laser_aligner.camera.service import FrameBurst
 from laser_aligner.calibration.bed import BedCalibration, BedMapper, BedPoint
 from laser_aligner.calibration.registration import (
     accuracy_validation_targets,
@@ -629,6 +631,26 @@ def test_powered_accuracy_validation_scores_synthetic_holdouts_and_rejects_stale
         assert result["analysis"]["passed"] is True
         assert result["analysis"]["point_count"] == 5
         assert Path(result["capture_path"]).exists()
+
+        burst = FrameBurst(
+            frames=tuple(image.copy() for _ in range(15)),
+            sequence_numbers=tuple(range(101, 116)),
+            discarded_frames=8,
+            settle_seconds=1.5,
+            elapsed_seconds=2.6,
+            sharpness_scores=tuple(100.0 for _ in range(15)),
+            controls=ControlResult({}, {}, {}),
+        )
+        precision = context.analyze_accuracy_validation_burst(burst)
+        diagnostics = precision["analysis"]["precision_capture"]
+        assert diagnostics["camera"]["sample_frames"] == 15
+        assert diagnostics["aggregation"]["worst_jitter_rms_px"] == pytest.approx(
+            0.0
+        )
+        assert all(
+            item["inlier_count"] == 15
+            for item in precision["analysis"]["measurements"]
+        )
 
         context.bed.apply_registration_translation(0.2, 0.0)
         with pytest.raises(CalibrationError, match="map changed"):

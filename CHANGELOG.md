@@ -34,7 +34,16 @@
 - Added a persistent machine connection status and Connect/Disconnect button to
   the Machine Setup window so calibration recovery does not require closing the
   dialog.
-
+- Added a shared precision camera-capture path for alignment and other
+  clarity-sensitive operations. It waits for motion/camera settling, discards
+  genuinely newer buffered frames, collects a configurable unique-frame burst,
+  reapplies and reads back supported camera controls, and selects a sharp still
+  where a single image is required.
+- Fine registration and holdout validation now detect each mark across the
+  burst, combine centers with median/MAD outlier rejection, reject excessive
+  temporal jitter, and persist frame, control, inlier, outlier, and jitter
+  diagnostics. Machine Setup can repeat the measurement without another home
+  cycle to distinguish capture variation from homing repeatability.
 - Stopped recurring camera-refresh failures from opening a modal dialog every
   refresh cycle. One camera fault is acknowledged once, subsequent failures are
   suppressed until recovery or an explicit Refresh camera retry, and successful

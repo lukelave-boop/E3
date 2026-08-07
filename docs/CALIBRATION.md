@@ -50,12 +50,25 @@ The Ender moves the workpiece in Y. The photograph is valid only when the bed is
 
 Fine registration is a verification layer on top of a solved bed homography.
 The desktop generates eight crosses at locations deliberately separated from
-the standard 5×5 grid, then measures their centers in a fresh homed/parked
-capture. For each mark it records:
+the standard 5×5 grid, then measures their centers in a precision capture at
+the homed/parked camera pose. Precision capture waits for the configured settle
+period, discards buffered frames, and analyzes a burst of genuinely newer
+frames. Per-mark centers are combined with a median/MAD filter; isolated frame
+outliers are rejected and excessive remaining jitter rejects the measurement.
+Configured camera controls are reapplied before the burst and, on V4L2 systems,
+read back where supported. For each mark it records:
 
 - the commanded machine coordinate
 - the coordinate predicted by the current camera map
 - the X/Y residual and total error
+- the accepted sample count, rejected outlier count, and temporal jitter
+
+After **Home / park, precision capture**, use **Recapture without homing** while
+the machine and workpiece remain untouched. If no-home repeats are stable but
+home-first repeats move, investigate homing and the photography pose. If
+no-home repeats also vary, investigate camera rigidity, focus, lighting,
+locked controls, vibration, and mark detection. The no-home action is enabled
+only after Machine Setup establishes the camera pose in the current dialog.
 
 If the residual vectors agree within the bounded scatter thresholds, the
 desktop may apply one explicit translation to the camera map. The cumulative
@@ -84,7 +97,9 @@ job confirmation, arming, homing, bounds, stop, and laser sequencing controls.
 After applying a reviewed correction, use the desktop Accuracy validation tab.
 It generates five holdout crosses at locations distinct from the eight points
 used by fine registration, then captures and scores them without fitting another
-map. All five detections are mandatory. A pass requires no more than `0.5 mm`
+map. It uses the same precision burst, temporal outlier rejection, jitter gate,
+and optional no-home diagnostic recapture as fine registration. All five
+detections are mandatory. A pass requires no more than `0.5 mm`
 RMS error and `1.0 mm` maximum error with confident detections. The prepared job
 is bound to the active bed-map matrix; changing calibration invalidates the
 session and requires a new job. Validation is diagnostic and cannot apply any

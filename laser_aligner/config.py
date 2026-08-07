@@ -41,6 +41,18 @@ class AppSettings:
 
 
 @dataclass(slots=True)
+class PrecisionCaptureSettings:
+    settle_seconds: float = 1.5
+    discard_frames: int = 8
+    sample_frames: int = 15
+    timeout_seconds: float = 8.0
+    minimum_valid_frames: int = 9
+    mad_multiplier: float = 3.5
+    outlier_floor_px: float = 0.25
+    max_jitter_rms_px: float = 0.75
+
+
+@dataclass(slots=True)
 class CameraSettings:
     device: str = "/dev/video0"
     width: int = 1920
@@ -51,6 +63,9 @@ class CameraSettings:
     jpeg_quality: int = 90
     warmup_frames: int = 12
     controls: dict[str, int | bool] = field(default_factory=dict)
+    precision_capture: PrecisionCaptureSettings = field(
+        default_factory=PrecisionCaptureSettings
+    )
 
 
 @dataclass(slots=True)
@@ -169,6 +184,22 @@ class Settings:
                 "width": self.camera.width,
                 "height": self.camera.height,
                 "fps": self.camera.fps,
+                "precision_capture": {
+                    "settle_seconds": self.camera.precision_capture.settle_seconds,
+                    "discard_frames": self.camera.precision_capture.discard_frames,
+                    "sample_frames": self.camera.precision_capture.sample_frames,
+                    "timeout_seconds": self.camera.precision_capture.timeout_seconds,
+                    "minimum_valid_frames": (
+                        self.camera.precision_capture.minimum_valid_frames
+                    ),
+                    "mad_multiplier": self.camera.precision_capture.mad_multiplier,
+                    "outlier_floor_px": (
+                        self.camera.precision_capture.outlier_floor_px
+                    ),
+                    "max_jitter_rms_px": (
+                        self.camera.precision_capture.max_jitter_rms_px
+                    ),
+                },
             },
             "machine": {
                 "backend": self.machine.backend,
@@ -246,6 +277,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "white_balance_temperature": 4500,
             "gain": 0,
         },
+        "precision_capture": {
+            "settle_seconds": 1.5,
+            "discard_frames": 8,
+            "sample_frames": 15,
+            "timeout_seconds": 8.0,
+            "minimum_valid_frames": 9,
+            "mad_multiplier": 3.5,
+            "outlier_floor_px": 0.25,
+            "max_jitter_rms_px": 0.75,
+        },
     },
     "machine": {
         "backend": "simulator",
@@ -310,6 +351,28 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("camera.jpeg_quality must be between 1 and 100")
     if int(raw["camera"]["warmup_frames"]) < 0:
         raise ConfigError("camera.warmup_frames cannot be negative")
+    precision = raw["camera"]["precision_capture"]
+    if float(precision["settle_seconds"]) < 0:
+        raise ConfigError("camera.precision_capture.settle_seconds cannot be negative")
+    if int(precision["discard_frames"]) < 0:
+        raise ConfigError("camera.precision_capture.discard_frames cannot be negative")
+    sample_frames = int(precision["sample_frames"])
+    minimum_valid_frames = int(precision["minimum_valid_frames"])
+    if sample_frames < 1:
+        raise ConfigError("camera.precision_capture.sample_frames must be positive")
+    if not 1 <= minimum_valid_frames <= sample_frames:
+        raise ConfigError(
+            "camera.precision_capture.minimum_valid_frames must be between 1 "
+            "and sample_frames"
+        )
+    if float(precision["timeout_seconds"]) <= 0:
+        raise ConfigError("camera.precision_capture.timeout_seconds must be positive")
+    if float(precision["mad_multiplier"]) <= 0:
+        raise ConfigError("camera.precision_capture.mad_multiplier must be positive")
+    if float(precision["outlier_floor_px"]) < 0:
+        raise ConfigError("camera.precision_capture.outlier_floor_px cannot be negative")
+    if float(precision["max_jitter_rms_px"]) <= 0:
+        raise ConfigError("camera.precision_capture.max_jitter_rms_px must be positive")
     area = raw["machine"]["work_area"]
     if float(area["x_max"]) <= float(area["x_min"]):
         raise ConfigError("machine.work_area.x_max must be greater than x_min")
@@ -432,6 +495,32 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             jpeg_quality=int(raw["camera"]["jpeg_quality"]),
             warmup_frames=int(raw["camera"]["warmup_frames"]),
             controls=dict(raw["camera"].get("controls", {})),
+            precision_capture=PrecisionCaptureSettings(
+                settle_seconds=float(
+                    raw["camera"]["precision_capture"]["settle_seconds"]
+                ),
+                discard_frames=int(
+                    raw["camera"]["precision_capture"]["discard_frames"]
+                ),
+                sample_frames=int(
+                    raw["camera"]["precision_capture"]["sample_frames"]
+                ),
+                timeout_seconds=float(
+                    raw["camera"]["precision_capture"]["timeout_seconds"]
+                ),
+                minimum_valid_frames=int(
+                    raw["camera"]["precision_capture"]["minimum_valid_frames"]
+                ),
+                mad_multiplier=float(
+                    raw["camera"]["precision_capture"]["mad_multiplier"]
+                ),
+                outlier_floor_px=float(
+                    raw["camera"]["precision_capture"]["outlier_floor_px"]
+                ),
+                max_jitter_rms_px=float(
+                    raw["camera"]["precision_capture"]["max_jitter_rms_px"]
+                ),
+            ),
         ),
         machine=MachineSettings(
             backend=str(raw["machine"]["backend"]),

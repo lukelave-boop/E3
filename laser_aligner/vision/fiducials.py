@@ -255,3 +255,178 @@ def detect_crosshairs_near(
         "orientation": "Seeded from current mapping; refined to nearby burned crosses",
         "maximum_seed_shift_px": float(max_shift),
     }
+
+
+def detect_crosshairs_burst(
+    images: list[np.ndarray] | tuple[np.ndarray, ...],
+    expected_points: list[dict[str, Any]],
+    *,
+    search_radius_px: int = 55,
+    minimum_valid_frames: int = 1,
+    mad_multiplier: float = 3.5,
+    outlier_floor_px: float = 0.25,
+    max_jitter_rms_px: float = 0.75,
+) -> dict[str, Any]:
+    """Detect every frame, then robustly aggregate each crosshair center."""
+
+    if not images:
+        return {
+            "detected": False,
+            "reason": "Precision capture contains no frames",
+            "points": [],
+        }
+    required = max(1, int(minimum_valid_frames))
+    detections = [
+        detect_crosshairs_near(
+            image,
+            expected_points,
+            search_radius_px=search_radius_px,
+        )
+        for image in images
+    ]
+    successful = [item for item in detections if item.get("detected")]
+    if len(successful) < required:
+        return {
+            "detected": False,
+            "reason": (
+                f"Only {len(successful)} of {len(images)} precision frames "
+                f"contained all expected marks; {required} are required"
+            ),
+            "points": [],
+            "capture_diagnostics": {
+                "requested_frames": len(images),
+                "successful_frames": len(successful),
+                "minimum_valid_frames": required,
+            },
+        }
+
+    samples_by_id: dict[int, list[dict[str, Any]]] = {
+        int(item["id"]): [] for item in expected_points
+    }
+    confidence_counts: dict[str, int] = {}
+    for frame_index, detection in enumerate(detections):
+        confidence = str(detection.get("confidence", "unknown"))
+        confidence_counts[confidence] = confidence_counts.get(confidence, 0) + 1
+        if not detection.get("detected"):
+            continue
+        for point in detection.get("points", []):
+            identifier = int(point["id"])
+            if identifier in samples_by_id:
+                samples_by_id[identifier].append(
+                    {**point, "frame_index": int(frame_index)}
+                )
+
+    aggregated: list[dict[str, Any]] = []
+    rejected_frames: set[int] = set()
+    unstable: list[str] = []
+    for target in expected_points:
+        identifier = int(target["id"])
+        samples = samples_by_id[identifier]
+        if len(samples) < required:
+            unstable.append(
+                f"mark {identifier} has {len(samples)} valid frames; {required} required"
+            )
+            continue
+        coordinates = np.asarray(
+            [[item["image_x"], item["image_y"]] for item in samples],
+            dtype=np.float64,
+        )
+        initial_center = np.median(coordinates, axis=0)
+        distances = np.linalg.norm(coordinates - initial_center, axis=1)
+        median_distance = float(np.median(distances))
+        mad = float(np.median(np.abs(distances - median_distance)))
+        robust_sigma = 1.4826 * mad
+        rejection_radius = max(
+            float(outlier_floor_px),
+            median_distance + float(mad_multiplier) * robust_sigma,
+        )
+        inlier_mask = distances <= rejection_radius + 1e-12
+        inlier_count = int(np.count_nonzero(inlier_mask))
+        for sample, is_inlier in zip(samples, inlier_mask, strict=True):
+            if not bool(is_inlier):
+                rejected_frames.add(int(sample["frame_index"]))
+        if inlier_count < required:
+            unstable.append(
+                f"mark {identifier} retained {inlier_count} stable frames; {required} required"
+            )
+            continue
+
+        inlier_coordinates = coordinates[inlier_mask]
+        center = np.median(inlier_coordinates, axis=0)
+        inlier_distances = np.linalg.norm(inlier_coordinates - center, axis=1)
+        jitter_rms = float(np.sqrt(np.mean(np.square(inlier_distances))))
+        jitter_max = float(np.max(inlier_distances))
+        if jitter_rms > float(max_jitter_rms_px):
+            unstable.append(
+                f"mark {identifier} jitter is {jitter_rms:.3f} px "
+                f"(limit {float(max_jitter_rms_px):.3f} px)"
+            )
+
+        inlier_samples = [
+            item
+            for item, is_inlier in zip(samples, inlier_mask, strict=True)
+            if bool(is_inlier)
+        ]
+        expected_x = float(target["image_x"])
+        expected_y = float(target["image_y"])
+        aggregated.append(
+            {
+                "id": identifier,
+                "image_x": float(center[0]),
+                "image_y": float(center[1]),
+                "machine_x": float(target["machine_x"]),
+                "machine_y": float(target["machine_y"]),
+                "label": f"Auto fiducial {identifier}",
+                "score": float(
+                    np.median([float(item["score"]) for item in inlier_samples])
+                ),
+                "seed_x": expected_x,
+                "seed_y": expected_y,
+                "shift_px": float(
+                    np.hypot(center[0] - expected_x, center[1] - expected_y)
+                ),
+                "sample_count": len(samples),
+                "inlier_count": inlier_count,
+                "outlier_count": len(samples) - inlier_count,
+                "jitter_rms_px": jitter_rms,
+                "jitter_max_px": jitter_max,
+                "mad_px": mad,
+                "rejection_radius_px": rejection_radius,
+            }
+        )
+
+    diagnostics = {
+        "requested_frames": len(images),
+        "successful_frames": len(successful),
+        "minimum_valid_frames": required,
+        "rejected_frame_count": len(rejected_frames),
+        "rejected_frame_indices": sorted(rejected_frames),
+        "confidence_counts": confidence_counts,
+        "worst_jitter_rms_px": (
+            max((float(item["jitter_rms_px"]) for item in aggregated), default=0.0)
+        ),
+        "max_jitter_rms_px": float(max_jitter_rms_px),
+    }
+    if unstable or len(aggregated) != len(expected_points):
+        return {
+            "detected": False,
+            "reason": "Precision capture was unstable: " + "; ".join(unstable),
+            "points": aggregated,
+            "capture_diagnostics": diagnostics,
+        }
+
+    aggregated.sort(key=lambda point: point["id"])
+    maximum_shift = max(float(point["shift_px"]) for point in aggregated)
+    confidence = "high"
+    if confidence_counts.get("low", 0):
+        confidence = "low"
+    elif confidence_counts.get("medium", 0):
+        confidence = "medium"
+    return {
+        "detected": True,
+        "points": aggregated,
+        "confidence": confidence,
+        "orientation": "Median/MAD aggregate of fresh precision frames",
+        "maximum_seed_shift_px": maximum_shift,
+        "capture_diagnostics": diagnostics,
+    }

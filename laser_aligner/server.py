@@ -169,13 +169,21 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/camera/controls/apply":
                 result = self.context.camera.apply_configured_controls()
                 self._send_json(
-                    {"ok": True, "requested": result.requested, "applied": result.applied, "skipped": result.skipped}
+                    {
+                        "ok": True,
+                        "requested": result.requested,
+                        "applied": result.applied,
+                        "verified": result.verified,
+                        "skipped": result.skipped,
+                    }
                 )
             elif path == "/api/camera/synthetic-scene":
                 self.context.synthetic_scene(str(payload.get("scene", "bed")))
                 self._send_json({"ok": True})
             elif path == "/api/calibration/lens/capture":
-                image = self.context.camera_frame(undistort=False)
+                image, _diagnostics = self.context.stable_camera_frame(
+                    undistort=False
+                )
                 self._send_json({"ok": True, **self.context.lens.capture(image)})
             elif path == "/api/calibration/lens/solve":
                 model = self.context.lens.solve()
@@ -203,7 +211,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/calibration/bed/auto-accept":
                 self._send_json({"ok": True, **self.context.replace_bed_points(payload)})
             elif path == "/api/workspace/capture":
-                image = self.context.rectified_frame(refresh=True)
+                image = self.context.rectified_frame(refresh=True, precision=True)
                 self._send_json({"ok": True, "width": image.shape[1], "height": image.shape[0]})
             elif path == "/api/vision/workpiece":
                 self._send_json({"ok": True, **self.context.detect_workpiece()})

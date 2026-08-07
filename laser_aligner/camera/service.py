@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from ..config import CameraSettings, WorkArea
+from ..config import CameraSettings, PrecisionCaptureSettings, WorkArea
 from ..errors import CameraError
 from .controls import ControlResult, apply_controls
 
@@ -39,6 +39,46 @@ class CameraStatus:
     synthetic: bool = False
 
 
+@dataclass(slots=True)
+class FrameBurst:
+    frames: tuple[np.ndarray, ...]
+    sequence_numbers: tuple[int, ...]
+    discarded_frames: int
+    settle_seconds: float
+    elapsed_seconds: float
+    sharpness_scores: tuple[float, ...]
+    controls: ControlResult
+
+    @property
+    def sharpest_index(self) -> int:
+        if not self.sharpness_scores:
+            raise CameraError("Precision capture contains no frames")
+        return max(range(len(self.sharpness_scores)), key=self.sharpness_scores.__getitem__)
+
+    @property
+    def sharpest_frame(self) -> np.ndarray:
+        return self.frames[self.sharpest_index].copy()
+
+    def diagnostics(self) -> dict[str, object]:
+        return {
+            "sample_frames": len(self.frames),
+            "discarded_frames": int(self.discarded_frames),
+            "settle_seconds": float(self.settle_seconds),
+            "elapsed_seconds": float(self.elapsed_seconds),
+            "sequence_start": (
+                int(self.sequence_numbers[0]) if self.sequence_numbers else None
+            ),
+            "sequence_end": (
+                int(self.sequence_numbers[-1]) if self.sequence_numbers else None
+            ),
+            "sharpest_index": int(self.sharpest_index),
+            "sharpness_scores": [float(value) for value in self.sharpness_scores],
+            "controls_applied": dict(self.controls.applied),
+            "controls_skipped": dict(self.controls.skipped),
+            "controls_verified": dict(self.controls.verified),
+        }
+
+
 class CameraService:
     """Background OpenCV/V4L2 capture service."""
 
@@ -50,6 +90,7 @@ class CameraService:
         self._frames_read = 0
         self._last_error: str | None = None
         self._lock = threading.RLock()
+        self._frame_condition = threading.Condition(self._lock)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._connected = False
@@ -118,12 +159,13 @@ class CameraService:
             instant_fps = 1.0 / delta
             smoothed_fps = instant_fps if smoothed_fps == 0 else 0.9 * smoothed_fps + 0.1 * instant_fps
             previous = now
-            with self._lock:
+            with self._frame_condition:
                 self._frame = frame
                 self._frame_time = time.time()
                 self._frames_read += 1
                 self._actual_fps = smoothed_fps
                 self._last_error = None
+                self._frame_condition.notify_all()
 
     def stop(self) -> None:
         self._stop.set()
@@ -131,9 +173,10 @@ class CameraService:
             self._thread.join(timeout=2)
         if self._capture is not None:
             self._capture.release()
-        with self._lock:
+        with self._frame_condition:
             self._capture = None
             self._connected = False
+            self._frame_condition.notify_all()
 
     def restart(self) -> None:
         self.stop()
@@ -170,6 +213,82 @@ class CameraService:
             time.sleep(0.02)
         raise CameraError(
             f"Camera did not provide a fresh frame within {float(timeout):g} seconds"
+        )
+
+    @staticmethod
+    def _sharpness_score(image: np.ndarray) -> float:
+        gray = (
+            cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            if image.ndim == 3
+            else image
+        )
+        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+
+    def _wait_for_new_frame(
+        self,
+        after_sequence: int,
+        deadline: float,
+    ) -> tuple[np.ndarray, int]:
+        with self._frame_condition:
+            while self._frames_read <= after_sequence:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CameraError(
+                        "Timed out waiting for fresh camera frames during precision capture"
+                    )
+                if self._stop.is_set() or not self._connected:
+                    raise CameraError("Camera stopped during precision capture")
+                self._frame_condition.wait(timeout=remaining)
+            if self._frame is None:
+                raise CameraError("No camera frame is available")
+            return self._frame.copy(), int(self._frames_read)
+
+    def capture_burst(
+        self,
+        settings: PrecisionCaptureSettings | None = None,
+        *,
+        reapply_controls: bool = True,
+    ) -> FrameBurst:
+        """Capture distinct post-settle frames for precision analysis.
+
+        The background reader owns the camera. This method waits on its
+        monotonic frame counter so buffered or repeated snapshots cannot be
+        mistaken for independent samples.
+        """
+
+        profile = settings or self.settings.precision_capture
+        started = time.monotonic()
+        controls = (
+            self.apply_configured_controls()
+            if reapply_controls
+            else ControlResult({}, {}, {})
+        )
+        if profile.settle_seconds > 0 and self._stop.wait(profile.settle_seconds):
+            raise CameraError("Camera stopped during precision-capture settling")
+        deadline = time.monotonic() + profile.timeout_seconds
+        with self._lock:
+            sequence = int(self._frames_read)
+
+        for _ in range(profile.discard_frames):
+            _, sequence = self._wait_for_new_frame(sequence, deadline)
+
+        frames: list[np.ndarray] = []
+        sequences: list[int] = []
+        sharpness: list[float] = []
+        for _ in range(profile.sample_frames):
+            frame, sequence = self._wait_for_new_frame(sequence, deadline)
+            frames.append(frame)
+            sequences.append(sequence)
+            sharpness.append(self._sharpness_score(frame))
+
+        return FrameBurst(
+            frames=tuple(frames),
+            sequence_numbers=tuple(sequences),
+            discarded_frames=profile.discard_frames,
+            settle_seconds=profile.settle_seconds,
+            elapsed_seconds=time.monotonic() - started,
+            sharpness_scores=tuple(sharpness),
+            controls=controls,
         )
 
     def jpeg(self, quality: int | None = None) -> bytes:
@@ -222,10 +341,11 @@ class SyntheticCameraService(CameraService):
         if self._synthetic_thread and self._synthetic_thread.is_alive():
             return
         self._stop.clear()
-        with self._lock:
+        with self._frame_condition:
             self._connected = True
             self._last_error = None
             self._frame = self._render_scene()
+            self._frame_condition.notify_all()
         self._synthetic_thread = threading.Thread(target=self._synthetic_loop, daemon=True, name="synthetic-camera")
         self._synthetic_thread.start()
 
@@ -233,26 +353,74 @@ class SyntheticCameraService(CameraService):
         delay = 1.0 / max(1, min(self.settings.fps, 10))
         while not self._stop.is_set():
             frame = self._render_scene()
-            with self._lock:
+            with self._frame_condition:
                 self._frame = frame
                 self._frame_time = time.time()
                 self._frames_read += 1
                 self._actual_fps = 1.0 / delay
+                self._frame_condition.notify_all()
             time.sleep(delay)
 
     def stop(self) -> None:
         self._stop.set()
         if self._synthetic_thread and self._synthetic_thread.is_alive():
             self._synthetic_thread.join(timeout=2)
-        with self._lock:
+        with self._frame_condition:
             self._connected = False
+            self._frame_condition.notify_all()
+
+    def capture_burst(
+        self,
+        settings: PrecisionCaptureSettings | None = None,
+        *,
+        reapply_controls: bool = True,
+    ) -> FrameBurst:
+        """Generate distinct deterministic samples without real-time waiting."""
+
+        profile = settings or self.settings.precision_capture
+        started = time.monotonic()
+        controls = (
+            self.apply_configured_controls()
+            if reapply_controls
+            else ControlResult({}, {}, {})
+        )
+        frames: list[np.ndarray] = []
+        sequences: list[int] = []
+        sharpness: list[float] = []
+        with self._frame_condition:
+            if not self._connected:
+                raise CameraError("Camera stopped during precision capture")
+            for _ in range(profile.discard_frames):
+                self._frame = self._render_scene()
+                self._frames_read += 1
+            for _ in range(profile.sample_frames):
+                frame = self._render_scene()
+                self._frame = frame
+                self._frame_time = time.time()
+                self._frames_read += 1
+                frames.append(frame.copy())
+                sequences.append(self._frames_read)
+                sharpness.append(self._sharpness_score(frame))
+            self._frame_condition.notify_all()
+        return FrameBurst(
+            frames=tuple(frames),
+            sequence_numbers=tuple(sequences),
+            discarded_frames=profile.discard_frames,
+            settle_seconds=0.0,
+            elapsed_seconds=time.monotonic() - started,
+            sharpness_scores=tuple(sharpness),
+            controls=controls,
+        )
 
     def set_scene(self, scene: str) -> None:
         if scene not in {"bed", "checkerboard"}:
             raise CameraError(f"Unknown synthetic scene: {scene}")
         self._scene = scene
-        with self._lock:
+        with self._frame_condition:
             self._frame = self._render_scene()
+            self._frames_read += 1
+            self._frame_time = time.time()
+            self._frame_condition.notify_all()
 
     def _render_scene(self) -> np.ndarray:
         width = max(640, self.settings.width)

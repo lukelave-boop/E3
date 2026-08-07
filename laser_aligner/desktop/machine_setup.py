@@ -82,6 +82,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._fine_registration_measurements: list[dict[str, Any]] = []
         self._dense_analysis: dict[str, Any] | None = None
         self._dense_validation_analysis: dict[str, Any] | None = None
+        self._photo_pose_confirmed = False
         self._registration_table_updating = False
         self.setWindowTitle("Machine Setup")
         self.setMinimumSize(900, 680)
@@ -153,6 +154,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
         row.addWidget(apply_controls)
         row.addWidget(save)
         layout.addLayout(row)
+        precision = self.context.settings.camera.precision_capture
+        precision_note = QtWidgets.QLabel(
+            f"Precision stills wait {precision.settle_seconds:g} s, discard "
+            f"{precision.discard_frames} fresh frames, then analyze "
+            f"{precision.sample_frames} frames. Live preview remains immediate."
+        )
+        precision_note.setWordWrap(True)
+        precision_note.setObjectName("mutedLabel")
+        layout.addWidget(precision_note)
         scene_row = QtWidgets.QHBoxLayout()
         scene_row.addWidget(QtWidgets.QLabel("Simulation scene"))
         self.synthetic_scene = QtWidgets.QComboBox()
@@ -343,8 +353,19 @@ class MachineSetupDialog(QtWidgets.QDialog):
         prepare_row.addWidget(dry)
         prepare_row.addWidget(powered)
         right.addLayout(prepare_row)
-        capture = QtWidgets.QPushButton("Home / park, capture and analyze marks")
-        right.addWidget(capture)
+        capture_row = QtWidgets.QHBoxLayout()
+        capture = QtWidgets.QPushButton("Home / park, precision capture")
+        self.registration_recapture_button = QtWidgets.QPushButton(
+            "Recapture without homing"
+        )
+        self.registration_recapture_button.setEnabled(False)
+        self.registration_recapture_button.setToolTip(
+            "Capture another precision burst at the current camera pose. Use this to "
+            "measure camera/detector repeatability separately from homing repeatability."
+        )
+        capture_row.addWidget(capture)
+        capture_row.addWidget(self.registration_recapture_button)
+        right.addLayout(capture_row)
         self.registration_results = QtWidgets.QTableWidget(0, 8)
         self.registration_results.setHorizontalHeaderLabels(
             ("Use", "#", "Command X", "Command Y", "Observed X", "Observed Y", "ΔX", "ΔY")
@@ -398,7 +419,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         dry.clicked.connect(lambda: self.prepare_registration_job(False))
         powered.clicked.connect(lambda: self.prepare_registration_job(True))
-        capture.clicked.connect(self.capture_fine_registration)
+        capture.clicked.connect(lambda: self.capture_fine_registration(home_first=True))
+        self.registration_recapture_button.clicked.connect(
+            lambda: self.capture_fine_registration(home_first=False)
+        )
         self.apply_registration_button.clicked.connect(self.apply_fine_registration)
         self.apply_registration_map_button.clicked.connect(self.apply_fine_registration_homography)
         reset.clicked.connect(self.reset_fine_registration)
@@ -456,8 +480,17 @@ class MachineSetupDialog(QtWidgets.QDialog):
         prepare_row.addWidget(validation_dry)
         prepare_row.addWidget(validation_powered)
         right.addLayout(prepare_row)
-        validation_capture = QtWidgets.QPushButton("Home / park, capture and score holdouts")
-        right.addWidget(validation_capture)
+        validation_capture_row = QtWidgets.QHBoxLayout()
+        validation_capture = QtWidgets.QPushButton("Home / park, precision capture")
+        self.validation_recapture_button = QtWidgets.QPushButton("Recapture without homing")
+        self.validation_recapture_button.setEnabled(False)
+        self.validation_recapture_button.setToolTip(
+            "Capture another precision burst without moving the machine. The machine "
+            "must still be parked at the calibrated camera pose."
+        )
+        validation_capture_row.addWidget(validation_capture)
+        validation_capture_row.addWidget(self.validation_recapture_button)
+        right.addLayout(validation_capture_row)
         dense_validation_row = QtWidgets.QHBoxLayout()
         dense_validation_dry = QtWidgets.QPushButton("Prepare dry 4×4 mesh check")
         dense_validation_powered = QtWidgets.QPushButton("Prepare powered 4×4 mesh check")
@@ -513,7 +546,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         validation_dry.clicked.connect(lambda: self.prepare_accuracy_validation_job(False))
         validation_powered.clicked.connect(lambda: self.prepare_accuracy_validation_job(True))
-        validation_capture.clicked.connect(self.capture_accuracy_validation)
+        validation_capture.clicked.connect(lambda: self.capture_accuracy_validation(home_first=True))
+        self.validation_recapture_button.clicked.connect(
+            lambda: self.capture_accuracy_validation(home_first=False)
+        )
         dense_validation_dry.clicked.connect(lambda: self.prepare_dense_validation_job(False))
         dense_validation_powered.clicked.connect(lambda: self.prepare_dense_validation_job(True))
         dense_validation_capture.clicked.connect(self.capture_dense_validation)
@@ -599,7 +635,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         result = self._message("Camera controls", self.context.camera.apply_configured_controls)
         if result is not None:
             QtWidgets.QMessageBox.information(
-                self, "Camera controls", f"Applied: {result.applied}\n\nSkipped: {result.skipped}"
+                self,
+                "Camera controls",
+                f"Applied: {result.applied}\n\nVerified: {result.verified}"
+                f"\n\nSkipped: {result.skipped}",
             )
 
     def save_still(self) -> None:
@@ -616,8 +655,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.refresh_camera()
 
     def capture_lens(self) -> None:
+        def operation() -> dict[str, Any]:
+            image, _diagnostics = self.context.stable_camera_frame(undistort=False)
+            return self.context.lens.capture(image)
+
         result = self._message(
-            "Checkerboard capture", lambda: self.context.lens.capture(self.context.camera_frame(undistort=False))
+            "Checkerboard capture",
+            operation,
         )
         if result is not None:
             self.refresh_all()
@@ -650,6 +694,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def park(self) -> None:
         result = self._message("Park at camera pose", self.context.machine.prepare_photo_position)
         if result is not None:
+            self._set_photo_pose_confirmed(True)
             position = result["position"]
             QtWidgets.QMessageBox.information(
                 self,
@@ -929,21 +974,22 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.registrationJobPrepared.emit(job)
             self.accept()
 
-    def capture_fine_registration(self) -> None:
+    def _set_photo_pose_confirmed(self, confirmed: bool) -> None:
+        self._photo_pose_confirmed = bool(confirmed)
+        self.registration_recapture_button.setEnabled(self._photo_pose_confirmed)
+        self.validation_recapture_button.setEnabled(self._photo_pose_confirmed)
+
+    def capture_fine_registration(self, *, home_first: bool = True) -> None:
         def operation() -> tuple[np.ndarray, dict[str, Any]]:
-            self.context.machine.prepare_photo_position()
-            # The physical GRBL-derived controller acknowledges the queued
-            # park sequence before this slow bed has necessarily stopped.
-            # Fresh frames alone are therefore insufficient: allow the full
-            # measured settle window, then require frames captured after it.
-            time.sleep(_POST_PARK_CAMERA_SETTLE_SECONDS)
-            sequence = self.context.camera.frame_sequence() + 2
-            image = self.context.camera_frame(
-                undistort=True,
-                after_sequence=sequence,
-                timeout=6.0,
-            )
-            return image, self.context.analyze_fine_registration_image(image)
+            if not home_first and not self._photo_pose_confirmed:
+                raise RuntimeError(
+                    "Home / park and complete one precision capture before using "
+                    "recapture without homing"
+                )
+            result = self.context.capture_fine_registration(home_first=home_first)
+            if home_first:
+                self._set_photo_pose_confirmed(True)
+            return result
 
         result = self._message("Fine registration", operation)
         if result is None:
@@ -970,7 +1016,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self._fine_registration_measurements = []
             self.apply_registration_button.setEnabled(False)
             self.apply_registration_map_button.setEnabled(False)
-            self.registration_status.setText(payload.get("reason", "Registration marks were not detected"))
+            status = payload.get("reason", "Registration marks were not detected")
+            precision = self._precision_capture_summary(
+                payload.get("precision_capture")
+            )
+            self.registration_status.setText(
+                status + (f"\n{precision}" if precision else "")
+            )
             return
         self._fine_registration_measurements = list(payload.get("measurements", []))
         self._populate_registration_results(
@@ -1007,7 +1059,33 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 f"{refinement['correction_max_mm']:.3f} mm maximum correction"
                 f"{outlier_text}\n{refinement['reason']}"
             )
+        precision = self._precision_capture_summary(analysis.get("precision_capture"))
+        if precision:
+            status += f"\n{precision}"
         self.registration_status.setText(status)
+
+    @staticmethod
+    def _precision_capture_summary(payload: Any) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        camera = payload.get("camera")
+        aggregation = payload.get("aggregation")
+        if not isinstance(camera, dict) or not isinstance(aggregation, dict):
+            return ""
+        samples = int(camera.get("sample_frames", 0))
+        discarded = int(camera.get("discarded_frames", 0))
+        jitter = float(aggregation.get("worst_jitter_rms_px", 0.0))
+        rejected = int(aggregation.get("rejected_frame_count", 0))
+        controls_skipped = camera.get("controls_skipped")
+        control_note = (
+            f" | {len(controls_skipped)} camera controls unavailable"
+            if isinstance(controls_skipped, dict) and controls_skipped
+            else ""
+        )
+        return (
+            f"Precision capture: {samples} fresh frames after {discarded} discarded | "
+            f"worst jitter {jitter:.3f} px | {rejected} outlier frames{control_note}"
+        )
 
     def _populate_registration_results(
         self,
@@ -1327,17 +1405,17 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.validationJobPrepared.emit(job)
             self.accept()
 
-    def capture_accuracy_validation(self) -> None:
+    def capture_accuracy_validation(self, *, home_first: bool = True) -> None:
         def operation() -> tuple[np.ndarray, dict[str, Any]]:
-            self.context.machine.prepare_photo_position()
-            time.sleep(_POST_PARK_CAMERA_SETTLE_SECONDS)
-            sequence = self.context.camera.frame_sequence() + 2
-            image = self.context.camera_frame(
-                undistort=True,
-                after_sequence=sequence,
-                timeout=6.0,
-            )
-            return image, self.context.analyze_accuracy_validation_image(image)
+            if not home_first and not self._photo_pose_confirmed:
+                raise RuntimeError(
+                    "Home / park and complete one precision capture before using "
+                    "recapture without homing"
+                )
+            result = self.context.capture_accuracy_validation(home_first=home_first)
+            if home_first:
+                self._set_photo_pose_confirmed(True)
+            return result
 
         result = self._message("Accuracy validation", operation)
         if result is None:
@@ -1347,7 +1425,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if not isinstance(analysis, dict):
             self.validation_preview.set_image(image)
             self.validation_results.setRowCount(0)
-            self.validation_status.setText(payload.get("reason", "Validation holdouts were not detected"))
+            status = payload.get("reason", "Validation holdouts were not detected")
+            precision = self._precision_capture_summary(
+                payload.get("precision_capture")
+            )
+            self.validation_status.setText(
+                status + (f"\n{precision}" if precision else "")
+            )
             return
 
         measurements = list(analysis.get("measurements", []))
@@ -1397,6 +1481,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
             f"{analysis['mean_error_x_mm']:+.3f} Y"
             f"{analysis['mean_error_y_mm']:+.3f} mm\n{analysis['reason']}"
         )
+        precision = self._precision_capture_summary(analysis.get("precision_capture"))
+        if precision:
+            self.validation_status.setText(
+                self.validation_status.text() + f"\n{precision}"
+            )
 
     def prepare_dense_validation_job(self, powered: bool, *, confirmation: bool = False) -> None:
         if powered:

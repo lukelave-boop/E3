@@ -1,8 +1,9 @@
 # Current repository state
 
-Snapshot: **2026-08-06**
+Snapshot: **2026-08-07**
 
-Branch: **`desktop-v1`**
+Branch: **`codex/precision-camera-capture`**, based on `desktop-v1` at
+**`223ea2e`**
 
 Baseline before consolidation: **`778532b` — Polish desktop controls and add camera focus workflow**
 
@@ -20,6 +21,26 @@ This document describes the branch, not only the last release. Update it
 when verification, platform support, known gaps, or active feature work changes.
 
 ## Repository status at this snapshot
+
+The active uncommitted feature work adds precision multi-frame camera capture
+for clarity-sensitive analysis. Fine registration and accuracy validation now
+wait for settling, discard buffered frames, require unique fresh frames,
+aggregate subpixel cross centers with median/MAD rejection, and reject excessive
+temporal jitter. Camera controls are reapplied and V4L2 values are read back
+where available. Persisted reports expose frame sequences, sharpness, control
+status, inlier/outlier counts, and per-mark jitter. Machine Setup offers a
+guarded no-home recapture after the camera pose has been established, allowing
+camera/detection variation to be distinguished from homing/pose variation.
+Trace, matching, workspace capture, and calibration stills use a stable sharp
+frame; continuous preview and streaming remain immediate single-frame paths.
+
+This precision-capture revision is software-verified on Windows with 95 focused
+tests. A full run reaches 394 passing and 2 skipped tests, with two pre-existing
+narrow-panel layout assertions failing in this checkout. Ruff is not installed
+in the current Windows virtual environment. Real C920/V4L2 control readback,
+capture timing, vibration settling, jitter thresholds, homing repeatability,
+and physical fine-alignment accuracy remain to be verified on the Linux laser
+machine before these defaults are treated as proven hardware settings.
 
 The object-tracing implementation was consolidated into focused vision,
 project-command, desktop-workflow, offline-tool, and artifact-policy commits.

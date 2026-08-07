@@ -33,7 +33,12 @@ from .calibration.registration import (
     review_registration_measurements,
     suggested_registration_exclusions,
 )
-from .camera.service import CameraService, SyntheticCameraService, list_video_devices
+from .camera.service import (
+    CameraService,
+    FrameBurst,
+    SyntheticCameraService,
+    list_video_devices,
+)
 from .config import Settings
 from .errors import CalibrationError
 from .gcode.generator import (
@@ -45,7 +50,11 @@ from .gcode.generator import (
 from .geometry.svg import parse_svg
 from .machine.service import MachineService, list_serial_ports
 from .storage import atomic_write_json, read_json
-from .vision.fiducials import detect_aruco_markers, detect_crosshairs_near
+from .vision.fiducials import (
+    detect_aruco_markers,
+    detect_crosshairs_burst,
+    detect_crosshairs_near,
+)
 from .vision.workpiece import detect_workpiece
 
 LOGGER = logging.getLogger(__name__)
@@ -81,7 +90,7 @@ class AppContext:
             try:
                 self.camera.start()
                 if isinstance(self.camera, SyntheticCameraService) and self.bed.calibration is None:
-                    self.capture_bed_reference()
+                    self.capture_bed_reference(precision=False)
                     points = [
                         BedPoint(image_x=u, image_y=v, machine_x=x, machine_y=y, label=label)
                         for u, v, x, y, label in self.camera.calibration_correspondences()
@@ -131,6 +140,21 @@ class AppContext:
             frame = self.lens.model.undistort(frame)
         return frame
 
+    def precision_camera_burst(self, undistort: bool = True) -> FrameBurst:
+        burst = self.camera.capture_burst(self.settings.camera.precision_capture)
+        if undistort and self.lens.model is not None:
+            burst.frames = tuple(
+                self.lens.model.undistort(frame) for frame in burst.frames
+            )
+            burst.sharpness_scores = tuple(
+                self.camera._sharpness_score(frame) for frame in burst.frames
+            )
+        return burst
+
+    def stable_camera_frame(self, undistort: bool = True) -> tuple[np.ndarray, dict[str, Any]]:
+        burst = self.precision_camera_burst(undistort=undistort)
+        return burst.sharpest_frame, burst.diagnostics()
+
     @staticmethod
     def encode_jpeg(image: np.ndarray, quality: int = 92) -> bytes:
         ok, encoded = cv2.imencode(".jpg", image, [cv2.IMWRITE_JPEG_QUALITY, int(quality)])
@@ -138,8 +162,18 @@ class AppContext:
             raise RuntimeError("Could not encode image")
         return encoded.tobytes()
 
-    def save_capture(self, prefix: str = "capture", undistort: bool = True) -> Path:
-        image = self.camera_frame(undistort=undistort)
+    def save_capture(
+        self,
+        prefix: str = "capture",
+        undistort: bool = True,
+        *,
+        precision: bool = True,
+    ) -> Path:
+        image = (
+            self.stable_camera_frame(undistort=undistort)[0]
+            if precision
+            else self.camera_frame(undistort=undistort)
+        )
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         safe_prefix = _SAFE_NAME_RE.sub("-", prefix).strip("-._")[:60] or "capture"
         path = self.settings.app.data_dir / "captures" / f"{safe_prefix}-{timestamp}.jpg"
@@ -147,11 +181,20 @@ class AppContext:
             raise RuntimeError(f"Could not save capture to {path}")
         return path
 
-    def capture_bed_reference(self) -> dict[str, Any]:
-        image = self.camera_frame(undistort=True)
+    def capture_bed_reference(self, *, precision: bool = True) -> dict[str, Any]:
+        if precision:
+            image, diagnostics = self.stable_camera_frame(undistort=True)
+        else:
+            image = self.camera_frame(undistort=True)
+            diagnostics = None
         if not cv2.imwrite(str(self.bed_reference_path), image, [cv2.IMWRITE_JPEG_QUALITY, 98]):
             raise RuntimeError("Could not save bed reference image")
-        return {"width": int(image.shape[1]), "height": int(image.shape[0]), "path": self.bed_reference_path.name}
+        return {
+            "width": int(image.shape[1]),
+            "height": int(image.shape[0]),
+            "path": self.bed_reference_path.name,
+            "capture_diagnostics": diagnostics,
+        }
 
     def bed_reference(self) -> np.ndarray:
         if self.bed_reference_path.exists():
@@ -160,7 +203,7 @@ class AppContext:
                 return image
         return self.camera_frame(undistort=True)
 
-    def rectified_frame(self, refresh: bool = True) -> np.ndarray:
+    def rectified_frame(self, refresh: bool = True, *, precision: bool = False) -> np.ndarray:
         with self._simulation_workspace_lock:
             if self._simulation_workspace_image is not None:
                 return self._simulation_workspace_image.copy()
@@ -168,7 +211,11 @@ class AppContext:
             image = cv2.imread(str(self.workspace_path), cv2.IMREAD_COLOR)
             if image is not None:
                 return image
-        image = self.camera_frame(undistort=True)
+        image = (
+            self.stable_camera_frame(undistort=True)[0]
+            if precision
+            else self.camera_frame(undistort=True)
+        )
         rectified = self.bed.rectify(image)
         self.workspace_path.parent.mkdir(parents=True, exist_ok=True)
         cv2.imwrite(str(self.workspace_path), rectified, [cv2.IMWRITE_JPEG_QUALITY, 96])
@@ -280,7 +327,7 @@ class AppContext:
         return calibration.to_dict()
 
     def detect_workpiece(self) -> dict[str, Any]:
-        image = self.rectified_frame(refresh=True)
+        image = self.rectified_frame(refresh=True, precision=True)
         detection = detect_workpiece(
             image,
             min_area_ratio=self.settings.vision.workpiece_min_area_ratio,
@@ -648,7 +695,37 @@ class AppContext:
             predicted_max_mm=float(refinement["predicted_max_mm"]),
         ).to_dict()
 
-    def analyze_accuracy_validation_image(self, image: np.ndarray) -> dict[str, Any]:
+    def analyze_accuracy_validation_image(
+        self, image: np.ndarray
+    ) -> dict[str, Any]:
+        return self._analyze_accuracy_validation_capture(image, (image,), None)
+
+    def capture_accuracy_validation(
+        self,
+        *,
+        home_first: bool = True,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        if home_first:
+            self.machine.prepare_photo_position()
+        burst = self.precision_camera_burst(undistort=True)
+        return burst.sharpest_frame, self.analyze_accuracy_validation_burst(burst)
+
+    def analyze_accuracy_validation_burst(
+        self,
+        burst: FrameBurst,
+    ) -> dict[str, Any]:
+        return self._analyze_accuracy_validation_capture(
+            burst.sharpest_frame,
+            burst.frames,
+            burst.diagnostics(),
+        )
+
+    def _analyze_accuracy_validation_capture(
+        self,
+        image: np.ndarray,
+        images: tuple[np.ndarray, ...],
+        camera_diagnostics: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         calibration = self.bed.calibration
         if calibration is None:
             raise CalibrationError("Solve the bed mapping before accuracy validation")
@@ -684,23 +761,61 @@ class AppContext:
                     "machine_y": machine_y,
                 }
             )
-        detection = detect_crosshairs_near(
-            image,
-            expected_points,
-            search_radius_px=55,
+        if camera_diagnostics is None:
+            detection = detect_crosshairs_near(
+                image,
+                expected_points,
+                search_radius_px=55,
+            )
+        else:
+            profile = self.settings.camera.precision_capture
+            detection = detect_crosshairs_burst(
+                images,
+                expected_points,
+                search_radius_px=55,
+                minimum_valid_frames=profile.minimum_valid_frames,
+                mad_multiplier=profile.mad_multiplier,
+                outlier_floor_px=profile.outlier_floor_px,
+                max_jitter_rms_px=profile.max_jitter_rms_px,
+            )
+        capture_diagnostics = (
+            {
+                "camera": camera_diagnostics,
+                "aggregation": detection.get("capture_diagnostics", {}),
+            }
+            if camera_diagnostics is not None
+            else None
         )
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         capture_path = self.settings.app.data_dir / "captures" / f"accuracy-validation-{timestamp}.jpg"
         if not cv2.imwrite(str(capture_path), image, [cv2.IMWRITE_JPEG_QUALITY, 98]):
             raise RuntimeError("Could not save the accuracy-validation capture")
         if not detection.get("detected"):
-            return {**detection, "capture_path": str(capture_path)}
+            updated_session = dict(session)
+            updated_session.update(
+                {
+                    "capture_path": str(capture_path),
+                    "captured_at": time.time(),
+                    "detection_confidence": detection.get("confidence"),
+                    "detection_failure": detection.get("reason"),
+                    "precision_capture": capture_diagnostics,
+                }
+            )
+            updated_session.pop("analysis", None)
+            updated_session.pop("measurements", None)
+            atomic_write_json(self.accuracy_validation_path, updated_session)
+            return {
+                **detection,
+                "capture_path": str(capture_path),
+                "precision_capture": capture_diagnostics,
+            }
 
         measurements = []
         for point in detection["points"]:
-            observed_x, observed_y = self.bed.image_to_mm(float(point["image_x"]), float(point["image_y"]))
-            measurements.append(
-                {
+            observed_x, observed_y = self.bed.image_to_mm(
+                float(point["image_x"]), float(point["image_y"])
+            )
+            measurement = {
                     "id": int(point["id"]),
                     "machine_x": float(point["machine_x"]),
                     "machine_y": float(point["machine_y"]),
@@ -711,8 +826,19 @@ class AppContext:
                     "score": float(point["score"]),
                     "seed_shift_px": float(point["shift_px"]),
                 }
-            )
+            for key in (
+                "sample_count",
+                "inlier_count",
+                "outlier_count",
+                "jitter_rms_px",
+                "jitter_max_px",
+                "mad_px",
+            ):
+                if key in point:
+                    measurement[key] = point[key]
+            measurements.append(measurement)
         analysis = analyze_accuracy_measurements(measurements)
+        analysis["precision_capture"] = capture_diagnostics
         updated_session = dict(session)
         updated_session.update(
             {
@@ -721,6 +847,7 @@ class AppContext:
                 "detection_confidence": detection.get("confidence"),
                 "analysis": analysis,
                 "measurements": analysis["measurements"],
+                "precision_capture": capture_diagnostics,
             }
         )
         atomic_write_json(self.accuracy_validation_path, updated_session)
@@ -731,9 +858,38 @@ class AppContext:
             "measurements": analysis["measurements"],
             "analysis": analysis,
             "capture_path": str(capture_path),
+            "precision_capture": capture_diagnostics,
         }
 
     def analyze_fine_registration_image(self, image: np.ndarray) -> dict[str, Any]:
+        return self._analyze_fine_registration_capture(image, (image,), None)
+
+    def capture_fine_registration(
+        self,
+        *,
+        home_first: bool = True,
+    ) -> tuple[np.ndarray, dict[str, Any]]:
+        if home_first:
+            self.machine.prepare_photo_position()
+        burst = self.precision_camera_burst(undistort=True)
+        return burst.sharpest_frame, self.analyze_fine_registration_burst(burst)
+
+    def analyze_fine_registration_burst(
+        self,
+        burst: FrameBurst,
+    ) -> dict[str, Any]:
+        return self._analyze_fine_registration_capture(
+            burst.sharpest_frame,
+            burst.frames,
+            burst.diagnostics(),
+        )
+
+    def _analyze_fine_registration_capture(
+        self,
+        image: np.ndarray,
+        images: tuple[np.ndarray, ...],
+        camera_diagnostics: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         if self.bed.calibration is None:
             raise CalibrationError("Solve the bed mapping before fine registration")
         session = read_json(self.fine_registration_path, {})
@@ -759,26 +915,61 @@ class AppContext:
                     "machine_y": machine_y,
                 }
             )
-        detection = detect_crosshairs_near(
-            image,
-            expected_points,
-            search_radius_px=55,
+        if camera_diagnostics is None:
+            detection = detect_crosshairs_near(
+                image,
+                expected_points,
+                search_radius_px=55,
+            )
+        else:
+            profile = self.settings.camera.precision_capture
+            detection = detect_crosshairs_burst(
+                images,
+                expected_points,
+                search_radius_px=55,
+                minimum_valid_frames=profile.minimum_valid_frames,
+                mad_multiplier=profile.mad_multiplier,
+                outlier_floor_px=profile.outlier_floor_px,
+                max_jitter_rms_px=profile.max_jitter_rms_px,
+            )
+        capture_diagnostics = (
+            {
+                "camera": camera_diagnostics,
+                "aggregation": detection.get("capture_diagnostics", {}),
+            }
+            if camera_diagnostics is not None
+            else None
         )
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         capture_path = self.settings.app.data_dir / "captures" / f"fine-registration-{timestamp}.jpg"
         if not cv2.imwrite(str(capture_path), image, [cv2.IMWRITE_JPEG_QUALITY, 98]):
             raise RuntimeError("Could not save the fine-registration capture")
         if not detection.get("detected"):
+            updated_session = dict(session)
+            updated_session.update(
+                {
+                    "capture_path": str(capture_path),
+                    "captured_at": time.time(),
+                    "detection_confidence": detection.get("confidence"),
+                    "detection_failure": detection.get("reason"),
+                    "precision_capture": capture_diagnostics,
+                }
+            )
+            updated_session.pop("analysis", None)
+            updated_session.pop("measurements", None)
+            atomic_write_json(self.fine_registration_path, updated_session)
             return {
                 **detection,
                 "capture_path": str(capture_path),
+                "precision_capture": capture_diagnostics,
             }
 
         measurements = []
         for point in detection["points"]:
-            observed_x, observed_y = self.bed.image_to_mm(float(point["image_x"]), float(point["image_y"]))
-            measurements.append(
-                {
+            observed_x, observed_y = self.bed.image_to_mm(
+                float(point["image_x"]), float(point["image_y"])
+            )
+            measurement = {
                     "id": int(point["id"]),
                     "machine_x": float(point["machine_x"]),
                     "machine_y": float(point["machine_y"]),
@@ -789,7 +980,17 @@ class AppContext:
                     "score": float(point["score"]),
                     "seed_shift_px": float(point["shift_px"]),
                 }
-            )
+            for key in (
+                "sample_count",
+                "inlier_count",
+                "outlier_count",
+                "jitter_rms_px",
+                "jitter_max_px",
+                "mad_px",
+            ):
+                if key in point:
+                    measurement[key] = point[key]
+            measurements.append(measurement)
         all_measurements = analyze_registration_measurements(measurements)["measurements"]
         suggested_exclusions = suggested_registration_exclusions(all_measurements)
         if len(suggested_exclusions) > 2:
@@ -806,8 +1007,13 @@ class AppContext:
                 }
             )
         else:
-            analysis = review_registration_measurements(all_measurements, suggested_exclusions)
-            analysis["full_map_refinement"] = self._analyze_full_map_refinement(all_measurements, suggested_exclusions)
+            analysis = review_registration_measurements(
+                all_measurements, suggested_exclusions
+            )
+            analysis["full_map_refinement"] = self._analyze_full_map_refinement(
+                all_measurements, suggested_exclusions
+            )
+        analysis["precision_capture"] = capture_diagnostics
         updated_session = dict(session)
         updated_session.update(
             {
@@ -816,6 +1022,7 @@ class AppContext:
                 "detection_confidence": detection.get("confidence"),
                 "analysis": analysis,
                 "measurements": all_measurements,
+                "precision_capture": capture_diagnostics,
             }
         )
         atomic_write_json(self.fine_registration_path, updated_session)
@@ -826,6 +1033,7 @@ class AppContext:
             "measurements": all_measurements,
             "analysis": analysis,
             "capture_path": str(capture_path),
+            "precision_capture": capture_diagnostics,
         }
 
     def review_fine_registration_measurements(

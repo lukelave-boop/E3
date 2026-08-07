@@ -9,7 +9,11 @@ server or create a second camera owner.
 
 - Inspect a raw preview and save a corrected still.
 - Apply every camera control from the active configuration. Unsupported or
-  rejected V4L2 controls are reported rather than silently treated as applied.
+  rejected V4L2 controls are reported rather than silently treated as applied;
+  supported controls are read back so a driver mismatch is visible.
+- Review the active precision profile. Analysis captures settle, discard stale
+  buffered frames, and collect unique fresh frames; live preview remains
+  immediate.
 - In simulation, select the perspective-bed, checkerboard, or workpiece scene.
 
 If another application has exclusive camera access, the desktop presents one
@@ -90,8 +94,17 @@ calibrated material height and rigidly restrain it to the moving bed.
 3. Reopen this tab, enter a visible-marking power that has already been verified
    for the material, and choose **Prepare powered mark job**. Review and run it
    through the normal powered-job confirmation and temporary arming path.
-4. Reopen the tab and choose **Home / park, capture and analyze marks**.
+4. Reopen the tab and choose **Home / park, precision capture**.
 5. Review every commanded coordinate, observed coordinate, and X/Y residual.
+
+The result also reports captured/discarded frames, rejected temporal outliers,
+and worst per-mark jitter. Without moving anything, choose **Recapture without
+homing** to test camera/detection repeatability independently of another home
+cycle. The button stays disabled until this Machine Setup session completes a
+park or home-first precision capture. Stable no-home results combined with
+changing home-first results point toward homing or camera-pose repeatability;
+changing no-home results point toward the camera, lighting, vibration, or mark
+detection.
 
 The **Use** checkbox permits at most two clearly obstructed, damaged, or
 incorrectly detected crosses to be excluded. A detection beyond the bounded
@@ -166,7 +179,10 @@ does not fit or change calibration.
 3. Reopen the tab, enter a previously verified visible-marking power, choose
    **Prepare powered validation job**, and run it through the normal confirmation
    and temporary arming path.
-4. Reopen the tab and choose **Home / park, capture and score holdouts**.
+4. Reopen the tab and choose **Home / park, precision capture**.
+
+Use **Recapture without homing** under the same restrictions when comparing
+capture repeatability with homing repeatability.
 
 All five crosses are required. The program reports each commanded and observed
 coordinate, X/Y error, total error, RMS error, maximum error, and mean bias. A

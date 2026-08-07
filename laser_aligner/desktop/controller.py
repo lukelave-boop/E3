@@ -494,6 +494,7 @@ class DesktopController(QtCore.QObject):
             "sharpness": self._sharpness_score(camera.snapshot()),
             "applied": dict(result.applied),
             "skipped": dict(result.skipped),
+            "verified": dict(result.verified),
             "changed": True,
         }
 
@@ -594,7 +595,7 @@ class DesktopController(QtCore.QObject):
                 raise ValueError(
                     "Bed mapping is required before tracing camera objects"
                 )
-            image = context.rectified_frame(refresh=True)
+            image = context.rectified_frame(refresh=True, precision=True)
             options = TraceOptions.from_mapping(raw_options)
             result = detect_objects(
                 image,
@@ -815,7 +816,7 @@ class DesktopController(QtCore.QObject):
 
         # One corrected camera frame is shared across every options group so an
         # automatic ranking never compares sheets captured at different times.
-        image = context.rectified_frame(refresh=True)
+        image = context.rectified_frame(refresh=True, precision=True)
         if image is None or image.size == 0:
             raise ValueError("The corrected camera frame is empty")
 
@@ -1007,7 +1008,7 @@ class DesktopController(QtCore.QObject):
                 raise ValueError(
                     "Bed mapping is required before sampling camera color"
                 )
-            image = context.rectified_frame(refresh=True)
+            image = context.rectified_frame(refresh=True, precision=True)
             area = self.runtime.settings.machine.work_area
             ppm = float(
                 self.runtime.settings.calibration.bed.pixels_per_mm

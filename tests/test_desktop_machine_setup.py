@@ -59,16 +59,21 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert {
             "Prepare dry registration path",
             "Prepare powered mark job",
-            "Home / park, capture and analyze marks",
+            "Home / park, precision capture",
+            "Recapture without homing",
             "Apply reviewed translation",
             "Reset fine translation",
             "Apply reviewed full-bed map",
             "Reset full-bed refinement",
             "Prepare dry validation path",
             "Prepare powered validation job",
-            "Home / park, capture and score holdouts",
         }.issubset(button_text)
         assert not dialog.reverse_x.isChecked()
+        assert not dialog.registration_recapture_button.isEnabled()
+        assert not dialog.validation_recapture_button.isEnabled()
+        dialog._set_photo_pose_confirmed(True)
+        assert dialog.registration_recapture_button.isEnabled()
+        assert dialog.validation_recapture_button.isEnabled()
         assert dialog.reverse_x.text() == "Reverse X mapping — OFF"
         assert "saved in the bed calibration" in dialog.axis_mapping_status.text()
         assert dialog.machine_connection_status.text().startswith("Machine connected")
@@ -216,11 +221,11 @@ def test_machine_setup_source_covers_browser_only_shared_operations() -> None:
         "bed.add_point",
         "detect_bed_cross_grid",
         "prepare_fine_registration_job",
-        "analyze_fine_registration_image",
+        "context.capture_fine_registration",
         "apply_fine_registration",
         "apply_fine_registration_homography",
         "prepare_accuracy_validation_job",
-        "analyze_accuracy_validation_image",
+        "context.capture_accuracy_validation",
         "solve_bed",
         "detect_workpiece",
         "detect_fiducials",

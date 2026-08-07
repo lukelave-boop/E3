@@ -110,3 +110,58 @@ def test_preview_timing_model_is_exposed_in_public_settings(tmp_path: Path) -> N
 
     assert public["preview_acceleration_mm_s2"] == 420.0
     assert public["preview_command_delay_ms"] == 12.0
+
+
+def test_precision_capture_settings_load_and_are_public(tmp_path: Path) -> None:
+    config = tmp_path / "precision.json"
+    config.write_text(
+        json.dumps(
+            {
+                "camera": {
+                    "precision_capture": {
+                        "settle_seconds": 0.75,
+                        "discard_frames": 4,
+                        "sample_frames": 11,
+                        "timeout_seconds": 6.0,
+                        "minimum_valid_frames": 7,
+                        "mad_multiplier": 4.0,
+                        "outlier_floor_px": 0.2,
+                        "max_jitter_rms_px": 0.6,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+    profile = settings.camera.precision_capture
+    assert profile.sample_frames == 11
+    assert profile.minimum_valid_frames == 7
+    assert profile.settle_seconds == pytest.approx(0.75)
+    assert settings.public_dict()["camera"]["precision_capture"][
+        "max_jitter_rms_px"
+    ] == pytest.approx(0.6)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"sample_frames": 0},
+        {"sample_frames": 5, "minimum_valid_frames": 6},
+        {"timeout_seconds": 0},
+        {"settle_seconds": -0.1},
+        {"max_jitter_rms_px": 0},
+    ],
+)
+def test_invalid_precision_capture_settings_are_rejected(
+    tmp_path: Path,
+    override: dict[str, float | int],
+) -> None:
+    config = tmp_path / "bad-precision.json"
+    config.write_text(
+        json.dumps({"camera": {"precision_capture": override}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match="precision_capture"):
+        load_settings(config)
