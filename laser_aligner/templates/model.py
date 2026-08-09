@@ -4,9 +4,10 @@ import copy
 import json
 import math
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, ClassVar, Mapping, Sequence
+from typing import Any, ClassVar
 
 from ..project import (
     Bounds,
@@ -14,9 +15,7 @@ from ..project import (
     ProjectDocument,
     ProjectFormatError,
     SceneObject,
-    Transform,
 )
-
 
 TEMPLATE_SCHEMA_VERSION = 1
 TEMPLATE_EXTENSION = ".e3template"
@@ -198,7 +197,7 @@ class TemplateFeature:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "TemplateFeature":
+    def from_dict(cls, raw: Mapping[str, Any]) -> TemplateFeature:
         if not isinstance(raw, Mapping):
             raise TemplateFormatError("Template feature must be a JSON object")
         try:
@@ -417,13 +416,12 @@ class CutTemplate:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "CutTemplate":
+    def from_dict(cls, raw: Mapping[str, Any]) -> CutTemplate:
         if not isinstance(raw, Mapping):
             raise TemplateFormatError("Template root must be a JSON object")
-        try:
-            schema = int(raw.get("schema_version", 0))
-        except (TypeError, ValueError, OverflowError) as exc:
-            raise TemplateFormatError("Template schema_version must be an integer") from exc
+        schema = raw.get("schema_version", 0)
+        if type(schema) is not int:
+            raise TemplateFormatError("Template schema_version must be an integer")
         if schema != TEMPLATE_SCHEMA_VERSION:
             raise TemplateFormatError(
                 f"Unsupported template schema {schema}; expected {TEMPLATE_SCHEMA_VERSION}"

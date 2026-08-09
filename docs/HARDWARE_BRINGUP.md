@@ -1,5 +1,9 @@
 # Ender-3 S1 Pro and Creality laser hardware bring-up
 
+This is the hardware-identification and motion-safety reference. For the actual
+five-tab calibration sequence, follow the canonical
+[Permanent Camera Setup Runbook](../laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
+
 The accessory family can be used with several printer/controller combinations. Do not assume the serial protocol, firmware behavior, power scale, or coordinate limits from a product page.
 
 ## Phase 1: identify devices without motion
@@ -57,18 +61,49 @@ motion. If saved point labels are mirrored, **Machine Setup → Bed mapping** ca
 reverse X or Y point labels and re-solve; this is not a substitute for the
 physical direction check.
 
-## Phase 4: dry-motion software test
+After a camera remount, **Fresh automatic base mapping (keyed 5 x 5)** can
+prepare a new machine-coordinate pattern without trusting the obsolete camera
+map. The two larger interior crosses resolve image rotation/reflection, but the
+operator must still inspect the exact Preview bounds, review
+all 25 detected centers, and perform the laser-off direction check. With the
+current local `10..210 mm` work area and `5 mm` generator boundary margin, the
+configured guarded output range is `15..205 mm` before any laser-spot-offset
+intersection. It is intentionally separate from the movable honeycomb support
+and its printed rulers. The base-grid centers are `40, 75, 110, 145, 180 mm` on
+each axis. These values are operator-reported/derived and are not physically
+verified controller limits until the direction and boundary checks are
+recorded.
 
-Set `machine.allow_motion` to `true` while leaving low-power framing disabled. Start with `./run-hardware.sh`, generate a small rectangular frame well inside the verified limits, and watch a complete dry-motion run. The generated dry-frame program contains no `M3` or `M4` laser-enable command.
+## Phase 4: direction and coordinate check
 
-Check that every UI direction, camera direction, and physical axis direction
-agrees. After configuring a spot offset, verify a dry frame first and then a
-minimum-power mark at a measured interior point before any normal job.
+Set `machine.allow_motion` to `true` and start with `./run-hardware.sh`. Use
+laser-off Jog to check that every UI direction, camera direction, and physical
+axis direction agrees. After configuring a spot offset, verify it with a
+minimum-power mark at a measured interior point before normal production.
 
 The desktop automatically runs `M5`, homes, parks at the configured camera
 pose, waits for idle, and only then arms and starts each hardware job. The core
 rejects serial motion or arming when that coordinate-reference preflight has
 not succeeded in the current connection.
+
+With `machine.home_and_release_after_powered_job` enabled, a successfully
+completed powered job also performs `M5`, waits for all accepted toolpath
+motion to finish, homes, returns to the configured camera pose, waits for the
+park move to finish, restores the configured normal GRBL idle delay if
+necessary, and releases the motors. It does not issue
+fan/coolant commands. Keep the complete homing and parking path clear until the
+job reports completion. The desktop reports the finishing phase explicitly and
+raises an error if a completion command fails. This post-job motion is not
+attempted after a stop, failure, emergency action, disconnect, or dry job.
+
+`machine.grbl_step_idle_delay_ms` is the normal non-camera value and defaults
+to 250 ms for this profile. The application temporarily uses `$1=255` only
+during parked camera capture. Because `$1` persists in controller storage, a
+crash can leave that hold active across power cycles; the next serial connection
+detects exactly `255`, restores the configured normal value, and explicitly
+releases the motors. Connection always requests an explicit motor release even
+when `$1` already reports its expected finite value. It changes no fan/coolant
+setting.
 
 For GRBL controllers, this preflight also reads `$G` and `$#` after parking and
 records the active `G54`-`G59` workspace, its XYZ offset, and `G92`. Immediately

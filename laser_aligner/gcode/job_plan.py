@@ -117,6 +117,19 @@ def build_job_plan(
                 layer = payload
             elif kind == "job":
                 job_metadata = payload
+                if not moves and "start_x" in payload and "start_y" in payload:
+                    try:
+                        start_x = float(payload["start_x"])
+                        start_y = float(payload["start_y"])
+                    except (TypeError, ValueError):
+                        warnings.append("Job start metadata is invalid; using the supplied start pose")
+                    else:
+                        if math.isfinite(start_x) and math.isfinite(start_y):
+                            x, y = start_x, start_y
+                        else:
+                            warnings.append(
+                                "Job start metadata is non-finite; using the supplied start pose"
+                            )
             elif kind == "planner":
                 planner_metadata = payload
             elif kind == "pass":
@@ -250,17 +263,34 @@ def restart_program_from_move(
     move_index: int,
     *,
     power_mode: str = "M4",
+    start_position: tuple[float, float] | None = None,
 ) -> tuple[str, JobPlan]:
-    """Create a guarded absolute program beginning at a reviewed move boundary."""
+    """Create a guarded absolute program beginning at a reviewed move boundary.
+
+    ``start_position`` is the controller pose from which the replacement job
+    will actually be streamed.  Recording it keeps the laser-off approach in
+    the exact Preview; callers without a known pose retain the legacy behavior
+    of beginning the model at the selected boundary.
+    """
 
     if not 0 <= int(move_index) < len(plan.moves):
         raise ValueError("Start Here move is outside the generated job")
     selected = plan.moves[int(move_index)]
     controller_start_x = selected.start_x - plan.spot_offset_x
     controller_start_y = selected.start_y - plan.spot_offset_y
+    if start_position is None:
+        actual_start_x, actual_start_y = controller_start_x, controller_start_y
+    else:
+        actual_start_x, actual_start_y = (float(value) for value in start_position)
+        if not math.isfinite(actual_start_x) or not math.isfinite(actual_start_y):
+            raise ValueError("Start Here controller start position must be finite")
     lines = [
         "; E3 Positioning System reviewed Start Here job",
         f"; Starts at preview move {selected.index + 1}/{len(plan.moves)}",
+        e3_metadata_line(
+            "job",
+            {"start_x": actual_start_x, "start_y": actual_start_y},
+        ),
         "G21 ; millimetres",
         "G90 ; absolute positioning",
         "M5 ; laser off before positioning",
@@ -319,7 +349,7 @@ def restart_program_from_move(
         text,
         power_max=plan.power_max,
         default_feed_mm_min=selected.feed_mm_min,
-        start_position=(controller_start_x, controller_start_y),
+        start_position=(actual_start_x, actual_start_y),
         acceleration_mm_s2=plan.acceleration_mm_s2,
         command_delay_ms=plan.command_delay_ms,
     )

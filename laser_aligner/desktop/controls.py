@@ -64,11 +64,19 @@ class InspectorTabs(QtWidgets.QTabWidget):
         self.tabBar().installEventFilter(self)
         self._pages: dict[str, PanelScrollArea] = {}
 
-    def add_panel(self, key: str, title: str, panel: QtWidgets.QWidget) -> None:
+    def add_panel(
+        self,
+        key: str,
+        title: str,
+        panel: QtWidgets.QWidget,
+        *,
+        tooltip: str | None = None,
+    ) -> None:
         page = PanelScrollArea(panel, self)
         page.setProperty("panelKey", key)
         self._pages[key] = page
-        self.addTab(page, title)
+        index = self.addTab(page, title)
+        self.setTabToolTip(index, tooltip or title)
 
     def select_panel(self, key: str) -> None:
         page = self._pages.get(key)

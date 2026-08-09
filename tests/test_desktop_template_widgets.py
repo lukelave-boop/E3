@@ -645,6 +645,34 @@ def test_controller_rejects_feature_dimension_scale_mismatch() -> None:
     assert any("feature dimensions" in reason for reason in reasons)
 
 
+def test_template_detection_filter_fails_closed_when_all_evidence_is_unsafe() -> None:
+    detections = [
+        {"id": "outside", "diagnostics": {"within_work_area": False}},
+        {"id": "cropped", "diagnostics": {"touches_image_edge": True}},
+        {
+            "id": "both",
+            "diagnostics": {
+                "within_work_area": False,
+                "touches_image_edge": True,
+            },
+        },
+    ]
+
+    usable, indices, evidence = controller_module._usable_template_detections(
+        detections
+    )
+
+    assert usable == []
+    assert indices == []
+    assert evidence["usable_detection_count"] == 0
+    assert evidence["excluded_detection_count"] == 3
+    assert evidence["excluded_outside_count"] == 2
+    assert evidence["excluded_cropped_count"] == 2
+    assert "Excluded all 3 camera detections" in evidence[
+        "template_evidence_warning"
+    ]
+
+
 def test_controller_cancellation_freezes_and_restores_camera_delivery(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -734,11 +762,16 @@ def test_controller_uses_one_frozen_frame_for_all_template_option_groups(
     runtime = SimpleNamespace(
         running=True,
         context=context,
-        settings=SimpleNamespace(
-            calibration=SimpleNamespace(
-                bed=SimpleNamespace(pixels_per_mm=1.0)
-            ),
-            machine=SimpleNamespace(
+            settings=SimpleNamespace(
+                calibration=SimpleNamespace(
+                    bed=SimpleNamespace(pixels_per_mm=1.0)
+                ),
+                laser=SimpleNamespace(
+                    boundary_margin_mm=0.0,
+                    spot_offset_x_mm=0.0,
+                    spot_offset_y_mm=0.0,
+                ),
+                machine=SimpleNamespace(
                 work_area=SimpleNamespace(
                     x_min=0.0,
                     y_min=0.0,
@@ -749,21 +782,41 @@ def test_controller_uses_one_frozen_frame_for_all_template_option_groups(
         ),
     )
     seen_images: list[np.ndarray] = []
+    ranked_detection_ids: list[list[str]] = []
+    raw_payloads = [
+        {"id": "safe-1", "diagnostics": {"within_work_area": True}},
+        {"id": "outside", "diagnostics": {"within_work_area": False}},
+        {"id": "safe-2", "diagnostics": {}},
+        {"id": "cropped", "diagnostics": {"touches_image_edge": True}},
+        {"id": "safe-3", "diagnostics": {"within_work_area": True}},
+    ]
+    raw_detections = [
+        SimpleNamespace(
+            id=payload["id"],
+            diagnostics=payload["diagnostics"],
+            to_dict=lambda payload=payload: dict(payload),
+        )
+        for payload in raw_payloads
+    ]
 
     def fake_detect(
         image: np.ndarray,
         options: TraceOptions,
         work_area: object,
         pixels_per_mm: float,
+        **kwargs: object,
     ) -> SimpleNamespace:
         del work_area
+        assert kwargs["output_work_area"] is not None
         assert pixels_per_mm == 1.0
         seen_images.append(image)
         return SimpleNamespace(
-            detections=[],
+            detections=raw_detections,
             mode_used=options.detection_mode,
-            message="Synthetic trace",
-            direct_count=3,
+            message=(
+                "Synthetic trace; WARNING: cropped and outside detections"
+            ),
+            direct_count=len(raw_detections),
             inferred_count=0,
             options=options,
         )
@@ -772,8 +825,31 @@ def test_controller_uses_one_frozen_frame_for_all_template_option_groups(
         templates: list[CutTemplate],
         detections: list[object],
     ) -> list[TemplateAlignment]:
-        del detections
+        ranked_detection_ids.append(
+            [str(detection.id) for detection in detections]
+        )
         template = templates[0]
+        if not detections:
+            return [
+                _alignment(
+                    template_id=template.id,
+                    template_name=template.name,
+                    matched_count=0,
+                    direct_match_count=0,
+                    feature_count=3,
+                    detection_count=0,
+                    coverage=0.0,
+                    weighted_coverage=0.0,
+                    detection_coverage=0.0,
+                    rms_error_mm=None,
+                    max_error_mm=None,
+                    scale_ratio=None,
+                    dimension_scale_ratio=None,
+                    confidence=0.0,
+                    score=0.0,
+                    matches=(),
+                )
+            ]
         score = 90.0 if template.id == first.id else 30.0
         return [
             _alignment(
@@ -792,11 +868,83 @@ def test_controller_uses_one_frozen_frame_for_all_template_option_groups(
     assert context.frame_calls == 1
     assert len(seen_images) == 2
     assert all(image is frame for image in seen_images)
+    assert ranked_detection_ids == [
+        ["safe-1", "safe-2", "safe-3"],
+        ["safe-1", "safe-2", "safe-3"],
+    ]
     assert payload["matched"] is True
     assert payload["template_id"] == first.id
+    assert payload["usable_detection_count"] == 3
+    assert payload["excluded_detection_count"] == 2
+    assert payload["excluded_outside_count"] == 1
+    assert payload["excluded_cropped_count"] == 1
+    assert [item["detection_index"] for item in payload["matches"]] == [0, 2, 4]
+    assert "Excluded 2 camera detections" in payload["message"]
+    assert any(
+        "Excluded 2 camera detections" in warning
+        for warning in payload["warnings"]
+    )
+    assert len(payload["detections"]) == 5
     assert not payload["camera_image"].isNull()
+
+    raw_detections = [
+        SimpleNamespace(
+            id="outside",
+            diagnostics={"within_work_area": False},
+            to_dict=lambda: {
+                "id": "outside",
+                "diagnostics": {"within_work_area": False},
+            },
+        ),
+        SimpleNamespace(
+            id="cropped",
+            diagnostics={"touches_image_edge": True},
+            to_dict=lambda: {
+                "id": "cropped",
+                "diagnostics": {"touches_image_edge": True},
+            },
+        ),
+    ]
+    blocked = controller._match_cut_templates_once(12, (first,), first.id)
+
+    assert ranked_detection_ids[-1] == []
+    assert blocked["matched"] is False
+    assert blocked["feature_match_found"] is False
+    assert blocked["usable_detection_count"] == 0
+    assert blocked["excluded_detection_count"] == 2
+    assert "no complete, in-bounds camera evidence remains" in blocked["message"]
+    assert "Excluded all 2 camera detections" in blocked["message"]
     controller.deleteLater()
     qt_application.processEvents()
+
+
+def test_trace_uses_boundary_margin_reduced_output_area() -> None:
+    runtime = SimpleNamespace(
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(
+                work_area=SimpleNamespace(
+                    x_min=10.0,
+                    x_max=210.0,
+                    y_min=20.0,
+                    y_max=200.0,
+                )
+            ),
+            laser=SimpleNamespace(
+                boundary_margin_mm=5.0,
+                spot_offset_x_mm=-2.0,
+                spot_offset_y_mm=3.0,
+            ),
+        )
+    )
+
+    area = controller_module._guarded_output_work_area(runtime)
+
+    assert (area.x_min, area.x_max, area.y_min, area.y_max) == (
+        15.0,
+        203.0,
+        28.0,
+        195.0,
+    )
 
 
 def test_main_window_applies_template_as_one_undoable_batch(
@@ -1100,6 +1248,8 @@ def test_workspace_template_drag_moves_the_whole_preview(
         center_y_mm=100.0,
         rotation_deg=0.0,
     )
+    legend_position = view._overlay_legend.pos()
+    assert legend_position == QtCore.QPoint(12, 12)
     edited: list[tuple[float, float, float]] = []
     committed: list[tuple[float, float, float]] = []
     view.templatePlacementEdited.connect(
@@ -1153,6 +1303,66 @@ def test_workspace_template_drag_moves_the_whole_preview(
     ) == pytest.approx((20.0, 0.0), abs=0.01)
     assert observed.sceneBoundingRect() == observed_before
     assert view.selected_object_ids() == []
+    assert view._overlay_legend.pos() == legend_position
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_overlay_key_moves_only_when_dragged_directly(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    view.set_trace_preview(
+        [
+            {
+                "id": "trace-1",
+                "source": "direct",
+                "contour_mm": [[40.0, 40.0], [60.0, 40.0], [60.0, 60.0]],
+            }
+        ],
+        {"trace-1"},
+    )
+    qt_application.processEvents()
+
+    legend = view._overlay_legend
+    assert legend.pos() == QtCore.QPoint(12, 12)
+    view.set_test_frame_source(True, "Generated alignment image")
+    assert not legend.geometry().intersects(view._test_frame_badge.geometry())
+    start = QtCore.QPoint(20, 12)
+    end = QtCore.QPoint(105, 75)
+    QtTest.QTest.mousePress(
+        legend,
+        QtCore.Qt.MouseButton.LeftButton,
+        QtCore.Qt.KeyboardModifier.NoModifier,
+        start,
+    )
+    QtTest.QTest.mouseMove(legend, end, 10)
+    QtTest.QTest.mouseRelease(
+        legend,
+        QtCore.Qt.MouseButton.LeftButton,
+        QtCore.Qt.KeyboardModifier.NoModifier,
+        end,
+    )
+    qt_application.processEvents()
+
+    dragged_position = legend.pos()
+    assert dragged_position.x() > 12
+    assert dragged_position.y() > 12
+
+    view.set_toolpath_preview("G90\nM5\nG0 X5 Y5\nG1 X10 Y10\nM5\n")
+    qt_application.processEvents()
+    assert legend.pos() == dragged_position
+
+    view.zoom_by(1.18)
+    qt_application.processEvents()
+    assert legend.pos() == dragged_position
+
+    view.resize(700, 540)
+    qt_application.processEvents()
+    assert legend.pos() == dragged_position
 
     view.close()
     view.deleteLater()
@@ -1491,6 +1701,154 @@ def test_workspace_trace_preview_prefers_vector_contour_with_legacy_fallback(
     qt_application.processEvents()
 
 
+def test_workspace_trace_preview_marks_out_of_bounds_cells_red(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    view.set_trace_preview(
+        [
+            {
+                "id": "outside",
+                "index": 1,
+                "source": "direct",
+                "center_mm": [215.0, 100.0],
+                "vector_contour_mm": [
+                    [205.0, 90.0],
+                    [225.0, 90.0],
+                    [225.0, 110.0],
+                    [205.0, 110.0],
+                ],
+                "diagnostics": {
+                    "within_work_area": False,
+                    "work_area_overrun_mm": 5.0,
+                },
+            }
+        ],
+        {"outside"},
+    )
+
+    path = next(
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    )
+    assert path.pen().color().name().upper() == "#E06666"
+    assert path.pen().style() == QtCore.Qt.PenStyle.DashDotLine
+    assert [entry[0] for entry in view._overlay_legend.entries] == [
+        "Cropped / outside output (red)"
+    ]
+
+    view.set_trace_preview(
+        [
+            {
+                "id": "cropped",
+                "index": 2,
+                "source": "direct",
+                "center_mm": [100.0, 100.0],
+                "vector_contour_mm": [
+                    [90.0, 90.0],
+                    [110.0, 90.0],
+                    [110.0, 110.0],
+                    [90.0, 110.0],
+                ],
+                "diagnostics": {
+                    "within_work_area": True,
+                    "touches_image_edge": True,
+                    "image_edge_sides": ["right"],
+                },
+            }
+        ],
+        set(),
+    )
+    cropped_path = next(
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    )
+    assert cropped_path.pen().color().name().upper() == "#E06666"
+    assert cropped_path.pen().style() == QtCore.Qt.PenStyle.DashDotLine
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_template_preview_marks_excluded_camera_evidence_red(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    _show_workspace(view, qt_application)
+    template_cut = SceneObject.rectangle(
+        "preview-layer",
+        name="Reviewed cut",
+        center=(100.0, 100.0),
+        width_mm=20.0,
+        height_mm=10.0,
+    )
+
+    def detection(
+        center_x: float,
+        diagnostics: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            "vector_contour_mm": [
+                [center_x - 5.0, 95.0],
+                [center_x + 5.0, 95.0],
+                [center_x + 5.0, 105.0],
+                [center_x - 5.0, 105.0],
+            ],
+            "diagnostics": diagnostics,
+        }
+
+    view.set_template_preview(
+        [template_cut],
+        detections=[
+            detection(70.0, {"within_work_area": True}),
+            detection(100.0, {"within_work_area": False}),
+            detection(130.0, {"touches_image_edge": True}),
+        ],
+        center_x_mm=100.0,
+        center_y_mm=100.0,
+    )
+
+    observed = [
+        item
+        for item in view._template_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+        and (
+            item.toolTip() == "Observed camera feature"
+            or item.toolTip().startswith("Excluded camera feature:")
+        )
+    ]
+    assert len(observed) == 3
+    safe = next(
+        item for item in observed if item.toolTip() == "Observed camera feature"
+    )
+    excluded = [
+        item
+        for item in observed
+        if item.toolTip().startswith("Excluded camera feature:")
+    ]
+    assert safe.pen().color().name().upper() == "#E7B55C"
+    assert safe.pen().style() == QtCore.Qt.PenStyle.DashLine
+    assert len(excluded) == 2
+    assert all(
+        item.pen().color().name().upper() == "#E06666"
+        and item.pen().style() == QtCore.Qt.PenStyle.DashDotLine
+        for item in excluded
+    )
+    assert {entry[0] for entry in view._overlay_legend.entries} == {
+        "Camera edge (amber)",
+        "Cropped / outside output (red)",
+        "Aligned template cut (cyan)",
+    }
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
 def test_alignment_overlay_key_names_cut_and_camera_geometry_and_prefers_vector(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -1569,11 +1927,22 @@ def test_overlay_key_combines_trace_and_toolpath_line_types(
             },
         ],
         {"direct", "inferred"},
+        {
+            "bed_map_current": True,
+            "reference_only": True,
+            "corners_machine_mm": [
+                [5.0, 5.0],
+                [205.0, 5.0],
+                [205.0, 205.0],
+                [5.0, 205.0],
+            ],
+        },
     )
     view.set_toolpath_preview("G90\nG0 X5 Y5\nM4 S100\nG1 X10 Y10\nM5\nG1 X15 Y15\n")
 
     labels = [entry[0] for entry in view._overlay_legend.entries]
     assert labels == [
+        "Approx. honeycomb reference (magenta)",
         "Selected trace (green)",
         "Inferred trace (amber)",
         "Rapid travel",

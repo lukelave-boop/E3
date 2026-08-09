@@ -15,9 +15,9 @@ geometry, G-code, safety and controller services.
 - Native `QMainWindow` application shell with persistent dock and window layout
 - Build-first native window title showing the application name, release version,
   short source revision, current project, and unsaved-change marker
-- Split right-side design tabs for Cuts/Layers, Cameras, Objects, Shape
-  Properties, Templates, and Trace, plus Laser, Machine, and Material Library
-  execution tabs; Console and G-code remain optional docks
+- A full-height right-side inspector for Cuts/Layers, Cameras, Objects, Shape
+  Properties, Templates, and Trace, plus a compact bottom row with G-code on
+  the left and Laser, Machine, and Material Library tabs beside it
 - Physical machine-coordinate workspace with adaptive grid, rulers, origin,
   pan, zoom and selectable snap spacing
 - Corrected camera image behind the workspace with adjustable opacity
@@ -29,7 +29,11 @@ geometry, G-code, safety and controller services.
   distribution and z-order controls
 - Persistent press-drag-release rectangle drawing plus basic rounded rectangle,
   ellipse, line and text creation
-- Existing SVG parser connected to the native project document
+- Physical-size SVG import for absolute `mm`, `cm`, `in`, and `px` root
+  dimensions plus viewBox-only files (`96 CSS px = 1 in`), including transformed
+  groups and `preserveAspectRatio` mapping. Imports remain centered at the
+  requested project placement. CSS stylesheets, clipping, masks, and any lossy
+  parser warning stop the import before a project object is created.
 - Dedicated exact-job Preview distinguishing rapid, powered and unpowered
   moves, with time scrubbing, animated playback, move coordinates, power,
   timing/distance statistics, display controls, and PNG export
@@ -60,22 +64,34 @@ without copying LightBurn branding or changing the E3 machine-control model:
    and snap tools.
 6. The central machine-coordinate workspace uses a near-white adaptive grid,
    thin light rulers, no permanent scroll-bar chrome, auto-fit until the user
-   zooms or pans, and an 18% corrected-camera overlay by default. A dynamic
+   zooms or pans, and a 70% corrected-camera overlay by default. A dynamic
    key identifies transient Trace, camera-detection, template-cut, and toolpath
-   lines by both role and line style.
-7. The right side uses two vertically split tab stacks: design and operation
-   editing above, laser execution and materials below.
-8. A fixed 30-color bottom palette assigns selected objects to existing
+   lines by both role and line style. The key stays in the upper-left viewport
+   corner during canvas interaction unless the operator drags the key itself.
+7. Cuts/Layers, Cameras, Objects, Shape Properties, Templates, and Trace share
+   one full-height tabbed inspector on the right.
+8. A short dock row beneath the canvas keeps raw G-code in a narrow left panel
+   and Laser, Machine, and Material Library in a wider tabbed panel beside it.
+9. A fixed 30-color bottom palette assigns selected objects to existing
    operations; clicking an unused color creates a matching operation. The
    status bar reports direct-edit affordances and live workspace feedback.
 
-Console and raw G-code remain dockable from the Window menu but start hidden so
-the workspace has more room. Generating or framing a job opens the dedicated
-graphical Preview; raw G-code remains available for diagnostics. **Window >
-Reset workspace layout** restores the maintained
-default arrangement. Window geometry and dock state use the versioned Qt
-settings key `v5`, so stale layouts from the earlier shell do not override the
-new default.
+Raw G-code starts visible in its compact panel. Console remains available from
+the Window menu and shares that slot when opened. Generating or framing a job
+still opens the dedicated graphical Preview. **Window > Reset workspace
+layout** restores this maintained arrangement. Window geometry, dock state,
+and active inspector tabs use versioned Qt settings keys for layout `v6`.
+Compatible older geometry and tab choices migrate, while obsolete `v5` dock
+topology is deliberately ignored so it cannot restore the previous cramped
+right-side stack.
+
+The default three-region dock layout is offscreen-tested at `1080x780` and
+`900x680` logical pixels with 13 pt application text. The requested window size
+is retained, the canvas and all visible dock rectangles remain disjoint, and
+every design/runtime inspector fits its horizontal viewport; compact panels
+use vertical scrolling where needed. Operation speed, power, pass, interval,
+angle, and overscan editors now update the project on edit completion rather
+than creating an undo entry and rebuilding the inspector for every typed digit.
 
 Direct resize/rotation handles appear only for one visible, unlocked object on
 a visible layer. Resizing keeps the opposite corner fixed; holding Shift while
@@ -99,8 +115,10 @@ Output, and Show state. Inline toggles, ordering controls, the quick editor,
 and operation color selection all update the existing project-layer model.
 Fill and raster layers generate scanline toolpaths. Their quick editor exposes
 line interval and scan angle; raster additionally exposes laser-off overscan.
-Imported raster images currently use a fixed 50% luminance threshold and the
-operation's maximum power.
+Imported PNG, JPEG, and BMP images are alpha-composited onto white,
+area-prefiltered when the physical raster pitch minifies the source, and use
+deterministic 8x8 ordered dithering at the operation's maximum power. TIFF is
+rejected consistently because its Qt decode plugin is not portable.
 
 ### Feature-preservation map
 
@@ -130,25 +148,34 @@ operation's maximum power.
 
 - Multi-layer vector G-code generation using the existing safety/bounds core
 - Per-layer speed, power and pass count
-- Nearest-path travel ordering and time/distance estimates
+- Nearest-path travel ordering and time/distance estimates, with a recorded
+  source-order fallback above 512 vector paths
 - Dry framing generation
 - Immutable preview plans parsed from the exact finalized G-code stream, with
   layer/pass/source metadata stored only in controller-ignored comments
 - Prepared-job status reports maximum planned power independently from live
   controller execution progress
-- Closed-vector fill, binary vector raster, and imported threshold-image raster
-  output with bounds-checked laser-off overscan
-- Unsupported text output, open fill geometry, missing raster assets, and empty
-  threshold results are rejected explicitly rather than silently omitted
-- Zero-power vector layers never emit `M3` or `M4`
+- Closed-vector fill, binary vector raster, and area-prefiltered ordered-dither
+  grayscale raster output with bounds-checked laser-off overscan
+- Unsupported text output, open fill geometry, missing/changed raster assets,
+  unsupported raster metadata, and empty dither results are rejected explicitly
+  rather than silently omitted
+- Zero-effective-power vector, fill, and raster layers never emit `M3` or `M4`;
+  their exact motion is counted as travel rather than cut distance
 - Existing camera and controller status in native dock panels
 - Guarded controller connect, diagnostics, software stop and job run; hardware
-  Start automatically homes and parks before arming and execution
-- Powered output still requires the exact temporary arming phrase
+  Start automatically homes and parks before arming and execution, while a
+  successful powered job drains queued motion, homes, and parks again before
+  motor release and finish. Drain/home/park/release phases remain visibly
+  running, and an asynchronous completion failure raises a one-time error
+- Powered output receives a one-use authorization for the exact prepared
+  program when **Start** submits it; the desktop does not show a confirmation
+  or typed-phrase dialog
 
 Native Machine Setup exposes raw camera preview and controls, synthetic scenes,
-checkerboard capture/solve, manual and CSV-assisted bed points, automatic 5×5
-grid detection, residual review, eight-point fine registration, workpiece
+checkerboard capture/solve, a no-prior-map keyed 5×5 base job with automatic
+rotation/reflection resolution and transactional application, manual and
+CSV-assisted fallback points, seeded grid refinement, residual review, eight-point fine registration, workpiece
 detection, and fiducial inspection. Fine registration prepares jobs through the
 normal preview/run path. It can apply either a bounded consistent camera-map
 translation or a separately gated seven-inlier full-bed homography refinement,
@@ -156,6 +183,32 @@ with explicit review, confirmation, persistence, and rollback. The desktop
 then provides a separate five-point holdout job with automatic fixed-limit
 accuracy scoring and no calibration mutation. The desktop camera panel and
 setup dialog use the same corrected-camera core.
+
+Machine Setup keeps the Qt event loop responsive during Home / park, stable and
+precision camera captures, and lens solving. It owns one background operation,
+shows progress, keeps an in-dialog software STOP available, and prevents the
+modal dialog from closing until cleanup finishes. Starting or failing a new
+analysis clears the previous review and Apply authority; results arriving after
+STOP are not presented.
+
+Project generation follows the same responsiveness contract. The desktop task
+pool clones the project while authoring is temporarily held, then performs
+toolpath, dry-frame, or Start Here planning against the clone or immutable plan.
+Distinct worker/render owners plus source-document and revision checks reject
+late success and failure results without mutating newer preparation. Large raw
+G-code documents, workspace paths, dedicated Preview paths, and backward
+timeline rebuilds are constructed in short GUI-thread slices with visible
+progress; Qt objects never cross into workers. Conflicting job actions remain
+unavailable until every required exact view finishes, while software STOP stays
+live. Closing an unfinished Preview fails closed, and application close retains
+workers through completion before runtime teardown. Generated programs remain
+in memory until the explicit export action writes one.
+
+Start Here planning snapshots the configured controller photography pose and
+records it in the replacement program. Its exact Preview includes the
+laser-off approach from that Home/park pose to the reviewed boundary, with the
+configured physical laser-spot offset applied, before normal execution
+preflight and arming.
 
 ## Installation
 
@@ -196,18 +249,21 @@ The format deliberately does not depend on LightBurn project files.
 
 ## Data locations
 
-The source remains in the Git repository. User data remains outside it:
+The source remains in the Git repository. Default user data remains outside it
+under `storage.default_user_data_dir()`:
 
 ```text
-~/.config/e3-positioning-system/
-~/.local/share/e3-positioning-system/
+Linux:  $XDG_DATA_HOME/e3-positioning-system/
+        (or the Python user base under share/e3-positioning-system/)
+Windows: %LOCALAPPDATA%\E3 Positioning System\
+         (falling back to %APPDATA% or the Python user base)
 ```
 
 The current milestone uses:
 
 ```text
-~/.local/share/e3-positioning-system/backups/
-~/.local/share/e3-positioning-system/materials.sqlite
+<user-data-root>/backups/
+<user-data-root>/materials.sqlite
 ```
 
 Existing camera and machine calibration data continues to use the configured
@@ -219,16 +275,20 @@ The desktop shell does not relax the existing machine controls:
 
 - serial access still requires a hardware-enabled process;
 - motion must still be enabled in the local configuration;
-- powered G-code still requires the exact temporary arming phrase;
+- powered G-code still requires exact-program, one-use authorization, created
+  internally when the desktop **Start** action submits it;
 - programs are validated against the project work area;
 - every generated vector path is bracketed by `M5`;
 - rapid travel occurs only while the laser is off;
 - the software stop is not a replacement for a physical emergency stop.
 
-Jog controls are visible to establish the final interaction design, but remain
-disabled in the controller bridge until a separately tested guarded jog API is
-added to the core. Pause/resume likewise remains disabled until the Falcon
-controller's realtime behavior has been physically verified.
+The Machine panel provides separately tested laser-off incremental jogging.
+Home / park must first establish the current XY position; every button press is
+converted to an absolute move, begins with `M5`, uses an explicit bounded travel
+feed, and intentionally does not apply the configured work-area rectangle so
+the operator can measure the actual travel limits. STOP, disconnect, jobs, and
+motor release invalidate the jog position. Pause/resume remains disabled until
+the Falcon controller's realtime behavior has been physically verified.
 
 ## Validation performed for this milestone
 
@@ -249,13 +309,16 @@ test. POSIX serial is selected lazily; Linux remains the only hardware platform.
 
 ## Next desktop milestones
 
-1. Windows launch scripts, OS-native user-data paths, and CI.
-2. Behavioral Qt tests for project editing and object tracing.
-4. Multi-selection transform boxes, proportional canvas resizing, node
+1. Windows launch scripts and CI. OS-native user-data paths and legacy-data
+   migration are implemented.
+2. Broader behavioral Qt tests for the remaining project-editing and object-
+   tracing workflows.
+3. Multi-selection transform boxes, proportional canvas resizing, node
    editing, and smart snap guides. Single-object resize/rotation and transient
    cutting-template drag/rotation are already implemented.
-5. Guarded jog API and tested controller-specific realtime pause/resume.
-6. DXF/image import and text-to-outline conversion.
-7. Grayscale/dithered image modes and embedded portable project assets.
-8. Job history and calibration profiles by material height.
-9. Stable release packaging, update checks and rollback.
+4. Guarded jog API and tested controller-specific realtime pause/resume.
+5. DXF import and text-to-outline conversion.
+6. Managed or embedded portable raster assets, selectable dithers, and
+   calibrated grayscale power curves.
+7. Job history and calibration profiles by material height.
+8. Stable release packaging, update checks and rollback.

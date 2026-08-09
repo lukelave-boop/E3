@@ -1,17 +1,5 @@
 """Transparent project/document model used by the E3 desktop application."""
 
-from .model import (
-    DEFAULT_LAYER_COLORS,
-    PROJECT_SCHEMA_VERSION,
-    Bounds,
-    LayerMode,
-    ObjectKind,
-    OperationLayer,
-    ProjectDocument,
-    ProjectFormatError,
-    SceneObject,
-    Transform,
-)
 from .alignment import Alignment, aligned_transforms, distributed_transforms
 from .history import (
     AddLayerCommand,
@@ -24,9 +12,9 @@ from .history import (
     FunctionalCommand,
     GroupObjectsCommand,
     RemoveLayerCommand,
+    RemoveObjectsCommand,
     ReorderLayersCommand,
     ReorderObjectsCommand,
-    RemoveObjectsCommand,
     UngroupObjectsCommand,
     UpdateLayerCommand,
     UpdateObjectPropertiesCommand,
@@ -44,7 +32,41 @@ from .io import (
     save_autosave,
     save_project,
 )
-from .toolpath import ProjectJob, generate_project_frame, generate_project_gcode, object_polylines
+from .model import (
+    DEFAULT_LAYER_COLORS,
+    PROJECT_SCHEMA_VERSION,
+    Bounds,
+    LayerMode,
+    ObjectKind,
+    OperationLayer,
+    ProjectDocument,
+    ProjectFormatError,
+    SceneObject,
+    Transform,
+)
+from .raster_asset import (
+    MAX_RASTER_DECODED_BYTES,
+    MAX_RASTER_DIMENSION,
+    MAX_RASTER_ENCODED_BYTES,
+    RASTER_FILE_DIALOG_FILTER,
+    SUPPORTED_RASTER_SUFFIXES,
+    RasterAssetIdentity,
+    RasterAssetMetadata,
+    RasterAssetPayload,
+    capture_raster_asset_identity,
+    decode_raster_grayscale,
+    probe_raster_asset,
+    read_raster_asset_payload,
+    verify_raster_asset_identities,
+    verify_raster_asset_identity,
+)
+from .toolpath import (
+    ProjectJob,
+    generate_project_frame,
+    generate_project_gcode,
+    object_polylines,
+    verify_project_job_assets,
+)
 
 __all__ = [
     "AddLayerCommand",
@@ -60,6 +82,9 @@ __all__ = [
     "FunctionalCommand",
     "GroupObjectsCommand",
     "LayerMode",
+    "MAX_RASTER_DECODED_BYTES",
+    "MAX_RASTER_DIMENSION",
+    "MAX_RASTER_ENCODED_BYTES",
     "ObjectKind",
     "OperationLayer",
     "PROJECT_EXTENSION",
@@ -67,6 +92,10 @@ __all__ = [
     "ProjectDocument",
     "ProjectFormatError",
     "ProjectJob",
+    "RASTER_FILE_DIALOG_FILTER",
+    "RasterAssetIdentity",
+    "RasterAssetMetadata",
+    "RasterAssetPayload",
     "RemoveLayerCommand",
     "ReorderLayersCommand",
     "ReorderObjectsCommand",
@@ -83,12 +112,20 @@ __all__ = [
     "autosave_is_newer",
     "autosave_path",
     "clear_autosave",
+    "capture_raster_asset_identity",
+    "decode_raster_grayscale",
     "distributed_transforms",
     "generate_project_frame",
     "generate_project_gcode",
     "load_project",
     "normalize_project_path",
     "object_polylines",
+    "probe_raster_asset",
+    "read_raster_asset_payload",
     "save_autosave",
     "save_project",
+    "SUPPORTED_RASTER_SUFFIXES",
+    "verify_project_job_assets",
+    "verify_raster_asset_identities",
+    "verify_raster_asset_identity",
 ]

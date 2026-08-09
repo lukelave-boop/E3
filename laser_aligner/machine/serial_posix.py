@@ -19,6 +19,7 @@ _BAUD_RATES = {
     115200: termios.B115200,
     230400: getattr(termios, "B230400", termios.B115200),
 }
+_SERIAL_WRITE_TIMEOUT_SECONDS = 0.25
 
 
 def list_serial_ports() -> list[dict[str, str]]:
@@ -123,12 +124,20 @@ class PosixSerial:
             raise MachineError("Serial port is not open")
         with self._write_lock:
             view = memoryview(data)
+            deadline = time.monotonic() + _SERIAL_WRITE_TIMEOUT_SECONDS
             while view:
                 try:
                     written = os.write(self._fd, view)
+                    if written <= 0:
+                        raise BlockingIOError
                     view = view[written:]
                 except BlockingIOError:
-                    time.sleep(0.01)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise MachineError(
+                            "Serial write timed out while the controller was not accepting data"
+                        ) from None
+                    select.select([], [self._fd], [], min(0.02, remaining))
                 except OSError as exc:
                     raise MachineError(f"Serial write failed: {exc}") from exc
 

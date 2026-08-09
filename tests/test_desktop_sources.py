@@ -56,10 +56,23 @@ def test_machine_setup_registration_job_uses_the_normal_main_job_pipeline():
         encoding="utf-8"
     )
 
-    assert "registrationJobPrepared.connect(self._load_fine_registration_job)" in source
-    assert "validationJobPrepared.connect(self._load_fine_registration_job)" in source
-    assert "self.last_job_powered = bool(registration_job.powered)" in source
-    assert "self.workspace.set_toolpath_preview(job.text)" in source
+    assert "dialog.registrationJobPrepared.connect(" in source
+    assert "dialog.validationJobPrepared.connect(" in source
+    assert source.count("QtCore.Qt.ConnectionType.QueuedConnection") >= 2
+    assert "exact_powered = plan.powered" in source
+    assert '"powered": exact_powered' in source
+    assert "self._install_generated_job(" in source
+    assert "self.workspace.start_toolpath_preview(" in source
+
+
+def test_main_help_menu_exposes_the_packaged_setup_runbook():
+    source = (Path(__file__).resolve().parents[1] / "laser_aligner" / "desktop" / "main_window.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert 'action("setup_guide", "Permanent camera setup guide…")' in source
+    assert 'help_menu.addAction(self.actions["setup_guide"])' in source
+    assert "show_setup_guide(self)" in source
 
 
 def test_dense_validation_preview_identifies_commanded_and_detected_points():

@@ -21,6 +21,7 @@ from laser_aligner.config import WorkArea
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.panels import CameraPanel
+from laser_aligner.desktop.theme import DEFAULT_CAMERA_OVERLAY_OPACITY
 from laser_aligner.desktop.workspace import WorkspaceView
 from laser_aligner.project import Bounds
 from laser_aligner.templates import (
@@ -42,6 +43,8 @@ class _SimulationFrameContext:
     def __init__(self) -> None:
         self.has_simulation_workspace_frame = False
         self.bed = SimpleNamespace(calibration=object())
+        self.lens = SimpleNamespace(model=None)
+        self.bed_validity = {"state": "VALID", "reasons": []}
         self.camera = SimpleNamespace(
             status=lambda: SimpleNamespace(
                 connected=True,
@@ -50,6 +53,9 @@ class _SimulationFrameContext:
             )
         )
         self.frame = np.full((8, 8, 3), (20, 80, 180), dtype=np.uint8)
+
+    def bed_calibration_validity(self) -> dict[str, Any]:
+        return dict(self.bed_validity)
 
     def set_simulation_workspace_frame(
         self,
@@ -86,10 +92,189 @@ def _controller() -> tuple[DesktopController, _SimulationFrameContext]:
     return DesktopController(runtime), context
 
 
+def test_job_controller_preflights_before_motion_and_arming(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    calls: list[str] = []
+
+    class Machine:
+        settings = SimpleNamespace(backend="serial")
+
+        def ensure_connected(self) -> None:
+            calls.append("connect")
+
+        def preflight_program(self, gcode: str) -> str:
+            calls.append(f"validate:{gcode}")
+            return "validated"
+
+        def prepare_photo_position(self) -> None:
+            calls.append("park")
+
+        def arm_program(self, phrase: str, program: str) -> None:
+            assert program == "validated"
+            calls.append(f"arm:{phrase}")
+
+        def start_validated_program(
+            self,
+            program: str,
+            name: str,
+        ) -> dict[str, bool]:
+            calls.append(f"start:{name}:{program}")
+            return {"running": True}
+
+        def disarm(self) -> None:
+            calls.append("disarm")
+
+    runtime = SimpleNamespace(context=SimpleNamespace(machine=Machine()))
+    controller = DesktopController(runtime)
+    controller._run = lambda callback, **_kwargs: callback()  # type: ignore[method-assign]
+
+    controller.run_job("program", "job.gcode", arm_phrase="phrase")
+
+    assert calls == [
+        "connect",
+        "validate:program",
+        "park",
+        "arm:phrase",
+        "start:job.gcode:validated",
+    ]
+
+
+def test_job_controller_disarms_when_start_fails_after_arming(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    calls: list[str] = []
+
+    class Machine:
+        settings = SimpleNamespace(backend="serial")
+
+        def ensure_connected(self) -> None:
+            calls.append("connect")
+
+        def preflight_program(self, _gcode: str) -> str:
+            calls.append("validate")
+            return "validated"
+
+        def prepare_photo_position(self) -> None:
+            calls.append("park")
+
+        def arm_program(self, _phrase: str, _program: str) -> None:
+            calls.append("arm")
+
+        def start_validated_program(self, _program: str, _name: str) -> None:
+            calls.append("start")
+            raise RuntimeError("rejected")
+
+        def disarm(self) -> None:
+            calls.append("disarm-m5")
+
+    runtime = SimpleNamespace(context=SimpleNamespace(machine=Machine()))
+    controller = DesktopController(runtime)
+    controller._run = lambda callback, **_kwargs: callback()  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="rejected"):
+        controller.run_job("program", "job.gcode", arm_phrase="phrase")
+
+    assert calls == ["connect", "validate", "park", "arm", "start", "disarm-m5"]
+
+
+def test_software_stop_bypasses_shared_worker_pool(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    calls: list[bool] = []
+    machine = SimpleNamespace(request_stop=lambda emergency=False: calls.append(emergency))
+    runtime = SimpleNamespace(
+        running=False,
+        context=SimpleNamespace(machine=machine),
+    )
+    controller = DesktopController(runtime)
+    controller._run = lambda *_args, **_kwargs: pytest.fail(  # type: ignore[method-assign]
+        "STOP must not enter the shared worker pool"
+    )
+
+    controller.emergency_stop()
+
+    assert calls == [True]
+
+
+def test_project_machine_work_area_mismatch_is_rejected() -> None:
+    fake = SimpleNamespace(
+        document=SimpleNamespace(work_area=Bounds(0.0, 0.0, 220.0, 220.0)),
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                machine=SimpleNamespace(
+                    work_area=WorkArea(15.0, 205.0, 15.0, 205.0)
+                )
+            )
+        ),
+        _work_area_signature=E3MainWindow._work_area_signature,
+    )
+
+    with pytest.raises(ValueError, match="Project work area does not match"):
+        E3MainWindow._require_project_machine_work_area_match(fake)
+
+
+def test_trace_detection_and_color_pick_reject_work_area_mismatch() -> None:
+    errors: list[str] = []
+    detection_requests: list[dict[str, Any]] = []
+    fake = SimpleNamespace(
+        document=SimpleNamespace(work_area=Bounds(0.0, 0.0, 220.0, 220.0)),
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                machine=SimpleNamespace(
+                    work_area=WorkArea(15.0, 205.0, 15.0, 205.0)
+                )
+            ),
+            context=SimpleNamespace(bed=SimpleNamespace(calibration=object())),
+        ),
+        controller=SimpleNamespace(
+            detect_trace_objects=detection_requests.append,
+        ),
+        show_error=errors.append,
+        _work_area_signature=E3MainWindow._work_area_signature,
+    )
+    fake._require_project_machine_work_area_match = lambda: (
+        E3MainWindow._require_project_machine_work_area_match(fake)
+    )
+
+    E3MainWindow._detect_trace_objects(fake, {"detection_mode": "auto"})
+    E3MainWindow._begin_trace_color_pick(fake)
+
+    assert detection_requests == []
+    assert len(errors) == 2
+    assert all("Project work area does not match" in error for error in errors)
+
+
+def test_controller_reports_terminal_job_error_only_once(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    status = {
+        "machine": {
+            "job": {
+                "running": False,
+                "started_at": 10.0,
+                "finished_at": 20.0,
+                "error": "Command '$H' failed: error:8",
+            }
+        }
+    }
+    runtime = SimpleNamespace(running=True, status=lambda: status)
+    controller = DesktopController(runtime)
+    errors: list[str] = []
+    controller.errorOccurred.connect(errors.append)
+
+    controller.poll_status()
+    controller.poll_status()
+
+    assert errors == ["Controller job failed: Command '$H' failed: error:8"]
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
 def test_controller_drops_stale_camera_refresh_delivery_and_cleanup(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    controller, _context = _controller()
+    controller, context = _controller()
     delivered: list[QtGui.QImage] = []
     controller.cameraImageReady.connect(delivered.append)
     image = QtGui.QImage(4, 4, QtGui.QImage.Format.Format_RGB888)
@@ -102,6 +287,11 @@ def test_controller_drops_stale_camera_refresh_delivery_and_cleanup(
 
     errors: list[str] = []
     controller.cameraErrorOccurred.connect(errors.append)
+    context.camera.status = lambda: SimpleNamespace(
+        connected=False,
+        frames_read=0,
+        last_error="device unavailable",
+    )
     controller._camera_refresh_failed("old source unavailable", 3)
     assert errors == []
     controller._camera_refresh_failed("current source unavailable", 4)
@@ -121,6 +311,11 @@ def test_controller_drops_stale_camera_refresh_delivery_and_cleanup(
 
     retries: list[bool] = []
     controller.refresh_camera_image = lambda: retries.append(True)  # type: ignore[method-assign]
+    context.camera.status = lambda: SimpleNamespace(
+        connected=True,
+        frames_read=1,
+        last_error=None,
+    )
     controller.retry_camera_image()
     assert controller._camera_error_latched is None
     assert retries == [True]
@@ -137,6 +332,392 @@ def test_controller_drops_stale_camera_refresh_delivery_and_cleanup(
     controller._camera_live_timer.stop()
     controller.deleteLater()
     qt_application.processEvents()
+
+
+@pytest.mark.parametrize("state", ["UNKNOWN", "STALE"])
+def test_invalid_bed_map_is_reported_as_mapping_not_camera_failure(
+    qt_application: QtWidgets.QApplication,
+    state: str,
+) -> None:
+    controller, context = _controller()
+    context.bed_validity = {
+        "state": state,
+        "reasons": ["Legacy bed map has no camera/lens provenance"],
+    }
+    mapping_alerts: list[dict[str, Any]] = []
+    camera_errors: list[str] = []
+    controller.cameraMappingRequired.connect(mapping_alerts.append)
+    controller.cameraErrorOccurred.connect(camera_errors.append)
+    controller._run = lambda *_args, **_kwargs: pytest.fail(  # type: ignore[method-assign]
+        "An invalid mapping must be rejected before camera refresh work starts"
+    )
+
+    controller.refresh_camera_image()
+    controller.refresh_camera_image()
+
+    assert camera_errors == []
+    assert mapping_alerts == [
+        {
+            "state": state,
+            "reasons": ["Legacy bed map has no camera/lens provenance"],
+            "camera_online": True,
+            "setup_tab": 1,
+        }
+    ]
+
+    context.lens.model = SimpleNamespace(quality={"gate": "pass"})
+    controller.retry_camera_image()
+    assert mapping_alerts[-1]["setup_tab"] == 2
+    assert len(mapping_alerts) == 2
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_missing_bed_map_remains_a_quiet_empty_workspace_state(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    context.bed.calibration = None
+    context.bed_validity = {"state": "MISSING", "reasons": ["No bed map"]}
+    mapping_alerts: list[dict[str, Any]] = []
+    controller.cameraMappingRequired.connect(mapping_alerts.append)
+    controller._run = lambda *_args, **_kwargs: pytest.fail(  # type: ignore[method-assign]
+        "A missing clean-install map must not launch corrected-frame work"
+    )
+
+    controller.refresh_camera_image()
+
+    assert mapping_alerts == []
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_calibration_change_discards_inflight_frame_and_queues_one_replacement(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, _context = _controller()
+    launches: list[dict[str, Any]] = []
+
+    class FinishedSignal:
+        def __init__(self) -> None:
+            self.callbacks: list[Any] = []
+
+        def connect(self, callback: Any, _connection: Any) -> None:
+            self.callbacks.append(callback)
+
+    def fake_run(_callback: Any, **kwargs: Any) -> object:
+        task = SimpleNamespace(signals=SimpleNamespace(finished=FinishedSignal()))
+        launches.append({"task": task, **kwargs})
+        return task
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    delivered: list[QtGui.QImage] = []
+    controller.cameraImageReady.connect(delivered.append)
+
+    controller.refresh_camera_image()
+    first_generation = controller._camera_source_generation
+    assert len(launches) == 1
+    assert controller._camera_refresh_in_flight
+
+    controller.calibration_changed()
+    assert controller._camera_source_generation == first_generation + 1
+    assert controller._camera_refresh_pending
+    assert len(launches) == 1
+
+    stale = QtGui.QImage(4, 4, QtGui.QImage.Format.Format_RGB888)
+    launches[0]["on_success"](stale)
+    assert delivered == []
+    launches[0]["task"].signals.finished.callbacks[0]()
+    qt_application.processEvents()
+
+    assert len(launches) == 2
+    assert not controller._camera_refresh_pending
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_focus_change_discards_frame_captured_with_the_old_focus(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, _context = _controller()
+    launches: list[dict[str, Any]] = []
+
+    class FinishedSignal:
+        def __init__(self) -> None:
+            self.callbacks: list[Any] = []
+
+        def connect(self, callback: Any, _connection: Any) -> None:
+            self.callbacks.append(callback)
+
+    def fake_run(_callback: Any, **kwargs: Any) -> object:
+        task = SimpleNamespace(signals=SimpleNamespace(finished=FinishedSignal()))
+        launches.append({"task": task, **kwargs})
+        return task
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    delivered: list[QtGui.QImage] = []
+    controller.cameraImageReady.connect(delivered.append)
+
+    controller.refresh_camera_image()
+    old_generation = controller._camera_source_generation
+    controller._camera_focus_complete({"changed": True})
+
+    assert controller._camera_source_generation == old_generation + 1
+    assert controller._camera_refresh_pending
+    launches[0]["on_success"](
+        QtGui.QImage(4, 4, QtGui.QImage.Format.Format_RGB888)
+    )
+    assert delivered == []
+    launches[0]["task"].signals.finished.callbacks[0]()
+    qt_application.processEvents()
+    assert len(launches) == 2
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_refresh_result_is_bound_to_exact_lens_and_bed_objects(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    context.lens.model = SimpleNamespace(quality={"gate": "pass"})
+    launches: list[dict[str, Any]] = []
+
+    class FinishedSignal:
+        def __init__(self) -> None:
+            self.callbacks: list[Any] = []
+
+        def connect(self, callback: Any, _connection: Any) -> None:
+            self.callbacks.append(callback)
+
+    def fake_run(_callback: Any, **kwargs: Any) -> object:
+        task = SimpleNamespace(signals=SimpleNamespace(finished=FinishedSignal()))
+        launches.append({"task": task, **kwargs})
+        return task
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    delivered: list[QtGui.QImage] = []
+    invalidations: list[bool] = []
+    controller.cameraImageReady.connect(delivered.append)
+    controller.cameraImageInvalidated.connect(lambda: invalidations.append(True))
+    controller._publish_camera_image(
+        QtGui.QImage(4, 4, QtGui.QImage.Format.Format_RGB888)
+    )
+
+    controller.refresh_camera_image()
+    assert len(launches) == 1
+    context.lens.model = SimpleNamespace(quality={"gate": "pass"})
+    launches[0]["on_success"](
+        QtGui.QImage(4, 4, QtGui.QImage.Format.Format_RGB888)
+    )
+
+    assert len(delivered) == 1
+    assert invalidations == [True]
+    assert controller._camera_refresh_pending
+    launches[0]["task"].signals.finished.callbacks[0]()
+    qt_application.processEvents()
+    assert len(launches) == 2
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_invalid_mapping_clears_an_already_visible_overlay(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    invalidations: list[bool] = []
+    controller.cameraImageInvalidated.connect(lambda: invalidations.append(True))
+    controller._publish_camera_image(
+        QtGui.QImage(4, 4, QtGui.QImage.Format.Format_RGB888)
+    )
+    context.bed_validity = {"state": "STALE", "reasons": ["lens changed"]}
+
+    controller.refresh_camera_image()
+    controller.refresh_camera_image()
+
+    assert invalidations == [True]
+    assert not controller._camera_image_published
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_calibration_change_during_reconnect_cannot_latch_reconnect_busy(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    context.camera.status = lambda: SimpleNamespace(
+        connected=False,
+        frames_read=0,
+        last_error="offline",
+    )
+    context.restart_camera = lambda: {"connected": True}
+    launches: list[dict[str, Any]] = []
+
+    class FinishedSignal:
+        def connect(self, _callback: Any, _connection: Any) -> None:
+            return
+
+    def fake_run(callback: Any, **kwargs: Any) -> object:
+        launches.append({"callback": callback, **kwargs})
+        return SimpleNamespace(signals=SimpleNamespace(finished=FinishedSignal()))
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    controller.retry_camera_image()
+    reconnect_generation = controller._camera_reconnect_generation
+    assert reconnect_generation is not None
+    controller.calibration_changed()
+    assert controller._camera_refresh_pending
+
+    context.camera.status = lambda: SimpleNamespace(
+        connected=True,
+        frames_read=2,
+        last_error=None,
+    )
+    launches[0]["on_success"]({"connected": True})
+
+    assert not controller._camera_reconnect_in_flight
+    assert controller._camera_reconnect_generation is None
+    assert len(launches) == 2
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_machine_setup_review_defers_mapping_refresh_until_dialog_closes(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, _context = _controller()
+    refreshes: list[bool] = []
+    controller.refresh_camera_image = lambda: refreshes.append(True)  # type: ignore[method-assign]
+
+    controller.set_calibration_review_active(True)
+    controller.calibration_changed()
+    assert refreshes == []
+    assert controller._camera_refresh_pending
+
+    controller.set_calibration_review_active(False)
+    assert refreshes == [True]
+    assert not controller._camera_refresh_pending
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_mapping_recovery_notice_is_distinct_from_camera_recovery(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, _context = _controller()
+    controller._camera_mapping_latched = "mapping"
+    notices: list[str] = []
+    controller.notice.connect(notices.append)
+
+    controller._camera_refresh_ready(
+        QtGui.QImage(4, 4, QtGui.QImage.Format.Format_RGB888),
+        controller._camera_source_generation,
+    )
+
+    assert notices == ["Corrected camera overlay recovered"]
+    assert controller._camera_mapping_latched is None
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_healthy_camera_rectification_error_has_its_own_alert(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, _context = _controller()
+    overlay_errors: list[str] = []
+    camera_errors: list[str] = []
+    controller.cameraOverlayErrorOccurred.connect(overlay_errors.append)
+    controller.cameraErrorOccurred.connect(camera_errors.append)
+
+    controller._camera_refresh_failed(
+        "Rectification map could not be built",
+        controller._camera_source_generation,
+    )
+    controller._camera_refresh_failed(
+        "A repeated rectification detail",
+        controller._camera_source_generation,
+    )
+
+    assert camera_errors == []
+    assert len(overlay_errors) == 1
+    assert "camera is online" in overlay_errors[0]
+    assert "Rectification map could not be built" in overlay_errors[0]
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_frozen_corrected_frame_bypasses_invalid_live_mapping(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    context.has_simulation_workspace_frame = True
+    context.bed_validity = {"state": "UNKNOWN", "reasons": ["legacy map"]}
+    delivered: list[QtGui.QImage] = []
+    mapping_alerts: list[dict[str, Any]] = []
+    controller.cameraImageReady.connect(delivered.append)
+    controller.cameraMappingRequired.connect(mapping_alerts.append)
+
+    controller.refresh_camera_image()
+
+    assert len(delivered) == 1
+    assert mapping_alerts == []
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_mapping_dialog_opens_the_recommended_setup_tab(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    messages: list[tuple[str, str]] = []
+    opened_tabs: list[int] = []
+
+    class StatusBar:
+        def showMessage(self, _message: str, _timeout: int) -> None:
+            return
+
+    fake_window = SimpleNamespace(
+        statusBar=lambda: StatusBar(),
+        open_machine_setup=opened_tabs.append,
+    )
+
+    def question(_parent: object, title: str, message: str, *_args: object) -> Any:
+        messages.append((title, message))
+        return QtWidgets.QMessageBox.StandardButton.Open
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", question)
+    monkeypatch.setattr(
+        QtCore.QTimer,
+        "singleShot",
+        lambda _delay, callback: callback(),
+    )
+
+    E3MainWindow.show_camera_mapping_required(
+        fake_window,
+        {
+            "camera_online": True,
+            "setup_tab": 2,
+            "reasons": ["Legacy map has no provenance"],
+        },
+    )
+
+    assert messages[0][0] == "Bed mapping required"
+    assert "Camera is online" in messages[0][1]
+    assert "No coordinate entry is required" in messages[0][1]
+    assert opened_tabs == [2]
 
 
 def test_explicit_camera_retry_reopens_failed_device_before_refresh(
@@ -487,6 +1068,23 @@ def test_camera_panel_test_source_disables_camera_actions_and_preserves_status(
     qt_application.processEvents()
 
 
+def test_camera_overlay_defaults_to_seventy_percent_in_control_and_workspace(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = CameraPanel()
+    workspace = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+
+    assert DEFAULT_CAMERA_OVERLAY_OPACITY == pytest.approx(0.70)
+    assert panel.opacity_slider.value() == 70
+    assert workspace.camera_opacity == pytest.approx(0.70)
+
+    panel.close()
+    workspace.close()
+    panel.deleteLater()
+    workspace.deleteLater()
+    qt_application.processEvents()
+
+
 def test_camera_panel_return_respects_missing_calibration(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -541,15 +1139,14 @@ def test_workspace_keeps_a_persistent_frozen_source_badge(
 def test_camera_overlay_registers_opencv_pixel_centers_to_machine_coordinates(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    area = Bounds(10.0, -5.0, 110.0, 75.0)
+    area = Bounds(10.0, -5.0, 110.1, 75.1)
     workspace = WorkspaceView(area)
     image = QtGui.QImage(400, 320, QtGui.QImage.Format.Format_RGB888)
-    workspace.set_camera_image(image)
+    workspace.set_camera_image(image, pixels_per_mm=4.0)
 
     item = workspace._camera_item
     offset = item.offset()
-    scale_x = area.width / image.width()
-    scale_y = area.height / image.height()
+    scale_x = scale_y = 0.25
     for pixel_x, pixel_y in ((0, 0), (173, 91), (399, 319)):
         # A source pixel occupies one Qt cell beginning at item.offset(); its
         # visual center must land at the OpenCV/BedMapper coordinate (i, j).
@@ -562,6 +1159,32 @@ def test_camera_overlay_registers_opencv_pixel_centers_to_machine_coordinates(
         )
         assert displayed_center.x() == pytest.approx(expected.x(), abs=1e-9)
         assert displayed_center.y() == pytest.approx(expected.y(), abs=1e-9)
+
+    workspace.close()
+    workspace.deleteLater()
+    qt_application.processEvents()
+
+
+def test_camera_overlay_rejects_raster_dimensions_that_disagree_with_ppm(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    workspace = WorkspaceView(Bounds(10.0, -5.0, 110.1, 75.1))
+    valid_image = QtGui.QImage(400, 320, QtGui.QImage.Format.Format_RGB888)
+    valid_image.fill(QtGui.QColor("#2468AC"))
+    workspace.set_camera_image(valid_image, pixels_per_mm=4.0)
+    item = workspace._camera_item
+    previous_pixmap_key = item.pixmap().cacheKey()
+    previous_transform = QtGui.QTransform(item.transform())
+    previous_position = QtCore.QPointF(item.pos())
+    invalid_image = QtGui.QImage(399, 320, QtGui.QImage.Format.Format_RGB888)
+
+    with pytest.raises(ValueError, match="received 399 x 320, expected 400 x 320"):
+        workspace.set_camera_image(invalid_image, pixels_per_mm=4.0)
+
+    assert item.isVisible()
+    assert item.pixmap().cacheKey() == previous_pixmap_key
+    assert item.transform() == previous_transform
+    assert item.pos() == previous_position
 
     workspace.close()
     workspace.deleteLater()
@@ -642,8 +1265,8 @@ def test_main_window_trace_review_uses_captured_frame_and_clear_cancels_request(
             clear_result=lambda: panel_clears.append(True),
         ),
         workspace=SimpleNamespace(
-            set_trace_preview=lambda detections, selected: preview_updates.append(
-                (detections, selected)
+            set_trace_preview=lambda detections, selected, _support=None: (
+                preview_updates.append((detections, selected))
             ),
             clear_trace_preview=lambda: preview_clears.append(True),
         ),
@@ -743,6 +1366,11 @@ def test_generated_frame_runs_through_the_controller_alignment_pipeline(
         settings=SimpleNamespace(
             calibration=SimpleNamespace(
                 bed=SimpleNamespace(pixels_per_mm=pixels_per_mm)
+            ),
+            laser=SimpleNamespace(
+                boundary_margin_mm=0.0,
+                spot_offset_x_mm=0.0,
+                spot_offset_y_mm=0.0,
             ),
             machine=SimpleNamespace(work_area=work_area),
         ),

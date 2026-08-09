@@ -39,10 +39,20 @@ class CoreRuntime:
         settings: Settings,
         *,
         hardware_enabled: bool = False,
+        laser_lockout: bool = False,
     ) -> None:
+        if type(hardware_enabled) is not bool:
+            raise TypeError("hardware_enabled must be an exact boolean")
+        if type(laser_lockout) is not bool:
+            raise TypeError("laser_lockout must be an exact boolean")
         self.settings = settings
-        self.hardware_enabled = bool(hardware_enabled)
-        self.context = AppContext(settings, hardware_enabled=self.hardware_enabled)
+        self.hardware_enabled = hardware_enabled
+        self.laser_lockout = laser_lockout
+        self.context = AppContext(
+            settings,
+            hardware_enabled=self.hardware_enabled,
+            laser_lockout=self.laser_lockout,
+        )
         self._state = RuntimeState.STOPPED
         self._error: str | None = None
         self._lock = threading.RLock()
@@ -53,10 +63,12 @@ class CoreRuntime:
         config_path: str | Path | None = None,
         *,
         hardware_enabled: bool = False,
-    ) -> "CoreRuntime":
+        laser_lockout: bool = False,
+    ) -> CoreRuntime:
         return cls(
             load_settings(config_path),
             hardware_enabled=hardware_enabled,
+            laser_lockout=laser_lockout,
         )
 
     @property
@@ -115,7 +127,7 @@ class CoreRuntime:
             **(snapshot.status or {}),
         }
 
-    def __enter__(self) -> "CoreRuntime":
+    def __enter__(self) -> CoreRuntime:
         self.start()
         return self
 

@@ -9,9 +9,40 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .storage import default_user_data_dir
+
 
 class ConfigError(ValueError):
     """Raised when a configuration file contains an invalid value."""
+
+
+_SUPPORTED_HTTP_BIND_HOSTS = frozenset({"127.0.0.1", "localhost", "0.0.0.0"})
+_MAX_ARM_TIMEOUT_SECONDS = 600
+
+
+def validate_http_bind_host(value: object) -> str:
+    """Return the normalized host supported by the IPv4 HTTP server."""
+
+    if not isinstance(value, str):
+        raise ConfigError(
+            "app.host must be an IPv4 loopback or wildcard bind; "
+            "the HTTP control surface is local-only"
+        )
+    host = value.strip().lower()
+    if host not in _SUPPORTED_HTTP_BIND_HOSTS:
+        raise ConfigError(
+            "app.host must be an IPv4 loopback or wildcard bind; "
+            "the HTTP control surface is local-only"
+        )
+    return host
+
+
+def validate_http_port(value: object) -> int:
+    """Return an integer TCP port within the valid bind range."""
+
+    if type(value) is not int or not 1 <= value <= 65535:
+        raise ConfigError("app.port must be an integer between 1 and 65535")
+    return value
 
 
 def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, Any]:
@@ -29,6 +60,44 @@ def _path(value: str | Path, root: Path) -> Path:
     return path if path.is_absolute() else (root / path).resolve()
 
 
+def _default_user_data_dir() -> Path:
+    """Compatibility wrapper for the shared portable path policy."""
+
+    return default_user_data_dir()
+
+
+def _require_boolean(value: Any, label: str) -> bool:
+    if type(value) is not bool:
+        raise ConfigError(f"{label} must be a JSON boolean")
+    return value
+
+
+def _require_integer(value: Any, label: str) -> int:
+    if type(value) is not int:
+        raise ConfigError(f"{label} must be a JSON integer")
+    return value
+
+
+def _require_number(value: Any, label: str) -> float:
+    if type(value) not in {int, float}:
+        raise ConfigError(f"{label} must be a finite JSON number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ConfigError(f"{label} must be a finite JSON number")
+    return number
+
+
+def _require_finite_numbers(value: Any, path: str = "configuration") -> None:
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ConfigError(f"{path} must be finite")
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            _require_finite_numbers(child, f"{path}.{key}")
+    elif isinstance(value, (list, tuple)):
+        for index, child in enumerate(value):
+            _require_finite_numbers(child, f"{path}[{index}]")
+
+
 @dataclass(slots=True)
 class AppSettings:
     host: str = "127.0.0.1"
@@ -44,12 +113,14 @@ class AppSettings:
 class PrecisionCaptureSettings:
     settle_seconds: float = 1.5
     discard_frames: int = 8
-    sample_frames: int = 15
+    sample_frames: int = 45
     timeout_seconds: float = 8.0
-    minimum_valid_frames: int = 9
+    minimum_valid_frames: int = 15
     mad_multiplier: float = 3.5
     outlier_floor_px: float = 0.25
     max_jitter_rms_px: float = 0.75
+    coordinate_strategy: str = "stable_clarity_consensus"
+    consensus_frames: int = 15
 
 
 @dataclass(slots=True)
@@ -63,9 +134,7 @@ class CameraSettings:
     jpeg_quality: int = 90
     warmup_frames: int = 12
     controls: dict[str, int | bool] = field(default_factory=dict)
-    precision_capture: PrecisionCaptureSettings = field(
-        default_factory=PrecisionCaptureSettings
-    )
+    precision_capture: PrecisionCaptureSettings = field(default_factory=PrecisionCaptureSettings)
 
 
 @dataclass(slots=True)
@@ -84,10 +153,46 @@ class WorkArea:
         return self.y_max - self.y_min
 
     def contains(self, x: float, y: float, margin: float = 0.0) -> bool:
-        return (
-            self.x_min + margin <= x <= self.x_max - margin
-            and self.y_min + margin <= y <= self.y_max - margin
+        return self.x_min + margin <= x <= self.x_max - margin and self.y_min + margin <= y <= self.y_max - margin
+
+
+def effective_laser_output_area(
+    work_area: WorkArea,
+    boundary_margin_mm: float,
+    spot_offset_x_mm: float = 0.0,
+    spot_offset_y_mm: float = 0.0,
+) -> WorkArea:
+    """Return desired spot coordinates valid for both spot and controller."""
+
+    values = (
+        float(boundary_margin_mm),
+        float(spot_offset_x_mm),
+        float(spot_offset_y_mm),
+        float(work_area.x_min),
+        float(work_area.x_max),
+        float(work_area.y_min),
+        float(work_area.y_max),
+    )
+    if not all(math.isfinite(value) for value in values):
+        raise ValueError("Laser output-area settings must be finite")
+    margin, offset_x, offset_y = values[:3]
+    if margin < 0.0:
+        raise ValueError("Laser boundary margin must be non-negative")
+    base_x_min = float(work_area.x_min) + margin
+    base_x_max = float(work_area.x_max) - margin
+    base_y_min = float(work_area.y_min) + margin
+    base_y_max = float(work_area.y_max) - margin
+    result = WorkArea(
+        x_min=max(base_x_min, base_x_min + offset_x),
+        x_max=min(base_x_max, base_x_max + offset_x),
+        y_min=max(base_y_min, base_y_min + offset_y),
+        y_max=min(base_y_max, base_y_max + offset_y),
+    )
+    if result.width <= 0.0 or result.height <= 0.0:
+        raise ValueError(
+            "Laser boundary margin and spot offset leave no guarded output area"
         )
+    return result
 
 
 @dataclass(slots=True)
@@ -102,8 +207,12 @@ class MachineSettings:
     photo_y: float = 110.0
     photo_z: float | None = None
     home_before_photo: bool = True
+    home_and_release_after_powered_job: bool = True
+    grbl_step_idle_delay_ms: int = 250
     allow_motion: bool = False
     controller_startup_delay: float = 2.0
+    max_travel_feed_mm_min: float = 6000.0
+    max_work_feed_mm_min: float = 6000.0
 
 
 @dataclass(slots=True)
@@ -189,16 +298,12 @@ class Settings:
                     "discard_frames": self.camera.precision_capture.discard_frames,
                     "sample_frames": self.camera.precision_capture.sample_frames,
                     "timeout_seconds": self.camera.precision_capture.timeout_seconds,
-                    "minimum_valid_frames": (
-                        self.camera.precision_capture.minimum_valid_frames
-                    ),
+                    "minimum_valid_frames": (self.camera.precision_capture.minimum_valid_frames),
                     "mad_multiplier": self.camera.precision_capture.mad_multiplier,
-                    "outlier_floor_px": (
-                        self.camera.precision_capture.outlier_floor_px
-                    ),
-                    "max_jitter_rms_px": (
-                        self.camera.precision_capture.max_jitter_rms_px
-                    ),
+                    "outlier_floor_px": (self.camera.precision_capture.outlier_floor_px),
+                    "max_jitter_rms_px": self.camera.precision_capture.max_jitter_rms_px,
+                    "coordinate_strategy": self.camera.precision_capture.coordinate_strategy,
+                    "consensus_frames": self.camera.precision_capture.consensus_frames,
                 },
             },
             "machine": {
@@ -218,6 +323,12 @@ class Settings:
                     "y": self.machine.photo_y,
                     "z": self.machine.photo_z,
                 },
+                "home_and_release_after_powered_job": (
+                    self.machine.home_and_release_after_powered_job
+                ),
+                "grbl_step_idle_delay_ms": self.machine.grbl_step_idle_delay_ms,
+                "max_travel_feed_mm_min": self.machine.max_travel_feed_mm_min,
+                "max_work_feed_mm_min": self.machine.max_work_feed_mm_min,
             },
             "calibration": {
                 "lens": {
@@ -272,6 +383,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "focus_auto": 0,
             "focus_absolute": 40,
             "exposure_auto": 1,
+            "auto_exposure": 1,
             "exposure_time_absolute": 250,
             "white_balance_automatic": 0,
             "white_balance_temperature": 4500,
@@ -280,12 +392,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "precision_capture": {
             "settle_seconds": 1.5,
             "discard_frames": 8,
-            "sample_frames": 15,
+            "sample_frames": 45,
             "timeout_seconds": 8.0,
-            "minimum_valid_frames": 9,
+            "minimum_valid_frames": 15,
             "mad_multiplier": 3.5,
             "outlier_floor_px": 0.25,
             "max_jitter_rms_px": 0.75,
+            "coordinate_strategy": "stable_clarity_consensus",
+            "consensus_frames": 15,
         },
     },
     "machine": {
@@ -297,8 +411,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "work_area": {"x_min": 0.0, "x_max": 220.0, "y_min": 0.0, "y_max": 220.0},
         "photo_position": {"x": 110.0, "y": 110.0, "z": None},
         "home_before_photo": True,
+        "home_and_release_after_powered_job": True,
+        "grbl_step_idle_delay_ms": 250,
         "allow_motion": False,
         "controller_startup_delay": 2.0,
+        "max_travel_feed_mm_min": 6000.0,
+        "max_work_feed_mm_min": 6000.0,
     },
     "calibration": {
         "lens": {
@@ -339,8 +457,115 @@ DEFAULT_CONFIG: dict[str, Any] = {
 
 
 def _validate(raw: Mapping[str, Any]) -> None:
-    if not (1 <= int(raw["app"]["port"]) <= 65535):
-        raise ConfigError("app.port must be between 1 and 65535")
+    _require_finite_numbers(raw)
+    precision = raw["camera"]["precision_capture"]
+    area = raw["machine"]["work_area"]
+    photo = raw["machine"]["photo_position"]
+    lens = raw["calibration"]["lens"]
+    bed = raw["calibration"]["bed"]
+    laser = raw["laser"]
+    vision = raw["vision"]
+    integer_values = (
+        ("app.max_request_bytes", raw["app"]["max_request_bytes"]),
+        ("camera.width", raw["camera"]["width"]),
+        ("camera.height", raw["camera"]["height"]),
+        ("camera.fps", raw["camera"]["fps"]),
+        ("camera.jpeg_quality", raw["camera"]["jpeg_quality"]),
+        ("camera.warmup_frames", raw["camera"]["warmup_frames"]),
+        ("camera.precision_capture.discard_frames", precision["discard_frames"]),
+        ("camera.precision_capture.sample_frames", precision["sample_frames"]),
+        (
+            "camera.precision_capture.minimum_valid_frames",
+            precision["minimum_valid_frames"],
+        ),
+        ("camera.precision_capture.consensus_frames", precision["consensus_frames"]),
+        ("machine.baudrate", raw["machine"]["baudrate"]),
+        (
+            "machine.grbl_step_idle_delay_ms",
+            raw["machine"]["grbl_step_idle_delay_ms"],
+        ),
+        ("calibration.lens.columns", lens["columns"]),
+        ("calibration.lens.rows", lens["rows"]),
+        ("calibration.lens.minimum_images", lens["minimum_images"]),
+        ("calibration.bed.minimum_points", bed["minimum_points"]),
+        ("laser.power_max", laser["power_max"]),
+        ("laser.default_power", laser["default_power"]),
+        ("laser.frame_power", laser["frame_power"]),
+        ("laser.arm_timeout_seconds", laser["arm_timeout_seconds"]),
+        ("vision.workpiece_canny_low", vision["workpiece_canny_low"]),
+        ("vision.workpiece_canny_high", vision["workpiece_canny_high"]),
+    )
+    for label, value in integer_values:
+        _require_integer(value, label)
+    number_values = (
+        ("camera.precision_capture.settle_seconds", precision["settle_seconds"]),
+        ("camera.precision_capture.timeout_seconds", precision["timeout_seconds"]),
+        ("camera.precision_capture.mad_multiplier", precision["mad_multiplier"]),
+        ("camera.precision_capture.outlier_floor_px", precision["outlier_floor_px"]),
+        (
+            "camera.precision_capture.max_jitter_rms_px",
+            precision["max_jitter_rms_px"],
+        ),
+        ("machine.read_timeout", raw["machine"]["read_timeout"]),
+        ("machine.work_area.x_min", area["x_min"]),
+        ("machine.work_area.x_max", area["x_max"]),
+        ("machine.work_area.y_min", area["y_min"]),
+        ("machine.work_area.y_max", area["y_max"]),
+        ("machine.photo_position.x", photo["x"]),
+        ("machine.photo_position.y", photo["y"]),
+        (
+            "machine.controller_startup_delay",
+            raw["machine"]["controller_startup_delay"],
+        ),
+        (
+            "machine.max_travel_feed_mm_min",
+            raw["machine"]["max_travel_feed_mm_min"],
+        ),
+        ("machine.max_work_feed_mm_min", raw["machine"]["max_work_feed_mm_min"]),
+        ("calibration.lens.square_size_mm", lens["square_size_mm"]),
+        ("calibration.bed.pixels_per_mm", bed["pixels_per_mm"]),
+        ("calibration.bed.ransac_threshold_mm", bed["ransac_threshold_mm"]),
+        ("laser.travel_feed_mm_min", laser["travel_feed_mm_min"]),
+        ("laser.engrave_feed_mm_min", laser["engrave_feed_mm_min"]),
+        ("laser.curve_tolerance_mm", laser["curve_tolerance_mm"]),
+        ("laser.boundary_margin_mm", laser["boundary_margin_mm"]),
+        ("laser.spot_offset_x_mm", laser["spot_offset_x_mm"]),
+        ("laser.spot_offset_y_mm", laser["spot_offset_y_mm"]),
+        ("laser.preview_acceleration_mm_s2", laser["preview_acceleration_mm_s2"]),
+        ("laser.preview_command_delay_ms", laser["preview_command_delay_ms"]),
+        ("vision.workpiece_min_area_ratio", vision["workpiece_min_area_ratio"]),
+    )
+    for label, value in number_values:
+        _require_number(value, label)
+    if photo.get("z") is not None:
+        _require_number(photo["z"], "machine.photo_position.z")
+    controls = raw["camera"].get("controls", {})
+    if not isinstance(controls, Mapping) or any(
+        not isinstance(key, str) or type(value) not in {bool, int}
+        for key, value in controls.items()
+    ):
+        raise ConfigError("camera.controls must map names to JSON integers or booleans")
+    validate_http_bind_host(raw["app"]["host"])
+    if _require_boolean(
+        raw["app"]["allow_remote_control"],
+        "app.allow_remote_control",
+    ):
+        raise ConfigError(
+            "app.allow_remote_control is no longer supported; the HTTP control surface is local-only"
+        )
+    for section, key in (
+        ("app", "simulation"),
+        ("app", "open_browser"),
+        ("app", "allow_remote_control"),
+        ("camera", "autostart"),
+        ("machine", "home_before_photo"),
+        ("machine", "home_and_release_after_powered_job"),
+        ("machine", "allow_motion"),
+        ("laser", "allow_low_power_frame"),
+        ("laser", "return_to_photo_position"),
+    ):
+        _require_boolean(raw[section][key], f"{section}.{key}")
+    validate_http_port(raw["app"]["port"])
     if int(raw["app"]["max_request_bytes"]) <= 0:
         raise ConfigError("app.max_request_bytes must be positive")
     if int(raw["camera"]["width"]) <= 0 or int(raw["camera"]["height"]) <= 0:
@@ -351,7 +576,8 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("camera.jpeg_quality must be between 1 and 100")
     if int(raw["camera"]["warmup_frames"]) < 0:
         raise ConfigError("camera.warmup_frames cannot be negative")
-    precision = raw["camera"]["precision_capture"]
+    if not 0 <= int(raw["machine"]["grbl_step_idle_delay_ms"]) < 255:
+        raise ConfigError("machine.grbl_step_idle_delay_ms must be between 0 and 254")
     if float(precision["settle_seconds"]) < 0:
         raise ConfigError("camera.precision_capture.settle_seconds cannot be negative")
     if int(precision["discard_frames"]) < 0:
@@ -361,10 +587,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
     if sample_frames < 1:
         raise ConfigError("camera.precision_capture.sample_frames must be positive")
     if not 1 <= minimum_valid_frames <= sample_frames:
-        raise ConfigError(
-            "camera.precision_capture.minimum_valid_frames must be between 1 "
-            "and sample_frames"
-        )
+        raise ConfigError("camera.precision_capture.minimum_valid_frames must be between 1 and sample_frames")
     if float(precision["timeout_seconds"]) <= 0:
         raise ConfigError("camera.precision_capture.timeout_seconds must be positive")
     if float(precision["mad_multiplier"]) <= 0:
@@ -373,7 +596,18 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("camera.precision_capture.outlier_floor_px cannot be negative")
     if float(precision["max_jitter_rms_px"]) <= 0:
         raise ConfigError("camera.precision_capture.max_jitter_rms_px must be positive")
-    area = raw["machine"]["work_area"]
+    if str(precision["coordinate_strategy"]) not in {
+        "median",
+        "sharpest_inlier_frame",
+        "stable_clarity_consensus",
+    }:
+        raise ConfigError(
+            "camera.precision_capture.coordinate_strategy must be median, "
+            "sharpest_inlier_frame, or stable_clarity_consensus"
+        )
+    consensus_frames = int(precision["consensus_frames"])
+    if not 1 <= consensus_frames <= sample_frames:
+        raise ConfigError("camera.precision_capture.consensus_frames must be between 1 and sample_frames")
     if float(area["x_max"]) <= float(area["x_min"]):
         raise ConfigError("machine.work_area.x_max must be greater than x_min")
     if float(area["y_max"]) <= float(area["y_min"]):
@@ -388,6 +622,9 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("machine.read_timeout must be positive")
     if float(raw["machine"]["controller_startup_delay"]) < 0:
         raise ConfigError("machine.controller_startup_delay cannot be negative")
+    for key in ("max_travel_feed_mm_min", "max_work_feed_mm_min"):
+        if float(raw["machine"][key]) <= 0:
+            raise ConfigError(f"machine.{key} must be positive")
     if str(raw["laser"]["power_mode"]).upper() not in {"M3", "M4"}:
         raise ConfigError("laser.power_mode must be M3 or M4")
     power_max = int(raw["laser"]["power_max"])
@@ -397,24 +634,29 @@ def _validate(raw: Mapping[str, Any]) -> None:
         value = int(raw["laser"][key])
         if not 0 <= value <= power_max:
             raise ConfigError(f"laser.{key} must be between 0 and laser.power_max")
-    lens = raw["calibration"]["lens"]
     if int(lens["columns"]) < 3 or int(lens["rows"]) < 3:
         raise ConfigError("lens checkerboard needs at least 3 x 3 inner corners")
     if float(lens["square_size_mm"]) <= 0:
         raise ConfigError("lens square_size_mm must be positive")
     if int(lens["minimum_images"]) < 3:
         raise ConfigError("lens minimum_images must be at least 3")
-    bed = raw["calibration"]["bed"]
     if float(bed["pixels_per_mm"]) <= 0:
         raise ConfigError("bed pixels_per_mm must be positive")
     if float(bed["ransac_threshold_mm"]) <= 0:
         raise ConfigError("bed ransac_threshold_mm must be positive")
     if int(bed["minimum_points"]) < 4:
         raise ConfigError("bed minimum_points must be at least 4")
-    laser = raw["laser"]
     for key in ("travel_feed_mm_min", "engrave_feed_mm_min", "curve_tolerance_mm"):
         if float(laser[key]) <= 0:
             raise ConfigError(f"laser.{key} must be positive")
+    if float(laser["travel_feed_mm_min"]) > float(raw["machine"]["max_travel_feed_mm_min"]):
+        raise ConfigError(
+            "laser.travel_feed_mm_min cannot exceed machine.max_travel_feed_mm_min"
+        )
+    if float(laser["engrave_feed_mm_min"]) > float(raw["machine"]["max_work_feed_mm_min"]):
+        raise ConfigError(
+            "laser.engrave_feed_mm_min cannot exceed machine.max_work_feed_mm_min"
+        )
     margin = float(laser["boundary_margin_mm"])
     if margin < 0:
         raise ConfigError("laser.boundary_margin_mm cannot be negative")
@@ -429,16 +671,17 @@ def _validate(raw: Mapping[str, Any]) -> None:
         if not math.isfinite(value):
             raise ConfigError(f"laser.{key} must be finite")
         if abs(value) > maximum_offset:
-            raise ConfigError(
-                f"laser.{key} cannot exceed the configured work-area span"
-            )
-    if int(laser["arm_timeout_seconds"]) <= 0:
-        raise ConfigError("laser.arm_timeout_seconds must be positive")
+            raise ConfigError(f"laser.{key} cannot exceed the configured work-area span")
+    arm_timeout = int(laser["arm_timeout_seconds"])
+    if not 1 <= arm_timeout <= _MAX_ARM_TIMEOUT_SECONDS:
+        raise ConfigError(
+            "laser.arm_timeout_seconds must be between 1 and "
+            f"{_MAX_ARM_TIMEOUT_SECONDS} seconds"
+        )
     if float(laser["preview_acceleration_mm_s2"]) <= 0:
         raise ConfigError("laser.preview_acceleration_mm_s2 must be positive")
     if float(laser["preview_command_delay_ms"]) < 0:
         raise ConfigError("laser.preview_command_delay_ms cannot be negative")
-    vision = raw["vision"]
     if not 0 < float(vision["workpiece_min_area_ratio"]) < 1:
         raise ConfigError("vision.workpiece_min_area_ratio must be between 0 and 1")
     canny_low = int(vision["workpiece_canny_low"])
@@ -462,6 +705,8 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
         raise ConfigError(f"Configuration file does not exist: {source_path}")
 
     raw = _deep_merge(DEFAULT_CONFIG, override)
+    if not source_path.exists():
+        raw["app"]["data_dir"] = str(_default_user_data_dir())
     try:
         _validate(raw)
     except ConfigError:
@@ -477,12 +722,15 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
         source_path=source_path,
         project_root=project_root,
         app=AppSettings(
-            host=str(raw["app"]["host"]),
-            port=int(raw["app"]["port"]),
+            host=validate_http_bind_host(raw["app"]["host"]),
+            port=validate_http_port(raw["app"]["port"]),
             data_dir=_path(raw["app"]["data_dir"], root),
-            simulation=bool(raw["app"]["simulation"]),
-            open_browser=bool(raw["app"]["open_browser"]),
-            allow_remote_control=bool(raw["app"]["allow_remote_control"]),
+            simulation=_require_boolean(raw["app"]["simulation"], "app.simulation"),
+            open_browser=_require_boolean(raw["app"]["open_browser"], "app.open_browser"),
+            allow_remote_control=_require_boolean(
+                raw["app"]["allow_remote_control"],
+                "app.allow_remote_control",
+            ),
             max_request_bytes=int(raw["app"]["max_request_bytes"]),
         ),
         camera=CameraSettings(
@@ -491,35 +739,21 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             height=int(raw["camera"]["height"]),
             fps=int(raw["camera"]["fps"]),
             fourcc=str(raw["camera"]["fourcc"]),
-            autostart=bool(raw["camera"]["autostart"]),
+            autostart=_require_boolean(raw["camera"]["autostart"], "camera.autostart"),
             jpeg_quality=int(raw["camera"]["jpeg_quality"]),
             warmup_frames=int(raw["camera"]["warmup_frames"]),
             controls=dict(raw["camera"].get("controls", {})),
             precision_capture=PrecisionCaptureSettings(
-                settle_seconds=float(
-                    raw["camera"]["precision_capture"]["settle_seconds"]
-                ),
-                discard_frames=int(
-                    raw["camera"]["precision_capture"]["discard_frames"]
-                ),
-                sample_frames=int(
-                    raw["camera"]["precision_capture"]["sample_frames"]
-                ),
-                timeout_seconds=float(
-                    raw["camera"]["precision_capture"]["timeout_seconds"]
-                ),
-                minimum_valid_frames=int(
-                    raw["camera"]["precision_capture"]["minimum_valid_frames"]
-                ),
-                mad_multiplier=float(
-                    raw["camera"]["precision_capture"]["mad_multiplier"]
-                ),
-                outlier_floor_px=float(
-                    raw["camera"]["precision_capture"]["outlier_floor_px"]
-                ),
-                max_jitter_rms_px=float(
-                    raw["camera"]["precision_capture"]["max_jitter_rms_px"]
-                ),
+                settle_seconds=float(raw["camera"]["precision_capture"]["settle_seconds"]),
+                discard_frames=int(raw["camera"]["precision_capture"]["discard_frames"]),
+                sample_frames=int(raw["camera"]["precision_capture"]["sample_frames"]),
+                timeout_seconds=float(raw["camera"]["precision_capture"]["timeout_seconds"]),
+                minimum_valid_frames=int(raw["camera"]["precision_capture"]["minimum_valid_frames"]),
+                mad_multiplier=float(raw["camera"]["precision_capture"]["mad_multiplier"]),
+                outlier_floor_px=float(raw["camera"]["precision_capture"]["outlier_floor_px"]),
+                max_jitter_rms_px=float(raw["camera"]["precision_capture"]["max_jitter_rms_px"]),
+                coordinate_strategy=str(raw["camera"]["precision_capture"]["coordinate_strategy"]),
+                consensus_frames=int(raw["camera"]["precision_capture"]["consensus_frames"]),
             ),
         ),
         machine=MachineSettings(
@@ -537,9 +771,22 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             photo_x=float(photo["x"]),
             photo_y=float(photo["y"]),
             photo_z=None if photo.get("z") is None else float(photo["z"]),
-            home_before_photo=bool(raw["machine"]["home_before_photo"]),
-            allow_motion=bool(raw["machine"]["allow_motion"]),
+            home_before_photo=_require_boolean(
+                raw["machine"]["home_before_photo"],
+                "machine.home_before_photo",
+            ),
+            home_and_release_after_powered_job=_require_boolean(
+                raw["machine"]["home_and_release_after_powered_job"],
+                "machine.home_and_release_after_powered_job",
+            ),
+            grbl_step_idle_delay_ms=int(raw["machine"]["grbl_step_idle_delay_ms"]),
+            allow_motion=_require_boolean(
+                raw["machine"]["allow_motion"],
+                "machine.allow_motion",
+            ),
             controller_startup_delay=float(raw["machine"]["controller_startup_delay"]),
+            max_travel_feed_mm_min=float(raw["machine"]["max_travel_feed_mm_min"]),
+            max_work_feed_mm_min=float(raw["machine"]["max_work_feed_mm_min"]),
         ),
         calibration=CalibrationSettings(
             lens=LensCalibrationSettings(
@@ -566,11 +813,15 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             spot_offset_x_mm=float(raw["laser"]["spot_offset_x_mm"]),
             spot_offset_y_mm=float(raw["laser"]["spot_offset_y_mm"]),
             arm_timeout_seconds=int(raw["laser"]["arm_timeout_seconds"]),
-            allow_low_power_frame=bool(raw["laser"]["allow_low_power_frame"]),
-            return_to_photo_position=bool(raw["laser"]["return_to_photo_position"]),
-            preview_acceleration_mm_s2=float(
-                raw["laser"]["preview_acceleration_mm_s2"]
+            allow_low_power_frame=_require_boolean(
+                raw["laser"]["allow_low_power_frame"],
+                "laser.allow_low_power_frame",
             ),
+            return_to_photo_position=_require_boolean(
+                raw["laser"]["return_to_photo_position"],
+                "laser.return_to_photo_position",
+            ),
+            preview_acceleration_mm_s2=float(raw["laser"]["preview_acceleration_mm_s2"]),
             preview_command_delay_ms=float(raw["laser"]["preview_command_delay_ms"]),
         ),
         vision=VisionSettings(

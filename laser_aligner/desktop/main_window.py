@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from ..camera import load_corrected_test_image
 from ..core import CoreRuntime
+from ..errors import SvgError
 from ..gcode.job_plan import build_job_plan, restart_program_from_move
 from ..geometry.svg import parse_svg
 from ..identity import application_identity, application_window_title
 from ..materials import MaterialDatabase, MaterialPreset
 from ..project import (
+    RASTER_FILE_DIALOG_FILTER,
     AddLayerCommand,
     AddObjectCommand,
     AddObjectsCommand,
@@ -42,12 +45,14 @@ from ..project import (
     autosave_path,
     clear_autosave,
     distributed_transforms,
-    generate_project_frame,
     generate_project_gcode,
     load_project,
+    probe_raster_asset,
     save_autosave,
     save_project,
+    verify_project_job_assets,
 )
+from ..storage import atomic_write_text
 from ..templates import (
     CutTemplate,
     RectangleGridSpec,
@@ -61,7 +66,7 @@ from .context_bar import ContextPropertyBar
 from .controller import DesktopController
 from .controls import InspectorTabs, WheelGuard
 from .icons import action_icon, apply_action_icons
-from .job_preview import JobPreviewDialog
+from .job_preview import JobPreviewDialog, PreparedJobPreview, prepare_job_preview
 from .machine_setup import MachineSetupDialog
 from .panels import (
     CameraPanel,
@@ -76,12 +81,53 @@ from .panels import (
 )
 from .qt import require_qt
 from .runtime_strip import RuntimeSafetyStrip
+from .setup_guide import show_setup_guide
 from .template_designer import WORK_AREA_TOLERANCE_MM, GridTemplateDesignerDialog
 from .template_panel import TemplatePanel
 from .template_test_image import TemplateTestImageDialog
 from .workspace import WorkspaceFrame, WorkspaceView
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+_DESIGN_DOCK_MIN_WIDTH = 360
+_RUNTIME_DOCK_MIN_WIDTH = 320
+_GCODE_DOCK_MIN_WIDTH = 160
+
+_AUTHORING_ACTION_KEYS = (
+    "new",
+    "open",
+    "save",
+    "save_as",
+    "save_template",
+    "import_svg",
+    "import_image",
+    "undo",
+    "redo",
+    "delete",
+    "duplicate",
+    "select_all",
+    "group",
+    "ungroup",
+    "align_left",
+    "align_center_x",
+    "align_right",
+    "align_bottom",
+    "align_center_y",
+    "align_top",
+    "distribute_h",
+    "distribute_v",
+    "bring_front",
+    "raise",
+    "lower",
+    "send_back",
+    "rectangle",
+    "ellipse",
+    "line",
+    "text",
+    "grid_template_designer",
+    "trace_objects",
+    "template_alignment",
+)
 
 
 LAYER_PALETTE_COLORS = (
@@ -250,9 +296,32 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_name = ""
         self.last_job_powered = False
         self.last_job_revision: int | None = None
+        self.last_job_work_area: tuple[float, float, float, float] | None = None
+        self.last_job_preview_data: PreparedJobPreview | None = None
         self._job_preview_dialog: JobPreviewDialog | None = None
         self._busy = False
+        self._controller_busy = False
+        self._job_preparation_busy = False
+        self._job_preparation_label = ""
+        self._job_preparation_owner: tuple[str, int] | None = None
+        self._job_request_id = 0
+        self._job_worker_requests: dict[int, threading.Event] = {}
+        self._job_worker_phases: dict[int, str] = {}
+        self._job_cancel_reason = ""
+        self._job_render_request_id: int | None = None
+        self._job_render_pending: set[str] = set()
+        self._job_render_progress: dict[str, float] = {}
+        self._gcode_render_text = ""
+        self._gcode_render_index = 0
+        self._gcode_render_request_id: int | None = None
+        self._gcode_render_cursor: QtGui.QTextCursor | None = None
+        self._gcode_render_timer = QtCore.QTimer(self)
+        self._gcode_render_timer.setInterval(0)
+        self._gcode_render_timer.timeout.connect(self._render_gcode_slice)
+        self._authoring_freeze_owner: int | None = None
+        self._authoring_action_states: dict[str, bool] = {}
         self._closing = False
+        self._close_requested = False
         self._expanding_group_selection = False
         self._trace_result: dict[str, Any] | None = None
         self._template_match_result: dict[str, Any] | None = None
@@ -279,7 +348,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._create_toolbars()
         self._create_docks()
         self._create_status_bar()
-        self._default_window_state = self.saveState(5)
+        self._default_window_state = self.saveState(6)
         self._connect_signals()
         self.controller.set_live_camera(
             self.camera_panel.live_enabled(),
@@ -373,7 +442,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("generate", "Generate toolpath", "Ctrl+Alt+Enter")
         action("optimize_paths", "Optimize path ordering")
         action("preview_job", "Preview generated job", "Alt+P")
-        action("frame", "Generate dry frame", "Ctrl+Shift+F")
         action("export_gcode", "Export generated G-code…", "Ctrl+Shift+E")
         action("run", "Run current job", "Ctrl+Enter")
         action("stop", "Software stop / laser off", "Esc")
@@ -381,6 +449,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("maximize_window", "Maximize / restore window", "Ctrl+Shift+M")
         action("reset_window_size", "Reset window size")
         action("reset_workspace_layout", "Reset workspace layout")
+        action("setup_guide", "Permanent camera setup guide…")
         action("about", "About E3 Positioning System")
 
         self._drawing_action_group = QtGui.QActionGroup(self)
@@ -447,9 +516,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["template_alignment"].triggered.connect(self.open_template_panel)
         self.actions["refresh_camera"].triggered.connect(self.controller.retry_camera_image)
         self.actions["machine_setup"].triggered.connect(self.open_machine_setup)
+        self.actions["setup_guide"].triggered.connect(
+            lambda: show_setup_guide(self)
+        )
         self.actions["generate"].triggered.connect(self.generate_toolpath)
         self.actions["preview_job"].triggered.connect(self.show_job_preview)
-        self.actions["frame"].triggered.connect(self.generate_frame)
         self.actions["export_gcode"].triggered.connect(self.export_gcode)
         self.actions["run"].triggered.connect(self.run_current_job)
         self.actions["stop"].triggered.connect(self.controller.emergency_stop)
@@ -516,7 +587,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "generate",
             "optimize_paths",
             "preview_job",
-            "frame",
             "export_gcode",
             "run",
             "stop",
@@ -534,6 +604,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.window_menu.addSeparator()
 
         help_menu = self.menuBar().addMenu("&Help")
+        help_menu.addAction(self.actions["setup_guide"])
+        help_menu.addSeparator()
         help_menu.addAction(self.actions["about"])
 
     def _create_toolbars(self) -> None:
@@ -653,7 +725,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         job_toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         job_toolbar.addAction(self.actions["refresh_camera"])
         job_toolbar.addSeparator()
-        for key in ("generate", "preview_job", "frame", "run"):
+        for key in ("generate", "preview_job", "run"):
             job_toolbar.addAction(self.actions[key])
 
         self.safety_toolbar = QtWidgets.QToolBar("Runtime and safety", self)
@@ -728,20 +800,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.job_panel = JobPanel()
         self.gcode_preview = QtWidgets.QPlainTextEdit()
         self.gcode_preview.setReadOnly(True)
+        self.gcode_preview.setUndoRedoEnabled(False)
         self.gcode_preview.setLineWrapMode(
             QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap
         )
 
-        # Match the drafting-first hierarchy: artwork/operation inspectors above,
-        # laser execution and material controls below.  Keeping two tab groups
-        # avoids a single oversized inspector stack and leaves the canvas dominant.
+        # Keep design/operation inspectors and runtime controls in separate tab
+        # groups. Their docks are arranged below so Cuts / Layers can own the
+        # full-height right column while runtime controls sit beside the compact
+        # raw G-code preview beneath the canvas.
         self.inspector_tabs = InspectorTabs(self)
         self.inspector_tabs.setTabPosition(QtWidgets.QTabWidget.TabPosition.South)
-        self.inspector_tabs.add_panel("layers", "Cuts / Layers", self.layer_panel)
-        self.inspector_tabs.add_panel("camera", "Cameras", self.camera_panel)
+        self.inspector_tabs.add_panel(
+            "layers", "Cuts", self.layer_panel, tooltip="Cuts / Layers"
+        )
+        self.inspector_tabs.add_panel(
+            "camera", "Camera", self.camera_panel, tooltip="Camera controls"
+        )
         self.inspector_tabs.add_panel("objects", "Objects", self.object_panel)
         self.inspector_tabs.add_panel(
-            "transform", "Shape Properties", self.transform_panel
+            "transform", "Shape", self.transform_panel, tooltip="Shape Properties"
         )
         self.inspector_tabs.add_panel("templates", "Templates", self.template_panel)
         self.inspector_tabs.add_panel("trace", "Trace", self.trace_panel)
@@ -754,48 +832,65 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         right = QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         bottom = QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
+        self.setCorner(QtCore.Qt.Corner.TopRightCorner, right)
+        self.setCorner(QtCore.Qt.Corner.BottomRightCorner, right)
+        self.setCorner(QtCore.Qt.Corner.BottomLeftCorner, bottom)
         self.layer_dock = self._dock(
             "Cuts / Layers",
             "layersDock",
             self.inspector_tabs,
             right,
         )
-        self.inspector_dock = self._dock(
-            "Laser",
-            "inspectorDock",
-            self.job_tabs,
-            right,
-        )
-        self.layer_dock.setMinimumWidth(420)
-        self.inspector_dock.setMinimumWidth(420)
-        self.console_dock = self._dock(
-            "Console",
-            "consoleDock",
-            self.console_panel,
-            bottom,
-        )
+        self.layer_dock.setMinimumWidth(_DESIGN_DOCK_MIN_WIDTH)
         self.preview_dock = self._dock(
             "G-code preview",
             "gcodeDock",
             self.gcode_preview,
             bottom,
         )
+        self.inspector_dock = self._dock(
+            "Laser",
+            "inspectorDock",
+            self.job_tabs,
+            bottom,
+        )
+        self.console_dock = self._dock(
+            "Console",
+            "consoleDock",
+            self.console_panel,
+            bottom,
+        )
+        self.preview_dock.setMinimumWidth(_GCODE_DOCK_MIN_WIDTH)
+        self.preview_dock.setMinimumHeight(80)
+        self.inspector_dock.setMinimumWidth(_RUNTIME_DOCK_MIN_WIDTH)
 
         self.splitDockWidget(
-            self.layer_dock,
+            self.preview_dock,
             self.inspector_dock,
-            QtCore.Qt.Orientation.Vertical,
+            QtCore.Qt.Orientation.Horizontal,
         )
-        self.tabifyDockWidget(self.console_dock, self.preview_dock)
+        # Keep the optional Console in the compact left-hand slot without
+        # letting its hidden default reorder the visible G-code/runtime docks.
+        self.tabifyDockWidget(self.preview_dock, self.console_dock)
         self.resizeDocks(
-            [self.layer_dock, self.inspector_dock],
-            [410, 300],
+            [self.layer_dock],
+            [600],
+            QtCore.Qt.Orientation.Horizontal,
+        )
+        self.resizeDocks(
+            [self.preview_dock, self.inspector_dock],
+            [300, 700],
+            QtCore.Qt.Orientation.Horizontal,
+        )
+        self.resizeDocks(
+            [self.preview_dock, self.inspector_dock],
+            [150, 150],
             QtCore.Qt.Orientation.Vertical,
         )
         self.layer_dock.raise_()
         self.inspector_dock.raise_()
+        self.preview_dock.raise_()
         self.console_dock.hide()
-        self.preview_dock.hide()
 
         for dock in (
             self.layer_dock,
@@ -948,7 +1043,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.material_panel.error.connect(self.show_error)
 
         self.job_panel.generateRequested.connect(self.generate_toolpath)
-        self.job_panel.frameRequested.connect(self.generate_frame)
         self.job_panel.startRequested.connect(self.run_current_job)
         self.job_panel.pauseRequested.connect(self.controller.pause_resume)
         self.job_panel.stopRequested.connect(self.controller.emergency_stop)
@@ -956,6 +1050,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         self.controller.statusChanged.connect(self._runtime_status)
         self.controller.cameraImageReady.connect(self._camera_image_ready)
+        self.controller.cameraImageInvalidated.connect(
+            self._camera_image_invalidated
+        )
         self.controller.cameraFocusChanged.connect(
             self._camera_focus_changed
         )
@@ -976,8 +1073,17 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.controller.errorOccurred.connect(self.show_error)
         self.controller.cameraErrorOccurred.connect(self.show_camera_error)
+        self.controller.cameraMappingRequired.connect(
+            self.show_camera_mapping_required
+        )
+        self.controller.cameraOverlayErrorOccurred.connect(
+            self.show_camera_overlay_error
+        )
         self.controller.notice.connect(self.show_notice)
         self.controller.busyChanged.connect(self._busy_changed)
+        self.controller.stopInitiated.connect(self._software_stop_started)
+        self.controller.tasksDrained.connect(self._background_tasks_drained)
+        self._pending_calibration_capture: dict[str, Any] | None = None
 
     def _refresh_document(self, selected_ids: list[str] | None = None) -> None:
         if not any(layer.id == self.active_layer_id for layer in self.document.layers):
@@ -1036,6 +1142,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.context_bar.set_selection(objects, self.document)
 
     def _history_changed(self, stack: CommandStack) -> None:
+        if getattr(self, "_job_preparation_busy", False):
+            self._cancel_job_preparation(
+                "Project changed; discarded the unfinished job preparation"
+            )
         if (
             self.last_job is not None
             and self.last_job_revision != self.document.revision
@@ -1051,11 +1161,21 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self._refresh_document(self.workspace.selected_object_ids())
 
-    def _invalidate_generated_job(self) -> None:
+    def _invalidate_generated_job(self, *, cancel_preparation: bool = True) -> None:
+        self._pending_calibration_capture = None
+        if cancel_preparation and getattr(self, "_job_preparation_busy", False):
+            self._cancel_job_preparation(
+                "Project changed; discarded the unfinished job preparation"
+            )
+        cancel_render = getattr(self, "_cancel_job_render", None)
+        if cancel_render is not None:
+            cancel_render()
         self.last_job = None
         self.last_job_name = ""
         self.last_job_powered = False
         self.last_job_revision = None
+        self.last_job_work_area = None
+        self.last_job_preview_data = None
         preview_dialog = getattr(self, "_job_preview_dialog", None)
         if preview_dialog is not None:
             preview_dialog.close()
@@ -1071,6 +1191,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             clear_prepared_job()
         if hasattr(self, "actions") and "export_gcode" in self.actions:
             self.actions["export_gcode"].setEnabled(False)
+            if "preview_job" in self.actions:
+                self.actions["preview_job"].setEnabled(False)
+            if "run" in self.actions:
+                self.actions["run"].setEnabled(False)
 
     def _document_center(self) -> tuple[float, float]:
         return self.document.work_area.center
@@ -1516,12 +1640,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
         try:
             svg_text = Path(filename).read_text(encoding="utf-8")
             geometry = parse_svg(svg_text)
+            if geometry.warnings:
+                raise SvgError(
+                    "SVG import stopped because conversion would be incomplete: "
+                    + "; ".join(geometry.warnings)
+                    + ". Convert unsupported content to explicit vector paths and retry."
+                )
             polylines = [
                 {
                     "points": [[float(x), float(-y)] for x, y in line.points],
                     "closed": line.closed,
                 }
-                for line in geometry.polylines
+                for line in geometry.physical_polylines()
             ]
             item = SceneObject.path(
                 self.active_layer_id,
@@ -1532,8 +1662,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 source_svg=svg_text,
             )
             self._add_object(item, "Import SVG")
-            if geometry.warnings:
-                self.show_notice("Imported with warnings: " + "; ".join(geometry.warnings))
         except Exception as exc:
             self.show_error(f"Could not import SVG: {exc}")
 
@@ -1542,14 +1670,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self,
             "Import raster image",
             str(Path.home()),
-            "Images (*.png *.jpg *.jpeg *.bmp *.tif *.tiff)",
+            RASTER_FILE_DIALOG_FILTER,
         )
         if not filename:
             return
-        image = QtGui.QImage(filename)
-        if image.isNull() or image.width() <= 0 or image.height() <= 0:
-            self.show_error("Could not decode the selected raster image")
+        try:
+            metadata = probe_raster_asset(filename)
+        except ValueError as exc:
+            self.show_error(f"Could not import raster image: {exc}")
             return
+        image_size = QtCore.QSize(metadata.width, metadata.height)
         layer = self.document.get_layer(self.active_layer_id)
         if layer.mode != LayerMode.RASTER:
             layer = OperationLayer(
@@ -1563,10 +1693,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
             self.active_layer_id = layer.id
         width_mm = min(80.0, self.document.work_area.width * 0.5)
-        height_mm = width_mm * image.height() / image.width()
+        height_mm = width_mm * image_size.height() / image_size.width()
         if height_mm > self.document.work_area.height * 0.5:
             height_mm = self.document.work_area.height * 0.5
-            width_mm = height_mm * image.width() / image.height()
+            width_mm = height_mm * image_size.width() / image_size.height()
         item = SceneObject(
             name=Path(filename).stem,
             kind=ObjectKind.IMAGE,
@@ -1580,8 +1710,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self._add_object(item, "Import raster image")
         self.show_notice(
-            "Imported threshold raster image; dark pixels below 50% engrave at "
-            "the operation's maximum power"
+            "Imported grayscale raster image with deterministic ordered dithering"
         )
 
     def new_project(self) -> None:
@@ -1670,68 +1799,547 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.statusBar().showMessage(f"Autosave failed: {exc}", 5000)
 
     def generate_toolpath(self) -> None:
+        self._begin_job_generation()
+
+    def _begin_job_generation(self) -> None:
+        if self._job_preparation_owner is not None:
+            self.show_notice("A job preparation is already in progress")
+            return
         try:
-            job = generate_project_gcode(
-                self.document,
-                self.runtime.settings.laser,
-                optimize_order=self.actions["optimize_paths"].isChecked(),
-                start_position=self._planned_job_start_position(),
-            )
+            self._require_project_machine_work_area_match()
         except Exception as exc:
             self.show_error(f"Toolpath generation failed: {exc}")
             return
-        self.last_job = job
-        self.last_job_name = f"{self.document.name}-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
-        self.last_job_revision = self.document.revision
-        layer_by_id = {layer.id: layer for layer in self.document.layers}
-        self.last_job_powered = any(
-            layer_by_id[item.layer_id].power_percent > 0
-            for item in self.document.visible_output_objects()
-        )
-        self.gcode_preview.setPlainText(job.text)
-        self.actions["export_gcode"].setEnabled(True)
-        self.workspace.set_toolpath_preview(job.text)
-        self._set_prepared_job_status(
-            f"{job.path_count} paths · {job.cut_length_mm:.1f} mm cut · "
-            f"{job.travel_length_mm:.1f} mm travel · "
-            f"estimated {job.estimated_seconds:.1f} s"
-            + self._laser_spot_offset_summary(),
-        )
-        generated_dir = self.runtime.settings.app.data_dir / "generated"
-        generated_dir.mkdir(parents=True, exist_ok=True)
-        path = generated_dir / self.last_job_name
-        path.write_text(job.text, encoding="utf-8")
-        self.show_notice(f"Generated and validated {path.name}")
-        self.show_job_preview()
 
-    def generate_frame(self) -> None:
+        source_document = self.document
+        revision = self.document.revision
+        work_area = self._work_area_signature(self.document.work_area)
+        start_position = self._planned_job_start_position()
+        optimize_order = self.actions["optimize_paths"].isChecked()
+        laser = self.runtime.settings.laser
+        timestamp = time.strftime("%Y%m%d-%H%M%S")
+        filename = f"{source_document.name}-{timestamp}.gcode"
+
+        self._invalidate_generated_job(cancel_preparation=False)
+        self._job_request_id += 1
+        request_id = self._job_request_id
+        cancellation = threading.Event()
+        self._job_worker_requests[request_id] = cancellation
+        self._job_worker_phases[request_id] = "snapshot"
+        self._job_cancel_reason = ""
+        owner = ("worker", request_id)
+        self._claim_job_preparation(owner, "Snapshotting project…")
+        self._set_authoring_frozen(request_id, True)
+        context = {
+            "source_document": source_document,
+            "revision": revision,
+            "work_area": work_area,
+            "start_position": start_position,
+            "optimize_order": optimize_order,
+            "laser": laser,
+            "filename": filename,
+        }
+
+        def snapshot_operation() -> ProjectDocument | None:
+            if cancellation.is_set():
+                return None
+            snapshot = source_document.clone()
+            if cancellation.is_set() or source_document.revision != revision:
+                return None
+            return snapshot
+
+        self.controller.run_background(
+            snapshot_operation,
+            on_success=lambda snapshot, request_id=request_id, context=context: (
+                self._job_snapshot_ready(request_id, context, snapshot)
+            ),
+            on_failure=lambda message, request_id=request_id: (
+                self._job_worker_failed(request_id, "Project snapshot", message)
+            ),
+            label="Snapshot project for job generation",
+        )
+
+    def _job_snapshot_ready(
+        self,
+        request_id: int,
+        context: dict[str, Any],
+        snapshot: ProjectDocument | None,
+    ) -> None:
+        if self._job_worker_phases.get(request_id) != "snapshot":
+            return
+        self._set_authoring_frozen(request_id, False)
+        cancellation = self._job_worker_requests.get(request_id)
+        owner = ("worker", request_id)
+        if (
+            cancellation is None
+            or cancellation.is_set()
+            or snapshot is None
+            or request_id != self._job_request_id
+            or self._job_preparation_owner != owner
+            or context["source_document"] is not self.document
+            or int(context["revision"]) != self.document.revision
+        ):
+            self._finish_stale_job_worker(request_id)
+            return
+
+        self._job_worker_phases[request_id] = "planning"
+        stage = "Generating exact toolpath"
+        self._update_job_preparation(owner, stage)
+
+        def operation() -> dict[str, Any] | None:
+            if cancellation.is_set():
+                return None
+            laser = context["laser"]
+            start_position = context["start_position"]
+            job = generate_project_gcode(
+                snapshot,
+                laser,
+                optimize_order=bool(context["optimize_order"]),
+                start_position=start_position,
+            )
+            plan = job.plan
+            if plan is None:
+                plan = build_job_plan(
+                    job.text,
+                    power_max=laser.power_max,
+                    default_feed_mm_min=laser.travel_feed_mm_min,
+                    start_position=start_position,
+                    acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                    command_delay_ms=laser.preview_command_delay_ms,
+                )
+                job.plan = plan
+            if cancellation.is_set():
+                return None
+            prepared = prepare_job_preview(plan)
+            powered = plan.powered
+            if cancellation.is_set():
+                return None
+            verify_project_job_assets(job)
+            return {
+                "job": job,
+                "prepared": prepared,
+                "filename": context["filename"],
+                "powered": powered,
+                "revision": context["revision"],
+                "work_area": context["work_area"],
+            }
+
+        self.controller.run_background(
+            operation,
+            on_success=lambda payload, request_id=request_id: (
+                self._job_generation_ready(request_id, payload)
+            ),
+            on_failure=lambda message, request_id=request_id: (
+                self._job_generation_failed(request_id, message)
+            ),
+            label=stage,
+        )
+
+    @QtCore.Slot(int, object)
+    def _job_generation_ready(
+        self,
+        request_id: int,
+        payload: dict[str, Any] | None,
+    ) -> None:
+        if self._job_worker_phases.get(request_id) != "planning":
+            return
+        cancellation = self._job_worker_requests.get(request_id)
+        self._finish_job_worker(request_id)
+        owner = ("worker", request_id)
+        if (
+            payload is None
+            or cancellation is None
+            or cancellation.is_set()
+            or request_id != self._job_request_id
+            or self._job_preparation_owner != owner
+            or int(payload["revision"]) != self.document.revision
+        ):
+            if self._job_preparation_owner == owner:
+                self._release_job_preparation(owner)
+                self.show_notice(
+                    self._job_cancel_reason
+                    or "Project changed; discarded the stale generated result"
+                )
+            return
+        if not self._prepared_raster_preview_matches(payload["job"], owner):
+            return
+        self._install_generated_job(request_id, payload)
+
+    @QtCore.Slot(int, bool, str)
+    def _job_generation_failed(
+        self,
+        request_id: int,
+        message: str,
+    ) -> None:
+        if self._job_worker_phases.get(request_id) != "planning":
+            return
+        self._finish_job_worker(request_id)
+        owner = ("worker", request_id)
+        if request_id != self._job_request_id or self._job_preparation_owner != owner:
+            return
+        self._release_job_preparation(owner)
+        self.show_error(f"Toolpath generation failed: {message}")
+
+    def _job_worker_failed(self, request_id: int, label: str, message: str) -> None:
+        if request_id not in self._job_worker_requests:
+            return
+        self._set_authoring_frozen(request_id, False)
+        self._finish_job_worker(request_id)
+        owner = ("worker", request_id)
+        if request_id != self._job_request_id or self._job_preparation_owner != owner:
+            return
+        self._release_job_preparation(owner)
+        self._invalidate_generated_job(cancel_preparation=False)
+        self.show_error(f"{label} failed: {message}")
+
+    def _finish_job_worker(self, request_id: int) -> None:
+        self._job_worker_requests.pop(request_id, None)
+        self._job_worker_phases.pop(request_id, None)
+
+    def _finish_stale_job_worker(self, request_id: int) -> None:
+        self._set_authoring_frozen(request_id, False)
+        self._finish_job_worker(request_id)
+        owner = ("worker", request_id)
+        if self._job_preparation_owner == owner:
+            self._release_job_preparation(owner)
+            self.show_notice(self._job_cancel_reason or "Job preparation cancelled")
+
+    def _install_generated_job(
+        self,
+        request_id: int,
+        payload: dict[str, Any],
+    ) -> None:
+        job = payload["job"]
+        self.last_job = job
+        self.last_job_name = str(payload["filename"])
+        self.last_job_powered = bool(payload["powered"])
+        self.last_job_revision = int(payload["revision"])
+        self.last_job_work_area = tuple(payload["work_area"])
+        self.last_job_preview_data = payload["prepared"]
+        if payload.get("summary"):
+            summary = str(payload["summary"])
+        else:
+            summary = (
+                f"{job.path_count} paths · {job.cut_length_mm:.1f} mm cut · "
+                f"{job.travel_length_mm:.1f} mm travel · "
+                f"estimated {job.estimated_seconds:.1f} s"
+                + self._laser_spot_offset_summary()
+            )
+        self._set_prepared_job_status(summary)
+        if payload.get("notice"):
+            self.show_notice(str(payload["notice"]))
+        else:
+            self.show_notice("Generated and validated exact in-memory job")
+        self._start_job_render(request_id, open_preview=True)
+
+    def _start_job_render(self, request_id: int, *, open_preview: bool) -> None:
+        if (
+            self.last_job is None
+            or self.last_job.plan is None
+            or self.last_job_preview_data is None
+        ):
+            owner = self._job_preparation_owner
+            if owner is not None:
+                self._release_job_preparation(owner)
+            self._invalidate_generated_job(cancel_preparation=False)
+            self.show_error("The generated job has no exact preview plan")
+            return
+        self._cancel_job_render()
+        self._job_render_request_id = request_id
+        owner = ("render", request_id)
+        self._job_render_pending = {"gcode", "workspace"}
+        if open_preview:
+            self._job_render_pending.add("dialog")
+        self._job_render_progress = {
+            stage: 0.0 for stage in self._job_render_pending
+        }
+        self._claim_job_preparation(owner, "Building exact previews")
+        self.actions["export_gcode"].setEnabled(False)
+
         try:
-            job = generate_project_frame(
-                self.document,
-                self.runtime.settings.laser,
-                start_position=self._planned_job_start_position(),
+            self.gcode_preview.clear()
+            self._gcode_render_text = self.last_job.text
+            self._gcode_render_index = 0
+            self._gcode_render_request_id = request_id
+            self._gcode_render_cursor = QtGui.QTextCursor(
+                self.gcode_preview.document()
+            )
+            self._gcode_render_timer.start()
+
+            plan = self.last_job.plan
+            self.workspace.start_toolpath_preview(
+                plan,
+                on_progress=lambda completed, total, request_id=request_id: (
+                    self._job_render_progressed(
+                        request_id,
+                        "workspace",
+                        completed,
+                        total,
+                    )
+                ),
+                on_finished=lambda completed, request_id=request_id: (
+                    self._job_render_stage_finished(request_id, "workspace")
+                    if completed
+                    else None
+                ),
+                on_failed=lambda message, request_id=request_id: (
+                    self._job_render_failed(
+                        request_id,
+                        f"Workspace preview failed: {message}",
+                    )
+                ),
             )
         except Exception as exc:
-            self.show_error(f"Frame generation failed: {exc}")
+            self._job_render_failed(
+                request_id,
+                f"Exact job preview startup failed: {exc}",
+            )
             return
-        self.last_job = job
-        self.last_job_name = f"frame-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
-        self.last_job_powered = False
-        self.last_job_revision = self.document.revision
-        self.gcode_preview.setPlainText(job.text)
-        self.actions["export_gcode"].setEnabled(True)
-        self.workspace.set_toolpath_preview(job.text)
-        self._set_prepared_job_status(
-            f"Dry frame · bounds X{job.bounds_mm[0]:.2f}..{job.bounds_mm[2]:.2f} "
-            f"Y{job.bounds_mm[1]:.2f}..{job.bounds_mm[3]:.2f}"
-            + self._laser_spot_offset_summary(),
+        if open_preview and request_id == self._job_render_request_id:
+            self._open_job_preview_dialog(request_id, deferred=True)
+
+    @QtCore.Slot()
+    def _render_gcode_slice(self) -> None:
+        request_id = self._gcode_render_request_id
+        if (
+            request_id is None
+            or request_id != self._job_render_request_id
+            or self._gcode_render_cursor is None
+        ):
+            self._gcode_render_timer.stop()
+            return
+        try:
+            total = len(self._gcode_render_text)
+            start = self._gcode_render_index
+            end = min(total, start + 32_768)
+            if end > start:
+                self._gcode_render_cursor.insertText(
+                    self._gcode_render_text[start:end]
+                )
+            self._gcode_render_index = end
+            self._job_render_progressed(
+                request_id,
+                "gcode",
+                end,
+                max(1, total),
+            )
+            if end >= total:
+                self._gcode_render_timer.stop()
+                self._gcode_render_text = ""
+                self._gcode_render_cursor = None
+                self._gcode_render_request_id = None
+                self._job_render_stage_finished(request_id, "gcode")
+        except Exception as exc:
+            self._job_render_failed(
+                request_id,
+                f"Raw G-code preview failed: {exc}",
+            )
+
+    def _open_job_preview_dialog(
+        self,
+        request_id: int,
+        *,
+        deferred: bool,
+    ) -> None:
+        if (
+            self.last_job is None
+            or self.last_job.plan is None
+            or self.last_job_preview_data is None
+        ):
+            self._job_render_failed(
+                request_id,
+                "Exact job Preview lost its prepared plan before construction",
+            )
+            return
+        previous = self._job_preview_dialog
+        if previous is not None:
+            previous.close()
+        area = self.document.work_area
+        try:
+            dialog = JobPreviewDialog(
+                self.last_job.plan,
+                (area.x_min, area.x_max, area.y_min, area.y_max),
+                self.last_job_name or self.document.name,
+                self,
+                prepared=self.last_job_preview_data,
+                defer_render=deferred,
+            )
+        except Exception as exc:
+            self._job_render_failed(
+                request_id,
+                f"Exact job Preview failed: {exc}",
+            )
+            return
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.destroyed.connect(
+            lambda _object=None, target=dialog, request_id=request_id: (
+                self._preview_dialog_destroyed(target, request_id)
+            )
         )
-        self.show_notice("Dry frame generated; no laser-enable command is present")
-        self.show_job_preview()
+        dialog.startHereRequested.connect(self._prepare_start_here)
+        if deferred:
+            dialog.renderProgress.connect(
+                lambda completed, total, request_id=request_id: (
+                    self._job_render_progressed(
+                        request_id,
+                        "dialog",
+                        completed,
+                        total,
+                    )
+                )
+            )
+            dialog.renderFinished.connect(
+                lambda request_id=request_id: self._job_render_stage_finished(
+                    request_id,
+                    "dialog",
+                )
+            )
+            dialog.renderCancelled.connect(
+                lambda request_id=request_id: self._job_render_cancelled(
+                    request_id
+                )
+            )
+            dialog.renderFailed.connect(
+                lambda message, request_id=request_id: self._job_render_failed(
+                    request_id,
+                    f"Exact job Preview failed: {message}",
+                )
+            )
+        self._job_preview_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _job_render_progressed(
+        self,
+        request_id: int,
+        stage: str,
+        completed: int,
+        total: int,
+    ) -> None:
+        owner = ("render", request_id)
+        if (
+            request_id != self._job_render_request_id
+            or self._job_preparation_owner != owner
+        ):
+            return
+        self._job_render_progress[stage] = max(
+            0.0,
+            min(1.0, float(completed) / max(1, int(total))),
+        )
+        overall = sum(self._job_render_progress.values()) / max(
+            1,
+            len(self._job_render_progress),
+        )
+        self._update_job_preparation(
+            owner,
+            f"Building exact previews · {overall * 100:.0f}%",
+            completed=int(round(overall * 1000)),
+            total=1000,
+        )
+
+    def _job_render_stage_finished(self, request_id: int, stage: str) -> None:
+        owner = ("render", request_id)
+        if (
+            request_id != self._job_render_request_id
+            or self._job_preparation_owner != owner
+        ):
+            return
+        self._job_render_pending.discard(stage)
+        self._job_render_progress[stage] = 1.0
+        if self._job_render_pending:
+            self._job_render_progressed(request_id, stage, 1, 1)
+            return
+        self._job_render_request_id = None
+        self._job_render_progress = {}
+        self._release_job_preparation(owner)
+        self.actions["export_gcode"].setEnabled(self.last_job is not None)
+        self.show_notice("Exact job and previews are ready for review")
+
+    def _cancel_job_render(self) -> None:
+        request_id = self._job_render_request_id
+        owner = None if request_id is None else ("render", request_id)
+        self._job_render_request_id = None
+        self._job_render_pending.clear()
+        self._job_render_progress.clear()
+        self._gcode_render_timer.stop()
+        self._gcode_render_text = ""
+        self._gcode_render_index = 0
+        self._gcode_render_request_id = None
+        self._gcode_render_cursor = None
+        if hasattr(self, "workspace"):
+            self.workspace.clear_toolpath_preview()
+        dialog = getattr(self, "_job_preview_dialog", None)
+        if dialog is not None:
+            self._job_preview_dialog = None
+            dialog.close()
+        if owner is not None:
+            self._release_job_preparation(owner)
+
+    def _job_render_cancelled(self, request_id: int) -> None:
+        if request_id != self._job_render_request_id:
+            return
+        self._job_request_id += 1
+        self._cancel_job_render()
+        self._invalidate_generated_job(cancel_preparation=False)
+        self.show_notice(
+            "Preview closed before preparation finished; regenerate before run or export"
+        )
+
+    def _job_render_failed(self, request_id: int, message: str) -> None:
+        if request_id != self._job_render_request_id:
+            return
+        self._job_request_id += 1
+        self._cancel_job_render()
+        self._invalidate_generated_job(cancel_preparation=False)
+        self.show_error(message)
+
+    def _cancel_job_preparation(self, reason: str) -> None:
+        owner = self._job_preparation_owner
+        if owner is None:
+            return
+        self._job_request_id += 1
+        self._job_cancel_reason = str(reason)
+        if owner[0] == "worker":
+            cancellation = self._job_worker_requests.get(owner[1])
+            if cancellation is not None:
+                cancellation.set()
+            self._update_job_preparation(owner, "Cancelling job preparation…")
+        else:
+            self._cancel_job_render()
+            self._invalidate_generated_job(cancel_preparation=False)
+
+    def _software_stop_started(self) -> None:
+        if self._job_preparation_owner is None:
+            return
+        self._cancel_job_preparation(
+            "Software Stop cancelled the unfinished job preparation"
+        )
+        self.show_notice("Software Stop cancelled the unfinished job preparation")
 
     def _planned_job_start_position(self) -> tuple[float, float]:
         machine = self.runtime.settings.machine
         return float(machine.photo_x), float(machine.photo_y)
+
+    @staticmethod
+    def _work_area_signature(area: Any) -> tuple[float, float, float, float]:
+        return (
+            float(area.x_min),
+            float(area.x_max),
+            float(area.y_min),
+            float(area.y_max),
+        )
+
+    def _require_project_machine_work_area_match(self) -> None:
+        project = self._work_area_signature(self.document.work_area)
+        machine = self._work_area_signature(self.runtime.settings.machine.work_area)
+        if any(abs(left - right) > 1e-6 for left, right in zip(project, machine, strict=True)):
+            raise ValueError(
+                "Project work area does not match the configured machine work area. "
+                f"Project X{project[0]:g}..{project[1]:g} "
+                f"Y{project[2]:g}..{project[3]:g}; machine "
+                f"X{machine[0]:g}..{machine[1]:g} Y{machine[2]:g}..{machine[3]:g}."
+            )
 
     def _current_job_plan(self) -> Any | None:
         if self.last_job is None:
@@ -1760,36 +2368,160 @@ class E3MainWindow(QtWidgets.QMainWindow):
             controller_power=controller_power,
         )
 
+    def _verify_prepared_job_assets(self, action: str) -> bool:
+        job = self.last_job
+        if job is None:
+            return False
+        try:
+            verify_project_job_assets(job)
+        except ValueError as exc:
+            self._invalidate_generated_job()
+            self.show_error(
+                f"Could not continue {action}: {exc} Regenerate the job and "
+                "review its exact Preview again."
+            )
+            return False
+        return True
+
+    def _prepared_raster_preview_matches(
+        self,
+        job: ProjectJob,
+        owner: tuple[str, int],
+    ) -> bool:
+        mismatches = self.workspace.raster_preview_mismatches(job.raster_assets)
+        if not mismatches:
+            return True
+        refreshed = self.workspace.refresh_raster_previews(mismatches)
+        self._job_request_id += 1
+        self._release_job_preparation(owner)
+        self._invalidate_generated_job(cancel_preparation=False)
+        detail = ", ".join(Path(path).name for path in mismatches)
+        if refreshed:
+            self.show_error(
+                "Raster source content changed after its canvas preview was "
+                f"loaded ({detail}). The canvas has been refreshed; Generate "
+                "again and review the replacement exact Preview."
+            )
+        else:
+            self.show_error(
+                "Raster source content no longer matches its canvas preview "
+                f"and could not be refreshed ({detail}). Restore the source, "
+                "then Generate again."
+            )
+        return False
+
     def show_job_preview(self) -> None:
-        plan = self._current_job_plan()
-        if plan is None:
-            self.show_error("Generate a project toolpath or dry frame first")
+        if self.last_job is None:
+            self.show_error("Generate a project toolpath first")
             return
         if self.last_job_revision != self.document.revision:
             self._invalidate_generated_job()
             self.show_error("The project changed; regenerate before previewing")
             return
-        previous_dialog = getattr(self, "_job_preview_dialog", None)
-        if previous_dialog is not None:
-            previous_dialog.close()
-        area = self.document.work_area
-        dialog = JobPreviewDialog(
-            plan,
-            (area.x_min, area.x_max, area.y_min, area.y_max),
-            self.last_job_name or self.document.name,
-            self,
-        )
-        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
-        dialog.destroyed.connect(
-            lambda _object=None, target=dialog: self._preview_dialog_destroyed(target)
-        )
-        dialog.startHereRequested.connect(self._prepare_start_here)
-        self._job_preview_dialog = dialog
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        if not self._verify_prepared_job_assets("opening Preview"):
+            return
+        if self._job_preparation_busy:
+            self.show_notice("The exact Preview is still being prepared")
+            return
+        plan = self.last_job.plan
+        self._job_request_id += 1
+        request_id = self._job_request_id
+        if plan is not None and self.last_job_preview_data is not None:
+            self._job_render_request_id = request_id
+            self._job_render_pending = {"dialog"}
+            self._job_render_progress = {"dialog": 0.0}
+            self._claim_job_preparation(
+                ("render", request_id),
+                "Building exact Preview",
+            )
+            self._open_job_preview_dialog(request_id, deferred=True)
+            return
 
-    def _preview_dialog_destroyed(self, dialog: JobPreviewDialog) -> None:
+        revision = self.document.revision
+        text = self.last_job.text
+        laser = self.runtime.settings.laser
+        start_position = self._planned_job_start_position()
+        cancellation = threading.Event()
+        self._job_worker_requests[request_id] = cancellation
+        self._job_worker_phases[request_id] = "preview"
+        owner = ("worker", request_id)
+        self._claim_job_preparation(owner, "Indexing exact Preview")
+
+        def prepare() -> tuple[Any, PreparedJobPreview] | None:
+            if cancellation.is_set():
+                return None
+            exact_plan = plan or build_job_plan(
+                text,
+                power_max=laser.power_max,
+                default_feed_mm_min=laser.travel_feed_mm_min,
+                start_position=start_position,
+                acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                command_delay_ms=laser.preview_command_delay_ms,
+            )
+            prepared = prepare_job_preview(exact_plan)
+            return None if cancellation.is_set() else (exact_plan, prepared)
+
+        self.controller.run_background(
+            prepare,
+            on_success=lambda result, request_id=request_id, revision=revision: (
+                self._preview_index_ready(request_id, revision, result)
+            ),
+            on_failure=lambda message, request_id=request_id: (
+                self._preview_index_failed(request_id, message)
+            ),
+            label="Index exact job Preview",
+        )
+
+    def _preview_index_ready(
+        self,
+        request_id: int,
+        revision: int,
+        result: tuple[Any, PreparedJobPreview] | None,
+    ) -> None:
+        if self._job_worker_phases.get(request_id) != "preview":
+            return
+        cancellation = self._job_worker_requests.get(request_id)
+        self._finish_job_worker(request_id)
+        owner = ("worker", request_id)
+        if (
+            result is None
+            or cancellation is None
+            or cancellation.is_set()
+            or request_id != self._job_request_id
+            or revision != self.document.revision
+            or self._job_preparation_owner != owner
+        ):
+            if self._job_preparation_owner == owner:
+                self._release_job_preparation(owner)
+                self.show_notice(self._job_cancel_reason or "Discarded stale Preview")
+            return
+        plan, prepared = result
+        if self.last_job is None:
+            self._release_job_preparation(owner)
+            return
+        self.last_job.plan = plan
+        self.last_job_preview_data = prepared
+        self._job_render_request_id = request_id
+        self._job_render_pending = {"dialog"}
+        self._job_render_progress = {"dialog": 0.0}
+        self._claim_job_preparation(("render", request_id), "Building exact Preview")
+        self._open_job_preview_dialog(request_id, deferred=True)
+
+    def _preview_index_failed(self, request_id: int, message: str) -> None:
+        if self._job_worker_phases.get(request_id) != "preview":
+            return
+        self._finish_job_worker(request_id)
+        owner = ("worker", request_id)
+        if request_id != self._job_request_id or self._job_preparation_owner != owner:
+            return
+        self._release_job_preparation(owner)
+        self.show_error(f"Preview preparation failed: {message}")
+
+    def _preview_dialog_destroyed(
+        self,
+        dialog: JobPreviewDialog,
+        request_id: int | None = None,
+    ) -> None:
         if getattr(self, "_job_preview_dialog", None) is dialog:
             self._job_preview_dialog = None
 
@@ -1812,36 +2544,81 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Ok:
             return
-        try:
+        revision = self.document.revision
+        work_area = self._work_area_signature(self.document.work_area)
+        power_mode = self.runtime.settings.laser.power_mode
+        controller_start_position = self._planned_job_start_position()
+        source_job = self.last_job
+        self._invalidate_generated_job(cancel_preparation=False)
+        self._job_request_id += 1
+        request_id = self._job_request_id
+        cancellation = threading.Event()
+        self._job_worker_requests[request_id] = cancellation
+        self._job_worker_phases[request_id] = "planning"
+        self._job_cancel_reason = ""
+        owner = ("worker", request_id)
+        self._claim_job_preparation(owner, "Preparing guarded Start Here job")
+
+        def operation() -> dict[str, Any] | None:
+            if cancellation.is_set():
+                return None
             text, restarted = restart_program_from_move(
                 plan,
                 move_index,
-                power_mode=self.runtime.settings.laser.power_mode,
+                power_mode=power_mode,
+                start_position=controller_start_position,
             )
-        except ValueError as exc:
-            self.show_error(str(exc))
+            job = ProjectJob(
+                text=text,
+                bounds_mm=restarted.bounds_mm,
+                cut_length_mm=restarted.cut_distance_mm,
+                travel_length_mm=restarted.travel_distance_mm,
+                estimated_seconds=restarted.total_seconds,
+                path_count=sum(1 for move in restarted.moves if move.laser_on),
+                point_count=len(restarted.moves),
+                plan=restarted,
+                raster_assets=source_job.raster_assets,
+            )
+            verify_project_job_assets(job)
+            prepared = prepare_job_preview(restarted)
+            if cancellation.is_set():
+                return None
+            return {
+                "job": job,
+                "prepared": prepared,
+                "filename": f"start-here-move-{move_index + 1}.gcode",
+                "powered": restarted.powered,
+                "revision": revision,
+                "work_area": work_area,
+                "frame": False,
+                "summary": (
+                    f"Start Here at original move {move_index + 1} · "
+                    f"{restarted.cut_distance_mm:.1f} mm cut · "
+                    f"estimated {restarted.total_seconds:.1f} s"
+                ),
+                "notice": "Prepared Start Here job; machine has not started",
+            }
+
+        self.controller.run_background(
+            operation,
+            on_success=lambda payload, request_id=request_id: (
+                self._job_generation_ready(request_id, payload)
+            ),
+            on_failure=lambda message, request_id=request_id: (
+                self._start_here_failed(request_id, message)
+            ),
+            label="Prepare Start Here job",
+        )
+
+    def _start_here_failed(self, request_id: int, message: str) -> None:
+        if self._job_worker_phases.get(request_id) != "planning":
             return
-        self.last_job = ProjectJob(
-            text=text,
-            bounds_mm=restarted.bounds_mm,
-            cut_length_mm=restarted.cut_distance_mm,
-            travel_length_mm=restarted.travel_distance_mm,
-            estimated_seconds=restarted.total_seconds,
-            path_count=sum(1 for move in restarted.moves if move.laser_on),
-            point_count=len(restarted.moves),
-            plan=restarted,
-        )
-        self.last_job_name = f"start-here-move-{move_index + 1}.gcode"
-        self.last_job_powered = restarted.powered
-        self.gcode_preview.setPlainText(text)
-        self.workspace.set_toolpath_preview(text)
-        self._set_prepared_job_status(
-            f"Start Here at original move {move_index + 1} · "
-            f"{restarted.cut_distance_mm:.1f} mm cut · "
-            f"estimated {restarted.total_seconds:.1f} s"
-        )
-        self.show_notice("Prepared Start Here job; machine has not started")
-        self.show_job_preview()
+        self._finish_job_worker(request_id)
+        owner = ("worker", request_id)
+        if request_id != self._job_request_id or self._job_preparation_owner != owner:
+            return
+        self._release_job_preparation(owner)
+        self.show_error(message)
 
     def _laser_spot_offset_summary(self) -> str:
         laser = self.runtime.settings.laser
@@ -1857,7 +2634,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def export_gcode(self) -> None:
         if self.last_job is None:
-            self.show_error("Generate a project toolpath or dry frame first")
+            self.show_error("Generate a project toolpath first")
+            return
+        if self._job_preparation_busy:
+            self.show_error("Wait for exact job Preview preparation before exporting")
+            return
+        if self.last_job_revision != self.document.revision:
+            self._invalidate_generated_job()
+            self.show_error("The project changed; regenerate before exporting")
+            return
+        if not self._verify_prepared_job_assets("exporting"):
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
@@ -1868,7 +2654,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if not path:
             return
         try:
-            Path(path).write_text(self.last_job.text, encoding="utf-8")
+            atomic_write_text(Path(path), self.last_job.text)
         except OSError as exc:
             self.show_error(f"Could not export G-code: {exc}")
             return
@@ -1876,44 +2662,34 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def run_current_job(self) -> None:
         if self.last_job is None:
-            self.show_error("Generate a project toolpath or dry frame first")
+            self.show_error("Generate a project toolpath first")
+            return
+        if getattr(self, "_job_preparation_busy", False):
+            self.show_error("Wait for exact job Preview preparation before running")
             return
         if self.last_job_revision != self.document.revision:
             self._invalidate_generated_job()
             self.show_error("The project changed; regenerate the toolpath before running")
             return
-        machine = self.runtime.context.machine.status()
-        if not machine.get("connected"):
-            self.show_error("Connect the controller before running a job")
+        if not self._verify_prepared_job_assets("running"):
+            return
+        machine_area = self._work_area_signature(
+            self.runtime.settings.machine.work_area
+        )
+        if self.last_job_work_area != machine_area:
+            self.show_error(
+                "The prepared job work area does not match the configured machine. "
+                "Regenerate or prepare the job for this machine before running."
+            )
             return
         if not self.runtime.settings.machine.allow_motion:
             self.show_error("Motion is blocked in the local configuration")
             return
 
+        machine = self.runtime.context.machine.status()
         phrase: str | None = None
         if self.last_job_powered:
-            answer = QtWidgets.QMessageBox.warning(
-                self,
-                "Powered laser job",
-                "This program contains powered laser output.\n\n"
-                "Confirm the enclosure, extraction, material, focus and hardware "
-                "emergency stop before continuing. Hardware will home and park "
-                "automatically before arming and starting the job.",
-                QtWidgets.QMessageBox.StandardButton.Ok
-                | QtWidgets.QMessageBox.StandardButton.Cancel,
-                QtWidgets.QMessageBox.StandardButton.Cancel,
-            )
-            if answer != QtWidgets.QMessageBox.StandardButton.Ok:
-                return
-            required = machine.get("arm_phrase", "ENABLE LASER CONTROL")
-            phrase, accepted = QtWidgets.QInputDialog.getText(
-                self,
-                "Arm laser temporarily",
-                f"Type exactly:\n{required}",
-            )
-            if not accepted or phrase != required:
-                self.show_error("Arming phrase did not match")
-                return
+            phrase = str(machine.get("arm_phrase", "ENABLE LASER CONTROL"))
 
         self.controller.run_job(
             self.last_job.text,
@@ -2542,12 +3318,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
+        try:
+            self._require_project_machine_work_area_match()
+        except Exception as exc:
+            self.show_error(f"Object detection unavailable: {exc}")
+            return
         self._clear_template_preview(show_message=False)
         self.controller.detect_trace_objects(raw_options)
 
     def _begin_trace_color_pick(self) -> None:
         if self.runtime.context.bed.calibration is None:
             self.show_error("Bed mapping is required before sampling camera color")
+            return
+        try:
+            self._require_project_machine_work_area_match()
+        except Exception as exc:
+            self.show_error(f"Color sampling unavailable: {exc}")
             return
         if self.workspace.point_pick_active:
             self.workspace.cancel_point_pick()
@@ -2587,6 +3373,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.workspace.set_trace_preview(
             list(result.get("detections", [])),
             self.trace_panel.selected_ids(),
+            result.get("honeycomb_support"),
         )
         self.show_notice(str(result.get("message", "Object detection complete")))
 
@@ -2596,6 +3383,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.workspace.set_trace_preview(
             list(self._trace_result.get("detections", [])),
             selected_ids,
+            self._trace_result.get("honeycomb_support"),
         )
 
     def _clear_trace_preview(self) -> None:
@@ -2712,8 +3500,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _camera_image_ready(self, image: QtGui.QImage) -> None:
-        self.workspace.set_camera_image(image)
+        self.workspace.set_camera_image(
+            image,
+            pixels_per_mm=self.runtime.settings.calibration.bed.pixels_per_mm,
+        )
         self.camera_panel.set_image_updated()
+
+    def _camera_image_invalidated(self) -> None:
+        self.workspace.set_camera_image(None)
 
     def _camera_focus_changed(
         self,
@@ -2754,52 +3548,259 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.runtime_label.setText(f"Runtime {state}")
         if status.get("runtime_error"):
             self.runtime_label.setText(status["runtime_error"])
+        self._maybe_start_calibration_capture(machine)
+
+    def _maybe_start_calibration_capture(
+        self,
+        machine: dict[str, Any] | None,
+    ) -> None:
+        pending = self._pending_calibration_capture
+        if pending is None or not machine:
+            return
+        job = machine.get("job") or {}
+        if job.get("running") or job.get("finished_at") is None:
+            return
+        if str(job.get("name") or "") != str(pending["filename"]):
+            return
+        if job.get("error") or str(job.get("phase") or "") != "complete":
+            self._pending_calibration_capture = None
+            return
+        self._pending_calibration_capture = None
+        tab_index = int(pending["tab_index"])
+        capture_action = str(pending["capture_action"])
+        QtCore.QTimer.singleShot(
+            0,
+            lambda: self.open_machine_setup(
+                tab_index,
+                automatic_capture=capture_action,
+            ),
+        )
 
     def _busy_changed(self, busy: bool) -> None:
+        self._controller_busy = bool(busy)
+        self._sync_busy_indicators()
+
+    def _claim_job_preparation(
+        self,
+        owner: tuple[str, int],
+        label: str,
+    ) -> None:
+        self._job_preparation_owner = owner
+        self._set_job_preparation_busy(True, label)
+
+    def _update_job_preparation(
+        self,
+        owner: tuple[str, int],
+        label: str,
+        *,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        if self._job_preparation_owner != owner:
+            return
+        self._set_job_preparation_busy(
+            True,
+            label,
+            completed=completed,
+            total=total,
+        )
+
+    def _release_job_preparation(self, owner: tuple[str, int]) -> None:
+        if self._job_preparation_owner != owner:
+            return
+        self._job_preparation_owner = None
+        self._set_job_preparation_busy(False)
+
+    def _set_authoring_frozen(self, request_id: int, frozen: bool) -> None:
+        if frozen:
+            if self._authoring_freeze_owner is not None:
+                raise RuntimeError("Another project snapshot already owns authoring")
+            self._authoring_freeze_owner = request_id
+            self._authoring_action_states = {
+                key: self.actions[key].isEnabled()
+                for key in _AUTHORING_ACTION_KEYS
+                if key in self.actions
+            }
+            for key in self._authoring_action_states:
+                self.actions[key].setEnabled(False)
+            for widget in (
+                self.workspace,
+                self.inspector_tabs,
+                self.context_bar,
+                self.palette,
+            ):
+                widget.setEnabled(False)
+            return
+        if self._authoring_freeze_owner != request_id:
+            return
+        self._authoring_freeze_owner = None
+        for key, enabled in self._authoring_action_states.items():
+            if key in self.actions:
+                if key == "undo":
+                    enabled = self.history.can_undo
+                elif key == "redo":
+                    enabled = self.history.can_redo
+                self.actions[key].setEnabled(enabled)
+        self._authoring_action_states = {}
+        for widget in (
+            self.workspace,
+            self.inspector_tabs,
+            self.context_bar,
+            self.palette,
+        ):
+            widget.setEnabled(True)
+
+    def _set_job_preparation_busy(
+        self,
+        busy: bool,
+        label: str = "",
+        *,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        was_busy = self._job_preparation_busy
+        self._job_preparation_busy = bool(busy)
+        self._job_preparation_label = str(label) if busy else ""
+        if busy and not was_busy:
+            self.job_tabs.select_panel("job")
+        self.job_panel.set_preparing(
+            busy,
+            label or "Preparing exact job preview",
+            completed=completed,
+            total=total,
+        )
+        self.actions["generate"].setEnabled(not busy)
+        ready = self.last_job is not None and not busy
+        self.actions["preview_job"].setEnabled(ready)
+        self.actions["run"].setEnabled(ready)
+        self.actions["export_gcode"].setEnabled(ready)
+        self._sync_busy_indicators()
+
+    def _sync_busy_indicators(self) -> None:
+        busy = self._controller_busy or self._job_preparation_busy
         self._busy = busy
         self.template_panel.set_busy(busy)
+        self.machine_panel.set_busy(busy)
         self.runtime_strip.set_busy(busy)
-        self.statusBar().showMessage("Working…" if busy else "", 0 if busy else 1000)
+        if self._job_preparation_busy:
+            self.statusBar().showMessage(
+                self._job_preparation_label or "Preparing exact job preview…"
+            )
+        else:
+            self.statusBar().showMessage(
+                "Working…" if self._controller_busy else "",
+                0 if self._controller_busy else 1000,
+            )
 
-    def open_machine_setup(self, tab_index: int = 0) -> None:
+    def open_machine_setup(
+        self,
+        tab_index: int = 0,
+        *,
+        automatic_capture: str | None = None,
+    ) -> None:
         was_live = self.camera_panel.live_enabled()
         self.controller.set_live_camera(False)
         dialog = MachineSetupDialog(self.runtime, self)
         dialog.tabs.setCurrentIndex(tab_index)
         dialog.calibrationChanged.connect(self.controller.poll_status)
-        dialog.calibrationChanged.connect(self.controller.refresh_camera_image)
-        dialog.registrationJobPrepared.connect(self._load_fine_registration_job)
-        dialog.validationJobPrepared.connect(self._load_fine_registration_job)
-        dialog.exec()
+        dialog.calibrationChanged.connect(self.controller.calibration_changed)
+        # Build the Preview only after the modal Setup event loop has unwound.
+        # Constructing it synchronously from accept() can strand the first render
+        # behind the closing modal dialog.
+        dialog.registrationJobPrepared.connect(
+            self._load_fine_registration_job,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        dialog.validationJobPrepared.connect(
+            self._load_fine_registration_job,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        self.controller.set_calibration_review_active(True)
+        try:
+            if automatic_capture is not None:
+                capture = getattr(dialog, automatic_capture)
+                QtCore.QTimer.singleShot(0, capture)
+            dialog.exec()
+        finally:
+            self.controller.set_calibration_review_active(False)
         self.controller.set_live_camera(was_live, self.camera_panel.refresh_interval_ms())
         self.controller.poll_status()
 
     def _load_fine_registration_job(self, registration_job: Any) -> None:
-        job = registration_job.program
-        self.last_job = job
-        self.last_job_name = registration_job.filename
-        self.last_job_powered = bool(registration_job.powered)
-        self.last_job_revision = self.document.revision
-        self.gcode_preview.setPlainText(job.text)
-        self.actions["export_gcode"].setEnabled(True)
-        self.workspace.set_toolpath_preview(job.text)
+        source_job = registration_job.program
+        plan = getattr(source_job, "plan", None) or build_job_plan(
+            source_job.text,
+            power_max=self.runtime.settings.laser.power_max,
+            default_feed_mm_min=self.runtime.settings.laser.travel_feed_mm_min,
+            start_position=self._planned_job_start_position(),
+        )
+        if isinstance(source_job, ProjectJob):
+            job = source_job
+            job.plan = plan
+        else:
+            job = ProjectJob(
+                text=source_job.text,
+                bounds_mm=source_job.bounds_mm,
+                cut_length_mm=source_job.cut_length_mm,
+                travel_length_mm=source_job.travel_length_mm,
+                estimated_seconds=plan.total_seconds,
+                path_count=source_job.path_count,
+                point_count=source_job.point_count,
+                plan=plan,
+            )
+        exact_powered = plan.powered
         mode = (
             f"powered at {registration_job.power_percent:g}%"
-            if registration_job.powered
+            if exact_powered
             else "dry motion only"
         )
         display_name = str(
             getattr(registration_job, "display_name", "Fine registration")
         )
-        self._set_prepared_job_status(
-            f"{display_name} · {len(registration_job.targets)} crosses · {mode} · "
-            f"bounds X{job.bounds_mm[0]:.2f}..{job.bounds_mm[2]:.2f} "
-            f"Y{job.bounds_mm[1]:.2f}..{job.bounds_mm[3]:.2f}",
+        self._invalidate_generated_job()
+        automatic_captures = {
+            "Base bed mapping": (2, "capture_base_bed_mapping"),
+            "Fine registration": (3, "capture_fine_registration"),
+            "Dense local correction": (3, "capture_dense_calibration"),
+            "Accuracy validation": (4, "capture_accuracy_validation"),
+            "Dense mesh validation": (4, "capture_dense_validation"),
+            "Dense mesh confirmation": (4, "capture_dense_confirmation"),
+        }
+        capture = automatic_captures.get(display_name)
+        self._pending_calibration_capture = (
+            {
+                "filename": str(registration_job.filename),
+                "tab_index": capture[0],
+                "capture_action": capture[1],
+            }
+            if exact_powered and capture is not None
+            else None
         )
-        self.show_notice(
-            f"{display_name} job loaded. Review the G-code preview and run the dry path first."
+        self._job_request_id += 1
+        request_id = self._job_request_id
+        self._install_generated_job(
+            request_id,
+            {
+                "job": job,
+                "prepared": prepare_job_preview(plan),
+                "filename": registration_job.filename,
+                "powered": exact_powered,
+                "revision": self.document.revision,
+                "work_area": self._work_area_signature(
+                    self.runtime.settings.machine.work_area
+                ),
+                "frame": not exact_powered,
+                "summary": (
+                    f"{display_name} · {len(registration_job.targets)} crosses · "
+                    f"{mode} · bounds X{job.bounds_mm[0]:.2f}..{job.bounds_mm[2]:.2f} "
+                    f"Y{job.bounds_mm[1]:.2f}..{job.bounds_mm[3]:.2f}"
+                ),
+                "notice": (
+                    f"{display_name} job loaded. Review the G-code preview and "
+                    "run the prepared job when ready."
+                ),
+            },
         )
-        self.show_job_preview()
 
     def show_notice(self, message: str) -> None:
         self.statusBar().showMessage(message, 7000)
@@ -2814,6 +3815,55 @@ class E3MainWindow(QtWidgets.QMainWindow):
         QtWidgets.QMessageBox.warning(
             self,
             "Camera unavailable",
+            message,
+            QtWidgets.QMessageBox.StandardButton.Ok,
+        )
+
+    def show_camera_mapping_required(self, payload: dict[str, Any]) -> None:
+        """Explain a calibration block without misreporting the camera source."""
+        camera_online = payload.get("camera_online") is True
+        setup_tab = 2 if payload.get("setup_tab") == 2 else 1
+        reasons = [str(reason) for reason in payload.get("reasons", []) if reason]
+        details = "; ".join(reasons) or "The saved bed map is not current"
+        if setup_tab == 1:
+            recovery = (
+                "Open Machine Setup at Lens, complete an accepted lens solve, then "
+                "continue to Bed mapping and use Fresh automatic base mapping."
+            )
+        else:
+            recovery = (
+                "Open Machine Setup at Bed mapping and use Fresh automatic base "
+                "mapping."
+            )
+        status = (
+            "Camera is online; the corrected overlay needs a new bed map."
+            if camera_online
+            else "The corrected overlay needs a new bed map."
+        )
+        self.statusBar().showMessage(status, 15000)
+        choice = QtWidgets.QMessageBox.question(
+            self,
+            "Bed mapping required",
+            f"{status}\n\n{recovery} No coordinate entry is required.\n\n"
+            f"Details: {details}",
+            (
+                QtWidgets.QMessageBox.StandardButton.Open
+                | QtWidgets.QMessageBox.StandardButton.Cancel
+            ),
+            QtWidgets.QMessageBox.StandardButton.Open,
+        )
+        if choice == QtWidgets.QMessageBox.StandardButton.Open:
+            QtCore.QTimer.singleShot(
+                0,
+                lambda setup_tab=setup_tab: self.open_machine_setup(setup_tab),
+            )
+
+    def show_camera_overlay_error(self, message: str) -> None:
+        """Report corrected-view processing separately from camera ownership."""
+        self.statusBar().showMessage(message.split("\n", 1)[0], 15000)
+        QtWidgets.QMessageBox.warning(
+            self,
+            "Corrected overlay unavailable",
             message,
             QtWidgets.QMessageBox.StandardButton.Ok,
         )
@@ -2917,6 +3967,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _reset_window_size(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings.remove("mainWindow/geometry-v6")
         settings.remove("mainWindow/geometry-v5")
         settings.remove("mainWindow/geometry-v4")
         settings.remove("mainWindow/geometry-v3")
@@ -2925,44 +3976,62 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _reset_workspace_layout(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings.remove("mainWindow/state-v6")
         settings.remove("mainWindow/state-v5")
         settings.remove("mainWindow/state-v4")
         settings.remove("mainWindow/state-v3")
+        settings.remove("mainWindow/inspector-tab-v6")
         settings.remove("mainWindow/inspector-tab-v5")
         settings.remove("mainWindow/inspector-tab-v4")
         settings.remove("mainWindow/inspector-tab-v3")
+        settings.remove("mainWindow/job-tab-v6")
         settings.remove("mainWindow/job-tab-v5")
-        self.restoreState(self._default_window_state, 5)
+        self.restoreState(self._default_window_state, 6)
         self.inspector_tabs.setCurrentIndex(0)
         self.job_tabs.setCurrentIndex(0)
         self.layer_dock.show()
         self.inspector_dock.show()
+        self.preview_dock.show()
+        self.preview_dock.raise_()
+        self.console_dock.hide()
         self.show_notice("Workspace layout reset")
 
     def _restore_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        geometry = settings.value("mainWindow/geometry-v5")
+        geometry = settings.value("mainWindow/geometry-v6")
+        if geometry is None:
+            geometry = settings.value("mainWindow/geometry-v5")
         if geometry is None:
             geometry = settings.value("mainWindow/geometry-v4")
         if geometry is None:
             geometry = settings.value("mainWindow/geometry-v3")
-        state = settings.value("mainWindow/state-v5")
+        # Dock topology changed in v6. Deliberately do not restore opaque v5
+        # dock bytes, which would recreate the obsolete stacked right column.
+        state = settings.value("mainWindow/state-v6")
         restored_geometry = bool(geometry and self.restoreGeometry(geometry))
         if state:
-            self.restoreState(state, 5)
+            self.restoreState(state, 6)
         # The runtime authority and software-stop control are intentionally not
         # user-hideable, including when an older saved layout says otherwise.
         self.safety_toolbar.show()
         self.safety_toolbar.toggleViewAction().setEnabled(False)
         inspector_index = int(
-            settings.value("mainWindow/inspector-tab-v5", 0)
+            settings.value(
+                "mainWindow/inspector-tab-v6",
+                settings.value("mainWindow/inspector-tab-v5", 0),
+            )
         )
         if hasattr(self, "inspector_tabs"):
             self.inspector_tabs.setCurrentIndex(
                 max(0, min(inspector_index, self.inspector_tabs.count() - 1))
             )
         if hasattr(self, "job_tabs"):
-            job_index = int(settings.value("mainWindow/job-tab-v5", 0))
+            job_index = int(
+                settings.value(
+                    "mainWindow/job-tab-v6",
+                    settings.value("mainWindow/job-tab-v5", 0),
+                )
+            )
             self.job_tabs.setCurrentIndex(
                 max(0, min(job_index, self.job_tabs.count() - 1))
             )
@@ -2971,16 +4040,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _save_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        settings.setValue("mainWindow/geometry-v5", self.saveGeometry())
-        settings.setValue("mainWindow/state-v5", self.saveState(5))
+        settings.setValue("mainWindow/geometry-v6", self.saveGeometry())
+        settings.setValue("mainWindow/state-v6", self.saveState(6))
         if hasattr(self, "inspector_tabs"):
             settings.setValue(
-                "mainWindow/inspector-tab-v5",
+                "mainWindow/inspector-tab-v6",
                 self.inspector_tabs.currentIndex(),
             )
         if hasattr(self, "job_tabs"):
             settings.setValue(
-                "mainWindow/job-tab-v5",
+                "mainWindow/job-tab-v6",
                 self.job_tabs.currentIndex(),
             )
 
@@ -2988,10 +4057,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self._closing:
             event.accept()
             return
-        if not self._confirm_discard_changes():
+        if not self._close_requested:
+            if not self._confirm_discard_changes():
+                event.ignore()
+                return
+            self._close_requested = True
+            self._save_window_state()
+            self._cancel_job_preparation("Application is closing")
+            self._cancel_job_render()
+            self._invalidate_generated_job(cancel_preparation=False)
+            self.controller.begin_shutdown()
+        if self.controller.has_active_tasks:
+            self.statusBar().showMessage(
+                "Closing after background preparation finishes…"
+            )
             event.ignore()
             return
         self._closing = True
-        self._save_window_state()
         self.controller.stop()
         event.accept()
+
+    def _background_tasks_drained(self) -> None:
+        if self._close_requested and not self._closing:
+            QtCore.QTimer.singleShot(0, self.close)

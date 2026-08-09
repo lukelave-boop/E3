@@ -15,6 +15,7 @@ class SimulatedTransport:
         self.absolute = True
         self.laser_on = False
         self.power = 0.0
+        self.step_idle_delay_ms = 250
 
     def open(self) -> None:
         self.is_open = True
@@ -42,8 +43,17 @@ class SimulatedTransport:
             self._queue.put("ok")
             return
         if cleaned == "$$":
+            self._queue.put(f"$1={self.step_idle_delay_ms}")
             self._queue.put("$30=1000")
             self._queue.put("$32=1")
+            self._queue.put("ok")
+            return
+        if cleaned.startswith("$1="):
+            try:
+                self.step_idle_delay_ms = int(cleaned.split("=", 1)[1])
+            except ValueError:
+                self._queue.put("error:3")
+                return
             self._queue.put("ok")
             return
         if cleaned == "$G":

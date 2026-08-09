@@ -3,8 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import sys
+from pathlib import Path
+
+# This repository-local tool supports direct execution without an installed
+# package, so its project imports intentionally follow the sys.path bootstrap.
+# ruff: noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:

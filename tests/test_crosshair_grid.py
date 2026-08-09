@@ -2,7 +2,43 @@ import cv2
 import numpy as np
 import pytest
 
-from laser_aligner.vision.fiducials import detect_crosshair_grid, detect_crosshairs_near
+from laser_aligner.vision.fiducials import (
+    detect_crosshair_grid,
+    detect_crosshairs_near,
+    detect_keyed_crosshair_grid,
+)
+
+
+def _keyed_grid_image(*, include_keys: bool = True) -> tuple[np.ndarray, list[dict[str, float | int]]]:
+    image = np.full((900, 1200, 3), 190, dtype=np.uint8)
+    plate = np.full((700, 700, 3), 235, dtype=np.uint8)
+    source_coordinates = [105, 227, 350, 472, 595]
+    machine_coordinates = [40.0, 75.0, 110.0, 145.0, 180.0]
+    targets: list[dict[str, float | int]] = []
+    for row, (source_y, machine_y) in enumerate(zip(source_coordinates, machine_coordinates, strict=True)):
+        for column, (source_x, machine_x) in enumerate(zip(source_coordinates, machine_coordinates, strict=True)):
+            identifier = row * 5 + column + 1
+            arm = 14
+            if include_keys and (row, column) == (1, 1):
+                arm = 28
+            elif include_keys and (row, column) == (1, 2):
+                arm = 21
+            cv2.line(plate, (source_x - arm, source_y), (source_x + arm, source_y), (25, 25, 25), 3)
+            cv2.line(plate, (source_x, source_y - arm), (source_x, source_y + arm), (25, 25, 25), 3)
+            targets.append(
+                {
+                    "id": identifier,
+                    "machine_x": machine_x,
+                    "machine_y": machine_y,
+                }
+            )
+    source = np.float32([[0, 0], [699, 0], [699, 699], [0, 699]])
+    destination = np.float32([[230, 90], [1000, 130], [940, 830], [160, 790]])
+    transform = cv2.getPerspectiveTransform(source, destination)
+    warped = cv2.warpPerspective(plate, transform, (1200, 900), borderValue=(190, 190, 190))
+    mask = cv2.warpPerspective(np.full((700, 700), 255, np.uint8), transform, (1200, 900))
+    image[mask > 0] = warped[mask > 0]
+    return image, targets
 
 
 def test_detect_crosshair_grid_on_synthetic_plate():
@@ -28,6 +64,67 @@ def test_detect_crosshair_grid_on_synthetic_plate():
     assert result['points'][0]['machine_y'] == 10.0
     assert result['points'][-1]['machine_x'] == 210.0
     assert result['points'][-1]['machine_y'] == 210.0
+
+
+@pytest.mark.parametrize(
+    "transform",
+    (
+        lambda image: image,
+        lambda image: cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE),
+        lambda image: cv2.rotate(image, cv2.ROTATE_180),
+        lambda image: cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE),
+        lambda image: cv2.flip(image, 1),
+        lambda image: cv2.flip(image, 0),
+        lambda image: cv2.transpose(image),
+        lambda image: cv2.flip(cv2.transpose(image), -1),
+    ),
+)
+def test_detect_keyed_crosshair_grid_resolves_all_rotations_and_reflections(transform):
+    image, targets = _keyed_grid_image()
+
+    result = detect_keyed_crosshair_grid(transform(image), targets)
+
+    assert result["detected"] is True
+    assert result["confidence"] == "high"
+    assert len(result["points"]) == 25
+    assert [(item["machine_x"], item["machine_y"]) for item in result["points"]] == [
+        (item["machine_x"], item["machine_y"]) for item in targets
+    ]
+
+
+def test_detect_keyed_crosshair_grid_rejects_symmetric_unkeyed_pattern():
+    image, targets = _keyed_grid_image(include_keys=False)
+
+    result = detect_keyed_crosshair_grid(image, targets)
+
+    assert result["detected"] is False
+    assert "orientation-key" in result["reason"]
+
+
+def test_detect_keyed_crosshair_grid_ignores_surrounding_hardware_clutter():
+    image, targets = _keyed_grid_image()
+    cv2.rectangle(image, (0, 0), (180, 899), (25, 25, 25), 20)
+    cv2.rectangle(image, (1050, 0), (1199, 899), (15, 15, 15), -1)
+    for index in range(18):
+        x = 25 + (index % 3) * 48
+        y = 35 + index * 45
+        cv2.circle(image, (x, y), 5 + index % 7, (20, 20, 20), -1)
+
+    result = detect_keyed_crosshair_grid(image, targets)
+
+    assert result["detected"] is True
+    assert len(result["points"]) == 25
+    assert result["key_sizes_px"]["large"] > result["key_sizes_px"]["medium"]
+    assert result["key_sizes_px"]["medium"] > result["key_sizes_px"]["regular_maximum"]
+
+
+def test_detect_keyed_crosshair_grid_rejects_blank_image():
+    _, targets = _keyed_grid_image()
+
+    result = detect_keyed_crosshair_grid(np.full((900, 1200, 3), 230, dtype=np.uint8), targets)
+
+    assert result["detected"] is False
+    assert result["points"] == []
 
 
 def test_detect_crosshairs_near_accepts_sparse_fine_registration_targets():

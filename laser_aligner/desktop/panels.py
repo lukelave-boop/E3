@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from ..project import (
@@ -11,6 +12,7 @@ from ..project import (
     Transform,
 )
 from .qt import require_qt
+from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -148,8 +150,10 @@ class LayerPanel(QtWidgets.QWidget):
         identity_row.addWidget(self.mode_combo)
         editor_layout.addLayout(identity_row)
 
-        settings_row = QtWidgets.QHBoxLayout()
-        settings_row.setSpacing(4)
+        settings_grid = QtWidgets.QGridLayout()
+        settings_grid.setContentsMargins(0, 0, 0, 0)
+        settings_grid.setHorizontalSpacing(4)
+        settings_grid.setVerticalSpacing(2)
         self.speed_spin = QtWidgets.QDoubleSpinBox()
         self.speed_spin.setRange(1.0, 100000.0)
         self.speed_spin.setDecimals(1)
@@ -174,18 +178,22 @@ class LayerPanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
-        settings_row.addWidget(QtWidgets.QLabel("Speed"))
-        settings_row.addWidget(self.speed_spin, 3)
-        settings_row.addWidget(QtWidgets.QLabel("Passes"))
-        settings_row.addWidget(self.passes_spin, 1)
-        settings_row.addWidget(QtWidgets.QLabel("Max Pwr"))
-        settings_row.addWidget(self.power_spin, 2)
-        editor_layout.addLayout(settings_row)
+        settings_grid.addWidget(QtWidgets.QLabel("Speed"), 0, 0)
+        settings_grid.addWidget(QtWidgets.QLabel("Passes"), 0, 1)
+        settings_grid.addWidget(QtWidgets.QLabel("Max power"), 0, 2)
+        settings_grid.addWidget(self.speed_spin, 1, 0)
+        settings_grid.addWidget(self.passes_spin, 1, 1)
+        settings_grid.addWidget(self.power_spin, 1, 2)
+        settings_grid.setColumnStretch(0, 3)
+        settings_grid.setColumnStretch(1, 1)
+        settings_grid.setColumnStretch(2, 2)
+        editor_layout.addLayout(settings_grid)
 
         self.scan_row = QtWidgets.QWidget()
-        scan_layout = QtWidgets.QHBoxLayout(self.scan_row)
+        scan_layout = QtWidgets.QGridLayout(self.scan_row)
         scan_layout.setContentsMargins(0, 0, 0, 0)
-        scan_layout.setSpacing(4)
+        scan_layout.setHorizontalSpacing(4)
+        scan_layout.setVerticalSpacing(2)
         self.interval_spin = QtWidgets.QDoubleSpinBox()
         self.interval_spin.setRange(0.02, 10.0)
         self.interval_spin.setDecimals(3)
@@ -201,12 +209,15 @@ class LayerPanel(QtWidgets.QWidget):
         self.overscan_spin.setDecimals(1)
         self.overscan_spin.setSuffix(" %")
         self.overscan_spin.setToolTip("Laser-off lead-in/out for raster rows")
-        scan_layout.addWidget(QtWidgets.QLabel("Interval"))
-        scan_layout.addWidget(self.interval_spin, 1)
-        scan_layout.addWidget(QtWidgets.QLabel("Angle"))
-        scan_layout.addWidget(self.angle_spin, 1)
-        scan_layout.addWidget(QtWidgets.QLabel("Overscan"))
-        scan_layout.addWidget(self.overscan_spin, 1)
+        scan_layout.addWidget(QtWidgets.QLabel("Interval"), 0, 0)
+        scan_layout.addWidget(QtWidgets.QLabel("Angle"), 0, 1)
+        scan_layout.addWidget(QtWidgets.QLabel("Overscan"), 0, 2)
+        scan_layout.addWidget(self.interval_spin, 1, 0)
+        scan_layout.addWidget(self.angle_spin, 1, 1)
+        scan_layout.addWidget(self.overscan_spin, 1, 2)
+        scan_layout.setColumnStretch(0, 1)
+        scan_layout.setColumnStretch(1, 1)
+        scan_layout.setColumnStretch(2, 1)
         editor_layout.addWidget(self.scan_row)
 
         action_row = QtWidgets.QHBoxLayout()
@@ -255,12 +266,12 @@ class LayerPanel(QtWidgets.QWidget):
         self.name_edit.editingFinished.connect(self._emit_edit)
         self.mode_combo.currentIndexChanged.connect(self._emit_edit)
         self.mode_combo.currentIndexChanged.connect(self._sync_scan_controls)
-        self.speed_spin.valueChanged.connect(self._emit_edit)
-        self.power_spin.valueChanged.connect(self._emit_edit)
-        self.passes_spin.valueChanged.connect(self._emit_edit)
-        self.interval_spin.valueChanged.connect(self._emit_edit)
-        self.angle_spin.valueChanged.connect(self._emit_edit)
-        self.overscan_spin.valueChanged.connect(self._emit_edit)
+        self.speed_spin.editingFinished.connect(self._emit_edit)
+        self.power_spin.editingFinished.connect(self._emit_edit)
+        self.passes_spin.editingFinished.connect(self._emit_edit)
+        self.interval_spin.editingFinished.connect(self._emit_edit)
+        self.angle_spin.editingFinished.connect(self._emit_edit)
+        self.overscan_spin.editingFinished.connect(self._emit_edit)
         self.output_check.toggled.connect(self._emit_edit)
         self.visible_check.toggled.connect(self._emit_edit)
 
@@ -811,7 +822,7 @@ class CameraPanel(QtWidgets.QWidget):
         opacity_row.addWidget(QtWidgets.QLabel("Opacity"))
         self.opacity_slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(0, 100)
-        self.opacity_slider.setValue(18)
+        self.opacity_slider.setValue(round(DEFAULT_CAMERA_OVERLAY_OPACITY * 100))
         opacity_row.addWidget(self.opacity_slider, 1)
         overlay_layout.addLayout(opacity_row)
 
@@ -1185,10 +1196,19 @@ class TracePanel(QtWidgets.QWidget):
         self.normalize_grid = QtWidgets.QCheckBox("Make grid cells identical")
         self.normalize_grid.setToolTip(
             "Fit one repeated-object model to the grid. Every accepted and "
-            "inferred cell receives the same width, height, corner radius, "
-            "and rotation, with its center snapped to the fitted lattice."
+            "inferred cell receives the same width, height, and corner radius. "
+            "Use Snap cells to fitted grid when centers and rotations should "
+            "also follow the fitted lattice."
         )
         self.normalize_grid.setChecked(True)
+        self.snap_grid_cells = QtWidgets.QCheckBox("Snap cells to fitted grid")
+        self.snap_grid_cells.setToolTip(
+            "When enabled, identical cells share the fitted grid's centers and "
+            "rotation. Disable this for a looser grid: direct cells keep their "
+            "observed center and rotation while still sharing width, height, "
+            "and corner radius. Inferred cells remain on the fitted grid."
+        )
+        self.snap_grid_cells.setChecked(True)
         _form_row(filter_form, "Minimum area", self.min_area)
         _form_row(filter_form, "Maximum area", self.max_area)
         _form_row(filter_form, "Minimum width", self.min_width)
@@ -1201,6 +1221,7 @@ class TracePanel(QtWidgets.QWidget):
         filter_form.addRow(self.regular_grid)
         filter_form.addRow(self.infer_missing)
         filter_form.addRow(self.normalize_grid)
+        filter_form.addRow(self.snap_grid_cells)
         layout.addWidget(filter_group)
 
         output_group = QtWidgets.QGroupBox("Vector output")
@@ -1244,6 +1265,11 @@ class TracePanel(QtWidgets.QWidget):
 
         self.detect_button = QtWidgets.QPushButton("Detect objects")
         self.detect_button.setObjectName("primaryButton")
+        self.detect_button.setToolTip(
+            "On hardware this homes and parks the machine, holds both axes "
+            "through a fresh multi-frame capture, releases them, then traces "
+            "the captured image. Ensure the travel path is clear."
+        )
         self.clear_button = QtWidgets.QPushButton("Clear preview")
         layout.addWidget(self.detect_button)
         layout.addWidget(self.clear_button)
@@ -1332,6 +1358,7 @@ class TracePanel(QtWidgets.QWidget):
         )
         self.output_mode.currentIndexChanged.connect(self._sync_output_controls)
         self.regular_grid.toggled.connect(self._sync_output_controls)
+        self.normalize_grid.toggled.connect(self._sync_output_controls)
 
         for widget in (
             self.mode_combo,
@@ -1346,6 +1373,7 @@ class TracePanel(QtWidgets.QWidget):
             self.regular_grid,
             self.infer_missing,
             self.normalize_grid,
+            self.snap_grid_cells,
             self.output_mode,
             self.border_offset,
             self.smoothing,
@@ -1386,6 +1414,7 @@ class TracePanel(QtWidgets.QWidget):
             "regular_grid": self.regular_grid.isChecked(),
             "infer_missing": self.infer_missing.isChecked(),
             "normalize_grid": self.normalize_grid.isChecked(),
+            "snap_grid_cells": self.snap_grid_cells.isChecked(),
             "output_mode": str(self.output_mode.currentData()),
             "border_offset_mm": self.border_offset.value(),
             "smoothing_mm": self.smoothing.value(),
@@ -1435,6 +1464,21 @@ class TracePanel(QtWidgets.QWidget):
         self._detections = list(result.get("detections", []))
         grid = result.get("grid") or {}
         grid_normalized = bool(grid.get("normalized"))
+        cells_snapped = bool(grid.get("cells_snapped"))
+        output_area = (
+            result.get("output_work_area")
+            or grid.get("output_work_area")
+            or {}
+        )
+        camera_area = (
+            result.get("camera_work_area")
+            or grid.get("camera_work_area")
+            or {}
+        )
+        guarded_output_area = bool(output_area and output_area != camera_area)
+        boundary_name = (
+            "guarded output area" if guarded_output_area else "configured work area"
+        )
         self._result_is_current = True
         self._updating = True
         try:
@@ -1451,7 +1495,19 @@ class TracePanel(QtWidgets.QWidget):
                 )
                 item.setText(1, str(detection.get("index", "")))
                 source = str(detection.get("source", "direct"))
-                item.setText(2, source.title())
+                diagnostics = detection.get("diagnostics") or {}
+                within_work_area = bool(
+                    diagnostics.get("within_work_area", True)
+                )
+                touches_image_edge = bool(
+                    diagnostics.get("touches_image_edge", False)
+                )
+                source_text = source.title()
+                if touches_image_edge:
+                    source_text += " · cropped"
+                if not within_work_area:
+                    source_text += " · outside"
+                item.setText(2, source_text)
                 item.setText(3, f"{float(detection.get('confidence', 0)) * 100:.0f}%")
                 item.setText(
                     4,
@@ -1469,15 +1525,27 @@ class TracePanel(QtWidgets.QWidget):
                         f"corner radius {radius:.2f} mm, rotation "
                         f"{float(detection.get('rotation_deg', 0)):.2f}°."
                     )
-                    diagnostics = detection.get("diagnostics") or {}
                     if diagnostics.get("grid_normalized"):
                         row = int(diagnostics.get("grid_row", 0)) + 1
                         column = int(diagnostics.get("grid_column", 0)) + 1
                         geometry_tip += (
-                            f" Fitted grid cell row {row}, column {column}; "
-                            "its geometry and center were normalized against "
-                            "the repeated-object lattice."
+                            f" Fitted grid cell row {row}, column {column}. "
                         )
+                        if source == "inferred":
+                            geometry_tip += (
+                                "This missing position is inferred from the "
+                                "fitted lattice and has no observed pose."
+                            )
+                        elif cells_snapped:
+                            geometry_tip += (
+                                "Its dimensions, center, and rotation follow "
+                                "the repeated-object lattice."
+                            )
+                        else:
+                            geometry_tip += (
+                                "Its dimensions are shared across the grid; "
+                                "its observed center and rotation are retained."
+                            )
                         if "observed_width_mm" in diagnostics:
                             geometry_tip += (
                                 " Raw observation was "
@@ -1490,9 +1558,43 @@ class TracePanel(QtWidgets.QWidget):
                         "output is unavailable for this outline, so contour "
                         "geometry will be used."
                     )
+                if not within_work_area:
+                    overrun = float(
+                        diagnostics.get("work_area_overrun_mm", 0.0)
+                    )
+                    if (
+                        diagnostics.get("grid_normalized")
+                        and diagnostics.get("observed_within_work_area") is True
+                    ):
+                        geometry_tip += (
+                            " The raw observed fit was inside the output limit, "
+                            "but shared grid sizing makes this fitted output extend "
+                            f"{overrun:.2f} mm outside the {boundary_name}."
+                        )
+                    else:
+                        geometry_tip += (
+                            f" This output extends {overrun:.2f} mm outside the "
+                            f"{boundary_name}."
+                        )
+                    geometry_tip += (
+                        " It was not preselected. Reposition the workpiece or "
+                        "verify the configured machine limits before engraving."
+                    )
+                if touches_image_edge:
+                    edge_names = ", ".join(
+                        str(value)
+                        for value in diagnostics.get("image_edge_sides", [])
+                    ) or "camera"
+                    geometry_tip += (
+                        f" The observed mask touches the {edge_names} edge of the "
+                        "corrected camera/work-area raster, so the complete object "
+                        "outline cannot be verified and it was not preselected."
+                    )
                 for column in range(self.result_tree.columnCount()):
                     item.setToolTip(column, geometry_tip)
-                if source == "inferred":
+                if not within_work_area or touches_image_edge:
+                    item.setForeground(2, QtGui.QColor("#E06666"))
+                elif source == "inferred":
                     item.setForeground(2, QtGui.QColor("#E7B55C"))
                 self.result_tree.addTopLevelItem(item)
         finally:
@@ -1505,6 +1607,17 @@ class TracePanel(QtWidgets.QWidget):
             )
         else:
             self.select_grid_button.setText("Select complete grid")
+        outside_cells = int(grid.get("outside_cells", 0))
+        if outside_cells:
+            self.select_grid_button.setToolTip(
+                "Select every fitted grid cell, including inferred and "
+                "out-of-limit cells. Generation remains blocked until every "
+                f"selected output lies inside the {boundary_name}."
+            )
+        else:
+            self.select_grid_button.setToolTip(
+                "Select every fitted grid cell, including reviewed inferred gaps."
+            )
         self.status_label.setText(str(result.get("message", "Detection complete")))
         self._update_create_button()
         self.selectionChanged.emit(self.selected_ids())
@@ -1559,6 +1672,9 @@ class TracePanel(QtWidgets.QWidget):
         self.normalize_grid.setEnabled(
             grid_enabled and self.output_mode.currentData() == "rounded"
         )
+        self.snap_grid_cells.setEnabled(
+            self.normalize_grid.isEnabled() and self.normalize_grid.isChecked()
+        )
 
     def _result_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         del item, column
@@ -1597,7 +1713,13 @@ class TracePanel(QtWidgets.QWidget):
         try:
             for row in range(self.result_tree.topLevelItemCount()):
                 item = self.result_tree.topLevelItem(row)
-                direct = self._detections[row].get("source") == "direct"
+                detection = self._detections[row]
+                diagnostics = detection.get("diagnostics") or {}
+                direct = (
+                    detection.get("source") == "direct"
+                    and bool(diagnostics.get("within_work_area", True))
+                    and not bool(diagnostics.get("touches_image_edge", False))
+                )
                 item.setCheckState(
                     0,
                     QtCore.Qt.CheckState.Checked
@@ -1632,6 +1754,13 @@ class MachinePanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._busy = False
+        self._connected = False
+        self._allow_motion = False
+        self._reconnect_required = False
+        self._jog_ready = False
+        self._armed = False
+        self._job_running = False
         layout = _dense_panel_layout(self)
 
         self.state_label = QtWidgets.QLabel("Disconnected")
@@ -1650,8 +1779,8 @@ class MachinePanel(QtWidgets.QWidget):
         connection_row.addWidget(self.park_button)
         layout.addLayout(connection_row)
 
-        jog_group = QtWidgets.QGroupBox("Jogging unavailable")
-        jog_layout = QtWidgets.QGridLayout(jog_group)
+        self.jog_group = QtWidgets.QGroupBox("Jog")
+        jog_layout = QtWidgets.QGridLayout(self.jog_group)
         jog_layout.setContentsMargins(6, 10, 6, 6)
         jog_layout.setHorizontalSpacing(4)
         jog_layout.setVerticalSpacing(3)
@@ -1662,26 +1791,26 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_speed.setRange(1.0, 10000.0)
         self.jog_speed.setValue(2000.0)
         self.jog_speed.setSuffix(" mm/min")
-        up = QtWidgets.QPushButton("Y+")
-        down = QtWidgets.QPushButton("Y−")
-        left = QtWidgets.QPushButton("X−")
-        right = QtWidgets.QPushButton("X+")
-        jog_layout.addWidget(up, 0, 1)
-        jog_layout.addWidget(left, 1, 0)
-        jog_layout.addWidget(right, 1, 2)
-        jog_layout.addWidget(down, 2, 1)
-        jog_layout.addWidget(QtWidgets.QLabel("Step"), 0, 3)
-        jog_layout.addWidget(self.jog_step, 0, 4)
-        jog_layout.addWidget(QtWidgets.QLabel("Speed"), 1, 3)
-        jog_layout.addWidget(self.jog_speed, 1, 4)
-        jog_layout.setColumnStretch(4, 1)
-        jog_note = _muted(
-            "Guarded jogging is not enabled in this build. These controls will "
-            "unlock after the Falcon jog behavior is tested."
+        self.jog_up = QtWidgets.QPushButton("Y+")
+        self.jog_down = QtWidgets.QPushButton("Y−")
+        self.jog_left = QtWidgets.QPushButton("X−")
+        self.jog_right = QtWidgets.QPushButton("X+")
+        jog_layout.addWidget(self.jog_up, 0, 1)
+        jog_layout.addWidget(self.jog_left, 1, 0)
+        jog_layout.addWidget(self.jog_right, 1, 2)
+        jog_layout.addWidget(self.jog_down, 2, 1)
+        jog_layout.addWidget(QtWidgets.QLabel("Step"), 3, 0)
+        jog_layout.addWidget(self.jog_step, 3, 1, 1, 2)
+        jog_layout.addWidget(QtWidgets.QLabel("Speed"), 4, 0)
+        jog_layout.addWidget(self.jog_speed, 4, 1, 1, 2)
+        jog_layout.setColumnStretch(1, 1)
+        self.jog_note = _muted(
+            "Laser-off incremental moves from the last Home / park pose. "
+            "Jogging may move beyond the configured work area for limit measurement."
         )
-        jog_layout.addWidget(jog_note, 3, 0, 1, 5)
-        jog_group.setEnabled(False)
-        layout.addWidget(jog_group)
+        jog_layout.addWidget(self.jog_note, 5, 0, 1, 3)
+        self.jog_group.setEnabled(False)
+        layout.addWidget(self.jog_group)
 
         safety_row = QtWidgets.QHBoxLayout()
         safety_row.setSpacing(6)
@@ -1703,10 +1832,10 @@ class MachinePanel(QtWidgets.QWidget):
         self.disconnect_button.clicked.connect(self.disconnectRequested)
         self.park_button.clicked.connect(self.parkRequested)
         self.stop_button.clicked.connect(self.stopRequested)
-        up.clicked.connect(lambda: self._jog(0.0, 1.0))
-        down.clicked.connect(lambda: self._jog(0.0, -1.0))
-        left.clicked.connect(lambda: self._jog(-1.0, 0.0))
-        right.clicked.connect(lambda: self._jog(1.0, 0.0))
+        self.jog_up.clicked.connect(lambda: self._jog(0.0, 1.0))
+        self.jog_down.clicked.connect(lambda: self._jog(0.0, -1.0))
+        self.jog_left.clicked.connect(lambda: self._jog(-1.0, 0.0))
+        self.jog_right.clicked.connect(lambda: self._jog(1.0, 0.0))
 
     def _jog(self, x_direction: float, y_direction: float) -> None:
         step = float(self.jog_step.currentData())
@@ -1719,29 +1848,106 @@ class MachinePanel(QtWidgets.QWidget):
     def set_status(self, status: dict[str, Any] | None) -> None:
         if not status:
             self.state_label.setText("Controller unavailable")
+            self._connected = False
+            self._allow_motion = False
+            self._reconnect_required = False
+            self._jog_ready = False
+            self._armed = False
+            self._job_running = False
+            self._sync_action_buttons()
             return
         connected = bool(status.get("connected", False))
+        connecting = bool(status.get("connecting", False))
+        self._connected = connected
+        self._allow_motion = bool(status.get("allow_motion"))
+        self._reconnect_required = bool(
+            status.get("controller_reconnect_required", False)
+        )
+        self._jog_ready = bool(status.get("jog_ready", False))
+        maximum_jog_feed = status.get("max_travel_feed_mm_min")
+        if type(maximum_jog_feed) in {int, float} and math.isfinite(
+            float(maximum_jog_feed)
+        ) and float(maximum_jog_feed) > 0:
+            self.jog_speed.setMaximum(float(maximum_jog_feed))
         armed = bool(status.get("armed", False))
         job = status.get("job", {})
+        self._armed = armed
+        self._job_running = bool(job.get("running", False))
         state = "RUNNING" if job.get("running") else (
             "ARMED" if armed else "SAFE"
         )
+        if self._reconnect_required:
+            motion_state = "RECONNECT REQUIRED"
+        elif (
+            connected
+            and status.get("backend") == "serial"
+            and status.get("allow_motion")
+            and not status.get("coordinate_reference_ready", False)
+        ):
+            motion_state = "HOME REQUIRED"
+        else:
+            motion_state = f"Motion {'ready' if self._allow_motion else 'blocked'}"
         self.state_label.setText(
-            f"{'Connected' if connected else 'Disconnected'} | "
+            f"{'Connecting' if connecting else ('Connected' if connected else 'Disconnected')} | "
             f"{status.get('protocol', 'unknown')} | {state} | "
-            + (
-                "HOME REQUIRED"
-                if connected
-                and status.get("backend") == "serial"
-                and status.get("allow_motion")
-                and not status.get("coordinate_reference_ready", False)
-                else f"Motion {'ready' if status.get('allow_motion') else 'blocked'}"
-            )
+            + motion_state
         )
-        self.connect_button.setEnabled(not connected)
-        self.disconnect_button.setEnabled(connected)
+        self._sync_action_buttons()
+
+    def set_busy(self, busy: bool) -> None:
+        """Prevent overlapping machine actions while preserving software Stop."""
+
+        self._busy = bool(busy)
+        self._sync_action_buttons()
+
+    def _sync_action_buttons(self) -> None:
+        self.connect_button.setEnabled(not self._busy and not self._connected)
+        self.disconnect_button.setEnabled(not self._busy and self._connected)
         self.park_button.setEnabled(
-            connected and bool(status.get("allow_motion"))
+            not self._busy
+            and self._allow_motion
+            and not self._reconnect_required
+        )
+        jog_enabled = (
+            not self._busy
+            and self._connected
+            and self._allow_motion
+            and not self._reconnect_required
+            and self._jog_ready
+            and not self._armed
+            and not self._job_running
+        )
+        self.jog_group.setEnabled(jog_enabled)
+        if self._reconnect_required:
+            jog_tip = "Disconnect and reconnect, then Home / park before jogging"
+        elif not self._connected:
+            jog_tip = "Connect and complete Home / park before jogging"
+        elif not self._allow_motion:
+            jog_tip = "Jogging is blocked by machine.allow_motion"
+        elif self._armed:
+            jog_tip = "Disarm laser control before jogging"
+        elif self._job_running:
+            jog_tip = "Wait for the controller job to finish"
+        elif not self._jog_ready:
+            jog_tip = "Complete Home / park before jogging"
+        elif self._busy:
+            jog_tip = "Wait for the current machine operation to finish"
+        else:
+            jog_tip = "Laser-off move; configured work-area bounds are not applied"
+        self.jog_group.setToolTip(jog_tip)
+        self.disconnect_button.setToolTip(
+            "Disconnect this untrusted controller session before reconnecting"
+            if self._reconnect_required
+            else "Disconnect the controller"
+        )
+        self.park_button.setToolTip(
+            "Disconnect and reconnect before Home / park"
+            if self._reconnect_required
+            else (
+                "Connect automatically, then home and park at the configured camera pose"
+                if not self._connected
+                else "Home and park at the configured camera pose"
+            )
         )
 
 
@@ -1783,7 +1989,6 @@ class ConsolePanel(QtWidgets.QWidget):
 
 
 class JobPanel(QtWidgets.QWidget):
-    frameRequested = QtCore.Signal()
     generateRequested = QtCore.Signal()
     startRequested = QtCore.Signal()
     pauseRequested = QtCore.Signal()
@@ -1797,6 +2002,12 @@ class JobPanel(QtWidgets.QWidget):
         self.summary.setObjectName("statusCard")
         self.summary.setWordWrap(True)
         layout.addWidget(self.summary)
+        self.preparation_progress = QtWidgets.QProgressBar()
+        self.preparation_progress.setObjectName("jobPreparationProgress")
+        self.preparation_progress.setFixedHeight(18)
+        self.preparation_progress.setTextVisible(True)
+        self.preparation_progress.hide()
+        layout.addWidget(self.preparation_progress)
         self.execution_label = QtWidgets.QLabel("Controller idle · no job started")
         self.execution_label.setWordWrap(True)
         layout.addWidget(self.execution_label)
@@ -1811,10 +2022,7 @@ class JobPanel(QtWidgets.QWidget):
         prepare_row.addWidget(QtWidgets.QLabel("Prepare"))
         self.generate_button = QtWidgets.QPushButton("Generate")
         self.generate_button.setToolTip("Generate the current project toolpath")
-        self.frame_button = QtWidgets.QPushButton("Dry frame")
-        self.frame_button.setToolTip("Generate a laser-off dry framing program")
         prepare_row.addWidget(self.generate_button, 1)
-        prepare_row.addWidget(self.frame_button, 1)
         layout.addLayout(prepare_row)
 
         run_row = QtWidgets.QHBoxLayout()
@@ -1836,10 +2044,43 @@ class JobPanel(QtWidgets.QWidget):
         layout.addStretch(1)
 
         self.generate_button.clicked.connect(self.generateRequested)
-        self.frame_button.clicked.connect(self.frameRequested)
         self.start_button.clicked.connect(self.startRequested)
         self.pause_button.clicked.connect(self.pauseRequested)
         self.stop_button.clicked.connect(self.stopRequested)
+        self._preparing = False
+        self._machine_runnable = False
+        self._job_prepared = False
+        self._sync_start_enabled()
+
+    def _sync_start_enabled(self) -> None:
+        self.start_button.setEnabled(
+            self._job_prepared and self._machine_runnable and not self._preparing
+        )
+
+    def set_preparing(
+        self,
+        active: bool,
+        label: str = "Preparing exact job preview",
+        *,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> None:
+        self._preparing = bool(active)
+        self.preparation_progress.setVisible(self._preparing)
+        if self._preparing:
+            if completed is None or total is None or total <= 0:
+                self.preparation_progress.setRange(0, 0)
+            else:
+                self.preparation_progress.setRange(0, int(total))
+                self.preparation_progress.setValue(
+                    max(0, min(int(completed), int(total)))
+                )
+            self.preparation_progress.setFormat(str(label))
+        else:
+            self.preparation_progress.setRange(0, 100)
+            self.preparation_progress.setValue(0)
+        self.generate_button.setEnabled(not self._preparing)
+        self._sync_start_enabled()
 
     def set_job_status(self, job: dict[str, Any] | None) -> None:
         job = job or {}
@@ -1848,10 +2089,28 @@ class JobPanel(QtWidgets.QWidget):
         completed = int(job.get("completed_lines", 0) or 0)
         progress = 0.0 if total <= 0 else completed / total
         self.progress.setValue(int(round(progress * 1000)))
-        self.progress.setFormat(f"Execution {progress * 100:.0f}%")
+        phase = str(job.get("phase", "streaming" if running else "idle"))
+        finishing_labels = {
+            "draining": "Finishing · waiting for motion",
+            "homing": "Finishing · homing",
+            "parking": "Finishing · parking",
+            "releasing": "Finishing · releasing motors",
+        }
+        self.progress.setFormat(
+            finishing_labels.get(phase, f"Execution {progress * 100:.0f}%")
+        )
         if running:
+            execution_labels = {
+                "draining": "Toolpath sent · waiting for queued motion to finish",
+                "homing": "Toolpath complete · homing machine",
+                "parking": "Homing complete · moving to park position",
+                "releasing": "Park complete · releasing motors",
+            }
             self.execution_label.setText(
-                f"Running {job.get('name', 'job')} · {completed}/{total} lines"
+                execution_labels.get(
+                    phase,
+                    f"Running {job.get('name', 'job')} · {completed}/{total} lines",
+                )
             )
         elif job.get("error"):
             self.execution_label.setText(f"Controller stopped: {job['error']}")
@@ -1869,13 +2128,17 @@ class JobPanel(QtWidgets.QWidget):
         power_percent: float,
         controller_power: float,
     ) -> None:
+        self._job_prepared = True
         self.summary.setText(
             f"Prepared · {summary} · max power {power_percent:.1f}% / "
             f"S{controller_power:g}"
         )
+        self._sync_start_enabled()
 
     def clear_prepared_job(self) -> None:
+        self._job_prepared = False
         self.summary.setText("No job generated")
+        self._sync_start_enabled()
 
     def set_machine_status(self, machine: dict[str, Any] | None) -> None:
         machine = machine or {}
@@ -1886,13 +2149,24 @@ class JobPanel(QtWidgets.QWidget):
                 machine.get("backend") == "simulator",
             )
         )
-        runnable = connected and bool(machine.get("allow_motion", False))
-        self.start_button.setEnabled(runnable)
-        self.start_button.setToolTip(
-            "Start the current job; hardware will home and park first"
-            if connected and not reference_ready
-            else "Start the currently generated job"
+        reconnect_required = bool(
+            machine.get("controller_reconnect_required", False)
         )
+        runnable = (
+            bool(machine.get("allow_motion", False))
+            and not reconnect_required
+        )
+        self._machine_runnable = runnable
+        self._sync_start_enabled()
+        if reconnect_required:
+            tooltip = "Disconnect and reconnect before starting a job"
+        elif not connected:
+            tooltip = "Connect automatically, then start the currently generated job"
+        elif connected and not reference_ready:
+            tooltip = "Start the current job; hardware will home and park first"
+        else:
+            tooltip = "Start the currently generated job"
+        self.start_button.setToolTip(tooltip)
 
 
 class ObjectPanel(QtWidgets.QWidget):

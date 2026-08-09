@@ -64,22 +64,65 @@ vision, G-code, or machine models.
 ```text
 CameraService or SyntheticCameraService
   -> sequence-numbered raw OpenCV BGR frame
-  -> immediate snapshot for live preview, or precision FrameBurst for analysis
-     (settle, unique-frame discard, control reapply/readback, fresh samples)
-  -> LensModel.undistort() when a lens model exists
-  -> BedMapper.rectify()
+  -> immediate snapshot for live preview, five-frame sharpest interactive still,
+     or 45-frame parked-bed FrameBurst for calibration analysis
+     (control reapply/readback, settle, unique-frame discard, fresh samples;
+      the configured deadline covers that complete acquisition sequence)
+  -> cached composed raw-camera-to-bed map when a lens model exists
+     (inverse bed homography/residual mesh coordinates distorted back into the
+     raw camera domain)
+  -> one cv2.remap() into the top-down bed image
+     (BedMapper.rectify() remains the no-lens path)
   -> top-down image at configured pixels/mm
   -> workspace background and optional vision detectors
 ```
 
-Fine registration and accuracy validation detect every expected cross in every
-burst frame, aggregate each center with median/MAD rejection, and reject the
-result when too few samples survive or temporal jitter exceeds the configured
-limit. Their persisted reports include frame sequences, sharpness, camera
-control status, inlier/outlier counts, and jitter. Trace, template matching,
-workspace captures, and calibration stills use the sharpest frame from the
-same stable capture path; continuous UI preview and streaming remain single
-frame operations.
+The background reader is the sole owner of `VideoCapture.read()`. Camera start,
+restart, V4L2 control changes, synthetic-scene changes, and precision bursts use
+one bounded exclusive-operation contract. Shutdown invalidates the current
+camera generation and releases the backend before joining its reader, so a
+burst or control request cannot publish state after teardown. Preview snapshots
+remain available during a burst: they retain the published immutable frame
+reference under the state lock and copy its pixels after releasing the lock.
+Sharpness and downstream vision analysis likewise run after camera ownership is
+released. This keeps large frame copies and CPU work from delaying new source
+frames while preventing two precision workflows from consuming the same capture
+sequence. Burst diagnostics include negotiated and observed FPS plus skipped
+sequence counts; negotiated FPS is evidence reported by the backend, not proof
+of sustained delivery.
+
+Parked hardware workflows request an unscored raw burst while the temporary
+stepper hold is active. The hold ends immediately after the last frame has been
+copied; lens correction and clarity scoring then populate the same `FrameBurst`
+outside that scope. The short parked Trace workflow uses the same two-phase
+capture/selection path. Each burst retains its camera-session generation, so a
+stop or reopen during deferred processing rejects the stale result. Callers
+never choose a representative frame from an unscored burst.
+
+The desktop camera panel and workspace share one presentation constant for the
+initial corrected-overlay opacity. It is 70%, remains operator-adjustable from
+0–100%, and does not alter captured pixels or any vision analysis input.
+
+Fine registration, dense fit/validation/confirmation, and accuracy validation
+detect every expected cross in every burst frame and screen each center with
+median/MAD rejection. The default `stable_clarity_consensus` strategy ranks
+frames that remain inliers for every mark by clarity and takes each mark's
+median across the best 15 stable frames from the 45-frame burst. Configurable
+comparison strategies retain the robust median across all surviving samples
+and the single sharpest common-inlier frame. Results are rejected when too few
+common samples survive or temporal jitter exceeds the configured limit. Their
+persisted reports include frame sequences, sharpness, consensus or selected
+frame indices, camera control status, inlier/outlier counts, and jitter. Trace,
+template matching, workspace captures, and calibration stills use the sharpest
+frame from the same stable capture path; continuous UI preview and streaming
+remain single-frame operations.
+
+Interactive Trace, template matching, color sampling, workspace refresh, and
+ordinary stable stills use a short five-frame burst with a 0.1-second settle,
+two discarded fresh frames, and a two-second deadline. They select only the
+sharpest image and do not run calibration mark statistics. The 45-frame burst
+is reserved for parked-bed fine registration, dense fit/validation/
+confirmation, and accuracy validation.
 
 In safe simulation only, `AppContext` can replace the final corrected frame
 with a thread-safe, memory-only override. The source is either a validated
@@ -95,8 +138,21 @@ or project file and is unavailable when hardware access or a non-simulator
 machine backend is enabled.
 
 `LensCalibrator` stores captured checkerboard images, a detection cache, and the
-solved camera model. `BedMapper` stores image/machine point pairs plus forward
-and inverse homographies. A reviewed fine-registration result may compose one
+solved camera model. Cold status reads image headers but not pixel bodies. Owned
+index and solve operations instead load size-capped immutable encoded payloads,
+derive content identity and decoded pixels from the same bytes, and recheck the
+selected evidence signature before committing; forced re-indexing rebuilds the
+advisory cache after external replacement. `BedMapper` stores image/machine point
+pairs plus forward and inverse homographies. A dedicated base-map session can
+generate a keyed
+5×5 job without a prior homography. Two larger interior crosses orient the
+regular grid under all rotations/reflections; incomplete, unkeyed, ambiguous,
+dry, or stale sessions are rejected. The candidate fit is analyzed without
+mutating active state, then reviewed points and the fresh homography are
+installed transactionally with rollback on persistence failure. A fresh base
+map intentionally clears corrections belonging to its predecessor and records
+the keyed generated-coordinate labels as normal on both axes. A reviewed
+fine-registration result may compose one
 persisted, resettable translation onto that homography. Its separate full-map
 path fits raw image coordinates to commanded mark coordinates with RANSAC,
 checks inlier count, bed coverage, residual, orientation, scale, and modeled
@@ -107,9 +163,11 @@ Simulation startup creates a synthetic perspective scene and a known mapping
 automatically.
 
 The same Qt-independent model defines five accuracy-validation holdouts and
-fixed pass/fail limits. `AppContext` binds each validation session to the exact
-active homography, persists the generated job/capture/report, and rejects stale
-or dry-only sessions. The desktop sends both calibration and validation jobs
+fixed pass/fail limits. `AppContext` binds every fine-registration and
+validation session to the exact active homography and residual-mesh revision,
+persists the generated job/capture/report, and rejects legacy, stale, or
+dry-only sessions. Live capture checks that identity before Home / park and
+camera acquisition. The desktop sends both calibration and validation jobs
 through the ordinary guarded preview/run pipeline; validation has no write path
 to `BedMapper`.
 
@@ -124,17 +182,41 @@ should own a physical camera at a time.
 
 - Rectangular workpiece detection runs on the rectified image and reports
   machine-coordinate placement hints.
-- ArUco and crosshair-grid detection support bed mapping.
-- The object-tracing pipeline segments color or contrast, optionally fits a
-  regular grid and infers missing cells, then records both the observed raster
-  contour and the proposed vector geometry in machine millimetres.
+- ArUco, keyed unseeded cross-grid, and rough-map-seeded crosshair detection
+  support bed mapping.
+- The object-tracing pipeline evaluates color, global/illumination-corrected/
+  adaptive filled contrast, and signed local contrast hypotheses. It ranks a
+  repeated-grid hypothesis by coherent filled-region support so narrow gaps or
+  highlights cannot win merely by producing more clean contours, optionally
+  infers missing cells, then records both the observed raster contour and the
+  proposed vector geometry in machine millimetres.
+- Live desktop trace capture establishes the photography pose rather than
+  trusting prior machine state: temporary hold encloses Home / park and the
+  stable camera frame set, while rectification and vision analysis run only
+  after the controller's original idle behavior has been restored. Frozen
+  simulator frames bypass machine operations.
 - Rounded-rectangle output fits center, dimensions, rotation, and radius and
   emits an analytic rounded vector. Simplified and exact modes preserve
   pixel-derived contours; simplification is a bounded polygon reduction, not a
   curve-fitting operation.
+- Identical-grid normalization derives its shared orientation from populated
+  row-center baselines and refits the lattice in that orientation. Grid pose
+  snapping is independent of dimension normalization: direct cells may retain
+  observed centers and rotations while sharing dimensions and radius, whereas
+  inferred cells always require a lattice pose.
+- Grid detections retain row/column identity and sort in stable row-major order.
+  Proposed cells crossing the work area remain visible but are marked outside
+  and unselected by default; occupancy and emitted detections therefore cannot
+  silently disagree. Desktop Trace capture and color picking first require the
+  project and machine work areas to match.
 - The workspace previews the proposed vector that object creation will consume.
   The exact analyzed frame is delivered with the result and remains frozen
+  during review. Corrected pixels use the rectifier's exact pixels/mm scale
+  instead of deriving a slightly different scale from rounded raster dimensions.
   until the review is cleared or committed.
+- The role-labeled overlay key is a viewport control rather than scene geometry.
+  It defaults to the upper-left, remains fixed through canvas scrolling,
+  workpiece movement, zooming, and refits, and moves only when dragged directly.
 - Inferred trace cells are deliberately not selected by default.
 - Template alignment compares unordered machine-coordinate detections with
   normalized template features, ranks rigid rotation/translation candidates,
@@ -174,20 +256,59 @@ native shapes / imported SVG / traced outlines
   -> the same finalized G-code text is exported or submitted to MachineService
 ```
 
+`parse_svg()` retains source user-space polylines and records the exact mapping
+from that coordinate system to physical millimetres. Absolute root dimensions
+use CSS physical-unit conversions (`96 px = 1 in`); `viewBox` and
+`preserveAspectRatio` establish the viewport transform, while a viewBox-only
+document treats its user units as CSS pixels. The desktop applies this mapping
+before its SVG-Y to machine-Y inversion, then centers the resulting physical
+bounds at the requested project placement. Group transforms therefore affect
+shape geometry before physical sizing without changing the placement center.
+
+Desktop SVG import is fail-closed. Selector-based CSS, clip paths, masks,
+markers, dashed strokes, and geometry-changing CSS are rejected by the parser.
+Any remaining lossy warning, such as ignored text or embedded raster content,
+also stops desktop import before `SceneObject` creation. Operators must convert
+that content to explicit vector paths in the source editor.
+
 `JobPlan` models the final stream rather than a second approximation of the
 project geometry. It records motion order, elapsed time, feed, controller power,
 layer/pass/source context, and the physical laser-spot coordinates recovered
 from the generated offset comment. Preview-only choices such as travel
 visibility, playback speed, color inversion, and power shading never mutate the
 program. Project revision changes invalidate both the program and its Preview.
+Start Here replacement programs carry the configured photography pose in job
+metadata, so their rebuilt plan includes the actual laser-off approach from the
+controller's Home/park position to the reviewed move boundary.
 
 The desktop supports line, fill, and raster operation layers. Fill and binary
-raster convert closed vector silhouettes into angled scanline segments. Raster
-images resolve their explicit asset path and threshold pixels at 50%; missing,
-undecodable, or empty assets are rejected. Raster lead-in/out overscan remains
-laser-off and both desired scanlines and corrected controller/overscan paths
-are bounds checked. Text-to-path and grayscale/dithered power modulation remain
-unsupported and must never be silently dropped.
+vector raster convert closed silhouettes into angled scanlines. Imported images
+are alpha-composited onto white, sampled on an exact physical-pitch lattice at
+the operation's absolute machine-coordinate scan angle, area-prefiltered when
+that lattice minifies the source, and converted with deterministic 8x8 ordered
+grayscale dithering. The source top edge follows the
+same positive-machine-Y, mirror, and rotation transform shown by the canvas.
+One shared PNG/JPEG/BMP contract bounds encoded bytes, dimensions, bit depth,
+channels, and conservative decoded bytes before decode; TIFF is rejected.
+`read_raster_asset_payload` returns metadata, SHA-256 identity, and the exact
+bounded stable encoded bytes from one read, so Qt workspace pixels and toolpath
+identity cannot come from different file versions. Workspace items retain that
+displayed identity across unrelated project refreshes and share their decoded
+memory budget across current project sources. Project jobs carry exact raster
+identities for later authority checks and must match the canvas identities before
+desktop acceptance.
+Aggregate row, sample, vector-edge, span, and stream-command work is also capped
+before or during planning. Missing,
+undecodable, empty, over-resolution, or over-budget assets are rejected. Raster
+rows retain serpentine source order instead of entering the nearest-path
+planner. Each row traverses its complete image or silhouette span; lead-in,
+white gaps, and lead-out remain laser-off at the engraving feed. Both desired
+motion and spot-corrected controller motion are bounds checked. Image bounds
+also participate in dry framing, including rotation and mixed vector projects.
+Vector nearest-path planning falls back to recorded source order above 512
+paths rather than entering an unbounded quadratic search.
+Text-to-path, selectable dither algorithms, and calibrated grayscale power
+curves remain unsupported and must never be silently dropped.
 
 For a selected rectangle, the Transform inspector edits width, height, and the
 absolute corner radius. `UpdateObjectShapeCommand` validates and applies the
@@ -287,15 +408,33 @@ silently diverge when a project is run.
 - requires temporary arming for positive-power jobs;
 - restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset;
 - validates every destination against the configured work area;
+- exposes incremental desktop jogging only as absolute, laser-off moves from a
+  Home / park-established position; jogs deliberately bypass project/work-area
+  geometry for physical limit measurement and invalidate their tracked position
+  after STOP, disconnect, jobs, or motor release;
 - validates offset-corrected controller destinations as well as uncorrected
   physical spot geometry;
 - prevents rapid travel while laser state is active;
+- serializes ordinary write/ack ownership and complete Home / park or scoped
+  camera-hold sequences so concurrent desktop workers cannot consume each
+  other's controller replies;
 - revokes authorization on stop or disarm;
-- attempts `M5` on stop, disconnect, and failure.
+- attempts `M5` on stop, disarm, disconnect, job failure, and scoped motor-
+  release cleanup, even when mutable configuration or controller state is
+  already untrusted.
 
 The desktop job-start path performs `M5 → home → park → idle wait → arm → run`.
-Controller reset, reconnect, emergency stop, or job failure invalidates the
-session reference. Simulation does not require a hardware homing preflight.
+After successful powered streaming, the job remains active through
+`M5 → planner-complete barrier → home → G21/G90 → park → motion-complete
+barrier → motor release`. Stream acknowledgements use a cancellation-aware
+completion timeout because GRBL can delay `ok` while its planner drains; the
+short interactive-command timeout is not evidence that a queued job failed.
+Dry jobs and stop, failure, emergency, or disconnect paths do not request this
+completion motion. Controller reset, reconnect, emergency stop, motor release,
+or job failure invalidates the session reference. Simulation does not require a
+hardware homing preflight. Connection status remains non-ready throughout
+protocol detection and GRBL startup cleanup. Emergency stop intentionally
+bypasses ordinary operation serialization.
 
 This is an accidental-command boundary, not functional safety.
 
@@ -308,14 +447,18 @@ This is an accidental-command boundary, not functional safety.
 | Captures, logs, generated G-code | configured `app.data_dir` |
 | Desktop projects | user-selected `.e3laser` paths |
 | Project backups | adjacent `.e3laser.bak` files |
-| Autosaves | `~/.local/share/e3-positioning-system/backups/` by default |
-| Material presets | `~/.local/share/e3-positioning-system/materials.sqlite` by default |
+| Autosaves | OS-native per-user data root under `backups/` by default |
+| Material presets | OS-native per-user data root as `materials.sqlite` by default |
 | Cutting templates | configured application data directory under `templates/` |
 | Active alignment test image | memory only; never persisted automatically |
-| Window layout | Qt `QSettings` |
+| Window geometry, dock topology, and active desktop tabs | Qt `QSettings`; dock topology is versioned independently from compatible geometry/tab fallbacks |
 
-The hard-coded desktop user-data paths are Linux-oriented and should be
-replaced with an OS-native location abstraction before Windows packaging.
+Autosaves, packaged-config fallback data, and material presets share the
+`storage.default_user_data_dir()` platform abstraction. When the native root
+differs from the pre-portability `~/.local/share/e3-positioning-system` root,
+autosave recovery files and the material database are copied forward once
+without deleting or overwriting the legacy source. Migration failure falls back
+to that source so existing operator data does not disappear.
 
 ## Platform boundary
 

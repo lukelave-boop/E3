@@ -12,7 +12,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget tests")
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.desktop.controls import PanelScrollArea
 from laser_aligner.desktop.main_window import LAYER_PALETTE_COLORS, LayerPaletteBar
@@ -195,6 +195,40 @@ def test_layer_panel_inline_state_and_quick_editor_keep_existing_signals(
     panel.remove_button.click()
     assert moves == [(document.layers[1].id, -1)]
     assert removals == [document.layers[1].id]
+
+    panel.close()
+    panel.deleteLater()
+
+
+def test_layer_numeric_editor_emits_once_when_the_value_is_committed(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    document = _document_with_operations()
+    panel = LayerPanel()
+    panel.set_document(document)
+    panel.show()
+    qt_application.processEvents()
+    edits: list[tuple[str, dict[str, object]]] = []
+    panel.layerEdited.connect(
+        lambda layer_id, values: edits.append((layer_id, values))
+    )
+
+    panel.speed_spin.setFocus()
+    panel.speed_spin.lineEdit().selectAll()
+    QtTest.QTest.keyClicks(panel.speed_spin.lineEdit(), "2345.6")
+    qt_application.processEvents()
+
+    assert edits == []
+
+    QtTest.QTest.keyClick(
+        panel.speed_spin,
+        QtCore.Qt.Key.Key_Return,
+    )
+    qt_application.processEvents()
+
+    assert len(edits) == 1
+    assert edits[0][0] == document.active_layer_id
+    assert edits[0][1]["speed_mm_min"] == pytest.approx(2345.6)
 
     panel.close()
     panel.deleteLater()

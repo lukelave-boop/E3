@@ -13,6 +13,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget te
 
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
+from laser_aligner.config import WorkArea
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.panels import TracePanel
 from laser_aligner.desktop.workspace import WorkspaceView
@@ -47,8 +48,14 @@ def test_pick_color_button_drives_canvas_sample_and_updates_real_color(
         runtime=SimpleNamespace(
             context=SimpleNamespace(
                 bed=SimpleNamespace(calibration=object()),
-            )
+            ),
+            settings=SimpleNamespace(
+                machine=SimpleNamespace(
+                    work_area=WorkArea(0.0, 220.0, 0.0, 220.0)
+                )
+            ),
         ),
+        document=SimpleNamespace(work_area=area),
         actions={"select_tool": select_action},
         workspace=workspace,
         trace_panel=panel,
@@ -61,6 +68,10 @@ def test_pick_color_button_drives_canvas_sample_and_updates_real_color(
         E3MainWindow._activate_selection_tool(harness, show_message=show_message)
     )
     harness._clear_template_preview = lambda show_message=False: None
+    harness._work_area_signature = E3MainWindow._work_area_signature
+    harness._require_project_machine_work_area_match = lambda: (
+        E3MainWindow._require_project_machine_work_area_match(harness)
+    )
     panel.pickColorRequested.connect(
         lambda: E3MainWindow._begin_trace_color_pick(harness)
     )

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
+from ..gcode.job_plan import JobPlan
 from ..gcode.preview import parse_gcode_segments
 from ..project import (
     Bounds,
@@ -13,9 +16,10 @@ from ..project import (
     ProjectDocument,
     SceneObject,
     Transform,
+    read_raster_asset_payload,
 )
 from .qt import require_qt
-from .theme import DRAFTING_COLORS
+from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY, DRAFTING_COLORS
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -125,6 +129,14 @@ class WorkspaceScene(QtWidgets.QGraphicsScene):
 
 
 class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
+    _IMAGE_CACHE_LIMIT = 8
+    _IMAGE_CACHE_MAX_BYTES = 64 * 1024 * 1024
+    _IMAGE_PREVIEW_MAX_PIXELS = 4_000_000
+    _project_raster_source_count = 1
+    _image_cache: OrderedDict[
+        tuple[str, str], QtGui.QImage
+    ] = OrderedDict()
+
     def __init__(
         self,
         scene_object: SceneObject,
@@ -137,6 +149,11 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         self._move_callback = move_callback
         self._start_position = QtCore.QPointF()
         self._syncing = False
+        self._raster_image: QtGui.QImage | None = None
+        self._raster_source = ""
+        self._raster_identity_sha: str | None = None
+        self._raster_source_size: tuple[int, int] | None = None
+        self._raster_asset_reference: str | None = None
         self.setFlags(
             QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
             | QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable
@@ -144,6 +161,156 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         )
         self.setAcceptHoverEvents(True)
         self.apply_model(scene_object, layer)
+
+    @classmethod
+    def set_project_raster_source_count(cls, count: int) -> None:
+        cls._project_raster_source_count = max(1, int(count))
+
+    @classmethod
+    def _preview_pixel_budget(cls) -> int:
+        source_bucket = 1 << (cls._project_raster_source_count - 1).bit_length()
+        project_share = (
+            cls._IMAGE_CACHE_MAX_BYTES
+            // source_bucket
+            // 4
+        )
+        return max(1, min(cls._IMAGE_PREVIEW_MAX_PIXELS, project_share))
+
+    @classmethod
+    def _prune_image_cache(cls) -> None:
+        while cls._image_cache and (
+            len(cls._image_cache)
+            > max(cls._IMAGE_CACHE_LIMIT, cls._project_raster_source_count)
+            or sum(item.sizeInBytes() for item in cls._image_cache.values())
+            > cls._IMAGE_CACHE_MAX_BYTES
+        ):
+            cls._image_cache.popitem(last=False)
+
+    @classmethod
+    def rebudget_raster_items(
+        cls,
+        items: list[ObjectGraphicsItem],
+    ) -> None:
+        groups: dict[tuple[str, str], list[ObjectGraphicsItem]] = {}
+        for item in items:
+            identity = item.raster_preview_identity
+            if identity is not None and item._raster_image is not None:
+                groups.setdefault(identity, []).append(item)
+        pixel_budget = cls._preview_pixel_budget()
+        for key, group in groups.items():
+            image = group[0]._raster_image
+            if image is None or image.width() * image.height() <= pixel_budget:
+                cls._image_cache[key] = image
+                continue
+            scale = math.sqrt(pixel_budget / (image.width() * image.height()))
+            resized = image.scaled(
+                max(1, int(math.floor(image.width() * scale))),
+                max(1, int(math.floor(image.height() * scale))),
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+            cls._image_cache[key] = resized
+            for item in group:
+                item._raster_image = resized
+                item.update()
+        cls._prune_image_cache()
+
+    @classmethod
+    def retain_item_cache(
+        cls,
+        items: list[ObjectGraphicsItem],
+    ) -> None:
+        retained: OrderedDict[tuple[str, str], QtGui.QImage] = OrderedDict()
+        for item in items:
+            identity = item.raster_preview_identity
+            if identity is not None and item._raster_image is not None:
+                retained[identity] = item._raster_image
+        cls._image_cache = retained
+        cls._prune_image_cache()
+
+    @classmethod
+    def _load_raster_snapshot(
+        cls,
+        asset: Any,
+        *,
+        use_cache: bool = True,
+    ) -> tuple[
+        str,
+        QtGui.QImage | None,
+        str | None,
+        tuple[int, int] | None,
+    ]:
+        source = str(asset or "").strip()
+        if not source:
+            return "", None, None, None
+        try:
+            payload = read_raster_asset_payload(source)
+        except ValueError:
+            return source, None, None, None
+        identity = payload.identity
+        metadata = payload.metadata
+        resolved = identity.path
+        source_size_px = (identity.width, identity.height)
+        key = (resolved, identity.sha256)
+        cached = cls._image_cache.get(key) if use_cache else None
+        if cached is not None:
+            cls._image_cache.move_to_end(key)
+            return resolved, cached, identity.sha256, source_size_px
+
+        encoded = QtCore.QByteArray(payload.encoded)
+        buffer = QtCore.QBuffer()
+        buffer.setData(encoded)
+        if not buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly):
+            return resolved, None, None, source_size_px
+        reader = QtGui.QImageReader(buffer)
+        reader.setAutoTransform(True)
+        source_size = QtCore.QSize(metadata.raw_width, metadata.raw_height)
+        source_pixels = identity.width * identity.height
+        preview_pixel_budget = cls._preview_pixel_budget()
+        if source_pixels > preview_pixel_budget:
+            scale = math.sqrt(preview_pixel_budget / source_pixels)
+            reader.setScaledSize(
+                QtCore.QSize(
+                    max(1, int(math.floor(source_size.width() * scale))),
+                    max(1, int(math.floor(source_size.height() * scale))),
+                )
+            )
+        image = reader.read()
+        if image.isNull():
+            return resolved, None, None, source_size_px
+        image = image.convertToFormat(
+            QtGui.QImage.Format.Format_ARGB32_Premultiplied
+        )
+        cls._image_cache[key] = image
+        cls._image_cache.move_to_end(key)
+        cls._prune_image_cache()
+        return resolved, image, identity.sha256, source_size_px
+
+    @classmethod
+    def _load_raster_image(cls, asset: Any) -> tuple[str, QtGui.QImage | None]:
+        source, image, _identity_sha, _source_size = cls._load_raster_snapshot(
+            asset
+        )
+        return source, image
+
+    @property
+    def raster_preview_identity(self) -> tuple[str, str] | None:
+        if not self._raster_source or self._raster_identity_sha is None:
+            return None
+        return self._raster_source, self._raster_identity_sha
+
+    def refresh_raster_snapshot(self) -> bool:
+        reference = self._raster_asset_reference
+        if reference is None:
+            return False
+        (
+            self._raster_source,
+            self._raster_image,
+            self._raster_identity_sha,
+            self._raster_source_size,
+        ) = self._load_raster_snapshot(reference)
+        self.update()
+        return self._raster_image is not None
 
     @staticmethod
     def _path_for_object(
@@ -236,13 +403,35 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
     ) -> None:
         self._syncing = True
         try:
+            if scene_object.kind == ObjectKind.IMAGE:
+                asset_reference = str(
+                    scene_object.geometry.get("asset") or ""
+                ).strip()
+                if asset_reference != self._raster_asset_reference:
+                    (
+                        self._raster_source,
+                        self._raster_image,
+                        self._raster_identity_sha,
+                        self._raster_source_size,
+                    ) = (
+                        self._load_raster_snapshot(asset_reference)
+                    )
+                    self._raster_asset_reference = asset_reference
+            else:
+                self._raster_source = ""
+                self._raster_image = None
+                self._raster_identity_sha = None
+                self._raster_source_size = None
+                self._raster_asset_reference = None
             self.setPath(self._path_for_object(scene_object, transform))
             color = QtGui.QColor(layer.color)
             pen = QtGui.QPen(color)
             pen.setWidthF(0.35)
             pen.setCosmetic(True)
             self.setPen(pen)
-            if layer.mode in {LayerMode.FILL, LayerMode.RASTER}:
+            if scene_object.kind == ObjectKind.IMAGE:
+                self.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            elif layer.mode in {LayerMode.FILL, LayerMode.RASTER}:
                 fill = QtGui.QColor(color)
                 fill.setAlpha(65 if layer.mode == LayerMode.FILL else 28)
                 self.setBrush(fill)
@@ -260,9 +449,32 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 f"{scene_object.name}\n"
                 f"X {transform.x_mm:.2f}  Y {transform.y_mm:.2f}\n"
                 f"{transform.width_mm:.2f} × {transform.height_mm:.2f} mm"
+                + (
+                    f"\n{self._raster_source}"
+                    if self._raster_image is not None
+                    else "\nRaster source is missing or unreadable"
+                    if scene_object.kind == ObjectKind.IMAGE
+                    else ""
+                )
             )
         finally:
             self._syncing = False
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: QtWidgets.QWidget | None = None,
+    ) -> None:
+        if self._raster_image is not None and not self._raster_image.isNull():
+            painter.save()
+            painter.setRenderHint(
+                QtGui.QPainter.RenderHint.SmoothPixmapTransform,
+                True,
+            )
+            painter.drawImage(self.path().boundingRect(), self._raster_image)
+            painter.restore()
+        super().paint(painter, option, widget)
 
     def mousePressEvent(self, event: QtWidgets.QGraphicsSceneMouseEvent) -> None:
         self._start_position = self.pos()
@@ -284,7 +496,7 @@ class _ObjectResizeHandle(QtWidgets.QGraphicsEllipseItem):
 
     def __init__(
         self,
-        owner: "_ObjectTransformOverlay",
+        owner: _ObjectTransformOverlay,
         corner: str,
         cursor: QtCore.Qt.CursorShape,
     ) -> None:
@@ -333,7 +545,7 @@ class _ObjectRotationHandle(QtWidgets.QGraphicsEllipseItem):
 
     _RADIUS_PX = 6.5
 
-    def __init__(self, owner: "_ObjectTransformOverlay") -> None:
+    def __init__(self, owner: _ObjectTransformOverlay) -> None:
         radius = self._RADIUS_PX
         super().__init__(
             QtCore.QRectF(-radius, -radius, radius * 2.0, radius * 2.0),
@@ -388,7 +600,7 @@ class _ObjectTransformOverlay(QtWidgets.QGraphicsRectItem):
 
     def __init__(
         self,
-        view: "WorkspaceView",
+        view: WorkspaceView,
         object_id: str,
         transform: Transform,
     ) -> None:
@@ -604,7 +816,7 @@ class _TemplatePreviewDragSurface(QtWidgets.QGraphicsPathItem):
     def __init__(
         self,
         path: QtGui.QPainterPath,
-        owner: "_TemplatePreviewGraphicsItem",
+        owner: _TemplatePreviewGraphicsItem,
     ) -> None:
         super().__init__(path, owner)
         self._owner = owner
@@ -641,7 +853,7 @@ class _TemplateRotationHandle(QtWidgets.QGraphicsEllipseItem):
 
     _RADIUS_PX = 7.0
 
-    def __init__(self, owner: "_TemplatePreviewGraphicsItem") -> None:
+    def __init__(self, owner: _TemplatePreviewGraphicsItem) -> None:
         radius = self._RADIUS_PX
         super().__init__(QtCore.QRectF(-radius, -radius, radius * 2.0, radius * 2.0), owner)
         self._owner = owner
@@ -866,7 +1078,7 @@ class _TemplatePreviewGraphicsItem(QtWidgets.QGraphicsItemGroup):
 class RulerWidget(QtWidgets.QWidget):
     def __init__(
         self,
-        view: "WorkspaceView",
+        view: WorkspaceView,
         orientation: QtCore.Qt.Orientation,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
@@ -942,7 +1154,7 @@ class RulerWidget(QtWidgets.QWidget):
 class WorkspaceFrame(QtWidgets.QWidget):
     def __init__(
         self,
-        view: "WorkspaceView",
+        view: WorkspaceView,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -968,12 +1180,12 @@ class _WorkspaceOverlayLegend(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget) -> None:
         super().__init__(parent)
         self._entries: list[tuple[str, str, QtCore.Qt.PenStyle]] = []
+        self._drag_offset: QtCore.QPoint | None = None
+        self._preferred_position: QtCore.QPoint | None = None
+        self._user_positioned = False
         self.setObjectName("workspaceOverlayLegend")
         self.setAccessibleName("Canvas overlay key")
-        self.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents,
-            True,
-        )
+        self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
         self.hide()
 
     @property
@@ -985,10 +1197,67 @@ class _WorkspaceOverlayLegend(QtWidgets.QWidget):
         entries: list[tuple[str, str, QtCore.Qt.PenStyle]],
     ) -> None:
         self._entries = list(entries)
-        self.setToolTip("\n".join(label for label, _, _ in self._entries))
+        labels = "\n".join(label for label, _, _ in self._entries)
+        self.setToolTip(f"Drag to reposition.\n{labels}".rstrip())
         self.resize(self.sizeHint())
         self.setVisible(bool(self._entries))
         self.update()
+
+    def position_in_parent(self, default: QtCore.QPoint) -> None:
+        """Keep a dragged key visible, or place an untouched key at its default."""
+
+        target = (
+            self._preferred_position
+            if self._user_positioned and self._preferred_position is not None
+            else default
+        )
+        bounded = self._bounded_position(target)
+        self._preferred_position = bounded if self._user_positioned else None
+        self.move(bounded)
+
+    def _bounded_position(self, target: QtCore.QPoint) -> QtCore.QPoint:
+        parent = self.parentWidget()
+        if parent is None:
+            return target
+        return QtCore.QPoint(
+            max(0, min(target.x(), parent.width() - self.width())),
+            max(0, min(target.y(), parent.height() - self.height())),
+        )
+
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+            self._drag_offset = event.position().toPoint()
+            self.setCursor(QtCore.Qt.CursorShape.ClosedHandCursor)
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if (
+            self._drag_offset is not None
+            and event.buttons() & QtCore.Qt.MouseButton.LeftButton
+        ):
+            parent = self.parentWidget()
+            if parent is not None:
+                pointer = parent.mapFromGlobal(event.globalPosition().toPoint())
+                target = self._bounded_position(pointer - self._drag_offset)
+                self._preferred_position = target
+                self.move(target)
+                self._user_positioned = True
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        if (
+            event.button() == QtCore.Qt.MouseButton.LeftButton
+            and self._drag_offset is not None
+        ):
+            self._drag_offset = None
+            self.setCursor(QtCore.Qt.CursorShape.OpenHandCursor)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
     def sizeHint(self) -> QtCore.QSize:
         metrics = self.fontMetrics()
@@ -1091,10 +1360,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         # vision results instead of introducing a half-pixel right/down shift.
         self._camera_item.setOffset(-0.5, -0.5)
         self._camera_item.setZValue(-500.0)
-        # Keep the drafting grid dominant by default. Operators can raise the
-        # corrected camera image from the Camera panel whenever photographic
-        # detail is needed for tracing or alignment.
-        self._camera_item.setOpacity(0.18)
+        self._camera_item.setOpacity(DEFAULT_CAMERA_OVERLAY_OPACITY)
         self._camera_item.setVisible(False)
         self.workspace_scene.addItem(self._camera_item)
         self._test_frame_badge = QtWidgets.QLabel("TEST IMAGE · FROZEN", self.viewport())
@@ -1111,7 +1377,25 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             str,
             list[tuple[str, str, QtCore.Qt.PenStyle]],
         ] = {"trace": [], "template": [], "toolpath": []}
-        self._toolpath_items: list[QtWidgets.QGraphicsLineItem] = []
+        self._toolpath_items: list[QtWidgets.QGraphicsPathItem] = []
+        self._toolpath_build_timer = QtCore.QTimer(self)
+        self._toolpath_build_timer.setInterval(0)
+        self._toolpath_build_timer.timeout.connect(self._toolpath_build_slice)
+        self._toolpath_build_moves: tuple[Any, ...] = ()
+        self._toolpath_build_index = 0
+        self._toolpath_build_paths: dict[str, QtGui.QPainterPath] = {}
+        self._toolpath_build_roles: set[str] = set()
+        self._toolpath_build_progress: Callable[[int, int], None] | None = None
+        self._toolpath_build_finished: Callable[[bool], None] | None = None
+        self._toolpath_build_failed: Callable[[str], None] | None = None
+        self._raster_restore_timer = QtCore.QTimer(self)
+        self._raster_restore_timer.setInterval(0)
+        self._raster_restore_timer.timeout.connect(
+            self._raster_restore_slice
+        )
+        self._raster_restore_queue: list[
+            tuple[str, tuple[str, ...], int]
+        ] = []
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
         self._template_items: list[QtWidgets.QGraphicsItem] = []
         self._template_preview_item: _TemplatePreviewGraphicsItem | None = None
@@ -1207,16 +1491,41 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     def zoom_out(self) -> None:
         self.zoom_by(1.0 / 1.18)
 
-    def set_camera_image(self, image: QtGui.QImage | None) -> None:
+    def set_camera_image(
+        self,
+        image: QtGui.QImage | None,
+        *,
+        pixels_per_mm: float | None = None,
+    ) -> None:
         if image is None or image.isNull():
             self._camera_item.setVisible(False)
             return
         pixmap = QtGui.QPixmap.fromImage(image)
         area = self.workspace_scene.work_area
+        transform = QtGui.QTransform()
+        if pixels_per_mm is None:
+            scale_x = area.width / pixmap.width()
+            scale_y = area.height / pixmap.height()
+        else:
+            pixels_per_mm = float(pixels_per_mm)
+            if not math.isfinite(pixels_per_mm) or pixels_per_mm <= 0.0:
+                raise ValueError("Camera pixels_per_mm must be a positive finite value")
+            expected_width = max(1, int(round(area.width * pixels_per_mm)))
+            expected_height = max(1, int(round(area.height * pixels_per_mm)))
+            if (pixmap.width(), pixmap.height()) != (
+                expected_width,
+                expected_height,
+            ):
+                raise ValueError(
+                    "Corrected camera raster dimensions do not match the work "
+                    f"area and pixels_per_mm: received {pixmap.width()} x "
+                    f"{pixmap.height()}, expected {expected_width} x "
+                    f"{expected_height}"
+                )
+            scale_x = scale_y = 1.0 / pixels_per_mm
+        transform.scale(scale_x, scale_y)
         self._camera_item.setPixmap(pixmap)
         self._camera_item.setPos(area.x_min, -area.y_max)
-        transform = QtGui.QTransform()
-        transform.scale(area.width / pixmap.width(), area.height / pixmap.height())
         self._camera_item.setTransform(transform)
         self._camera_item.setVisible(True)
 
@@ -1232,13 +1541,14 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._test_frame_badge.raise_()
 
     def _position_test_frame_badge(self) -> None:
-        self._test_frame_badge.move(12, 12)
+        badge = self._test_frame_badge
+        badge.move(max(12, self.viewport().width() - badge.width() - 12), 12)
 
     def _position_overlay_legend(self) -> None:
         if not hasattr(self, "_overlay_legend"):
             return
         legend = self._overlay_legend
-        legend.move(max(12, self.viewport().width() - legend.width() - 12), 12)
+        legend.position_in_parent(QtCore.QPoint(12, 12))
         legend.raise_()
 
     def _refresh_overlay_legend(self) -> None:
@@ -1262,6 +1572,13 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         # still in Fit Work Area mode; manual zooming or panning opts out.
         if getattr(self, "_fit_to_work_area", False):
             QtCore.QTimer.singleShot(0, self._refit_after_resize)
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:
+        """Keep viewport overlays fixed when QGraphicsView scrolls its children."""
+
+        super().scrollContentsBy(dx, dy)
+        self._position_test_frame_badge()
+        self._position_overlay_legend()
 
     def _refit_after_resize(self) -> None:
         if self._fit_to_work_area and self.viewport().width() > 0:
@@ -1438,12 +1755,36 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self,
         detections: list[dict[str, Any]],
         selected_ids: list[str] | set[str] | None = None,
+        support_reference: dict[str, Any] | None = None,
     ) -> None:
         self.clear_trace_preview()
         selected = set(selected_ids or [])
+        has_support_boundary = False
+        support = support_reference or {}
+        support_corners = support.get("corners_machine_mm") or []
+        if bool(support.get("bed_map_current")) and len(support_corners) >= 3:
+            path = QtGui.QPainterPath()
+            first = self.workspace_scene.machine_to_scene(*support_corners[0])
+            path.moveTo(first)
+            for point in support_corners[1:]:
+                path.lineTo(self.workspace_scene.machine_to_scene(*point))
+            path.closeSubpath()
+            support_item = QtWidgets.QGraphicsPathItem(path)
+            pen = QtGui.QPen(QtGui.QColor("#CD5FDC"))
+            pen.setWidthF(1.4)
+            pen.setCosmetic(True)
+            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            support_item.setPen(pen)
+            support_item.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            support_item.setZValue(259.0)
+            support_item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            self.workspace_scene.addItem(support_item)
+            self._trace_items.append(support_item)
+            has_support_boundary = True
         has_selected_direct = False
         has_inferred = False
         has_unselected_direct = False
+        has_outside = False
         for detection in detections:
             points = (
                 detection.get("vector_contour_mm")
@@ -1462,12 +1803,21 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             item = QtWidgets.QGraphicsPathItem(path)
             is_selected = detection.get("id") in selected
             is_inferred = detection.get("source") == "inferred"
-            has_selected_direct = has_selected_direct or (is_selected and not is_inferred)
-            has_inferred = has_inferred or is_inferred
-            has_unselected_direct = has_unselected_direct or (
-                not is_selected and not is_inferred
+            diagnostics = detection.get("diagnostics") or {}
+            is_outside = not bool(diagnostics.get("within_work_area", True))
+            is_cropped = bool(diagnostics.get("touches_image_edge", False))
+            is_flagged = is_outside or is_cropped
+            has_outside = has_outside or is_flagged
+            has_selected_direct = has_selected_direct or (
+                is_selected and not is_inferred and not is_flagged
             )
-            if is_selected and not is_inferred:
+            has_inferred = has_inferred or (is_inferred and not is_flagged)
+            has_unselected_direct = has_unselected_direct or (
+                not is_selected and not is_inferred and not is_flagged
+            )
+            if is_flagged:
+                color = QtGui.QColor("#E06666")
+            elif is_selected and not is_inferred:
                 color = QtGui.QColor("#4FE36F")
             elif is_selected and is_inferred:
                 color = QtGui.QColor("#E7B55C")
@@ -1478,7 +1828,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             pen = QtGui.QPen(color)
             pen.setWidthF(1.4 if is_selected else 1.0)
             pen.setCosmetic(True)
-            if is_inferred:
+            if is_flagged:
+                pen.setStyle(QtCore.Qt.PenStyle.DashDotLine)
+            elif is_inferred:
                 pen.setStyle(QtCore.Qt.PenStyle.DashLine)
             item.setPen(pen)
             fill = QtGui.QColor(color)
@@ -1505,6 +1857,14 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 self._trace_items.append(label)
 
         trace_entries: list[tuple[str, str, QtCore.Qt.PenStyle]] = []
+        if has_support_boundary:
+            trace_entries.append(
+                (
+                    "Approx. honeycomb reference (magenta)",
+                    "#CD5FDC",
+                    QtCore.Qt.PenStyle.DashLine,
+                )
+            )
         if has_selected_direct:
             trace_entries.append(
                 ("Selected trace (green)", "#4FE36F", QtCore.Qt.PenStyle.SolidLine)
@@ -1516,6 +1876,14 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         if has_unselected_direct:
             trace_entries.append(
                 ("Unselected detection (gray)", "#8998A3", QtCore.Qt.PenStyle.SolidLine)
+            )
+        if has_outside:
+            trace_entries.append(
+                (
+                    "Cropped / outside output (red)",
+                    "#E06666",
+                    QtCore.Qt.PenStyle.DashDotLine,
+                )
             )
         self._overlay_entries["trace"] = trace_entries
         self._refresh_overlay_legend()
@@ -1546,7 +1914,9 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
         self.clear_template_preview()
         observed_color = QtGui.QColor("#E7B55C")
+        excluded_color = QtGui.QColor("#E06666")
         has_observed = False
+        has_excluded = False
         for detection in detections or []:
             # Alignment review should show the same proposed fitted boundary
             # that Trace shows. The camera pixels remain visible underneath;
@@ -1566,12 +1936,21 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 path.lineTo(self.workspace_scene.machine_to_scene(*point))
             path.closeSubpath()
             item = QtWidgets.QGraphicsPathItem(path)
-            pen = QtGui.QPen(observed_color)
+            diagnostics = detection.get("diagnostics") or {}
+            is_outside = not bool(diagnostics.get("within_work_area", True))
+            is_cropped = bool(diagnostics.get("touches_image_edge", False))
+            is_excluded = is_outside or is_cropped
+            color = excluded_color if is_excluded else observed_color
+            pen = QtGui.QPen(color)
             pen.setWidthF(1.5)
             pen.setCosmetic(True)
-            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+            pen.setStyle(
+                QtCore.Qt.PenStyle.DashDotLine
+                if is_excluded
+                else QtCore.Qt.PenStyle.DashLine
+            )
             item.setPen(pen)
-            fill = QtGui.QColor(observed_color)
+            fill = QtGui.QColor(color)
             fill.setAlpha(8)
             item.setBrush(fill)
             # Draw camera evidence over the exact cut line. When both agree,
@@ -1579,15 +1958,34 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             # underneath it; any disagreement remains geometrically honest.
             item.setZValue(282.0)
             item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
-            item.setToolTip("Observed camera feature")
+            if is_excluded:
+                reasons = []
+                if is_outside:
+                    reasons.append("outside the guarded output area")
+                if is_cropped:
+                    reasons.append("cropped at the corrected image boundary")
+                item.setToolTip(
+                    "Excluded camera feature: " + " and ".join(reasons)
+                )
+            else:
+                item.setToolTip("Observed camera feature")
             self.workspace_scene.addItem(item)
             self._template_items.append(item)
-            has_observed = True
+            has_excluded = has_excluded or is_excluded
+            has_observed = has_observed or not is_excluded
 
         template_entries: list[tuple[str, str, QtCore.Qt.PenStyle]] = []
         if has_observed:
             template_entries.append(
                 ("Camera edge (amber)", "#E7B55C", QtCore.Qt.PenStyle.DashLine)
+            )
+        if has_excluded:
+            template_entries.append(
+                (
+                    "Cropped / outside output (red)",
+                    "#E06666",
+                    QtCore.Qt.PenStyle.DashDotLine,
+                )
             )
         if not objects:
             self._overlay_entries["template"] = template_entries
@@ -1625,34 +2023,193 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._template_preview_item.set_view_scale(scale)
 
     def clear_toolpath_preview(self) -> None:
+        self._cancel_toolpath_build(notify=True)
         for item in self._toolpath_items:
             self.workspace_scene.removeItem(item)
         self._toolpath_items.clear()
         self._overlay_entries["toolpath"] = []
         self._refresh_overlay_legend()
 
+    def _cancel_toolpath_build(self, *, notify: bool) -> None:
+        active = self._toolpath_build_timer.isActive()
+        self._toolpath_build_timer.stop()
+        callback = self._toolpath_build_finished
+        self._toolpath_build_moves = ()
+        self._toolpath_build_paths = {}
+        self._toolpath_build_roles = set()
+        self._toolpath_build_progress = None
+        self._toolpath_build_finished = None
+        self._toolpath_build_failed = None
+        self._toolpath_build_index = 0
+        if active and notify and callback is not None:
+            callback(False)
+
+    def start_toolpath_preview(
+        self,
+        plan: JobPlan,
+        *,
+        on_progress: Callable[[int, int], None] | None = None,
+        on_finished: Callable[[bool], None] | None = None,
+        on_failed: Callable[[str], None] | None = None,
+    ) -> None:
+        """Build the workspace overlay in bounded GUI-thread slices."""
+
+        self.clear_toolpath_preview()
+        self._toolpath_build_moves = tuple(plan.moves)
+        self._toolpath_build_paths = {
+            "rapid": QtGui.QPainterPath(),
+            "powered": QtGui.QPainterPath(),
+            "unpowered": QtGui.QPainterPath(),
+        }
+        self._toolpath_build_roles = set()
+        self._toolpath_build_progress = on_progress
+        self._toolpath_build_finished = on_finished
+        self._toolpath_build_failed = on_failed
+        if not self._toolpath_build_moves:
+            self._finish_toolpath_build()
+            return
+        self._toolpath_build_timer.start()
+
+    @QtCore.Slot()
+    def _toolpath_build_slice(self) -> None:
+        try:
+            moves = self._toolpath_build_moves
+            if not moves:
+                self._finish_toolpath_build()
+                return
+            timer = QtCore.QElapsedTimer()
+            timer.start()
+            start = self._toolpath_build_index
+            count = start
+            while count < len(moves) and count - start < 1_500:
+                move = moves[count]
+                role = (
+                    "rapid"
+                    if move.rapid
+                    else "powered"
+                    if move.laser_on
+                    else "unpowered"
+                )
+                path = self._toolpath_build_paths[role]
+                start_point = self.workspace_scene.machine_to_scene(
+                    move.start_x,
+                    move.start_y,
+                )
+                end_point = self.workspace_scene.machine_to_scene(
+                    move.end_x,
+                    move.end_y,
+                )
+                path.moveTo(start_point)
+                path.lineTo(end_point)
+                self._toolpath_build_roles.add(role)
+                count += 1
+                if timer.elapsed() >= 8:
+                    break
+            self._toolpath_build_index = count
+            if self._toolpath_build_progress is not None:
+                self._toolpath_build_progress(count, len(moves))
+            if count >= len(moves):
+                self._finish_toolpath_build()
+        except Exception as exc:
+            self._fail_toolpath_build(str(exc))
+
+    def _finish_toolpath_build(self) -> None:
+        self._toolpath_build_timer.stop()
+        paths = self._toolpath_build_paths
+        roles = self._toolpath_build_roles
+        callback = self._toolpath_build_finished
+        failed_callback = self._toolpath_build_failed
+        self._toolpath_build_moves = ()
+        self._toolpath_build_paths = {}
+        self._toolpath_build_roles = set()
+        self._toolpath_build_progress = None
+        self._toolpath_build_finished = None
+        self._toolpath_build_failed = None
+        self._toolpath_build_index = 0
+        try:
+            self._commit_toolpath_paths(paths, roles)
+        except Exception as exc:
+            self.clear_toolpath_preview()
+            if failed_callback is not None:
+                failed_callback(str(exc))
+            return
+        if callback is not None:
+            callback(True)
+
+    def _fail_toolpath_build(self, message: str) -> None:
+        self._toolpath_build_timer.stop()
+        callback = self._toolpath_build_failed
+        self._toolpath_build_moves = ()
+        self._toolpath_build_paths = {}
+        self._toolpath_build_roles = set()
+        self._toolpath_build_progress = None
+        self._toolpath_build_finished = None
+        self._toolpath_build_failed = None
+        self._toolpath_build_index = 0
+        for item in self._toolpath_items:
+            self.workspace_scene.removeItem(item)
+        self._toolpath_items.clear()
+        if callback is not None:
+            callback(str(message))
+
     def set_toolpath_preview(self, gcode: str) -> None:
         self.clear_toolpath_preview()
-        has_rapid = False
-        has_powered = False
-        has_unpowered = False
+        paths = {
+            "rapid": QtGui.QPainterPath(),
+            "powered": QtGui.QPainterPath(),
+            "unpowered": QtGui.QPainterPath(),
+        }
+        roles: set[str] = set()
         for segment in parse_gcode_segments(gcode):
             start = self.workspace_scene.machine_to_scene(segment.start_x, segment.start_y)
             end = self.workspace_scene.machine_to_scene(segment.end_x, segment.end_y)
-            item = QtWidgets.QGraphicsLineItem(QtCore.QLineF(start, end))
             if segment.rapid:
-                has_rapid = True
-                pen = QtGui.QPen(QtGui.QColor("#5CA9E7"))
-                pen.setStyle(QtCore.Qt.PenStyle.DashLine)
-                pen.setWidthF(0.30)
+                role = "rapid"
             elif segment.laser_on:
-                has_powered = True
-                pen = QtGui.QPen(QtGui.QColor("#E35D6A"))
-                pen.setWidthF(0.50)
+                role = "powered"
             else:
-                has_unpowered = True
-                pen = QtGui.QPen(QtGui.QColor("#E7B55C"))
-                pen.setWidthF(0.35)
+                role = "unpowered"
+            roles.add(role)
+            path = paths[role]
+            path.moveTo(start)
+            path.lineTo(end)
+
+        self._commit_toolpath_paths(paths, roles)
+
+    def _commit_toolpath_paths(
+        self,
+        paths: dict[str, QtGui.QPainterPath],
+        roles: set[str],
+    ) -> None:
+
+        styles = (
+            (
+                "rapid",
+                "#5CA9E7",
+                0.30,
+                QtCore.Qt.PenStyle.DashLine,
+            ),
+            (
+                "powered",
+                "#E35D6A",
+                0.50,
+                QtCore.Qt.PenStyle.SolidLine,
+            ),
+            (
+                "unpowered",
+                "#E7B55C",
+                0.35,
+                QtCore.Qt.PenStyle.SolidLine,
+            ),
+        )
+        for key, color, width, style in styles:
+            path = paths[key]
+            if path.isEmpty():
+                continue
+            item = QtWidgets.QGraphicsPathItem(path)
+            pen = QtGui.QPen(QtGui.QColor(color))
+            pen.setStyle(style)
+            pen.setWidthF(width)
             pen.setCosmetic(True)
             item.setPen(pen)
             item.setZValue(300.0)
@@ -1660,15 +2217,15 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.workspace_scene.addItem(item)
             self._toolpath_items.append(item)
         toolpath_entries: list[tuple[str, str, QtCore.Qt.PenStyle]] = []
-        if has_rapid:
+        if "rapid" in roles:
             toolpath_entries.append(
                 ("Rapid travel", "#5CA9E7", QtCore.Qt.PenStyle.DashLine)
             )
-        if has_powered:
+        if "powered" in roles:
             toolpath_entries.append(
                 ("Powered toolpath", "#E35D6A", QtCore.Qt.PenStyle.SolidLine)
             )
-        if has_unpowered:
+        if "unpowered" in roles:
             toolpath_entries.append(
                 ("Laser-off move", "#E7B55C", QtCore.Qt.PenStyle.SolidLine)
             )
@@ -1679,11 +2236,43 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self.cancel_shape_draft()
         selected = set(self.selected_object_ids())
         self._clear_object_transform_overlay()
+        reuse_items = self._document is document
         self._syncing_document = True
         try:
-            for item in self._items_by_id.values():
-                self.workspace_scene.removeItem(item)
-            self._items_by_id.clear()
+            raster_sources = {
+                str(item.geometry.get("asset", "")).strip()
+                for item in document.objects
+                if item.kind == ObjectKind.IMAGE
+                and str(item.geometry.get("asset", "")).strip()
+            }
+            previous_pixel_budget = getattr(
+                self,
+                "_raster_preview_pixel_budget",
+                ObjectGraphicsItem._preview_pixel_budget(),
+            )
+            ObjectGraphicsItem.set_project_raster_source_count(
+                len(raster_sources)
+            )
+            current_pixel_budget = ObjectGraphicsItem._preview_pixel_budget()
+            self._raster_preview_pixel_budget = current_pixel_budget
+            if not reuse_items or current_pixel_budget < previous_pixel_budget:
+                self._cancel_raster_preview_quality_restore()
+            desired_ids = {item.id for item in document.objects}
+            if reuse_items:
+                for object_id in set(self._items_by_id) - desired_ids:
+                    removed = self._items_by_id.pop(object_id)
+                    self.workspace_scene.removeItem(removed)
+                retained_items = list(self._items_by_id.values())
+                ObjectGraphicsItem.rebudget_raster_items(retained_items)
+                ObjectGraphicsItem.retain_item_cache(retained_items)
+                existing_items = dict(self._items_by_id)
+            else:
+                for item in self._items_by_id.values():
+                    self.workspace_scene.removeItem(item)
+                self._items_by_id = {}
+                ObjectGraphicsItem.retain_item_cache([])
+                existing_items = {}
+            next_items: dict[str, ObjectGraphicsItem] = {}
             self._document = document
             area_changed = document.work_area != self.workspace_scene.work_area
             if area_changed:
@@ -1691,19 +2280,114 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             layers = {layer.id: layer for layer in document.layers}
             for z_index, scene_object in enumerate(document.objects):
                 layer = layers[scene_object.layer_id]
-                item = ObjectGraphicsItem(
-                    scene_object,
-                    layer,
-                    move_callback=self._item_move_finished,
-                )
+                item = existing_items.pop(scene_object.id, None)
+                if item is None:
+                    item = ObjectGraphicsItem(
+                        scene_object,
+                        layer,
+                        move_callback=self._item_move_finished,
+                    )
+                    self.workspace_scene.addItem(item)
+                else:
+                    item.apply_model(scene_object, layer)
                 item.setZValue(float(z_index))
-                self.workspace_scene.addItem(item)
-                self._items_by_id[scene_object.id] = item
+                next_items[scene_object.id] = item
                 if scene_object.id in selected:
                     item.setSelected(True)
+            for item in existing_items.values():
+                self.workspace_scene.removeItem(item)
+            self._items_by_id = next_items
+            ObjectGraphicsItem.retain_item_cache(list(next_items.values()))
+            if reuse_items and current_pixel_budget > previous_pixel_budget:
+                self._schedule_raster_preview_quality_restore(
+                    list(next_items.values()),
+                    current_pixel_budget,
+                )
         finally:
             self._syncing_document = False
         self._update_object_transform_overlay()
+
+    def _cancel_raster_preview_quality_restore(self) -> None:
+        self._raster_restore_timer.stop()
+        self._raster_restore_queue = []
+
+    def _schedule_raster_preview_quality_restore(
+        self,
+        items: list[ObjectGraphicsItem],
+        pixel_budget: int,
+    ) -> None:
+        self._cancel_raster_preview_quality_restore()
+        groups: dict[str, list[str]] = {}
+        for item in items:
+            source_size = item._raster_source_size
+            image = item._raster_image
+            reference = item._raster_asset_reference
+            if source_size is None or image is None or not reference:
+                continue
+            desired_pixels = min(
+                source_size[0] * source_size[1],
+                pixel_budget,
+            )
+            if image.width() * image.height() >= desired_pixels:
+                continue
+            groups.setdefault(reference, []).append(item.object_id)
+        self._raster_restore_queue = [
+            (reference, tuple(object_ids), pixel_budget)
+            for reference, object_ids in groups.items()
+        ]
+        if self._raster_restore_queue:
+            self._raster_restore_timer.start()
+
+    def _raster_restore_slice(self) -> None:
+        if not self._raster_restore_queue:
+            self._raster_restore_timer.stop()
+            return
+        reference, object_ids, expected_budget = self._raster_restore_queue.pop(0)
+        if (
+            expected_budget != self._raster_preview_pixel_budget
+            or expected_budget != ObjectGraphicsItem._preview_pixel_budget()
+        ):
+            self._cancel_raster_preview_quality_restore()
+            return
+        group = [
+            item
+            for object_id in object_ids
+            if (item := self._items_by_id.get(object_id)) is not None
+            and item._raster_asset_reference == reference
+        ]
+        if group:
+            (
+                source,
+                image,
+                sha256,
+                source_size,
+            ) = ObjectGraphicsItem._load_raster_snapshot(
+                reference,
+                use_cache=False,
+            )
+            if (
+                image is not None
+                and sha256 is not None
+                and source_size is not None
+                and expected_budget == self._raster_preview_pixel_budget
+            ):
+                for item in group:
+                    if self._items_by_id.get(item.object_id) is not item:
+                        continue
+                    if item._raster_asset_reference != reference:
+                        continue
+                    if item._raster_identity_sha != sha256:
+                        continue
+                    item._raster_source = source
+                    item._raster_image = image
+                    item._raster_identity_sha = sha256
+                    item._raster_source_size = source_size
+                    item.update()
+                ObjectGraphicsItem.retain_item_cache(
+                    list(self._items_by_id.values())
+                )
+        if not self._raster_restore_queue:
+            self._raster_restore_timer.stop()
 
     def refresh_object(self, object_id: str) -> None:
         if self._document is None:
@@ -1720,6 +2404,65 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             and self._object_transform_overlay.object_id == object_id
         ):
             self._object_transform_overlay.apply_transform(scene_object.transform)
+
+    def raster_preview_mismatches(
+        self,
+        identities: tuple[Any, ...],
+    ) -> tuple[str, ...]:
+        displayed: dict[str, set[str]] = {}
+        for item in self._items_by_id.values():
+            identity = item.raster_preview_identity
+            if identity is None:
+                continue
+            path, sha256 = identity
+            displayed.setdefault(path, set()).add(sha256)
+        expected: dict[str, set[str]] = {}
+        for identity in identities:
+            expected.setdefault(str(identity.path), set()).add(
+                str(identity.sha256)
+            )
+        return tuple(
+            sorted(
+                {
+                    path
+                    for path, hashes in expected.items()
+                    if displayed.get(path, set()) != hashes
+                }
+            )
+        )
+
+    def refresh_raster_previews(self, paths: tuple[str, ...]) -> bool:
+        pending = set(paths)
+        by_path: dict[str, list[ObjectGraphicsItem]] = {}
+        for item in self._items_by_id.values():
+            identity = item.raster_preview_identity
+            candidate = (
+                identity[0]
+                if identity is not None
+                else str(
+                    Path(item._raster_asset_reference or "")
+                    .expanduser()
+                    .absolute()
+                )
+            )
+            if candidate in pending:
+                by_path.setdefault(candidate, []).append(item)
+        refreshed = set()
+        for path, items in by_path.items():
+            primary = items[0]
+            if not primary.refresh_raster_snapshot():
+                continue
+            refreshed.add(path)
+            for item in items[1:]:
+                item._raster_source = primary._raster_source
+                item._raster_image = primary._raster_image
+                item._raster_identity_sha = primary._raster_identity_sha
+                item._raster_source_size = primary._raster_source_size
+                item.update()
+        ObjectGraphicsItem.retain_item_cache(
+            list(self._items_by_id.values())
+        )
+        return refreshed == pending
 
     def _preview_object_transform(self, object_id: str, transform: Transform) -> None:
         """Update canvas geometry while leaving the document untouched."""

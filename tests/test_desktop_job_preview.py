@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -16,6 +17,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from laser_aligner.desktop.job_preview import JobPreviewDialog
 from laser_aligner.desktop.panels import JobPanel
+from laser_aligner.desktop.theme import DARK_STYLESHEET
 from laser_aligner.gcode.job_plan import build_job_plan, e3_metadata_line
 
 
@@ -48,6 +50,40 @@ def _plan():
         text,
         power_max=1000,
         start_position=(10.0, 10.0),
+    )
+
+
+def _variable_power_plan(
+    *,
+    layer_name: str = "Variable power",
+    layer_color: str = "#185CFF",
+):
+    text = "\n".join(
+        [
+            "G21",
+            "G90",
+            "M5",
+            e3_metadata_line(
+                "layer",
+                {
+                    "id": "power-01",
+                    "name": layer_name,
+                    "color": layer_color,
+                },
+            ),
+            e3_metadata_line("pass", {"index": 1, "count": 1}),
+            "G0 X10 Y10 F2000",
+            "M4 S100",
+            "G1 X40 Y10 F1000",
+            "S800",
+            "G1 X70 Y10 F1000",
+            "M5",
+        ]
+    )
+    return build_job_plan(
+        text,
+        power_max=1000,
+        start_position=(0.0, 0.0),
     )
 
 
@@ -132,6 +168,131 @@ def test_preview_layer_table_controls_only_that_operation(
     qt_application.processEvents()
 
 
+def test_power_shading_keeps_distinct_s_values_within_one_layer(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    dialog = JobPreviewDialog(
+        _variable_power_plan(),
+        (0.0, 100.0, 0.0, 100.0),
+        "variable-power.gcode",
+    )
+    dialog.show()
+    qt_application.processEvents()
+
+    dialog.power_check.setChecked(True)
+    powered_colors = {
+        key[2]: item.pen().color().name()
+        for key, item in dialog.canvas._items.items()
+        if key[0] == "powered"
+    }
+
+    assert set(powered_colors) == {100.0, 800.0}
+    assert len(set(powered_colors.values())) == 2
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_preview_escapes_rich_metadata_and_uses_warning_theme_contract(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    layer_name = '<b>Layer & "quoted"</b><img src="bad">'
+    plan = replace(
+        _variable_power_plan(
+            layer_name=layer_name,
+            layer_color="red; background-image: url(bad)",
+        ),
+        planner_mode="<i>nearest & unsafe</i>",
+        warnings=("<b>warning & review</b>",),
+    )
+    dialog = JobPreviewDialog(
+        plan,
+        (0.0, 100.0, 0.0, 100.0),
+        "<b>job & title</b>",
+    )
+    dialog.show()
+    qt_application.processEvents()
+    powered_move = next(move for move in plan.moves if move.laser_on)
+    dialog.set_elapsed(powered_move.start_seconds + 0.01)
+
+    assert dialog.heading.textFormat() == QtCore.Qt.TextFormat.PlainText
+    assert "<i>nearest & unsafe</i>" in dialog.heading.text()
+    assert "&lt;b&gt;Layer &amp; &quot;quoted&quot;&lt;/b&gt;" in dialog.legend.text()
+    assert "<b>Layer" not in dialog.legend.text()
+    assert "background-image" not in dialog.legend.text()
+    assert dialog.move_label.textFormat() == QtCore.Qt.TextFormat.PlainText
+    assert layer_name in dialog.move_label.full_text
+    dialog.move_label.resize(80, dialog.move_label.height())
+    dialog.move_label._refresh_text()
+    assert "&lt;b&gt;Layer &amp; &quot;quoted&quot;&lt;/b&gt;" in dialog.move_label.toolTip()
+    layer_tooltip = dialog.layer_tree.topLevelItem(0).toolTip(1)
+    assert "&lt;b&gt;Layer &amp; &quot;quoted&quot;&lt;/b&gt;" in layer_tooltip
+    assert "<img" not in layer_tooltip
+    assert dialog.warning_label is not None
+    assert dialog.warning_label.objectName() == "warningLabel"
+    assert dialog.warning_label.textFormat() == QtCore.Qt.TextFormat.PlainText
+    assert dialog.warning_label.text() == "Warnings: <b>warning & review</b>"
+    assert "QLabel#warningLabel" in DARK_STYLESHEET
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_preview_remains_useful_at_compact_geometry_with_large_text(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    original_font = QtGui.QFont(qt_application.font())
+    large_font = QtGui.QFont(original_font)
+    large_font.setPointSize(13)
+    qt_application.setFont(large_font)
+    dialog: JobPreviewDialog | None = None
+    try:
+        plan = _variable_power_plan(layer_name="Long operation " * 40)
+        dialog = JobPreviewDialog(
+            plan,
+            (0.0, 100.0, 0.0, 100.0),
+            "compact-preview.gcode",
+        )
+        screen = QtGui.QGuiApplication.primaryScreen()
+        available = (
+            screen.availableGeometry().size()
+            if screen is not None
+            else QtCore.QSize(900, 680)
+        )
+        target_width = min(900, available.width())
+        target_height = min(680, available.height())
+        dialog.resize(target_width, target_height)
+        dialog.show()
+        qt_application.processEvents()
+
+        powered_move = next(move for move in plan.moves if move.laser_on)
+        dialog.set_elapsed(powered_move.start_seconds + 0.01)
+        qt_application.processEvents()
+
+        assert dialog.width() <= target_width
+        assert dialog.height() <= target_height
+        assert dialog.canvas.width() >= 360
+        assert dialog.canvas.height() >= 240
+        assert dialog.sidebar.width() >= 300
+        assert not dialog.canvas.geometry().intersects(dialog.sidebar.geometry())
+        header = dialog.layer_tree.header()
+        final_column_right = (
+            header.sectionViewportPosition(4) + header.sectionSize(4)
+        )
+        assert final_column_right <= dialog.layer_tree.viewport().width()
+        assert "…" in dialog.move_label.text()
+        assert dialog.move_label.toolTip() == dialog.move_label.full_text
+        assert dialog.move_label.width() <= dialog.contentsRect().width()
+    finally:
+        if dialog is not None:
+            dialog.close()
+            dialog.deleteLater()
+            qt_application.processEvents()
+        qt_application.setFont(original_font)
+
+
 def test_controller_progress_does_not_overwrite_prepared_power(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -159,8 +320,43 @@ def test_controller_progress_does_not_overwrite_prepared_power(
     assert panel.progress.format() == "Execution 25%"
     assert "25/100 lines" in panel.execution_label.text()
 
+    panel.set_job_status(
+        {
+            "running": True,
+            "phase": "homing",
+            "name": "grid.gcode",
+            "total_lines": 100,
+            "completed_lines": 100,
+        }
+    )
+    assert panel.progress.format() == "Finishing · homing"
+    assert panel.execution_label.text() == "Toolpath complete · homing machine"
+
     panel.close()
     panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_preview_explains_automatic_post_job_motion_is_not_drawn(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    dialog = JobPreviewDialog(
+        _plan(),
+        (0.0, 0.0, 220.0, 220.0),
+        "preview.gcode",
+    )
+
+    notes = [
+        label.text()
+        for label in dialog.findChildren(QtWidgets.QLabel)
+        if "end of the generated G-code stream" in label.text()
+    ]
+    assert len(notes) == 1
+    assert "Home / park" in notes[0]
+    assert "not drawn here" in notes[0]
+
+    dialog.close()
+    dialog.deleteLater()
     qt_application.processEvents()
 
 

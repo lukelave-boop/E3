@@ -2,11 +2,13 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.gcode.job_plan import (
     build_job_plan,
     e3_metadata_line,
     restart_program_from_move,
 )
+from laser_aligner.machine.service import MachineService
 
 
 def test_job_plan_preserves_exact_move_context_and_timing() -> None:
@@ -121,6 +123,44 @@ def test_start_here_rebuilds_guarded_program_at_move_boundary() -> None:
     assert restarted.powered
     assert restarted.moves[0].start_x == pytest.approx(20.0)
     assert restarted.moves[-1].end_y == pytest.approx(20.0)
+
+
+def test_start_here_records_park_pose_and_previews_exact_spot_approach() -> None:
+    original = build_job_plan(
+        "; Laser spot offset (spot = controller + offset): X-2 Y-3\n"
+        "G21\nG90\nM5\nG0 X12 Y13 F1000\nM4 S200\n"
+        "G1 X22 Y13 F600\nG1 X22 Y23 F600\nM5\n",
+        power_max=1000,
+    )
+
+    text, restarted = restart_program_from_move(
+        original,
+        2,
+        start_position=(50.0, 40.0),
+    )
+
+    assert '; @E3_JOB {"start_x":50.0,"start_y":40.0}' in text
+    approach, selected = restarted.moves[:2]
+    assert approach.rapid and not approach.laser_on
+    assert (approach.start_x, approach.start_y) == pytest.approx((48.0, 37.0))
+    assert (approach.end_x, approach.end_y) == pytest.approx((20.0, 10.0))
+    assert selected.laser_on
+    assert (selected.start_x, selected.start_y) == pytest.approx((20.0, 10.0))
+    machine = MachineService(
+        MachineSettings(backend="simulator"),
+        LaserSettings(spot_offset_x_mm=-2.0, spot_offset_y_mm=-3.0),
+        hardware_enabled=False,
+    )
+    preflight = machine.preflight_program(text)
+    assert preflight.requires_motion
+    assert preflight.requires_laser_authorization
+
+
+def test_start_here_rejects_nonfinite_controller_start_pose() -> None:
+    plan = build_job_plan("G90\nG0 X1 Y1\n", power_max=1000)
+
+    with pytest.raises(ValueError, match="must be finite"):
+        restart_program_from_move(plan, 0, start_position=(float("nan"), 0.0))
 
 
 def test_start_here_rejects_unknown_move() -> None:

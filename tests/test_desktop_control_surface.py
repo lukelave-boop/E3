@@ -3,7 +3,6 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parents[1]
 DESKTOP = ROOT / "laser_aligner" / "desktop"
 
@@ -41,12 +40,29 @@ def test_main_window_uses_lightburn_style_design_and_job_inspector_stacks():
     assert "self.job_tabs = InspectorTabs" in text
     assert 'self.inspector_dock = self._dock(' in text
     assert '"Objects", self.object_panel' in text
-    assert '"Cameras", self.camera_panel' in text
-    assert '"Cuts / Layers", self.layer_panel' in text
+    assert '"camera", "Camera", self.camera_panel' in text
+    assert '"layers", "Cuts", self.layer_panel' in text
     assert '"Laser", self.job_panel' in text
     assert "self.object_dock =" not in text
     assert "self.camera_dock =" not in text
-    assert "mainWindow/state-v5" in text
+    assert 'state = settings.value("mainWindow/state-v6")' in text
+    assert 'self.saveState(6)' in text
+    assert 'self.restoreState(state, 6)' in text
+    assert 'state = settings.value("mainWindow/state-v5")' not in text
+
+
+def test_main_window_default_docks_match_full_height_inspector_layout():
+    text = source("main_window.py")
+    assert "self.setCorner(QtCore.Qt.Corner.BottomRightCorner, right)" in text
+    assert '"gcodeDock"' in text
+    assert '"inspectorDock"' in text
+    assert "self.preview_dock,\n            self.inspector_dock," in text
+    assert "QtCore.Qt.Orientation.Horizontal" in text
+    assert (
+        "self.layer_dock,\n            self.inspector_dock,\n"
+        "            QtCore.Qt.Orientation.Vertical"
+    ) not in text
+    assert "self.preview_dock.hide()" not in text
 
 
 def test_main_window_has_context_properties_and_persistent_safety_strip():
@@ -77,8 +93,12 @@ def test_camera_focus_controls_are_present_and_persistent():
     assert "cameraFocusChanged.connect" in main_window
 
 
-def test_unimplemented_machine_controls_are_visibly_disabled():
+def test_machine_controls_expose_guarded_jogging_and_keep_pause_disabled():
     panels = source("panels.py")
-    assert "Guarded jogging is not enabled" in panels
-    assert "jog_group.setEnabled(False)" in panels
+    controller = source("controller.py")
+    service = (ROOT / "laser_aligner" / "machine" / "service.py").read_text()
+    assert "Jogging may move beyond the configured work area" in panels
+    assert "self._jog_ready" in panels
+    assert "self.runtime.context.machine.jog" in controller
+    assert "def jog(" in service
     assert "self.pause_button.setEnabled(False)" in panels

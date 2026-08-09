@@ -31,6 +31,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Force serial hardware locked even when --hardware is also supplied",
     )
+    parser.add_argument(
+        "--laser-lockout",
+        action="store_true",
+        help="Allow hardware and motion while rejecting laser-enable programs",
+    )
     return parser
 
 
@@ -82,6 +87,7 @@ def main(argv: list[str] | None = None) -> int:
         runtime = CoreRuntime.from_config(
             config,
             hardware_enabled=hardware_enabled,
+            laser_lockout=arguments.laser_lockout,
         )
     except Exception as exc:
         QtWidgets.QMessageBox.critical(

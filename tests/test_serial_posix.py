@@ -6,7 +6,7 @@ import time
 import pytest
 
 from laser_aligner.config import LaserSettings, MachineSettings
-from laser_aligner.errors import SafetyError
+from laser_aligner.errors import MachineError, SafetyError
 from laser_aligner.machine.service import MachineService
 
 pytestmark = pytest.mark.skipif(
@@ -46,6 +46,24 @@ def test_posix_serial_round_trip_over_pseudoterminal() -> None:
         os.close(slave_fd)
 
 
+def test_posix_serial_write_backpressure_has_a_bounded_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.machine.serial_posix as serial_module
+
+    serial = serial_module.PosixSerial("unused", 115200)
+    serial._fd = 123
+    monkeypatch.setattr(serial_module, "_SERIAL_WRITE_TIMEOUT_SECONDS", 0.02)
+    monkeypatch.setattr(serial_module.os, "write", lambda _fd, _data: (_ for _ in ()).throw(BlockingIOError()))
+    monkeypatch.setattr(serial_module.select, "select", lambda *_args: ([], [], []))
+
+    started = time.monotonic()
+    with pytest.raises(MachineError, match="timed out"):
+        serial.write_raw(b"M5\n")
+    assert time.monotonic() - started < 0.25
+    serial._fd = None
+
+
 def test_machine_service_over_pseudoterminal() -> None:
     import pty
 
@@ -76,6 +94,8 @@ def test_machine_service_over_pseudoterminal() -> None:
                     commands.append(line)
                     if line == "$I":
                         os.write(master_fd, b"[VER:1.1h.test:PTY]\r\nok\r\n")
+                    elif line == "$$":
+                        os.write(master_fd, b"$1=250\r\n$30=1000\r\n$32=1\r\nok\r\n")
                     elif line == "$G":
                         os.write(
                             master_fd,
@@ -124,8 +144,11 @@ def test_machine_service_over_pseudoterminal() -> None:
         parked = machine.prepare_photo_position()
         assert parked["position"]["x"] == 100
         assert machine.status()["coordinate_reference_ready"]
-        machine.arm(machine.ARM_PHRASE)
-        machine.start_job("G21\nG90\nM5\nG0X10Y10F1000\nM4S5\nG1X20Y20F500\nM5\n", "pty.gcode")
+        program = machine.preflight_program(
+            "G21\nG90\nM5\nG0X10Y10F1000\nM4S5\nG1X20Y20F500\nM5\n"
+        )
+        machine.arm_program(machine.ARM_PHRASE, program)
+        machine.start_validated_program(program, "pty.gcode")
         deadline = time.monotonic() + 3
         while machine.status()["job"]["running"] and time.monotonic() < deadline:
             time.sleep(0.01)

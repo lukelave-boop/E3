@@ -1,4 +1,3 @@
-import math
 
 import pytest
 
@@ -109,9 +108,44 @@ def test_invalid_layer_color_is_rejected():
         OperationLayer(color="red")
 
 
-def test_schema_mismatch_is_rejected():
+@pytest.mark.parametrize("radius", [float("nan"), float("inf"), float("-inf")])
+def test_non_finite_rectangle_corner_radius_is_rejected(radius: float) -> None:
+    item = SceneObject.rectangle("layer-test").to_dict()
+    item["geometry"]["corner_radius_mm"] = radius
+
+    with pytest.raises(
+        ProjectFormatError,
+        match="rectangle.corner_radius_mm must be a finite number",
+    ):
+        SceneObject.from_dict(item)
+
+
+def test_project_string_booleans_are_rejected() -> None:
+    with pytest.raises(ProjectFormatError, match="layer.output_enabled must be a JSON boolean"):
+        OperationLayer.from_dict({"output_enabled": "false"})
+    with pytest.raises(ProjectFormatError, match="transform.mirror_x must be a JSON boolean"):
+        Transform.from_dict({"mirror_x": "false"})
+
+    document = ProjectDocument.new()
+    item = SceneObject.rectangle(document.active_layer_id)
+    payload = item.to_dict()
+    payload["visible"] = "false"
+    with pytest.raises(ProjectFormatError, match="object.visible must be a JSON boolean"):
+        SceneObject.from_dict(payload)
+
+    path = SceneObject.path(
+        document.active_layer_id,
+        [{"points": [[0, 0], [1, 1]], "closed": False}],
+    ).to_dict()
+    path["geometry"]["polylines"][0]["closed"] = "false"
+    with pytest.raises(ProjectFormatError, match="path.closed must be a JSON boolean"):
+        SceneObject.from_dict(path)
+
+
+@pytest.mark.parametrize("schema", [999, True, 1.0, 1.5, "1"])
+def test_schema_mismatch_is_rejected(schema: object):
     payload = ProjectDocument.new().to_dict()
-    payload["schema_version"] = 999
+    payload["schema_version"] = schema
 
     with pytest.raises(ProjectFormatError):
         ProjectDocument.from_dict(payload)

@@ -45,6 +45,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self._connected = False
         self._motion_enabled = False
         self._coordinate_reference_ready = False
+        self._reconnect_required = False
         self._serial_backend = False
 
         layout = QtWidgets.QHBoxLayout(self)
@@ -124,11 +125,18 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         backend = str(machine.get("backend", "")).strip().lower()
         self._serial_backend = backend == "serial"
         hardware_enabled = bool(machine.get("hardware_enabled", False))
+        laser_lockout = bool(machine.get("laser_lockout", False))
 
         if backend == "simulator":
             self._mode_text = "SIMULATION"
             self._mode_style = "statusGood"
             self._mode_description = "Simulator backend; serial hardware is not in use."
+        elif hardware_enabled and laser_lockout:
+            self._mode_text = "LASER LOCKOUT"
+            self._mode_style = "statusWarning"
+            self._mode_description = (
+                "Hardware and motion access enabled; laser-enable programs are blocked."
+            )
         elif hardware_enabled:
             self._mode_text = "HARDWARE ENABLED"
             self._mode_style = "statusBad"
@@ -145,6 +153,9 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self._motion_enabled = bool(machine.get("allow_motion", False))
         self._coordinate_reference_ready = bool(
             machine.get("coordinate_reference_ready", backend == "simulator")
+        )
+        self._reconnect_required = bool(
+            machine.get("controller_reconnect_required", False)
         )
         self._render_status()
 
@@ -171,6 +182,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
                 "SIMULATION": "SIM",
                 "HARDWARE LOCKED": "HW LOCKED",
                 "HARDWARE ENABLED": "HW ENABLED",
+                "LASER LOCKOUT": "LASER LOCKOUT",
             }.get(mode_text, mode_text)
         self._set_indicator(
             self.mode_label,
@@ -199,7 +211,18 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             and self._motion_enabled
             and not self._coordinate_reference_ready
         )
-        if reference_required:
+        if self._connected and self._reconnect_required:
+            motion_text = (
+                "RECONNECT REQUIRED"
+                if self._compact or self._chrome_mode
+                else "Reconnect required"
+            )
+            motion_style = "statusBad"
+            motion_description = (
+                "Controller command ordering is no longer trusted. Disconnect and "
+                "reconnect before Home / park or job execution."
+            )
+        elif reference_required:
             motion_text = (
                 "HOME REQUIRED"
                 if self._compact or self._chrome_mode

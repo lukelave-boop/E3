@@ -1,5 +1,9 @@
 # Safety requirements
 
+For the current five-tab calibration order, use the canonical
+[Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
+This file defines safety boundaries and does not replace that operator sequence.
+
 This repository controls equipment capable of causing permanent eye injury, fire, toxic smoke exposure, and mechanical injury. It is experimental software and is not a safety-rated control system.
 
 ## Required physical safeguards
@@ -14,7 +18,9 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 - Confirm extraction flow and the exhaust destination.
 - Remove flammable debris from the enclosure.
 - Confirm focus, workpiece restraint, cable clearance, and unobstructed axis travel.
-- Run the generated dry framing pass first; it contains no `M3` or `M4` laser-enable command.
+- Treat **Detect objects** as a motion command on hardware: it automatically
+  homes and parks before capturing. Keep the complete travel path clear even
+  though tracing never requests positive laser output.
 - Inspect the dedicated generated-job Preview, including maximum planned power,
   powered/travel motion, bounds, and warnings. Preview is a review aid, not a
   safety function and not a substitute for dry framing.
@@ -22,15 +28,47 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 - Verify that Home / park succeeds after every controller connection or reset.
   The desktop repeats this homing/parking preflight automatically at job start;
   a failed preflight blocks motion and arming.
+- Desktop Jog is a laser-off positioning aid, not a safety-rated limit finder.
+  It requires a current Home / park position, begins each move with `M5`, and
+  intentionally does not enforce the configured work-area rectangle so that
+  rectangle can be measured. Start with a small step and conservative feed,
+  keep the path clear, and use the physical emergency stop for an actual
+  emergency. If an axis was moved by hand, Home / park again before jogging.
+- A successful powered serial job automatically issues `M5`, waits behind all
+  accepted toolpath motion, homes, parks at the configured camera pose, waits
+  for that move to finish, restores the normal GRBL step-idle delay if
+  necessary, and releases the motors. It does not change
+  fan or coolant state. Keep the complete homing and parking path clear until
+  the job reports completion. Stops, job failures, emergency actions,
+  disconnects, and dry jobs do not initiate this convenience motion.
 - On GRBL, Home / park records the active `G54`-`G59` and `G92` offsets. Every
   subsequent absolute-motion job re-reads them and is blocked if they changed
   after the parked camera alignment. This detects coordinate-state drift but
   does not prove that an unchanged offset matches the one used for calibration.
 - Verify any configured laser-spot offset and inspect the generated controller
   bounds; a wrong sign moves the beam farther from the intended location.
+- For a fresh automatic bed map, inspect the keyed 25-cross Preview and its
+  complete bounds. Use only a previously established visible-
+  marking power on a clean, restrained sacrificial sheet. Review all numbered
+  detections before application and then verify both controller directions with
+  laser-off motion. Automatic orientation and a low fit residual do not prove
+  the physical origin, usable travel, focus plane, or beam location.
 - For fine registration, run the dry eight-cross path first. Use only a
   previously established visible-marking power on a clean, restrained
   sacrificial surface; inspect every detected point before applying a result.
+- Parked-bed precision capture temporarily keeps GRBL motors energized and
+  explicitly disables them after its final frame, using FluidNC motor-disable
+  or standard GRBL sleep/reset as available, while preserving the prior
+  step-idle setting. Releasing motors invalidates trusted position and requires
+  another Home / park before subsequent hardware work. Motor
+  holding is not a safety brake. After an application crash or power fault,
+  verify that the axes and controller idle-delay setting returned to the
+  expected state before touching or operating the machine.
+- Continuous GRBL hold (`$1=255`) is reserved for the scoped camera window.
+  Every serial GRBL connection explicitly releases the motors. If it finds a
+  stale `255`, it first restores configured `machine.grbl_step_idle_delay_ms`;
+  the default for this profile is 250 ms. A controller that does not report
+  `$1` is rejected after a best-effort finite-delay restore and motor release.
 - For accuracy validation, run the separate dry five-cross holdout path before
   preparing its powered job. Validation reports camera-to-laser error but is not
   a safety test or proof that unattended operation is safe.
@@ -39,14 +77,30 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 ## Software guardrails in this repository
 
 The default project profile is simulation-only. Real serial access requires
-`--hardware`; real motion requires `machine.allow_motion` and a successfully
+the exact boolean `--hardware` gate; real motion requires the exact boolean
+`machine.allow_motion` gate and a successfully
 homed coordinate reference for the current connection; the desktop homes and
 parks before each hardware job, then arms only after that preflight. Positive
-laser commands require temporary arming; arming is cleared after every job;
+laser commands require temporary arming bounded to 1–600 seconds; arming is
+cleared after every job;
 low-power framing is disabled; streamed jobs are restricted to a conservative
 G-code subset; generated paths are checked against a configured rectangular
 work area; rapid travel is blocked while laser state is active; and `M5` is
 placed before travel and at job end.
+
+MachineService revalidates those gates and numeric ceilings even when settings
+are constructed or mutated programmatically. It also re-parses the immutable
+program lines and recomputes their digest, motion/power flags, and safety
+profile at both Arm and Start. A forged, stale, or altered preflight object is
+rejected before controller output, and rejection does not suppress cleanup
+`M5`.
+
+Ordinary serial operations own their complete command/ack exchange, and
+multi-command Home / park and camera-hold sequences cannot interleave with
+another ordinary controller operation. Connect is not reported ready until its
+controller cleanup finishes. Software stop remains outside this serialization
+so it can still request interruption immediately. These are protocol-integrity
+guards, not emergency-stop or functional-safety mechanisms.
 
 Fine registration may apply only a reviewed, multi-point global camera-map
 translation no larger than 5 mm. Low-confidence, excessive, or
@@ -77,8 +131,16 @@ workpiece, or physical beam path is correct.
 
 Fill and raster scanlines can create much longer powered jobs than outlines.
 Raster overscan motion is emitted only with the laser off and is included in
-controller-space bounds validation. Imported images use a binary 50% threshold;
-inspect the powered pattern and maximum power in Preview. A Start Here program
+controller-space bounds validation. Imported grayscale images use deterministic
+ordered dithering at the configured exact physical line pitch and absolute
+machine-coordinate scan angle, with area prefiltering when that pitch minifies
+the source. Their lead-in, white gaps, and lead-out are
+emitted at engraving feed with the laser off; rows are never passed through
+nearest-path reordering. Raster planning accepts only bounded PNG/JPEG/BMP
+metadata, file size, and conservative decoded bytes before full decode, then
+caps aggregate row, sample, vector-edge, span, and command work. Programs
+beyond the 250,000 streamed-command limit are rejected. Inspect the powered
+pattern and maximum power in Preview. A Start Here program
 intentionally omits earlier motion. It is prepared only at a complete move
 boundary, begins with `G21`, `G90`, and `M5`, positions with the laser off, and
 does not bypass the ordinary dry-frame, homing, arming, or execution gates.

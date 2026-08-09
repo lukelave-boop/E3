@@ -3,7 +3,61 @@ from pathlib import Path
 
 import pytest
 
-from laser_aligner.config import ConfigError, load_settings
+from laser_aligner import config as config_module
+from laser_aligner.config import (
+    ConfigError,
+    PrecisionCaptureSettings,
+    WorkArea,
+    effective_laser_output_area,
+    load_settings,
+)
+
+
+def test_effective_laser_output_area_intersects_margin_and_spot_offset() -> None:
+    result = effective_laser_output_area(
+        WorkArea(10.0, 210.0, 20.0, 200.0),
+        5.0,
+        spot_offset_x_mm=-2.0,
+        spot_offset_y_mm=3.0,
+    )
+
+    assert (result.x_min, result.x_max, result.y_min, result.y_max) == (
+        15.0,
+        203.0,
+        28.0,
+        195.0,
+    )
+
+
+@pytest.mark.parametrize(
+    ("margin", "offset_x", "offset_y"),
+    [
+        (float("nan"), 0.0, 0.0),
+        (-1.0, 0.0, 0.0),
+        (5.0, 500.0, 0.0),
+    ],
+)
+def test_effective_laser_output_area_rejects_invalid_or_empty_limits(
+    margin: float,
+    offset_x: float,
+    offset_y: float,
+) -> None:
+    with pytest.raises(ValueError, match="finite|non-negative|no guarded"):
+        effective_laser_output_area(
+            WorkArea(0.0, 100.0, 0.0, 100.0),
+            margin,
+            offset_x,
+            offset_y,
+        )
+
+
+def test_parked_bed_precision_defaults_use_large_stable_consensus_burst() -> None:
+    profile = PrecisionCaptureSettings()
+    assert profile.sample_frames == 45
+    assert profile.minimum_valid_frames == 15
+    assert profile.timeout_seconds == pytest.approx(8.0)
+    assert profile.coordinate_strategy == "stable_clarity_consensus"
+    assert profile.consensus_frames == 15
 
 
 def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
@@ -22,9 +76,88 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     assert settings.app.data_dir == (tmp_path / "runtime").resolve()
     assert settings.camera.width == 1280
     assert settings.machine.work_area.width == 200
+    assert settings.machine.home_and_release_after_powered_job
+    assert settings.machine.grbl_step_idle_delay_ms == 250
+    assert settings.machine.max_travel_feed_mm_min == pytest.approx(6000.0)
+    assert settings.machine.max_work_feed_mm_min == pytest.approx(6000.0)
     assert settings.laser.spot_offset_x_mm == 0.0
     assert settings.laser.spot_offset_y_mm == 0.0
     assert (settings.app.data_dir / "captures").is_dir()
+
+
+def test_builtin_install_defaults_use_writable_user_data_directory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_module = tmp_path / "site-packages" / "laser_aligner" / "config.py"
+    user_data = tmp_path / "user-data" / "e3"
+    monkeypatch.setattr(config_module, "__file__", str(fake_module))
+    monkeypatch.setattr(config_module, "_default_user_data_dir", lambda: user_data)
+
+    settings = config_module.load_settings()
+
+    assert settings.app.data_dir == user_data
+    assert (user_data / "captures").is_dir()
+
+
+@pytest.mark.parametrize(
+    "app_override",
+    [
+        {"host": "192.168.1.50"},
+        {"allow_remote_control": True},
+    ],
+)
+def test_http_configuration_is_explicitly_local_only(
+    tmp_path: Path,
+    app_override: dict[str, object],
+) -> None:
+    config = tmp_path / "remote-http.json"
+    config.write_text(json.dumps({"app": app_override}), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="local-only"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize(
+    ("section", "key"),
+    [
+        ("app", "simulation"),
+        ("camera", "autostart"),
+        ("machine", "allow_motion"),
+        ("laser", "allow_low_power_frame"),
+    ],
+)
+def test_string_booleans_are_rejected(
+    tmp_path: Path,
+    section: str,
+    key: str,
+) -> None:
+    config = tmp_path / f"bad-{section}-{key}.json"
+    config.write_text(
+        json.dumps({section: {key: "false"}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match=rf"{section}\.{key} must be a JSON boolean"):
+        load_settings(config)
+
+
+def test_configured_feeds_must_fit_machine_ceilings(tmp_path: Path) -> None:
+    config = tmp_path / "bad-feed-ceiling.json"
+    config.write_text(
+        json.dumps(
+            {
+                "machine": {
+                    "max_travel_feed_mm_min": 2000,
+                    "max_work_feed_mm_min": 1000,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="travel_feed_mm_min cannot exceed"):
+        load_settings(config)
 
 
 def test_invalid_work_area_is_rejected(tmp_path: Path) -> None:
@@ -35,6 +168,111 @@ def test_invalid_work_area_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(ConfigError):
         load_settings(config)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"machine": {"work_area": {"x_min": float("-inf")}}},
+        {"machine": {"max_work_feed_mm_min": float("nan")}},
+        {"laser": {"travel_feed_mm_min": float("inf")}},
+    ],
+)
+def test_nonfinite_configuration_numbers_are_rejected(
+    tmp_path: Path,
+    override: dict[str, object],
+) -> None:
+    config = tmp_path / "nonfinite.json"
+    config.write_text(json.dumps(override), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="must be finite"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"machine": {"max_travel_feed_mm_min": "nan"}},
+        {"machine": {"max_work_feed_mm_min": "inf"}},
+        {"machine": {"work_area": {"x_min": "-inf"}}},
+        {"camera": {"precision_capture": {"max_jitter_rms_px": "nan"}}},
+        {"camera": {"precision_capture": {"settle_seconds": "-inf"}}},
+        {"calibration": {"lens": {"square_size_mm": "nan"}}},
+        {"calibration": {"bed": {"ransac_threshold_mm": "inf"}}},
+        {"laser": {"curve_tolerance_mm": "nan"}},
+        {"vision": {"workpiece_min_area_ratio": "-inf"}},
+    ],
+)
+def test_string_nonfinite_configuration_numbers_are_rejected(
+    tmp_path: Path,
+    override: dict[str, object],
+) -> None:
+    config = tmp_path / "string-nonfinite.json"
+    config.write_text(json.dumps(override), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="must be a finite JSON number"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"camera": {"width": "1920"}},
+        {"laser": {"power_max": 1000.0}},
+        {"machine": {"max_work_feed_mm_min": "6000"}},
+    ],
+)
+def test_numeric_configuration_requires_json_number_types(
+    tmp_path: Path,
+    override: dict[str, object],
+) -> None:
+    config = tmp_path / "coerced-number.json"
+    config.write_text(json.dumps(override), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="must be a (finite JSON number|JSON integer)"):
+        load_settings(config)
+
+
+def test_continuous_grbl_idle_delay_is_reserved_for_scoped_camera_hold(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "continuous-hold.json"
+    config.write_text(
+        json.dumps({"machine": {"grbl_step_idle_delay_ms": 255}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="between 0 and 254"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize("timeout", [0, 601])
+def test_arm_timeout_must_remain_bounded(
+    tmp_path: Path,
+    timeout: int,
+) -> None:
+    config = tmp_path / "arm-timeout.json"
+    config.write_text(
+        json.dumps({"laser": {"arm_timeout_seconds": timeout}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="between 1 and 600 seconds"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize("timeout", [1, 600])
+def test_arm_timeout_accepts_bounded_endpoints(
+    tmp_path: Path,
+    timeout: int,
+) -> None:
+    config = tmp_path / "arm-timeout.json"
+    config.write_text(
+        json.dumps({"laser": {"arm_timeout_seconds": timeout}}),
+        encoding="utf-8",
+    )
+
+    assert load_settings(config).laser.arm_timeout_seconds == timeout
 
 
 def test_laser_spot_offsets_load_and_excessive_values_are_rejected(
@@ -127,6 +365,8 @@ def test_precision_capture_settings_load_and_are_public(tmp_path: Path) -> None:
                         "mad_multiplier": 4.0,
                         "outlier_floor_px": 0.2,
                         "max_jitter_rms_px": 0.6,
+                        "coordinate_strategy": "median",
+                        "consensus_frames": 5,
                     }
                 }
             }
@@ -139,9 +379,9 @@ def test_precision_capture_settings_load_and_are_public(tmp_path: Path) -> None:
     assert profile.sample_frames == 11
     assert profile.minimum_valid_frames == 7
     assert profile.settle_seconds == pytest.approx(0.75)
-    assert settings.public_dict()["camera"]["precision_capture"][
-        "max_jitter_rms_px"
-    ] == pytest.approx(0.6)
+    assert profile.coordinate_strategy == "median"
+    assert profile.consensus_frames == 5
+    assert settings.public_dict()["camera"]["precision_capture"]["max_jitter_rms_px"] == pytest.approx(0.6)
 
 
 @pytest.mark.parametrize(
@@ -152,6 +392,8 @@ def test_precision_capture_settings_load_and_are_public(tmp_path: Path) -> None:
         {"timeout_seconds": 0},
         {"settle_seconds": -0.1},
         {"max_jitter_rms_px": 0},
+        {"coordinate_strategy": "unknown"},
+        {"sample_frames": 5, "consensus_frames": 6},
     ],
 )
 def test_invalid_precision_capture_settings_are_rejected(

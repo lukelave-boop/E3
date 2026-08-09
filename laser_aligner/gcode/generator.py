@@ -10,8 +10,11 @@ import numpy as np
 from ..config import WorkArea
 from ..errors import SafetyError, SvgError
 from ..geometry.svg import Polyline, SvgGeometry
+from .job_plan import e3_metadata_line
 
 _PATH_BOUNDS_TOLERANCE_MM = 1e-6
+_MAX_NEAREST_ORDER_PATHS = 512
+_MAX_STREAM_COMMANDS = 250_000
 
 
 @dataclass(slots=True)
@@ -39,6 +42,8 @@ class ToolpathOptions:
     include_return_move: bool = False
     return_x_mm: float = 0.0
     return_y_mm: float = 0.0
+    start_x_mm: float | None = None
+    start_y_mm: float | None = None
 
 
 @dataclass(slots=True)
@@ -230,6 +235,38 @@ def _nearest_order(paths: list[Polyline], start: np.ndarray) -> list[Polyline]:
     return ordered
 
 
+def _vector_stream_command_count(
+    paths: list[Polyline],
+    *,
+    powered: bool,
+    include_return_move: bool,
+) -> int:
+    usable = (path for path in paths if len(path.points) >= 2)
+    per_path_overhead = 2 if powered else 1
+    return (
+        4
+        + int(include_return_move)
+        + sum(len(path.points) + per_path_overhead for path in usable)
+    )
+
+
+def _program_start(options: ToolpathOptions, work_area: WorkArea) -> np.ndarray:
+    if (options.start_x_mm is None) != (options.start_y_mm is None):
+        raise ValueError("start_x_mm and start_y_mm must be provided together")
+    if options.start_x_mm is None:
+        start = np.array([work_area.x_min, work_area.y_min], dtype=np.float64)
+    else:
+        start = np.array(
+            [float(options.start_x_mm), float(options.start_y_mm)],
+            dtype=np.float64,
+        )
+    if not np.isfinite(start).all():
+        raise ValueError("planned controller start position must be finite")
+    if not work_area.contains(float(start[0]), float(start[1])):
+        raise SafetyError("Planned controller start position lies outside the work area")
+    return start
+
+
 def generate_vector_gcode(
     geometry: SvgGeometry,
     placement: DesignPlacement,
@@ -241,6 +278,17 @@ def generate_vector_gcode(
         raise ValueError("power_mode must be M3 or M4")
     if not 0 <= options.power <= options.power_max:
         raise ValueError("power must be between zero and power_max")
+    controller_power = int(options.power)
+    estimated_commands = _vector_stream_command_count(
+        geometry.polylines,
+        powered=controller_power > 0,
+        include_return_move=options.include_return_move,
+    )
+    if estimated_commands > _MAX_STREAM_COMMANDS:
+        raise ValueError(
+            f"Vector output requires {estimated_commands:,} streamed commands, exceeding "
+            f"the {_MAX_STREAM_COMMANDS:,}-command limit; simplify the source geometry"
+        )
     design_paths = place_geometry(geometry, placement)
     validate_paths(design_paths, work_area, options.boundary_margin_mm)
     bounds = _program_bounds(design_paths)
@@ -251,9 +299,15 @@ def generate_vector_gcode(
         options.boundary_margin_mm,
         coordinate_label="controller path after laser spot correction",
     )
-    start = np.array([work_area.x_min, work_area.y_min], dtype=np.float64)
-    if options.optimize_order:
+    start = _program_start(options, work_area)
+    warnings = list(geometry.warnings)
+    if options.optimize_order and len(paths) <= _MAX_NEAREST_ORDER_PATHS:
         paths = _nearest_order(paths, start)
+    elif options.optimize_order:
+        warnings.append(
+            "Nearest-path optimization was skipped for "
+            f"{len(paths):,} paths to keep planning responsive; source order was retained."
+        )
 
     controller_bounds = _program_bounds(paths)
     lines = [
@@ -261,7 +315,11 @@ def generate_vector_gcode(
         f"; Source: {_safe_comment(design_name)}",
         f"; Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"; Bounds: X{_fmt(bounds[0])}..{_fmt(bounds[2])} Y{_fmt(bounds[1])}..{_fmt(bounds[3])}",
-        f"; Power: {options.power}/{options.power_max}; feed: {_fmt(options.engrave_feed_mm_min)} mm/min",
+        f"; Power: {controller_power}/{options.power_max}; feed: {_fmt(options.engrave_feed_mm_min)} mm/min",
+        e3_metadata_line(
+            "job",
+            {"start_x": float(start[0]), "start_y": float(start[1])},
+        ),
         "G21 ; millimetres",
         "G90 ; absolute positioning",
         "M5 ; laser off before motion",
@@ -285,8 +343,8 @@ def generate_vector_gcode(
         travel_length += float(np.linalg.norm(points[0] - current))
         lines.append(f"; Path {index}: {path.source_tag or 'vector'}")
         lines.append(f"G0 X{_fmt(points[0, 0])} Y{_fmt(points[0, 1])} F{_fmt(options.travel_feed_mm_min)}")
-        if options.power > 0:
-            lines.append(f"{options.power_mode.upper()} S{int(options.power)}")
+        if controller_power > 0:
+            lines.append(f"{options.power_mode.upper()} S{controller_power}")
         else:
             lines.append("; Laser output disabled for this path")
         for point in points[1:]:
@@ -294,7 +352,11 @@ def generate_vector_gcode(
                 f"G1 X{_fmt(point[0])} Y{_fmt(point[1])} F{_fmt(options.engrave_feed_mm_min)}"
             )
         lines.append("M5")
-        cut_length += _path_length(points)
+        path_length = _path_length(points)
+        if controller_power > 0:
+            cut_length += path_length
+        else:
+            travel_length += path_length
         point_count += len(points)
         current = points[-1]
 
@@ -314,7 +376,7 @@ def generate_vector_gcode(
         travel_length_mm=travel_length,
         path_count=len(paths),
         point_count=point_count,
-        warnings=list(geometry.warnings),
+        warnings=warnings,
     )
 
 
@@ -339,10 +401,22 @@ def generate_frame_gcode(
         coordinate_label="controller path after laser spot correction",
     )
     controller_rectangle = controller_paths[0].points
-    effective_power = options.power if laser_enabled else 0
+    start = _program_start(options, work_area)
+    effective_power = int(options.power) if laser_enabled else 0
+    frame_length = _path_length(rectangle)
+    approach_length = float(
+        np.linalg.norm(
+            controller_rectangle[0]
+            - start
+        )
+    )
     lines = [
         "; Laser Camera Aligner framing pass",
         "; DRY MOTION ONLY" if effective_power == 0 else "; LOW-POWER LASER FRAME — verify configured power",
+        e3_metadata_line(
+            "job",
+            {"start_x": float(start[0]), "start_y": float(start[1])},
+        ),
         "G21",
         "G90",
         "M5",
@@ -369,12 +443,9 @@ def generate_frame_gcode(
     return GcodeProgram(
         text="\n".join(lines),
         bounds_mm=bounds_mm,
-        cut_length_mm=_path_length(rectangle),
-        travel_length_mm=float(
-            np.linalg.norm(
-                controller_rectangle[0]
-                - np.array([work_area.x_min, work_area.y_min])
-            )
+        cut_length_mm=frame_length if effective_power > 0 else 0.0,
+        travel_length_mm=(
+            approach_length if effective_power > 0 else approach_length + frame_length
         ),
         path_count=1,
         point_count=len(rectangle),

@@ -67,6 +67,21 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
             "Connected",
             "Motion ready",
         ),
+        (
+            {
+                "machine": {
+                    "backend": "serial",
+                    "hardware_enabled": True,
+                    "laser_lockout": True,
+                    "connected": True,
+                    "allow_motion": True,
+                    "coordinate_reference_ready": True,
+                }
+            },
+            "LASER LOCKOUT",
+            "Connected",
+            "Motion ready",
+        ),
     ],
 )
 def test_runtime_strip_derives_visible_machine_state(
@@ -124,6 +139,29 @@ def test_runtime_strip_marks_unreferenced_serial_motion_as_home_required(
 
     assert strip.motion_label.text() == "HOME REQUIRED"
     assert "blocked" in strip.motion_label.toolTip().lower()
+
+
+def test_runtime_strip_prioritizes_reconnect_over_home_required(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    strip = RuntimeSafetyStrip()
+    strip.resize(900, 60)
+    strip.show()
+    strip.set_status(
+        {
+            "backend": "serial",
+            "hardware_enabled": True,
+            "connected": True,
+            "allow_motion": True,
+            "coordinate_reference_ready": False,
+            "controller_reconnect_required": True,
+        }
+    )
+    qt_application.processEvents()
+
+    assert strip.motion_label.text() == "RECONNECT REQUIRED"
+    assert "disconnect and reconnect" in strip.motion_label.toolTip().lower()
+    assert strip.stop_button.isEnabled()
 
 
 def test_stop_remains_enabled_while_busy_and_emits_request(

@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any
 
 from ..project import Bounds, ObjectKind, SceneObject
 from .model import CutTemplate, TemplateFeature, TemplateFormatError
-
 
 GRID_AUTHORING_METADATA_KEY = "authoring"
 GRID_AUTHORING_KIND = "rectangle_grid"
@@ -169,7 +169,7 @@ class RectangleGridSpec:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "RectangleGridSpec":
+    def from_dict(cls, raw: Mapping[str, Any]) -> RectangleGridSpec:
         values = _mapping(raw, "rectangle-grid parameters")
         try:
             return cls(
@@ -197,7 +197,7 @@ class RectangleGridSpec:
         }
 
     @classmethod
-    def from_authoring_metadata(cls, raw: Mapping[str, Any]) -> "RectangleGridSpec":
+    def from_authoring_metadata(cls, raw: Mapping[str, Any]) -> RectangleGridSpec:
         root = _mapping(raw, "authoring metadata")
         if str(root.get("kind", "")) != GRID_AUTHORING_KIND:
             raise TemplateFormatError("Template was not authored as a rectangle grid")
@@ -212,7 +212,7 @@ class RectangleGridSpec:
         return cls.from_dict(root)
 
     @classmethod
-    def from_template(cls, template: CutTemplate) -> "RectangleGridSpec":
+    def from_template(cls, template: CutTemplate) -> RectangleGridSpec:
         metadata = template.metadata.get(GRID_AUTHORING_METADATA_KEY)
         if metadata is None:
             raise TemplateFormatError("Template has no rectangle-grid authoring metadata")

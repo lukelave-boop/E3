@@ -1,4 +1,6 @@
 import json
+import time
+from copy import deepcopy
 from pathlib import Path
 
 import cv2
@@ -33,11 +35,177 @@ from laser_aligner.config import (
 from laser_aligner.errors import CalibrationError
 
 
+def _run_prepared_job(context: AppContext, job: object) -> None:
+    program = context.machine.preflight_program(job.program.text)
+    context.machine.arm_program(context.machine.ARM_PHRASE, program)
+    context.machine.start_validated_program(program, job.filename)
+    deadline = time.monotonic() + 2.0
+    while context.machine.status()["job"]["running"] and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert context.machine.status()["job"]["error"] is None
+
+
 def test_dense_mesh_targets_form_complete_five_by_five_grid() -> None:
     targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
     assert len(targets) == 25
     assert len({target.machine_x for target in targets}) == 5
     assert len({target.machine_y for target in targets}) == 5
+
+
+def test_dense_fit_and_validation_sessions_do_not_overwrite_each_other(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    context.start()
+    try:
+        fit_job = context.prepare_dense_calibration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+        )
+        fit_session = json.loads(context.dense_calibration_path.read_text(encoding="utf-8"))
+        nodes = np.asarray(sorted({target.machine_x for target in fit_job.targets}))
+        context.bed.apply_residual_mesh(
+            nodes,
+            nodes,
+            np.zeros((5, 5, 2), dtype=np.float64),
+            fit_rms_mm=0.0,
+            fit_max_mm=0.0,
+        )
+        validation_job = context.prepare_dense_calibration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+            validation=True,
+        )
+        _run_prepared_job(context, validation_job)
+
+        assert len(fit_job.targets) == 25
+        assert len(validation_job.targets) == 16
+        assert json.loads(context.dense_calibration_path.read_text(encoding="utf-8")) == fit_session
+        validation_session = json.loads(context.dense_validation_path.read_text(encoding="utf-8"))
+        assert len(validation_session["targets"]) == 16
+        assert validation_session["validation"] is True
+        assert validation_session["confirmation"] is False
+
+        active_mesh = context.bed.calibration.residual_mesh
+        context.bed.refine_residual_mesh(
+            np.zeros((5, 5, 2), dtype=np.float64),
+            analyzed_mesh_created_at=active_mesh.created_at,
+            predicted_rms_mm=0.0,
+            predicted_max_mm=0.0,
+        )
+        with pytest.raises(
+            CalibrationError,
+            match="These 16 interstitial marks belong.*before the validation refinement",
+        ):
+            context.analyze_dense_calibration_image(
+                context.camera_frame(undistort=True),
+                validation=True,
+            )
+    finally:
+        context.stop()
+
+
+def test_legacy_shared_dense_validation_session_is_preserved(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"app": {"data_dir": "data", "simulation": True, "open_browser": False}}),
+        encoding="utf-8",
+    )
+    settings = load_settings(config_path)
+    legacy = {
+        "schema_version": 1,
+        "powered": True,
+        "validation": True,
+        "confirmation": False,
+        "targets": [{"id": value} for value in range(16)],
+    }
+    (settings.app.data_dir / "dense_calibration.json").write_text(
+        json.dumps(legacy),
+        encoding="utf-8",
+    )
+
+    context = AppContext(settings)
+
+    assert json.loads(context.dense_validation_path.read_text(encoding="utf-8")) == legacy
+    assert json.loads(context.dense_calibration_path.read_text(encoding="utf-8")) == legacy
+
+
+def test_malformed_confirmation_session_is_repaired_before_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"app": {"data_dir": "data", "simulation": True, "open_browser": False}}),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    calibration = context.bed.calibration
+    assert calibration is None
+    context.start()
+    try:
+        fit_job = context.prepare_dense_calibration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+        )
+        nodes = np.asarray(sorted({target.machine_x for target in fit_job.targets}))
+        context.bed.apply_residual_mesh(
+            nodes,
+            nodes,
+            np.zeros((5, 5, 2), dtype=np.float64),
+            fit_rms_mm=0.0,
+            fit_max_mm=0.0,
+        )
+        context.bed.refine_residual_mesh(
+            np.zeros((5, 5, 2), dtype=np.float64),
+            analyzed_mesh_created_at=context.bed.calibration.residual_mesh.created_at,
+            predicted_rms_mm=0.0,
+            predicted_max_mm=0.0,
+        )
+        confirmation_job = context.prepare_dense_calibration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+            confirmation=True,
+        )
+        _run_prepared_job(context, confirmation_job)
+        malformed = json.loads(context.dense_confirmation_path.read_text(encoding="utf-8"))
+        malformed["validation"] = True
+        context.dense_confirmation_path.write_text(json.dumps(malformed), encoding="utf-8")
+
+        observed: dict[str, int] = {}
+
+        def detect(_image, _expected, *, search_radius_px):
+            observed["search_radius_px"] = search_radius_px
+            return {"detected": False, "reason": "fixture", "points": []}
+
+        monkeypatch.setattr("laser_aligner.app.detect_crosshairs_near", detect)
+        image = context.camera_frame(undistort=True)
+        context.analyze_dense_calibration_image(image, confirmation=True)
+
+        repaired = json.loads(context.dense_confirmation_path.read_text(encoding="utf-8"))
+        assert repaired["validation"] is False
+        assert repaired["confirmation"] is True
+        # The active mapping projects the Step 5 machine-space 2 mm gate to 15 px.
+        assert observed["search_radius_px"] == 15
+    finally:
+        context.stop()
 
 
 def test_shifted_confirmation_targets_are_distinct_from_fit_and_refinement() -> None:
@@ -138,7 +306,11 @@ def test_dense_mesh_analysis_rejects_two_unreliable_grid_cells() -> None:
     result = analyze_dense_mesh_measurements(measurements)
 
     assert result["can_apply"] is False
-    assert result["inferred_ids"] == [1, 25]
+    assert result["unreliable_ids"] == [1, 25]
+    assert result["inferred_ids"] == []
+    assert result["rejected_ids"] == [1, 25]
+    assert result["measurements"][0]["rejected"] is True
+    assert result["measurements"][-1]["rejected"] is True
     assert "More than one" in result["reason"]
 
 
@@ -545,6 +717,215 @@ def test_dry_registration_session_cannot_be_analyzed_as_burned_marks(
         context.stop()
 
 
+def test_fine_registration_session_is_bound_to_the_active_bed_map(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "data_dir": "data",
+                    "simulation": True,
+                    "open_browser": False,
+                },
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    context.start()
+    try:
+        job = context.prepare_fine_registration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+        )
+        session = json.loads(
+            context.fine_registration_path.read_text(encoding="utf-8")
+        )
+        assert session["image_to_machine"] == context.bed.calibration.image_to_machine.tolist()
+        assert session["residual_mesh_created_at"] is None
+        _run_prepared_job(context, job)
+
+        prepared_map = context.bed.calibration.image_to_machine.copy()
+        nodes = np.asarray(
+            sorted(
+                {
+                    target.machine_x
+                    for target in dense_mesh_targets(
+                        context.settings.machine.work_area
+                    )
+                }
+            )
+        )
+        context.bed.apply_residual_mesh(
+            nodes,
+            nodes,
+            np.zeros((5, 5, 2), dtype=np.float64),
+            fit_rms_mm=0.0,
+            fit_max_mm=0.0,
+        )
+        assert np.array_equal(
+            context.bed.calibration.image_to_machine,
+            prepared_map,
+        )
+        with pytest.raises(CalibrationError, match="bed map changed"):
+            context.analyze_fine_registration_image(
+                context.camera_frame(undistort=True)
+            )
+    finally:
+        context.stop()
+
+
+def test_stale_fine_registration_capture_fails_before_motor_hold(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "data_dir": "data",
+                    "simulation": True,
+                    "open_browser": False,
+                },
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    context.start()
+    try:
+        job = context.prepare_fine_registration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+        )
+        _run_prepared_job(context, job)
+        context.bed.apply_registration_translation(0.2, 0.0)
+        monkeypatch.setattr(context, "_require_camera_calibration_ready", lambda: None)
+
+        def unexpected_hold():
+            raise AssertionError("stale registration reached the motor-hold scope")
+
+        monkeypatch.setattr(context.machine, "temporary_stepper_hold", unexpected_hold)
+        with pytest.raises(CalibrationError, match="bed map changed"):
+            context.capture_fine_registration()
+    finally:
+        context.stop()
+
+
+def test_legacy_fine_registration_session_without_map_identity_is_rejected(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "data_dir": "data",
+                    "simulation": True,
+                    "open_browser": False,
+                },
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    context.start()
+    try:
+        job = context.prepare_fine_registration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+        )
+        _run_prepared_job(context, job)
+        session = json.loads(
+            context.fine_registration_path.read_text(encoding="utf-8")
+        )
+        session.pop("image_to_machine")
+        session.pop("residual_mesh_created_at")
+        context.fine_registration_path.write_text(
+            json.dumps(session),
+            encoding="utf-8",
+        )
+
+        with pytest.raises(CalibrationError, match="bed map changed"):
+            context.analyze_fine_registration_image(
+                context.camera_frame(undistort=True)
+            )
+    finally:
+        context.stop()
+
+
+def test_fine_registration_apply_rejects_modified_and_stale_analysis(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "data_dir": "data",
+                    "simulation": True,
+                    "open_browser": False,
+                },
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    context.start()
+    try:
+        current = context._seal_analysis(
+            {
+                "can_apply_translation": True,
+                "correction_x_mm": 0.1,
+                "correction_y_mm": -0.1,
+            }
+        )
+        context.fine_registration_path.write_text(
+            json.dumps({"analysis": current}),
+            encoding="utf-8",
+        )
+        applied = context.apply_fine_registration(current)
+        assert applied["fine_registration"]["translation_x_mm"] == pytest.approx(0.1)
+
+        modified = deepcopy(current)
+        modified["correction_x_mm"] = 9.0
+        with pytest.raises(CalibrationError, match="modified after review"):
+            context.apply_fine_registration(modified)
+
+        replacement = context._seal_analysis(
+            {
+                "can_apply_translation": True,
+                "correction_x_mm": 0.2,
+                "correction_y_mm": 0.0,
+            }
+        )
+        context.fine_registration_path.write_text(
+            json.dumps({"analysis": replacement}),
+            encoding="utf-8",
+        )
+        with pytest.raises(CalibrationError, match="result is stale"):
+            context.apply_fine_registration(current)
+    finally:
+        context.stop()
+
+
 def test_dry_accuracy_validation_cannot_be_analyzed_as_burned_holdouts(
     tmp_path: Path,
 ) -> None:
@@ -608,6 +989,7 @@ def test_powered_accuracy_validation_scores_synthetic_holdouts_and_rejects_stale
             mark_size_mm=5,
             speed_mm_min=1200,
         )
+        _run_prepared_job(context, job)
         image = np.full((600, 800, 3), 220, dtype=np.uint8)
         for target in job.targets:
             x, y = context.bed.mm_to_image(target.machine_x, target.machine_y)

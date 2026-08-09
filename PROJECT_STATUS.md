@@ -1,10 +1,14 @@
-# Project status
+# Historical project status
 
-Version metadata: **0.1.0-alpha**
+Version metadata: **0.1.0 (alpha-stage)**
 
 Working branch at audit: **`desktop-v1`**
 
-Status updated: **2026-08-06**
+Snapshot date: **2026-08-06**
+
+> This file preserves the dated Windows portability audit. It is not the active
+> branch boundary. See [CURRENT_STATE.md](CURRENT_STATE.md) for current Linux,
+> desktop, calibration, safety, and packaging evidence.
 
 The project is an early alpha. Simulation and substantial platform-neutral
 functionality are implemented, but physical camera/controller behavior and all
@@ -22,7 +26,7 @@ The repository uses these terms deliberately:
 - **Physically verified** — exercised on identified hardware with recorded
   configuration and results.
 
-## Current Windows audit
+## Dated Windows audit
 
 Environment:
 

@@ -1,11 +1,60 @@
 from __future__ import annotations
 
+import logging
+import os
 import sqlite3
+import tempfile
+from collections.abc import Iterable
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterable
 
 from ..project import LayerMode, OperationLayer
+from ..storage import default_user_data_dir, legacy_user_data_dir
+
+logger = logging.getLogger(__name__)
+
+
+def _migrate_database(source: Path, destination: Path) -> bool:
+    """Copy one complete SQLite snapshot without mutating the legacy database."""
+
+    temporary: Path | None = None
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=f".{destination.name}.",
+            suffix=".tmp",
+            dir=destination.parent,
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        temporary.unlink(missing_ok=True)
+        with sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True) as legacy:
+            with sqlite3.connect(temporary) as migrated:
+                legacy.backup(migrated)
+                migrated.commit()
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            # A native-path database created during migration wins. Never
+            # replace operator data with the legacy snapshot.
+            return True
+    except (OSError, sqlite3.Error) as exc:
+        logger.warning("Could not migrate legacy material presets: %s", exc)
+        return False
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return True
+
+
+def _default_database_path() -> Path:
+    preferred = (default_user_data_dir() / "materials.sqlite").expanduser().resolve()
+    legacy = (legacy_user_data_dir() / "materials.sqlite").expanduser().resolve()
+    if preferred == legacy or preferred.exists() or not legacy.is_file():
+        return preferred
+    return preferred if _migrate_database(legacy, preferred) else legacy
 
 
 @dataclass(slots=True)
@@ -62,13 +111,7 @@ class MaterialPreset:
 class MaterialDatabase:
     def __init__(self, path: str | Path | None = None) -> None:
         if path is None:
-            path = (
-                Path.home()
-                / ".local"
-                / "share"
-                / "e3-positioning-system"
-                / "materials.sqlite"
-            )
+            path = _default_database_path()
         self.path = Path(path).expanduser().resolve()
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._initialize()

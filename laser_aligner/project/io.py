@@ -6,10 +6,54 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from ..storage import (
+    atomic_write_bytes,
+    atomic_write_bytes_if_absent,
+    default_user_data_dir,
+    legacy_user_data_dir,
+)
 from .model import ProjectDocument, ProjectFormatError
 
-
 PROJECT_EXTENSION = ".e3laser"
+
+
+def _autosave_filename(
+    document: ProjectDocument,
+    project_path: str | Path | None,
+) -> str:
+    if project_path:
+        stem = Path(project_path).stem
+    else:
+        stem = document.name.strip().replace(" ", "-") or "untitled"
+    safe = "".join(
+        character for character in stem if character.isalnum() or character in "-_"
+    )[:80]
+    return f"{safe}-{document.id}.autosave{PROJECT_EXTENSION}"
+
+
+def _default_autosave_path(
+    document: ProjectDocument,
+    project_path: str | Path | None,
+) -> Path:
+    filename = _autosave_filename(document, project_path)
+    preferred = (default_user_data_dir() / "backups" / filename).expanduser().resolve()
+    legacy = (legacy_user_data_dir() / "backups" / filename).expanduser().resolve()
+    if preferred == legacy or preferred.exists() or not legacy.is_file():
+        return preferred
+    try:
+        with legacy.open("rb") as handle:
+            stat = os.fstat(handle.fileno())
+            data = handle.read()
+        atomic_write_bytes_if_absent(
+            preferred,
+            data,
+            timestamps_ns=(stat.st_atime_ns, stat.st_mtime_ns),
+        )
+    except OSError:
+        # Recovery must remain visible even when the new platform directory is
+        # temporarily unwritable. A later successful lookup retries migration.
+        return legacy
+    return preferred
 
 
 def normalize_project_path(path: str | Path) -> Path:
@@ -34,7 +78,7 @@ def save_project(
 
     if create_backup and destination.exists():
         backup = destination.with_suffix(destination.suffix + ".bak")
-        backup.write_bytes(destination.read_bytes())
+        atomic_write_bytes(backup, destination.read_bytes())
 
     descriptor, temporary_name = tempfile.mkstemp(
         prefix=f".{destination.name}.",
@@ -73,20 +117,9 @@ def autosave_path(
     autosave_root: str | Path | None = None,
 ) -> Path:
     if autosave_root is None:
-        autosave_root = (
-            Path.home()
-            / ".local"
-            / "share"
-            / "e3-positioning-system"
-            / "backups"
-        )
+        return _default_autosave_path(document, project_path)
     root = Path(autosave_root).expanduser()
-    if project_path:
-        stem = Path(project_path).stem
-    else:
-        stem = document.name.strip().replace(" ", "-") or "untitled"
-    safe = "".join(character for character in stem if character.isalnum() or character in "-_")[:80]
-    return (root / f"{safe}-{document.id}.autosave{PROJECT_EXTENSION}").resolve()
+    return (root / _autosave_filename(document, project_path)).resolve()
 
 
 def save_autosave(
@@ -127,8 +160,13 @@ def clear_autosave(
     project_path: str | Path | None = None,
     autosave_root: str | Path | None = None,
 ) -> None:
-    autosave_path(
-        document,
-        project_path=project_path,
-        autosave_root=autosave_root,
-    ).unlink(missing_ok=True)
+    if autosave_root is not None:
+        autosave_path(
+            document,
+            project_path=project_path,
+            autosave_root=autosave_root,
+        ).unlink(missing_ok=True)
+        return
+    filename = _autosave_filename(document, project_path)
+    for root in (default_user_data_dir(), legacy_user_data_dir()):
+        (root / "backups" / filename).expanduser().resolve().unlink(missing_ok=True)

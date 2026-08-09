@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import logging
 import mimetypes
+import secrets
 import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,6 +16,39 @@ from .app import AppContext
 from .errors import LaserAlignerError
 
 LOGGER = logging.getLogger(__name__)
+_REQUEST_TOKEN_HEADER = "X-E3-Request-Token"
+_REQUEST_TOKEN_PLACEHOLDER = "__E3_REQUEST_TOKEN__"
+
+
+def _json_boolean(payload: dict[str, Any], key: str, default: bool) -> bool:
+    value = payload.get(key, default)
+    if type(value) is not bool:
+        raise ValueError(f"{key} must be a JSON boolean")
+    return value
+
+
+def _http_authority(host: str, port: int) -> str:
+    normalized = host.strip().lower()
+    if ":" in normalized and not normalized.startswith("["):
+        normalized = f"[{normalized}]"
+    return normalized if port == 80 else f"{normalized}:{port}"
+
+
+def _loopback_authorities(bind_host: str, port: int) -> frozenset[str]:
+    hosts = {"127.0.0.1", "localhost", "::1"}
+    candidate = bind_host.strip().strip("[]").split("%", 1)[0]
+    try:
+        address = ipaddress.ip_address(candidate)
+    except ValueError:
+        if candidate.lower() == "localhost":
+            hosts.add("localhost")
+    else:
+        if address.is_loopback:
+            hosts.add(address.compressed)
+    authorities = {_http_authority(host, port) for host in hosts}
+    if port == 80:
+        authorities.update(f"{authority}:80" for authority in tuple(authorities))
+    return frozenset(authorities)
 
 
 class AppHTTPServer(ThreadingHTTPServer):
@@ -22,7 +57,12 @@ class AppHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, address: tuple[str, int], context: AppContext):
         self.context = context
+        self._request_token = secrets.token_urlsafe(32)
         super().__init__(address, AppRequestHandler)
+        self.allowed_authorities = _loopback_authorities(
+            address[0],
+            int(self.server_address[1]),
+        )
 
 
 class AppRequestHandler(BaseHTTPRequestHandler):
@@ -94,31 +134,81 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         return payload
 
     def _is_local_client(self) -> bool:
-        return self.client_address[0] in {"127.0.0.1", "::1"}
+        address = self.client_address[0].split("%", 1)[0]
+        try:
+            return ipaddress.ip_address(address).is_loopback
+        except ValueError:
+            return False
 
-    def _check_remote_machine_control(self, path: str) -> bool:
-        if path.startswith("/api/machine/") and not self._is_local_client():
-            if not self.context.settings.app.allow_remote_control:
-                self._error(
-                    HTTPStatus.FORBIDDEN,
-                    "Remote machine control is disabled. Use the computer locally or explicitly enable it in configuration.",
-                )
-                return False
+    def _reject_request(self, status: HTTPStatus, message: str) -> None:
+        # Rejected POST bodies are intentionally not consumed. Close this HTTP/1.1
+        # connection so those bytes cannot be parsed as a subsequent request.
+        self.close_connection = True
+        self._error(status, message)
+
+    def _validated_authority(self) -> str | None:
+        values = self.headers.get_all("Host", failobj=[])
+        if len(values) != 1:
+            self._reject_request(HTTPStatus.MISDIRECTED_REQUEST, "Request host is not allowed")
+            return None
+        authority = values[0].strip().lower()
+        if authority not in self.server.allowed_authorities:
+            self._reject_request(HTTPStatus.MISDIRECTED_REQUEST, "Request host is not allowed")
+            return None
+        if not self._is_local_client():
+            self._reject_request(
+                HTTPStatus.FORBIDDEN,
+                "Browser access is restricted to this computer",
+            )
+            return None
+        return authority
+
+    def _authorize_mutating_request(self, authority: str) -> bool:
+        origins = self.headers.get_all("Origin", failobj=[])
+        expected_origin = f"http://{authority}"
+        if len(origins) != 1 or origins[0].strip().lower() != expected_origin:
+            self._reject_request(HTTPStatus.FORBIDDEN, "Request origin is not allowed")
+            return False
+
+        content_types = self.headers.get_all("Content-Type", failobj=[])
+        if len(content_types) != 1 or self.headers.get_content_type().lower() != "application/json":
+            self._reject_request(
+                HTTPStatus.UNSUPPORTED_MEDIA_TYPE,
+                "State-changing requests require application/json",
+            )
+            return False
+
+        tokens = self.headers.get_all(_REQUEST_TOKEN_HEADER, failobj=[])
+        if len(tokens) != 1 or not secrets.compare_digest(
+            tokens[0].strip(),
+            self.server._request_token,
+        ):
+            self._reject_request(HTTPStatus.FORBIDDEN, "Request token is missing or invalid")
+            return False
         return True
 
     def do_OPTIONS(self) -> None:
+        authority = self._validated_authority()
+        if authority is None:
+            return
+        origins = self.headers.get_all("Origin", failobj=[])
+        if len(origins) != 1 or origins[0].strip().lower() != f"http://{authority}":
+            self._reject_request(HTTPStatus.FORBIDDEN, "Request origin is not allowed")
+            return
         self.send_response(HTTPStatus.NO_CONTENT)
         self.send_header("Allow", "GET, POST, OPTIONS")
         self.send_header("Content-Length", "0")
         self.end_headers()
 
     def do_GET(self) -> None:
+        if self._validated_authority() is None:
+            return
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
         query = parse_qs(parsed.query)
         try:
             if path in {"/", "/index.html"}:
-                self._serve_static("index.html")
+                self._serve_index()
             elif path.startswith("/static/"):
                 self._serve_static(path.removeprefix("/static/"))
             elif path == "/api/status":
@@ -154,16 +244,17 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             self._handle_exception(exc)
 
     def do_POST(self) -> None:
+        authority = self._validated_authority()
+        if authority is None or not self._authorize_mutating_request(authority):
+            return
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
-        if not self._check_remote_machine_control(path):
-            return
         try:
             payload = self._read_json()
             if path == "/api/camera/capture":
                 capture = self.context.save_capture(
                     prefix=str(payload.get("prefix", "capture")),
-                    undistort=bool(payload.get("undistort", True)),
+                    undistort=_json_boolean(payload, "undistort", True),
                 )
                 self._send_json({"ok": True, "filename": capture.name})
             elif path == "/api/camera/controls/apply":
@@ -181,15 +272,16 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 self.context.synthetic_scene(str(payload.get("scene", "bed")))
                 self._send_json({"ok": True})
             elif path == "/api/calibration/lens/capture":
-                image, _diagnostics = self.context.stable_camera_frame(
-                    undistort=False
+                self._send_json(
+                    {"ok": True, **self.context.capture_lens_calibration()}
                 )
-                self._send_json({"ok": True, **self.context.lens.capture(image)})
             elif path == "/api/calibration/lens/solve":
-                model = self.context.lens.solve()
+                model = self.context.solve_lens_calibration()
                 self._send_json({"ok": True, "model": model.to_dict()})
             elif path == "/api/calibration/lens/clear":
-                self.context.lens.clear(delete_images=bool(payload.get("delete_images", False)))
+                self.context.clear_lens_calibration(
+                    delete_images=_json_boolean(payload, "delete_images", False)
+                )
                 self._send_json({"ok": True})
             elif path == "/api/calibration/bed/capture":
                 self._send_json({"ok": True, **self.context.capture_bed_reference()})
@@ -211,7 +303,11 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             elif path == "/api/calibration/bed/auto-accept":
                 self._send_json({"ok": True, **self.context.replace_bed_points(payload)})
             elif path == "/api/workspace/capture":
-                image = self.context.rectified_frame(refresh=True, precision=True)
+                image = self.context.rectified_frame(
+                    refresh=True,
+                    precision=True,
+                    persist=True,
+                )
                 self._send_json({"ok": True, "width": image.shape[1], "height": image.shape[0]})
             elif path == "/api/vision/workpiece":
                 self._send_json({"ok": True, **self.context.detect_workpiece()})
@@ -219,8 +315,6 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 self._send_json({"ok": True, **self.context.analyze_svg(str(payload["svg"]))})
             elif path == "/api/design/gcode":
                 self._send_json({"ok": True, **self.context.generate_gcode(payload)})
-            elif path == "/api/design/frame":
-                self._send_json({"ok": True, **self.context.generate_frame(payload)})
             elif path == "/api/machine/connect":
                 result = self.context.machine.connect(
                     port=payload.get("port"),
@@ -232,7 +326,26 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 self.context.machine.disconnect()
                 self._send_json({"ok": True})
             elif path == "/api/machine/arm":
-                until = self.context.machine.arm(str(payload.get("phrase", "")))
+                generation = self.context.machine.operation_generation()
+                try:
+                    with self.context.machine.operation_scope(generation):
+                        gcode = str(payload.get("gcode", ""))
+                        if not gcode.strip():
+                            raise ValueError(
+                                "G-code is required before laser control can be armed"
+                            )
+                        program = self.context.machine.preflight_program(gcode)
+                        until = self.context.machine.arm_program(
+                            str(payload.get("phrase", "")),
+                            program,
+                        )
+                except Exception:
+                    # A STOP after this request began already revoked its grant.
+                    # Do not let the stale request disarm a newer connection's
+                    # independently authorized program.
+                    if self.context.machine.operation_generation() == generation:
+                        self.context.machine.disarm()
+                    raise
                 self._send_json({"ok": True, "armed_until": until})
             elif path == "/api/machine/disarm":
                 self.context.machine.disarm()
@@ -246,14 +359,31 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 result = self.context.machine.start_job(str(payload["gcode"]), str(payload.get("name", "job.gcode")))
                 self._send_json({"ok": True, "job": result}, status=HTTPStatus.ACCEPTED)
             elif path == "/api/machine/stop":
-                self.context.machine.stop_job(emergency=bool(payload.get("emergency", False)))
+                self.context.machine.stop_job(
+                    emergency=_json_boolean(payload, "emergency", False)
+                )
                 self._send_json({"ok": True})
             else:
                 self._error(HTTPStatus.NOT_FOUND, "Route not found")
         except Exception as exc:
             self._handle_exception(exc)
 
+    def _serve_index(self) -> None:
+        path = Path(__file__).resolve().parent / "web" / "index.html"
+        template = path.read_text(encoding="utf-8")
+        if _REQUEST_TOKEN_PLACEHOLDER not in template:
+            raise RuntimeError("Browser app shell is missing its request-token placeholder")
+        data = template.replace(
+            _REQUEST_TOKEN_PLACEHOLDER,
+            self.server._request_token,
+            1,
+        ).encode("utf-8")
+        self._send_bytes(data, "text/html; charset=utf-8")
+
     def _serve_static(self, relative: str) -> None:
+        if relative == "index.html":
+            self._serve_index()
+            return
         root = Path(__file__).resolve().parent / "web"
         candidate = (root / relative).resolve()
         if root not in candidate.parents and candidate != root:

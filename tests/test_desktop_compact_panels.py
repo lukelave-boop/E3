@@ -12,7 +12,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget tests")
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtWidgets
 
 from laser_aligner.desktop.panels import JobPanel, LayerPanel, MachinePanel
 from laser_aligner.desktop.theme import DARK_STYLESHEET
@@ -86,20 +86,17 @@ def test_job_panel_uses_compact_rows_and_preserves_action_states(
     panel = JobPanel()
     _show_compact(panel, qt_application, 220)
     generated: list[bool] = []
-    framed: list[bool] = []
     started: list[bool] = []
     stopped: list[bool] = []
     panel.generateRequested.connect(lambda: generated.append(True))
-    panel.frameRequested.connect(lambda: framed.append(True))
     panel.startRequested.connect(lambda: started.append(True))
     panel.stopRequested.connect(lambda: stopped.append(True))
 
-    assert panel.generate_button.geometry().top() == panel.frame_button.geometry().top()
+    assert not hasattr(panel, "frame_button")
     assert panel.start_button.geometry().top() == panel.stop_button.geometry().top()
     assert not panel.pause_button.isEnabled()
     for button in (
         panel.generate_button,
-        panel.frame_button,
         panel.start_button,
         panel.pause_button,
         panel.stop_button,
@@ -107,14 +104,85 @@ def test_job_panel_uses_compact_rows_and_preserves_action_states(
         _assert_inside_panel(button, panel)
 
     panel.generate_button.click()
-    panel.frame_button.click()
+    assert not panel.start_button.isEnabled()
+    panel.set_machine_status(
+        {
+            "connected": True,
+            "allow_motion": True,
+            "coordinate_reference_ready": True,
+        }
+    )
+    assert not panel.start_button.isEnabled()
+    panel.set_prepared_job(
+        "1 path · estimated 1 s",
+        power_percent=0.0,
+        controller_power=0.0,
+    )
+    assert panel.start_button.isEnabled()
     panel.start_button.click()
     panel.stop_button.click()
     assert generated == [True]
-    assert framed == [True]
     assert started == [True]
     assert stopped == [True]
 
+    panel.close()
+    panel.deleteLater()
+
+
+def test_job_panel_blocks_start_until_untrusted_controller_is_reconnected(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = JobPanel()
+    _show_compact(panel, qt_application, 220)
+    panel.set_prepared_job(
+        "1 path · estimated 1 s",
+        power_percent=0.0,
+        controller_power=0.0,
+    )
+
+    panel.set_machine_status(
+        {
+            "connected": True,
+            "allow_motion": True,
+            "coordinate_reference_ready": False,
+            "controller_reconnect_required": True,
+        }
+    )
+
+    assert not panel.start_button.isEnabled()
+    assert "disconnect and reconnect" in panel.start_button.toolTip().lower()
+    assert panel.stop_button.isEnabled()
+
+    panel.set_machine_status(
+        {
+            "connected": True,
+            "allow_motion": True,
+            "coordinate_reference_ready": True,
+            "controller_reconnect_required": False,
+        }
+    )
+    assert panel.start_button.isEnabled()
+    panel.clear_prepared_job()
+    assert not panel.start_button.isEnabled()
+    panel.close()
+    panel.deleteLater()
+
+
+def test_prepared_job_can_start_offline_and_attempt_connection(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = JobPanel()
+    _show_compact(panel, qt_application, 220)
+    panel.set_prepared_job(
+        "calibration marks",
+        power_percent=0.0,
+        controller_power=0.0,
+    )
+
+    panel.set_machine_status({"connected": False, "allow_motion": True})
+
+    assert panel.start_button.isEnabled()
+    assert "connect automatically" in panel.start_button.toolTip().lower()
     panel.close()
     panel.deleteLater()
 
@@ -125,11 +193,7 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
     panel = MachinePanel()
     _show_compact(panel, qt_application, 390)
 
-    jog_group = next(
-        group
-        for group in panel.findChildren(QtWidgets.QGroupBox)
-        if group.title().startswith("Jogging")
-    )
+    jog_group = panel.jog_group
     assert not jog_group.isEnabled()
     assert "physical emergency stop" in panel.safety_note.text()
     assert panel.stop_button.isEnabled()
@@ -141,6 +205,18 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
         panel.stop_button,
     ):
         _assert_inside_panel(button, panel)
+
+    panel.set_status(
+        {
+            "connected": False,
+            "armed": False,
+            "protocol": "grbl",
+            "allow_motion": True,
+            "job": {},
+        }
+    )
+    assert panel.park_button.isEnabled()
+    assert "connect automatically" in panel.park_button.toolTip().lower()
 
     panel.set_status(
         {
@@ -165,6 +241,90 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
             "job": {},
         }
     )
+    assert panel.park_button.isEnabled()
+    assert not jog_group.isEnabled()
+    assert "Home / park" in jog_group.toolTip()
+
+    jog_requests: list[tuple[float, float, float]] = []
+    panel.jogRequested.connect(
+        lambda dx, dy, feed: jog_requests.append((dx, dy, feed))
+    )
+    panel.set_status(
+        {
+            "connected": True,
+            "armed": False,
+            "protocol": "grbl",
+            "allow_motion": True,
+            "coordinate_reference_ready": True,
+            "jog_ready": True,
+            "max_travel_feed_mm_min": 1200.0,
+            "job": {},
+        }
+    )
+    assert jog_group.isEnabled()
+    assert panel.jog_speed.maximum() == 1200.0
+    panel.jog_step.setCurrentIndex(1)
+    panel.jog_right.click()
+    assert jog_requests == [(1.0, 0.0, 1200.0)]
+
+    panel.set_status(
+        {
+            "connected": True,
+            "armed": True,
+            "protocol": "grbl",
+            "allow_motion": True,
+            "coordinate_reference_ready": True,
+            "jog_ready": True,
+            "job": {},
+        }
+    )
+    assert not jog_group.isEnabled()
+    assert "Disarm" in jog_group.toolTip()
+
+    panel.set_status(
+        {
+            "connected": True,
+            "armed": False,
+            "protocol": "grbl",
+            "allow_motion": True,
+            "controller_reconnect_required": True,
+            "job": {},
+        }
+    )
+    assert "RECONNECT REQUIRED" in panel.state_label.text()
+    assert panel.disconnect_button.isEnabled()
+    assert not panel.park_button.isEnabled()
+    assert not jog_group.isEnabled()
+    assert "disconnect and reconnect" in panel.park_button.toolTip().lower()
+
+    panel.set_status(
+        {
+            "connected": True,
+            "armed": False,
+            "protocol": "grbl",
+            "allow_motion": True,
+            "job": {},
+        }
+    )
+
+    panel.set_busy(True)
+    assert not panel.connect_button.isEnabled()
+    assert not panel.disconnect_button.isEnabled()
+    assert not panel.park_button.isEnabled()
+    assert not jog_group.isEnabled()
+    assert panel.stop_button.isEnabled()
+    panel.set_status(
+        {
+            "connected": True,
+            "armed": False,
+            "protocol": "grbl",
+            "allow_motion": True,
+            "job": {},
+        }
+    )
+    assert not panel.park_button.isEnabled()
+    panel.set_busy(False)
+    assert panel.disconnect_button.isEnabled()
     assert panel.park_button.isEnabled()
 
     stop_requests: list[bool] = []

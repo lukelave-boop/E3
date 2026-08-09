@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping
-from typing import Any, Callable
+from collections.abc import Callable, Mapping
+from typing import Any
 
 from ..templates import MAX_GRID_OBJECTS
 from .qt import require_qt

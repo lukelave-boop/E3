@@ -20,7 +20,8 @@ def test_controller_matches_templates_off_thread_and_ignores_stale_results() -> 
     assert "def match_cut_templates(" in controller
     assert "def _match_cut_templates_once(" in controller
     assert "context.rectified_frame(refresh=True)" in controller
-    assert "rank_templates(grouped_templates, trace_result.detections)" in controller
+    assert "_usable_template_detections(trace_result.detections)" in controller
+    assert "rank_templates(grouped_templates, usable_detections)" in controller
     assert "CutTemplate.from_dict(template.to_dict())" in controller
     assert "self._run(" in controller
     assert "request_id != self._template_match_request_id" in controller
@@ -39,8 +40,10 @@ def test_hardware_job_start_homes_and_parks_before_arming() -> None:
     operation = controller[controller.index("    def run_job(") : controller.index("    def pause_resume(")]
 
     assert 'machine.settings.backend == "serial"' in operation
-    assert operation.index("machine.prepare_photo_position()") < operation.index("machine.arm(arm_phrase)")
-    assert operation.index("machine.arm(arm_phrase)") < operation.index("machine.start_job(gcode, name)")
+    assert operation.index("machine.preflight_program(gcode)") < operation.index("machine.prepare_photo_position()")
+    assert operation.index("machine.prepare_photo_position()") < operation.index("machine.arm_program(arm_phrase, program)")
+    assert operation.index("machine.arm_program(arm_phrase, program)") < operation.index("machine.start_validated_program(program, name)")
+    assert "machine.disarm()" in operation
 
 
 def test_main_window_wires_template_review_and_one_batch_application() -> None:

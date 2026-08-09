@@ -14,9 +14,16 @@ stationary overhead **Logitech C920**.
 > `CURRENT_STATE.md`, but the controller/profile and final physical accuracy
 > are not yet verified configurations.
 
-Read [CURRENT_STATE.md](CURRENT_STATE.md) for the branch snapshot and
-[PROJECT_STATUS.md](PROJECT_STATUS.md) for the verification boundary. Read
-[SAFETY.md](SAFETY.md) before connecting hardware.
+Read [CURRENT_STATE.md](CURRENT_STATE.md) for the active branch and verification
+boundary. [PROJECT_STATUS.md](PROJECT_STATUS.md) is the dated 2026-08-06 Windows
+portability snapshot retained as historical evidence. Read [SAFETY.md](SAFETY.md)
+before connecting hardware.
+
+For permanent-camera calibration, follow the single current-version
+[Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
+It gives the exact five-tab button sequence, completion gates, and calibration-job
+handoff rules. The longer calibration documents are technical references, not
+alternative operator sequences.
 
 ## What is implemented
 
@@ -47,7 +54,8 @@ Native desktop workflow:
   runtime/safety status, always-present selection properties, split design and
   laser inspector stacks, and a fixed 30-color operation palette
 - PySide6 machine-coordinate workspace with camera overlay, pan, zoom, grid,
-  rulers, snapping, and toolpath preview
+  rulers, snapping, toolpath preview, a 70%-opacity camera default, and a
+  draggable viewport-fixed overlay key
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
 - Rectangle, rounded rectangle, ellipse, line, text, and imported SVG-path
@@ -56,14 +64,16 @@ Native desktop workflow:
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
   fixed-size handles, Shift-to-snap rotation, and undo/redo-backed commits
-- Per-layer line, fill, and binary-raster speed, power, pass count, ordering,
-  scan interval/angle, laser-off raster overscan, estimates, and dry frames
+- Per-layer line, fill, vector-raster, and grayscale-image speed, power, pass
+  count, ordering, exact scan interval/absolute machine angle, laser-off raster
+  overscan, estimates, and image-aware dry frames
 - Dedicated exact-job Preview with a time scrubber, animated playback up to
   40×, cut/travel visibility, power shading, live move coordinates, timing and
   distance statistics, and PNG export
 - SQLite material presets and camera focus/sharpness controls
 - Native Machine Setup for camera controls and preview, checkerboard lens
-  calibration, manual/CSV/automatic bed mapping, eight-point fine registration,
+  calibration, a fresh keyed 5×5 base-map job with automatic orientation and
+  transactional installation, manual/CSV fallback mapping, eight-point fine registration,
   reviewed translation/full-bed refinement with rollback, bounded 5×5 local
   correction, independent 4×4 holdout validation, and guided five-point
   holdout accuracy validation. Registration and validation can use precision
@@ -78,11 +88,13 @@ Native desktop workflow:
 - Simulation-only frozen alignment images loaded from PNG/JPEG or generated
   deterministically from a selected template at a known pose
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
-  software stop
+  software stop; successful powered jobs drain queued motion, Home/park, and
+  only then release the motors, with visible completion phases and failure alert
 - Validated G-code export; no operator capability requires the browser UI
 
-See [docs/MACHINE_SETUP.md](docs/MACHINE_SETUP.md) for the native calibration
-workflow and browser-parity map, and [docs/JOB_PREVIEW.md](docs/JOB_PREVIEW.md)
+Follow the [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
+for the native calibration workflow. See [docs/MACHINE_SETUP.md](docs/MACHINE_SETUP.md)
+for technical detail and browser parity, and [docs/JOB_PREVIEW.md](docs/JOB_PREVIEW.md)
 for the generated-job review workflow.
 
 The desktop branch also contains a synthetically and behaviorally tested
@@ -136,12 +148,15 @@ The shipped configuration uses a synthetic camera and controller. In a real-hard
 
 - Serial access requires the `--hardware` command-line flag.
 - Motion remains blocked until `machine.allow_motion` is explicitly changed.
-- Positive laser commands require temporary arming with the phrase displayed in the UI.
+- Positive laser commands receive a one-use, time-limited authorization for the
+  exact prepared program when the desktop **Start** action submits it.
 - Low-power laser framing is disabled, and the default dry-frame file contains no `M3`/`M4` laser-enable command at all.
 - Laser-head mounting offsets default to zero. Real-hardware profiles can set
   `laser.spot_offset_x_mm` and `laser.spot_offset_y_mm`; generated jobs show the
   applied values and validate both desired spot and shifted controller bounds.
-- The server binds only to `127.0.0.1`.
+- The shipped server configuration binds to `127.0.0.1`. An explicitly
+  configured IPv4 wildcard bind still rejects non-loopback clients and requires
+  the guarded Host, Origin, JSON, and per-process token checks.
 
 These are software guardrails, not safety-rated controls.
 
@@ -150,7 +165,7 @@ These are software guardrails, not safety-rated controls.
 On Linux Mint, Ubuntu, or Debian:
 
 ```bash
-unzip laser-camera-aligner-0.1.0.zip
+unzip laser-camera-aligner-0.2.0.dev0.zip
 cd laser-camera-aligner
 ./install.sh
 ./run.sh
@@ -158,7 +173,8 @@ cd laser-camera-aligner
 
 The browser opens to `http://127.0.0.1:8080`. Simulation mode starts with an automatically mapped perspective bed, a test workpiece, and a simulated controller.
 
-Load `sample_data/sample_design.svg`, drag it over the simulated workpiece, generate G-code, type the temporary arming phrase, and run it against the simulator.
+Load `sample_data/sample_design.svg`, drag it over the simulated workpiece,
+generate G-code, review the Preview, and run it against the simulator.
 
 For the native desktop after the base installation:
 
@@ -175,7 +191,8 @@ uses the same calibration files and remains available as a legacy alternative.
 The browser and native desktop applications run on Windows with the synthetic
 camera and simulated controller. POSIX serial code is imported only if the
 serial backend is selected; Windows serial hardware, V4L2 camera controls,
-install/launch scripts, OS-native user-data paths, and CI are not implemented.
+install/launch scripts, and CI are not implemented. Autosaves and material
+presets already use a writable OS-native per-user data root.
 
 From an existing desktop-enabled virtual environment, launch the native UI in
 safe simulation mode:
@@ -304,10 +321,15 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 - Linux is the only current hardware platform. Windows is limited to the
   synthetic camera and simulated controller.
 - Line vectors, closed-vector fills, binary vector rasters, and imported
-  threshold raster images are supported. Text-to-path and grayscale/dithered
-  raster power modulation are not implemented.
-- SVG text and embedded images are ignored. Convert text to paths in the design program.
-- CSS stylesheets, clipping paths, masks, and every edge case of the full SVG specification are not supported.
+  grayscale images with deterministic ordered dithering are supported.
+  Text-to-path, selectable dither algorithms, and calibrated grayscale power
+  curves are not implemented.
+- SVG text and embedded images are not converted. Native desktop import stops
+  before creating an object when either is present; convert them to paths in
+  the design program.
+- CSS stylesheets, clipping paths, masks, markers, dashed strokes, and
+  geometry-changing CSS are not supported and are explicitly rejected rather
+  than imported with a mismatched cut path.
 - The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.
 - Cutting-template identification and alignment have synthetic coverage but
   have not been verified with real corrected label-sheet images. The desktop's

@@ -51,7 +51,7 @@ class CommandStack:
         self._commands: list[Command] = []
         self._index = 0
         self._clean_index = 0
-        self._listeners: list[Callable[["CommandStack"], None]] = []
+        self._listeners: list[Callable[[CommandStack], None]] = []
 
     @property
     def can_undo(self) -> bool:
@@ -77,11 +77,11 @@ class CommandStack:
     def depth(self) -> int:
         return len(self._commands)
 
-    def add_listener(self, callback: Callable[["CommandStack"], None]) -> None:
+    def add_listener(self, callback: Callable[[CommandStack], None]) -> None:
         if callback not in self._listeners:
             self._listeners.append(callback)
 
-    def remove_listener(self, callback: Callable[["CommandStack"], None]) -> None:
+    def remove_listener(self, callback: Callable[[CommandStack], None]) -> None:
         if callback in self._listeners:
             self._listeners.remove(callback)
 

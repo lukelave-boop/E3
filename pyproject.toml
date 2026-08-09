@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laser-camera-aligner"
-version = "0.1.0"
+version = "0.2.0.dev0"
 description = "Stationary-camera alignment, SVG placement, and guarded G-code generation for a laser-converted 3D printer"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -18,6 +18,7 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",
   "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
   "Topic :: Multimedia :: Graphics :: Capture :: Digital Camera",
   "Topic :: Scientific/Engineering :: Image Processing"
 ]
@@ -40,7 +41,8 @@ laser_aligner = [
   "web/*.html",
   "web/*.js",
   "web/*.css",
-  "desktop/assets/*.svg"
+  "desktop/assets/*.svg",
+  "operator_docs/*.md"
 ]
 
 [tool.pytest.ini_options]

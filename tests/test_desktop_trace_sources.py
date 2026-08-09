@@ -23,6 +23,7 @@ def test_trace_panel_and_controller_are_wired():
     assert "click the target in the corrected camera image" in panels
     assert "Create vector objects" in panels
     assert "def detect_trace_objects" in controller
+    assert "context.capture_parked_trace_frame()" in controller
     assert "def sample_trace_color" in controller
     assert 'add_panel("trace", "Trace"' in window
     assert "AddObjectsCommand" in window

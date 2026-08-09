@@ -215,6 +215,11 @@ def test_unsupported_schema_and_inconsistent_size_are_rejected():
     with pytest.raises(TemplateFormatError, match="Unsupported template schema"):
         CutTemplate.from_dict(payload)
 
+    for malformed_schema in (True, 1.0, 1.5, "1"):
+        payload["schema_version"] = malformed_schema
+        with pytest.raises(TemplateFormatError, match="must be an integer"):
+            CutTemplate.from_dict(payload)
+
     payload["schema_version"] = 1
     payload["size_mm"]["width"] += 1.0
     with pytest.raises(TemplateFormatError, match="does not match bounds"):

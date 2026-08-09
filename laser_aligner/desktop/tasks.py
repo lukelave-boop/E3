@@ -8,6 +8,17 @@ from .qt import require_qt
 QtCore, _, _ = require_qt()
 
 
+def _exception_message(exc: Exception) -> str:
+    parts = [str(exc) or exc.__class__.__name__]
+    seen = {parts[0]}
+    for raw_note in getattr(exc, "__notes__", ()):
+        note = str(raw_note).strip()
+        if note and note not in seen:
+            parts.append(note)
+            seen.add(note)
+    return "\n".join(parts)
+
+
 class TaskSignals(QtCore.QObject):
     succeeded = QtCore.Signal(object)
     failed = QtCore.Signal(str)
@@ -31,7 +42,7 @@ class FunctionTask(QtCore.QRunnable):
         try:
             result = self.callback()
         except Exception as exc:  # pragma: no cover - exercised with hardware
-            self.signals.failed.emit(str(exc))
+            self.signals.failed.emit(_exception_message(exc))
         else:
             self.signals.succeeded.emit(result)
         finally:

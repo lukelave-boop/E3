@@ -7,7 +7,6 @@ from typing import Any
 from ..config import WorkArea
 from .qt import require_qt
 
-
 QtCore, QtGui, QtWidgets = require_qt()
 
 

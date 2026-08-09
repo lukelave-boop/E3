@@ -4,7 +4,7 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
-VERSION = "0.1.0"
+VERSION = "0.2.0.dev0"
 EXCLUDED_PARTS = {
     ".git",
     ".venv",

@@ -20,14 +20,18 @@ const state = {
 };
 
 const TEMPORARY_BED_MAPPING_KEY = 'laser-aligner-temporary-bed-mapping';
+const REQUEST_TOKEN = document.querySelector('meta[name="e3-request-token"]')?.content || '';
 const $ = (id) => document.getElementById(id);
 const fmt = (value, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—';
 
 async function api(path, method = 'GET', payload = null) {
-  const options = { method, headers: {} };
-  if (payload !== null) {
+  const normalizedMethod = method.toUpperCase();
+  const options = { method: normalizedMethod, headers: {}, credentials: 'same-origin' };
+  if (normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD') {
+    if (!REQUEST_TOKEN) throw new Error('The browser request token is unavailable; reload the application.');
+    options.headers['X-E3-Request-Token'] = REQUEST_TOKEN;
     options.headers['Content-Type'] = 'application/json';
-    options.body = JSON.stringify(payload);
+    options.body = JSON.stringify(payload ?? {});
   }
   const response = await fetch(path, options);
   let data;
@@ -623,21 +627,6 @@ $('generateGcodeButton').addEventListener('click', async () => {
   }
 });
 
-$('generateFrameButton').addEventListener('click', async () => {
-  if (!state.lastBounds) return toast('Generate the design G-code first so its bounds are known.', true);
-  try {
-    const result = await api('/api/design/frame', 'POST', {
-      bounds_mm: state.lastBounds,
-      laser_enabled: false,
-      feed_mm_min: Number($('travelFeed').value),
-    });
-    showGenerated(result);
-    toast('Dry-motion framing program generated with no laser-enable command.');
-  } catch (error) {
-    toast(error.message, true);
-  }
-});
-
 $('detectWorkpieceButton').addEventListener('click', async () => {
   try {
     const result = await api('/api/vision/workpiece', 'POST', {});
@@ -818,7 +807,15 @@ $('sendCommandButton').addEventListener('click', async () => {
   } catch (error) { toast(error.message, true); }
 });
 $('armMachineButton').addEventListener('click', async () => {
-  try { await api('/api/machine/arm', 'POST', { phrase: $('armPhrase').value }); await refreshStatus(); toast('Laser control armed temporarily.'); }
+  if (!state.lastGcode) return toast('Generate or load G-code before arming.', true);
+  try {
+    await api('/api/machine/arm', 'POST', {
+      phrase: $('armPhrase').value,
+      gcode: state.lastGcode,
+    });
+    await refreshStatus();
+    toast('Laser control armed temporarily for this program.');
+  }
   catch (error) { toast(error.message, true); }
 });
 $('disarmMachineButton').addEventListener('click', async () => {

@@ -30,6 +30,7 @@ class TraceOptions:
     regular_grid: bool = True
     infer_missing: bool = True
     normalize_grid: bool = True
+    snap_grid_cells: bool = True
     output_mode: str = "rounded"
     border_offset_mm: float = 0.0
     smoothing_mm: float = 0.25
@@ -59,6 +60,7 @@ class TraceOptions:
         self.regular_grid = bool(self.regular_grid)
         self.infer_missing = bool(self.infer_missing)
         self.normalize_grid = bool(self.normalize_grid)
+        self.snap_grid_cells = bool(self.snap_grid_cells)
         self.output_mode = str(self.output_mode).lower()
         if self.output_mode not in OUTPUT_MODES:
             raise ValueError(f"Unknown output mode: {self.output_mode}")
@@ -116,6 +118,8 @@ class TraceResult:
     grid: dict[str, Any] | None
     message: str
     options: TraceOptions
+    camera_work_area: dict[str, float] = field(default_factory=dict)
+    output_work_area: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -130,6 +134,8 @@ class TraceResult:
             "grid": self.grid,
             "message": self.message,
             "options": self.options.to_dict(),
+            "camera_work_area": self.camera_work_area,
+            "output_work_area": self.output_work_area,
         }
 
 
@@ -291,6 +297,93 @@ def _contrast_region_masks(
         adaptive = 0.0 if positive.size == 0 else float(np.percentile(positive, 78))
         threshold = max(6.0, adaptive)
         mask = (difference >= threshold).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+        masks.append(cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1))
+    return masks[0], masks[1]
+
+
+def _global_contrast_masks(
+    image: np.ndarray,
+    pixels_per_mm: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Segment whole dark/light regions at both raw and corrected contrast.
+
+    Signed local contrast is intentionally retained for uneven beds, but its
+    complementary polarity can describe the narrow highlight between two
+    filled objects more cleanly than either object. Global luminance clustering
+    supplies full-region hypotheses instead of forcing mask arbitration to
+    choose between edge or gap bands. CLAHE provides the same hypotheses after
+    bounded illumination correction when a broad gradient defeats raw Otsu.
+    """
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blur_size = max(3, int(round(pixels_per_mm * 1.25)))
+    if blur_size % 2 == 0:
+        blur_size += 1
+    blurred = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(blurred)
+    radius = max(1, int(round(max(1.0, pixels_per_mm * 0.5))))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
+    )
+    masks: list[np.ndarray] = []
+    for source in (blurred, clahe):
+        _, dark = cv2.threshold(
+            source,
+            0,
+            255,
+            cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU,
+        )
+        for mask in (dark, cv2.bitwise_not(dark)):
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
+            masks.append(
+                cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            )
+    return masks[0], masks[1], masks[2], masks[3]
+
+
+def _adaptive_contrast_masks(
+    image: np.ndarray,
+    pixels_per_mm: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Segment filled regions against a slowly varying local background."""
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    minimum_dimension = min(gray.shape[:2])
+    if minimum_dimension < 3:
+        empty = np.zeros_like(gray)
+        return empty, empty.copy()
+    block_size = max(31, int(round(pixels_per_mm * 40.0)))
+    if block_size % 2 == 0:
+        block_size += 1
+    maximum_block = (
+        minimum_dimension
+        if minimum_dimension % 2 == 1
+        else minimum_dimension - 1
+    )
+    block_size = max(3, min(block_size, maximum_block))
+    dark = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        block_size,
+        4.0,
+    )
+    light = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY,
+        block_size,
+        -4.0,
+    )
+    radius = max(1, int(round(max(1.0, pixels_per_mm * 0.5))))
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
+    )
+    masks = []
+    for mask in (dark, light):
         mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
         masks.append(cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1))
     return masks[0], masks[1]
@@ -467,11 +560,34 @@ def _machine_geometry(
     }
 
 
+def _work_area_overrun_mm(
+    points: Sequence[Sequence[float]],
+    work_area: WorkArea,
+) -> float:
+    return max(_work_area_overruns_mm(points, work_area).values(), default=0.0)
+
+
+def _work_area_overruns_mm(
+    points: Sequence[Sequence[float]],
+    work_area: WorkArea,
+) -> dict[str, float]:
+    coordinates = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    if not len(coordinates):
+        return {"left": 0.0, "right": 0.0, "bottom": 0.0, "top": 0.0}
+    return {
+        "left": max(0.0, float(work_area.x_min - np.min(coordinates[:, 0]))),
+        "right": max(0.0, float(np.max(coordinates[:, 0]) - work_area.x_max)),
+        "bottom": max(0.0, float(work_area.y_min - np.min(coordinates[:, 1]))),
+        "top": max(0.0, float(np.max(coordinates[:, 1]) - work_area.y_max)),
+    }
+
+
 def _candidate(
     contour: np.ndarray,
     mask: np.ndarray,
     options: TraceOptions,
     work_area: WorkArea,
+    output_work_area: WorkArea,
     pixels_per_mm: float,
 ) -> dict[str, Any] | None:
     area_px = float(cv2.contourArea(contour))
@@ -538,6 +654,27 @@ def _candidate(
         if options.output_mode == "rounded" and shape == "rounded_rectangle"
         else observed_contour_mm
     )
+    contour_points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+    image_height, image_width = mask.shape[:2]
+    image_edge_sides = []
+    if float(np.min(contour_points[:, 0])) <= 0.0:
+        image_edge_sides.append("left")
+    if float(np.max(contour_points[:, 0])) >= image_width - 1.0:
+        image_edge_sides.append("right")
+    if float(np.min(contour_points[:, 1])) <= 0.0:
+        image_edge_sides.append("top")
+    if float(np.max(contour_points[:, 1])) >= image_height - 1.0:
+        image_edge_sides.append("bottom")
+    camera_work_area_overruns_mm = _work_area_overruns_mm(
+        vector_contour_mm,
+        work_area,
+    )
+    work_area_overruns_mm = _work_area_overruns_mm(
+        vector_contour_mm,
+        output_work_area,
+    )
+    camera_work_area_overrun_mm = max(camera_work_area_overruns_mm.values())
+    work_area_overrun_mm = max(work_area_overruns_mm.values())
     return {
         "center_px": np.asarray(rectangle["center"], dtype=np.float64),
         "width_px": float(rectangle["width"]),
@@ -553,6 +690,14 @@ def _candidate(
         "coverage": coverage,
         "compactness": compactness,
         "shape": shape,
+        "touches_image_edge": bool(image_edge_sides),
+        "image_edge_sides": image_edge_sides,
+        "within_camera_work_area": camera_work_area_overrun_mm <= 1e-9,
+        "camera_work_area_overrun_mm": camera_work_area_overrun_mm,
+        "camera_work_area_overruns_mm": camera_work_area_overruns_mm,
+        "within_work_area": work_area_overrun_mm <= 1e-9,
+        "work_area_overrun_mm": work_area_overrun_mm,
+        "work_area_overruns_mm": work_area_overruns_mm,
         "contour_mm": observed_contour_mm,
         "vector_contour_mm": vector_contour_mm,
         **geometry,
@@ -610,6 +755,7 @@ def _infer_grid(
     candidates: list[dict[str, Any]],
     options: TraceOptions,
     work_area: WorkArea,
+    output_work_area: WorkArea,
     pixels_per_mm: float,
 ) -> tuple[
     list[dict[str, Any]],
@@ -735,9 +881,65 @@ def _infer_grid(
             cell_members[cell] = (rank, item)
 
     occupancy = len(cell_members) / (len(columns) * len(rows))
+    observed_area_mm2 = sum(
+        float(item["area_mm2"]) for _, item in cell_members.values()
+    )
     grid_quality = min(x_quality, y_quality) * min(1.0, occupancy / 0.55)
     if occupancy < 0.45 or grid_quality < 0.45:
         return candidates, [], None
+
+    # Rounded, softly focused silhouettes give minAreaRect a short and noisy
+    # orientation baseline. Once cells have been assigned, the repeated center
+    # lattice is a much stronger rotation measurement: every populated row
+    # contributes a vector spanning the columns. Refit the regular axes in that
+    # orientation so normalized outlines do not inherit a small contour-angle
+    # bias that is visibly amplified across a long label.
+    row_members: dict[int, list[tuple[int, np.ndarray]]] = {}
+    for (row, column), (_, item) in cell_members.items():
+        row_members.setdefault(row, []).append(
+            (column, np.asarray(item["center_px"], dtype=np.float64))
+        )
+    lattice_angles = []
+    for members in row_members.values():
+        if len(members) < 2:
+            continue
+        first_column, first_point = min(members, key=lambda value: value[0])
+        last_column, last_point = max(members, key=lambda value: value[0])
+        if last_column == first_column:
+            continue
+        vector = last_point - first_point
+        lattice_angles.append(math.degrees(math.atan2(float(vector[1]), float(vector[0]))))
+    if len(lattice_angles) >= 2:
+        common_angle = _mean_angle(lattice_angles)
+        angle = math.radians(common_angle)
+        u = np.array([math.cos(angle), math.sin(angle)])
+        v = np.array([-u[1], u[0]])
+
+        def refit_axis(axis: np.ndarray, cell_axis: int, count: int) -> tuple[list[float], float]:
+            indices = []
+            values = []
+            for cell, (_, item) in cell_members.items():
+                indices.append(float(cell[cell_axis]))
+                values.append(float(np.asarray(item["center_px"]) @ axis))
+            index_array = np.asarray(indices, dtype=np.float64)
+            value_array = np.asarray(values, dtype=np.float64)
+            centered = index_array - float(np.mean(index_array))
+            denominator = float(np.dot(centered, centered))
+            if denominator <= 1e-9:
+                return [], 0.0
+            spacing = float(
+                np.dot(centered, value_array - float(np.mean(value_array))) / denominator
+            )
+            origin = float(np.mean(value_array - index_array * spacing))
+            return [origin + index * spacing for index in range(count)], spacing
+
+        refined_columns, refined_x_spacing = refit_axis(u, 1, len(columns))
+        refined_rows, refined_y_spacing = refit_axis(v, 0, len(rows))
+        if refined_x_spacing > 0.0 and refined_y_spacing > 0.0:
+            columns = refined_columns
+            rows = refined_rows
+            x_spacing = refined_x_spacing
+            y_spacing = refined_y_spacing
 
     normalize = bool(options.normalize_grid and options.output_mode == "rounded")
 
@@ -747,22 +949,29 @@ def _infer_grid(
         column: int,
         *,
         inferred: bool,
-    ) -> dict[str, Any] | None:
-        center_px = u * columns[column] + v * rows[row]
+    ) -> dict[str, Any]:
+        lattice_center_px = u * columns[column] + v * rows[row]
+        use_lattice_pose = inferred or options.snap_grid_cells
+        center_px = (
+            lattice_center_px
+            if use_lattice_pose or item is None
+            else np.asarray(item["center_px"], dtype=np.float64)
+        )
+        cell_angle = (
+            common_angle
+            if use_lattice_pose or item is None
+            else float(item["angle_image_deg"])
+        )
         rectangle = {
             "center": center_px,
             "width": median_width,
             "height": median_height,
-            "angle_image_deg": common_angle,
+            "angle_image_deg": cell_angle,
             "radius_px": median_radius,
         }
         geometry = _machine_geometry(
             rectangle, work_area, pixels_per_mm, options.border_offset_mm
         )
-        if not all(
-            work_area.contains(float(x), float(y)) for x, y in geometry["box_mm"]
-        ):
-            return None
         rounded_contour = _rounded_polyline(
             geometry["center_mm"],
             geometry["width_mm"],
@@ -770,6 +979,18 @@ def _infer_grid(
             geometry["rotation_deg"],
             geometry["corner_radius_mm"],
         )
+        camera_work_area_overruns_mm = _work_area_overruns_mm(
+            rounded_contour,
+            work_area,
+        )
+        work_area_overruns_mm = _work_area_overruns_mm(
+            rounded_contour,
+            output_work_area,
+        )
+        camera_work_area_overrun_mm = max(
+            camera_work_area_overruns_mm.values()
+        )
+        work_area_overrun_mm = max(work_area_overruns_mm.values())
         if inferred:
             median_score = float(
                 np.median([value[1]["score"] for value in cell_members.values()])
@@ -789,6 +1010,14 @@ def _infer_grid(
                 "coverage": 0.0,
                 "compactness": 1.0,
                 "shape": "rounded_rectangle",
+                "touches_image_edge": False,
+                "image_edge_sides": [],
+                "within_camera_work_area": camera_work_area_overrun_mm <= 1e-9,
+                "camera_work_area_overrun_mm": camera_work_area_overrun_mm,
+                "camera_work_area_overruns_mm": camera_work_area_overruns_mm,
+                "within_work_area": work_area_overrun_mm <= 1e-9,
+                "work_area_overrun_mm": work_area_overrun_mm,
+                "work_area_overruns_mm": work_area_overruns_mm,
                 "contour_mm": rounded_contour,
                 "vector_contour_mm": rounded_contour,
                 "grid_row": row,
@@ -809,6 +1038,15 @@ def _infer_grid(
                 "observed_height_mm": float(item["height_mm"]),
                 "observed_rotation_deg": float(item["rotation_deg"]),
                 "observed_corner_radius_mm": float(item["corner_radius_mm"]),
+                "observed_within_work_area": bool(
+                    item.get("within_work_area", True)
+                ),
+                "observed_work_area_overrun_mm": float(
+                    item.get("work_area_overrun_mm", 0.0)
+                ),
+                "observed_work_area_overruns_mm": dict(
+                    item.get("work_area_overruns_mm", {})
+                ),
             }
         )
         if normalize:
@@ -817,10 +1055,20 @@ def _infer_grid(
                     "center_px": center_px,
                     "width_px": median_width,
                     "height_px": median_height,
-                    "angle_image_deg": common_angle,
+                    "angle_image_deg": cell_angle,
                     "radius_px": median_radius,
                     "area_mm2": median_width * median_height / pixels_per_mm**2,
                     "shape": "rounded_rectangle",
+                    "within_camera_work_area": (
+                        camera_work_area_overrun_mm <= 1e-9
+                    ),
+                    "camera_work_area_overrun_mm": camera_work_area_overrun_mm,
+                    "camera_work_area_overruns_mm": (
+                        camera_work_area_overruns_mm
+                    ),
+                    "within_work_area": work_area_overrun_mm <= 1e-9,
+                    "work_area_overrun_mm": work_area_overrun_mm,
+                    "work_area_overruns_mm": work_area_overruns_mm,
                     "vector_contour_mm": rounded_contour,
                     **geometry,
                 }
@@ -830,8 +1078,7 @@ def _infer_grid(
     direct = []
     for (row, column), (_, item) in sorted(cell_members.items()):
         candidate = canonical_candidate(item, row, column, inferred=False)
-        if candidate is not None:
-            direct.append(candidate)
+        direct.append(candidate)
 
     inferred = []
     if options.infer_missing:
@@ -840,8 +1087,7 @@ def _infer_grid(
                 if (row, column) in cell_members:
                     continue
                 candidate = canonical_candidate(None, row, column, inferred=True)
-                if candidate is not None:
-                    inferred.append(candidate)
+                inferred.append(candidate)
 
     canonical_geometry = _machine_geometry(
         {
@@ -855,21 +1101,53 @@ def _infer_grid(
         pixels_per_mm,
         options.border_offset_mm,
     )
+    output_cells = [*direct, *inferred]
+    outside_cells = sum(
+        not bool(item.get("within_work_area", True)) for item in output_cells
+    )
     return direct, inferred, {
         "rows": len(rows),
         "columns": len(columns),
         "occupancy": occupancy,
+        "observed_cells": len(cell_members),
+        "observed_area_mm2": observed_area_mm2,
         "quality": grid_quality,
         "rotation_deg": -common_angle,
         "direct_cells": len(direct),
         "missing_cells": len(inferred),
-        "rejected_candidates": len(candidates) - len(direct),
+        "missing_cells_total": len(rows) * len(columns) - len(cell_members),
+        "inferred_cells": len(inferred),
+        "rejected_candidates": len(candidates) - len(cell_members),
+        "outside_cells": outside_cells,
+        "max_work_area_overrun_mm": max(
+            (
+                float(item.get("work_area_overrun_mm", 0.0))
+                for item in output_cells
+            ),
+            default=0.0,
+        ),
         "normalized": normalize,
+        "cells_snapped": normalize and options.snap_grid_cells,
         "cell_width_mm": float(canonical_geometry["width_mm"]),
         "cell_height_mm": float(canonical_geometry["height_mm"]),
         "cell_corner_radius_mm": float(canonical_geometry["corner_radius_mm"]),
         "column_pitch_mm": x_spacing / pixels_per_mm,
         "row_pitch_mm": y_spacing / pixels_per_mm,
+        "output_work_area": {
+            "x_min": float(output_work_area.x_min),
+            "x_max": float(output_work_area.x_max),
+            "y_min": float(output_work_area.y_min),
+            "y_max": float(output_work_area.y_max),
+        },
+        "camera_work_area": {
+            "x_min": float(work_area.x_min),
+            "x_max": float(work_area.x_max),
+            "y_min": float(work_area.y_min),
+            "y_max": float(work_area.y_max),
+        },
+        "edge_cropped_direct_cells": sum(
+            bool(item.get("touches_image_edge", False)) for item in direct
+        ),
     }
 
 
@@ -877,6 +1155,8 @@ def _to_detection(
     item: Mapping[str, Any], source: str, options: TraceOptions
 ) -> TraceDetection:
     confidence = float(item["confidence"])
+    within_work_area = bool(item.get("within_work_area", True))
+    touches_image_edge = bool(item.get("touches_image_edge", False))
     return TraceDetection(
         id=_new_id(), index=0, source=source,
         confidence=confidence, score=float(item["score"]),
@@ -893,7 +1173,10 @@ def _to_detection(
         ],
         box_mm=[list(point) for point in item["box_mm"]],
         selected_default=(
-            source == "direct" and confidence >= options.confidence_threshold
+            source == "direct"
+            and confidence >= options.confidence_threshold
+            and within_work_area
+            and not touches_image_edge
         ),
         diagnostics={
             "rectangularity": float(item["rectangularity"]),
@@ -901,6 +1184,22 @@ def _to_detection(
             "fit_iou": float(item["fit_iou"]),
             "color_coverage": float(item["coverage"]),
             "compactness": float(item.get("compactness", 0.0)),
+            "mask_source": str(item.get("mask_source", "unknown")),
+            "touches_image_edge": touches_image_edge,
+            "image_edge_sides": list(item.get("image_edge_sides", [])),
+            "within_camera_work_area": bool(
+                item.get("within_camera_work_area", True)
+            ),
+            "camera_work_area_overrun_mm": float(
+                item.get("camera_work_area_overrun_mm", 0.0)
+            ),
+            "within_work_area": within_work_area,
+            "work_area_overrun_mm": float(
+                item.get("work_area_overrun_mm", 0.0)
+            ),
+            "work_area_overruns_mm": dict(
+                item.get("work_area_overruns_mm", {})
+            ),
             **(
                 {
                     "grid_normalized": bool(item.get("grid_normalized", False)),
@@ -919,6 +1218,12 @@ def _to_detection(
                     "observed_corner_radius_mm": float(
                         item["observed_corner_radius_mm"]
                     ),
+                    "observed_within_work_area": bool(
+                        item.get("observed_within_work_area", True)
+                    ),
+                    "observed_work_area_overrun_mm": float(
+                        item.get("observed_work_area_overrun_mm", 0.0)
+                    ),
                 }
                 if "observed_center_mm" in item
                 else {}
@@ -932,6 +1237,8 @@ def detect_objects(
     options: TraceOptions | Mapping[str, Any] | None,
     work_area: WorkArea,
     pixels_per_mm: float,
+    *,
+    output_work_area: WorkArea | None = None,
 ) -> TraceResult:
     options = (
         options
@@ -943,54 +1250,165 @@ def detect_objects(
     pixels_per_mm = float(pixels_per_mm)
     if pixels_per_mm <= 0:
         raise ValueError("pixels_per_mm must be positive")
+    output_work_area = work_area if output_work_area is None else output_work_area
+    output_values = (
+        output_work_area.x_min,
+        output_work_area.x_max,
+        output_work_area.y_min,
+        output_work_area.y_max,
+    )
+    if not all(math.isfinite(float(value)) for value in output_values):
+        raise ValueError("output_work_area limits must be finite")
+    if output_work_area.width <= 0 or output_work_area.height <= 0:
+        raise ValueError("output_work_area must have positive dimensions")
+    if (
+        output_work_area.x_min < work_area.x_min
+        or output_work_area.x_max > work_area.x_max
+        or output_work_area.y_min < work_area.y_min
+        or output_work_area.y_max > work_area.y_max
+    ):
+        raise ValueError("output_work_area must lie inside the camera work area")
+    camera_work_area_payload = {
+        "x_min": float(work_area.x_min),
+        "x_max": float(work_area.x_max),
+        "y_min": float(work_area.y_min),
+        "y_max": float(work_area.y_max),
+    }
+    output_work_area_payload = {
+        "x_min": float(output_work_area.x_min),
+        "x_max": float(output_work_area.x_max),
+        "y_min": float(output_work_area.y_min),
+        "y_max": float(output_work_area.y_max),
+    }
 
     target_hue = options.target_hue
-    masks: list[tuple[str, np.ndarray, float | None]] = []
+    masks: list[tuple[str, str, np.ndarray, float | None]] = []
     if options.detection_mode in {"auto", "color"}:
         if target_hue is None:
             target_hue = auto_target_hue(image, options.min_saturation)
         if target_hue is not None:
-            masks.append((
-                "color",
-                _color_mask(image, target_hue, options, pixels_per_mm),
-                target_hue,
-            ))
+            masks.append(
+                (
+                    "color",
+                    "color",
+                    _color_mask(image, target_hue, options, pixels_per_mm),
+                    target_hue,
+                )
+            )
     if options.detection_mode in {"auto", "contrast"}:
-        masks.append(("contrast", _contrast_mask(image, pixels_per_mm), None))
-        for region_mask in _contrast_region_masks(image, pixels_per_mm):
-            masks.append(("contrast", region_mask, None))
+        masks.append(
+            (
+                "contrast",
+                "local_absolute",
+                _contrast_mask(image, pixels_per_mm),
+                None,
+            )
+        )
+        for source, region_mask in zip(
+            ("global_dark", "global_light", "clahe_dark", "clahe_light"),
+            _global_contrast_masks(image, pixels_per_mm),
+            strict=True,
+        ):
+            masks.append(("contrast", source, region_mask, None))
+        for source, region_mask in zip(
+            ("adaptive_dark", "adaptive_light"),
+            _adaptive_contrast_masks(image, pixels_per_mm),
+            strict=True,
+        ):
+            masks.append(("contrast", source, region_mask, None))
+        for source, region_mask in zip(
+            ("local_dark", "local_light"),
+            _contrast_region_masks(image, pixels_per_mm),
+            strict=True,
+        ):
+            masks.append(("contrast", source, region_mask, None))
     if not masks:
         return TraceResult(
             False, [], options.detection_mode, target_hue,
             image.shape[1], image.shape[0], 0, 0, None,
             "No suitable target color was found", options,
+            camera_work_area_payload,
+            output_work_area_payload,
         )
 
+    filled_region_sources = {
+        "color",
+        "global_dark",
+        "global_light",
+        "clahe_dark",
+        "clahe_light",
+        "adaptive_dark",
+        "adaptive_light",
+    }
     best = None
-    for mode, mask, hue in masks:
+    for mode, mask_source, mask, hue in masks:
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
         candidates = [
             candidate for contour in contours
             if (candidate := _candidate(
-                contour, mask, options, work_area, pixels_per_mm
+                contour,
+                mask,
+                options,
+                work_area,
+                output_work_area,
+                pixels_per_mm,
             )) is not None
         ]
-        quality = sum(item["score"] for item in candidates) + 0.35 * len(candidates)
-        if best is None or quality > best[0]:
-            best = (quality, mode, hue, candidates)
+        raw_quality = sum(item["score"] for item in candidates) + 0.35 * len(
+            candidates
+        )
+        direct, inferred, grid = _infer_grid(
+            candidates,
+            options,
+            work_area,
+            output_work_area,
+            pixels_per_mm,
+        )
+        family = direct if grid is not None else candidates
+        family_area = sum(float(item["area_mm2"]) for item in family)
+        family_score = (
+            float(np.mean([item["score"] for item in family])) if family else 0.0
+        )
+        if options.regular_grid and grid is not None:
+            rank = (
+                2.0 if mask_source in filled_region_sources else 1.0,
+                float(grid["observed_area_mm2"]) * float(grid["quality"]),
+                float(grid["observed_cells"]) * float(grid["quality"]),
+                family_score,
+                raw_quality,
+            )
+        else:
+            rank = (
+                1.0 if mask_source in filled_region_sources and family else 0.0,
+                raw_quality,
+                family_score,
+                math.log1p(family_area),
+            )
+        for item in (*direct, *inferred):
+            item["mask_source"] = mask_source
+        if grid is not None:
+            grid["mask_source"] = mask_source
+        if best is None or rank > best[0]:
+            best = (rank, mode, hue, direct, inferred, grid)
     assert best is not None
-    _, mode_used, chosen_hue, candidates = best
+    _, mode_used, chosen_hue, candidates, inferred, grid = best
     if chosen_hue is not None:
         target_hue = chosen_hue
-
-    candidates, inferred, grid = _infer_grid(
-        candidates, options, work_area, pixels_per_mm
-    )
     detections = [
         *[_to_detection(item, "direct", options) for item in candidates],
         *[_to_detection(item, "inferred", options) for item in inferred],
     ]
-    detections.sort(key=lambda item: (-item.center_mm[1], item.center_mm[0]))
+    detections.sort(
+        key=lambda item: (
+            (
+                0,
+                int(item.diagnostics["grid_row"]),
+                int(item.diagnostics["grid_column"]),
+            )
+            if "grid_row" in item.diagnostics
+            else (1, -float(item.center_mm[1]), float(item.center_mm[0]))
+        )
+    )
     for index, detection in enumerate(detections, 1):
         detection.index = index
 
@@ -1006,11 +1424,91 @@ def detect_objects(
             f"position{'s' if inferred_count != 1 else ''}"
         )
     if grid and grid.get("normalized"):
-        message += (
-            f"; fitted identical {int(grid['columns'])} × "
-            f"{int(grid['rows'])} grid cells"
-        )
+        if grid.get("cells_snapped"):
+            message += (
+                f"; fitted identical {int(grid['columns'])} × "
+                f"{int(grid['rows'])} grid cells"
+            )
+        else:
+            message += (
+                f"; fitted shared dimensions across a "
+                f"{int(grid['columns'])} × {int(grid['rows'])} grid"
+            )
     message += f"; {selected_count} selected by confidence"
+    outside_count = sum(
+        not bool(item.diagnostics.get("within_work_area", True))
+        for item in detections
+    )
+    if outside_count:
+        outline_name = "cell" if grid is not None else "outline"
+        maximum_by_side = {
+            side: max(
+                (
+                    float(
+                        item.diagnostics.get("work_area_overruns_mm", {}).get(
+                            side,
+                            0.0,
+                        )
+                    )
+                    for item in detections
+                ),
+                default=0.0,
+            )
+            for side in ("left", "right", "bottom", "top")
+        }
+        side_summary = "; ".join(
+            f"{side} by {amount:.2f} mm"
+            for side, amount in maximum_by_side.items()
+            if amount > 1e-9
+        )
+        guarded_output_area = any(
+            abs(float(left) - float(right)) > 1e-9
+            for left, right in zip(
+                (
+                    output_work_area.x_min,
+                    output_work_area.x_max,
+                    output_work_area.y_min,
+                    output_work_area.y_max,
+                ),
+                (
+                    work_area.x_min,
+                    work_area.x_max,
+                    work_area.y_min,
+                    work_area.y_max,
+                ),
+                strict=True,
+            )
+        )
+        boundary_name = (
+            "guarded output area" if guarded_output_area else "work area"
+        )
+        message += (
+            f"; WARNING: {outside_count} {outline_name}"
+            f"{'s extend' if outside_count != 1 else ' extends'} outside the "
+            f"{boundary_name} ({side_summary}) and "
+            f"{'were' if outside_count != 1 else 'was'} not preselected"
+        )
+    edge_cropped_count = sum(
+        item.source == "direct"
+        and bool(item.diagnostics.get("touches_image_edge", False))
+        for item in detections
+    )
+    if edge_cropped_count:
+        edge_sides = sorted(
+            {
+                str(side)
+                for item in detections
+                if item.source == "direct"
+                for side in item.diagnostics.get("image_edge_sides", [])
+            }
+        )
+        edge_summary = "/".join(edge_sides) or "camera"
+        message += (
+            f"; WARNING: {edge_cropped_count} observed outline"
+            f"{'s touch' if edge_cropped_count != 1 else ' touches'} the "
+            f"{edge_summary} camera/work-area image edge, may be cropped, and "
+            f"{'were' if edge_cropped_count != 1 else 'was'} not preselected"
+        )
     if not detections:
         message = "No objects passed the current filters"
 
@@ -1018,4 +1516,6 @@ def detect_objects(
         bool(detections), detections, mode_used, target_hue,
         image.shape[1], image.shape[0], direct_count, inferred_count,
         grid, message, options,
+        camera_work_area_payload,
+        output_work_area_payload,
     )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import math
+
 import cv2
 import numpy as np
 import pytest
@@ -60,6 +62,143 @@ def _label_scene(*, obscure: bool = True) -> np.ndarray:
         cv2.rectangle(image, (565, 0), (759, 166), (28, 31, 34), -1)
         cv2.rectangle(image, (548, 20), (640, 150), (48, 52, 55), -1)
     return image
+
+
+def _neutral_dark_label_seam_scene(
+    *,
+    missing: set[tuple[int, int]] | None = None,
+    alternating_y_offset_px: int = 0,
+    internal_highlight_height_mm: float = 0.0,
+) -> tuple[np.ndarray, list[tuple[float, float]]]:
+    """Neutral labels whose bright inter-row seams form a false clean grid."""
+
+    pixels_per_mm = 4.0
+    size_px = 880
+    y, x = np.indices((size_px, size_px))
+    base = (
+        225.0
+        + 18.0 * x / (size_px - 1)
+        - 24.0 * y / (size_px - 1)
+        - 12.0
+        * ((x - size_px * 0.55) ** 2 + (y - size_px * 0.45) ** 2)
+        / (size_px * size_px)
+    )
+    image = np.stack((base - 3.0, base, base + 3.0), axis=2)
+
+    expected_centers: list[tuple[float, float]] = []
+    x_centers = (64.05, 155.95)
+    y_centers = tuple(199.25 - row * 25.5 for row in range(8))
+    for row, center_y_mm in enumerate(y_centers):
+        for column, center_x_mm in enumerate(x_centers):
+            if missing and (row, column) in missing:
+                continue
+            center_x_px = int(center_x_mm * pixels_per_mm)
+            center_y_px = int((220.0 - center_y_mm) * pixels_per_mm)
+            center_y_px += alternating_y_offset_px if column == 0 else -alternating_y_offset_px
+            width_px = int(81.7 * pixels_per_mm)
+            height_px = int(21.5 * pixels_per_mm)
+            radius_px = 14
+
+            mask = np.zeros((size_px, size_px), dtype=np.uint8)
+            cv2.rectangle(
+                mask,
+                (
+                    center_x_px - width_px // 2 + radius_px,
+                    center_y_px - height_px // 2,
+                ),
+                (
+                    center_x_px + width_px // 2 - radius_px,
+                    center_y_px + height_px // 2,
+                ),
+                255,
+                -1,
+            )
+            cv2.rectangle(
+                mask,
+                (
+                    center_x_px - width_px // 2,
+                    center_y_px - height_px // 2 + radius_px,
+                ),
+                (
+                    center_x_px + width_px // 2,
+                    center_y_px + height_px // 2 - radius_px,
+                ),
+                255,
+                -1,
+            )
+            for corner in (
+                (
+                    center_x_px - width_px // 2 + radius_px,
+                    center_y_px - height_px // 2 + radius_px,
+                ),
+                (
+                    center_x_px + width_px // 2 - radius_px,
+                    center_y_px - height_px // 2 + radius_px,
+                ),
+                (
+                    center_x_px + width_px // 2 - radius_px,
+                    center_y_px + height_px // 2 - radius_px,
+                ),
+                (
+                    center_x_px - width_px // 2 + radius_px,
+                    center_y_px + height_px // 2 - radius_px,
+                ),
+            ):
+                cv2.circle(mask, corner, radius_px, 255, -1)
+
+            value = 62 + row * 4 + column * 2
+            image[mask > 0] = (value - 2, value, value + 3)
+            cv2.putText(
+                image,
+                "WARNING",
+                (center_x_px - 55, center_y_px - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.35,
+                (35, 36, 38),
+                1,
+                cv2.LINE_AA,
+            )
+            for offset_y in (2, 13):
+                cv2.line(
+                    image,
+                    (center_x_px - 85, center_y_px + offset_y),
+                    (center_x_px + 85, center_y_px + offset_y),
+                    (42, 43, 46),
+                    1,
+                    cv2.LINE_AA,
+                )
+            if internal_highlight_height_mm > 0.0:
+                half_height = max(
+                    1,
+                    int(round(internal_highlight_height_mm * pixels_per_mm / 2.0)),
+                )
+                cv2.rectangle(
+                    image,
+                    (center_x_px - 136, center_y_px - half_height),
+                    (center_x_px + 136, center_y_px + half_height),
+                    (220, 223, 226),
+                    -1,
+                )
+            expected_centers.append(
+                (
+                    center_x_mm,
+                    center_y_mm
+                    - (
+                        alternating_y_offset_px
+                        if column == 0
+                        else -alternating_y_offset_px
+                    )
+                    / pixels_per_mm,
+                )
+            )
+
+    rng = np.random.default_rng(2)
+    image = np.clip(
+        image + rng.normal(0.0, 2.0, image.shape),
+        0,
+        255,
+    ).astype(np.uint8)
+    return cv2.GaussianBlur(image, (5, 5), 0.9), expected_centers
 
 
 def test_auto_hue_finds_red_labels():
@@ -196,6 +335,432 @@ def test_contrast_region_detects_fill_instead_of_expanded_edge_halo():
     assert close_matches
 
 
+def _seam_scene_options() -> TraceOptions:
+    return TraceOptions(
+        detection_mode="auto",
+        hue_tolerance=14.0,
+        min_saturation=45,
+        min_area_mm2=30.0,
+        max_area_mm2=20_000.0,
+        min_width_mm=4.0,
+        min_height_mm=3.0,
+        regular_grid=True,
+        infer_missing=True,
+        normalize_grid=True,
+        snap_grid_cells=False,
+        output_mode="rounded",
+    )
+
+
+def test_auto_neutral_grid_prefers_full_bodies_over_bright_seams() -> None:
+    image, expected_centers = _neutral_dark_label_seam_scene()
+    result = detect_objects(
+        image,
+        _seam_scene_options(),
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert result.grid["rows"] == 8
+    assert result.grid["columns"] == 2
+    assert result.grid["observed_cells"] == 16
+    assert result.grid["mask_source"] in {"global_dark", "clahe_dark"}
+    assert result.direct_count == 16
+    assert result.inferred_count == 0
+    assert len(result.detections) == 16
+    assert all(item.height_mm > 14.0 for item in result.detections)
+    assert np.median([item.width_mm for item in result.detections]) == pytest.approx(
+        81.5,
+        abs=0.75,
+    )
+    assert np.median([item.height_mm for item in result.detections]) == pytest.approx(
+        21.5,
+        abs=0.5,
+    )
+    observed_centers = [item.center_mm for item in result.detections]
+    assert len(observed_centers) == len(expected_centers)
+    for observed, expected in zip(observed_centers, expected_centers, strict=True):
+        assert math.dist(observed, expected) <= 0.75
+
+
+def test_auto_neutral_non_grid_prefers_full_bodies_over_internal_bands() -> None:
+    image, _ = _neutral_dark_label_seam_scene()
+    options = _seam_scene_options()
+    options.regular_grid = False
+    result = detect_objects(
+        image,
+        options,
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        4.0,
+    )
+
+    assert result.grid is None
+    assert result.direct_count == 16
+    assert result.inferred_count == 0
+    assert all(item.height_mm > 14.0 for item in result.detections)
+    assert np.median([item.width_mm for item in result.detections]) == pytest.approx(
+        81.5,
+        abs=0.75,
+    )
+    assert np.median([item.height_mm for item in result.detections]) == pytest.approx(
+        21.5,
+        abs=0.5,
+    )
+
+
+@pytest.mark.parametrize("regular_grid", [False, True], ids=["without-grid", "with-grid"])
+def test_auto_prefers_full_bodies_over_opposite_polarity_internal_highlights(
+    regular_grid: bool,
+) -> None:
+    image, _ = _neutral_dark_label_seam_scene(
+        internal_highlight_height_mm=3.8,
+    )
+    options = _seam_scene_options()
+    options.regular_grid = regular_grid
+    result = detect_objects(
+        image,
+        options,
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        4.0,
+    )
+
+    assert result.direct_count == 16
+    assert all(item.height_mm > 14.0 for item in result.detections)
+    assert np.median([item.width_mm for item in result.detections]) == pytest.approx(
+        81.5,
+        abs=0.75,
+    )
+    if regular_grid:
+        assert result.grid is not None
+        assert (result.grid["columns"], result.grid["rows"]) == (2, 8)
+    else:
+        assert result.grid is None
+
+
+def test_auto_neutral_grid_infers_only_the_missing_full_bodies() -> None:
+    image, _ = _neutral_dark_label_seam_scene(missing={(0, 0), (1, 0)})
+    result = detect_objects(
+        image,
+        _seam_scene_options(),
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert (result.grid["columns"], result.grid["rows"]) == (2, 8)
+    assert result.grid["observed_cells"] == 14
+    assert result.grid["missing_cells_total"] == 2
+    assert result.direct_count == 14
+    assert result.inferred_count == 2
+    assert len(result.detections) == 16
+    assert all(item.height_mm > 14.0 for item in result.detections)
+
+
+def test_grid_numbering_stays_row_major_with_small_within_row_y_offsets() -> None:
+    image, _ = _neutral_dark_label_seam_scene(alternating_y_offset_px=2)
+    result = detect_objects(
+        image,
+        _seam_scene_options(),
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert (result.grid["columns"], result.grid["rows"]) == (2, 8)
+    assert [
+        (
+            item.index,
+            item.diagnostics["grid_row"],
+            item.diagnostics["grid_column"],
+        )
+        for item in result.detections
+    ] == [
+        (row * 2 + column + 1, row, column)
+        for row in range(8)
+        for column in range(2)
+    ]
+
+
+@pytest.mark.parametrize("angle_deg", [-8.0, -4.0, 2.0, 5.0, 8.0])
+def test_rotated_grid_keeps_angle_and_stable_row_major_numbering(
+    angle_deg: float,
+) -> None:
+    pixels_per_mm = 4.0
+    size_px = 880
+    image = np.full((size_px, size_px, 3), 220, dtype=np.uint8)
+    for center_y_mm in (170.0, 130.0, 90.0, 50.0):
+        for center_x_mm in (70.0, 150.0):
+            center_x_px = int(center_x_mm * pixels_per_mm)
+            center_y_px = int((220.0 - center_y_mm) * pixels_per_mm)
+            width_px = int(60.0 * pixels_per_mm)
+            height_px = int(18.0 * pixels_per_mm)
+            radius_px = 12
+            cv2.rectangle(
+                image,
+                (
+                    center_x_px - width_px // 2 + radius_px,
+                    center_y_px - height_px // 2,
+                ),
+                (
+                    center_x_px + width_px // 2 - radius_px,
+                    center_y_px + height_px // 2,
+                ),
+                (55, 58, 62),
+                -1,
+            )
+            cv2.rectangle(
+                image,
+                (
+                    center_x_px - width_px // 2,
+                    center_y_px - height_px // 2 + radius_px,
+                ),
+                (
+                    center_x_px + width_px // 2,
+                    center_y_px + height_px // 2 - radius_px,
+                ),
+                (55, 58, 62),
+                -1,
+            )
+            for corner in (
+                (
+                    center_x_px - width_px // 2 + radius_px,
+                    center_y_px - height_px // 2 + radius_px,
+                ),
+                (
+                    center_x_px + width_px // 2 - radius_px,
+                    center_y_px - height_px // 2 + radius_px,
+                ),
+                (
+                    center_x_px + width_px // 2 - radius_px,
+                    center_y_px + height_px // 2 - radius_px,
+                ),
+                (
+                    center_x_px - width_px // 2 + radius_px,
+                    center_y_px + height_px // 2 - radius_px,
+                ),
+            ):
+                cv2.circle(image, corner, radius_px, (55, 58, 62), -1)
+    matrix = cv2.getRotationMatrix2D(
+        (size_px / 2.0, size_px / 2.0),
+        angle_deg,
+        1.0,
+    )
+    image = cv2.warpAffine(
+        image,
+        matrix,
+        (size_px, size_px),
+        flags=cv2.INTER_LINEAR,
+        borderValue=(220, 220, 220),
+    )
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            min_area_mm2=200.0,
+            max_area_mm2=2_000.0,
+            min_width_mm=20.0,
+            min_height_mm=8.0,
+            regular_grid=True,
+            infer_missing=True,
+            normalize_grid=True,
+        ),
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        pixels_per_mm,
+    )
+
+    assert result.grid is not None
+    assert (result.grid["columns"], result.grid["rows"]) == (2, 4)
+    assert result.grid["rotation_deg"] == pytest.approx(angle_deg, abs=0.1)
+    assert [
+        (
+            item.index,
+            item.diagnostics["grid_row"],
+            item.diagnostics["grid_column"],
+        )
+        for item in result.detections
+    ] == [
+        (row * 2 + column + 1, row, column)
+        for row in range(4)
+        for column in range(2)
+    ]
+
+
+def test_auto_neutral_grid_survives_severe_exposure_gradient() -> None:
+    image, _ = _neutral_dark_label_seam_scene()
+    exposure = np.linspace(0.45, 1.45, image.shape[1], dtype=np.float32)[
+        None,
+        :,
+        None,
+    ]
+    image = np.clip(image.astype(np.float32) * exposure, 0, 255).astype(np.uint8)
+    result = detect_objects(
+        image,
+        _seam_scene_options(),
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert (result.grid["columns"], result.grid["rows"]) == (2, 8)
+    assert result.grid["mask_source"] == "adaptive_dark"
+    assert result.direct_count == 16
+    assert result.inferred_count == 0
+    assert all(item.height_mm > 14.0 for item in result.detections)
+
+
+def test_normalized_grid_retains_and_flags_cells_crossing_work_area() -> None:
+    image, _ = _neutral_dark_label_seam_scene()
+    options = _seam_scene_options()
+    options.border_offset_mm = 16.0
+    result = detect_objects(
+        image,
+        options,
+        WorkArea(0.0, 220.0, 0.0, 220.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert result.grid["observed_cells"] == 16
+    assert result.grid["direct_cells"] == 16
+    assert result.direct_count == 16
+    assert len(result.detections) == 16
+    outside = [
+        item
+        for item in result.detections
+        if not item.diagnostics["within_work_area"]
+    ]
+    assert outside
+    assert result.grid["outside_cells"] == len(outside)
+    assert all(not item.selected_default for item in outside)
+    assert "outside the work area" in result.message
+
+
+def test_edge_cropped_observation_is_flagged_and_not_preselected() -> None:
+    image = np.full((400, 400, 3), 230, dtype=np.uint8)
+    cv2.rectangle(image, (300, 120), (399, 220), (35, 35, 35), -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            min_area_mm2=100.0,
+            min_width_mm=10.0,
+            min_height_mm=10.0,
+            regular_grid=False,
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        4.0,
+    )
+
+    assert result.direct_count == 1
+    detection = result.detections[0]
+    assert detection.diagnostics["touches_image_edge"] is True
+    assert detection.diagnostics["image_edge_sides"] == ["right"]
+    assert detection.selected_default is False
+    assert "may be cropped" in result.message
+
+
+def test_guarded_output_area_is_distinct_from_camera_work_area() -> None:
+    image = np.full((400, 400, 3), 230, dtype=np.uint8)
+    cv2.rectangle(image, (328, 150), (380, 250), (35, 35, 35), -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            min_area_mm2=50.0,
+            min_width_mm=8.0,
+            min_height_mm=8.0,
+            regular_grid=False,
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        4.0,
+        output_work_area=WorkArea(5.0, 85.0, 5.0, 95.0),
+    )
+
+    assert result.direct_count == 1
+    detection = result.detections[0]
+    assert detection.diagnostics["within_camera_work_area"] is True
+    assert detection.diagnostics["within_work_area"] is False
+    assert detection.diagnostics["work_area_overruns_mm"]["right"] > 0.0
+    assert detection.selected_default is False
+    assert "guarded output area" in result.message
+    assert "right by" in result.message
+    payload = result.to_dict()
+    assert payload["camera_work_area"] == {
+        "x_min": 0.0,
+        "x_max": 100.0,
+        "y_min": 0.0,
+        "y_max": 100.0,
+    }
+    assert payload["output_work_area"] == {
+        "x_min": 5.0,
+        "x_max": 85.0,
+        "y_min": 5.0,
+        "y_max": 95.0,
+    }
+
+
+def test_output_work_area_must_stay_inside_camera_work_area() -> None:
+    with pytest.raises(ValueError, match="must lie inside"):
+        detect_objects(
+            np.zeros((20, 20, 3), dtype=np.uint8),
+            TraceOptions(),
+            WorkArea(0.0, 20.0, 0.0, 20.0),
+            1.0,
+            output_work_area=WorkArea(-1.0, 20.0, 0.0, 20.0),
+        )
+
+
+def test_contrast_grid_retains_light_objects_on_dark_background() -> None:
+    image = np.full((500, 600, 3), 45, dtype=np.uint8)
+    for row in range(3):
+        for column in range(2):
+            x, y = 60 + column * 280, 50 + row * 140
+            cv2.rectangle(
+                image,
+                (x + 15, y),
+                (x + 205, y + 80),
+                (220, 220, 220),
+                -1,
+            )
+            cv2.rectangle(
+                image,
+                (x, y + 15),
+                (x + 220, y + 65),
+                (220, 220, 220),
+                -1,
+            )
+            for center in (
+                (x + 15, y + 15),
+                (x + 205, y + 15),
+                (x + 205, y + 65),
+                (x + 15, y + 65),
+            ):
+                cv2.circle(image, center, 15, (220, 220, 220), -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            min_area_mm2=100.0,
+            min_width_mm=20.0,
+            min_height_mm=10.0,
+            regular_grid=True,
+        ),
+        WorkArea(0.0, 150.0, 0.0, 125.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert (result.grid["columns"], result.grid["rows"]) == (2, 3)
+    assert result.direct_count == 6
+    assert result.inferred_count == 0
+    assert all(item.height_mm > 15.0 for item in result.detections)
+
+
 def test_repeated_label_grid_detects_and_infers_occluded_objects():
     options = TraceOptions(
         detection_mode="color",
@@ -279,6 +844,40 @@ def test_repeated_grid_repairs_one_malformed_direct_cell() -> None:
         if item.source == "direct"
     ]
     assert max(observed_widths) - min(observed_widths) >= 5.0
+
+
+def test_loose_normalized_grid_keeps_direct_cell_pose_but_shares_dimensions() -> None:
+    result = detect_objects(
+        _label_scene(obscure=False),
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            min_saturation=35,
+            min_area_mm2=20,
+            min_width_mm=20,
+            min_height_mm=8,
+            regular_grid=True,
+            infer_missing=True,
+            normalize_grid=True,
+            snap_grid_cells=False,
+            output_mode="rounded",
+        ),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert result.grid["normalized"] is True
+    assert result.grid["cells_snapped"] is False
+    direct = [item for item in result.detections if item.source == "direct"]
+    assert len({item.width_mm for item in direct}) == 1
+    assert len({item.height_mm for item in direct}) == 1
+    assert len({item.corner_radius_mm for item in direct}) == 1
+    for item in direct:
+        assert item.center_mm == pytest.approx(item.diagnostics["observed_center_mm"])
+        assert item.rotation_deg == pytest.approx(
+            item.diagnostics["observed_rotation_deg"]
+        )
 
 
 def test_border_offset_expands_fitted_output():

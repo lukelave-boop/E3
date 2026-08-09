@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="e3-request-token" content="__E3_REQUEST_TOKEN__">
   <title>Laser Camera Aligner</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -68,7 +69,7 @@
               <li>Calibrate lens distortion with at least ten varied checkerboard photos.</li>
               <li>Park the bed at the fixed photography pose and map known XY points.</li>
               <li>Place an SVG over the rectified photograph and export G-code.</li>
-              <li>Validate dry motion before enabling any laser power.</li>
+              <li>Review the generated path and selected power before execution.</li>
             </ol>
           </article>
           <article class="panel">
@@ -246,7 +247,6 @@
             <label class="checkbox"><input id="lockAspect" type="checkbox" checked> Keep SVG aspect ratio</label>
             <div class="button-row stack-on-small">
               <button id="generateGcodeButton">Generate G-code</button>
-              <button class="secondary" id="generateFrameButton">Generate dry frame</button>
             </div>
             <a id="downloadGcodeLink" class="download-link hidden" href="#">Download generated file</a>
           </aside>
@@ -293,7 +293,7 @@
               <button class="warning-button" id="armMachineButton">Arm temporarily</button>
               <button class="secondary" id="disarmMachineButton">Disarm</button>
             </div>
-            <label class="checkbox"><input id="runConfirmation" type="checkbox"> I have completed a dry-motion check and the enclosure is secured.</label>
+            <label class="checkbox"><input id="runConfirmation" type="checkbox"> I reviewed this program and the machine is ready for attended operation.</label>
             <button class="full danger" id="runGeneratedButton">Run current generated G-code</button>
           </article>
         </div>

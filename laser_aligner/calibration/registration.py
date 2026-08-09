@@ -36,6 +36,7 @@ _VALIDATION_TARGET_FRACTIONS = (
 )
 _DENSE_MESH_FRACTIONS = (0.15, 0.325, 0.50, 0.675, 0.85)
 _DENSE_VALIDATION_FRACTIONS = (0.2375, 0.4125, 0.5875, 0.7625)
+_BASE_BED_GRID_FRACTIONS = (0.15, 0.325, 0.50, 0.675, 0.85)
 _MAX_APPLIED_TRANSLATION_MM = 5.0
 _MAX_MEASUREMENT_RESIDUAL_MM = 8.0
 _TRANSLATION_SCATTER_RMS_MM = 0.8
@@ -74,6 +75,17 @@ class FineRegistrationJob:
     powered: bool
     power_percent: float
     mark_size_mm: float
+
+
+@dataclass(frozen=True, slots=True)
+class BaseBedCalibrationJob:
+    program: GcodeProgram
+    filename: str
+    targets: tuple[RegistrationTarget, ...]
+    powered: bool
+    power_percent: float
+    mark_size_mm: float
+    display_name: str = "Base bed mapping"
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,7 +167,7 @@ def regular_grid_targets(
         for column, fx in enumerate(fractions)
     )
     if any(not work_area.contains(t.machine_x, t.machine_y, clearance) for t in targets):
-        raise CalibrationError("Work area is too small for the dense calibration grid")
+        raise CalibrationError("Work area is too small for the regular calibration grid")
     return targets
 
 
@@ -168,6 +180,30 @@ def dense_mesh_targets(
         mark_size_mm=mark_size_mm,
         boundary_margin_mm=boundary_margin_mm,
     )
+
+
+def base_bed_grid_targets(
+    work_area: WorkArea,
+    *,
+    mark_size_mm: float = 5.0,
+    boundary_margin_mm: float = 0.0,
+) -> tuple[RegistrationTarget, ...]:
+    """Return a broad 5x5 grid for solving a new camera-to-bed homography."""
+    return regular_grid_targets(
+        work_area,
+        _BASE_BED_GRID_FRACTIONS,
+        mark_size_mm=mark_size_mm,
+        boundary_margin_mm=boundary_margin_mm,
+    )
+
+
+def base_bed_grid_mark_sizes(mark_size_mm: float) -> dict[int, float]:
+    if not math.isfinite(mark_size_mm) or not 2.0 <= mark_size_mm <= 5.0:
+        raise CalibrationError("Base-grid cross size must be between 2 and 5 mm")
+    return {
+        7: mark_size_mm * 2.0,
+        8: mark_size_mm * 1.5,
+    }
 
 
 def dense_validation_targets(
@@ -297,8 +333,8 @@ def analyze_dense_mesh_measurements(
         for item, score, shift in zip(ordered, scores, shifts, strict=True)
         if median_score <= 0 or float(score) < median_score * 0.22 or float(shift) > _MAX_REVIEWED_SEED_SHIFT_PX
     ]
-    inferred_ids = sorted(set(over_bound_ids) | set(low_confidence_ids))
-    included = [index for index, item in enumerate(ordered) if int(item["id"]) not in inferred_ids]
+    unreliable_ids = sorted(set(over_bound_ids) | set(low_confidence_ids))
+    included = [index for index, item in enumerate(ordered) if int(item["id"]) not in unreliable_ids]
 
     rows: list[np.ndarray] = [np.eye(25)[included]]
     for axis in (0, 1):
@@ -330,8 +366,14 @@ def analyze_dense_mesh_measurements(
     dy = np.diff(fitted_grid, axis=0) / np.diff(y_nodes)[:, None, None]
     gradient_ok = bool(float(np.max(np.abs(dx))) <= 0.08 and float(np.max(np.abs(dy))) <= 0.08)
     can_apply = bool(
-        len(inferred_ids) <= 1 and rms <= 0.35 and maximum <= 0.75 and correction_maximum <= 3.0 and gradient_ok
+        len(unreliable_ids) <= 1
+        and rms <= 0.35
+        and maximum <= 0.75
+        and correction_maximum <= 3.0
+        and gradient_ok
     )
+    inferred_ids = unreliable_ids if can_apply and len(unreliable_ids) == 1 else []
+    rejected_ids = unreliable_ids if not can_apply else []
     output_measurements = [
         {
             **item,
@@ -340,23 +382,25 @@ def analyze_dense_mesh_measurements(
             "error_mm": float(length),
             "over_correction_bound": float(length) > 3.0,
             "inferred": int(item["id"]) in inferred_ids,
+            "rejected": int(item["id"]) in rejected_ids,
+            "unreliable": int(item["id"]) in unreliable_ids,
         }
         for item, correction, length in zip(ordered, measured, lengths, strict=True)
     ]
-    if len(inferred_ids) > 1:
+    if len(unreliable_ids) > 1:
         reason = (
             "More than one grid cell is unreliable ("
-            + ", ".join(f"#{identifier}" for identifier in inferred_ids)
+            + ", ".join(f"#{identifier}" for identifier in unreliable_ids)
             + "); recapture rather than inferring multiple corrections"
         )
-    elif inferred_ids and can_apply:
+    elif inferred_ids:
         reason = (
             f"Grid cell #{inferred_ids[0]} was excluded as unreliable; its correction "
             "was inferred from the other 24 cells and requires the independent holdout check"
         )
-    elif inferred_ids:
+    elif unreliable_ids:
         reason = (
-            f"Grid cell #{inferred_ids[0]} was excluded, but the remaining fit failed "
+            f"Grid cell #{unreliable_ids[0]} was rejected, and the remaining fit failed "
             "the correction or smoothness gates"
         )
     elif rms > 0.35 or maximum > 0.75:
@@ -373,7 +417,9 @@ def analyze_dense_mesh_measurements(
         "reason": reason,
         "over_bound_ids": over_bound_ids,
         "low_confidence_ids": low_confidence_ids,
+        "unreliable_ids": unreliable_ids,
         "inferred_ids": inferred_ids,
+        "rejected_ids": rejected_ids,
         "x_nodes_mm": x_nodes.tolist(),
         "y_nodes_mm": y_nodes.tolist(),
         "corrections_mm": fitted_grid.tolist(),
@@ -396,6 +442,7 @@ def generate_registration_program(
     powered: bool,
     speed_mm_min: float,
     design_name: str = "fine-registration-crosses",
+    mark_sizes_mm: dict[int, float] | None = None,
 ) -> GcodeProgram:
     if len(targets) < 4:
         raise CalibrationError("Fine registration requires at least four target marks")
@@ -409,9 +456,18 @@ def generate_registration_program(
             "Set a previously verified visible-marking power before preparing a powered registration job"
         )
 
-    half = mark_size_mm * 0.5
+    target_mark_sizes = {
+        target.id: float((mark_sizes_mm or {}).get(target.id, mark_size_mm))
+        for target in targets
+    }
+    if any(
+        not math.isfinite(size) or not 2.0 <= size <= 10.0
+        for size in target_mark_sizes.values()
+    ):
+        raise CalibrationError("Registration mark sizes must be between 2 and 10 mm")
     paths: list[Polyline] = []
     for target in targets:
+        half = target_mark_sizes[target.id] * 0.5
         # Source Y is negated because SVG geometry grows down while machine Y grows up.
         paths.extend(
             [

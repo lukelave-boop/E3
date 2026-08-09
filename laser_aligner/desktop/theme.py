@@ -13,6 +13,11 @@ DRAFTING_COLORS = {
     "selection": "#00A58E",
 }
 
+# Keep the camera legible by default while leaving the drafting grid and vector
+# geometry visible over it. CameraPanel and WorkspaceView share this value so
+# the initial slider position always matches the rendered image.
+DEFAULT_CAMERA_OVERLAY_OPACITY = 0.70
+
 
 # Compact neutral chrome around a light drafting surface.  Object-name
 # selectors are intentionally stable because desktop widgets and regression
@@ -556,4 +561,9 @@ def apply_dark_theme(application: object) -> None:
     application.setStyleSheet(DARK_STYLESHEET)
 
 
-__all__ = ["DARK_STYLESHEET", "DRAFTING_COLORS", "apply_dark_theme"]
+__all__ = [
+    "DARK_STYLESHEET",
+    "DEFAULT_CAMERA_OVERLAY_OPACITY",
+    "DRAFTING_COLORS",
+    "apply_dark_theme",
+]

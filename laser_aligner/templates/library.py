@@ -7,8 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..storage import atomic_write_json
-from .model import CutTemplate, TEMPLATE_EXTENSION, TemplateFormatError
-
+from .model import TEMPLATE_EXTENSION, CutTemplate, TemplateFormatError
 
 _WINDOWS_RESERVED_STEMS = {
     "aux",

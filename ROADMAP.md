@@ -1,8 +1,9 @@
 # Roadmap
 
 This roadmap describes remaining work from the current `desktop-v1` branch. It
-is not a hardware-readiness claim. Verification state belongs in
-[CURRENT_STATE.md](CURRENT_STATE.md) and [PROJECT_STATUS.md](PROJECT_STATUS.md).
+is not a hardware-readiness claim. Active verification state belongs in
+[CURRENT_STATE.md](CURRENT_STATE.md); [PROJECT_STATUS.md](PROJECT_STATUS.md) is
+the retained 2026-08-06 Windows portability snapshot.
 
 ## Foundation already present
 
@@ -18,13 +19,19 @@ Original browser/core foundation:
 
 Desktop foundation:
 
-- Native machine-coordinate workspace and camera overlay.
+- Native machine-coordinate workspace and camera overlay, including a
+  70%-opacity photographic default and a draggable overlay key that remains
+  fixed to the viewport during canvas work.
 - Multi-object/layer project model and `.e3laser` persistence.
 - Undo/redo, grouping, alignment, distribution, and ordering.
 - Material presets, multi-layer vector toolpaths, preview, and estimates.
-- Guarded machine controls with jogging and pause/resume still disabled.
+- Guarded machine controls, including planner-drained post-powered-job
+  Home/park, bounded laser-off incremental jogging, visible completion phases,
+  failure alerts, and motor release; pause/resume remains disabled.
 - Safe browser and desktop simulator startup on Windows, with POSIX serial
   selected only on supported systems.
+- Native lens calibration and fresh keyed 5×5 base mapping that does not depend
+  on a prior camera homography; real-machine verification remains outstanding.
 
 Current branch feature:
 
@@ -54,12 +61,12 @@ These features have different verification levels; see `CURRENT_STATE.md`.
   the current matcher intentionally requires manual selection because radius is
   not part of its observable feature model.
 - Keep local label/trace captures ignored and excluded from release packages.
-- Run the complete consolidated branch suite on Linux.
+- Keep the complete Linux suite and release-package smoke green as the branch
+  evolves.
 
 ## Milestone 2 — Windows/Linux development consistency
 
 - Add Windows CI alongside the existing Linux Python matrix.
-- Introduce OS-native user-data paths for autosaves and material presets.
 - Add PowerShell setup/launch scripts and platform-appropriate CLI messages.
 - Separate portable OpenCV capture from Linux V4L2 discovery/control.
 
@@ -68,7 +75,8 @@ milestone. If added later, it needs its own serial transport and tests.
 
 ## Milestone 3 — native calibration and camera bring-up
 
-- Add native lens and bed-calibration wizards.
+- Physically verify the native lens and keyed automatic base-map workflow after
+  a camera remount, including dry bounds, keyed detection, and axis direction.
 - Validate stable C920 selection on the Linux workstation.
 - Add camera control presets and calibration-image quality guidance.
 - Add coverage visualization and repeatability measurements.
@@ -85,14 +93,16 @@ milestone. If added later, it needs its own serial transport and tests.
 - Confirm homing, coordinate origin, X/Y direction, and laser-head offset.
 - Establish verified work-area limits and a safe photo pose.
 - Add a versioned machine profile based on measured results.
-- Add a separately tested guarded jog API.
+- Physically verify guarded jog direction, endpoint behavior, and STOP response
+  on the named controller profile.
 - Test controller-specific realtime pause/resume before enabling it.
 
 ## Milestone 5 — improved authoring
 
-- On-canvas resize and rotation handles.
+- Shared multi-selection transform boxes and node editing. Single-object
+  on-canvas resize and rotation handles are implemented.
 - Smart snap guides.
-- DXF and image import.
+- DXF import and managed or embedded raster assets.
 - Text-to-outline conversion.
 - Improved SVG `<use>`, stylesheet, and clipping support.
 - Fiducial-based automatic rotation/translation.
@@ -110,10 +120,11 @@ those controls.
 - Parallax correction or multiple calibration planes.
 - Optional low-cost distance-sensor integration.
 
-## Milestone 7 — fill, raster, and production features
+## Milestone 7 — advanced raster and production features
 
-- Fill engine.
-- Raster engraving with overscan and scan-direction tests.
+- Hatch/fill optimization beyond the existing closed-vector scanline engine.
+- Selectable dither methods and calibrated grayscale power curves beyond the
+  existing area-prefiltered ordered-dither raster engine.
 - Estimated duration refinement and reproducible job manifests.
 - Job history.
 - Recovery and controlled pause/resume where supported.

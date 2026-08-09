@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import json
-import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 import cv2
 import numpy as np
 
-from ..camera.controls import apply_controls
+from ..config import WorkArea, effective_laser_output_area
 from ..core import CoreRuntime
 from ..templates import CutTemplate
 from ..vision.object_trace import TraceOptions, detect_objects, sample_color
@@ -26,6 +25,106 @@ _MIN_TEMPLATE_CONFIDENCE = 0.55
 _MAX_TEMPLATE_RMS_ERROR_MM = 1.0
 _MAX_TEMPLATE_POINT_ERROR_MM = 2.0
 _MAX_TEMPLATE_SCALE_ERROR = 0.035
+
+
+def _guarded_output_work_area(runtime: CoreRuntime) -> WorkArea:
+    laser = runtime.settings.laser
+    return effective_laser_output_area(
+        runtime.settings.machine.work_area,
+        laser.boundary_margin_mm,
+        laser.spot_offset_x_mm,
+        laser.spot_offset_y_mm,
+    )
+
+
+def _honeycomb_support_metadata(runtime: CoreRuntime) -> dict[str, Any] | None:
+    """Expose an approximate physical reference without affecting output."""
+
+    context = runtime.context
+    support_store = getattr(context, "honeycomb_support", None)
+    reference = getattr(support_store, "reference", None)
+    if reference is None:
+        return None
+    calibration = context.bed.calibration
+    current = bool(
+        calibration is not None
+        and abs(calibration.created_at - reference.bed_calibration_created_at) <= 1e-9
+    )
+    metadata: dict[str, Any] = {
+        "corners_machine_mm": [
+            list(point) for point in reference.support_corners_machine_mm
+        ],
+        "support_width_mm": reference.support_width_mm,
+        "support_height_mm": reference.support_height_mm,
+        "created_at": reference.created_at,
+        "bed_map_current": current,
+        "reference_only": True,
+    }
+    if not current:
+        metadata["message"] = (
+            "Recorded honeycomb support was measured with a different bed map; "
+            "re-record it before visually comparing the support outline."
+        )
+        return metadata
+    metadata["message"] = (
+        "The approximate honeycomb outline is shown for visual comparison only; "
+        "it does not classify detections or change laser limits."
+    )
+    return metadata
+
+
+def _usable_template_detections(
+    detections: Sequence[Any],
+) -> tuple[list[Any], list[int], dict[str, Any]]:
+    """Keep incomplete or unsafe camera evidence out of template alignment."""
+
+    usable: list[Any] = []
+    usable_indices: list[int] = []
+    outside_count = 0
+    cropped_count = 0
+    excluded_count = 0
+    for index, detection in enumerate(detections):
+        diagnostics = (
+            detection.get("diagnostics", {})
+            if isinstance(detection, Mapping)
+            else getattr(detection, "diagnostics", {})
+        )
+        if not isinstance(diagnostics, Mapping):
+            diagnostics = {}
+        outside = not bool(diagnostics.get("within_work_area", True))
+        cropped = bool(diagnostics.get("touches_image_edge", False))
+        outside_count += int(outside)
+        cropped_count += int(cropped)
+        if outside or cropped:
+            excluded_count += 1
+            continue
+        usable.append(detection)
+        usable_indices.append(index)
+
+    warning = ""
+    if excluded_count:
+        qualifier = "all " if not usable else ""
+        details = []
+        if outside_count:
+            details.append(
+                f"{outside_count} outside the guarded output area"
+            )
+        if cropped_count:
+            details.append(
+                f"{cropped_count} cropped at the corrected image boundary"
+            )
+        warning = (
+            f"Excluded {qualifier}{excluded_count} camera detection"
+            f"{'s' if excluded_count != 1 else ''} from template alignment"
+            f" ({' and '.join(details)})."
+        )
+    return usable, usable_indices, {
+        "usable_detection_count": len(usable),
+        "excluded_detection_count": excluded_count,
+        "excluded_outside_count": outside_count,
+        "excluded_cropped_count": cropped_count,
+        "template_evidence_warning": warning,
+    }
 
 
 def image_to_qimage(image: np.ndarray) -> QtGui.QImage:
@@ -61,8 +160,11 @@ def image_to_qimage(image: np.ndarray) -> QtGui.QImage:
 class DesktopController(QtCore.QObject):
     statusChanged = QtCore.Signal(dict)
     cameraImageReady = QtCore.Signal(object)
+    cameraImageInvalidated = QtCore.Signal()
     errorOccurred = QtCore.Signal(str)
     cameraErrorOccurred = QtCore.Signal(str)
+    cameraMappingRequired = QtCore.Signal(dict)
+    cameraOverlayErrorOccurred = QtCore.Signal(str)
     notice = QtCore.Signal(str)
     busyChanged = QtCore.Signal(bool)
     cameraFocusChanged = QtCore.Signal(dict)
@@ -71,6 +173,8 @@ class DesktopController(QtCore.QObject):
     traceColorFailed = QtCore.Signal(str)
     templateMatchReady = QtCore.Signal(dict)
     simulationFrameChanged = QtCore.Signal(dict)
+    stopInitiated = QtCore.Signal()
+    tasksDrained = QtCore.Signal()
 
     def __init__(
         self,
@@ -84,15 +188,23 @@ class DesktopController(QtCore.QObject):
         self._tasks: set[FunctionTask] = set()
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation: int | None = None
+        self._camera_refresh_pending = False
+        self._camera_image_published = False
+        self._calibration_review_active = False
         self._camera_source_generation = 0
         self._camera_error_latched: str | None = None
+        self._camera_mapping_latched: str | None = None
+        self._camera_overlay_error_latched: str | None = None
         self._camera_reconnect_in_flight = False
+        self._camera_reconnect_generation: int | None = None
         self._trace_request_id = 0
         self._trace_review_active = False
         self._template_match_request_id = 0
         self._template_review_active = False
         self._live_camera_enabled = False
         self._live_camera_interval_ms = 1000
+        self._reported_terminal_job: tuple[object, object] | None = None
+        self._shutdown_started = False
         self._poll_timer = QtCore.QTimer(self)
         self._poll_timer.setInterval(750)
         self._poll_timer.timeout.connect(self.poll_status)
@@ -108,6 +220,8 @@ class DesktopController(QtCore.QObject):
         )
 
     def _started(self) -> None:
+        if self._shutdown_started:
+            return
         self._poll_timer.start()
         self.poll_status()
         if self.runtime.context.bed.calibration is not None:
@@ -116,15 +230,32 @@ class DesktopController(QtCore.QObject):
         self.notice.emit("Core services started")
 
     def stop(self) -> None:
+        self.begin_shutdown()
+        # FunctionTask disables Qt auto-deletion, so keep every live wrapper
+        # owned until its callback has actually returned. A bounded wait followed
+        # by clearing `_tasks` can abandon a near-cap planning worker.
+        self.thread_pool.waitForDone(-1)
+        self.runtime.stop()
+
+    def begin_shutdown(self) -> None:
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
         self._poll_timer.stop()
         self._camera_live_timer.stop()
         self._trace_request_id += 1
         self._trace_review_active = False
         self._template_match_request_id += 1
         self._template_review_active = False
-        self.thread_pool.waitForDone(5000)
-        self._tasks.clear()
-        self.runtime.stop()
+        # Request laser-off before waiting for unrelated background work.
+        try:
+            self.runtime.context.machine.request_stop(emergency=False)
+        except Exception as exc:
+            self.errorOccurred.emit(f"Shutdown laser-off request failed: {exc}")
+
+    @property
+    def has_active_tasks(self) -> bool:
+        return bool(self._tasks)
 
     def _set_busy(self, delta: int) -> None:
         self._active_tasks = max(0, self._active_tasks + delta)
@@ -141,18 +272,32 @@ class DesktopController(QtCore.QObject):
     ) -> FunctionTask:
         if show_busy:
             self._set_busy(1)
-        task = FunctionTask(callback)
+        machine = self.runtime.context.machine
+        operation_generation = machine.operation_generation()
+
+        def guarded_callback() -> Any:
+            with machine.operation_scope(operation_generation):
+                return callback()
+
+        task = FunctionTask(guarded_callback)
         self._tasks.add(task)
 
         if on_success is not None:
-            task.signals.succeeded.connect(on_success)
+            task.signals.succeeded.connect(
+                on_success,
+                QtCore.Qt.ConnectionType.QueuedConnection,
+            )
 
         if on_failure is None:
             task.signals.failed.connect(
-                lambda message: self.errorOccurred.emit(f"{label} failed: {message}")
+                lambda message: self.errorOccurred.emit(f"{label} failed: {message}"),
+                QtCore.Qt.ConnectionType.QueuedConnection,
             )
         else:
-            task.signals.failed.connect(on_failure)
+            task.signals.failed.connect(
+                on_failure,
+                QtCore.Qt.ConnectionType.QueuedConnection,
+            )
 
         # Route cleanup through a QObject slot in the GUI thread. Do not drop
         # the final Python reference from the worker thread.
@@ -165,6 +310,25 @@ class DesktopController(QtCore.QObject):
         self.thread_pool.start(task)
         return task
 
+    def run_background(
+        self,
+        callback: Callable[[], Any],
+        *,
+        on_success: Callable[[Any], None] | None = None,
+        on_failure: Callable[[str], None] | None = None,
+        label: str = "Operation",
+        show_busy: bool = True,
+    ) -> FunctionTask:
+        """Run Qt-free preparation using the desktop's owned task lifecycle."""
+
+        return self._run(
+            callback,
+            on_success=on_success,
+            on_failure=on_failure,
+            label=label,
+            show_busy=show_busy,
+        )
+
     @QtCore.Slot(object, bool)
     def _task_finished(
         self,
@@ -174,6 +338,8 @@ class DesktopController(QtCore.QObject):
         if show_busy:
             self._set_busy(-1)
         self._tasks.discard(task)
+        if not self._tasks:
+            self.tasksDrained.emit()
 
     def poll_status(self) -> None:
         if not self.runtime.running:
@@ -184,6 +350,17 @@ class DesktopController(QtCore.QObject):
             self.errorOccurred.emit(f"Status refresh failed: {exc}")
             return
         self.statusChanged.emit(status)
+        machine = status.get("machine") or {}
+        job = machine.get("job") or {}
+        terminal_key = (job.get("started_at"), job.get("finished_at"))
+        if (
+            not job.get("running", False)
+            and job.get("finished_at") is not None
+            and terminal_key != self._reported_terminal_job
+        ):
+            self._reported_terminal_job = terminal_key
+            if job.get("error"):
+                self.errorOccurred.emit(f"Controller job failed: {job['error']}")
 
     def refresh_camera_image(self) -> None:
         if (
@@ -191,24 +368,45 @@ class DesktopController(QtCore.QObject):
             or self._camera_refresh_in_flight
             or self._camera_reconnect_in_flight
             or self._camera_review_active()
-            or self.runtime.context.bed.calibration is None
         ):
             return
         if self.runtime.context.has_simulation_workspace_frame:
-            self.cameraImageReady.emit(
+            self._publish_camera_image(
                 image_to_qimage(self.runtime.context.rectified_frame(refresh=True))
             )
             return
+        if self.runtime.context.bed.calibration is None:
+            self._invalidate_camera_image()
+            return
+        validity = self.runtime.context.bed_calibration_validity()
+        if str(validity.get("state", "UNKNOWN")) != "VALID":
+            self._invalidate_camera_image()
+            self._report_camera_mapping_required(validity)
+            return
+        expected_revision = (
+            getattr(getattr(self.runtime.context, "lens", None), "model", None),
+            self.runtime.context.bed.calibration,
+        )
         source_generation = self._camera_source_generation
         self._camera_refresh_in_flight = True
         self._camera_refresh_generation = source_generation
         task = self._run(
             lambda: image_to_qimage(self.runtime.context.rectified_frame(refresh=True)),
-            on_success=lambda image, source_generation=source_generation: (
-                self._camera_refresh_ready(image, source_generation)
+            on_success=lambda image, source_generation=source_generation,
+            expected_revision=expected_revision: (
+                self._camera_refresh_ready(
+                    image,
+                    source_generation,
+                    expected_revision,
+                )
             ),
-            on_failure=lambda message, source_generation=source_generation: (
-                self._camera_refresh_failed(message, source_generation)
+            on_failure=lambda message, source_generation=source_generation,
+            expected_revision=expected_revision: (
+                self._camera_refresh_failed(
+                    message,
+                    source_generation,
+                    expected_revision,
+                )
             ),
             label="Corrected bed-image refresh",
             show_busy=False,
@@ -223,6 +421,8 @@ class DesktopController(QtCore.QObject):
     def retry_camera_image(self) -> None:
         """Refresh a healthy camera or release/reopen a failed camera device."""
         self._camera_error_latched = None
+        self._camera_mapping_latched = None
+        self._camera_overlay_error_latched = None
         if not self.runtime.running or self._camera_reconnect_in_flight:
             return
         status = self.runtime.context.camera.status()
@@ -238,7 +438,9 @@ class DesktopController(QtCore.QObject):
         source_generation = self._camera_source_generation
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation = None
+        self._camera_refresh_pending = False
         self._camera_reconnect_in_flight = True
+        self._camera_reconnect_generation = source_generation
         self.notice.emit("Reopening camera…")
         self._run(
             self.runtime.context.restart_camera,
@@ -253,18 +455,30 @@ class DesktopController(QtCore.QObject):
         )
 
     def _camera_reconnect_ready(self, source_generation: int) -> None:
-        if source_generation != self._camera_source_generation:
+        if source_generation != self._camera_reconnect_generation:
             return
         self._camera_reconnect_in_flight = False
+        self._camera_reconnect_generation = None
+        if source_generation != self._camera_source_generation:
+            if self._camera_refresh_pending:
+                self.request_camera_refresh()
+            return
         self._camera_error_latched = None
+        self._camera_mapping_latched = None
+        self._camera_overlay_error_latched = None
         self.notice.emit("Camera reopened successfully")
         self.poll_status()
-        self.refresh_camera_image()
+        self.request_camera_refresh()
 
     def _camera_reconnect_failed(self, message: str, source_generation: int) -> None:
-        if source_generation != self._camera_source_generation:
+        if source_generation != self._camera_reconnect_generation:
             return
         self._camera_reconnect_in_flight = False
+        self._camera_reconnect_generation = None
+        if source_generation != self._camera_source_generation:
+            if self._camera_refresh_pending:
+                self.request_camera_refresh()
+            return
         self._camera_refresh_failed(message, source_generation)
 
     @QtCore.Slot()
@@ -279,29 +493,157 @@ class DesktopController(QtCore.QObject):
             return
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation = None
+        if self._camera_refresh_pending:
+            QtCore.QTimer.singleShot(0, self.request_camera_refresh)
+
+    def calibration_changed(self) -> None:
+        """Invalidate an old corrected-frame result and request one replacement."""
+        self._camera_source_generation += 1
+        self._camera_error_latched = None
+        self._camera_mapping_latched = None
+        self._camera_overlay_error_latched = None
+        self._invalidate_camera_image()
+        self._camera_refresh_pending = True
+        self.request_camera_refresh()
+
+    def set_calibration_review_active(self, active: bool) -> None:
+        self._calibration_review_active = bool(active)
+        if not self._calibration_review_active and self._camera_refresh_pending:
+            self.request_camera_refresh()
+
+    def request_camera_refresh(self) -> None:
+        if (
+            self._calibration_review_active
+            or self._camera_refresh_in_flight
+            or self._camera_reconnect_in_flight
+        ):
+            self._camera_refresh_pending = True
+            return
+        self._camera_refresh_pending = False
+        self.refresh_camera_image()
 
     def _camera_refresh_ready(
         self,
         image: QtGui.QImage,
         source_generation: int | None = None,
+        expected_revision: tuple[object | None, object | None] | None = None,
     ) -> None:
         if (
             source_generation is not None
             and source_generation != self._camera_source_generation
         ):
             return
+        if expected_revision is not None and (
+            getattr(getattr(self.runtime.context, "lens", None), "model", None)
+            is not expected_revision[0]
+            or self.runtime.context.bed.calibration is not expected_revision[1]
+        ):
+            self._invalidate_camera_image()
+            self._camera_refresh_pending = True
+            return
         if not self._camera_review_active():
-            self.cameraImageReady.emit(image)
-        if self._camera_error_latched is not None:
-            self._camera_error_latched = None
+            self._publish_camera_image(image)
+        camera_recovered = self._camera_error_latched is not None
+        mapping_recovered = self._camera_mapping_latched is not None
+        overlay_recovered = self._camera_overlay_error_latched is not None
+        self._camera_error_latched = None
+        self._camera_mapping_latched = None
+        self._camera_overlay_error_latched = None
+        if camera_recovered:
             self.notice.emit("Camera image updates recovered")
+        elif overlay_recovered:
+            self.notice.emit("Corrected camera overlay recovered")
+        elif mapping_recovered:
+            self.notice.emit("Corrected camera overlay recovered")
+
+    def _publish_camera_image(self, image: QtGui.QImage) -> None:
+        self._camera_image_published = True
+        self.cameraImageReady.emit(image)
+
+    def _invalidate_camera_image(self) -> None:
+        if not self._camera_image_published:
+            return
+        self._camera_image_published = False
+        self.cameraImageInvalidated.emit()
+
+    def _report_camera_mapping_required(self, validity: dict[str, Any]) -> None:
+        state = str(validity.get("state") or "UNKNOWN").upper()
+        reasons = tuple(
+            str(reason).strip()
+            for reason in validity.get("reasons", [])
+            if str(reason).strip()
+        )
+        lens = getattr(getattr(self.runtime.context, "lens", None), "model", None)
+        quality = getattr(lens, "quality", {}) if lens is not None else {}
+        gate = (
+            str(quality.get("gate") or "").strip().lower()
+            if isinstance(quality, dict)
+            else ""
+        )
+        setup_tab = 2 if gate in {"pass", "warning"} else 1
+        latch = "\0".join((state, *reasons, str(setup_tab)))
+        if self._camera_mapping_latched == latch:
+            return
+        self._camera_mapping_latched = latch
+        camera_status = self.runtime.context.camera.status()
+        camera_online = bool(
+            camera_status.connected
+            and camera_status.frames_read > 0
+            and not camera_status.last_error
+        )
+        self.cameraMappingRequired.emit(
+            {
+                "state": state,
+                "reasons": list(reasons),
+                "camera_online": camera_online,
+                "setup_tab": setup_tab,
+            }
+        )
 
     def _camera_refresh_failed(
         self,
         message: str,
         source_generation: int,
+        expected_revision: tuple[object | None, object | None] | None = None,
     ) -> None:
         if source_generation != self._camera_source_generation:
+            return
+        if expected_revision is not None and (
+            getattr(getattr(self.runtime.context, "lens", None), "model", None)
+            is not expected_revision[0]
+            or self.runtime.context.bed.calibration is not expected_revision[1]
+        ):
+            self._invalidate_camera_image()
+            self._camera_refresh_pending = True
+            return
+        try:
+            validity = self.runtime.context.bed_calibration_validity()
+        except Exception:
+            validity = None
+        if (
+            self.runtime.context.bed.calibration is not None
+            and isinstance(validity, dict)
+            and str(validity.get("state", "UNKNOWN")) != "VALID"
+        ):
+            self._invalidate_camera_image()
+            self._report_camera_mapping_required(validity)
+            return
+        try:
+            status = self.runtime.context.camera.status()
+            camera_online = bool(
+                status.connected and status.frames_read > 0 and not status.last_error
+            )
+        except Exception:
+            camera_online = False
+        if camera_online:
+            if self._camera_overlay_error_latched is not None:
+                return
+            self._camera_overlay_error_latched = str(message)
+            self.cameraOverlayErrorOccurred.emit(
+                "The camera is online, but the corrected overlay could not be "
+                "prepared. Automatic refresh will continue silently.\n\n"
+                f"Details: {message}"
+            )
             return
         if self._camera_error_latched is not None:
             return
@@ -358,14 +700,19 @@ class DesktopController(QtCore.QObject):
         )
         self._camera_source_generation += 1
         self._camera_error_latched = None
+        self._camera_mapping_latched = None
+        self._camera_overlay_error_latched = None
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation = None
+        self._camera_refresh_pending = False
         self._trace_request_id += 1
         self._trace_review_active = False
         self._template_match_request_id += 1
         self._template_review_active = False
         self._sync_camera_timer()
-        self.cameraImageReady.emit(image_to_qimage(self.runtime.context.rectified_frame()))
+        self._publish_camera_image(
+            image_to_qimage(self.runtime.context.rectified_frame())
+        )
         self.simulationFrameChanged.emit(info)
         self.notice.emit(f"Using frozen test image: {source_name}")
         return info
@@ -378,8 +725,12 @@ class DesktopController(QtCore.QObject):
         self.runtime.context.clear_simulation_workspace_frame()
         self._camera_source_generation += 1
         self._camera_error_latched = None
+        self._camera_mapping_latched = None
+        self._camera_overlay_error_latched = None
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation = None
+        self._camera_refresh_pending = False
+        self._invalidate_camera_image()
         self._trace_request_id += 1
         self._trace_review_active = False
         self._template_match_request_id += 1
@@ -485,13 +836,18 @@ class DesktopController(QtCore.QObject):
         if not autofocus:
             requested["focus_absolute"] = value
 
-        result = apply_controls(camera.settings.device, requested)
+        configured_controls = dict(camera.settings.controls)
+        configured_controls.update(requested)
+        result, focus_frame = camera.apply_controls_and_snapshot(
+            configured_controls,
+            settle_seconds=0.35,
+            timeout_seconds=2.0,
+        )
         camera.settings.controls.update(requested)
-        time.sleep(0.35)
         return {
             "autofocus": bool(autofocus),
             "focus_value": value,
-            "sharpness": self._sharpness_score(camera.snapshot()),
+            "sharpness": self._sharpness_score(focus_frame),
             "applied": dict(result.applied),
             "skipped": dict(result.skipped),
             "verified": dict(result.verified),
@@ -581,7 +937,10 @@ class DesktopController(QtCore.QObject):
         else:
             self.notice.emit("Applied camera focus")
         if self.runtime.context.bed.calibration is not None:
-            self.refresh_camera_image()
+            if payload.get("changed") is True:
+                self.calibration_changed()
+            else:
+                self.request_camera_refresh()
 
     def detect_trace_objects(self, raw_options: dict[str, Any]) -> int:
         self._trace_request_id += 1
@@ -595,15 +954,22 @@ class DesktopController(QtCore.QObject):
                 raise ValueError(
                     "Bed mapping is required before tracing camera objects"
                 )
-            image = context.rectified_frame(refresh=True, precision=True)
+            image = context.capture_parked_trace_frame()
             options = TraceOptions.from_mapping(raw_options)
             result = detect_objects(
                 image,
                 options,
                 self.runtime.settings.machine.work_area,
                 self.runtime.settings.calibration.bed.pixels_per_mm,
+                output_work_area=_guarded_output_work_area(self.runtime),
             )
+            support = _honeycomb_support_metadata(self.runtime)
             payload = result.to_dict()
+            if support is not None:
+                payload["honeycomb_support"] = support
+                payload["message"] = (
+                    f"{payload['message']} {support['message']}"
+                )
             payload["request_id"] = request_id
             payload["camera_image"] = image_to_qimage(image)
             return payload
@@ -837,17 +1203,24 @@ class DesktopController(QtCore.QObject):
 
         alignments: list[TemplateAlignment] = []
         traces_by_template: dict[str, Any] = {}
+        evidence_by_template: dict[str, dict[str, Any]] = {}
         for options, grouped_templates in option_groups.values():
             trace_result = detect_objects(
                 image,
                 options,
                 self.runtime.settings.machine.work_area,
                 pixels_per_mm,
+                output_work_area=_guarded_output_work_area(self.runtime),
             )
+            usable_detections, usable_indices, evidence = (
+                _usable_template_detections(trace_result.detections)
+            )
+            evidence["usable_detection_indices"] = usable_indices
             for template in grouped_templates:
                 traces_by_template[template.id] = trace_result
+                evidence_by_template[template.id] = evidence
             alignments.extend(
-                rank_templates(grouped_templates, trace_result.detections)
+                rank_templates(grouped_templates, usable_detections)
             )
 
         alignments.sort(
@@ -882,13 +1255,29 @@ class DesktopController(QtCore.QObject):
                     if warning not in item.warnings:
                         item.warnings = (*item.warnings, warning)
 
-        candidates = [
-            self._template_alignment_payload(
+        candidates = []
+        for alignment in alignments:
+            candidate = self._template_alignment_payload(
                 alignment,
                 traces_by_template[alignment.template_id],
             )
-            for alignment in alignments
-        ]
+            evidence = evidence_by_template[alignment.template_id]
+            index_map = evidence["usable_detection_indices"]
+            for match in candidate["matches"]:
+                detection_index = int(match["detection_index"])
+                if 0 <= detection_index < len(index_map):
+                    match["detection_index"] = int(index_map[detection_index])
+            candidate.update(
+                {
+                    key: value
+                    for key, value in evidence.items()
+                    if key != "usable_detection_indices"
+                }
+            )
+            evidence_warning = str(candidate["template_evidence_warning"])
+            if evidence_warning and evidence_warning not in candidate["warnings"]:
+                candidate["warnings"].append(evidence_warning)
+            candidates.append(candidate)
         best = candidates[0]
         winning_trace = traces_by_template[str(best["template_id"])]
         mode = "selected" if selected_template_id is not None else "automatic"
@@ -899,7 +1288,18 @@ class DesktopController(QtCore.QObject):
         )
         accepted = alignment_viable and not selection_required
         if not feature_match_found:
-            message = "No cutting template features matched the camera detections."
+            if (
+                int(best.get("usable_detection_count", 0)) == 0
+                and int(best.get("excluded_detection_count", 0)) > 0
+            ):
+                message = (
+                    "Template matching was blocked because no complete, in-bounds "
+                    "camera evidence remains. Reposition the sheet and capture again."
+                )
+            else:
+                message = (
+                    "No cutting template features matched the camera detections."
+                )
         elif not alignment_viable:
             message = (
                 f"{best['template_name']} produced a possible match, but it is not "
@@ -917,6 +1317,9 @@ class DesktopController(QtCore.QObject):
             message = f"Aligned selected template {best['template_name']}."
         else:
             message = f"Identified and aligned {best['template_name']}."
+        evidence_warning = str(best.get("template_evidence_warning", ""))
+        if evidence_warning:
+            message = f"{message} {evidence_warning}"
         return {
             **best,
             "matched": accepted,
@@ -1042,8 +1445,13 @@ class DesktopController(QtCore.QObject):
         )
 
     def park_at_camera_pose(self) -> None:
+        def operation() -> dict[str, Any]:
+            machine = self.runtime.context.machine
+            machine.ensure_connected()
+            return machine.prepare_photo_position()
+
         self._run(
-            self.runtime.context.machine.prepare_photo_position,
+            operation,
             on_success=lambda result: self._machine_changed(
                 f"Parked at X{result['position']['x']:.2f} Y{result['position']['y']:.2f}"
             ),
@@ -1054,11 +1462,19 @@ class DesktopController(QtCore.QObject):
     def run_job(self, gcode: str, name: str, *, arm_phrase: str | None = None) -> None:
         def operation() -> dict[str, Any]:
             machine = self.runtime.context.machine
-            if machine.settings.backend == "serial":
-                machine.prepare_photo_position()
-            if arm_phrase is not None:
-                machine.arm(arm_phrase)
-            return machine.start_job(gcode, name)
+            try:
+                machine.ensure_connected()
+                program = machine.preflight_program(gcode)
+                if machine.settings.backend == "serial":
+                    machine.prepare_photo_position()
+                if arm_phrase is not None:
+                    machine.arm_program(arm_phrase, program)
+                return machine.start_validated_program(program, name)
+            except Exception:
+                # A failure after preflight must not leave a reusable temporary
+                # arm grant. disarm() also makes a best-effort M5 request.
+                machine.disarm()
+                raise
 
         self._run(
             operation,
@@ -1075,24 +1491,42 @@ class DesktopController(QtCore.QObject):
         )
 
     def emergency_stop(self) -> None:
-        self._run(
-            lambda: self.runtime.context.machine.stop_job(emergency=True),
-            on_success=lambda _: self._machine_changed("Software stop sent; laser-off requested"),
-            label="Software stop",
-        )
+        self.stopInitiated.emit()
+        try:
+            self.runtime.context.machine.request_stop(emergency=True)
+        except Exception as exc:
+            self.errorOccurred.emit(f"Software stop failed: {exc}")
+            return
+        self._machine_changed("Software stop sent; laser-off requested")
 
     def send_diagnostic(self, command: str) -> None:
+        def operation() -> list[str]:
+            machine = self.runtime.context.machine
+            machine.ensure_connected()
+            return machine.send_command(command)
+
         self._run(
-            lambda: self.runtime.context.machine.send_command(command),
+            operation,
             on_success=lambda responses: self._diagnostic_complete(command, responses),
             label="Diagnostic command",
         )
 
     def jog(self, dx_mm: float, dy_mm: float, feed_mm_min: float) -> None:
-        del dx_mm, dy_mm, feed_mm_min
-        self.errorOccurred.emit(
-            "Jogging is visible in the desktop shell but remains disabled until "
-            "the core exposes a separately tested guarded jog operation."
+        def operation() -> dict[str, Any]:
+            self.runtime.context.machine.ensure_connected()
+            return self.runtime.context.machine.jog(dx_mm, dy_mm, feed_mm_min)
+
+        self._run(
+            operation,
+            on_success=self._jog_complete,
+            label="Jog",
+        )
+
+    def _jog_complete(self, result: dict[str, Any]) -> None:
+        position = result["position"]
+        self._machine_changed(
+            f"Jog complete: X{float(position['x']):.3f} "
+            f"Y{float(position['y']):.3f} mm"
         )
 
     def _diagnostic_complete(self, command: str, responses: list[str]) -> None:

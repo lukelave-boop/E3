@@ -3,11 +3,11 @@ from __future__ import annotations
 import copy
 import math
 import uuid
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Iterable, Mapping, Sequence
-
+from typing import Any
 
 PROJECT_SCHEMA_VERSION = 1
 
@@ -52,6 +52,12 @@ def _positive(value: float, name: str) -> float:
     if number <= 0:
         raise ProjectFormatError(f"{name} must be positive")
     return number
+
+
+def _boolean(value: Any, name: str) -> bool:
+    if type(value) is not bool:
+        raise ProjectFormatError(f"{name} must be a JSON boolean")
+    return value
 
 
 def _color(value: str) -> str:
@@ -103,7 +109,7 @@ class Bounds:
             and self.y_min + margin <= y <= self.y_max - margin
         )
 
-    def union(self, other: "Bounds") -> "Bounds":
+    def union(self, other: Bounds) -> Bounds:
         return Bounds(
             min(self.x_min, other.x_min),
             min(self.y_min, other.y_min),
@@ -111,7 +117,7 @@ class Bounds:
             max(self.y_max, other.y_max),
         )
 
-    def expanded(self, amount: float) -> "Bounds":
+    def expanded(self, amount: float) -> Bounds:
         amount = _finite(amount, "amount")
         return Bounds(
             self.x_min - amount,
@@ -129,7 +135,7 @@ class Bounds:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Bounds":
+    def from_dict(cls, raw: Mapping[str, Any]) -> Bounds:
         return cls(
             x_min=float(raw["x_min"]),
             y_min=float(raw["y_min"]),
@@ -162,7 +168,7 @@ class Transform:
         rotation = _finite(value, "transform.rotation_deg")
         return (rotation + 180.0) % 360.0 - 180.0
 
-    def copy(self, **changes: Any) -> "Transform":
+    def copy(self, **changes: Any) -> Transform:
         payload = self.to_dict()
         payload.update(changes)
         return Transform.from_dict(payload)
@@ -207,15 +213,15 @@ class Transform:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "Transform":
+    def from_dict(cls, raw: Mapping[str, Any]) -> Transform:
         return cls(
             x_mm=float(raw.get("x_mm", 0.0)),
             y_mm=float(raw.get("y_mm", 0.0)),
             width_mm=float(raw.get("width_mm", 10.0)),
             height_mm=float(raw.get("height_mm", 10.0)),
             rotation_deg=float(raw.get("rotation_deg", 0.0)),
-            mirror_x=bool(raw.get("mirror_x", False)),
-            mirror_y=bool(raw.get("mirror_y", False)),
+            mirror_x=_boolean(raw.get("mirror_x", False), "transform.mirror_x"),
+            mirror_y=_boolean(raw.get("mirror_y", False), "transform.mirror_y"),
         )
 
 
@@ -282,7 +288,7 @@ class OperationLayer:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "OperationLayer":
+    def from_dict(cls, raw: Mapping[str, Any]) -> OperationLayer:
         return cls(
             id=str(raw.get("id", _new_id("layer"))),
             name=str(raw.get("name", "Layer")),
@@ -294,9 +300,12 @@ class OperationLayer:
             line_interval_mm=float(raw.get("line_interval_mm", 0.10)),
             scan_angle_deg=float(raw.get("scan_angle_deg", 0.0)),
             overscan_percent=float(raw.get("overscan_percent", 2.5)),
-            air_assist=bool(raw.get("air_assist", False)),
-            output_enabled=bool(raw.get("output_enabled", True)),
-            visible=bool(raw.get("visible", True)),
+            air_assist=_boolean(raw.get("air_assist", False), "layer.air_assist"),
+            output_enabled=_boolean(
+                raw.get("output_enabled", True),
+                "layer.output_enabled",
+            ),
+            visible=_boolean(raw.get("visible", True), "layer.visible"),
             priority=int(raw.get("priority", 0)),
         )
 
@@ -334,7 +343,10 @@ class SceneObject:
 
     def validate_geometry(self) -> None:
         if self.kind == ObjectKind.RECTANGLE:
-            radius = float(self.geometry.get("corner_radius_mm", 0.0))
+            radius = _finite(
+                self.geometry.get("corner_radius_mm", 0.0),
+                "rectangle.corner_radius_mm",
+            )
             if radius < 0:
                 raise ProjectFormatError("Rectangle corner radius cannot be negative")
             self.geometry["corner_radius_mm"] = radius
@@ -361,7 +373,10 @@ class SceneObject:
                             [_finite(point[0], "path.x"), _finite(point[1], "path.y")]
                             for point in points
                         ],
-                        "closed": bool(line.get("closed", False)),
+                        "closed": _boolean(
+                            line.get("closed", False),
+                            "path.closed",
+                        ),
                     }
                 )
             self.geometry["polylines"] = cleaned
@@ -381,7 +396,7 @@ class SceneObject:
         width_mm: float = 40.0,
         height_mm: float = 25.0,
         corner_radius_mm: float = 0.0,
-    ) -> "SceneObject":
+    ) -> SceneObject:
         return cls(
             name=name,
             kind=ObjectKind.RECTANGLE,
@@ -399,7 +414,7 @@ class SceneObject:
         center: tuple[float, float] = (0.0, 0.0),
         width_mm: float = 30.0,
         height_mm: float = 30.0,
-    ) -> "SceneObject":
+    ) -> SceneObject:
         return cls(
             name=name,
             kind=ObjectKind.ELLIPSE,
@@ -416,7 +431,7 @@ class SceneObject:
         center: tuple[float, float] = (0.0, 0.0),
         length_mm: float = 30.0,
         rotation_deg: float = 0.0,
-    ) -> "SceneObject":
+    ) -> SceneObject:
         return cls(
             name=name,
             kind=ObjectKind.LINE,
@@ -435,14 +450,19 @@ class SceneObject:
         center: tuple[float, float] = (0.0, 0.0),
         source_name: str = "",
         source_svg: str | None = None,
-    ) -> "SceneObject":
+    ) -> SceneObject:
         raw_lines: list[dict[str, Any]] = []
         all_points: list[tuple[float, float]] = []
         for line in polylines:
             points = [(float(point[0]), float(point[1])) for point in line["points"]]
             if len(points) < 2:
                 continue
-            raw_lines.append({"points": points, "closed": bool(line.get("closed", False))})
+            raw_lines.append(
+                {
+                    "points": points,
+                    "closed": _boolean(line.get("closed", False), "path.closed"),
+                }
+            )
             all_points.extend(points)
         if not all_points:
             raise ProjectFormatError("Imported path contains no usable points")
@@ -481,7 +501,7 @@ class SceneObject:
         offset_mm: tuple[float, float] = (5.0, -5.0),
         *,
         group_id: str | None = None,
-    ) -> "SceneObject":
+    ) -> SceneObject:
         duplicate = SceneObject.from_dict(self.to_dict())
         duplicate.id = _new_id("object")
         duplicate.name = f"{self.name} copy"
@@ -510,7 +530,7 @@ class SceneObject:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "SceneObject":
+    def from_dict(cls, raw: Mapping[str, Any]) -> SceneObject:
         return cls(
             id=str(raw.get("id", _new_id("object"))),
             name=str(raw.get("name", "Object")),
@@ -518,8 +538,8 @@ class SceneObject:
             layer_id=str(raw.get("layer_id", "")),
             transform=Transform.from_dict(raw.get("transform", {})),
             geometry=copy.deepcopy(dict(raw.get("geometry", {}))),
-            visible=bool(raw.get("visible", True)),
-            locked=bool(raw.get("locked", False)),
+            visible=_boolean(raw.get("visible", True), "object.visible"),
+            locked=_boolean(raw.get("locked", False), "object.locked"),
             group_id=None if raw.get("group_id") in {None, ""} else str(raw.get("group_id")),
             metadata=copy.deepcopy(dict(raw.get("metadata", {}))),
         )
@@ -575,7 +595,7 @@ class ProjectDocument:
         cls,
         name: str = "Untitled",
         work_area: Bounds | None = None,
-    ) -> "ProjectDocument":
+    ) -> ProjectDocument:
         return cls(name=name, work_area=work_area or Bounds(0.0, 0.0, 220.0, 220.0))
 
     @property
@@ -746,8 +766,10 @@ class ProjectDocument:
         }
 
     @classmethod
-    def from_dict(cls, raw: Mapping[str, Any]) -> "ProjectDocument":
-        schema = int(raw.get("schema_version", 0))
+    def from_dict(cls, raw: Mapping[str, Any]) -> ProjectDocument:
+        schema = raw.get("schema_version", 0)
+        if type(schema) is not int:
+            raise ProjectFormatError("Project schema_version must be an integer")
         if schema != PROJECT_SCHEMA_VERSION:
             raise ProjectFormatError(
                 f"Unsupported project schema {schema}; expected {PROJECT_SCHEMA_VERSION}"
@@ -769,5 +791,5 @@ class ProjectDocument:
                 raise
             raise ProjectFormatError(f"Invalid project structure: {exc}") from exc
 
-    def clone(self) -> "ProjectDocument":
+    def clone(self) -> ProjectDocument:
         return ProjectDocument.from_dict(self.to_dict())

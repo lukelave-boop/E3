@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-
 PYSIDE6_IMPORT_ERROR: Exception | None = None
 
 try:

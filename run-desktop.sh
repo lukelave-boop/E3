@@ -19,4 +19,12 @@ if [[ ! -f "$CONFIG" ]]; then
   CONFIG="$ROOT/config/default.json"
 fi
 
-exec .venv/bin/python -m laser_aligner.desktop.main --safe --config "$CONFIG" "$@"
+MODE=(--safe)
+for argument in "$@"; do
+  if [[ "$argument" == "--hardware" ]]; then
+    MODE=()
+    break
+  fi
+done
+
+exec .venv/bin/python -m laser_aligner.desktop.main "${MODE[@]}" --config "$CONFIG" "$@"
