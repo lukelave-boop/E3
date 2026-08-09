@@ -8,6 +8,29 @@ from pathlib import Path
 from typing import Any
 
 
+def _reject_json_constant(value: str) -> None:
+    raise ValueError(f"JSON numbers must be finite; unsupported constant {value}")
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in output:
+            raise ValueError(f"JSON contains duplicate key {key!r}")
+        output[key] = value
+    return output
+
+
+def strict_json_loads(text: str) -> Any:
+    """Decode standards-compliant JSON without ambiguous duplicate keys."""
+
+    return json.loads(
+        text,
+        parse_constant=_reject_json_constant,
+        object_pairs_hook=_strict_json_object,
+    )
+
+
 def default_user_data_dir() -> Path:
     """Return the writable per-user data root for E3 on Windows and Linux."""
 
@@ -32,9 +55,28 @@ def read_json(path: Path, default: Any = None) -> Any:
     if not path.exists():
         return default
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+        return strict_json_loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, ValueError, RecursionError):
         return default
+
+
+def _fsync_parent_directory(path: Path) -> None:
+    """Best-effort persistence for a newly published directory entry."""
+
+    if os.name == "nt":
+        return
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    try:
+        descriptor = os.open(path.parent, flags)
+    except OSError:
+        return
+    try:
+        os.fsync(descriptor)
+    except OSError:
+        # Some network and virtual filesystems do not support directory fsync.
+        pass
+    finally:
+        os.close(descriptor)
 
 
 def atomic_write_json(path: Path, data: Any) -> None:
@@ -43,11 +85,12 @@ def atomic_write_json(path: Path, data: Any) -> None:
     temp_path = Path(temp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2, sort_keys=True)
+            json.dump(data, handle, indent=2, sort_keys=True, allow_nan=False)
             handle.write("\n")
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        _fsync_parent_directory(path)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -64,6 +107,7 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)
+        _fsync_parent_directory(path)
     finally:
         temp_path.unlink(missing_ok=True)
 
@@ -96,6 +140,7 @@ def atomic_write_bytes_if_absent(
             os.link(temp_path, path)
         except FileExistsError:
             return False
+        _fsync_parent_directory(path)
         return True
     finally:
         temp_path.unlink(missing_ok=True)

@@ -57,7 +57,11 @@ from .gcode.generator import (
 from .geometry.svg import parse_svg
 from .imaging import encode_image, image_quality, read_image, write_image_atomic
 from .machine.service import MachineService, list_serial_ports
-from .storage import atomic_write_json, atomic_write_text, read_json
+from .storage import (
+    atomic_write_bytes_if_absent,
+    atomic_write_json,
+    read_json,
+)
 from .vision.fiducials import (
     detect_aruco_markers,
     detect_crosshairs_burst,
@@ -70,12 +74,69 @@ from .vision.workpiece import detect_workpiece
 LOGGER = logging.getLogger(__name__)
 _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 _CURRENT_LENS_MODEL = object()
+_GENERATED_NAME_LOCK = threading.Lock()
+_GENERATED_NAME_SEQUENCE = 0
+
+
+def _unique_artifact_filename(stem: str, suffix: str) -> str:
+    """Return a bounded, distinct artifact name for concurrent same-second writes."""
+    global _GENERATED_NAME_SEQUENCE
+    with _GENERATED_NAME_LOCK:
+        _GENERATED_NAME_SEQUENCE += 1
+        sequence = _GENERATED_NAME_SEQUENCE
+        entropy = secrets.token_hex(6)
+    extension = suffix if suffix.startswith(".") else f".{suffix}"
+    return f"{stem}-{time.strftime('%Y%m%d-%H%M%S')}-{sequence:08x}-{entropy}{extension}"
+
+
+def _publish_unique_artifact(
+    directory: Path,
+    *,
+    stem: str,
+    suffix: str,
+    data: bytes,
+) -> tuple[str, Path]:
+    for _attempt in range(100):
+        filename = _unique_artifact_filename(stem, suffix)
+        path = directory / filename
+        if atomic_write_bytes_if_absent(path, data):
+            return filename, path
+    raise RuntimeError("Could not reserve a unique artifact filename")
 
 
 def _payload_boolean(payload: Mapping[str, Any], key: str, default: bool) -> bool:
     value = payload.get(key, default)
     if type(value) is not bool:
         raise ValueError(f"{key} must be a JSON boolean")
+    return value
+
+
+def _payload_finite_number(
+    payload: Mapping[str, Any],
+    key: str,
+    default: int | float,
+) -> float:
+    value = payload.get(key, default)
+    if type(value) not in {int, float} or not math.isfinite(float(value)):
+        raise ValueError(f"{key} must be a finite JSON number")
+    return float(value)
+
+
+def _payload_integer(
+    payload: Mapping[str, Any],
+    key: str,
+    default: int,
+) -> int:
+    value = payload.get(key, default)
+    if type(value) is not int:
+        raise ValueError(f"{key} must be a JSON integer")
+    return value
+
+
+def _payload_string(payload: Mapping[str, Any], key: str, default: str) -> str:
+    value = payload.get(key, default)
+    if type(value) is not str:
+        raise ValueError(f"{key} must be a JSON string")
     return value
 
 
@@ -282,8 +343,8 @@ class AppContext:
             raise CalibrationError(f"Prepare the {label} job before capture")
         if not self._session_boolean(session, "powered", label):
             raise CalibrationError(
-                f"The prepared {label} job is dry motion only. Prepare and run its "
-                "powered version before capture."
+                f"The prepared {label} job has laser power 0%. Prepare and run its "
+                "positive-power version before capture."
             )
         digest = session.get("program_digest")
         created_at = session.get("created_at")
@@ -573,13 +634,18 @@ class AppContext:
         return burst
 
     def _stable_camera_burst(self) -> FrameBurst:
+        sample_frames = 5
         profile = replace(
             self.settings.camera.precision_capture,
             settle_seconds=0.1,
             discard_frames=2,
-            sample_frames=5,
+            sample_frames=sample_frames,
             timeout_seconds=2.0,
             minimum_valid_frames=1,
+            consensus_frames=min(
+                self.settings.camera.precision_capture.consensus_frames,
+                sample_frames,
+            ),
         )
         return self.camera.capture_burst(profile, score_frames=False)
 
@@ -604,10 +670,18 @@ class AppContext:
         image = (
             self.stable_camera_frame(undistort=undistort)[0] if precision else self.camera_frame(undistort=undistort)
         )
-        timestamp = time.strftime("%Y%m%d-%H%M%S")
         safe_prefix = _SAFE_NAME_RE.sub("-", prefix).strip("-._")[:60] or "capture"
-        path = self.settings.app.data_dir / "captures" / f"{safe_prefix}-{timestamp}.jpg"
-        write_image_atomic(path, image, [cv2.IMWRITE_JPEG_QUALITY, 96])
+        encoded = encode_image(
+            image,
+            ".jpg",
+            [cv2.IMWRITE_JPEG_QUALITY, 96],
+        )
+        _filename, path = _publish_unique_artifact(
+            self.settings.app.data_dir / "captures",
+            stem=safe_prefix,
+            suffix=".jpg",
+            data=encoded,
+        )
         return path
 
     def capture_bed_reference(self, *, precision: bool = True) -> dict[str, Any]:
@@ -1121,10 +1195,11 @@ class AppContext:
             design_name="base-bed-mapping-keyed-crosses",
             mark_sizes_mm=keyed_sizes,
         )
-        filename = f"base-bed-mapping-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
-        atomic_write_text(
-            self.settings.app.data_dir / "generated" / filename,
-            program.text,
+        filename, _generated_path = _publish_unique_artifact(
+            self.settings.app.data_dir / "generated",
+            stem="base-bed-mapping",
+            suffix=".gcode",
+            data=program.text.encode("utf-8"),
         )
         created_at = time.time()
         program_digest = self.machine.preflight_program(program.text).digest
@@ -1192,7 +1267,8 @@ class AppContext:
             "fresh base-map",
         ):
             raise CalibrationError(
-                "The prepared base-map job is dry motion only. Run it, then prepare and run the powered job."
+                "The prepared base-map job has laser power 0%. Prepare and run the "
+                "positive-power job before capture."
             )
         if require_powered:
             session = {
@@ -1343,9 +1419,12 @@ class AppContext:
             powered=powered,
             speed_mm_min=speed_mm_min,
         )
-        filename = f"fine-registration-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
-        generated_path = self.settings.app.data_dir / "generated" / filename
-        atomic_write_text(generated_path, program.text)
+        filename, _generated_path = _publish_unique_artifact(
+            self.settings.app.data_dir / "generated",
+            stem="fine-registration",
+            suffix=".gcode",
+            data=program.text.encode("utf-8"),
+        )
         created_at = time.time()
         program_digest = self.machine.preflight_program(program.text).digest
         atomic_write_json(
@@ -1398,9 +1477,12 @@ class AppContext:
             speed_mm_min=speed_mm_min,
             design_name="accuracy-validation-holdout-crosses",
         )
-        filename = f"accuracy-validation-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
-        generated_path = self.settings.app.data_dir / "generated" / filename
-        atomic_write_text(generated_path, program.text)
+        filename, _generated_path = _publish_unique_artifact(
+            self.settings.app.data_dir / "generated",
+            stem="accuracy-validation",
+            suffix=".gcode",
+            data=program.text.encode("utf-8"),
+        )
         created_at = time.time()
         program_digest = self.machine.preflight_program(program.text).digest
         atomic_write_json(
@@ -1472,10 +1554,11 @@ class AppContext:
             speed_mm_min=speed_mm_min,
             design_name=design_name,
         )
-        filename = f"{design_name}-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
-        atomic_write_text(
-            self.settings.app.data_dir / "generated" / filename,
-            program.text,
+        filename, _generated_path = _publish_unique_artifact(
+            self.settings.app.data_dir / "generated",
+            stem=design_name,
+            suffix=".gcode",
+            data=program.text.encode("utf-8"),
         )
         session_path = (
             self.dense_confirmation_path
@@ -1920,8 +2003,8 @@ class AppContext:
             raise CalibrationError("Prepare the accuracy-validation mark job before capturing its marks")
         if not self._session_boolean(session, "powered", "accuracy-validation"):
             raise CalibrationError(
-                "The prepared validation job is dry motion only. After reviewing it, "
-                "prepare and run the powered holdout job before analyzing marks."
+                "The prepared validation job has laser power 0%. After reviewing it, "
+                "prepare and run the positive-power holdout job before analyzing marks."
             )
         session = {
             **session,
@@ -2115,8 +2198,8 @@ class AppContext:
             raise CalibrationError("Prepare the fine-registration mark job before capturing its marks")
         if not self._session_boolean(session, "powered", "fine-registration"):
             raise CalibrationError(
-                "The prepared registration job is dry motion only. After reviewing it, "
-                "prepare and run the powered mark job before analyzing marks."
+                "The prepared registration job has laser power 0%. After reviewing it, "
+                "prepare and run the positive-power mark job before analyzing marks."
             )
         session = {
             **session,
@@ -2382,12 +2465,19 @@ class AppContext:
         }
 
     def _placement(self, payload: dict[str, Any]) -> DesignPlacement:
+        missing = [
+            key
+            for key in ("center_x_mm", "center_y_mm", "width_mm", "height_mm")
+            if key not in payload
+        ]
+        if missing:
+            raise ValueError(f"placement is missing required field {missing[0]}")
         return DesignPlacement(
-            center_x_mm=float(payload["center_x_mm"]),
-            center_y_mm=float(payload["center_y_mm"]),
-            width_mm=float(payload["width_mm"]),
-            height_mm=float(payload["height_mm"]),
-            rotation_deg=float(payload.get("rotation_deg", 0.0)),
+            center_x_mm=_payload_finite_number(payload, "center_x_mm", 0.0),
+            center_y_mm=_payload_finite_number(payload, "center_y_mm", 0.0),
+            width_mm=_payload_finite_number(payload, "width_mm", 0.0),
+            height_mm=_payload_finite_number(payload, "height_mm", 0.0),
+            rotation_deg=_payload_finite_number(payload, "rotation_deg", 0.0),
             mirror_x=_payload_boolean(payload, "mirror_x", False),
             mirror_y=_payload_boolean(payload, "mirror_y", False),
         )
@@ -2395,11 +2485,23 @@ class AppContext:
     def _toolpath_options(self, payload: dict[str, Any]) -> ToolpathOptions:
         laser = self.settings.laser
         return ToolpathOptions(
-            power_mode=str(payload.get("power_mode", laser.power_mode)).upper(),
-            power=int(payload.get("power", laser.default_power)),
+            power_mode=_payload_string(
+                payload,
+                "power_mode",
+                laser.power_mode,
+            ).upper(),
+            power=_payload_integer(payload, "power", laser.default_power),
             power_max=laser.power_max,
-            travel_feed_mm_min=float(payload.get("travel_feed_mm_min", laser.travel_feed_mm_min)),
-            engrave_feed_mm_min=float(payload.get("engrave_feed_mm_min", laser.engrave_feed_mm_min)),
+            travel_feed_mm_min=_payload_finite_number(
+                payload,
+                "travel_feed_mm_min",
+                laser.travel_feed_mm_min,
+            ),
+            engrave_feed_mm_min=_payload_finite_number(
+                payload,
+                "engrave_feed_mm_min",
+                laser.engrave_feed_mm_min,
+            ),
             boundary_margin_mm=laser.boundary_margin_mm,
             spot_offset_x_mm=laser.spot_offset_x_mm,
             spot_offset_y_mm=laser.spot_offset_y_mm,
@@ -2412,11 +2514,21 @@ class AppContext:
         )
 
     def generate_gcode(self, payload: dict[str, Any]) -> dict[str, Any]:
-        svg_text = str(payload["svg"])
+        svg_text = payload.get("svg")
+        if type(svg_text) is not str:
+            raise ValueError("svg must be a JSON string")
+        raw_placement = payload.get("placement")
+        if type(raw_placement) is not dict:
+            raise ValueError("placement must be a JSON object")
+        raw_toolpath = payload.get("toolpath", {})
+        if type(raw_toolpath) is not dict:
+            raise ValueError("toolpath must be a JSON object")
+        name = payload.get("name", "design.svg")
+        if type(name) is not str:
+            raise ValueError("name must be a JSON string")
         geometry = parse_svg(svg_text)
-        placement = self._placement(dict(payload["placement"]))
-        options = self._toolpath_options(dict(payload.get("toolpath", {})))
-        name = str(payload.get("name", "design.svg"))
+        placement = self._placement(raw_placement)
+        options = self._toolpath_options(raw_toolpath)
         program = generate_vector_gcode(
             geometry,
             placement,
@@ -2424,10 +2536,15 @@ class AppContext:
             self.settings.machine.work_area,
             design_name=name,
         )
-        safe_base = _SAFE_NAME_RE.sub("-", Path(name).stem).strip("-.") or "design"
-        filename = f"{safe_base}-{time.strftime('%Y%m%d-%H%M%S')}.gcode"
-        path = self.settings.app.data_dir / "generated" / filename
-        atomic_write_text(path, program.text)
+        safe_base = (
+            _SAFE_NAME_RE.sub("-", Path(name).stem).strip("-.")[:80] or "design"
+        )
+        filename, _path = _publish_unique_artifact(
+            self.settings.app.data_dir / "generated",
+            stem=safe_base,
+            suffix=".gcode",
+            data=program.text.encode("utf-8"),
+        )
         return {
             "filename": filename,
             "download_url": f"/api/generated/{filename}",

@@ -147,7 +147,7 @@ pairs plus forward and inverse homographies. A dedicated base-map session can
 generate a keyed
 5×5 job without a prior homography. Two larger interior crosses orient the
 regular grid under all rotations/reflections; incomplete, unkeyed, ambiguous,
-dry, or stale sessions are rejected. The candidate fit is analyzed without
+zero-power, or stale sessions are rejected. The candidate fit is analyzed without
 mutating active state, then reviewed points and the fresh homography are
 installed transactionally with rollback on persistence failure. A fresh base
 map intentionally clears corrections belonging to its predecessor and records
@@ -166,7 +166,7 @@ The same Qt-independent model defines five accuracy-validation holdouts and
 fixed pass/fail limits. `AppContext` binds every fine-registration and
 validation session to the exact active homography and residual-mesh revision,
 persists the generated job/capture/report, and rejects legacy, stale, or
-dry-only sessions. Live capture checks that identity before Home / park and
+zero-power-only sessions. Live capture checks that identity before Home / park and
 camera acquisition. The desktop sends both calibration and validation jobs
 through the ordinary guarded preview/run pipeline; validation has no write path
 to `BedMapper`.
@@ -304,7 +304,7 @@ rows retain serpentine source order instead of entering the nearest-path
 planner. Each row traverses its complete image or silhouette span; lead-in,
 white gaps, and lead-out remain laser-off at the engraving feed. Both desired
 motion and spot-corrected controller motion are bounds checked. Image bounds
-also participate in dry framing, including rotation and mixed vector projects.
+also participate in zero-power framing, including rotation and mixed vector projects.
 Vector nearest-path planning falls back to recorded source order above 512
 paths rather than entering an unbounded quadratic search.
 Text-to-path, selectable dither algorithms, and calibrated grayscale power
@@ -429,7 +429,7 @@ After successful powered streaming, the job remains active through
 barrier → motor release`. Stream acknowledgements use a cancellation-aware
 completion timeout because GRBL can delay `ok` while its planner drains; the
 short interactive-command timeout is not evidence that a queued job failed.
-Dry jobs and stop, failure, emergency, or disconnect paths do not request this
+Zero-power jobs and stop, failure, emergency, or disconnect paths do not request this
 completion motion. Controller reset, reconnect, emergency stop, motor release,
 or job failure invalidates the session reference. Simulation does not require a
 hardware homing preflight. Connection status remains non-ready throughout

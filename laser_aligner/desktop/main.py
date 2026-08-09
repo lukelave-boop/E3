@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "PySide6 is not installed.\n"
             "Install the native desktop dependencies with:\n\n"
-            "  .venv/bin/pip install -e '.[desktop]'\n",
+            '  python -m pip install -e ".[desktop]"\n',
             file=sys.stderr,
         )
         return 2

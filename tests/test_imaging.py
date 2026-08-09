@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import cv2
@@ -81,3 +82,48 @@ def test_stable_payload_enforces_encoded_byte_cap(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="byte limit"):
         imaging.read_encoded_image_payload(path, max_encoded_bytes=16)
+
+
+def test_decode_rejects_noninteger_bounds_and_oversized_reported_pixels() -> None:
+    ok, encoded = cv2.imencode(".png", np.zeros((20, 20, 3), dtype=np.uint8))
+    assert ok
+    payload = imaging.encoded_image_payload(encoded.tobytes())
+
+    with pytest.raises(ValueError, match="dimensions must be positive"):
+        imaging.decode_image_payload(
+            payload,
+            max_width=float("nan"),  # type: ignore[arg-type]
+            max_height=20,
+        )
+    oversized = replace(payload, source_size=(100_000, 100_000))
+    with pytest.raises(imaging.ImageEvidenceChangedError, match="dimensions"):
+        imaging.decode_image_payload(oversized)
+    with pytest.raises(ValueError, match="pixel decode limit"):
+        imaging.decode_image_payload(payload, max_decoded_pixels=100)
+
+
+def test_decode_rejects_payload_identity_mismatch() -> None:
+    ok, encoded = cv2.imencode(".png", np.zeros((20, 20, 3), dtype=np.uint8))
+    assert ok
+    payload = imaging.encoded_image_payload(encoded.tobytes())
+
+    with pytest.raises(imaging.ImageEvidenceChangedError, match="digest"):
+        imaging.decode_image_payload(replace(payload, content_sha256="0" * 64))
+
+
+@pytest.mark.parametrize("limit", (True, 1.5, float("nan"), "10"))
+def test_encoded_payload_rejects_noninteger_byte_limit(limit: object) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        imaging.encoded_image_payload(
+            b"payload",
+            max_encoded_bytes=limit,  # type: ignore[arg-type]
+            allow_invalid=True,
+        )
+
+
+def test_sharpness_rejects_nonfinite_crop_fraction() -> None:
+    with pytest.raises(ValueError, match="crop fraction must be finite"):
+        imaging.sharpness_score(
+            np.zeros((20, 20), dtype=np.uint8),
+            crop_fraction=float("nan"),
+        )

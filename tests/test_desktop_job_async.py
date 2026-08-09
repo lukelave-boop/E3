@@ -228,16 +228,22 @@ def test_completed_calibration_job_reopens_setup_and_starts_capture(
         "filename": "dense-validation.gcode",
         "tab_index": 4,
         "capture_action": "capture_dense_validation",
+        "submitted": True,
+        "baseline_job": (100.0, 101.0, "old-digest", "previous.gcode"),
+        "started_at": 122.0,
+        "program_digest": "dense-digest",
     }
     try:
         window._maybe_start_calibration_capture(
             {
                 "job": {
                     "running": False,
+                    "started_at": 122.0,
                     "finished_at": 123.0,
                     "name": "dense-validation.gcode",
                     "phase": "complete",
                     "error": None,
+                    "program_digest": "dense-digest",
                 }
             }
         )
@@ -267,6 +273,10 @@ def test_failed_or_replaced_calibration_job_never_starts_capture(
         "filename": "fine-registration.gcode",
         "tab_index": 3,
         "capture_action": "capture_fine_registration",
+        "submitted": True,
+        "baseline_job": (100.0, 101.0, "old-digest", "previous.gcode"),
+        "started_at": 122.0,
+        "program_digest": "fine-digest",
     }
     try:
         window._pending_calibration_capture = dict(pending)
@@ -274,10 +284,12 @@ def test_failed_or_replaced_calibration_job_never_starts_capture(
             {
                 "job": {
                     "running": False,
+                    "started_at": 122.0,
                     "finished_at": 123.0,
                     "name": "fine-registration.gcode",
                     "phase": "failed",
                     "error": "Controller error",
+                    "program_digest": "fine-digest",
                 }
             }
         )
@@ -290,6 +302,151 @@ def test_failed_or_replaced_calibration_job_never_starts_capture(
         assert opened == []
         assert window._pending_calibration_capture is None
     finally:
+        _dispose(qt_application, window)
+
+
+def test_stale_same_name_terminal_job_cannot_trigger_automatic_capture(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, _, _ = _window(tmp_path, monkeypatch)
+    opened: list[tuple[int, str | None]] = []
+    monkeypatch.setattr(
+        window,
+        "open_machine_setup",
+        lambda tab_index=0, *, automatic_capture=None: opened.append(
+            (tab_index, automatic_capture)
+        ),
+    )
+    stale = {
+        "running": False,
+        "started_at": 100.0,
+        "finished_at": 101.0,
+        "name": "same-second.gcode",
+        "phase": "complete",
+        "error": None,
+        "program_digest": "stale-digest",
+    }
+    window._pending_calibration_capture = {
+        "filename": "same-second.gcode",
+        "tab_index": 4,
+        "capture_action": "capture_dense_validation",
+        "submitted": False,
+        "baseline_job": None,
+    }
+    try:
+        window._maybe_start_calibration_capture({"job": stale})
+        assert opened == []
+
+        pending = window._pending_calibration_capture
+        assert pending is not None
+        pending["submitted"] = True
+        pending["baseline_job"] = window._machine_job_identity(stale)
+        window._maybe_start_calibration_capture({"job": stale})
+        qt_application.processEvents()
+
+        assert opened == []
+        assert window._pending_calibration_capture is pending
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_rapid_completed_job_binds_start_identity_before_automatic_capture(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, _, _ = _window(tmp_path, monkeypatch)
+    opened: list[tuple[int, str | None]] = []
+    monkeypatch.setattr(
+        window,
+        "open_machine_setup",
+        lambda tab_index=0, *, automatic_capture=None: opened.append(
+            (tab_index, automatic_capture)
+        ),
+    )
+    window._pending_calibration_capture = {
+        "filename": "instant.gcode",
+        "tab_index": 4,
+        "capture_action": "capture_dense_confirmation",
+        "submitted": True,
+        "baseline_job": (100.0, 101.0, "old-digest", "instant.gcode"),
+    }
+    terminal = {
+        "running": False,
+        "started_at": 200.0,
+        "finished_at": 200.001,
+        "name": "instant.gcode",
+        "phase": "complete",
+        "error": None,
+        "program_digest": "new-digest",
+    }
+    monkeypatch.setattr(
+        window.controller,
+        "poll_status",
+        lambda: window._maybe_start_calibration_capture({"job": terminal}),
+    )
+    try:
+        window._maybe_start_calibration_capture({"job": terminal})
+        assert opened == []
+
+        window._job_started(
+            {
+                **terminal,
+                "running": True,
+                "finished_at": None,
+                "phase": "streaming",
+            }
+        )
+        qt_application.processEvents()
+
+        assert opened == [(4, "capture_dense_confirmation")]
+        assert window._pending_calibration_capture is None
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_automatic_capture_reuses_an_open_machine_setup_dialog(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, _, _ = _window(tmp_path, monkeypatch)
+    calls: list[object] = []
+
+    class ExistingDialog:
+        tabs = SimpleNamespace(setCurrentIndex=lambda index: calls.append(("tab", index)))
+
+        def capture_dense_validation(self) -> None:
+            calls.append("capture")
+
+        def show(self) -> None:
+            calls.append("show")
+
+        def raise_(self) -> None:
+            calls.append("raise")
+
+        def activateWindow(self) -> None:
+            calls.append("activate")
+
+    existing = ExistingDialog()
+    window._machine_setup_dialog = existing  # type: ignore[assignment]
+    monkeypatch.setattr(
+        main_window_module,
+        "MachineSetupDialog",
+        lambda *_args, **_kwargs: pytest.fail("opened a nested Machine Setup dialog"),
+    )
+    try:
+        window.open_machine_setup(
+            4,
+            automatic_capture="capture_dense_validation",
+        )
+        qt_application.processEvents()
+
+        assert calls == [("tab", 4), "show", "raise", "activate", "capture"]
+    finally:
+        window._machine_setup_dialog = None
         _dispose(qt_application, window)
 
 

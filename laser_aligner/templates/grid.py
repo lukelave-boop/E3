@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping
 from dataclasses import dataclass
+from numbers import Real
 from typing import Any
 
 from ..project import Bounds, ObjectKind, SceneObject
@@ -25,12 +26,9 @@ def _strict_count(value: Any, name: str) -> int:
 
 
 def _finite(value: Any, name: str) -> float:
-    if isinstance(value, bool):
+    if isinstance(value, bool) or not isinstance(value, Real):
         raise TemplateFormatError(f"{name} must be a finite number")
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise TemplateFormatError(f"{name} must be a finite number") from exc
+    number = float(value)
     if not math.isfinite(number):
         raise TemplateFormatError(f"{name} must be a finite number")
     return number

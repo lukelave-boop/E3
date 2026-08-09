@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import json
 import re
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..storage import atomic_write_json
+from ..storage import atomic_write_json, strict_json_loads
 from .model import TEMPLATE_EXTENSION, CutTemplate, TemplateFormatError
 
 _WINDOWS_RESERVED_STEMS = {
@@ -190,10 +189,10 @@ class TemplateLibrary:
         if not source.exists() and not Path(reference).suffix:
             return self.get(str(reference))
         try:
-            raw = json.loads(source.read_text(encoding="utf-8"))
+            raw = strict_json_loads(source.read_text(encoding="utf-8"))
         except FileNotFoundError:
             raise
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        except (OSError, UnicodeError, ValueError, RecursionError) as exc:
             raise TemplateFormatError(f"Invalid template JSON in {source}: {exc}") from exc
         return CutTemplate.from_dict(raw)
 

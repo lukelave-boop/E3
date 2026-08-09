@@ -62,30 +62,34 @@ def main(argv: list[str] | None = None) -> int:
         hardware_enabled=args.hardware,
         laser_lockout=args.laser_lockout,
     )
-    context.start()
-    server = AppHTTPServer((settings.app.host, settings.app.port), context)
-    url = f"http://{settings.app.host if settings.app.host != '0.0.0.0' else '127.0.0.1'}:{settings.app.port}/"
-    logger.info("Laser Camera Aligner running at %s", url)
-
-    shutdown_started = threading.Event()
-
-    def shutdown(_signum: int, _frame: object) -> None:
-        if shutdown_started.is_set():
-            return
-        shutdown_started.set()
-        logger.info("Stopping server")
-        threading.Thread(target=server.shutdown, daemon=True).start()
-
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
-    if settings.app.open_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    server: AppHTTPServer | None = None
     try:
+        context.start()
+        server = AppHTTPServer((settings.app.host, settings.app.port), context)
+        url = f"http://{settings.app.host if settings.app.host != '0.0.0.0' else '127.0.0.1'}:{settings.app.port}/"
+        logger.info("Laser Camera Aligner running at %s", url)
+
+        shutdown_started = threading.Event()
+
+        def shutdown(_signum: int, _frame: object) -> None:
+            if shutdown_started.is_set():
+                return
+            shutdown_started.set()
+            logger.info("Stopping server")
+            threading.Thread(target=server.shutdown, daemon=True).start()
+
+        signal.signal(signal.SIGINT, shutdown)
+        signal.signal(signal.SIGTERM, shutdown)
+
+        if settings.app.open_browser:
+            threading.Timer(0.8, lambda: webbrowser.open(url)).start()
         server.serve_forever(poll_interval=0.25)
     finally:
-        server.server_close()
-        context.stop()
+        try:
+            if server is not None:
+                server.server_close()
+        finally:
+            context.stop()
     return 0
 
 

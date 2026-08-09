@@ -1,3 +1,5 @@
+import sqlite3
+
 import pytest
 
 from laser_aligner.materials import MaterialDatabase, MaterialPreset
@@ -151,3 +153,90 @@ def test_material_preset_applies_to_layer_without_changing_identity():
 def test_invalid_material_values_are_rejected():
     with pytest.raises(ValueError):
         MaterialPreset(material="Wood", name="Bad", power_percent=101)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("thickness_mm", float("nan")),
+        ("thickness_mm", float("inf")),
+        ("speed_mm_min", float("nan")),
+        ("speed_mm_min", float("inf")),
+        ("power_percent", float("nan")),
+        ("line_interval_mm", float("nan")),
+        ("line_interval_mm", float("inf")),
+        ("passes", True),
+        ("passes", 1.5),
+        ("passes", "1"),
+    ],
+)
+def test_material_preset_rejects_nonfinite_or_coerced_numbers(field, value):
+    payload = {"material": "Wood", "name": "Invalid", field: value}
+
+    with pytest.raises(ValueError):
+        MaterialPreset(**payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("material", True),
+        ("name", 1),
+        ("mode", {}),
+        ("notes", []),
+    ],
+)
+def test_material_preset_rejects_coerced_strings(field, value):
+    payload = {"material": "Wood", "name": "Invalid", field: value}
+
+    with pytest.raises(ValueError, match="string"):
+        MaterialPreset(**payload)
+
+
+def test_material_database_revalidates_mutated_nonfinite_preset(tmp_path):
+    database = MaterialDatabase(tmp_path / "materials.sqlite")
+    preset = MaterialPreset(material="Wood", name="Mutated")
+    preset.speed_mm_min = float("nan")
+
+    with pytest.raises(ValueError):
+        database.save(preset)
+
+
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [
+        ("speed_mm_min", float("inf")),
+        ("line_interval_mm", float("inf")),
+        ("passes", 1.5),
+        ("material", sqlite3.Binary(b"Wood")),
+        ("name", sqlite3.Binary(b"Invalid")),
+        ("notes", sqlite3.Binary(b"notes")),
+    ],
+)
+def test_material_database_rejects_malformed_persisted_rows(tmp_path, column, value):
+    database = MaterialDatabase(tmp_path / "malformed.sqlite")
+    columns = {
+        "material": "Wood",
+        "name": f"Invalid {column}",
+        "thickness_mm": 1.0,
+        "mode": "line",
+        "speed_mm_min": 1000.0,
+        "power_percent": 10.0,
+        "passes": 1,
+        "line_interval_mm": 0.1,
+        "notes": "",
+    }
+    columns[column] = value
+    with sqlite3.connect(database.path) as connection:
+        connection.execute(
+            """
+            INSERT INTO material_presets (
+                material, name, thickness_mm, mode, speed_mm_min,
+                power_percent, passes, line_interval_mm, notes
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            tuple(columns.values()),
+        )
+
+    with pytest.raises(ValueError):
+        database.list()

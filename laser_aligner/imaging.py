@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import os
 import struct
 from dataclasses import asdict, dataclass
@@ -14,6 +15,7 @@ from .storage import atomic_write_bytes
 
 _MAX_IMAGE_HEADER_BYTES = 1024 * 1024
 MAX_STABLE_IMAGE_BYTES = 64 * 1024 * 1024
+MAX_DECODED_IMAGE_PIXELS = 64_000_000
 
 
 class ImageEvidenceChangedError(ValueError):
@@ -90,7 +92,13 @@ def sharpness_score(image: np.ndarray, *, crop_fraction: float = 0.0) -> float:
     """Return a comparable variance-of-Laplacian score for one fixed scene."""
 
     gray = _gray(image)
-    crop = max(0.0, min(0.45, float(crop_fraction)))
+    try:
+        crop = float(crop_fraction)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Sharpness crop fraction must be finite") from exc
+    if type(crop_fraction) is bool or not math.isfinite(crop):
+        raise ValueError("Sharpness crop fraction must be finite")
+    crop = max(0.0, min(0.45, crop))
     if crop > 0.0 and min(gray.shape[:2]) >= 40:
         margin_y = max(1, int(round(gray.shape[0] * crop)))
         margin_x = max(1, int(round(gray.shape[1] * crop)))
@@ -140,14 +148,10 @@ def write_image_atomic(path: str | Path, image: np.ndarray, params: list[int] | 
 def read_image(path: str | Path) -> np.ndarray | None:
     """Decode through bytes so non-ASCII paths behave consistently on every OS."""
 
-    source = Path(path)
     try:
-        payload = source.read_bytes()
-    except OSError:
+        return decode_image_payload(read_encoded_image_payload(path)).image
+    except (ImageEvidenceChangedError, ValueError):
         return None
-    if not payload:
-        return None
-    return cv2.imdecode(np.frombuffer(payload, dtype=np.uint8), cv2.IMREAD_COLOR)
 
 
 def _jpeg_orientation(payload: bytes) -> int:
@@ -285,8 +289,8 @@ def encoded_image_payload(
 ) -> EncodedImagePayload:
     """Freeze and identify one bounded encoded image body."""
 
-    if max_encoded_bytes <= 0:
-        raise ValueError("Encoded image byte limit must be positive")
+    if type(max_encoded_bytes) is not int or max_encoded_bytes <= 0:
+        raise ValueError("Encoded image byte limit must be a positive integer")
     encoded = bytes(payload)
     if not encoded:
         raise ValueError(f"Image payload is empty: {source}")
@@ -318,8 +322,8 @@ def read_encoded_image_payload(
     """Read one stable, size-capped file body and its exact-byte identity."""
 
     source = Path(path)
-    if max_encoded_bytes <= 0:
-        raise ValueError("Encoded image byte limit must be positive")
+    if type(max_encoded_bytes) is not int or max_encoded_bytes <= 0:
+        raise ValueError("Encoded image byte limit must be a positive integer")
     try:
         path_before = ImageFileIdentity.from_stat(source.stat())
         if path_before.size <= 0:
@@ -389,17 +393,56 @@ def decode_image_payload(
     *,
     max_width: int | None = None,
     max_height: int | None = None,
+    max_decoded_pixels: int = MAX_DECODED_IMAGE_PIXELS,
 ) -> DecodedImagePayload:
     """Decode pixels from the same immutable bytes used for the content digest."""
 
     if (max_width is None) != (max_height is None):
         raise ValueError("Both bounded image dimensions must be provided together")
-    if max_width is not None and (max_width <= 0 or max_height is None or max_height <= 0):
+    if (
+        max_width is not None
+        and (
+            type(max_width) is not int
+            or type(max_height) is not int
+            or max_width <= 0
+            or max_height is None
+            or max_height <= 0
+        )
+    ):
         raise ValueError("Bounded image dimensions must be positive")
+    if type(max_decoded_pixels) is not int or max_decoded_pixels <= 0:
+        raise ValueError("Decoded image pixel limit must be a positive integer")
     assert_image_payload_current(payload)
+    if not isinstance(payload.encoded, bytes) or not payload.encoded:
+        raise ValueError(f"Image payload is empty or invalid: {payload.source}")
+    if len(payload.encoded) > MAX_STABLE_IMAGE_BYTES:
+        raise ValueError(
+            f"Encoded image exceeds the {MAX_STABLE_IMAGE_BYTES:,}-byte decode limit: "
+            f"{payload.source}"
+        )
+    actual_digest = hashlib.sha256(payload.encoded).hexdigest()
+    if actual_digest != payload.content_sha256:
+        raise ImageEvidenceChangedError(
+            f"Image payload digest does not match its encoded bytes: {payload.source}"
+        )
+    actual_size = probe_encoded_image_dimensions(
+        payload.encoded,
+        source=payload.source,
+    )
+    if payload.source_size != actual_size:
+        raise ImageEvidenceChangedError(
+            f"Image payload dimensions do not match its encoded bytes: {payload.source}"
+        )
     if payload.source_size is None:
         raise ValueError(f"Image dimensions could not be decoded: {payload.source}")
     width, height = payload.source_size
+    if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        raise ValueError(f"Image dimensions are invalid: {payload.source}")
+    if width * height > max_decoded_pixels:
+        raise ValueError(
+            f"Image reports {width * height:,} pixels, exceeding the "
+            f"{max_decoded_pixels:,}-pixel decode limit: {payload.source}"
+        )
     reduction = 1
     if max_width is not None and max_height is not None:
         scale = max(width / max_width, height / max_height)

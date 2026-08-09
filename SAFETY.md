@@ -23,7 +23,7 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
   though tracing never requests positive laser output.
 - Inspect the dedicated generated-job Preview, including maximum planned power,
   powered/travel motion, bounds, and warnings. Preview is a review aid, not a
-  safety function and not a substitute for dry framing.
+  safety function and not a substitute for reviewing a zero-power frame.
 - Verify the generated bounds and the machine coordinate origin.
 - Verify that Home / park succeeds after every controller connection or reset.
   The desktop repeats this homing/parking preflight automatically at job start;
@@ -40,7 +40,7 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
   necessary, and releases the motors. It does not change
   fan or coolant state. Keep the complete homing and parking path clear until
   the job reports completion. Stops, job failures, emergency actions,
-  disconnects, and dry jobs do not initiate this convenience motion.
+  disconnects, and zero-power jobs do not initiate this convenience motion.
 - On GRBL, Home / park records the active `G54`-`G59` and `G92` offsets. Every
   subsequent absolute-motion job re-reads them and is blocked if they changed
   after the parked camera alignment. This detects coordinate-state drift but
@@ -53,7 +53,7 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
   detections before application and then verify both controller directions with
   laser-off motion. Automatic orientation and a low fit residual do not prove
   the physical origin, usable travel, focus plane, or beam location.
-- For fine registration, run the dry eight-cross path first. Use only a
+- For fine registration, review the zero-power eight-cross path first. Use only a
   previously established visible-marking power on a clean, restrained
   sacrificial surface; inspect every detected point before applying a result.
 - Parked-bed precision capture temporarily keeps GRBL motors energized and
@@ -69,9 +69,9 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
   stale `255`, it first restores configured `machine.grbl_step_idle_delay_ms`;
   the default for this profile is 250 ms. A controller that does not report
   `$1` is rejected after a best-effort finite-delay restore and motor release.
-- For accuracy validation, run the separate dry five-cross holdout path before
-  preparing its powered job. Validation reports camera-to-laser error but is not
-  a safety test or proof that unattended operation is safe.
+- For accuracy validation, inspect the separate five-cross holdout path in
+  Preview before running its powered job. Validation reports camera-to-laser
+  error but is not a safety test or proof that unattended operation is safe.
 - Keep the operator present for the entire job.
 
 ## Software guardrails in this repository
@@ -112,7 +112,7 @@ map for rollback. These are alignment guardrails, not safety functions or proof
 of beam location.
 
 Independent accuracy validation uses a separate guarded five-cross job. It
-requires every holdout detection, rejects dry-only and stale-map sessions, and
+requires every holdout detection, rejects zero-power-only and stale-map sessions, and
 reports fixed RMS/maximum acceptance limits without modifying calibration.
 Precision capture and **Recapture without homing** are measurement operations:
 they do not arm the laser or send motion. The recapture control is available
@@ -143,7 +143,7 @@ beyond the 250,000 streamed-command limit are rejected. Inspect the powered
 pattern and maximum power in Preview. A Start Here program
 intentionally omits earlier motion. It is prepared only at a complete move
 boundary, begins with `G21`, `G90`, and `M5`, positions with the laser off, and
-does not bypass the ordinary dry-frame, homing, arming, or execution gates.
+does not bypass the ordinary homing, arming, or execution gates.
 
 ## Camera sensor protection
 

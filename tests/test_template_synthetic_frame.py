@@ -126,6 +126,33 @@ def test_generated_frame_has_correct_size_pose_and_json_metadata():
     }
 
 
+@pytest.mark.parametrize(
+    ("argument", "value"),
+    [
+        ("pixels_per_mm", "3.0"),
+        ("center_x_mm", True),
+        ("rotation_deg", "30"),
+    ],
+)
+def test_synthetic_template_numeric_inputs_reject_coerced_types(
+    argument: str,
+    value: object,
+) -> None:
+    kwargs = {
+        "pixels_per_mm": 3.0,
+        "center_x_mm": 50.0,
+        "rotation_deg": 0.0,
+    }
+    kwargs[argument] = value
+
+    with pytest.raises(ValueError, match="finite number"):
+        generate_template_test_frame(
+            _grid_template(),
+            WorkArea(0.0, 100.0, 0.0, 100.0),
+            **kwargs,
+        )
+
+
 def test_seeded_noise_missing_and_occlusion_are_deterministic():
     template = _grid_template()
     area = WorkArea(0.0, 100.0, 0.0, 80.0)

@@ -89,9 +89,16 @@ def test_cli_host_override_uses_the_same_normalized_bind_contract(
     observed: dict[str, Any] = {}
 
     class FakeContext:
-        def __init__(self, settings: Any, *, hardware_enabled: bool) -> None:
+        def __init__(
+            self,
+            settings: Any,
+            *,
+            hardware_enabled: bool,
+            laser_lockout: bool,
+        ) -> None:
             observed["settings"] = settings
             observed["hardware_enabled"] = hardware_enabled
+            observed["laser_lockout"] = laser_lockout
 
         def start(self) -> None:
             observed["context_started"] = True
@@ -128,6 +135,7 @@ def test_cli_host_override_uses_the_same_normalized_bind_contract(
 
     assert result == 0
     assert observed["address"] == ("localhost", 65535)
+    assert observed["laser_lockout"] is False
     assert observed["context_started"] is True
     assert observed["context_stopped"] is True
     assert observed["server_closed"] is True

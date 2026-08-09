@@ -7,6 +7,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+from numbers import Real
 from typing import Any
 
 PROJECT_SCHEMA_VERSION = 1
@@ -41,6 +42,8 @@ def _utc_now() -> str:
 
 
 def _finite(value: float, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ProjectFormatError(f"{name} must be a finite number")
     number = float(value)
     if not math.isfinite(number):
         raise ProjectFormatError(f"{name} must be a finite number")
@@ -57,6 +60,24 @@ def _positive(value: float, name: str) -> float:
 def _boolean(value: Any, name: str) -> bool:
     if type(value) is not bool:
         raise ProjectFormatError(f"{name} must be a JSON boolean")
+    return value
+
+
+def _string(value: Any, name: str) -> str:
+    if type(value) is not str:
+        raise ProjectFormatError(f"{name} must be a JSON string")
+    return value
+
+
+def _object(value: Any, name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ProjectFormatError(f"{name} must be a JSON object")
+    return value
+
+
+def _array(value: Any, name: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise ProjectFormatError(f"{name} must be a JSON array")
     return value
 
 
@@ -136,11 +157,12 @@ class Bounds:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> Bounds:
+        raw = _object(raw, "work_area")
         return cls(
-            x_min=float(raw["x_min"]),
-            y_min=float(raw["y_min"]),
-            x_max=float(raw["x_max"]),
-            y_max=float(raw["y_max"]),
+            x_min=raw["x_min"],
+            y_min=raw["y_min"],
+            x_max=raw["x_max"],
+            y_max=raw["y_max"],
         )
 
 
@@ -160,8 +182,8 @@ class Transform:
         self.width_mm = _positive(self.width_mm, "transform.width_mm")
         self.height_mm = _positive(self.height_mm, "transform.height_mm")
         self.rotation_deg = self.normalized_rotation(self.rotation_deg)
-        self.mirror_x = bool(self.mirror_x)
-        self.mirror_y = bool(self.mirror_y)
+        self.mirror_x = _boolean(self.mirror_x, "transform.mirror_x")
+        self.mirror_y = _boolean(self.mirror_y, "transform.mirror_y")
 
     @staticmethod
     def normalized_rotation(value: float) -> float:
@@ -214,12 +236,13 @@ class Transform:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> Transform:
+        raw = _object(raw, "object.transform")
         return cls(
-            x_mm=float(raw.get("x_mm", 0.0)),
-            y_mm=float(raw.get("y_mm", 0.0)),
-            width_mm=float(raw.get("width_mm", 10.0)),
-            height_mm=float(raw.get("height_mm", 10.0)),
-            rotation_deg=float(raw.get("rotation_deg", 0.0)),
+            x_mm=raw.get("x_mm", 0.0),
+            y_mm=raw.get("y_mm", 0.0),
+            width_mm=raw.get("width_mm", 10.0),
+            height_mm=raw.get("height_mm", 10.0),
+            rotation_deg=raw.get("rotation_deg", 0.0),
             mirror_x=_boolean(raw.get("mirror_x", False), "transform.mirror_x"),
             mirror_y=_boolean(raw.get("mirror_y", False), "transform.mirror_y"),
         )
@@ -251,7 +274,8 @@ class OperationLayer:
         self.power_percent = _finite(self.power_percent, "layer.power_percent")
         if not 0.0 <= self.power_percent <= 100.0:
             raise ProjectFormatError("layer.power_percent must be between 0 and 100")
-        self.passes = int(self.passes)
+        if type(self.passes) is not int:
+            raise ProjectFormatError("layer.passes must be an integer")
         if self.passes < 1:
             raise ProjectFormatError("layer.passes must be at least one")
         self.line_interval_mm = _positive(self.line_interval_mm, "layer.line_interval_mm")
@@ -259,10 +283,14 @@ class OperationLayer:
         self.overscan_percent = _finite(self.overscan_percent, "layer.overscan_percent")
         if not 0.0 <= self.overscan_percent <= 100.0:
             raise ProjectFormatError("layer.overscan_percent must be between 0 and 100")
-        self.air_assist = bool(self.air_assist)
-        self.output_enabled = bool(self.output_enabled)
-        self.visible = bool(self.visible)
-        self.priority = int(self.priority)
+        self.air_assist = _boolean(self.air_assist, "layer.air_assist")
+        self.output_enabled = _boolean(
+            self.output_enabled,
+            "layer.output_enabled",
+        )
+        self.visible = _boolean(self.visible, "layer.visible")
+        if type(self.priority) is not int:
+            raise ProjectFormatError("layer.priority must be an integer")
 
     def controller_power(self, power_max: int) -> int:
         if power_max <= 0:
@@ -289,24 +317,27 @@ class OperationLayer:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> OperationLayer:
+        raw = _object(raw, "layer")
         return cls(
-            id=str(raw.get("id", _new_id("layer"))),
-            name=str(raw.get("name", "Layer")),
-            color=str(raw.get("color", "#E35D6A")),
-            mode=LayerMode(str(raw.get("mode", LayerMode.LINE.value))),
-            speed_mm_min=float(raw.get("speed_mm_min", 2000.0)),
-            power_percent=float(raw.get("power_percent", 10.0)),
-            passes=int(raw.get("passes", 1)),
-            line_interval_mm=float(raw.get("line_interval_mm", 0.10)),
-            scan_angle_deg=float(raw.get("scan_angle_deg", 0.0)),
-            overscan_percent=float(raw.get("overscan_percent", 2.5)),
+            id=_string(raw.get("id", _new_id("layer")), "layer.id"),
+            name=_string(raw.get("name", "Layer"), "layer.name"),
+            color=_string(raw.get("color", "#E35D6A"), "layer.color"),
+            mode=LayerMode(
+                _string(raw.get("mode", LayerMode.LINE.value), "layer.mode")
+            ),
+            speed_mm_min=raw.get("speed_mm_min", 2000.0),
+            power_percent=raw.get("power_percent", 10.0),
+            passes=raw.get("passes", 1),
+            line_interval_mm=raw.get("line_interval_mm", 0.10),
+            scan_angle_deg=raw.get("scan_angle_deg", 0.0),
+            overscan_percent=raw.get("overscan_percent", 2.5),
             air_assist=_boolean(raw.get("air_assist", False), "layer.air_assist"),
             output_enabled=_boolean(
                 raw.get("output_enabled", True),
                 "layer.output_enabled",
             ),
             visible=_boolean(raw.get("visible", True), "layer.visible"),
-            priority=int(raw.get("priority", 0)),
+            priority=raw.get("priority", 0),
         )
 
 
@@ -336,8 +367,8 @@ class SceneObject:
             raise ProjectFormatError("object.metadata must be an object")
         self.geometry = copy.deepcopy(self.geometry)
         self.metadata = copy.deepcopy(self.metadata)
-        self.visible = bool(self.visible)
-        self.locked = bool(self.locked)
+        self.visible = _boolean(self.visible, "object.visible")
+        self.locked = _boolean(self.locked, "object.locked")
         self.group_id = None if self.group_id in {None, ""} else str(self.group_id)
         self.validate_geometry()
 
@@ -381,10 +412,19 @@ class SceneObject:
                 )
             self.geometry["polylines"] = cleaned
         elif self.kind == ObjectKind.TEXT:
-            self.geometry["text"] = str(self.geometry.get("text", "Text"))
-            self.geometry["font_family"] = str(self.geometry.get("font_family", "Sans Serif"))
+            self.geometry["text"] = _string(
+                self.geometry.get("text", "Text"),
+                "text.text",
+            )
+            self.geometry["font_family"] = _string(
+                self.geometry.get("font_family", "Sans Serif"),
+                "text.font_family",
+            )
         elif self.kind == ObjectKind.IMAGE:
-            self.geometry["asset"] = str(self.geometry.get("asset", ""))
+            self.geometry["asset"] = _string(
+                self.geometry.get("asset", ""),
+                "image.asset",
+            )
 
     @classmethod
     def rectangle(
@@ -531,17 +571,26 @@ class SceneObject:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> SceneObject:
+        raw = _object(raw, "object")
+        transform = _object(raw.get("transform", {}), "object.transform")
+        geometry = _object(raw.get("geometry", {}), "object.geometry")
+        metadata = _object(raw.get("metadata", {}), "object.metadata")
+        group_id = raw.get("group_id")
+        if group_id is not None:
+            group_id = _string(group_id, "object.group_id")
         return cls(
-            id=str(raw.get("id", _new_id("object"))),
-            name=str(raw.get("name", "Object")),
-            kind=ObjectKind(str(raw.get("kind", ObjectKind.RECTANGLE.value))),
-            layer_id=str(raw.get("layer_id", "")),
-            transform=Transform.from_dict(raw.get("transform", {})),
-            geometry=copy.deepcopy(dict(raw.get("geometry", {}))),
+            id=_string(raw.get("id", _new_id("object")), "object.id"),
+            name=_string(raw.get("name", "Object"), "object.name"),
+            kind=ObjectKind(
+                _string(raw.get("kind", ObjectKind.RECTANGLE.value), "object.kind")
+            ),
+            layer_id=_string(raw.get("layer_id", ""), "object.layer_id"),
+            transform=Transform.from_dict(transform),
+            geometry=copy.deepcopy(dict(geometry)),
             visible=_boolean(raw.get("visible", True), "object.visible"),
             locked=_boolean(raw.get("locked", False), "object.locked"),
-            group_id=None if raw.get("group_id") in {None, ""} else str(raw.get("group_id")),
-            metadata=copy.deepcopy(dict(raw.get("metadata", {}))),
+            group_id=None if group_id in {None, ""} else group_id,
+            metadata=copy.deepcopy(dict(metadata)),
         )
 
 
@@ -586,8 +635,13 @@ class ProjectDocument:
             item if isinstance(item, SceneObject) else SceneObject.from_dict(item)
             for item in self.objects
         ]
-        self.metadata = copy.deepcopy(dict(self.metadata))
-        self.revision = int(self.revision)
+        if not isinstance(self.metadata, dict):
+            raise ProjectFormatError("project.metadata must be a JSON object")
+        self.metadata = copy.deepcopy(self.metadata)
+        if type(self.revision) is not int:
+            raise ProjectFormatError("project.revision must be an integer")
+        if self.revision < 0:
+            raise ProjectFormatError("project.revision cannot be negative")
         self.validate()
 
     @classmethod
@@ -767,6 +821,7 @@ class ProjectDocument:
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> ProjectDocument:
+        raw = _object(raw, "project")
         schema = raw.get("schema_version", 0)
         if type(schema) is not int:
             raise ProjectFormatError("Project schema_version must be an integer")
@@ -775,16 +830,26 @@ class ProjectDocument:
                 f"Unsupported project schema {schema}; expected {PROJECT_SCHEMA_VERSION}"
             )
         try:
+            work_area = _object(raw["work_area"], "project.work_area")
+            layers = _array(raw["layers"], "project.layers")
+            objects = _array(raw.get("objects", []), "project.objects")
+            metadata = _object(raw.get("metadata", {}), "project.metadata")
             return cls(
-                id=str(raw.get("id", _new_id("project"))),
-                name=str(raw.get("name", "Untitled")),
-                work_area=Bounds.from_dict(raw["work_area"]),
-                layers=[OperationLayer.from_dict(item) for item in raw["layers"]],
-                objects=[SceneObject.from_dict(item) for item in raw.get("objects", [])],
-                created_at=str(raw.get("created_at", _utc_now())),
-                modified_at=str(raw.get("modified_at", _utc_now())),
-                metadata=copy.deepcopy(dict(raw.get("metadata", {}))),
-                revision=int(raw.get("revision", 0)),
+                id=_string(raw.get("id", _new_id("project")), "project.id"),
+                name=_string(raw.get("name", "Untitled"), "project.name"),
+                work_area=Bounds.from_dict(work_area),
+                layers=[OperationLayer.from_dict(item) for item in layers],
+                objects=[SceneObject.from_dict(item) for item in objects],
+                created_at=_string(
+                    raw.get("created_at", _utc_now()),
+                    "project.created_at",
+                ),
+                modified_at=_string(
+                    raw.get("modified_at", _utc_now()),
+                    "project.modified_at",
+                ),
+                metadata=copy.deepcopy(dict(metadata)),
+                revision=raw.get("revision", 0),
             )
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, ProjectFormatError):

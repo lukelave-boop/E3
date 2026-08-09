@@ -307,3 +307,31 @@ def test_malformed_transform_never_falls_back_to_different_geometry(
             '<svg xmlns="http://www.w3.org/2000/svg">'
             f'<rect transform="{transform}" width="10" height="10"/></svg>'
         )
+
+
+def test_duplicate_svg_ids_are_rejected_before_use_resolution() -> None:
+    with pytest.raises(SvgError, match="duplicate element id 'target'"):
+        parse_svg(
+            '<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100">'
+            '<defs>'
+            '<rect id="target" x="1" y="1" width="10" height="10"/>'
+            '<circle id="target" cx="50" cy="50" r="5"/>'
+            '</defs>'
+            '<use href="#target"/>'
+            '</svg>'
+        )
+
+
+@pytest.mark.parametrize(
+    "ratio",
+    [True, "0.01", 0.0, -0.1, float("nan"), float("inf")],
+)
+def test_curve_tolerance_ratio_must_be_a_finite_positive_number(
+    ratio: object,
+) -> None:
+    with pytest.raises(SvgError, match="finite positive number"):
+        parse_svg(
+            '<svg xmlns="http://www.w3.org/2000/svg">'
+            '<rect width="10" height="10"/></svg>',
+            curve_tolerance_ratio=ratio,
+        )

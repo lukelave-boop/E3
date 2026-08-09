@@ -77,7 +77,7 @@ precision parked-bed capture and detects the exact 25 persisted targets.
 Two interior crosses have distinct sizes. They uniquely orient the otherwise
 symmetric grid across camera rotations and reflections. The detector rejects a
 plain symmetric grid, missing or ambiguous keys, duplicate assignments, an
-incomplete grid, a dry session, and any session whose target geometry or
+incomplete grid, a zero-power session, and any session whose target geometry or
 generation settings no longer match. Review the numbered overlay before
 application. All 25 points must be RANSAC inliers with at most `0.50 mm` RMS and
 `0.80 mm` maximum fit error. Installation is transactional and clears
@@ -172,7 +172,7 @@ residual, and scatter limits. Future target layouts keep the lower registration
 point away from the configured head/park corner that obstructed the first real
 capture.
 
-A dry registration path is not accepted as a marked calibration capture. The
+A zero-power registration path is not accepted as a marked calibration capture. The
 powered mark job must be prepared separately and remains subject to ordinary
 job confirmation, arming, homing, bounds, stop, and laser sequencing controls.
 

@@ -77,7 +77,46 @@ def _safe_comment(value: str) -> str:
     return value.replace("\n", " ").replace("\r", " ").replace(";", ",")[:160]
 
 
+def _validate_toolpath_options(options: ToolpathOptions) -> None:
+    if type(options.power_mode) is not str or options.power_mode.upper() not in {
+        "M3",
+        "M4",
+    }:
+        raise ValueError("power_mode must be M3 or M4")
+    if type(options.power) is not int or type(options.power_max) is not int:
+        raise ValueError("power and power_max must be integers")
+    if options.power_max <= 0:
+        raise ValueError("power_max must be positive")
+    if not 0 <= options.power <= options.power_max:
+        raise ValueError("power must be between zero and power_max")
+    for name, value in (
+        ("travel_feed_mm_min", options.travel_feed_mm_min),
+        ("engrave_feed_mm_min", options.engrave_feed_mm_min),
+    ):
+        if type(value) not in {int, float} or not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be a finite positive number")
+        if float(value) <= 0:
+            raise ValueError(f"{name} must be a finite positive number")
+    if (
+        type(options.boundary_margin_mm) not in {int, float}
+        or not math.isfinite(float(options.boundary_margin_mm))
+        or float(options.boundary_margin_mm) < 0
+    ):
+        raise ValueError("boundary_margin_mm must be a finite nonnegative number")
+    if type(options.optimize_order) is not bool:
+        raise ValueError("optimize_order must be a boolean")
+    if type(options.include_return_move) is not bool:
+        raise ValueError("include_return_move must be a boolean")
+
+
 def place_geometry(geometry: SvgGeometry, placement: DesignPlacement) -> list[Polyline]:
+    if type(placement.mirror_x) is not bool or type(placement.mirror_y) is not bool:
+        raise SvgError("Placement mirror flags must be booleans")
+    if not geometry.polylines or any(
+        len(path.points) == 0 or not np.isfinite(path.points).all()
+        for path in geometry.polylines
+    ):
+        raise ValueError("Path coordinates must be finite and nonempty")
     if not all(
         math.isfinite(value)
         for value in (
@@ -170,6 +209,19 @@ def _spot_offset_comment(options: ToolpathOptions) -> str | None:
     )
 
 
+def _validate_work_area(work_area: WorkArea) -> None:
+    values: dict[str, float] = {}
+    for name in ("x_min", "x_max", "y_min", "y_max"):
+        value = getattr(work_area, name, None)
+        if type(value) not in {int, float} or not math.isfinite(float(value)):
+            raise ValueError(f"work_area.{name} must be a finite number")
+        values[name] = float(value)
+    if values["x_max"] <= values["x_min"]:
+        raise ValueError("work_area.x_max must be greater than x_min")
+    if values["y_max"] <= values["y_min"]:
+        raise ValueError("work_area.y_max must be greater than y_min")
+
+
 def validate_paths(
     paths: list[Polyline],
     work_area: WorkArea,
@@ -177,6 +229,18 @@ def validate_paths(
     *,
     coordinate_label: str = "design",
 ) -> None:
+    _validate_work_area(work_area)
+    if (
+        type(margin_mm) not in {int, float}
+        or not math.isfinite(float(margin_mm))
+        or float(margin_mm) < 0
+    ):
+        raise ValueError("Path boundary margin must be a finite nonnegative number")
+    if not paths or any(
+        len(path.points) == 0 or not np.isfinite(path.points).all()
+        for path in paths
+    ):
+        raise ValueError("Path coordinates must be finite and nonempty")
     minimum_x, minimum_y, maximum_x, maximum_y = _program_bounds(paths)
     safe_minimum_x = work_area.x_min + margin_mm
     safe_maximum_x = work_area.x_max - margin_mm
@@ -274,11 +338,8 @@ def generate_vector_gcode(
     work_area: WorkArea,
     design_name: str = "design.svg",
 ) -> GcodeProgram:
-    if options.power_mode.upper() not in {"M3", "M4"}:
-        raise ValueError("power_mode must be M3 or M4")
-    if not 0 <= options.power <= options.power_max:
-        raise ValueError("power must be between zero and power_max")
-    controller_power = int(options.power)
+    _validate_toolpath_options(options)
+    controller_power = options.power
     estimated_commands = _vector_stream_command_count(
         geometry.polylines,
         powered=controller_power > 0,
@@ -386,6 +447,7 @@ def generate_frame_gcode(
     work_area: WorkArea,
     laser_enabled: bool = False,
 ) -> GcodeProgram:
+    _validate_toolpath_options(options)
     min_x, min_y, max_x, max_y = bounds_mm
     rectangle = np.array(
         [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]],
@@ -402,7 +464,7 @@ def generate_frame_gcode(
     )
     controller_rectangle = controller_paths[0].points
     start = _program_start(options, work_area)
-    effective_power = int(options.power) if laser_enabled else 0
+    effective_power = options.power if laser_enabled else 0
     frame_length = _path_length(rectangle)
     approach_length = float(
         np.linalg.norm(
@@ -412,7 +474,11 @@ def generate_frame_gcode(
     )
     lines = [
         "; Laser Camera Aligner framing pass",
-        "; DRY MOTION ONLY" if effective_power == 0 else "; LOW-POWER LASER FRAME — verify configured power",
+        (
+            "; LASER POWER 0%"
+            if effective_power == 0
+            else "; LOW-POWER LASER FRAME — verify configured power"
+        ),
         e3_metadata_line(
             "job",
             {"start_x": float(start[0]), "start_y": float(start[1])},

@@ -5,6 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from dataclasses import dataclass, field
+from numbers import Real
 
 import numpy as np
 
@@ -932,6 +933,14 @@ def _bounds(polylines: Iterable[Polyline]) -> tuple[float, float, float, float]:
 
 
 def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeometry:
+    if isinstance(curve_tolerance_ratio, bool) or not isinstance(
+        curve_tolerance_ratio,
+        Real,
+    ):
+        raise SvgError("curve_tolerance_ratio must be a finite positive number")
+    tolerance_ratio = float(curve_tolerance_ratio)
+    if not math.isfinite(tolerance_ratio) or tolerance_ratio <= 0.0:
+        raise SvgError("curve_tolerance_ratio must be a finite positive number")
     if len(svg_text) > 10_000_000:
         raise SvgError("SVG is larger than the 10 MB parser limit")
     if svg_text.count("<") > _MAX_SVG_XML_MARKERS:
@@ -952,9 +961,16 @@ def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeomet
     width_mm = _root_length_mm(root, "width")
     height_mm = _root_length_mm(root, "height")
     reference = max(view_box[2], view_box[3]) if view_box else 1000.0
-    tolerance = max(reference * curve_tolerance_ratio, 1e-4)
+    tolerance = max(reference * tolerance_ratio, 1e-4)
 
-    id_map = {element.get("id"): element for element in root.iter() if element.get("id")}
+    id_map: dict[str, ET.Element] = {}
+    for element in root.iter():
+        element_id = element.get("id")
+        if not element_id:
+            continue
+        if element_id in id_map:
+            raise SvgError(f"SVG contains duplicate element id {element_id!r}")
+        id_map[element_id] = element
     warnings: list[str] = []
     polylines: list[Polyline] = []
     ignored_tags: set[str] = set()

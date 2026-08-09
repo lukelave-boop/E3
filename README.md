@@ -42,7 +42,7 @@ Shared core and browser workflow:
 - Traditional computer-vision detection of a rectangular workpiece
 - SVG loading and display with drag, size, and rotation controls
 - In-house SVG vector parser for paths, lines, polylines, polygons, rectangles, circles, ellipses, groups, transforms, curves, and arcs
-- Path flattening, nearest-path ordering, design bounds checks, dry framing, and vector G-code generation
+- Path flattening, nearest-path ordering, design bounds checks, zero-power framing, and vector G-code generation
 - Linux serial communication without a mandatory pyserial dependency
 - GRBL/Marlin identification probes and a read-only diagnostic command console (`M5` is the only actuator command accepted there)
 - Temporary laser arming, automatic disarming, software stop, and simulation-first defaults
@@ -66,7 +66,7 @@ Native desktop workflow:
   fixed-size handles, Shift-to-snap rotation, and undo/redo-backed commits
 - Per-layer line, fill, vector-raster, and grayscale-image speed, power, pass
   count, ordering, exact scan interval/absolute machine angle, laser-off raster
-  overscan, estimates, and image-aware dry frames
+  overscan, estimates, and image-aware zero-power framing
 - Dedicated exact-job Preview with a time scrubber, animated playback up to
   40×, cut/travel visibility, power shading, live move coordinates, timing and
   distance statistics, and PNG export
@@ -150,7 +150,8 @@ The shipped configuration uses a synthetic camera and controller. In a real-hard
 - Motion remains blocked until `machine.allow_motion` is explicitly changed.
 - Positive laser commands receive a one-use, time-limited authorization for the
   exact prepared program when the desktop **Start** action submits it.
-- Low-power laser framing is disabled, and the default dry-frame file contains no `M3`/`M4` laser-enable command at all.
+- A zero-power program contains no `M3`/`M4` laser-enable command; positive
+  output is never used merely to outline a job.
 - Laser-head mounting offsets default to zero. Real-hardware profiles can set
   `laser.spot_offset_x_mm` and `laser.spot_offset_y_mm`; generated jobs show the
   applied values and validate both desired spot and shifted controller bounds.
@@ -189,10 +190,11 @@ uses the same calibration files and remains available as a legacy alternative.
 ## Windows development status
 
 The browser and native desktop applications run on Windows with the synthetic
-camera and simulated controller. POSIX serial code is imported only if the
-serial backend is selected; Windows serial hardware, V4L2 camera controls,
-install/launch scripts, and CI are not implemented. Autosaves and material
-presets already use a writable OS-native per-user data root.
+camera and simulated controller. The CI matrix collects and runs the portable
+suite on Windows as well as Linux. POSIX serial code is imported only if the
+serial backend is selected; Windows serial hardware, V4L2 camera controls, and
+install/launch scripts are not implemented. Autosaves and material presets use
+a writable OS-native per-user data root.
 
 From an existing desktop-enabled virtual environment, launch the native UI in
 safe simulation mode:

@@ -1384,8 +1384,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         right.addLayout(form)
 
         prepare_row = QtWidgets.QHBoxLayout()
-        powered = QtWidgets.QPushButton("Prepare powered mark job")
-        prepare_row.addWidget(powered)
+        self.registration_prepare_button = QtWidgets.QPushButton(
+            "Prepare powered mark job"
+        )
+        prepare_row.addWidget(self.registration_prepare_button)
         right.addLayout(prepare_row)
         capture_row = QtWidgets.QHBoxLayout()
         capture = QtWidgets.QPushButton("Home / park, precision capture")
@@ -1447,7 +1449,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         right.addWidget(dense_box)
         layout.addLayout(right, 2)
 
-        powered.clicked.connect(lambda: self.prepare_registration_job(True))
+        self.registration_prepare_button.clicked.connect(
+            lambda: self.prepare_registration_job(True)
+        )
         capture.clicked.connect(lambda: self.capture_fine_registration(home_first=True))
         self.registration_recapture_button.clicked.connect(lambda: self.capture_fine_registration(home_first=False))
         self.apply_registration_button.clicked.connect(self.apply_fine_registration)
@@ -1461,7 +1465,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.registration_results.itemChanged.connect(self.registration_measurement_changed)
         self._bed_dependent_actions.extend(
             (
-                powered,
+                self.registration_prepare_button,
                 capture,
                 reset,
                 reset_map,
@@ -1522,8 +1526,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         right.addLayout(form)
 
         prepare_row = QtWidgets.QHBoxLayout()
-        validation_powered = QtWidgets.QPushButton("Prepare powered validation job")
-        prepare_row.addWidget(validation_powered)
+        self.validation_prepare_button = QtWidgets.QPushButton(
+            "Prepare powered validation job"
+        )
+        prepare_row.addWidget(self.validation_prepare_button)
         right.addLayout(prepare_row)
         validation_capture_row = QtWidgets.QHBoxLayout()
         validation_capture = QtWidgets.QPushButton("Home / park, precision capture")
@@ -1589,7 +1595,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         right.addWidget(diagnostics)
         layout.addLayout(right, 2)
 
-        validation_powered.clicked.connect(lambda: self.prepare_accuracy_validation_job(True))
+        self.validation_prepare_button.clicked.connect(
+            lambda: self.prepare_accuracy_validation_job(True)
+        )
         validation_capture.clicked.connect(lambda: self.capture_accuracy_validation(home_first=True))
         self.validation_recapture_button.clicked.connect(lambda: self.capture_accuracy_validation(home_first=False))
         dense_validation_powered.clicked.connect(lambda: self.prepare_dense_validation_job(True))
@@ -1601,7 +1609,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         fiducials.clicked.connect(self.detect_fiducials)
         self._bed_dependent_actions.extend(
             (
-                validation_powered,
+                self.validation_prepare_button,
                 validation_capture,
                 dense_validation_powered,
                 dense_validation_capture,
@@ -2984,8 +2992,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "Prepare powered registration marks",
                 "This prepares eight powered crosses. Use only a previously verified "
                 "visible-marking power on a restrained sacrificial surface inside the "
-                "required enclosure. The main window will still require the normal "
-                "powered-job confirmation and arming phrase.\n\nContinue?",
+                "required enclosure. After reviewing and closing Preview, the main "
+                "window's Start button submits this prepared powered job immediately."
+                "\n\nContinue?",
                 QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
             )
@@ -3466,8 +3475,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "Prepare powered accuracy validation",
                 "This prepares five powered holdout crosses. Use a clean, restrained "
                 "sacrificial surface at the calibrated height and only a previously "
-                "verified visible-marking power. The main window still requires its "
-                "normal powered-job confirmation and arming phrase.\n\nContinue?",
+                "verified visible-marking power. After reviewing and closing Preview, "
+                "the main window's Start button submits this prepared powered job "
+                "immediately.\n\nContinue?",
                 QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
             )
@@ -3765,7 +3775,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.apply_dense_validation_refinement_button.setEnabled(False)
             self.validation_status.setText(
                 "Validation refinement applied. Use a fresh sheet or clean side, then run "
-                "the shifted dry and powered confirmation jobs."
+                "the shifted confirmation job."
             )
             self.refresh_all()
             self.calibrationChanged.emit()

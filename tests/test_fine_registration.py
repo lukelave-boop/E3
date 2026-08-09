@@ -241,6 +241,31 @@ def test_validation_refinement_predicts_removal_of_consistent_y_bias() -> None:
     assert result["update_max_mm"] < 1.5
 
 
+def test_validation_refinement_rejects_nonfinite_confidence_and_wrong_cell_identity() -> None:
+    targets = dense_validation_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
+    measurements = [
+        {
+            "id": item.id,
+            "machine_x": item.machine_x,
+            "machine_y": item.machine_y,
+            "observed_x": item.machine_x,
+            "observed_y": item.machine_y,
+            "score": 1.0,
+            "seed_shift_px": 1.0,
+        }
+        for item in targets
+    ]
+    nodes = np.asarray([40.0, 75.0, 110.0, 145.0, 180.0])
+    measurements[0]["score"] = float("nan")
+    with pytest.raises(CalibrationError, match="confidence metadata"):
+        analyze_dense_validation_refinement(measurements, nodes, nodes)
+
+    measurements[0]["score"] = 1.0
+    measurements[0]["machine_x"] = measurements[1]["machine_x"]
+    with pytest.raises(CalibrationError, match="one correctly identified point per mesh cell"):
+        analyze_dense_validation_refinement(measurements, nodes, nodes)
+
+
 def test_dense_mesh_analysis_fits_bounded_position_dependent_correction() -> None:
     targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
     measurements = []
@@ -261,6 +286,30 @@ def test_dense_mesh_analysis_fits_bounded_position_dependent_correction() -> Non
     result = analyze_dense_mesh_measurements(measurements)
     assert result["can_apply"] is True
     assert np.asarray(result["corrections_mm"]).shape == (5, 5, 2)
+
+
+def test_dense_mesh_analysis_rejects_nonfinite_confidence_and_wrong_grid_identity() -> None:
+    targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
+    measurements = [
+        {
+            "id": target.id,
+            "machine_x": target.machine_x,
+            "machine_y": target.machine_y,
+            "observed_x": target.machine_x,
+            "observed_y": target.machine_y,
+            "score": 1.0,
+            "seed_shift_px": 1.0,
+        }
+        for target in targets
+    ]
+    measurements[3]["seed_shift_px"] = float("nan")
+    with pytest.raises(CalibrationError, match="confidence metadata"):
+        analyze_dense_mesh_measurements(measurements)
+
+    measurements[3]["seed_shift_px"] = 1.0
+    measurements[0]["machine_x"] = measurements[1]["machine_x"]
+    with pytest.raises(CalibrationError, match="correctly identified regular"):
+        analyze_dense_mesh_measurements(measurements)
 
 
 def test_dense_mesh_analysis_infers_one_occluded_grid_cell() -> None:
@@ -450,6 +499,23 @@ def test_accuracy_validation_rejects_low_confidence_holdout() -> None:
     assert result["low_confidence_ids"] == [3]
 
 
+def test_accuracy_validation_rejects_nonfinite_confidence_metadata() -> None:
+    measurements = [
+        {
+            "id": index,
+            "machine_x": float(index * 20),
+            "machine_y": float(index * 25),
+            "observed_x": float(index * 20),
+            "observed_y": float(index * 25),
+            "score": float("nan") if index == 2 else 1.0,
+        }
+        for index in range(1, 6)
+    ]
+
+    with pytest.raises(CalibrationError, match="confidence metadata"):
+        analyze_accuracy_measurements(measurements)
+
+
 def test_registration_analysis_accepts_only_consistent_translation() -> None:
     analysis = analyze_registration_measurements(_measurements([(-3.0, -0.75)] * 8))
 
@@ -503,6 +569,16 @@ def test_registration_review_rejects_excluding_more_than_two_marks() -> None:
 
     with pytest.raises(CalibrationError, match="At most two"):
         review_registration_measurements(measurements, [1, 2, 3])
+
+
+def test_registration_review_rejects_nonfinite_confidence_metadata() -> None:
+    measurements = analyze_registration_measurements(
+        _measurements([(-3.0, -0.75)] * 8)
+    )["measurements"]
+    measurements[4]["seed_shift_px"] = float("nan")
+
+    with pytest.raises(CalibrationError, match="confidence metadata"):
+        review_registration_measurements(measurements, [])
 
 
 def _homography_measurements(
@@ -711,7 +787,7 @@ def test_dry_registration_session_cannot_be_analyzed_as_burned_marks(
             mark_size_mm=5,
             speed_mm_min=1200,
         )
-        with pytest.raises(CalibrationError, match="dry motion only"):
+        with pytest.raises(CalibrationError, match="laser power 0%"):
             context.analyze_fine_registration_image(context.camera_frame(undistort=True))
     finally:
         context.stop()
@@ -956,7 +1032,7 @@ def test_dry_accuracy_validation_cannot_be_analyzed_as_burned_holdouts(
         assert len(job.targets) == 5
         assert "M3 " not in job.program.text
         assert "M4 " not in job.program.text
-        with pytest.raises(CalibrationError, match="dry motion only"):
+        with pytest.raises(CalibrationError, match="laser power 0%"):
             context.analyze_accuracy_validation_image(context.camera_frame(undistort=True))
     finally:
         context.stop()

@@ -238,3 +238,29 @@ def test_cancelled_control_operation_does_not_spawn_v4l2(
 
     assert "cancelled" in result.skipped["exposure_time_absolute"]
     assert "exposure_value" in result.critical_unverified
+
+
+@pytest.mark.parametrize("timeout", (float("nan"), float("inf"), 0.0, True, "bad"))
+def test_apply_controls_rejects_invalid_timeout(timeout: object) -> None:
+    with pytest.raises(ValueError, match="positive finite"):
+        controls.apply_controls(
+            "/dev/video0",
+            {"focus_absolute": 40},
+            timeout_seconds=timeout,  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.parametrize(
+    "requested",
+    (
+        {"focus-absolute": 40},
+        {"focus_absolute": 40.5},
+        {"focus_absolute": "40"},
+    ),
+)
+def test_apply_controls_rejects_malformed_requests(requested: object) -> None:
+    with pytest.raises(ValueError, match="Camera control"):
+        controls.apply_controls(
+            "/dev/video0",
+            requested,  # type: ignore[arg-type]
+        )

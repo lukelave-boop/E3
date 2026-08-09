@@ -118,16 +118,30 @@ def test_job_controller_preflights_before_motion_and_arming(
             self,
             program: str,
             name: str,
-        ) -> dict[str, bool]:
+        ) -> dict[str, object]:
             calls.append(f"start:{name}:{program}")
-            return {"running": True}
+            return {
+                "running": True,
+                "name": name,
+                "started_at": 123.0,
+                "program_digest": "digest",
+            }
 
         def disarm(self) -> None:
             calls.append("disarm")
 
-    runtime = SimpleNamespace(context=SimpleNamespace(machine=Machine()))
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(machine=Machine()),
+        running=False,
+    )
     controller = DesktopController(runtime)
-    controller._run = lambda callback, **_kwargs: callback()  # type: ignore[method-assign]
+    started: list[dict[str, object]] = []
+    controller.jobStarted.connect(started.append)
+
+    def run(callback, **kwargs):
+        kwargs["on_success"](callback())
+
+    controller._run = run  # type: ignore[method-assign]
 
     controller.run_job("program", "job.gcode", arm_phrase="phrase")
 
@@ -137,6 +151,14 @@ def test_job_controller_preflights_before_motion_and_arming(
         "park",
         "arm:phrase",
         "start:job.gcode:validated",
+    ]
+    assert started == [
+        {
+            "running": True,
+            "name": "job.gcode",
+            "started_at": 123.0,
+            "program_digest": "digest",
+        }
     ]
 
 

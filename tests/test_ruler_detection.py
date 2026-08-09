@@ -35,3 +35,15 @@ def test_three_hints_without_detectable_rulers_fail_closed() -> None:
             ((80.0, 80.0), (80.0, 800.0), (800.0, 800.0)),
             ruler_span_mm=190.0,
         )
+
+
+def test_ruler_detection_rejects_malformed_images_hints_and_span() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    hints = ((1.0, 1.0), (10.0, 1.0), (10.0, 10.0))
+
+    with pytest.raises(ValueError, match="grayscale or color"):
+        detect_honeycomb_rulers(image.astype(np.float32), hints)
+    with pytest.raises(ValueError, match="exactly three"):
+        detect_honeycomb_rulers(image, hints[:2])  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="finite positive"):
+        detect_honeycomb_rulers(image, hints, ruler_span_mm=float("nan"))

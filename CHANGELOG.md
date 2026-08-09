@@ -9,7 +9,30 @@
 - Automatically reopen the matching Machine Setup step and run its Home / park
   precision capture and scoring operation after a powered base-map,
   registration, dense-correction, or validation job completes successfully.
-  Failed, stopped, replaced, and ordinary project jobs do not trigger capture.
+  The handoff is bound to the exact submitted program digest and execution
+  receipt, including jobs that complete before the next Qt callback. Failed,
+  stopped, replaced, stale same-name, and ordinary project jobs do not trigger
+  capture, and an already-open Setup dialog is reused instead of nesting a
+  second modal window.
+
+- Hardened controller ownership and transport recovery. Concurrent reconnects
+  cannot tear down a newer connection, queued arming cannot survive STOP or
+  overlap Home/jog ownership, automatic protocol detection can fall back after
+  a consumed GRBL probe rejection, and serial motion-only completion waits for
+  the planner. Executable line length, receipt bounds, POSIX reopen state,
+  receive-buffer growth, and unsupported baud handling now fail closed.
+- Hardened versioned and external inputs across configuration, project,
+  material, template, HTTP, SVG, image, calibration, and vision boundaries.
+  Duplicate keys, nonstandard numeric constants, coerced scalar/container
+  types, non-finite values, malformed topology, oversized image resources, and
+  ambiguous HTTP framing are rejected before side effects. Calibration updates
+  persist before live publication, and all generated/captured artifacts use
+  collision-resistant exclusive publication.
+- Release archives now derive their version from canonical package metadata and
+  contain only tracked, in-repository regular files. Untracked operator data,
+  symlinks (including symlinked parent directories), missing tracked files, and
+  paths outside the checkout are rejected. CLI startup also stops the runtime
+  after partial startup, bind, serving, or close failures.
 
 - Enabled the Machine panel's guarded XY jog controls. Home / park establishes
   a tracked starting pose; each press sends laser-off absolute millimetre motion
@@ -47,8 +70,8 @@
   Machine Setup footer and the main Help menu, follows the current tab when
   opened, and spells out the calibration-job handoff: Preview Play is animation
   only; close Preview and use the main Laser **Start** without clicking
-  **Generate** or **Dry frame**, which would replace the prepared calibration
-  program. Automated contracts bind the runbook to the current tab and button
+  **Generate**, which would replace the prepared calibration program.
+  Automated contracts bind the runbook to the current tab and button
   labels and verify that it is included in installed packages.
 - Bind newly prepared fine-registration and accuracy-validation sessions to the
   exact active bed homography and residual-mesh revision. Legacy sessions
@@ -73,7 +96,7 @@
   program line and recompute its digest, motion/power flags, and safety profile,
   so forged or mutated preflight tokens fail before transport output while
   cleanup `M5` remains available.
-- Moved project cloning, toolpath/dry-frame planning, Preview indexing, and Start
+- Moved project cloning, toolpath/zero-power framing, Preview indexing, and Start
   Here rebuilding under owned cancellable desktop tasks. Worker and renderer
   authority is tokenized independently; unfinished Preview close, STOP, project
   replacement, renderer failure, and application shutdown fail closed without
@@ -133,9 +156,9 @@
   same persisted-byte preview-quality pipeline. Machine Setup now also displays
   both observed and camera-negotiated FPS.
 - Added a dedicated fresh keyed 5×5 base-bed mapping workflow that requires no
-  old homography or manual point entry. It prepares dry and normally guarded
+  old homography or manual point entry. It prepares zero-power and normally guarded
   powered jobs through the existing Preview/run pipeline, resolves all grid
-  rotations/reflections from two larger interior crosses, rejects dry/stale/
+  rotations/reflections from two larger interior crosses, rejects zero-power/stale/
   altered/ambiguous sessions, and requires 25 inliers within `0.50 mm` RMS and
   `0.80 mm` maximum fit error. Reviewed application installs points and the new
   homography transactionally, clears corrections tied to the old base map, and
@@ -176,7 +199,7 @@
   interactive-command timeout. The Laser panel exposes drain/home/park/release
   phases, and asynchronous completion failures raise a one-time desktop error
   instead of resembling an ordinary 100% finish. It does not send fan/coolant
-  commands. Stops, failures, emergency actions, disconnects, and dry jobs never
+  commands. Stops, failures, emergency actions, disconnects, and zero-power jobs never
   initiate the additional homing and parking motion. Preview states that its
   cyan marker is the end of the exact stream, before these automatic actions.
 - Treat GRBL `$1=255` as a scoped camera-hold state rather than a permanent
@@ -321,7 +344,7 @@
   setup timeout distinguishes `M5`, `$H`, `G21`, `G90`, the park move, and its
   completion barrier.
 
-- Added a dedicated exact-job graphical Preview opened by generation and dry
+- Added a dedicated exact-job graphical Preview opened by generation and zero-power
   framing. It provides time scrubbing, animated playback from 0.1× to 40×,
   cut/travel display, optional controller-power shading and inversion, current
   feed/power/X/Y/layer/pass details, timing and distance statistics, warnings,
@@ -349,7 +372,7 @@
 - Corrected image raster orientation to match the canvas through source-top,
   mirror, and object rotation transforms. Image rows now honor the operation's
   absolute machine-coordinate scan angle and retain exact pitch for
-  non-integral dimensions. Transformed images participate in dry framing,
+  non-integral dimensions. Transformed images participate in zero-power framing,
   zero-power cut metrics match the exact plan, and encoded dimensions plus
   row/sample/vector-edge workloads are rejected before expensive decode or
   iteration.
@@ -466,7 +489,7 @@
   timeout.
 - Added explicit X/Y bed-point reversal controls because a symmetric cross grid
   cannot determine controller-axis sign from image geometry alone.
-- Added a native eight-point fine-registration workflow. It prepares dry or
+- Added a native eight-point fine-registration workflow. It prepares zero-power or
   normally guarded powered cross jobs, captures fresh marks at the homed camera
   pose, reports commanded/observed residuals, distinguishes global translation
   from position-dependent error, and refuses unsafe or excessive corrections.
@@ -483,10 +506,10 @@
   fine-registration results. It requires seven RANSAC inliers, broad coverage,
   bounded residual/warp/scale checks, explicit confirmation, and preserves the
   prior solved map for reset; it never weakens the translation thresholds.
-- Added guided independent accuracy validation with five holdout crosses. Dry
+- Added guided independent accuracy validation with five holdout crosses. Zero-power
   and powered jobs use the normal guarded pipeline; automatic capture reports
   per-point, RMS, maximum, and mean error against fixed limits, rejects missing,
-  low-confidence, dry-only, or stale-map sessions, and cannot change calibration.
+  low-confidence, zero-power-only, or stale-map sessions, and cannot change calibration.
 
 ### Cutting templates
 
@@ -584,9 +607,9 @@ committed, verified, and included in a release.
 - Simulation-first browser application
 - C920/OpenCV camera capture and V4L2 controls
 - Lens and bed calibration workflows
-- SVG parser, placement engine, vector G-code generation, and dry framing
+- SVG parser, placement engine, vector G-code generation, and zero-power framing
 - POSIX serial controller abstraction with GRBL/Marlin probing
 - Fixed photography-position homing/parking workflow with controller-idle wait
 - Conservative streamed G-code allowlist, compact-word parsing, coordinate checks, and rapid-with-laser rejection
-- Dry framing with no `M3`/`M4` command
+- Zero-power framing with no `M3`/`M4` command
 - Software safety gates, 20 automated tests, end-to-end simulated API validation, documentation, and Linux installation scripts

@@ -6,10 +6,29 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12"]
+        include:
+          - os: ubuntu-latest
+            python-version: "3.10"
+            desktop: false
+          - os: ubuntu-latest
+            python-version: "3.11"
+            desktop: false
+          - os: ubuntu-latest
+            python-version: "3.12"
+            desktop: true
+          - os: windows-latest
+            python-version: "3.10"
+            desktop: false
+          - os: windows-latest
+            python-version: "3.12"
+            desktop: true
+    env:
+      QT_QPA_PLATFORM: offscreen
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,4 +37,18 @@ jobs:
           cache: pip
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e . pytest
-      - run: pytest
+      - if: matrix.desktop
+        run: python -m pip install -e ".[desktop]"
+      - run: python -m pytest -q
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install ruff
+      - run: python -m ruff check .

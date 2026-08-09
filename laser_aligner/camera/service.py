@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import logging
+import math
 import sys
 import threading
 import time
@@ -15,7 +16,7 @@ import numpy as np
 
 from ..config import CameraSettings, PrecisionCaptureSettings, WorkArea
 from ..errors import CameraError
-from .controls import ControlResult
+from .controls import ControlResult, validate_control_request
 from .controls import apply_controls as apply_v4l2_controls
 
 LOGGER = logging.getLogger(__name__)
@@ -326,7 +327,7 @@ class CameraService:
                 ok, candidate = capture.read()
             except Exception as exc:
                 raise CameraError(f"Camera warmup read failed: {exc}") from exc
-            if ok and candidate is not None:
+            if ok and self._valid_frame(candidate):
                 frame = candidate
                 warmup_count += 1
 
@@ -344,6 +345,16 @@ class CameraService:
             LOGGER.info("Applied camera controls: %s", result.applied)
         if result.skipped:
             LOGGER.info("Skipped camera controls: %s", result.skipped)
+
+    @staticmethod
+    def _valid_frame(frame: object) -> bool:
+        return bool(
+            isinstance(frame, np.ndarray)
+            and frame.size > 0
+            and frame.dtype == np.uint8
+            and frame.ndim in (2, 3)
+            and (frame.ndim == 2 or frame.shape[2] == 3)
+        )
 
     def _reader_loop(
         self,
@@ -364,7 +375,9 @@ class CameraService:
             now = time.monotonic()
             if stop_event.is_set():
                 break
-            if not ok or frame is None:
+            if not ok or not self._valid_frame(frame):
+                if ok and frame is not None:
+                    error = "Camera returned a malformed frame"
                 with self._frame_condition:
                     if generation != self._generation or capture is not self._capture:
                         break
@@ -480,7 +493,15 @@ class CameraService:
 
     def snapshot_after(self, sequence: int, timeout: float = 6.0) -> np.ndarray:
         """Wait for a new frame without accepting a frame from another session."""
-        deadline = time.monotonic() + max(0.0, float(timeout))
+        if type(sequence) is not int or sequence < 0:
+            raise CameraError("Fresh-frame sequence must be a non-negative integer")
+        try:
+            timeout_seconds = float(timeout)
+        except (TypeError, ValueError) as exc:
+            raise CameraError("Fresh-frame timeout must be a positive finite number") from exc
+        if type(timeout) is bool or not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise CameraError("Fresh-frame timeout must be a positive finite number")
+        deadline = time.monotonic() + timeout_seconds
         with self._frame_condition:
             generation = self._generation
             while self._frames_read <= int(sequence):
@@ -493,7 +514,7 @@ class CameraService:
                     detail = f" ({self._last_error})" if self._last_error else ""
                     raise CameraError(
                         "Camera did not provide a fresh frame within "
-                        f"{float(timeout):g} seconds{detail}"
+                        f"{timeout_seconds:g} seconds{detail}"
                     )
                 self._frame_condition.wait(timeout=remaining)
             frame = self._frame
@@ -564,12 +585,50 @@ class CameraService:
 
     @staticmethod
     def _validate_capture_profile(profile: PrecisionCaptureSettings) -> None:
-        if profile.sample_frames <= 0:
+        if type(profile.sample_frames) is not int or profile.sample_frames <= 0:
             raise CameraError("Precision capture requires at least one sample frame")
-        if profile.discard_frames < 0 or profile.settle_seconds < 0:
-            raise CameraError("Precision capture settle and discard values cannot be negative")
-        if profile.timeout_seconds <= 0:
-            raise CameraError("Precision capture timeout must be positive")
+        if type(profile.discard_frames) is not int or profile.discard_frames < 0:
+            raise CameraError("Precision capture discard count must be a non-negative integer")
+        if (
+            type(profile.minimum_valid_frames) is not int
+            or not 1 <= profile.minimum_valid_frames <= profile.sample_frames
+        ):
+            raise CameraError("Precision capture minimum-valid count is outside the sample count")
+        if (
+            type(profile.consensus_frames) is not int
+            or profile.consensus_frames < 1
+            or (
+                profile.coordinate_strategy == "stable_clarity_consensus"
+                and profile.consensus_frames > profile.sample_frames
+            )
+        ):
+            raise CameraError("Precision capture consensus count is outside the sample count")
+        numeric_values = (
+            ("settle time", profile.settle_seconds, True),
+            ("timeout", profile.timeout_seconds, False),
+            ("MAD multiplier", profile.mad_multiplier, False),
+            ("outlier floor", profile.outlier_floor_px, True),
+            ("jitter limit", profile.max_jitter_rms_px, False),
+        )
+        for label, raw_value, allow_zero in numeric_values:
+            try:
+                value = float(raw_value)
+            except (TypeError, ValueError) as exc:
+                raise CameraError(f"Precision capture {label} must be finite") from exc
+            if (
+                type(raw_value) is bool
+                or not math.isfinite(value)
+                or value < 0
+                or (not allow_zero and value == 0)
+            ):
+                qualifier = "non-negative" if allow_zero else "positive"
+                raise CameraError(f"Precision capture {label} must be finite and {qualifier}")
+        if profile.coordinate_strategy not in {
+            "median",
+            "sharpest_inlier_frame",
+            "stable_clarity_consensus",
+        }:
+            raise CameraError("Precision capture coordinate strategy is unsupported")
 
     def capture_burst(
         self,
@@ -696,7 +755,10 @@ class CameraService:
 
     def jpeg(self, quality: int | None = None) -> bytes:
         frame = self.snapshot()
-        encode_quality = int(self.settings.jpeg_quality if quality is None else quality)
+        raw_quality = self.settings.jpeg_quality if quality is None else quality
+        if type(raw_quality) is not int:
+            raise CameraError("JPEG quality must be an integer")
+        encode_quality = raw_quality
         encode_quality = max(1, min(100, encode_quality))
         ok, encoded = cv2.imencode(
             ".jpg",
@@ -708,7 +770,13 @@ class CameraService:
         return encoded.tobytes()
 
     def mjpeg(self, target_fps: float = 10.0) -> Iterator[bytes]:
-        delay = 1.0 / max(1.0, target_fps)
+        try:
+            fps = float(target_fps)
+        except (TypeError, ValueError) as exc:
+            raise CameraError("MJPEG target FPS must be a positive finite number") from exc
+        if type(target_fps) is bool or not math.isfinite(fps) or fps <= 0.0:
+            raise CameraError("MJPEG target FPS must be a positive finite number")
+        delay = 1.0 / max(1.0, fps)
         generation = self._current_generation()
         while not self._is_cancelled(generation):
             try:
@@ -793,6 +861,16 @@ class CameraService:
         *,
         timeout_seconds: float = 5.0,
     ) -> ControlResult:
+        try:
+            control_timeout = float(timeout_seconds)
+        except (TypeError, ValueError) as exc:
+            raise CameraError("Camera-control timeout must be a positive finite number") from exc
+        if type(timeout_seconds) is bool or not math.isfinite(control_timeout) or control_timeout <= 0:
+            raise CameraError("Camera-control timeout must be a positive finite number")
+        try:
+            normalized = validate_control_request(requested)
+        except ValueError as exc:
+            raise CameraError(str(exc)) from exc
         request_generation = self._current_generation()
         with self._exclusive_operation(
             "camera control update",
@@ -804,10 +882,10 @@ class CameraService:
                 generation = self._generation
                 stop_event = self._stop
             result = self._apply_controls_owned(
-                requested,
+                normalized,
                 generation,
                 stop_event,
-                timeout_seconds=max(0.0, float(timeout_seconds)),
+                timeout_seconds=control_timeout,
             )
         if self._is_cancelled(generation, stop_event):
             raise CameraError("Camera stopped while applying controls")
@@ -820,6 +898,24 @@ class CameraService:
         settle_seconds: float = 0.35,
         timeout_seconds: float = 2.0,
     ) -> tuple[ControlResult, np.ndarray]:
+        try:
+            settle = float(settle_seconds)
+            timeout = float(timeout_seconds)
+        except (TypeError, ValueError) as exc:
+            raise CameraError("Camera-control settle and timeout values must be finite") from exc
+        if (
+            type(settle_seconds) is bool
+            or type(timeout_seconds) is bool
+            or not math.isfinite(settle)
+            or not math.isfinite(timeout)
+            or settle < 0
+            or timeout <= 0
+        ):
+            raise CameraError("Camera-control settle and timeout values must be finite")
+        try:
+            normalized = validate_control_request(requested)
+        except ValueError as exc:
+            raise CameraError(str(exc)) from exc
         request_generation = self._current_generation()
         with self._exclusive_operation(
             "camera control update",
@@ -830,9 +926,9 @@ class CameraService:
                     raise CameraError("Camera is not connected")
                 generation = self._generation
                 stop_event = self._stop
-            deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+            deadline = time.monotonic() + timeout
             result = self._apply_controls_owned(
-                requested,
+                normalized,
                 generation,
                 stop_event,
                 timeout_seconds=max(0.0, deadline - time.monotonic()),
@@ -840,7 +936,7 @@ class CameraService:
             with self._lock:
                 sequence = self._frames_read
             self._wait_settle(
-                settle_seconds,
+                settle,
                 deadline,
                 generation,
                 stop_event,

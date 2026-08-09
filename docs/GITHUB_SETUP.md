@@ -39,6 +39,9 @@ The most useful items are a repository ZIP, a public repository link, a unified 
 
 Camera/object-trace inputs, trace previews, and trace-result JSON are also local
 artifacts unless they are deliberately reviewed and added as stable test
-fixtures. Check release ZIP contents before publishing from a dirty tree.
+fixtures. The release tool archives tracked regular files from the current
+checkout, including uncommitted edits to those files. It rejects tracked
+symbolic links and never adds untracked files; still review the resulting ZIP
+before publishing it.
 
 After finalizing the rig, back up the useful calibration JSON files outside Git or add a sanitized machine-profile export feature rather than committing arbitrary images and logs.

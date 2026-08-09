@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sqlite3
 import tempfile
@@ -12,6 +13,21 @@ from ..project import LayerMode, OperationLayer
 from ..storage import default_user_data_dir, legacy_user_data_dir
 
 logger = logging.getLogger(__name__)
+
+
+def _finite_number(value: object, name: str) -> float:
+    if type(value) not in {int, float}:
+        raise ValueError(f"{name} must be a finite number")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{name} must be a finite number")
+    return number
+
+
+def _string(value: object, name: str) -> str:
+    if type(value) is not str:
+        raise ValueError(f"{name} must be a string")
+    return value
 
 
 def _migrate_database(source: Path, destination: Path) -> bool:
@@ -71,18 +87,26 @@ class MaterialPreset:
     id: int | None = None
 
     def __post_init__(self) -> None:
-        self.material = str(self.material or "Unspecified")[:120]
-        self.name = str(self.name or "Preset")[:120]
+        self.material = (_string(self.material, "Preset material") or "Unspecified")[:120]
+        self.name = (_string(self.name, "Preset name") or "Preset")[:120]
         if self.thickness_mm is not None:
-            self.thickness_mm = float(self.thickness_mm)
+            self.thickness_mm = _finite_number(
+                self.thickness_mm,
+                "Material thickness",
+            )
             if self.thickness_mm < 0:
                 raise ValueError("Material thickness cannot be negative")
-        self.mode = self.mode if isinstance(self.mode, LayerMode) else LayerMode(str(self.mode))
-        self.speed_mm_min = float(self.speed_mm_min)
-        self.power_percent = float(self.power_percent)
-        self.passes = int(self.passes)
-        self.line_interval_mm = float(self.line_interval_mm)
-        self.notes = str(self.notes)[:2000]
+        if not isinstance(self.mode, LayerMode):
+            self.mode = LayerMode(_string(self.mode, "Preset mode"))
+        self.speed_mm_min = _finite_number(self.speed_mm_min, "Preset speed")
+        self.power_percent = _finite_number(self.power_percent, "Preset power")
+        if type(self.passes) is not int:
+            raise ValueError("Preset passes must be an integer")
+        self.line_interval_mm = _finite_number(
+            self.line_interval_mm,
+            "Preset line interval",
+        )
+        self.notes = _string(self.notes, "Preset notes")[:2000]
         if self.speed_mm_min <= 0:
             raise ValueError("Preset speed must be positive")
         if not 0 <= self.power_percent <= 100:
@@ -92,7 +116,8 @@ class MaterialPreset:
         if self.line_interval_mm <= 0:
             raise ValueError("Preset line interval must be positive")
         if self.id is not None:
-            self.id = int(self.id)
+            if type(self.id) is not int:
+                raise ValueError("Preset ID must be an integer")
 
     def apply_to_layer(self, layer: OperationLayer) -> OperationLayer:
         payload = layer.to_dict()

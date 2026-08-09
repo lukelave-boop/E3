@@ -1045,3 +1045,34 @@ def test_non_grid_mode_preserves_irregular_colored_silhouette():
     assert detection.shape == "contour"
     assert len(detection.contour_mm) >= 6
     assert detection.vector_contour_mm == detection.contour_mm
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"target_hue": float("nan")},
+        {"hue_tolerance": float("inf")},
+        {"min_area_mm2": float("nan")},
+        {"target_bgr": [0, float("nan"), 0]},
+    ],
+)
+def test_trace_options_reject_nonfinite_values(overrides: dict[str, object]) -> None:
+    with pytest.raises(ValueError, match="finite"):
+        TraceOptions(**overrides)
+
+
+def test_trace_options_reject_string_booleans() -> None:
+    with pytest.raises(ValueError, match="JSON boolean"):
+        TraceOptions(regular_grid="false")  # type: ignore[arg-type]
+
+
+def test_trace_rejects_nonfinite_scale_and_malformed_images() -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    area = WorkArea(0.0, 20.0, 0.0, 20.0)
+
+    with pytest.raises(ValueError, match="finite"):
+        detect_objects(image, TraceOptions(), area, float("nan"))
+    with pytest.raises(ValueError, match="uint8 BGR"):
+        detect_objects(np.zeros((20, 20), dtype=np.uint8), TraceOptions(), area, 1.0)
+    with pytest.raises(ValueError, match="finite"):
+        sample_color(image, float("nan"), 5.0)

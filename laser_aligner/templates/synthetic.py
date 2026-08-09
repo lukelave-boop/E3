@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from collections.abc import Iterable
 from dataclasses import dataclass
+from numbers import Real
 from typing import Any
 
 import cv2
@@ -115,10 +116,9 @@ class _LabelRegion:
 
 
 def _finite(value: Any, name: str) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{name} must be a finite number") from exc
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise ValueError(f"{name} must be a finite number")
+    number = float(value)
     if not math.isfinite(number):
         raise ValueError(f"{name} must be a finite number")
     return number

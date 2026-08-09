@@ -41,6 +41,22 @@ def _wait_for_operation(camera: CameraService, label: str, timeout: float = 1.0)
         time.sleep(0.005)
 
 
+def test_non_consensus_profile_allows_unused_consensus_count_above_sample() -> None:
+    profile = _profile(sample_frames=2)
+    profile.consensus_frames = 15
+
+    CameraService._validate_capture_profile(profile)
+
+
+def test_consensus_profile_rejects_consensus_count_above_sample() -> None:
+    profile = _profile(sample_frames=2)
+    profile.coordinate_strategy = "stable_clarity_consensus"
+    profile.consensus_frames = 15
+
+    with pytest.raises(CameraError, match="consensus count"):
+        CameraService._validate_capture_profile(profile)
+
+
 def test_snapshot_after_waits_for_a_new_frame() -> None:
     camera = CameraService(CameraSettings())
     with camera._lock:
@@ -73,6 +89,37 @@ def test_snapshot_after_rejects_a_stale_frame() -> None:
         camera._frames_read = 4
     with pytest.raises(CameraError, match="fresh frame"):
         camera.snapshot_after(4, timeout=0.03)
+
+
+@pytest.mark.parametrize("timeout", [float("nan"), float("inf"), 0.0, True])
+def test_snapshot_after_rejects_invalid_timeouts(timeout: object) -> None:
+    camera = CameraService(CameraSettings())
+
+    with pytest.raises(CameraError, match="positive finite"):
+        camera.snapshot_after(0, timeout=timeout)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("settle_seconds", float("nan")),
+        ("timeout_seconds", float("inf")),
+        ("sample_frames", True),
+        ("minimum_valid_frames", 3),
+        ("mad_multiplier", float("nan")),
+        ("max_jitter_rms_px", 0.0),
+    ],
+)
+def test_capture_burst_rejects_malformed_profile_values(
+    field_name: str,
+    value: object,
+) -> None:
+    profile = _profile()
+    setattr(profile, field_name, value)
+    camera = CameraService(CameraSettings(precision_capture=profile))
+
+    with pytest.raises(CameraError, match="Precision capture"):
+        camera.capture_burst(reapply_controls=False)
 
 
 def test_snapshot_rejects_disconnected_or_old_cached_frame() -> None:
@@ -436,3 +483,57 @@ def test_sharpness_analysis_runs_after_releasing_camera_operation(
     thread.join(timeout=0.5)
     assert not thread.is_alive()
     assert result[0].sharpness_scores == (123.0,)
+
+
+@pytest.mark.parametrize(
+    "requested",
+    (
+        {"focus-absolute": 40},
+        {"focus_absolute": 40.5},
+        {"focus_absolute": "40"},
+    ),
+)
+def test_camera_service_rejects_malformed_control_requests(
+    requested: object,
+) -> None:
+    camera = CameraService(CameraSettings())
+
+    with pytest.raises(CameraError, match="Camera control"):
+        camera.apply_controls(requested)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("quality", (True, 90.5, "90"))
+def test_jpeg_rejects_noninteger_quality(quality: object) -> None:
+    camera = CameraService(CameraSettings())
+    with camera._lock:
+        camera._connected = True
+        camera._frame = np.zeros((4, 4, 3), dtype=np.uint8)
+        camera._frame_monotonic = time.monotonic()
+
+    with pytest.raises(CameraError, match="JPEG quality must be an integer"):
+        camera.jpeg(quality)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("fps", (float("nan"), float("inf"), 0.0, True, "bad"))
+def test_mjpeg_rejects_invalid_target_fps(fps: object) -> None:
+    stream = CameraService(CameraSettings()).mjpeg(fps)  # type: ignore[arg-type]
+
+    with pytest.raises(CameraError, match="positive finite"):
+        next(stream)
+
+
+@pytest.mark.parametrize(
+    ("frame", "valid"),
+    (
+        (np.zeros((4, 4, 3), dtype=np.uint8), True),
+        (np.zeros((4, 4), dtype=np.uint8), True),
+        (np.empty((0, 0, 3), dtype=np.uint8), False),
+        (np.zeros((4, 4, 3), dtype=np.float32), False),
+        (np.zeros((4, 4, 2), dtype=np.uint8), False),
+    ),
+)
+def test_camera_frame_validation_rejects_malformed_driver_frames(
+    frame: np.ndarray,
+    valid: bool,
+) -> None:
+    assert CameraService._valid_frame(frame) is valid

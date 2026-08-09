@@ -98,6 +98,8 @@ def test_rectangle_grid_builds_centered_row_major_geometry_and_metadata():
         ({"columns": 1.5}, "integer"),
         ({"rows": MAX_GRID_OBJECTS + 1, "columns": 1}, "more than"),
         ({"width_mm": float("nan")}, "finite"),
+        ({"width_mm": "20.0"}, "finite"),
+        ({"height_mm": True}, "finite"),
         ({"height_mm": 0.0001}, "at least"),
         ({"corner_radius_mm": -0.1}, "negative"),
         ({"corner_radius_mm": 5.1}, "half the smaller"),

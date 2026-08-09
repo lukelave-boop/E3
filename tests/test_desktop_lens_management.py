@@ -549,26 +549,26 @@ def test_replacing_or_clearing_lens_marks_bed_stale_and_disables_dependents(
         lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
     )
     try:
-        assert dialog.registration_dry_button.isEnabled()
+        assert dialog.registration_prepare_button.isEnabled()
         dialog.solve_lens()
         _wait_until(qt_application, lambda: not dialog.operation_busy)
 
         assert runtime.context.bed_status()["validity"]["state"] == "STALE"
         assert "Bed map dependency: STALE" in dialog.lens_bed_status.text()
-        assert not dialog.registration_dry_button.isEnabled()
-        assert not dialog.validation_dry_button.isEnabled()
+        assert not dialog.registration_prepare_button.isEnabled()
+        assert not dialog.validation_prepare_button.isEnabled()
         assert not dialog.rough_grid_detect_button.isEnabled()
 
         runtime.context.lens.save_model(original)
         runtime.context.solve_bed()
         dialog.refresh_all()
-        assert dialog.registration_dry_button.isEnabled()
+        assert dialog.registration_prepare_button.isEnabled()
 
         dialog.clear_lens()
         assert runtime.context.lens.model is None
         assert runtime.context.bed_status()["validity"]["state"] == "STALE"
         assert "Bed map dependency: STALE" in dialog.lens_bed_status.text()
-        assert not dialog.registration_dry_button.isEnabled()
+        assert not dialog.registration_prepare_button.isEnabled()
         assert not dialog.base_grid_capture_button.isEnabled()
     finally:
         dialog.close()

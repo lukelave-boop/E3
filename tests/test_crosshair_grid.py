@@ -160,3 +160,57 @@ def test_detect_crosshairs_near_accepts_sparse_fine_registration_targets():
     for point, center in zip(result["points"], centers, strict=True):
         assert point["image_x"] == pytest.approx(center[0], abs=1.5)
         assert point["image_y"] == pytest.approx(center[1], abs=1.5)
+
+
+@pytest.mark.parametrize(
+    "image",
+    (
+        np.empty((0, 0, 3), dtype=np.uint8),
+        np.zeros((20, 20, 3), dtype=np.float32),
+        np.zeros((20, 20, 2), dtype=np.uint8),
+    ),
+)
+def test_crosshair_detectors_reject_malformed_images(image: np.ndarray) -> None:
+    _, targets = _keyed_grid_image()
+
+    assert detect_crosshair_grid(image)["detected"] is False
+    assert detect_keyed_crosshair_grid(image, targets)["detected"] is False
+    assert detect_crosshairs_near(image, targets)["detected"] is False
+
+
+@pytest.mark.parametrize(
+    ("grid_size", "plate_size_mm", "coordinates_mm"),
+    (
+        (True, 220.0, (10.0, 60.0)),
+        (2, float("nan"), (10.0, 60.0)),
+        (2, 220.0, (60.0, 10.0)),
+        (3, 220.0, (10.0, 60.0)),
+    ),
+)
+def test_crosshair_grid_rejects_malformed_geometry(
+    grid_size: object,
+    plate_size_mm: object,
+    coordinates_mm: tuple[float, ...],
+) -> None:
+    result = detect_crosshair_grid(
+        np.zeros((20, 20, 3), dtype=np.uint8),
+        grid_size=grid_size,  # type: ignore[arg-type]
+        plate_size_mm=plate_size_mm,  # type: ignore[arg-type]
+        coordinates_mm=coordinates_mm,
+    )
+
+    assert result["detected"] is False
+
+
+def test_crosshairs_near_rejects_duplicate_or_nonfinite_expected_marks() -> None:
+    image = np.zeros((30, 30, 3), dtype=np.uint8)
+    duplicate = [
+        {"id": 1, "image_x": 5.0, "image_y": 5.0, "machine_x": 1.0, "machine_y": 1.0},
+        {"id": 1, "image_x": 8.0, "image_y": 8.0, "machine_x": 2.0, "machine_y": 2.0},
+    ]
+    nonfinite = [
+        {"id": 1, "image_x": float("nan"), "image_y": 5.0, "machine_x": 1.0, "machine_y": 1.0}
+    ]
+
+    assert detect_crosshairs_near(image, duplicate)["detected"] is False
+    assert detect_crosshairs_near(image, nonfinite)["detected"] is False

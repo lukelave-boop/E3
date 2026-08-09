@@ -60,6 +60,18 @@ def test_simulated_program_stream() -> None:
             "0" * 64,
             not_before=0.0,
         ) is None
+        assert machine.successful_job_receipt(
+            program.digest,
+            not_before=float("nan"),
+        ) is None
+        assert machine.successful_job_receipt(
+            program.digest,
+            not_before=float("-inf"),
+        ) is None
+        assert machine.successful_job_receipt(  # type: ignore[arg-type]
+            object(),
+            not_before=0.0,
+        ) is None
     finally:
         machine.disconnect()
 
@@ -75,6 +87,66 @@ def test_ensure_connected_opens_a_disconnected_machine() -> None:
 
     assert machine.status()["connected"] is True
     assert result["connected"] is True
+    machine.disconnect()
+
+
+def test_concurrent_ensure_connected_calls_share_one_reconnect_sequence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = MachineService(
+        MachineSettings(backend="simulator", allow_motion=True),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    machine.request_stop()
+    original_disconnect = machine.disconnect
+    disconnect_entered = threading.Event()
+    release_disconnect = threading.Event()
+    disconnect_calls = 0
+    calls_lock = threading.Lock()
+
+    def paused_disconnect() -> None:
+        nonlocal disconnect_calls
+        with calls_lock:
+            disconnect_calls += 1
+            call_number = disconnect_calls
+        if call_number == 1:
+            disconnect_entered.set()
+            assert release_disconnect.wait(timeout=2.0)
+        original_disconnect()
+
+    monkeypatch.setattr(machine, "disconnect", paused_disconnect)
+    results: list[dict[str, object]] = []
+    errors: list[Exception] = []
+
+    def reconnect() -> None:
+        try:
+            results.append(machine.ensure_connected())
+        except Exception as exc:
+            errors.append(exc)
+
+    first = threading.Thread(target=reconnect, daemon=True)
+    second = threading.Thread(target=reconnect, daemon=True)
+    first.start()
+    assert disconnect_entered.wait(timeout=1.0)
+    second.start()
+    time.sleep(0.05)
+
+    with calls_lock:
+        assert disconnect_calls == 1
+
+    release_disconnect.set()
+    first.join(timeout=2.0)
+    second.join(timeout=2.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert len(results) == 2
+    assert all(result["connected"] is True for result in results)
+    assert machine.status()["connected"] is True
+    assert machine.status()["controller_reconnect_required"] is False
     machine.disconnect()
 
 
@@ -180,6 +252,18 @@ def test_program_requires_explicit_bounded_feed(line: str, message: str) -> None
 
     with pytest.raises(SafetyError, match=message):
         machine.validate_program(f"G21\nG90\nM5\n{line}\nM5\n")
+
+
+def test_program_rejects_oversized_executable_line_before_streaming() -> None:
+    machine = MachineService(
+        MachineSettings(backend="simulator"),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    oversized_m5 = "M" + (" " * 300) + "5"
+
+    with pytest.raises(SafetyError, match="exceeds 256 characters"):
+        machine.preflight_program(f"G21\nG90\n{oversized_m5}\nM5\n")
 
 
 @pytest.mark.parametrize(
@@ -944,6 +1028,57 @@ def test_stop_cancels_a_start_already_in_progress(
     assert commands == ["M5"]
     assert not machine.status()["job"]["running"]
     assert not machine.status()["armed"]
+    machine.disconnect()
+
+
+def test_auto_protocol_probe_falls_back_to_marlin_after_consumed_grbl_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class MarlinProbeTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def open(self) -> None:
+            self.is_open = True
+            self._queue.put("start")
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            self.commands.append(command)
+            if command == "$I":
+                self._queue.put("error:Unknown command")
+                return
+            if command == "M115":
+                self._queue.put("FIRMWARE_NAME:Marlin 2.1.2")
+                self._queue.put("ok")
+                return
+            if command == "M5":
+                self._queue.put("ok")
+                return
+            raise AssertionError(f"Unexpected command: {command}")
+
+    transport = MarlinProbeTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda _port, _baudrate: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="auto",
+            controller_startup_delay=0.0,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    status = machine.connect()
+
+    assert status["connected"] is True
+    assert status["protocol"] == "marlin"
+    assert status["controller_reconnect_required"] is False
+    assert transport.commands == ["$I", "M115", "M5"]
     machine.disconnect()
 
 
@@ -2184,6 +2319,117 @@ def test_explicit_grbl_connect_waits_for_controller_startup_before_querying(
     machine.disconnect()
 
 
+def test_arm_waits_for_an_inflight_jog_command() -> None:
+    machine = MachineService(
+        MachineSettings(backend="simulator", allow_motion=True),
+        LaserSettings(arm_timeout_seconds=10),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    machine.prepare_photo_position()
+    start_position = machine.status()["jog_position_mm"]
+    assert start_position is not None
+    target_x = float(start_position["x"]) + 10.0
+    target_y = float(start_position["y"])
+    transport = machine._transport
+    assert isinstance(transport, SimulatedTransport)
+    original_write_line = transport.write_line
+    jog_write_entered = threading.Event()
+    release_jog_write = threading.Event()
+
+    def blocked_write_line(line: str) -> None:
+        expected = f"G0 X{target_x:.3f} Y{target_y:.3f}"
+        if line.strip().upper().startswith(expected):
+            jog_write_entered.set()
+            assert release_jog_write.wait(timeout=2.0)
+        original_write_line(line)
+
+    transport.write_line = blocked_write_line  # type: ignore[method-assign]
+    jog_errors: list[Exception] = []
+    arm_errors: list[Exception] = []
+    armed = threading.Event()
+
+    def jog() -> None:
+        try:
+            machine.jog(10.0, 0.0, 1000.0)
+        except Exception as exc:
+            jog_errors.append(exc)
+
+    def arm() -> None:
+        try:
+            machine.arm(machine.ARM_PHRASE)
+            armed.set()
+        except Exception as exc:
+            arm_errors.append(exc)
+
+    jog_worker = threading.Thread(target=jog, daemon=True)
+    arm_worker = threading.Thread(target=arm, daemon=True)
+    jog_worker.start()
+    assert jog_write_entered.wait(timeout=1.0)
+    arm_worker.start()
+    time.sleep(0.05)
+
+    assert not armed.is_set()
+    assert arm_worker.is_alive()
+
+    release_jog_write.set()
+    jog_worker.join(timeout=2.0)
+    arm_worker.join(timeout=2.0)
+
+    assert not jog_worker.is_alive()
+    assert not arm_worker.is_alive()
+    assert jog_errors == []
+    assert arm_errors == []
+    assert armed.is_set()
+    assert machine.status()["jog_position_mm"] == {"x": target_x, "y": target_y}
+    machine.disconnect()
+
+
+def test_stop_cancels_an_arm_queued_behind_controller_ownership() -> None:
+    machine = MachineService(
+        MachineSettings(backend="simulator", allow_motion=True),
+        LaserSettings(arm_timeout_seconds=10),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    errors: list[Exception] = []
+    arm_waiting = threading.Event()
+    release_arm = threading.Event()
+    command_lock = machine._command_lock
+
+    class PausedCommandLock:
+        def __enter__(self) -> "PausedCommandLock":
+            arm_waiting.set()
+            assert release_arm.wait(timeout=2.0)
+            command_lock.acquire()
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            command_lock.release()
+
+    machine._command_lock = PausedCommandLock()  # type: ignore[assignment]
+
+    def arm() -> None:
+        try:
+            machine.arm(machine.ARM_PHRASE)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=arm, daemon=True)
+    worker.start()
+    assert arm_waiting.wait(timeout=1.0)
+    machine.request_stop()
+    release_arm.set()
+    worker.join(timeout=2.0)
+    machine._command_lock = command_lock
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert "cancelled by software STOP" in str(errors[0])
+    assert machine.status()["armed"] is False
+    machine.disconnect()
+
+
 def test_temporary_stepper_hold_repairs_existing_stale_continuous_hold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2959,6 +3205,65 @@ def test_dry_serial_job_does_not_move_or_release_after_completion(
         assert "$MD" not in transport.commands
         assert "M9" not in transport.commands
     finally:
+        machine.disconnect()
+
+
+def test_serial_motion_job_does_not_publish_success_before_planner_barrier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DelayedBarrierTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.barrier_entered = threading.Event()
+            self.release_barrier = threading.Event()
+            self.delay_barrier = False
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            if command == "G4 P0.01" and self.delay_barrier:
+                self.barrier_entered.set()
+                assert self.release_barrier.wait(timeout=2.0)
+            super().write_line(line)
+
+    transport = DelayedBarrierTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda _port, _baudrate: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=True,
+            home_and_release_after_powered_job=True,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    try:
+        machine.prepare_photo_position()
+        transport.delay_barrier = True
+        machine.start_job(
+            "G21\nG90\nM5\nG0 X10 Y10 F1000\nM5\n",
+            "motion.gcode",
+        )
+        assert transport.barrier_entered.wait(timeout=1.0)
+
+        status = machine.status()["job"]
+        assert status["running"] is True
+        assert status["phase"] == "draining"
+        assert status["finished_at"] is None
+
+        transport.release_barrier.set()
+        wait_for_job(machine)
+        status = machine.status()["job"]
+        assert status["running"] is False
+        assert status["phase"] == "complete"
+        assert status["error"] is None
+    finally:
+        transport.release_barrier.set()
         machine.disconnect()
 
 

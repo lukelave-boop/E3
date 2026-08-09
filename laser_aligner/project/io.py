@@ -15,6 +15,48 @@ from ..storage import (
 from .model import ProjectDocument, ProjectFormatError
 
 PROJECT_EXTENSION = ".e3laser"
+MAX_PROJECT_BYTES = 32 * 1024 * 1024
+
+
+def _reject_json_constant(value: str) -> None:
+    raise ProjectFormatError(f"Project JSON contains unsupported constant {value}")
+
+
+def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    output: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in output:
+            raise ProjectFormatError(f"Project JSON contains duplicate key {key!r}")
+        output[key] = value
+    return output
+
+
+def _read_project_bytes(source: Path) -> bytes:
+    try:
+        with source.open("rb") as handle:
+            before = os.fstat(handle.fileno())
+            if before.st_size > MAX_PROJECT_BYTES:
+                raise ProjectFormatError(
+                    f"Project exceeds the {MAX_PROJECT_BYTES:,}-byte file limit"
+                )
+            data = handle.read(MAX_PROJECT_BYTES + 1)
+            after = os.fstat(handle.fileno())
+        current = source.stat()
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        raise ProjectFormatError(f"Could not read project {source}: {exc}") from exc
+    if len(data) > MAX_PROJECT_BYTES:
+        raise ProjectFormatError(
+            f"Project exceeds the {MAX_PROJECT_BYTES:,}-byte file limit"
+        )
+    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
+    before_identity = tuple(getattr(before, field, None) for field in identity_fields)
+    after_identity = tuple(getattr(after, field, None) for field in identity_fields)
+    current_identity = tuple(getattr(current, field, None) for field in identity_fields)
+    if before_identity != after_identity or after_identity != current_identity:
+        raise ProjectFormatError(f"Project changed while it was being read: {source}")
+    return data
 
 
 def _autosave_filename(
@@ -74,7 +116,19 @@ def save_project(
     destination.parent.mkdir(parents=True, exist_ok=True)
     document.validate()
     payload = document.to_dict()
-    data = (json.dumps(payload, indent=indent, sort_keys=True) + "\n").encode("utf-8")
+    # Reparse the complete serialized model so post-construction mutations
+    # cannot publish a project that the loader itself would reject.
+    ProjectDocument.from_dict(payload)
+    try:
+        serialized = json.dumps(
+            payload,
+            indent=indent,
+            sort_keys=True,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ProjectFormatError(f"Project contains non-JSON data: {exc}") from exc
+    data = (serialized + "\n").encode("utf-8")
 
     if create_backup and destination.exists():
         backup = destination.with_suffix(destination.suffix + ".bak")
@@ -100,14 +154,22 @@ def save_project(
 def load_project(path: str | Path) -> ProjectDocument:
     source = Path(path).expanduser().resolve()
     try:
-        raw: Any = json.loads(source.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        raise
-    except json.JSONDecodeError as exc:
+        text = _read_project_bytes(source).decode("utf-8")
+        raw: Any = json.loads(
+            text,
+            parse_constant=_reject_json_constant,
+            object_pairs_hook=_strict_json_object,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise ProjectFormatError(f"Invalid JSON in {source}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ProjectFormatError("Project root must be a JSON object")
-    return ProjectDocument.from_dict(raw)
+    try:
+        return ProjectDocument.from_dict(raw)
+    except RecursionError as exc:
+        raise ProjectFormatError(
+            f"Project structure is nested too deeply in {source}"
+        ) from exc
 
 
 def autosave_path(

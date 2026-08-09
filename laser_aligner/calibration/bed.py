@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import logging
 import math
 import threading
@@ -17,6 +18,39 @@ from ..errors import CalibrationError
 from ..storage import atomic_write_json, read_json
 
 LOGGER = logging.getLogger(__name__)
+_MAX_RECTIFIED_PIXELS = 64_000_000
+
+
+def _exact_integer(value: Any, label: str) -> int:
+    if type(value) is not int:
+        raise ValueError(f"{label} must be an integer")
+    return value
+
+
+def _finite_coordinate(value: Any, label: str) -> float:
+    if type(value) is bool:
+        raise CalibrationError(f"{label} must be finite")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise CalibrationError(f"{label} must be finite") from exc
+    if not math.isfinite(result):
+        raise CalibrationError(f"{label} must be finite")
+    return result
+
+
+def _validated_pixels_per_mm(value: Any) -> float:
+    if type(value) is bool:
+        raise CalibrationError("Rectification pixels_per_mm must be finite and positive")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise CalibrationError(
+            "Rectification pixels_per_mm must be finite and positive"
+        ) from exc
+    if not math.isfinite(result) or result <= 0.0:
+        raise CalibrationError("Rectification pixels_per_mm must be finite and positive")
+    return result
 
 
 @dataclass(slots=True)
@@ -51,12 +85,18 @@ class BedCalibrationBackup:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> BedCalibrationBackup:
+        if not isinstance(raw, dict):
+            raise ValueError("Bed calibration backup must be an object")
         image_to_machine = np.asarray(raw["image_to_machine"], dtype=np.float64)
         machine_to_image = np.asarray(raw["machine_to_image"], dtype=np.float64)
         rms_error = float(raw["rms_error_mm"])
         max_error = float(raw["max_error_mm"])
-        inlier_count = int(raw["inlier_count"])
-        point_count = int(raw["point_count"])
+        inlier_count = _exact_integer(
+            raw["inlier_count"], "Bed calibration backup inlier_count"
+        )
+        point_count = _exact_integer(
+            raw["point_count"], "Bed calibration backup point_count"
+        )
         created_at = float(raw["created_at"])
         if (
             image_to_machine.shape != (3, 3)
@@ -77,6 +117,8 @@ class BedCalibrationBackup:
             not all(math.isfinite(value) for value in (rms_error, max_error, created_at))
             or rms_error < 0
             or max_error < 0
+            or max_error < rms_error
+            or created_at < 0
             or point_count < 4
             or not 4 <= inlier_count <= point_count
         ):
@@ -118,6 +160,15 @@ class BedResidualMesh:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> BedResidualMesh:
+        if not isinstance(raw, dict):
+            raise ValueError("Residual correction mesh must be an object")
+        schema_version = _exact_integer(
+            raw.get("schema_version", 1), "Residual correction mesh schema_version"
+        )
+        if schema_version != 1:
+            raise ValueError(
+                f"Unsupported residual correction mesh schema version: {schema_version}"
+            )
         x_nodes = np.asarray(raw["x_nodes_mm"], dtype=np.float64)
         y_nodes = np.asarray(raw["y_nodes_mm"], dtype=np.float64)
         corrections = np.asarray(raw["corrections_mm"], dtype=np.float64)
@@ -137,11 +188,16 @@ class BedResidualMesh:
         created_at = float(raw["created_at"])
         fit_rms = float(raw["fit_rms_mm"])
         fit_max = float(raw["fit_max_mm"])
-        refinement_count = int(raw.get("refinement_count", 0))
+        refinement_count = _exact_integer(
+            raw.get("refinement_count", 0),
+            "Residual correction mesh refinement_count",
+        )
         if (
             not all(math.isfinite(value) for value in (created_at, fit_rms, fit_max))
             or fit_rms < 0
             or fit_max < 0
+            or fit_max < fit_rms
+            or created_at < 0
             or refinement_count not in {0, 1}
         ):
             raise ValueError("Invalid residual correction mesh metadata")
@@ -217,10 +273,26 @@ class BedCalibration:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> BedCalibration:
-        registration = raw.get("fine_registration") or {}
-        axis_mapping = raw.get("axis_mapping") or {}
-        refinement = registration.get("homography_refinement") or {}
+        if not isinstance(raw, dict):
+            raise ValueError("Bed calibration must be a JSON object")
+        raw_registration = raw.get("fine_registration")
+        raw_axis_mapping = raw.get("axis_mapping")
+        registration = {} if raw_registration is None else raw_registration
+        axis_mapping = {} if raw_axis_mapping is None else raw_axis_mapping
+        if not isinstance(registration, dict):
+            raise ValueError("Bed calibration fine_registration must be an object or null")
+        if not isinstance(axis_mapping, dict):
+            raise ValueError("Bed calibration axis_mapping must be an object or null")
+        raw_refinement = registration.get("homography_refinement")
+        refinement = {} if raw_refinement is None else raw_refinement
+        if not isinstance(refinement, dict):
+            raise ValueError("Bed calibration homography_refinement must be an object or null")
         base = refinement.get("base_calibration")
+        if base is not None and not isinstance(base, dict):
+            raise ValueError("Bed calibration refinement base must be an object or null")
+        raw_residual_mesh = raw.get("residual_mesh")
+        if raw_residual_mesh is not None and not isinstance(raw_residual_mesh, dict):
+            raise ValueError("Bed calibration residual_mesh must be an object or null")
         image_to_machine = np.asarray(raw["image_to_machine"], dtype=np.float64)
         machine_to_image = np.asarray(raw["machine_to_image"], dtype=np.float64)
         if (
@@ -232,12 +304,20 @@ class BedCalibration:
             or abs(float(np.linalg.det(machine_to_image))) < 1e-12
         ):
             raise ValueError("Bed calibration homographies must be finite invertible 3x3 matrices")
-        image_width = int(raw["image_width"])
-        image_height = int(raw["image_height"])
+        image_width = _exact_integer(
+            raw["image_width"], "Bed calibration image_width"
+        )
+        image_height = _exact_integer(
+            raw["image_height"], "Bed calibration image_height"
+        )
         rms_error = float(raw["rms_error_mm"])
         max_error = float(raw["max_error_mm"])
-        inlier_count = int(raw["inlier_count"])
-        point_count = int(raw["point_count"])
+        inlier_count = _exact_integer(
+            raw["inlier_count"], "Bed calibration inlier_count"
+        )
+        point_count = _exact_integer(
+            raw["point_count"], "Bed calibration point_count"
+        )
         created_at = float(raw.get("created_at", 0.0))
         if image_width <= 0 or image_height <= 0:
             raise ValueError("Bed calibration image dimensions must be positive")
@@ -245,6 +325,8 @@ class BedCalibration:
             not all(math.isfinite(value) for value in (rms_error, max_error, created_at))
             or rms_error < 0
             or max_error < 0
+            or max_error < rms_error
+            or created_at < 0
             or point_count < 4
             or not 4 <= inlier_count <= point_count
         ):
@@ -261,6 +343,10 @@ class BedCalibration:
         provenance = raw.get("provenance")
         if provenance is not None and not isinstance(provenance, dict):
             raise ValueError("Bed calibration provenance must be an object or null")
+        try:
+            json.dumps(provenance, allow_nan=False)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Bed calibration provenance must contain finite JSON values") from exc
         registration_x = float(registration.get("translation_x_mm", 0.0))
         registration_y = float(registration.get("translation_y_mm", 0.0))
         registration_created_at = (
@@ -280,6 +366,7 @@ class BedCalibration:
                 for value in (registration_x, registration_y, *optional_times)
             )
             or math.hypot(registration_x, registration_y) > 5.0 + 1e-9
+            or any(value < 0 for value in optional_times)
         ):
             raise ValueError("Bed calibration registration state is invalid")
         calibration = cls(
@@ -295,18 +382,20 @@ class BedCalibration:
             registration_x_mm=registration_x,
             registration_y_mm=registration_y,
             registration_created_at=registration_created_at,
-            refinement_base=(None if not isinstance(base, dict) else BedCalibrationBackup.from_dict(base)),
+            refinement_base=(None if base is None else BedCalibrationBackup.from_dict(base)),
             refinement_created_at=refinement_created_at,
             axis_reversed_x=optional_axis("reverse_x"),
             axis_reversed_y=optional_axis("reverse_y"),
             residual_mesh=(
                 None
-                if not isinstance(raw.get("residual_mesh"), dict)
-                else BedResidualMesh.from_dict(raw["residual_mesh"])
+                if raw_residual_mesh is None
+                else BedResidualMesh.from_dict(raw_residual_mesh)
             ),
             provenance=copy.deepcopy(provenance),
         )
         product = calibration.image_to_machine @ calibration.machine_to_image
+        if abs(float(product[2, 2])) < 1e-12:
+            raise ValueError("Bed calibration homographies are not mutual inverses")
         product /= product[2, 2]
         if not np.allclose(product, np.eye(3), atol=1e-5, rtol=1e-5):
             raise ValueError("Bed calibration homographies are not mutual inverses")
@@ -506,12 +595,12 @@ class BedMapper:
         state = self.axis_mapping_state()[normalized]
         desired = bool(enabled)
         if state["reversed"] == desired:
-            self._calibration = replace(
+            replacement = replace(
                 calibration,
                 axis_reversed_x=(desired if normalized == "x" else calibration.axis_reversed_x),
                 axis_reversed_y=(desired if normalized == "y" else calibration.axis_reversed_y),
             )
-            self._persist_calibration()
+            self._calibration = self._persist_calibration(replacement=replacement)
             return self._calibration
 
         if normalized == "x":
@@ -582,16 +671,29 @@ class BedMapper:
         self._calibration_unavailable_reason = None
         self._pending_axis_mapping = None
 
-    def _persist_calibration(self, analysis: dict[str, Any] | None = None) -> None:
-        calibration = self._require()
+    def _persist_calibration(
+        self,
+        analysis: dict[str, Any] | None = None,
+        *,
+        replacement: BedCalibration | None = None,
+    ) -> BedCalibration:
+        calibration = self._require() if replacement is None else replacement
+        canonical = BedCalibration.from_dict(calibration.to_dict())
         existing = read_json(self.model_path, {})
         payload = dict(existing) if isinstance(existing, dict) else {}
-        payload.update(calibration.to_dict())
+        payload.update(canonical.to_dict())
         payload["points"] = [asdict(point) for point in self._points]
         if analysis is not None:
+            try:
+                json.dumps(analysis, allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                raise CalibrationError(
+                    "Bed calibration analysis must contain finite JSON values"
+                ) from exc
             payload["fine_registration"]["analysis"] = analysis
         atomic_write_json(self.model_path, payload)
         self._calibration_unavailable_reason = None
+        return canonical
 
     def apply_registration_translation(
         self,
@@ -624,7 +726,7 @@ class BedMapper:
         image_to_machine = transform @ calibration.image_to_machine
         if not np.isfinite(image_to_machine).all() or abs(float(np.linalg.det(image_to_machine))) < 1e-12:
             raise CalibrationError("Fine-registration correction produced an invalid transform")
-        self._calibration = replace(
+        replacement = replace(
             calibration,
             image_to_machine=image_to_machine,
             machine_to_image=np.linalg.inv(image_to_machine),
@@ -632,7 +734,10 @@ class BedMapper:
             registration_y_mm=float(total[1]),
             registration_created_at=time.time(),
         )
-        self._persist_calibration(analysis)
+        self._calibration = self._persist_calibration(
+            analysis,
+            replacement=replacement,
+        )
         return self._calibration
 
     def reset_registration_translation(self) -> BedCalibration:
@@ -650,7 +755,7 @@ class BedMapper:
             dtype=np.float64,
         )
         image_to_machine = inverse @ calibration.image_to_machine
-        self._calibration = replace(
+        replacement = replace(
             calibration,
             image_to_machine=image_to_machine,
             machine_to_image=np.linalg.inv(image_to_machine),
@@ -658,7 +763,7 @@ class BedMapper:
             registration_y_mm=0.0,
             registration_created_at=None,
         )
-        self._persist_calibration()
+        self._calibration = self._persist_calibration(replacement=replacement)
         return self._calibration
 
     def apply_registration_homography(
@@ -713,7 +818,7 @@ class BedMapper:
             point_count=calibration.point_count,
             created_at=calibration.created_at,
         )
-        self._calibration = replace(
+        replacement = replace(
             calibration,
             image_to_machine=proposed,
             machine_to_image=inverse,
@@ -725,7 +830,10 @@ class BedMapper:
             refinement_base=backup,
             refinement_created_at=time.time(),
         )
-        self._persist_calibration(analysis)
+        self._calibration = self._persist_calibration(
+            analysis,
+            replacement=replacement,
+        )
         return self._calibration
 
     def reset_registration_homography(self) -> BedCalibration:
@@ -735,7 +843,7 @@ class BedMapper:
             return calibration
         if math.hypot(calibration.registration_x_mm, calibration.registration_y_mm) > 1e-12:
             raise CalibrationError("Reset the fine-registration translation before resetting the full-bed refinement")
-        self._calibration = replace(
+        replacement = replace(
             calibration,
             image_to_machine=backup.image_to_machine,
             machine_to_image=backup.machine_to_image,
@@ -747,7 +855,7 @@ class BedMapper:
             refinement_base=None,
             refinement_created_at=None,
         )
-        self._persist_calibration()
+        self._calibration = self._persist_calibration(replacement=replacement)
         return self._calibration
 
     @staticmethod
@@ -799,8 +907,8 @@ class BedMapper:
         dy = np.diff(mesh.corrections_mm, axis=0) / np.diff(mesh.y_nodes_mm)[:, None, None]
         if float(np.max(np.abs(dx))) > 0.08 or float(np.max(np.abs(dy))) > 0.08:
             raise CalibrationError("Local correction changes too sharply between neighboring cells")
-        self._calibration = replace(calibration, residual_mesh=mesh)
-        self._persist_calibration()
+        replacement = replace(calibration, residual_mesh=mesh)
+        self._calibration = self._persist_calibration(replacement=replacement)
         return self._calibration
 
     def refine_residual_mesh(
@@ -843,16 +951,18 @@ class BedMapper:
         dy = np.diff(updated, axis=0) / np.diff(current.y_nodes_mm)[:, None, None]
         if float(np.max(np.abs(dx))) > 0.08 or float(np.max(np.abs(dy))) > 0.08:
             raise CalibrationError("Refined correction changes too sharply between cells")
-        self._calibration = replace(calibration, residual_mesh=replacement)
-        self._persist_calibration()
+        updated_calibration = replace(calibration, residual_mesh=replacement)
+        self._calibration = self._persist_calibration(
+            replacement=updated_calibration
+        )
         return self._calibration
 
     def reset_residual_mesh(self) -> BedCalibration:
         calibration = self._require()
         if calibration.residual_mesh is None:
             return calibration
-        self._calibration = replace(calibration, residual_mesh=None)
-        self._persist_calibration()
+        replacement = replace(calibration, residual_mesh=None)
+        self._calibration = self._persist_calibration(replacement=replacement)
         return self._calibration
 
     def _fit_points(
@@ -864,6 +974,15 @@ class BedMapper:
         axis_reversed_x: bool | None,
         axis_reversed_y: bool | None,
     ) -> tuple[BedCalibration, np.ndarray, np.ndarray]:
+        if (
+            type(image_width) is not int
+            or type(image_height) is not int
+            or image_width <= 0
+            or image_height <= 0
+        ):
+            raise CalibrationError(
+                "Bed calibration image dimensions must be positive integers"
+            )
         if len(points) < self.settings.minimum_points:
             raise CalibrationError(
                 f"Need at least {self.settings.minimum_points} point pairs; have {len(points)}"
@@ -902,8 +1021,8 @@ class BedMapper:
             BedCalibration(
             image_to_machine=homography,
             machine_to_image=inverse,
-            image_width=int(image_width),
-            image_height=int(image_height),
+            image_width=image_width,
+            image_height=image_height,
             rms_error_mm=rms,
             max_error_mm=maximum,
             inlier_count=int(np.sum(inlier_mask)),
@@ -1054,32 +1173,46 @@ class BedMapper:
 
     def image_to_mm(self, image_x: float, image_y: float) -> tuple[float, float]:
         calibration = self._require()
-        point = np.asarray([[[image_x, image_y]]], dtype=np.float64)
+        point = np.asarray(
+            [[[
+                _finite_coordinate(image_x, "Image X coordinate"),
+                _finite_coordinate(image_y, "Image Y coordinate"),
+            ]]],
+            dtype=np.float64,
+        )
         result = cv2.perspectiveTransform(point, calibration.image_to_machine)[0, 0]
         if calibration.residual_mesh is not None:
             result = result + self._mesh_correction(calibration.residual_mesh, result.reshape(1, 2))[0]
+        if not np.isfinite(result).all():
+            raise CalibrationError("Bed mapping produced non-finite machine coordinates")
         return float(result[0]), float(result[1])
 
     def mm_to_image(self, machine_x: float, machine_y: float) -> tuple[float, float]:
         calibration = self._require()
-        base_point = np.asarray([[machine_x, machine_y]], dtype=np.float64)
+        base_point = np.asarray(
+            [[
+                _finite_coordinate(machine_x, "Machine X coordinate"),
+                _finite_coordinate(machine_y, "Machine Y coordinate"),
+            ]],
+            dtype=np.float64,
+        )
         if calibration.residual_mesh is not None:
             target = base_point.copy()
             for _ in range(12):
                 base_point = target - self._mesh_correction(calibration.residual_mesh, base_point)
         point = base_point.reshape(1, 1, 2)
         result = cv2.perspectiveTransform(point, calibration.machine_to_image)[0, 0]
+        if not np.isfinite(result).all():
+            raise CalibrationError("Bed mapping produced non-finite image coordinates")
         return float(result[0]), float(result[1])
 
     def image_to_canvas_matrix(self, pixels_per_mm: float | None = None) -> np.ndarray:
         calibration = self._require()
-        ppm = float(
+        ppm = _validated_pixels_per_mm(
             self.settings.pixels_per_mm
             if pixels_per_mm is None
             else pixels_per_mm
         )
-        if not np.isfinite(ppm) or ppm <= 0:
-            raise CalibrationError("Rectification pixels_per_mm must be finite and positive")
         machine_to_canvas = np.array(
             [
                 [ppm, 0.0, -self.work_area.x_min * ppm],
@@ -1097,13 +1230,11 @@ class BedMapper:
         """Map corrected-camera pixels into the top-down workspace canvas."""
 
         calibration = self._require()
-        ppm = float(
+        ppm = _validated_pixels_per_mm(
             self.settings.pixels_per_mm
             if pixels_per_mm is None
             else pixels_per_mm
         )
-        if not np.isfinite(ppm) or ppm <= 0:
-            raise CalibrationError("Rectification pixels_per_mm must be finite and positive")
         key = (id(calibration), ppm)
         with self._rectification_map_lock:
             cached = self._rectification_map_cache.get(key)
@@ -1112,6 +1243,10 @@ class BedMapper:
 
         output_width = max(1, int(round(self.work_area.width * ppm)))
         output_height = max(1, int(round(self.work_area.height * ppm)))
+        if output_width * output_height > _MAX_RECTIFIED_PIXELS:
+            raise CalibrationError(
+                "Requested bed rectification exceeds the decoded-image pixel limit"
+            )
         canvas_x = self.work_area.x_min + np.arange(output_width) / ppm
         canvas_y = self.work_area.y_max - np.arange(output_height) / ppm
         xx, yy = np.meshgrid(canvas_x, canvas_y)
@@ -1139,13 +1274,23 @@ class BedMapper:
 
     def rectify(self, image: np.ndarray, pixels_per_mm: float | None = None) -> np.ndarray:
         calibration = self._require()
+        if (
+            not isinstance(image, np.ndarray)
+            or image.size == 0
+            or image.dtype != np.uint8
+            or image.ndim not in (2, 3)
+            or (image.ndim == 3 and image.shape[2] != 3)
+        ):
+            raise CalibrationError(
+                "Bed rectification image must be a non-empty uint8 grayscale or BGR array"
+            )
         height, width = image.shape[:2]
         if (width, height) != (calibration.image_width, calibration.image_height):
             raise CalibrationError(
                 "Current camera resolution does not match the bed calibration "
                 f"({width}x{height} vs {calibration.image_width}x{calibration.image_height})"
         )
-        ppm = float(
+        ppm = _validated_pixels_per_mm(
             self.settings.pixels_per_mm
             if pixels_per_mm is None
             else pixels_per_mm

@@ -85,6 +85,97 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     assert (settings.app.data_dir / "captures").is_dir()
 
 
+@pytest.mark.parametrize("root", [None, [], "settings", 7])
+def test_configuration_root_must_be_a_json_object(
+    tmp_path: Path,
+    root: object,
+) -> None:
+    config = tmp_path / "invalid-root.json"
+    config.write_text(json.dumps(root), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="root must be a JSON object"):
+        load_settings(config)
+
+
+def test_configuration_must_be_valid_utf8(tmp_path: Path) -> None:
+    config = tmp_path / "invalid-encoding.json"
+    config.write_bytes(b"\xff\xfe")
+
+    with pytest.raises(ConfigError, match="not valid UTF-8"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        '{"app": {"port": 8080, "port": 8081}}',
+        '{"machine": {"work_area": {"x_min": NaN}}}',
+    ],
+)
+def test_configuration_rejects_ambiguous_or_nonstandard_json(
+    tmp_path: Path,
+    text: str,
+) -> None:
+    config = tmp_path / "invalid-json.json"
+    config.write_text(text, encoding="utf-8")
+
+    with pytest.raises(ConfigError, match="Invalid JSON"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize(
+    ("override", "key"),
+    [
+        ({"appp": {"simulation": False}}, "appp"),
+        ({"machine": {"work_area": {"x_mni": 10}}}, "machine.work_area.x_mni"),
+    ],
+)
+def test_unknown_configuration_keys_are_rejected(
+    tmp_path: Path,
+    override: dict[str, object],
+    key: str,
+) -> None:
+    config = tmp_path / "unknown-key.json"
+    config.write_text(json.dumps(override), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=key):
+        load_settings(config)
+
+
+def test_camera_controls_remain_an_explicit_free_form_extension_map(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "camera-control.json"
+    config.write_text(
+        json.dumps({"camera": {"controls": {"vendor_specific_focus": 17}}}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.camera.controls["vendor_specific_focus"] == 17
+
+
+@pytest.mark.parametrize(
+    ("override", "key"),
+    [
+        ({"machine": []}, "machine"),
+        ({"machine": {"work_area": "0,0,190,190"}}, "machine.work_area"),
+        ({"camera": {"controls": ["focus_absolute", 10]}}, "camera.controls"),
+    ],
+)
+def test_configuration_sections_must_remain_json_objects(
+    tmp_path: Path,
+    override: dict[str, object],
+    key: str,
+) -> None:
+    config = tmp_path / "invalid-section.json"
+    config.write_text(json.dumps(override), encoding="utf-8")
+
+    with pytest.raises(ConfigError, match=rf"{key} must be a JSON object"):
+        load_settings(config)
+
+
 def test_builtin_install_defaults_use_writable_user_data_directory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -115,6 +206,21 @@ def test_http_configuration_is_explicitly_local_only(
     config.write_text(json.dumps({"app": app_override}), encoding="utf-8")
 
     with pytest.raises(ConfigError, match="local-only"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1000000", 0, -1])
+def test_http_request_limit_rejects_coerced_or_nonpositive_values(
+    tmp_path: Path,
+    value: object,
+) -> None:
+    config = tmp_path / "bad-request-limit.json"
+    config.write_text(
+        json.dumps({"app": {"max_request_bytes": value}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="app.max_request_bytes"):
         load_settings(config)
 
 
@@ -382,6 +488,33 @@ def test_precision_capture_settings_load_and_are_public(tmp_path: Path) -> None:
     assert profile.coordinate_strategy == "median"
     assert profile.consensus_frames == 5
     assert settings.public_dict()["camera"]["precision_capture"]["max_jitter_rms_px"] == pytest.approx(0.6)
+
+
+def test_non_consensus_precision_strategy_ignores_unused_large_consensus_count(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "median-precision.json"
+    config.write_text(
+        json.dumps(
+            {
+                "camera": {
+                    "precision_capture": {
+                        "sample_frames": 5,
+                        "minimum_valid_frames": 1,
+                        "coordinate_strategy": "median",
+                        "consensus_frames": 15,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    profile = load_settings(config).camera.precision_capture
+
+    assert profile.sample_frames == 5
+    assert profile.coordinate_strategy == "median"
+    assert profile.consensus_frames == 15
 
 
 @pytest.mark.parametrize(

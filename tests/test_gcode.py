@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from laser_aligner.config import WorkArea
-from laser_aligner.errors import SafetyError
+from laser_aligner.errors import SafetyError, SvgError
 from laser_aligner.gcode.generator import DesignPlacement, ToolpathOptions, generate_frame_gcode, generate_vector_gcode
 from laser_aligner.gcode.job_plan import build_job_plan
 from laser_aligner.gcode.preview import parse_gcode_segments
@@ -24,7 +24,7 @@ def test_vector_gcode_has_safe_laser_sequence() -> None:
     assert program.cut_length_mm > 100
 
 
-@pytest.mark.parametrize("requested_power", [0, 0.9])
+@pytest.mark.parametrize("requested_power", [0])
 def test_zero_effective_vector_power_counts_all_motion_as_travel(
     requested_power: float,
 ) -> None:
@@ -50,6 +50,135 @@ def test_zero_effective_vector_power_counts_all_motion_as_travel(
     assert not plan.powered
     assert program.cut_length_mm == pytest.approx(0.0)
     assert program.travel_length_mm == pytest.approx(plan.travel_distance_mm)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("travel_feed_mm_min", float("nan")),
+        ("travel_feed_mm_min", float("inf")),
+        ("travel_feed_mm_min", 0.0),
+        ("travel_feed_mm_min", -1.0),
+        ("engrave_feed_mm_min", float("nan")),
+        ("engrave_feed_mm_min", float("inf")),
+        ("engrave_feed_mm_min", 0.0),
+        ("engrave_feed_mm_min", -1.0),
+    ],
+)
+def test_vector_generator_rejects_invalid_feed_before_emitting_gcode(
+    field: str,
+    value: float,
+) -> None:
+    geometry = parse_svg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
+    )
+    options = ToolpathOptions(power=10)
+    setattr(options, field, value)
+
+    with pytest.raises(ValueError, match=field):
+        generate_vector_gcode(
+            geometry,
+            DesignPlacement(110, 110, 10, 10),
+            options,
+            WorkArea(),
+        )
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), 0.0, -1.0])
+def test_frame_generator_rejects_invalid_travel_feed(value: float) -> None:
+    with pytest.raises(ValueError, match="travel_feed_mm_min"):
+        generate_frame_gcode(
+            (10, 20, 30, 40),
+            ToolpathOptions(power=0, travel_feed_mm_min=value),
+            WorkArea(),
+        )
+
+
+@pytest.mark.parametrize("power", [True, 0.9, "10"])
+def test_generator_rejects_noninteger_power(power: object) -> None:
+    geometry = parse_svg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
+    )
+
+    with pytest.raises(ValueError, match="must be integers"):
+        generate_vector_gcode(
+            geometry,
+            DesignPlacement(110, 110, 10, 10),
+            ToolpathOptions(power=power),  # type: ignore[arg-type]
+            WorkArea(),
+        )
+
+
+@pytest.mark.parametrize("coordinate", [float("nan"), float("inf")])
+def test_generator_rejects_nonfinite_path_coordinates(coordinate: float) -> None:
+    geometry = SvgGeometry(
+        [Polyline(np.array([[coordinate, 0.0], [1.0, 1.0]]))],
+        (0.0, 0.0, 1.0, 1.0),
+    )
+
+    with pytest.raises(ValueError, match="Path coordinates must be finite"):
+        generate_vector_gcode(
+            geometry,
+            DesignPlacement(110, 110, 10, 10),
+            ToolpathOptions(power=10),
+            WorkArea(),
+        )
+
+
+@pytest.mark.parametrize(
+    "work_area",
+    [
+        WorkArea(x_min=float("nan")),
+        WorkArea(x_max=float("inf")),
+        WorkArea(x_min=True),
+        WorkArea(x_min=10.0, x_max=10.0),
+        WorkArea(x_min=20.0, x_max=10.0),
+        WorkArea(y_min=10.0, y_max=10.0),
+        WorkArea(y_min=20.0, y_max=10.0),
+    ],
+)
+def test_vector_generator_rejects_invalid_work_area(work_area: WorkArea) -> None:
+    geometry = parse_svg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
+    )
+
+    with pytest.raises(ValueError, match="work_area"):
+        generate_vector_gcode(
+            geometry,
+            DesignPlacement(110, 110, 10, 10),
+            ToolpathOptions(power=10),
+            work_area,
+        )
+
+
+def test_frame_generator_rejects_invalid_work_area() -> None:
+    with pytest.raises(ValueError, match="work_area"):
+        generate_frame_gcode(
+            (10, 20, 30, 40),
+            ToolpathOptions(power=0),
+            WorkArea(y_max=float("inf")),
+        )
+
+
+@pytest.mark.parametrize("field", ["mirror_x", "mirror_y"])
+@pytest.mark.parametrize("value", [0, 1, "false"])
+def test_generator_rejects_coerced_placement_mirror_flags(
+    field: str,
+    value: object,
+) -> None:
+    geometry = parse_svg(
+        '<svg xmlns="http://www.w3.org/2000/svg"><rect width="10" height="10"/></svg>'
+    )
+    placement = DesignPlacement(110, 110, 10, 10)
+    setattr(placement, field, value)
+
+    with pytest.raises(SvgError, match="mirror flags must be booleans"):
+        generate_vector_gcode(
+            geometry,
+            placement,
+            ToolpathOptions(power=10),
+            WorkArea(),
+        )
 
 
 def test_out_of_bounds_design_is_blocked() -> None:

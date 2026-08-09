@@ -292,12 +292,19 @@ def detect_honeycomb_rulers(
 ) -> HoneycombRulerDetection:
     """Detect two perpendicular ticked rulers near three approximate hints."""
 
-    if not isinstance(image, np.ndarray) or image.ndim not in (2, 3):
+    if (
+        not isinstance(image, np.ndarray)
+        or image.dtype != np.uint8
+        or image.ndim not in (2, 3)
+        or (image.ndim == 3 and image.shape[2] != 3)
+    ):
         raise ValueError("Ruler detection requires a grayscale or color image")
     if image.size == 0:
         raise ValueError("Ruler detection image is empty")
+    if not isinstance(seed_points, (list, tuple)) or len(seed_points) != 3:
+        raise ValueError("Ruler detection requires exactly three endpoint hints")
     span = float(ruler_span_mm)
-    if not math.isfinite(span) or span <= 0.0:
+    if type(ruler_span_mm) is bool or not math.isfinite(span) or span <= 0.0:
         raise ValueError("Ruler span must be a finite positive number")
     origin_seed = _point(seed_points[0], "First ruler hint")
     corner_seed = _point(seed_points[1], "Second ruler hint")

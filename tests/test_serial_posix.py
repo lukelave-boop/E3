@@ -46,6 +46,85 @@ def test_posix_serial_round_trip_over_pseudoterminal() -> None:
         os.close(slave_fd)
 
 
+def test_posix_serial_reopen_discards_prior_replies_and_partial_bytes() -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    master_fd, slave_fd = pty.openpty()
+    slave_path = os.ttyname(slave_fd)
+    serial = PosixSerial(slave_path, 115200)
+    try:
+        serial.open()
+        os.write(master_fd, b"stale-ok\r\npartial")
+        deadline = time.monotonic() + 1.0
+        while (
+            serial._queue.qsize() != 1 or bytes(serial._buffer) != b"partial"
+        ) and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serial._queue.qsize() == 1
+        assert bytes(serial._buffer) == b"partial"
+
+        serial.close()
+        serial.open()
+
+        assert serial.read_line(timeout=0.05) is None
+        assert bytes(serial._buffer) == b""
+        serial.write_line("M5")
+        assert read_master(master_fd) == b"M5\n"
+    finally:
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_posix_serial_rejects_an_unbounded_controller_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pty
+
+    import laser_aligner.machine.serial_posix as serial_module
+
+    monkeypatch.setattr(serial_module, "_MAX_SERIAL_LINE_BYTES", 32)
+    master_fd, slave_fd = pty.openpty()
+    serial = serial_module.PosixSerial(os.ttyname(slave_fd), 115200)
+    try:
+        serial.open()
+        os.write(master_fd, b"x" * 64)
+        assert serial._stop.wait(timeout=1.0)
+
+        with pytest.raises(MachineError, match="exceeded 32 bytes"):
+            serial.read_line(timeout=1.0)
+        assert bytes(serial._buffer) == b""
+    finally:
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_posix_serial_rejects_an_unbounded_unsolicited_line_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pty
+
+    import laser_aligner.machine.serial_posix as serial_module
+
+    monkeypatch.setattr(serial_module, "_MAX_QUEUED_SERIAL_LINES", 2)
+    master_fd, slave_fd = pty.openpty()
+    serial = serial_module.PosixSerial(os.ttyname(slave_fd), 115200)
+    try:
+        serial.open()
+        os.write(master_fd, b"one\r\ntwo\r\nthree\r\n")
+        assert serial._stop.wait(timeout=1.0)
+
+        with pytest.raises(MachineError, match="exceeded 2 lines"):
+            serial.read_line(timeout=1.0)
+    finally:
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
 def test_posix_serial_write_backpressure_has_a_bounded_deadline(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

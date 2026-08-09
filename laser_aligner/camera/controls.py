@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import re
 import shutil
 import subprocess
@@ -29,6 +30,22 @@ _CRITICAL_DIRECT_CONTROLS = {
     "white_balance_temperature": "white_balance_value",
 }
 _COMMAND_TIMEOUT_SECONDS = 5.0
+_CONTROL_NAME_RE = re.compile(r"^[a-zA-Z0-9_]+$")
+
+
+def validate_control_request(
+    requested: Mapping[str, int | bool],
+) -> dict[str, int | bool]:
+    if not isinstance(requested, Mapping):
+        raise ValueError("Camera controls must be a mapping")
+    result: dict[str, int | bool] = {}
+    for name, value in requested.items():
+        if not isinstance(name, str) or not _CONTROL_NAME_RE.fullmatch(name):
+            raise ValueError("Camera control names may contain only letters, digits, and underscores")
+        if type(value) not in {bool, int}:
+            raise ValueError(f"Camera control {name} must have an integer or boolean value")
+        result[name] = value
+    return result
 
 
 def _critical_requirements(
@@ -171,10 +188,20 @@ def apply_controls(
     contains aliases; unavailable controls are skipped rather than treated as a
     fatal error.
     """
-    requested_dict = dict(requested)
+    requested_dict = validate_control_request(requested)
+    if type(timeout_seconds) is bool:
+        raise ValueError("Camera-control timeout must be a positive finite number")
+    try:
+        timeout = float(timeout_seconds)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "Camera-control timeout must be a positive finite number"
+        ) from exc
+    if not math.isfinite(timeout) or timeout <= 0.0:
+        raise ValueError("Camera-control timeout must be a positive finite number")
     if not requested_dict:
         return ControlResult(requested_dict, {}, {})
-    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    deadline = time.monotonic() + timeout
     if cancelled is not None and cancelled():
         reason = "camera-control operation was cancelled"
         return ControlResult(

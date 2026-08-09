@@ -116,14 +116,24 @@ def _as_features(items: Sequence[Any], *, detections: bool) -> list[_ObservedFea
         raw_center = _value(item, "center_mm", None)
         if raw_center is None:
             continue
-        center = np.asarray(raw_center, dtype=np.float64).reshape(-1)
+        try:
+            center = np.asarray(raw_center, dtype=np.float64).reshape(-1)
+            width = float(_value(item, "width_mm", 0.0))
+            height = float(_value(item, "height_mm", 0.0))
+            rotation = float(_value(item, "rotation_deg", 0.0))
+            confidence = float(_value(item, "confidence", 1.0))
+        except (TypeError, ValueError):
+            continue
         if len(center) != 2 or not np.all(np.isfinite(center)):
             continue
-        width = abs(float(_value(item, "width_mm", 0.0)))
-        height = abs(float(_value(item, "height_mm", 0.0)))
-        rotation = float(_value(item, "rotation_deg", 0.0))
+        if (
+            not all(math.isfinite(value) for value in (width, height, rotation, confidence))
+            or width < 0
+            or height < 0
+        ):
+            continue
         source = str(_value(item, "source", "direct")).lower() if detections else "template"
-        confidence = max(0.0, min(1.0, float(_value(item, "confidence", 1.0))))
+        confidence = max(0.0, min(1.0, confidence))
         if detections:
             source_weight = 0.32 if source == "inferred" else 1.0
             weight = source_weight * (0.60 + 0.40 * confidence)
@@ -240,7 +250,13 @@ def _alignment_tolerance(template: Any, features: Sequence[_ObservedFeature]) ->
     if configured is None:
         configured = _value(template, "match_tolerance_mm", None)
     if configured is not None:
-        return max(0.25, min(25.0, float(configured)))
+        try:
+            value = float(configured)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Template alignment tolerance must be finite") from exc
+        if not math.isfinite(value):
+            raise ValueError("Template alignment tolerance must be finite")
+        return max(0.25, min(25.0, value))
 
     diagonals = [math.hypot(item.width, item.height) for item in features if item.width and item.height]
     feature_term = 0.22 * float(np.median(diagonals)) if diagonals else 3.0

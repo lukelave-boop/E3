@@ -43,6 +43,7 @@ _GRBL_STEP_IDLE_PATTERN = re.compile(
     r"^\s*\$1\s*=\s*(\d+)(?:\.0*)?(?:\s+\([^)]*\))?\s*$",
     re.IGNORECASE,
 )
+_PROGRAM_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
 class _ControllerCommandRejected(MachineError):
@@ -309,14 +310,19 @@ class MachineService:
     def ensure_connected(self) -> dict[str, Any]:
         """Return a trusted connection, reconnecting when necessary."""
 
-        with self._lock:
-            connected = self._connected and self._transport is not None
-            reconnect_required = self._controller_reconnect_required
-        if connected and not reconnect_required:
-            return self.status()
-        if connected:
-            self.disconnect()
-        return self.connect()
+        # Keep the observe-disconnect-connect sequence under the same ownership
+        # used by controller operations. Otherwise two queued operations can
+        # both observe one untrusted connection and the later caller can tear
+        # down the fresh connection established by the first caller.
+        with self._command_lock:
+            with self._lock:
+                connected = self._connected and self._transport is not None
+                reconnect_required = self._controller_reconnect_required
+            if connected and not reconnect_required:
+                return self.status()
+            if connected:
+                self.disconnect()
+            return self.connect()
 
     def _wait_for_controller_startup(
         self,
@@ -340,18 +346,26 @@ class MachineService:
         joined = "\n".join(startup).lower()
         if "grbl" in joined:
             return "grbl"
-        responses = self._send_command_locked(
-            "$I",
-            timeout=1.0,
-            _expected_stop_epoch=expected_stop_epoch,
-        )
+        try:
+            responses = self._send_command_locked(
+                "$I",
+                timeout=1.0,
+                _expected_stop_epoch=expected_stop_epoch,
+                _terminal_error_consumed=True,
+            )
+        except _ControllerCommandRejected:
+            responses = []
         if any("grbl" in line.lower() or "[ver:" in line.lower() for line in responses):
             return "grbl"
-        responses = self._send_command_locked(
-            "M115",
-            timeout=1.5,
-            _expected_stop_epoch=expected_stop_epoch,
-        )
+        try:
+            responses = self._send_command_locked(
+                "M115",
+                timeout=1.5,
+                _expected_stop_epoch=expected_stop_epoch,
+                _terminal_error_consumed=True,
+            )
+        except _ControllerCommandRejected:
+            responses = []
         if any("firmware_name" in line.lower() or "marlin" in line.lower() for line in responses):
             return "marlin"
         raise MachineError(
@@ -384,6 +398,43 @@ class MachineService:
         program_digest: str | None = None,
         _expected_stop_epoch: int | None = None,
         _expected_authorization_epoch: int | None = None,
+    ) -> float:
+        # Arming participates in controller-operation ownership even though it
+        # does not write to the transport. This keeps a jog or Home / park from
+        # passing its unarmed gate and then becoming armed mid-motion.
+        requested_stop_epoch = (
+            self._operation_stop_epoch()
+            if _expected_stop_epoch is None
+            else _expected_stop_epoch
+        )
+        with self._stop_epoch_lock:
+            if self._stop_epoch != requested_stop_epoch:
+                raise MachineError("Arming was cancelled by software STOP")
+            requested_authorization_epoch = (
+                self._authorization_epoch
+                if _expected_authorization_epoch is None
+                else _expected_authorization_epoch
+            )
+            if self._authorization_epoch != requested_authorization_epoch:
+                raise MachineError("Arming was cancelled by disarm")
+            # Preserve the request-time one-use semantics while waiting for a
+            # controller operation to finish.
+            self._clear_arm_authorization()
+        with self._command_lock:
+            return self._arm_locked(
+                phrase,
+                program_digest=program_digest,
+                _expected_stop_epoch=requested_stop_epoch,
+                _expected_authorization_epoch=requested_authorization_epoch,
+            )
+
+    def _arm_locked(
+        self,
+        phrase: str,
+        *,
+        program_digest: str | None,
+        _expected_stop_epoch: int | None,
+        _expected_authorization_epoch: int | None,
     ) -> float:
         # Every attempt consumes an earlier grant, even when this attempt is
         # malformed or rejected. A temporary grant must not survive for replay.
@@ -451,7 +502,7 @@ class MachineService:
 
     def disarm(self) -> None:
         # Authorization has its own generation so disarm can defeat an arm
-        # currently being validated without cancelling unrelated dry motion.
+        # currently being validated without cancelling unrelated laser-off motion.
         with self._stop_epoch_lock:
             self._authorization_epoch += 1
             self._clear_arm_authorization()
@@ -605,6 +656,7 @@ class MachineService:
         *,
         _internal_motion: bool = False,
         _expected_stop_epoch: int | None = None,
+        _terminal_error_consumed: bool = False,
     ) -> list[str]:
         if len(line) > 256:
             raise MachineError("Single controller command exceeds 256 characters")
@@ -635,6 +687,7 @@ class MachineService:
             return self._wait_for_ack(
                 acknowledgement_timeout,
                 expected_stop_epoch=_expected_stop_epoch,
+                terminal_error_consumed=_terminal_error_consumed,
             )
         except Exception as exc:
             if not isinstance(exc, _ControllerCommandRejected):
@@ -643,6 +696,8 @@ class MachineService:
                 # controller error/alarm is different: that terminal response
                 # has been consumed and callers may apply a documented fallback.
                 self._mark_controller_command_state_untrusted()
+            if isinstance(exc, _ControllerCommandRejected) and _terminal_error_consumed:
+                raise
             raise MachineError(f"Command {cleaned!r} failed: {exc}") from exc
 
     def _wait_for_ack(
@@ -650,6 +705,7 @@ class MachineService:
         timeout: float,
         *,
         expected_stop_epoch: int | None = None,
+        terminal_error_consumed: bool = False,
     ) -> list[str]:
         if self._job.running and self._job_stop.is_set():
             raise MachineError("Job stopped")
@@ -682,7 +738,9 @@ class MachineService:
             lower = response.lower()
             if lower == "ok" or lower.startswith("ok "):
                 return responses
-            if lower.startswith("error") and self._protocol == "grbl":
+            if lower.startswith("error") and (
+                self._protocol == "grbl" or terminal_error_consumed
+            ):
                 raise _ControllerCommandRejected(response)
             if lower.startswith("error") or lower.startswith("alarm"):
                 raise MachineError(response)
@@ -1296,6 +1354,8 @@ class MachineService:
             }
 
     def _validate_stream_line(self, line: str) -> tuple[list[Any], set[int], set[int]]:
+        if len(line) > 256:
+            raise SafetyError("Single streamed G-code line exceeds 256 characters")
         try:
             words = parse_words(line, require_full_match=True)
         except ValueError as exc:
@@ -1780,7 +1840,12 @@ class MachineService:
                 self._job_stop.clear()
                 self._job_thread = threading.Thread(
                     target=self._run_job,
-                    args=(lines, requires_laser_authorization, program.digest),
+                    args=(
+                        lines,
+                        requires_laser_authorization,
+                        requires_motion,
+                        program.digest,
+                    ),
                     name="gcode-streamer",
                     daemon=True,
                 )
@@ -1929,6 +1994,7 @@ class MachineService:
         self,
         lines: list[str],
         requires_laser_authorization: bool,
+        requires_motion: bool,
         program_digest: str,
     ) -> None:
         error: str | None = None
@@ -1964,6 +2030,19 @@ class MachineService:
             self._wait_for_ack(job_ack_timeout)
             if run_completion:
                 self._finish_powered_job_home_park_and_release()
+            elif self.settings.backend == "serial" and requires_motion:
+                # Controller acknowledgement proves planner acceptance, not
+                # physical completion. Do not publish a successful terminal
+                # job while accepted motion may still be running.
+                with self._lock:
+                    self._job.phase = "draining"
+                self._execute_running_job_command(
+                    "G4 P0.01" if self._protocol == "grbl" else "M400",
+                    timeout=max(
+                        _JOB_COMMAND_ACK_TIMEOUT_SECONDS,
+                        self.settings.read_timeout,
+                    ),
+                )
             if self._job_stop.is_set():
                 raise MachineError("Job stopped")
         except Exception as exc:
@@ -2103,12 +2182,20 @@ class MachineService:
     ) -> dict[str, Any] | None:
         """Return a completed exact-program receipt, never a prepared/running job."""
 
+        if (
+            type(program_digest) is not str
+            or _PROGRAM_DIGEST_PATTERN.fullmatch(program_digest) is None
+            or type(not_before) not in {int, float}
+            or not math.isfinite(float(not_before))
+        ):
+            return None
+        threshold = float(not_before)
         with self._lock:
             receipt = self._last_successful_job
             if (
                 receipt is None
                 or receipt.get("program_digest") != program_digest
-                or float(receipt.get("finished_at") or 0.0) < float(not_before)
+                or float(receipt.get("finished_at") or 0.0) < threshold
             ):
                 return None
             return dict(receipt)

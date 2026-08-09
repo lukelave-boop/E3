@@ -365,6 +365,25 @@ def test_model_load_rejects_malformed_or_nonfinite_values(
         LensModel.from_dict(payload)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("image_width", True),
+        ("image_height", 180.5),
+        ("images_used", "12"),
+    ],
+)
+def test_model_load_rejects_coerced_integer_metadata(
+    field: str,
+    value: object,
+) -> None:
+    payload = _model(320, 180).to_dict()
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=rf"{field} must be an integer"):
+        LensModel.from_dict(payload)
+
+
 def test_schema_two_rejects_a_model_id_that_does_not_match_parameters() -> None:
     payload = _model(320, 180).to_dict()
     payload["model_id"] = "0" * 64

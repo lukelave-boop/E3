@@ -15,6 +15,28 @@ TRACE_MODES = {"auto", "color", "contrast"}
 OUTPUT_MODES = {"rounded", "smoothed", "exact"}
 
 
+def _finite_option(value: Any, label: str) -> float:
+    if type(value) is bool:
+        raise ValueError(f"{label} must be a finite number")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a finite number") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{label} must be a finite number")
+    return result
+
+
+def _require_bgr_image(image: np.ndarray, label: str) -> None:
+    if (
+        not isinstance(image, np.ndarray)
+        or image.dtype != np.uint8
+        or image.ndim != 3
+        or image.shape[2] != 3
+    ):
+        raise ValueError(f"{label} must be a uint8 BGR image")
+
+
 @dataclass(slots=True)
 class TraceOptions:
     detection_mode: str = "auto"
@@ -39,35 +61,67 @@ class TraceOptions:
         self.detection_mode = str(self.detection_mode).lower()
         if self.detection_mode not in TRACE_MODES:
             raise ValueError(f"Unknown detection mode: {self.detection_mode}")
-        self.target_hue = (
-            None if self.target_hue is None else float(self.target_hue) % 180.0
-        )
+        self.target_hue = None if self.target_hue is None else _finite_option(
+            self.target_hue,
+            "target_hue",
+        ) % 180.0
         if self.target_bgr is not None:
-            if len(self.target_bgr) != 3:
+            if not isinstance(self.target_bgr, (list, tuple)) or len(self.target_bgr) != 3:
                 raise ValueError("target_bgr must contain exactly three channels")
             self.target_bgr = tuple(
-                max(0, min(255, int(value))) for value in self.target_bgr
+                max(0, min(255, int(_finite_option(value, "target_bgr channel"))))
+                for value in self.target_bgr
             )
-        self.hue_tolerance = max(1.0, min(90.0, float(self.hue_tolerance)))
-        self.min_saturation = max(0, min(255, int(self.min_saturation)))
-        self.min_area_mm2 = max(0.01, float(self.min_area_mm2))
-        self.max_area_mm2 = max(self.min_area_mm2, float(self.max_area_mm2))
-        self.min_width_mm = max(0.1, float(self.min_width_mm))
-        self.min_height_mm = max(0.1, float(self.min_height_mm))
-        self.confidence_threshold = max(
-            0.0, min(1.0, float(self.confidence_threshold))
+        self.hue_tolerance = max(
+            1.0,
+            min(90.0, _finite_option(self.hue_tolerance, "hue_tolerance")),
         )
-        self.regular_grid = bool(self.regular_grid)
-        self.infer_missing = bool(self.infer_missing)
-        self.normalize_grid = bool(self.normalize_grid)
-        self.snap_grid_cells = bool(self.snap_grid_cells)
+        self.min_saturation = max(
+            0,
+            min(255, int(_finite_option(self.min_saturation, "min_saturation"))),
+        )
+        self.min_area_mm2 = max(
+            0.01,
+            _finite_option(self.min_area_mm2, "min_area_mm2"),
+        )
+        self.max_area_mm2 = max(
+            self.min_area_mm2,
+            _finite_option(self.max_area_mm2, "max_area_mm2"),
+        )
+        self.min_width_mm = max(
+            0.1,
+            _finite_option(self.min_width_mm, "min_width_mm"),
+        )
+        self.min_height_mm = max(
+            0.1,
+            _finite_option(self.min_height_mm, "min_height_mm"),
+        )
+        self.confidence_threshold = max(
+            0.0,
+            min(
+                1.0,
+                _finite_option(self.confidence_threshold, "confidence_threshold"),
+            ),
+        )
+        for field_name in (
+            "regular_grid",
+            "infer_missing",
+            "normalize_grid",
+            "snap_grid_cells",
+        ):
+            if type(getattr(self, field_name)) is not bool:
+                raise ValueError(f"{field_name} must be a JSON boolean")
         self.output_mode = str(self.output_mode).lower()
         if self.output_mode not in OUTPUT_MODES:
             raise ValueError(f"Unknown output mode: {self.output_mode}")
         self.border_offset_mm = max(
-            -25.0, min(25.0, float(self.border_offset_mm))
+            -25.0,
+            min(25.0, _finite_option(self.border_offset_mm, "border_offset_mm")),
         )
-        self.smoothing_mm = max(0.0, min(10.0, float(self.smoothing_mm)))
+        self.smoothing_mm = max(
+            0.0,
+            min(10.0, _finite_option(self.smoothing_mm, "smoothing_mm")),
+        )
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> TraceOptions:
@@ -181,12 +235,17 @@ def sample_color(
     pixel_y: float,
     radius_px: int = 5,
 ) -> dict[str, Any]:
-    if image is None or image.size == 0:
+    if not isinstance(image, np.ndarray) or image.size == 0:
         raise ValueError("No image is available for color sampling")
+    _require_bgr_image(image, "Color-sampling image")
+    x_value = _finite_option(pixel_x, "pixel_x")
+    y_value = _finite_option(pixel_y, "pixel_y")
+    if type(radius_px) is not int or radius_px < 1:
+        raise ValueError("Color-sampling radius must be a positive integer")
     height, width = image.shape[:2]
-    x = int(round(float(pixel_x)))
-    y = int(round(float(pixel_y)))
-    radius = max(1, int(radius_px))
+    x = int(round(x_value))
+    y = int(round(y_value))
+    radius = radius_px
     x0, x1 = max(0, x - radius), min(width, x + radius + 1)
     y0, y1 = max(0, y - radius), min(height, y + radius + 1)
     if x0 >= x1 or y0 >= y1:
@@ -1245,12 +1304,23 @@ def detect_objects(
         if isinstance(options, TraceOptions)
         else TraceOptions.from_mapping(options)
     )
-    if image is None or image.size == 0:
+    if not isinstance(image, np.ndarray) or image.size == 0:
         raise ValueError("No rectified camera image is available")
-    pixels_per_mm = float(pixels_per_mm)
+    _require_bgr_image(image, "Rectified camera image")
+    pixels_per_mm = _finite_option(pixels_per_mm, "pixels_per_mm")
     if pixels_per_mm <= 0:
-        raise ValueError("pixels_per_mm must be positive")
+        raise ValueError("pixels_per_mm must be positive and finite")
     output_work_area = work_area if output_work_area is None else output_work_area
+    camera_values = (
+        work_area.x_min,
+        work_area.x_max,
+        work_area.y_min,
+        work_area.y_max,
+    )
+    if not all(math.isfinite(float(value)) for value in camera_values):
+        raise ValueError("camera work-area limits must be finite")
+    if work_area.width <= 0 or work_area.height <= 0:
+        raise ValueError("camera work area must have positive dimensions")
     output_values = (
         output_work_area.x_min,
         output_work_area.x_max,

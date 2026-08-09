@@ -1,7 +1,8 @@
 # Generated-job Preview
 
-The native desktop opens a dedicated graphical Preview after **Generate** or
-**Dry frame**. It answers two separate questions before execution:
+The native desktop opens a dedicated graphical Preview after **Generate** and
+after calibration-job preparation. It answers two separate questions before
+execution:
 
 1. What exact motion and controller power did generation produce?
 2. In what order and at approximately what time will each move occur?
@@ -74,7 +75,7 @@ preview, export, or run.
 The existing guarded run path remains authoritative. Preview cannot connect,
 home, enable motion, arm the laser, or submit commands, and it does not relax
 bounds checking, the conservative command allowlist, rapid-with-laser rejection,
-or stop/disarm behavior. It is not a safety-rated beam-location guarantee; dry
+or stop/disarm behavior. It is not a safety-rated beam-location guarantee; zero-power
 frame every real job and keep the operator present.
 
 Preview includes an operation table with independent display visibility,
@@ -98,7 +99,7 @@ resolutions therefore produce the same physical dither plan. Source
 top/mirror/rotation orientation matches the
 canvas. Raster lead-in, white gaps, and lead-out are shown as laser-off
 engraving-feed moves and are bounds checked. Image-only and mixed image/vector
-projects contribute their transformed bounds to dry framing. PNG/JPEG/BMP
+projects contribute their transformed bounds to zero-power framing. PNG/JPEG/BMP
 metadata and conservative decoded bytes are bounded before decode; TIFF is
 rejected consistently. The workspace decodes the exact bounded byte payload
 used to compute its SHA-256 identity, and divides its preview-memory budget

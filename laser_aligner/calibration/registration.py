@@ -57,6 +57,41 @@ _VALIDATION_RMS_LIMIT_MM = 0.5
 _VALIDATION_MAX_LIMIT_MM = 1.0
 
 
+def _ordered_measurements(
+    measurements: list[dict[str, Any]],
+    expected_count: int,
+    label: str,
+) -> list[dict[str, Any]]:
+    identifiers: list[int] = []
+    for item in measurements:
+        if not isinstance(item, dict) or type(item.get("id")) is not int:
+            raise CalibrationError(f"{label} mark identities must be JSON integers")
+        identifiers.append(item["id"])
+    if sorted(identifiers) != list(range(1, expected_count + 1)):
+        raise CalibrationError(f"{label} mark identities are incomplete or duplicated")
+    return sorted(measurements, key=lambda item: item["id"])
+
+
+def _confidence_arrays(
+    measurements: list[dict[str, Any]],
+    label: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    try:
+        scores = np.asarray(
+            [float(item.get("score", 1.0)) for item in measurements],
+            dtype=np.float64,
+        )
+        shifts = np.asarray(
+            [float(item.get("seed_shift_px", 0.0)) for item in measurements],
+            dtype=np.float64,
+        )
+    except (TypeError, ValueError) as exc:
+        raise CalibrationError(f"{label} confidence metadata must be numeric") from exc
+    if not np.isfinite(scores).all() or not np.isfinite(shifts).all() or np.any(shifts < 0):
+        raise CalibrationError(f"{label} confidence metadata must be finite and non-negative")
+    return scores, shifts
+
+
 @dataclass(frozen=True, slots=True)
 class RegistrationTarget:
     id: int
@@ -258,16 +293,34 @@ def analyze_dense_validation_refinement(
     """Solve a bounded mesh update from 16 reviewed cell-center residuals."""
     if len(measurements) != 16:
         raise CalibrationError("Validation refinement requires all 16 measurements")
+    ordered = _ordered_measurements(measurements, 16, "Validation refinement")
     x_nodes = np.asarray(x_nodes_mm, dtype=np.float64)
     y_nodes = np.asarray(y_nodes_mm, dtype=np.float64)
-    if len(x_nodes) != 5 or len(y_nodes) != 5:
+    if (
+        x_nodes.shape != (5,)
+        or y_nodes.shape != (5,)
+        or not np.isfinite(x_nodes).all()
+        or not np.isfinite(y_nodes).all()
+        or np.any(np.diff(x_nodes) <= 0)
+        or np.any(np.diff(y_nodes) <= 0)
+    ):
         raise CalibrationError("Validation refinement requires the active 5×5 mesh")
     matrix = np.zeros((16, 25), dtype=np.float64)
     residuals = np.zeros((16, 2), dtype=np.float64)
-    for row, item in enumerate(measurements):
-        x, y = float(item["machine_x"]), float(item["machine_y"])
-        ix = int(np.clip(np.searchsorted(x_nodes, x) - 1, 0, 3))
-        iy = int(np.clip(np.searchsorted(y_nodes, y) - 1, 0, 3))
+    for row, item in enumerate(ordered):
+        try:
+            x, y = float(item["machine_x"]), float(item["machine_y"])
+            observed_x = float(item["observed_x"])
+            observed_y = float(item["observed_y"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise CalibrationError("Validation-refinement measurements are invalid") from exc
+        if not all(math.isfinite(value) for value in (x, y, observed_x, observed_y)):
+            raise CalibrationError("Validation-refinement measurements must be finite")
+        iy, ix = divmod(row, 4)
+        if not (x_nodes[ix] < x < x_nodes[ix + 1] and y_nodes[iy] < y < y_nodes[iy + 1]):
+            raise CalibrationError(
+                "Validation-refinement marks must contain one correctly identified point per mesh cell"
+            )
         tx = (x - x_nodes[ix]) / (x_nodes[ix + 1] - x_nodes[ix])
         ty = (y - y_nodes[iy]) / (y_nodes[iy + 1] - y_nodes[iy])
         matrix[row, iy * 5 + ix] = (1 - tx) * (1 - ty)
@@ -275,11 +328,10 @@ def analyze_dense_validation_refinement(
         matrix[row, (iy + 1) * 5 + ix] = (1 - tx) * ty
         matrix[row, (iy + 1) * 5 + ix + 1] = tx * ty
         residuals[row] = (
-            float(item["observed_x"]) - x,
-            float(item["observed_y"]) - y,
+            observed_x - x,
+            observed_y - y,
         )
-    scores = np.asarray([float(item.get("score", 1.0)) for item in measurements])
-    shifts = np.asarray([float(item.get("seed_shift_px", 0.0)) for item in measurements])
+    scores, shifts = _confidence_arrays(ordered, "Validation refinement")
     confidence_ok = bool(
         np.median(scores) > 0
         and np.min(scores) >= np.median(scores) * 0.22
@@ -315,17 +367,38 @@ def analyze_dense_mesh_measurements(
     """Fit a regularized 5x5 field, allowing one visibly unreliable grid cell."""
     if len(measurements) != 25:
         raise CalibrationError("Dense local correction requires all 25 grid marks")
-    ordered = sorted(measurements, key=lambda item: int(item["id"]))
-    if [int(item["id"]) for item in ordered] != list(range(1, 26)):
-        raise CalibrationError("Dense local correction mark identities are incomplete")
-    commanded = np.asarray([[item["machine_x"], item["machine_y"]] for item in ordered], dtype=np.float64)
-    observed = np.asarray([[item["observed_x"], item["observed_y"]] for item in ordered], dtype=np.float64)
-    measured = commanded - observed
-    if not np.isfinite(measured).all():
+    ordered = _ordered_measurements(measurements, 25, "Dense local correction")
+    try:
+        commanded = np.asarray(
+            [[item["machine_x"], item["machine_y"]] for item in ordered],
+            dtype=np.float64,
+        )
+        observed = np.asarray(
+            [[item["observed_x"], item["observed_y"]] for item in ordered],
+            dtype=np.float64,
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CalibrationError("Dense-grid measurements are invalid") from exc
+    if not np.isfinite(commanded).all() or not np.isfinite(observed).all():
         raise CalibrationError("Dense-grid measurements must be finite")
+    x_nodes = np.unique(commanded[:, 0])
+    y_nodes = np.unique(commanded[:, 1])
+    expected_grid = np.asarray(
+        [[x, y] for y in y_nodes for x in x_nodes],
+        dtype=np.float64,
+    )
+    if (
+        x_nodes.shape != (5,)
+        or y_nodes.shape != (5,)
+        or expected_grid.shape != commanded.shape
+        or not np.allclose(commanded, expected_grid, atol=1e-9, rtol=0.0)
+    ):
+        raise CalibrationError(
+            "Dense local correction marks must form one correctly identified regular 5×5 grid"
+        )
+    measured = commanded - observed
     lengths = np.linalg.norm(measured, axis=1)
-    scores = np.asarray([float(item.get("score", 1.0)) for item in ordered])
-    shifts = np.asarray([float(item.get("seed_shift_px", 0.0)) for item in ordered])
+    scores, shifts = _confidence_arrays(ordered, "Dense-grid")
     median_score = float(np.median(scores))
     over_bound_ids = [int(item["id"]) for item, length in zip(ordered, lengths, strict=True) if float(length) > 3.0]
     low_confidence_ids = [
@@ -335,6 +408,8 @@ def analyze_dense_mesh_measurements(
     ]
     unreliable_ids = sorted(set(over_bound_ids) | set(low_confidence_ids))
     included = [index for index, item in enumerate(ordered) if int(item["id"]) not in unreliable_ids]
+    if not included:
+        raise CalibrationError("Dense-grid measurements contain no reliable marks")
 
     rows: list[np.ndarray] = [np.eye(25)[included]]
     for axis in (0, 1):
@@ -360,8 +435,6 @@ def analyze_dense_mesh_measurements(
     maximum = float(np.max(fit_error))
     fitted_grid = fitted.reshape(5, 5, 2)
     correction_maximum = float(np.max(np.linalg.norm(fitted_grid, axis=2)))
-    x_nodes = np.asarray(sorted(set(float(value) for value in commanded[:, 0])))
-    y_nodes = np.asarray(sorted(set(float(value) for value in commanded[:, 1])))
     dx = np.diff(fitted_grid, axis=1) / np.diff(x_nodes)[None, :, None]
     dy = np.diff(fitted_grid, axis=0) / np.diff(y_nodes)[:, None, None]
     gradient_ok = bool(float(np.max(np.abs(dx))) <= 0.08 and float(np.max(np.abs(dy))) <= 0.08)
@@ -537,12 +610,13 @@ def analyze_accuracy_measurements(
 ) -> dict[str, Any]:
     if len(measurements) != len(_VALIDATION_TARGET_FRACTIONS):
         raise CalibrationError("Accuracy validation requires all five holdout marks")
+    ordered = _ordered_measurements(measurements, 5, "Accuracy validation")
     commanded = np.asarray(
-        [[item["machine_x"], item["machine_y"]] for item in measurements],
+        [[item["machine_x"], item["machine_y"]] for item in ordered],
         dtype=np.float64,
     )
     observed = np.asarray(
-        [[item["observed_x"], item["observed_y"]] for item in measurements],
+        [[item["observed_x"], item["observed_y"]] for item in ordered],
         dtype=np.float64,
     )
     if not np.isfinite(commanded).all() or not np.isfinite(observed).all():
@@ -552,10 +626,12 @@ def analyze_accuracy_measurements(
     rms = float(np.sqrt(np.mean(np.square(lengths))))
     maximum = float(np.max(lengths))
     mean = residuals.mean(axis=0)
+    scores, shifts = _confidence_arrays(ordered, "Accuracy validation")
     seed_shift_ids = [
-        int(item["id"]) for item in measurements if float(item.get("seed_shift_px", 0.0)) > _MAX_REVIEWED_SEED_SHIFT_PX
+        int(item["id"])
+        for item, shift in zip(ordered, shifts, strict=True)
+        if float(shift) > _MAX_REVIEWED_SEED_SHIFT_PX
     ]
-    scores = np.asarray([float(item.get("score", 1.0)) for item in measurements], dtype=np.float64)
     low_score = bool(
         len(scores) and (float(np.median(scores)) <= 0 or float(np.min(scores)) < float(np.median(scores)) * 0.22)
     )
@@ -578,7 +654,7 @@ def analyze_accuracy_measurements(
         )
 
     output_measurements = []
-    for item, residual, error in zip(measurements, residuals, lengths, strict=True):
+    for item, residual, error in zip(ordered, residuals, lengths, strict=True):
         output = dict(item)
         output["error_x_mm"] = float(residual[0])
         output["error_y_mm"] = float(residual[1])
@@ -588,7 +664,7 @@ def analyze_accuracy_measurements(
         "classification": classification,
         "passed": passed,
         "reason": reason,
-        "point_count": len(measurements),
+        "point_count": len(ordered),
         "rms_error_mm": rms,
         "max_error_mm": maximum,
         "mean_error_x_mm": float(mean[0]),
@@ -693,7 +769,13 @@ def review_registration_measurements(
     measurements: list[dict[str, Any]],
     excluded_ids: list[int] | tuple[int, ...] | set[int],
 ) -> dict[str, Any]:
-    available_ids = {int(item["id"]) for item in measurements}
+    try:
+        identifiers = [int(item["id"]) for item in measurements]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CalibrationError("Fine-registration mark identities are invalid") from exc
+    if len(set(identifiers)) != len(identifiers):
+        raise CalibrationError("Fine-registration mark identities are duplicated")
+    available_ids = set(identifiers)
     excluded = {int(value) for value in excluded_ids}
     unknown = excluded - available_ids
     if unknown:
@@ -706,11 +788,13 @@ def review_registration_measurements(
     if len(included) < max(4, len(measurements) - _MAX_REVIEW_EXCLUSIONS):
         raise CalibrationError("At least six of eight registration marks must remain in use")
 
+    scores, shifts = _confidence_arrays(included, "Fine registration")
     analysis = analyze_registration_measurements(included)
     bad_seed_ids = [
-        int(item["id"]) for item in included if float(item.get("seed_shift_px", 0.0)) > _MAX_REVIEWED_SEED_SHIFT_PX
+        int(item["id"])
+        for item, shift in zip(included, shifts, strict=True)
+        if float(shift) > _MAX_REVIEWED_SEED_SHIFT_PX
     ]
-    scores = np.asarray([float(item.get("score", 1.0)) for item in included], dtype=np.float64)
     low_score = bool(
         len(scores) and (float(np.median(scores)) <= 0 or float(np.min(scores)) < float(np.median(scores)) * 0.22)
     )

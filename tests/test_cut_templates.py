@@ -8,6 +8,7 @@ from laser_aligner.templates import (
     TEMPLATE_EXTENSION,
     CutTemplate,
     TemplateCatalog,
+    TemplateFeature,
     TemplateFormatError,
     TemplateLibrary,
     instantiate_template,
@@ -224,6 +225,154 @@ def test_unsupported_schema_and_inconsistent_size_are_rejected():
     payload["size_mm"]["width"] += 1.0
     with pytest.raises(TemplateFormatError, match="does not match bounds"):
         CutTemplate.from_dict(payload)
+
+
+def test_template_numeric_fields_reject_json_strings_and_booleans():
+    payload = template_from_project(_project_with_two_labels(), "Strict numbers").to_dict()
+    payload["size_mm"]["width"] = str(payload["size_mm"]["width"])
+    with pytest.raises(TemplateFormatError, match="size_mm.width must be a finite number"):
+        CutTemplate.from_dict(payload)
+
+    payload = template_from_project(_project_with_two_labels(), "Strict features").to_dict()
+    payload["features"][0]["center_mm"][0] = "0.0"
+    with pytest.raises(TemplateFormatError, match=r"feature.center_mm\[0\]"):
+        CutTemplate.from_dict(payload)
+
+    payload = template_from_project(_project_with_two_labels(), "Strict booleans").to_dict()
+    payload["features"][0]["width_mm"] = True
+    with pytest.raises(TemplateFormatError, match="feature.width_mm must be a finite number"):
+        CutTemplate.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("id", 17, "Template ID must be a string"),
+        ("name", False, "Template name must be a string"),
+        ("description", ["description"], "Template description must be a string"),
+        ("created_at", 1234, "created_at must be a string"),
+        ("modified_at", {"timestamp": "now"}, "modified_at must be a string"),
+    ],
+)
+def test_template_persisted_string_fields_reject_coercible_values(
+    field,
+    value,
+    message,
+):
+    payload = template_from_project(_project_with_two_labels(), "Strict strings").to_dict()
+    payload[field] = value
+
+    with pytest.raises(TemplateFormatError, match=message):
+        CutTemplate.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("object_id", 17, "feature.object_id must be a string"),
+        ("kind", False, "feature.kind must be a string"),
+    ],
+)
+def test_template_feature_persisted_strings_reject_coercible_values(
+    field,
+    value,
+    message,
+):
+    payload = template_from_project(_project_with_two_labels(), "Strict features").to_dict()
+    payload["features"][0][field] = value
+
+    with pytest.raises(TemplateFormatError, match=message):
+        CutTemplate.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("bounds", [], "bounds must be a JSON object"),
+        ("objects", {}, "objects must be a JSON array"),
+        ("features", "features", "features must be a JSON array"),
+    ],
+)
+def test_template_persisted_containers_are_validated_before_iteration(
+    field,
+    value,
+    message,
+):
+    payload = template_from_project(_project_with_two_labels(), "Strict containers").to_dict()
+    payload[field] = value
+
+    with pytest.raises(TemplateFormatError, match=message):
+        CutTemplate.from_dict(payload)
+
+
+def test_template_feature_center_requires_a_json_array_when_persisted():
+    payload = template_from_project(_project_with_two_labels(), "Strict center").to_dict()
+    payload["features"][0]["center_mm"] = "0, 0"
+
+    with pytest.raises(TemplateFormatError, match="feature.center_mm must be a JSON array"):
+        CutTemplate.from_dict(payload)
+
+
+def test_direct_template_models_do_not_coerce_strings():
+    with pytest.raises(TemplateFormatError, match="feature.object_id must be a string"):
+        TemplateFeature(
+            center_mm=(0.0, 0.0),
+            width_mm=1.0,
+            height_mm=1.0,
+            object_id=123,
+        )
+
+    template = template_from_project(_project_with_two_labels(), "Direct model")
+    with pytest.raises(TemplateFormatError, match="Template name must be a string"):
+        CutTemplate(
+            id=template.id,
+            name=123,
+            description=template.description,
+            bounds=template.bounds,
+            objects=template.objects,
+            features=template.features,
+            trace_options=template.trace_options,
+            marker_id=template.marker_id,
+            created_at=template.created_at,
+            modified_at=template.modified_at,
+            metadata=template.metadata,
+        )
+
+
+@pytest.mark.parametrize("marker_id", [1.5, [1], {"id": 1}])
+def test_template_marker_id_rejects_values_outside_its_schema(marker_id):
+    payload = template_from_project(_project_with_two_labels(), "Strict marker").to_dict()
+    payload["marker_id"] = marker_id
+
+    with pytest.raises(
+        TemplateFormatError,
+        match="marker_id must be a string, integer, or null",
+    ):
+        CutTemplate.from_dict(payload)
+
+
+@pytest.mark.parametrize("malformed", ["duplicate", "nonfinite"])
+def test_template_library_rejects_ambiguous_or_nonstandard_json(
+    tmp_path,
+    malformed,
+):
+    template = template_from_project(_project_with_two_labels(), "Strict JSON")
+    text = json.dumps(template.to_dict())
+    if malformed == "duplicate":
+        text = text.replace(
+            '"schema_version": 1',
+            '"schema_version": 1, "schema_version": 1',
+            1,
+        )
+        message = "duplicate key"
+    else:
+        text = text.replace('"width":', '"width": NaN, "ignored_width":', 1)
+        message = "unsupported constant"
+    path = tmp_path / f"strict-json{TEMPLATE_EXTENSION}"
+    path.write_text(text, encoding="utf-8")
+
+    with pytest.raises(TemplateFormatError, match=message):
+        TemplateLibrary(tmp_path).load(path)
 
 
 def test_library_round_trip_listing_overwrite_lookup_and_delete(tmp_path):

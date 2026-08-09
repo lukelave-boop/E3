@@ -312,6 +312,98 @@ def test_rectification_rejects_explicit_zero_pixels_per_mm(
             mapper.rectify(np.zeros((21, 21, 3), dtype=np.uint8), 0)
 
 
+@pytest.mark.parametrize("pixels_per_mm", (float("nan"), True, "invalid", 10_000.0))
+def test_rectification_rejects_invalid_or_excessive_output_density(
+    tmp_path: Path,
+    pixels_per_mm: object,
+) -> None:
+    mapper = _solved_square_mapper(tmp_path)
+
+    with pytest.raises(CalibrationError, match="pixels_per_mm|pixel limit"):
+        mapper.rectification_map(pixels_per_mm)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "image",
+    (
+        np.empty((0, 0, 3), dtype=np.uint8),
+        np.zeros((240, 240, 3), dtype=np.float32),
+        np.zeros((240, 240, 2), dtype=np.uint8),
+    ),
+)
+def test_rectification_rejects_malformed_images(
+    tmp_path: Path,
+    image: np.ndarray,
+) -> None:
+    mapper = _solved_square_mapper(tmp_path)
+
+    with pytest.raises(CalibrationError, match="uint8 grayscale or BGR"):
+        mapper.rectify(image)
+
+
+@pytest.mark.parametrize(
+    ("operation", "first", "second"),
+    (
+        ("image", float("nan"), 1.0),
+        ("image", True, 1.0),
+        ("machine", 1.0, float("inf")),
+    ),
+)
+def test_bed_mapping_rejects_nonfinite_coordinates(
+    tmp_path: Path,
+    operation: str,
+    first: object,
+    second: object,
+) -> None:
+    mapper = _solved_square_mapper(tmp_path)
+
+    with pytest.raises(CalibrationError, match="must be finite"):
+        if operation == "image":
+            mapper.image_to_mm(first, second)  # type: ignore[arg-type]
+        else:
+            mapper.mm_to_image(first, second)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("dimension", (0, True, 240.5))
+def test_bed_solve_rejects_invalid_image_dimensions(
+    tmp_path: Path,
+    dimension: object,
+) -> None:
+    mapper = BedMapper(tmp_path, BedCalibrationSettings(), WorkArea())
+    for point in (
+        BedPoint(0, 0, 0, 0),
+        BedPoint(220, 0, 220, 0),
+        BedPoint(220, 220, 220, 220),
+        BedPoint(0, 220, 0, 220),
+    ):
+        mapper.add_point(point)
+
+    with pytest.raises(CalibrationError, match="positive integers"):
+        mapper.solve(dimension, 240)  # type: ignore[arg-type]
+
+
+def test_registration_write_failure_does_not_publish_unpersisted_map(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mapper = _solved_square_mapper(tmp_path)
+    original = mapper.calibration
+    original_bytes = mapper.model_path.read_bytes()
+    from laser_aligner.calibration import bed as bed_module
+
+    def fail_write(path, payload):
+        del path, payload
+        raise OSError("simulated model write failure")
+
+    monkeypatch.setattr(bed_module, "atomic_write_json", fail_write)
+
+    with pytest.raises(OSError, match="simulated model write failure"):
+        mapper.apply_registration_translation(0.5, 0.25)
+
+    assert mapper.calibration is original
+    assert mapper.model_path.read_bytes() == original_bytes
+
+
 def test_residual_mesh_round_trip_persists_and_resets(tmp_path: Path) -> None:
     area = WorkArea(x_min=0, x_max=200, y_min=0, y_max=200)
     mapper = BedMapper(tmp_path, BedCalibrationSettings(), area)

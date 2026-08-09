@@ -15,6 +15,6 @@ def require_qt() -> tuple[Any, Any, Any]:
     if PYSIDE6_IMPORT_ERROR is not None:
         raise RuntimeError(
             "The native desktop interface requires PySide6. "
-            "Install it with: .venv/bin/pip install -e '.[desktop]'"
+            'Install it with: python -m pip install -e ".[desktop]"'
         ) from PYSIDE6_IMPORT_ERROR
     return QtCore, QtGui, QtWidgets

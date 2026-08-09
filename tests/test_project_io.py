@@ -1,7 +1,15 @@
 
+import json
+
+import pytest
+
+import laser_aligner.project.io as project_io
 from laser_aligner.project import (
+    OperationLayer,
     ProjectDocument,
+    ProjectFormatError,
     SceneObject,
+    Transform,
     autosave_path,
     load_project,
     save_project,
@@ -17,6 +25,234 @@ def test_atomic_save_and_load(tmp_path):
 
     assert path.suffix == ".e3laser"
     assert restored.to_dict() == document.to_dict()
+
+
+@pytest.mark.parametrize("field", ["passes", "priority"])
+@pytest.mark.parametrize("value", [True, 1.5, "1"])
+def test_operation_layer_rejects_coerced_integer_fields(field, value):
+    payload = OperationLayer().to_dict()
+    payload[field] = value
+
+    with pytest.raises(ProjectFormatError):
+        OperationLayer.from_dict(payload)
+
+
+@pytest.mark.parametrize("value", [True, 1.5, "1"])
+def test_project_document_rejects_coerced_revision(value):
+    payload = ProjectDocument.new().to_dict()
+    payload["revision"] = value
+
+    with pytest.raises(ProjectFormatError, match="revision must be an integer"):
+        ProjectDocument.from_dict(payload)
+
+
+def test_project_document_rejects_negative_revision():
+    payload = ProjectDocument.new().to_dict()
+    payload["revision"] = -1
+
+    with pytest.raises(ProjectFormatError, match="cannot be negative"):
+        ProjectDocument.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("section", "field", "value"),
+    [
+        ("project", "id", True),
+        ("project", "name", {}),
+        ("project", "created_at", 1),
+        ("project", "modified_at", []),
+        ("layer", "id", True),
+        ("layer", "name", {}),
+        ("layer", "color", 1),
+        ("layer", "mode", []),
+        ("object", "id", True),
+        ("object", "name", {}),
+        ("object", "kind", 1),
+        ("object", "layer_id", []),
+        ("object", "group_id", False),
+    ],
+)
+def test_project_document_rejects_coerced_persisted_strings(
+    section,
+    field,
+    value,
+):
+    document = ProjectDocument.new()
+    document.add_object(SceneObject.rectangle(document.active_layer_id))
+    payload = document.to_dict()
+    target = payload
+    if section == "layer":
+        target = payload["layers"][0]
+    elif section == "object":
+        target = payload["objects"][0]
+    target[field] = value
+
+    with pytest.raises(ProjectFormatError, match="JSON string"):
+        ProjectDocument.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("kind", "geometry"),
+    [
+        ("text", {"text": {}, "font_family": "Sans Serif"}),
+        ("text", {"text": "Label", "font_family": []}),
+        ("image", {"asset": {}}),
+    ],
+)
+def test_project_document_rejects_coerced_geometry_strings(kind, geometry):
+    document = ProjectDocument.new()
+    document.add_object(SceneObject.rectangle(document.active_layer_id))
+    payload = document.to_dict()
+    payload["objects"][0]["kind"] = kind
+    payload["objects"][0]["geometry"] = geometry
+
+    with pytest.raises(ProjectFormatError, match="JSON string"):
+        ProjectDocument.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("factory", "field"),
+    [
+        (OperationLayer, "air_assist"),
+        (OperationLayer, "output_enabled"),
+        (OperationLayer, "visible"),
+        (Transform, "mirror_x"),
+        (Transform, "mirror_y"),
+    ],
+)
+@pytest.mark.parametrize("value", [0, 1, "false"])
+def test_project_models_reject_coerced_boolean_fields(factory, field, value):
+    with pytest.raises(ProjectFormatError, match="JSON boolean"):
+        factory(**{field: value})
+
+
+@pytest.mark.parametrize(
+    ("section", "field"),
+    [
+        ("work_area", "x_min"),
+        ("transform", "x_mm"),
+        ("transform", "width_mm"),
+        ("layer", "speed_mm_min"),
+        ("layer", "power_percent"),
+        ("layer", "line_interval_mm"),
+    ],
+)
+@pytest.mark.parametrize("value", [True, "1.0"])
+def test_project_document_rejects_coerced_numeric_fields(section, field, value):
+    document = ProjectDocument.new()
+    document.add_object(SceneObject.rectangle(document.active_layer_id))
+    payload = document.to_dict()
+    if section == "work_area":
+        payload["work_area"][field] = value
+    elif section == "transform":
+        payload["objects"][0]["transform"][field] = value
+    else:
+        payload["layers"][0][field] = value
+
+    with pytest.raises(ProjectFormatError, match="finite number"):
+        ProjectDocument.from_dict(payload)
+
+
+def test_save_revalidates_mutated_document_before_replacing_destination(tmp_path):
+    document = ProjectDocument.new("Mutated")
+    destination = save_project(document, tmp_path / "mutated.e3laser")
+    original = destination.read_bytes()
+    document.layers[0].speed_mm_min = float("nan")
+
+    with pytest.raises(ProjectFormatError, match="finite number"):
+        save_project(document, destination)
+
+    assert destination.read_bytes() == original
+    assert not destination.with_suffix(".e3laser.bak").exists()
+
+
+def test_save_rejects_nonfinite_metadata_without_publishing_file(tmp_path):
+    document = ProjectDocument.new("Invalid metadata")
+    document.metadata["score"] = float("nan")
+
+    with pytest.raises(ProjectFormatError, match="non-JSON data"):
+        save_project(document, tmp_path / "invalid-metadata.e3laser")
+
+    assert not (tmp_path / "invalid-metadata.e3laser").exists()
+
+
+def test_load_rejects_oversized_project_before_parsing(tmp_path):
+    path = tmp_path / "oversized.e3laser"
+    with path.open("wb") as handle:
+        handle.seek(project_io.MAX_PROJECT_BYTES)
+        handle.write(b"x")
+
+    with pytest.raises(ProjectFormatError, match="file limit"):
+        load_project(path)
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_load_rejects_nonstandard_json_constants(tmp_path, constant):
+    path = tmp_path / "constant.e3laser"
+    path.write_text(
+        '{"schema_version":1,"metadata":{"value":' + constant + "}}",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProjectFormatError, match="unsupported constant"):
+        load_project(path)
+
+
+def test_load_rejects_duplicate_json_keys(tmp_path):
+    path = tmp_path / "duplicate.e3laser"
+    path.write_text('{"schema_version":1,"schema_version":1}', encoding="utf-8")
+
+    with pytest.raises(ProjectFormatError, match="duplicate key 'schema_version'"):
+        load_project(path)
+
+
+def test_load_wraps_invalid_utf8_as_project_format_error(tmp_path):
+    path = tmp_path / "invalid-utf8.e3laser"
+    path.write_bytes(b"\xff\xfe")
+
+    with pytest.raises(ProjectFormatError, match="Invalid JSON"):
+        load_project(path)
+
+
+def test_load_wraps_excessive_json_nesting_as_project_format_error(tmp_path):
+    path = tmp_path / "deep.e3laser"
+    payload = json.dumps(ProjectDocument.new().to_dict())
+    payload = payload.replace(
+        '"metadata": {}',
+        '"metadata": {"deep": ' + "[" * 2_000 + "0" + "]" * 2_000 + "}",
+    )
+    path.write_text(payload, encoding="utf-8")
+
+    with pytest.raises(ProjectFormatError, match="nested too deeply"):
+        load_project(path)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("work_area", [], "project.work_area must be a JSON object"),
+        ("layers", {}, "project.layers must be a JSON array"),
+        ("objects", {}, "project.objects must be a JSON array"),
+        ("metadata", [], "project.metadata must be a JSON object"),
+    ],
+)
+def test_project_document_rejects_malformed_top_level_sections(field, value, message):
+    payload = ProjectDocument.new().to_dict()
+    payload[field] = value
+
+    with pytest.raises(ProjectFormatError, match=message):
+        ProjectDocument.from_dict(payload)
+
+
+@pytest.mark.parametrize("field", ["transform", "geometry", "metadata"])
+def test_project_document_rejects_non_object_scene_sections(field):
+    document = ProjectDocument.new()
+    document.add_object(SceneObject.rectangle(document.active_layer_id))
+    payload = document.to_dict()
+    payload["objects"][0][field] = []
+
+    with pytest.raises(ProjectFormatError, match="must be a JSON object"):
+        ProjectDocument.from_dict(payload)
 
 
 def test_save_creates_backup(tmp_path):

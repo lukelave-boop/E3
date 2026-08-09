@@ -32,7 +32,7 @@ unlisted calibration step or interrupt a tab transition described here.
 1. Mount the camera permanently and independently of the bed and gantry.
 2. Confirm the configured work area and camera pose match the physical rig.
 3. Connect the camera. Connect the controller only when a step explicitly
-   requires Home, park, dry motion, or a guarded marking job.
+   requires Home, park, commanded motion, or a guarded marking job.
 4. Open **Tools > Machine Setup**.
 
 ## 1. Camera

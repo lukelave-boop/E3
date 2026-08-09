@@ -4,6 +4,7 @@ import math
 from dataclasses import dataclass
 
 import numpy as np
+import pytest
 
 from laser_aligner.project import SceneObject
 from laser_aligner.templates import TemplateFeature
@@ -316,6 +317,44 @@ def test_empty_detections_return_non_viable_alignment():
     assert result.confidence == 0.0
     assert result.rms_error_mm is None
     assert any("No detections" in warning for warning in result.warnings)
+
+
+def test_nonfinite_detection_features_are_not_allowed_into_alignment_math():
+    template = _Template("warning-3x2", "Warning labels 3x2", _grid())
+    malformed = [
+        {
+            "center_mm": [float("nan"), 10.0],
+            "width_mm": 20.0,
+            "height_mm": 10.0,
+        },
+        {
+            "center_mm": [10.0, 10.0],
+            "width_mm": 20.0,
+            "height_mm": 10.0,
+            "confidence": float("nan"),
+        },
+    ]
+
+    result = align_template(template, malformed)
+
+    assert result.matched_count == 0
+    assert result.detection_count == 0
+    assert any("No detections" in warning for warning in result.warnings)
+
+
+def test_nonfinite_template_alignment_tolerance_is_rejected():
+    template = _Template(
+        "warning-3x2",
+        "Warning labels 3x2",
+        _grid(),
+        alignment_tolerance_mm=float("nan"),
+    )
+
+    with pytest.raises(ValueError, match="tolerance must be finite"):
+        align_template(
+            template,
+            _detections(template.features, rotation_deg=0.0, translation=(0.0, 0.0)),
+        )
 
 
 def test_ranker_surfaces_indistinguishable_templates_as_ambiguous():

@@ -436,6 +436,152 @@ def test_invalid_json_is_rejected_without_route_side_effects(http_app) -> None:
     assert context.mutations == []
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        '{"scene":"bed","scene":"checkerboard"}',
+        '{"scene":NaN}',
+        '{"scene":Infinity}',
+        '{"scene":-Infinity}',
+    ],
+)
+def test_ambiguous_or_nonstandard_json_is_rejected_without_side_effects(
+    http_app,
+    body: str,
+) -> None:
+    server, context = http_app
+    token = _token_from_index(server)
+
+    status, _headers, _payload = _request(
+        server,
+        "POST",
+        "/api/camera/synthetic-scene",
+        body=body,
+        headers=_authorized_headers(server, token),
+    )
+
+    assert status == 400
+    assert context.mutations == []
+
+
+@pytest.mark.parametrize(
+    "extra_headers",
+    [
+        [("Content-Length", "0"), ("Content-Length", "0")],
+        [("Content-Length", "+0")],
+        [("Content-Length", "0, 0")],
+        [("Transfer-Encoding", "chunked")],
+    ],
+)
+def test_ambiguous_or_unsupported_request_framing_is_rejected(
+    http_app,
+    extra_headers: list[tuple[str, str]],
+) -> None:
+    server, context = http_app
+    token = _token_from_index(server)
+    authority = _authority(server)
+    status, _headers, _payload = _request_with_header_lines(
+        server,
+        "POST",
+        "/api/camera/synthetic-scene",
+        [
+            ("Host", authority),
+            ("Origin", f"http://{authority}"),
+            ("Content-Type", "application/json"),
+            ("X-E3-Request-Token", token),
+            *extra_headers,
+        ],
+    )
+
+    assert status == 400
+    assert context.mutations == []
+
+
+@pytest.mark.parametrize(
+    "filename",
+    [
+        "notes.txt",
+        ".hidden.gcode",
+        'quoted%22name.gcode',
+        "backslash%5Cname.gcode",
+        f"{'a' * 190}.gcode",
+    ],
+)
+def test_generated_download_rejects_non_application_filenames(
+    http_app,
+    filename: str,
+) -> None:
+    server, _context = http_app
+
+    status, headers, payload = _request(
+        server,
+        "GET",
+        f"/api/generated/{filename}",
+    )
+
+    assert status == 403
+    assert "content-disposition" not in headers
+    assert b"private" not in payload
+
+
+def test_generated_download_serves_a_safe_gcode_filename(http_app) -> None:
+    server, context = http_app
+    generated = context.settings.app.data_dir / "generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    path = generated / "design-20260809-010203-00000001-abcdef.gcode"
+    path.write_text("G21\nG90\nM5\n", encoding="utf-8")
+
+    status, headers, payload = _request(
+        server,
+        "GET",
+        f"/api/generated/{path.name}",
+    )
+
+    assert status == 200
+    assert headers["content-disposition"] == f'attachment; filename="{path.name}"'
+    assert payload == path.read_bytes()
+
+
+def test_generated_download_does_not_follow_symlinks(http_app, tmp_path: Path) -> None:
+    server, context = http_app
+    generated = context.settings.app.data_dir / "generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    private = tmp_path / "private.txt"
+    private.write_bytes(b"private controller data")
+    link = generated / "published.gcode"
+    try:
+        link.symlink_to(private)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"Symlink creation is unavailable: {exc}")
+
+    status, headers, payload = _request(
+        server,
+        "GET",
+        f"/api/generated/{link.name}",
+    )
+
+    assert status == 403
+    assert "content-disposition" not in headers
+    assert private.read_bytes() not in payload
+
+
+def test_generated_download_rejects_non_regular_targets(http_app) -> None:
+    server, context = http_app
+    generated = context.settings.app.data_dir / "generated"
+    generated.mkdir(parents=True, exist_ok=True)
+    target = generated / "directory.gcode"
+    target.mkdir()
+
+    status, headers, _payload = _request(
+        server,
+        "GET",
+        f"/api/generated/{target.name}",
+    )
+
+    assert status == 403
+    assert "content-disposition" not in headers
+
+
 def test_arm_requires_gcode_before_preflight_or_arming(http_app) -> None:
     server, context = http_app
     token = _token_from_index(server)

@@ -130,7 +130,7 @@ asked to recover, and a loaded image is only as physically meaningful as its
 prior correction. Neither is evidence that a real lens model, bed homography,
 camera pose, material height, parallax, controller, motion system, or powered
 laser is correct. Physical validation still requires a recorded real-camera
-and no-laser dry-frame procedure.
+and zero-power motion-review procedure.
 
 ## Template format
 
@@ -213,8 +213,8 @@ valid bed mapping. Manual placement does not prove that the camera calibration
 or physical sheet position is correct.
 
 Any project edit after toolpath generation invalidates the generated G-code and
-preview. Generate a new dry frame or job after applying or adjusting template
-objects; stale generated output is refused before machine access.
+preview. Generate a new job after applying or adjusting template objects;
+stale generated output is refused before machine access.
 
 ## Verification boundary
 
@@ -243,6 +243,7 @@ identification is not implemented. Real-camera validation must record the
 template, calibration, material height, detections, residuals, manual
 correction, and repeatability before any accuracy claim is made.
 
-Always inspect the overlay and run a no-laser dry frame before a real job. The
-template matcher and manual correction controls are positioning aids, not
-safety-rated controls.
+Always inspect the overlay and exact generated Preview before a real job. To
+review motion without output, set the relevant layer power to 0% before
+generation. The template matcher and manual correction controls are
+positioning aids, not safety-rated controls.

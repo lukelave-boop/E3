@@ -4,7 +4,10 @@ import ipaddress
 import json
 import logging
 import mimetypes
+import os
+import re
 import secrets
+import stat
 import traceback
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -14,10 +17,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from .app import AppContext
 from .errors import LaserAlignerError
+from .storage import strict_json_loads
 
 LOGGER = logging.getLogger(__name__)
 _REQUEST_TOKEN_HEADER = "X-E3-Request-Token"
 _REQUEST_TOKEN_PLACEHOLDER = "__E3_REQUEST_TOKEN__"
+_GENERATED_FILENAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.gcode")
 
 
 def _json_boolean(payload: dict[str, Any], key: str, default: bool) -> bool:
@@ -116,19 +121,27 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         self._send_json(payload, status=status)
 
     def _read_json(self) -> dict[str, Any]:
-        raw_length = self.headers.get("Content-Length")
-        if raw_length is None:
+        if self.headers.get_all("Transfer-Encoding", failobj=[]):
+            self.close_connection = True
+            raise ValueError("Transfer-Encoding is not supported")
+        lengths = self.headers.get_all("Content-Length", failobj=[])
+        if len(lengths) > 1:
+            self.close_connection = True
+            raise ValueError("Multiple Content-Length headers are not allowed")
+        if not lengths:
             return {}
-        try:
-            length = int(raw_length)
-        except ValueError as exc:
-            raise ValueError("Invalid Content-Length") from exc
+        raw_length = lengths[0].strip()
+        if re.fullmatch(r"[0-9]+", raw_length) is None:
+            self.close_connection = True
+            raise ValueError("Invalid Content-Length")
+        length = int(raw_length)
         if length < 0 or length > self.context.settings.app.max_request_bytes:
+            self.close_connection = True
             raise ValueError("Request body exceeds configured limit")
         body = self.rfile.read(length)
         if not body:
             return {}
-        payload = json.loads(body.decode("utf-8"))
+        payload = strict_json_loads(body.decode("utf-8"))
         if not isinstance(payload, dict):
             raise ValueError("JSON request body must be an object")
         return payload
@@ -396,15 +409,35 @@ class AppRequestHandler(BaseHTTPRequestHandler):
         self._send_bytes(candidate.read_bytes(), content_type, cache=relative != "index.html")
 
     def _serve_generated(self, filename: str) -> None:
-        if Path(filename).name != filename:
+        if _GENERATED_FILENAME_RE.fullmatch(filename) is None:
             self._error(HTTPStatus.FORBIDDEN, "Invalid generated filename")
             return
-        path = self.context.settings.app.data_dir / "generated" / filename
-        if not path.is_file():
+        root = (self.context.settings.app.data_dir / "generated").resolve()
+        path = root / filename
+        if path.is_symlink():
+            self._error(HTTPStatus.FORBIDDEN, "Invalid generated file target")
+            return
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NONBLOCK", 0)
+        flags |= getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except FileNotFoundError:
             self._error(HTTPStatus.NOT_FOUND, "Generated file not found")
             return
+        except OSError:
+            self._error(HTTPStatus.FORBIDDEN, "Invalid generated file target")
+            return
+        try:
+            target = os.fstat(descriptor)
+            if not stat.S_ISREG(target.st_mode):
+                self._error(HTTPStatus.FORBIDDEN, "Invalid generated file target")
+                return
+            with os.fdopen(descriptor, "rb", closefd=False) as handle:
+                data = handle.read()
+        finally:
+            os.close(descriptor)
         self._send_bytes(
-            path.read_bytes(),
+            data,
             "text/plain; charset=utf-8",
             disposition=f'attachment; filename="{filename}"',
         )

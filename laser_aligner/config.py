@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import json
 import math
 import os
 from collections.abc import Mapping
@@ -9,7 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .storage import default_user_data_dir
+from .storage import default_user_data_dir, strict_json_loads
 
 
 class ConfigError(ValueError):
@@ -53,6 +52,26 @@ def _deep_merge(base: dict[str, Any], override: Mapping[str, Any]) -> dict[str, 
         else:
             result[key] = copy.deepcopy(value)
     return result
+
+
+def _validate_override_keys(
+    override: Mapping[str, Any],
+    schema: Mapping[str, Any],
+    path: tuple[str, ...] = (),
+) -> None:
+    """Reject misspelled settings while preserving documented extension maps."""
+
+    if path == ("camera", "controls"):
+        return
+    for key, value in override.items():
+        label = ".".join((*path, str(key)))
+        if key not in schema:
+            raise ConfigError(f"Unknown configuration key: {label}")
+        expected = schema[key]
+        if isinstance(expected, Mapping):
+            if not isinstance(value, Mapping):
+                raise ConfigError(f"{label} must be a JSON object")
+            _validate_override_keys(value, expected, (*path, str(key)))
 
 
 def _path(value: str | Path, root: Path) -> Path:
@@ -566,7 +585,10 @@ def _validate(raw: Mapping[str, Any]) -> None:
     ):
         _require_boolean(raw[section][key], f"{section}.{key}")
     validate_http_port(raw["app"]["port"])
-    if int(raw["app"]["max_request_bytes"]) <= 0:
+    if _require_integer(
+        raw["app"]["max_request_bytes"],
+        "app.max_request_bytes",
+    ) <= 0:
         raise ConfigError("app.max_request_bytes must be positive")
     if int(raw["camera"]["width"]) <= 0 or int(raw["camera"]["height"]) <= 0:
         raise ConfigError("camera width and height must be positive")
@@ -606,8 +628,14 @@ def _validate(raw: Mapping[str, Any]) -> None:
             "sharpest_inlier_frame, or stable_clarity_consensus"
         )
     consensus_frames = int(precision["consensus_frames"])
-    if not 1 <= consensus_frames <= sample_frames:
-        raise ConfigError("camera.precision_capture.consensus_frames must be between 1 and sample_frames")
+    if consensus_frames < 1 or (
+        precision["coordinate_strategy"] == "stable_clarity_consensus"
+        and consensus_frames > sample_frames
+    ):
+        raise ConfigError(
+            "camera.precision_capture.consensus_frames must be positive and cannot "
+            "exceed sample_frames for stable_clarity_consensus"
+        )
     if float(area["x_max"]) <= float(area["x_min"]):
         raise ConfigError("machine.work_area.x_max must be greater than x_min")
     if float(area["y_max"]) <= float(area["y_min"]):
@@ -695,15 +723,23 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
     source_path = Path(config_path or os.environ.get("LASER_ALIGNER_CONFIG", project_root / "config" / "default.json"))
     source_path = source_path.expanduser().resolve()
 
-    override: dict[str, Any] = {}
+    override: Mapping[str, Any] = {}
     if source_path.exists():
         try:
-            override = json.loads(source_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
+            loaded: Any = strict_json_loads(source_path.read_text(encoding="utf-8"))
+        except UnicodeError as exc:
+            raise ConfigError(f"Configuration file is not valid UTF-8: {source_path}") from exc
+        except (ValueError, RecursionError) as exc:
             raise ConfigError(f"Invalid JSON in {source_path}: {exc}") from exc
+        except OSError as exc:
+            raise ConfigError(f"Could not read configuration file {source_path}: {exc}") from exc
+        if not isinstance(loaded, Mapping):
+            raise ConfigError("Configuration root must be a JSON object")
+        override = loaded
     elif config_path is not None or os.environ.get("LASER_ALIGNER_CONFIG"):
         raise ConfigError(f"Configuration file does not exist: {source_path}")
 
+    _validate_override_keys(override, DEFAULT_CONFIG)
     raw = _deep_merge(DEFAULT_CONFIG, override)
     if not source_path.exists():
         raw["app"]["data_dir"] = str(_default_user_data_dir())
@@ -731,7 +767,10 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
                 raw["app"]["allow_remote_control"],
                 "app.allow_remote_control",
             ),
-            max_request_bytes=int(raw["app"]["max_request_bytes"]),
+            max_request_bytes=_require_integer(
+                raw["app"]["max_request_bytes"],
+                "app.max_request_bytes",
+            ),
         ),
         camera=CameraSettings(
             device=str(raw["camera"]["device"]),

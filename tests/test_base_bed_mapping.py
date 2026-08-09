@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
+from laser_aligner import app as app_module
 from laser_aligner.app import AppContext
 from laser_aligner.calibration.bed import BedPoint
 from laser_aligner.calibration.registration import (
@@ -124,6 +125,53 @@ def test_base_job_requires_no_existing_map_and_uses_guarded_dry_and_powered_prog
     assert powered.program.bounds_mm == pytest.approx((38, 38, 182, 182))
 
 
+def test_rapid_base_job_prepares_keep_distinct_artifacts_and_latest_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    names = iter(
+        (
+            "base-bed-mapping-forced-collision.gcode",
+            "base-bed-mapping-forced-collision.gcode",
+            "base-bed-mapping-after-collision.gcode",
+        )
+    )
+    monkeypatch.setattr(
+        app_module,
+        "_unique_artifact_filename",
+        lambda _stem, _suffix: next(names),
+    )
+    context = _context(tmp_path)
+
+    first = context.prepare_base_bed_mapping_job(
+        powered=True,
+        power_percent=10,
+        mark_size_mm=4,
+        speed_mm_min=1200,
+    )
+    second = context.prepare_base_bed_mapping_job(
+        powered=True,
+        power_percent=20,
+        mark_size_mm=5,
+        speed_mm_min=900,
+    )
+
+    assert first.filename == "base-bed-mapping-forced-collision.gcode"
+    assert second.filename == "base-bed-mapping-after-collision.gcode"
+    generated = context.settings.app.data_dir / "generated"
+    assert (generated / first.filename).read_text(encoding="utf-8") == first.program.text
+    assert (generated / second.filename).read_text(encoding="utf-8") == second.program.text
+    session = json.loads(context.base_bed_mapping_path.read_text(encoding="utf-8"))
+    assert session["filename"] == second.filename
+    assert session["power_percent"] == pytest.approx(20.0)
+    assert session["mark_size_mm"] == pytest.approx(5.0)
+    assert session["speed_mm_min"] == pytest.approx(900.0)
+    first_digest = context.machine.preflight_program(first.program.text).digest
+    second_digest = context.machine.preflight_program(second.program.text).digest
+    assert first_digest != second_digest
+    assert session["program_digest"] == second_digest
+
+
 def test_base_detection_rejects_dry_and_stale_sessions(tmp_path: Path) -> None:
     context = _context(tmp_path)
     context.prepare_base_bed_mapping_job(
@@ -134,7 +182,7 @@ def test_base_detection_rejects_dry_and_stale_sessions(tmp_path: Path) -> None:
     )
     image = _keyed_grid_image()
 
-    with pytest.raises(CalibrationError, match="dry motion only"):
+    with pytest.raises(CalibrationError, match="laser power 0%"):
         context.analyze_base_bed_mapping_image(image)
 
     context.prepare_base_bed_mapping_job(

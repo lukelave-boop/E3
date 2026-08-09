@@ -150,7 +150,7 @@ rejected consistently because its Qt decode plugin is not portable.
 - Per-layer speed, power and pass count
 - Nearest-path travel ordering and time/distance estimates, with a recorded
   source-order fallback above 512 vector paths
-- Dry framing generation
+- Zero-power framing generation
 - Immutable preview plans parsed from the exact finalized G-code stream, with
   layer/pass/source metadata stored only in controller-ignored comments
 - Prepared-job status reports maximum planned power independently from live
@@ -193,7 +193,8 @@ STOP are not presented.
 
 Project generation follows the same responsiveness contract. The desktop task
 pool clones the project while authoring is temporarily held, then performs
-toolpath, dry-frame, or Start Here planning against the clone or immutable plan.
+toolpath, zero-power framing, or Start Here planning against the clone or
+immutable plan.
 Distinct worker/render owners plus source-document and revision checks reject
 late success and failure results without mutating newer preparation. Large raw
 G-code documents, workspace paths, dedicated Preview paths, and backward

@@ -1,15 +1,35 @@
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import cv2
 import numpy as np
 
 
+def _image_validation_error(image: object) -> str | None:
+    if image is None or not isinstance(image, np.ndarray) or image.size == 0:
+        return "Empty image"
+    if (
+        image.dtype != np.uint8
+        or image.ndim not in (2, 3)
+        or (image.ndim == 3 and image.shape[2] != 3)
+    ):
+        return "Image must be a non-empty uint8 grayscale or BGR array"
+    return None
+
+
 def detect_aruco_markers(
     image: np.ndarray,
     dictionary_name: str = "DICT_4X4_50",
 ) -> list[dict[str, Any]]:
+    image_error = _image_validation_error(image)
+    if image_error == "Empty image":
+        return []
+    if image_error is not None:
+        raise ValueError(image_error)
+    if not isinstance(dictionary_name, str):
+        raise ValueError("ArUco dictionary name must be a string")
     if not hasattr(cv2, "aruco"):
         return []
     dictionary_id = getattr(cv2.aruco, dictionary_name, None)
@@ -106,8 +126,42 @@ def detect_crosshair_grid(
     plate_size_mm: float = 220.0,
     coordinates_mm: tuple[float, ...] = (10.0, 60.0, 110.0, 160.0, 210.0),
 ) -> dict[str, Any]:
-    if image is None or image.size == 0:
-        return {"detected": False, "reason": "Empty image", "points": []}
+    image_error = _image_validation_error(image)
+    if image_error is not None:
+        return {"detected": False, "reason": image_error, "points": []}
+    if type(grid_size) is not int or grid_size < 2:
+        return {
+            "detected": False,
+            "reason": "Grid size must be an integer of at least two",
+            "points": [],
+        }
+    try:
+        plate_size = float(plate_size_mm)
+        coordinates = tuple(float(value) for value in coordinates_mm)
+    except (TypeError, ValueError):
+        return {
+            "detected": False,
+            "reason": "Calibration grid coordinates are invalid",
+            "points": [],
+        }
+    if (
+        type(plate_size_mm) is bool
+        or not math.isfinite(plate_size)
+        or plate_size <= 0.0
+        or len(coordinates) != grid_size
+        or not all(math.isfinite(value) for value in coordinates)
+        or any(
+            left >= right
+            for left, right in zip(coordinates, coordinates[1:], strict=False)
+        )
+        or coordinates[0] < 0.0
+        or coordinates[-1] > plate_size
+    ):
+        return {
+            "detected": False,
+            "reason": "Calibration grid coordinates are invalid",
+            "points": [],
+        }
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
     quad = _largest_plate_quad(gray)
     if quad is None:
@@ -118,13 +172,13 @@ def detect_crosshair_grid(
     plate_to_image = cv2.getPerspectiveTransform(destination, quad)
     warped = cv2.warpPerspective(gray, image_to_plate, (warp_size, warp_size))
     response = _cross_response(warped)
-    expected = [value / plate_size_mm * (warp_size - 1) for value in coordinates_mm]
+    expected = [value / plate_size * (warp_size - 1) for value in coordinates]
     search_radius = 50
     points = []
     scores = []
-    for row_top, machine_y in enumerate(reversed(coordinates_mm)):
+    for row_top, machine_y in enumerate(reversed(coordinates)):
         expected_y = expected[len(expected) - 1 - row_top]
-        for col, machine_x in enumerate(coordinates_mm):
+        for col, machine_x in enumerate(coordinates):
             expected_x = expected[col]
             x0 = max(0, int(expected_x - search_radius))
             x1 = min(warp_size, int(expected_x + search_radius + 1))
@@ -135,7 +189,7 @@ def detect_crosshair_grid(
             px = float(x0 + location[0])
             py = float(y0 + location[1])
             image_point = cv2.perspectiveTransform(np.asarray([[[px, py]]], dtype=np.float32), plate_to_image)[0, 0]
-            row_from_bottom = coordinates_mm.index(machine_y)
+            row_from_bottom = coordinates.index(machine_y)
             identifier = row_from_bottom * grid_size + col + 1
             scores.append(float(peak))
             points.append(
@@ -149,8 +203,15 @@ def detect_crosshair_grid(
                     "score": float(peak),
                 }
             )
-    if len(points) != 25:
-        return {"detected": False, "reason": f"Detected only {len(points)} of 25 expected locations", "points": points}
+    expected_count = grid_size * grid_size
+    if len(points) != expected_count:
+        return {
+            "detected": False,
+            "reason": (
+                f"Detected only {len(points)} of {expected_count} expected locations"
+            ),
+            "points": points,
+        }
     score_array = np.asarray(scores, dtype=np.float64)
     median = float(np.median(score_array))
     minimum = float(np.min(score_array))
@@ -178,8 +239,27 @@ def detect_keyed_crosshair_grid(
     medium_key_index: tuple[int, int] = (1, 2),
 ) -> dict[str, Any]:
     """Detect and orient a regular cross grid using two larger keyed crosses."""
-    if image is None or image.size == 0:
-        return {"detected": False, "reason": "Empty image", "points": []}
+    image_error = _image_validation_error(image)
+    if image_error is not None:
+        return {"detected": False, "reason": image_error, "points": []}
+    if type(grid_size) is not int or grid_size < 2:
+        return {
+            "detected": False,
+            "reason": "Grid size must be an integer of at least two",
+            "points": [],
+        }
+    key_indices = (large_key_index, medium_key_index)
+    if any(
+        not isinstance(index, tuple)
+        or len(index) != 2
+        or any(type(value) is not int or value < 0 or value >= grid_size for value in index)
+        for index in key_indices
+    ) or large_key_index == medium_key_index:
+        return {
+            "detected": False,
+            "reason": "Orientation-key indices are invalid",
+            "points": [],
+        }
     if len(targets) != grid_size * grid_size:
         return {
             "detected": False,
@@ -188,14 +268,17 @@ def detect_keyed_crosshair_grid(
         }
 
     try:
-        normalized = [
-            {
-                "id": int(item["id"]),
-                "machine_x": float(item["machine_x"]),
-                "machine_y": float(item["machine_y"]),
-            }
-            for item in targets
-        ]
+        normalized = []
+        for item in targets:
+            if type(item["id"]) is not int:
+                raise ValueError
+            normalized.append(
+                {
+                    "id": item["id"],
+                    "machine_x": float(item["machine_x"]),
+                    "machine_y": float(item["machine_y"]),
+                }
+            )
     except (KeyError, TypeError, ValueError):
         return {"detected": False, "reason": "Base-grid target metadata is invalid", "points": []}
     values = np.asarray(
@@ -445,12 +528,50 @@ def detect_crosshairs_near(
     search_radius_px: int = 55,
 ) -> dict[str, Any]:
     """Refine approximate crosshair locations without needing a plate boundary."""
-    if image is None or image.size == 0:
-        return {"detected": False, "reason": "Empty image", "points": []}
+    image_error = _image_validation_error(image)
+    if image_error is not None:
+        return {"detected": False, "reason": image_error, "points": []}
     if not expected_points:
         return {
             "detected": False,
             "reason": "Need at least one expected crosshair location",
+            "points": [],
+        }
+    if type(search_radius_px) is not int or search_radius_px < 1:
+        return {
+            "detected": False,
+            "reason": "Crosshair search radius must be a positive integer",
+            "points": [],
+        }
+    try:
+        identifiers = [item["id"] for item in expected_points]
+        coordinates = np.asarray(
+            [
+                (
+                    item["image_x"],
+                    item["image_y"],
+                    item["machine_x"],
+                    item["machine_y"],
+                )
+                for item in expected_points
+            ],
+            dtype=np.float64,
+        )
+    except (KeyError, TypeError, ValueError):
+        return {
+            "detected": False,
+            "reason": "Expected crosshair metadata is invalid",
+            "points": [],
+        }
+    if (
+        any(type(identifier) is not int for identifier in identifiers)
+        or len(set(identifiers)) != len(identifiers)
+        or coordinates.shape != (len(expected_points), 4)
+        or not np.isfinite(coordinates).all()
+    ):
+        return {
+            "detected": False,
+            "reason": "Expected crosshairs must be finite and uniquely numbered",
             "points": [],
         }
 
@@ -550,13 +671,79 @@ def detect_crosshairs_burst(
             "reason": "Precision capture contains no frames",
             "points": [],
         }
+    if type(search_radius_px) is not int or search_radius_px < 1:
+        raise ValueError("Crosshair search radius must be a positive integer")
+    if type(minimum_valid_frames) is not int or minimum_valid_frames < 1:
+        raise ValueError("Minimum valid frame count must be a positive integer")
+    if minimum_valid_frames > len(images):
+        raise ValueError("Minimum valid frame count cannot exceed the precision frame count")
     if coordinate_strategy not in {"median", "sharpest_inlier_frame", "stable_clarity_consensus"}:
         raise ValueError(f"Unsupported coordinate strategy: {coordinate_strategy}")
-    if int(consensus_frames) < 1:
-        raise ValueError("Consensus frame count must be positive")
+    if type(consensus_frames) is not int or consensus_frames < 1:
+        raise ValueError("Consensus frame count must be a positive integer")
+    if coordinate_strategy == "stable_clarity_consensus" and consensus_frames > len(images):
+        raise ValueError("Consensus frame count cannot exceed the precision frame count")
+    numeric_parameters = (
+        ("MAD multiplier", mad_multiplier, False),
+        ("outlier floor", outlier_floor_px, True),
+        ("jitter limit", max_jitter_rms_px, False),
+    )
+    for label, raw_value, allow_zero in numeric_parameters:
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{label} must be finite") from exc
+        if (
+            type(raw_value) is bool
+            or not math.isfinite(value)
+            or value < 0
+            or (not allow_zero and value == 0)
+        ):
+            qualifier = "non-negative" if allow_zero else "positive"
+            raise ValueError(f"{label} must be finite and {qualifier}")
     if frame_quality_scores is not None and len(frame_quality_scores) != len(images):
         raise ValueError("Frame quality scores must match the precision frame count")
-    required = max(1, int(minimum_valid_frames))
+    if frame_quality_scores is not None:
+        try:
+            quality_values = np.asarray(frame_quality_scores, dtype=np.float64)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Frame quality scores must be numeric") from exc
+        if not np.isfinite(quality_values).all():
+            raise ValueError("Frame quality scores must be finite")
+    identifiers: list[int] = []
+    for target in expected_points:
+        if not isinstance(target, dict) or type(target.get("id")) is not int:
+            raise ValueError("Expected crosshair identities must be JSON integers")
+        try:
+            coordinates = (
+                float(target["image_x"]),
+                float(target["image_y"]),
+                float(target["machine_x"]),
+                float(target["machine_y"]),
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("Expected crosshair coordinates are invalid") from exc
+        if not all(math.isfinite(value) for value in coordinates):
+            raise ValueError("Expected crosshair coordinates must be finite")
+        identifiers.append(target["id"])
+    if not identifiers:
+        return {
+            "detected": False,
+            "reason": "Need at least one expected crosshair location",
+            "points": [],
+        }
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("Expected crosshair identities must be unique")
+    for image in images:
+        if (
+            not isinstance(image, np.ndarray)
+            or image.size == 0
+            or image.dtype != np.uint8
+            or image.ndim not in {2, 3}
+            or (image.ndim == 3 and image.shape[2] != 3)
+        ):
+            raise ValueError("Precision frames must be uint8 grayscale or BGR images")
+    required = minimum_valid_frames
     detections = [
         detect_crosshairs_near(
             image,

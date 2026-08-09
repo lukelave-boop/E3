@@ -124,6 +124,8 @@ class LensModel:
             or not np.isfinite(self.distortion).all()
         ):
             raise ValueError("Lens distortion coefficients are invalid")
+        if type(self.image_width) is not int or type(self.image_height) is not int:
+            raise ValueError("Lens calibration image dimensions must be integers")
         if self.image_width <= 0 or self.image_height <= 0:
             raise ValueError("Lens calibration image dimensions must be positive")
         if (
@@ -147,6 +149,8 @@ class LensModel:
             raise ValueError("Lens calibration metadata must be finite")
         if self.rms_error < 0 or self.mean_reprojection_error < 0 or self.created_at < 0:
             raise ValueError("Lens calibration errors and timestamp cannot be negative")
+        if type(self.images_used) is not int:
+            raise ValueError("Lens calibration images_used must be an integer")
         if self.images_used < 1:
             raise ValueError("Lens calibration must record at least one image")
         if not isinstance(self.quality, dict):
@@ -218,14 +222,17 @@ class LensModel:
             ]
         if not isinstance(raw_views, list) or not all(isinstance(item, dict) for item in raw_views):
             raise ValueError("Lens per-view diagnostics are invalid")
+        for field_name in ("image_width", "image_height", "images_used"):
+            if type(raw.get(field_name)) is not int:
+                raise ValueError(f"Lens calibration {field_name} must be an integer")
         model = cls(
             camera_matrix=np.asarray(raw["camera_matrix"], dtype=np.float64),
             distortion=np.asarray(raw["distortion"], dtype=np.float64).reshape(1, -1),
-            image_width=int(raw["image_width"]),
-            image_height=int(raw["image_height"]),
+            image_width=raw["image_width"],
+            image_height=raw["image_height"],
             rms_error=float(raw["rms_error"]),
             mean_reprojection_error=float(raw["mean_reprojection_error"]),
-            images_used=int(raw["images_used"]),
+            images_used=raw["images_used"],
             created_at=float(raw.get("created_at", 0.0)),
             model_id=str(raw.get("model_id", "")),
             quality=dict(raw.get("quality") or {}),

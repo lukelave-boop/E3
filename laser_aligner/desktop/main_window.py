@@ -299,6 +299,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_work_area: tuple[float, float, float, float] | None = None
         self.last_job_preview_data: PreparedJobPreview | None = None
         self._job_preview_dialog: JobPreviewDialog | None = None
+        self._machine_setup_dialog: MachineSetupDialog | None = None
+        self._pending_calibration_capture: dict[str, Any] | None = None
         self._busy = False
         self._controller_busy = False
         self._job_preparation_busy = False
@@ -1082,8 +1084,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.notice.connect(self.show_notice)
         self.controller.busyChanged.connect(self._busy_changed)
         self.controller.stopInitiated.connect(self._software_stop_started)
+        self.controller.jobStarted.connect(self._job_started)
         self.controller.tasksDrained.connect(self._background_tasks_drained)
-        self._pending_calibration_capture: dict[str, Any] | None = None
 
     def _refresh_document(self, selected_ids: list[str] | None = None) -> None:
         if not any(layer.id == self.active_layer_id for layer in self.document.layers):
@@ -2310,6 +2312,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._invalidate_generated_job(cancel_preparation=False)
 
     def _software_stop_started(self) -> None:
+        self._pending_calibration_capture = None
         if self._job_preparation_owner is None:
             return
         self._cancel_job_preparation(
@@ -2536,8 +2539,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "Prepare Start Here job",
             f"This will replace the prepared job with a guarded program beginning "
             f"at preview move {move_index + 1}. Earlier moves will not run.\n\n"
-            "The machine will not start. Review the replacement Preview and dry "
-            "frame before execution.",
+            "The machine will not start. Review the replacement Preview before "
+            "execution.",
             QtWidgets.QMessageBox.StandardButton.Ok
             | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
@@ -2690,6 +2693,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         phrase: str | None = None
         if self.last_job_powered:
             phrase = str(machine.get("arm_phrase", "ENABLE LASER CONTROL"))
+
+        pending = self._pending_calibration_capture
+        if pending is not None and self.last_job_name == pending.get("filename"):
+            pending["submitted"] = True
+            pending["baseline_job"] = self._machine_job_identity(machine.get("job"))
+            pending.pop("started_at", None)
+            pending.pop("program_digest", None)
 
         self.controller.run_job(
             self.last_job.text,
@@ -3555,12 +3565,24 @@ class E3MainWindow(QtWidgets.QMainWindow):
         machine: dict[str, Any] | None,
     ) -> None:
         pending = self._pending_calibration_capture
-        if pending is None or not machine:
+        if (
+            pending is None
+            or not machine
+            or not pending.get("submitted", False)
+            or pending.get("started_at") is None
+            or not pending.get("program_digest")
+        ):
             return
         job = machine.get("job") or {}
         if job.get("running") or job.get("finished_at") is None:
             return
         if str(job.get("name") or "") != str(pending["filename"]):
+            return
+        if (
+            job.get("started_at") != pending["started_at"]
+            or str(job.get("program_digest") or "") != pending["program_digest"]
+            or self._machine_job_identity(job) == pending.get("baseline_job")
+        ):
             return
         if job.get("error") or str(job.get("phase") or "") != "complete":
             self._pending_calibration_capture = None
@@ -3570,10 +3592,50 @@ class E3MainWindow(QtWidgets.QMainWindow):
         capture_action = str(pending["capture_action"])
         QtCore.QTimer.singleShot(
             0,
-            lambda: self.open_machine_setup(
-                tab_index,
-                automatic_capture=capture_action,
+            lambda: self._open_automatic_calibration_capture(
+                tab_index, capture_action
             ),
+        )
+
+    @staticmethod
+    def _machine_job_identity(job: Any) -> tuple[Any, Any, str, str]:
+        payload = job if isinstance(job, dict) else {}
+        return (
+            payload.get("started_at"),
+            payload.get("finished_at"),
+            str(payload.get("program_digest") or ""),
+            str(payload.get("name") or ""),
+        )
+
+    def _job_started(self, job: dict[str, Any]) -> None:
+        pending = self._pending_calibration_capture
+        if (
+            pending is None
+            or not pending.get("submitted", False)
+            or str(job.get("name") or "") != str(pending.get("filename") or "")
+            or job.get("started_at") is None
+            or not job.get("program_digest")
+        ):
+            return
+        identity = self._machine_job_identity(job)
+        if identity == pending.get("baseline_job"):
+            return
+        pending["started_at"] = job["started_at"]
+        pending["program_digest"] = str(job["program_digest"])
+        # A simulator can finish before the queued start callback reaches Qt.
+        # Poll once now so the matching terminal state is not delayed or lost.
+        self.controller.poll_status()
+
+    def _open_automatic_calibration_capture(
+        self,
+        tab_index: int,
+        capture_action: str,
+    ) -> None:
+        if self._closing:
+            return
+        self.open_machine_setup(
+            tab_index,
+            automatic_capture=capture_action,
         )
 
     def _busy_changed(self, busy: bool) -> None:
@@ -3698,9 +3760,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
         *,
         automatic_capture: str | None = None,
     ) -> None:
+        existing = self._machine_setup_dialog
+        if existing is not None:
+            existing.tabs.setCurrentIndex(int(tab_index))
+            if automatic_capture is not None:
+                capture = getattr(existing, automatic_capture)
+                QtCore.QTimer.singleShot(0, capture)
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
         was_live = self.camera_panel.live_enabled()
         self.controller.set_live_camera(False)
         dialog = MachineSetupDialog(self.runtime, self)
+        self._machine_setup_dialog = dialog
         dialog.tabs.setCurrentIndex(tab_index)
         dialog.calibrationChanged.connect(self.controller.poll_status)
         dialog.calibrationChanged.connect(self.controller.calibration_changed)
@@ -3723,6 +3796,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             dialog.exec()
         finally:
             self.controller.set_calibration_review_active(False)
+            if self._machine_setup_dialog is dialog:
+                self._machine_setup_dialog = None
+            dialog.deleteLater()
         self.controller.set_live_camera(was_live, self.camera_panel.refresh_interval_ms())
         self.controller.poll_status()
 
@@ -3752,7 +3828,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         mode = (
             f"powered at {registration_job.power_percent:g}%"
             if exact_powered
-            else "dry motion only"
+            else "laser power 0%"
         )
         display_name = str(
             getattr(registration_job, "display_name", "Fine registration")
@@ -3772,6 +3848,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "filename": str(registration_job.filename),
                 "tab_index": capture[0],
                 "capture_action": capture[1],
+                "submitted": False,
+                "baseline_job": None,
             }
             if exact_powered and capture is not None
             else None

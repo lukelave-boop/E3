@@ -175,6 +175,7 @@ class DesktopController(QtCore.QObject):
     simulationFrameChanged = QtCore.Signal(dict)
     stopInitiated = QtCore.Signal()
     tasksDrained = QtCore.Signal()
+    jobStarted = QtCore.Signal(dict)
 
     def __init__(
         self,
@@ -1476,11 +1477,13 @@ class DesktopController(QtCore.QObject):
                 machine.disarm()
                 raise
 
+        def started(result: dict[str, Any]) -> None:
+            self.jobStarted.emit(dict(result))
+            self._machine_changed(f"Homed, parked, and started {name}")
+
         self._run(
             operation,
-            on_success=lambda _: self._machine_changed(
-                f"Homed, parked, and started {name}"
-            ),
+            on_success=started,
             label="Home, park, and start job",
         )
 

@@ -166,6 +166,9 @@ def test_legacy_bed_map_is_provenance_unknown_and_blocked(tmp_path: Path) -> Non
         "backup_metrics",
         "mesh_metadata",
         "mesh_bound",
+        "registration_type",
+        "residual_mesh_type",
+        "refinement_base_type",
     ],
 )
 def test_bed_calibration_load_rejects_malformed_models(
@@ -208,6 +211,15 @@ def test_bed_calibration_load_rejects_malformed_models(
             "created_at": 1.0,
             "base_calibration": backup,
         }
+    elif mutation == "registration_type":
+        payload["fine_registration"] = []
+    elif mutation == "residual_mesh_type":
+        payload["residual_mesh"] = []
+    elif mutation == "refinement_base_type":
+        payload["fine_registration"]["homography_refinement"] = {
+            "created_at": 1.0,
+            "base_calibration": [],
+        }
     else:
         corrections = np.zeros((2, 2, 2), dtype=np.float64)
         if mutation == "mesh_bound":
@@ -224,4 +236,82 @@ def test_bed_calibration_load_rejects_malformed_models(
         }
 
     with pytest.raises(ValueError):
+        BedCalibration.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("image_width", True),
+        ("image_height", 600.5),
+        ("inlier_count", "8"),
+        ("point_count", 8.0),
+    ),
+)
+def test_bed_calibration_rejects_coerced_integer_metadata(
+    tmp_path: Path,
+    field: str,
+    value: object,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.start()
+    try:
+        assert context.bed.calibration is not None
+        payload = context.bed.calibration.to_dict()
+    finally:
+        context.stop()
+    payload[field] = value
+
+    with pytest.raises(ValueError, match=rf"{field} must be an integer"):
+        BedCalibration.from_dict(payload)
+
+
+def test_bed_calibration_rejects_nonfinite_provenance(tmp_path: Path) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.start()
+    try:
+        assert context.bed.calibration is not None
+        payload = context.bed.calibration.to_dict()
+    finally:
+        context.stop()
+    payload["provenance"] = {"quality": float("nan")}
+
+    with pytest.raises(ValueError, match="finite JSON"):
+        BedCalibration.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("schema_version", 2, "Unsupported residual"),
+        ("schema_version", "1", "schema_version must be an integer"),
+        ("refinement_count", 0.0, "refinement_count must be an integer"),
+    ),
+)
+def test_bed_calibration_rejects_malformed_residual_mesh_schema(
+    tmp_path: Path,
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.start()
+    try:
+        assert context.bed.calibration is not None
+        payload = context.bed.calibration.to_dict()
+    finally:
+        context.stop()
+    payload["residual_mesh"] = {
+        "schema_version": 1,
+        "x_nodes_mm": [0.0, 100.0],
+        "y_nodes_mm": [0.0, 100.0],
+        "corrections_mm": np.zeros((2, 2, 2), dtype=np.float64).tolist(),
+        "created_at": 1.0,
+        "fit_rms_mm": 0.1,
+        "fit_max_mm": 0.2,
+        "refinement_count": 0,
+    }
+    payload["residual_mesh"][field] = value
+
+    with pytest.raises(ValueError, match=message):
         BedCalibration.from_dict(payload)

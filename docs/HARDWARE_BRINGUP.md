@@ -94,7 +94,7 @@ necessary, and releases the motors. It does not issue
 fan/coolant commands. Keep the complete homing and parking path clear until the
 job reports completion. The desktop reports the finishing phase explicitly and
 raises an error if a completion command fails. This post-job motion is not
-attempted after a stop, failure, emergency action, disconnect, or dry job.
+attempted after a stop, failure, emergency action, disconnect, or zero-power job.
 
 `machine.grbl_step_idle_delay_ms` is the normal non-camera value and defaults
 to 250 ms for this profile. The application temporarily uses `$1=255` only
@@ -149,4 +149,4 @@ After the scale is known, record it in a versioned machine profile and keep the 
 - photo pose
 - measured camera-to-bed height
 - laser-head/nozzle offset if relevant
-- dry-run and marking-test results
+- zero-power motion and marking-test results

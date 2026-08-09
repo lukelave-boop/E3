@@ -7,6 +7,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from numbers import Real
 from typing import Any, ClassVar
 
 from ..project import (
@@ -34,10 +35,9 @@ def _utc_now() -> str:
 
 
 def _finite(value: Any, name: str) -> float:
-    try:
-        number = float(value)
-    except (TypeError, ValueError) as exc:
-        raise TemplateFormatError(f"{name} must be a finite number") from exc
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TemplateFormatError(f"{name} must be a finite number")
+    number = float(value)
     if not math.isfinite(number):
         raise TemplateFormatError(f"{name} must be a finite number")
     return number
@@ -48,6 +48,27 @@ def _positive(value: Any, name: str) -> float:
     if number <= 0.0:
         raise TemplateFormatError(f"{name} must be positive")
     return number
+
+
+def _string(
+    value: Any,
+    name: str,
+    *,
+    allow_empty: bool = True,
+    strip: bool = False,
+) -> str:
+    if not isinstance(value, str):
+        raise TemplateFormatError(f"{name} must be a string")
+    text = value.strip() if strip else value
+    if not allow_empty and not text:
+        raise TemplateFormatError(f"{name} must not be empty")
+    return text
+
+
+def _json_array(value: Any, name: str) -> list[Any]:
+    if not isinstance(value, list):
+        raise TemplateFormatError(f"{name} must be a JSON array")
+    return value
 
 
 def _json_object(value: Any, name: str) -> dict[str, Any]:
@@ -62,9 +83,7 @@ def _json_object(value: Any, name: str) -> dict[str, Any]:
 
 
 def _timestamp(value: Any, name: str) -> str:
-    text = str(value).strip()
-    if not text:
-        raise TemplateFormatError(f"{name} must not be empty")
+    text = _string(value, name, allow_empty=False, strip=True)
     try:
         datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError as exc:
@@ -175,8 +194,8 @@ class TemplateFeature:
         object.__setattr__(self, "width_mm", _positive(self.width_mm, "feature.width_mm"))
         object.__setattr__(self, "height_mm", _positive(self.height_mm, "feature.height_mm"))
         object.__setattr__(self, "rotation_deg", _normalized_rotation(self.rotation_deg))
-        object.__setattr__(self, "object_id", str(self.object_id))
-        object.__setattr__(self, "kind", str(self.kind))
+        object.__setattr__(self, "object_id", _string(self.object_id, "feature.object_id"))
+        object.__setattr__(self, "kind", _string(self.kind, "feature.kind"))
 
     @property
     def center_x_mm(self) -> float:
@@ -201,13 +220,14 @@ class TemplateFeature:
         if not isinstance(raw, Mapping):
             raise TemplateFormatError("Template feature must be a JSON object")
         try:
+            center = _json_array(raw["center_mm"], "feature.center_mm")
             return cls(
-                center_mm=tuple(raw["center_mm"]),
+                center_mm=tuple(center),
                 width_mm=raw["width_mm"],
                 height_mm=raw["height_mm"],
                 rotation_deg=raw.get("rotation_deg", 0.0),
-                object_id=str(raw.get("object_id", "")),
-                kind=str(raw.get("kind", "")),
+                object_id=raw.get("object_id", ""),
+                kind=raw.get("kind", ""),
             )
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, TemplateFormatError):
@@ -322,13 +342,9 @@ class CutTemplate:
     schema_version: ClassVar[int] = TEMPLATE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        self.id = str(self.id).strip()
-        if not self.id:
-            raise TemplateFormatError("Template ID must not be empty")
-        self.name = str(self.name).strip()
-        if not self.name:
-            raise TemplateFormatError("Template name must not be empty")
-        self.description = str(self.description)
+        self.id = _string(self.id, "Template ID", allow_empty=False, strip=True)
+        self.name = _string(self.name, "Template name", allow_empty=False, strip=True)
+        self.description = _string(self.description, "Template description")
 
         if not isinstance(self.bounds, Bounds):
             try:
@@ -376,10 +392,12 @@ class CutTemplate:
             if isinstance(self.marker_id, int):
                 if self.marker_id < 0:
                     raise TemplateFormatError("marker_id integer must not be negative")
-            else:
-                self.marker_id = str(self.marker_id).strip()
+            elif isinstance(self.marker_id, str):
+                self.marker_id = self.marker_id.strip()
                 if not self.marker_id:
                     self.marker_id = None
+            else:
+                raise TemplateFormatError("marker_id must be a string, integer, or null")
         self.created_at = _timestamp(self.created_at, "created_at")
         self.modified_at = _timestamp(self.modified_at, "modified_at")
 
@@ -430,7 +448,12 @@ class CutTemplate:
             size = raw["size_mm"]
             if not isinstance(size, Mapping):
                 raise TemplateFormatError("size_mm must be a JSON object")
-            bounds = Bounds.from_dict(raw["bounds"])
+            bounds_raw = raw["bounds"]
+            if not isinstance(bounds_raw, Mapping):
+                raise TemplateFormatError("bounds must be a JSON object")
+            objects = _json_array(raw["objects"], "objects")
+            features = _json_array(raw["features"], "features")
+            bounds = Bounds.from_dict(bounds_raw)
             width = _positive(size["width"], "size_mm.width")
             height = _positive(size["height"], "size_mm.height")
             if not math.isclose(bounds.width, width, abs_tol=1e-9) or not math.isclose(
@@ -438,16 +461,16 @@ class CutTemplate:
             ):
                 raise TemplateFormatError("Template size_mm does not match bounds")
             return cls(
-                id=str(raw["id"]),
-                name=str(raw["name"]),
-                description=str(raw.get("description", "")),
+                id=raw["id"],
+                name=raw["name"],
+                description=raw.get("description", ""),
                 bounds=bounds,
-                objects=[SceneObject.from_dict(item) for item in raw["objects"]],
-                features=[TemplateFeature.from_dict(item) for item in raw["features"]],
+                objects=[SceneObject.from_dict(item) for item in objects],
+                features=[TemplateFeature.from_dict(item) for item in features],
                 trace_options=raw.get("trace_options", {}),
                 marker_id=raw.get("marker_id"),
-                created_at=str(raw["created_at"]),
-                modified_at=str(raw["modified_at"]),
+                created_at=raw["created_at"],
+                modified_at=raw["modified_at"],
                 metadata=raw.get("metadata", {}),
             )
         except (KeyError, TypeError, ValueError, OverflowError, ProjectFormatError) as exc:

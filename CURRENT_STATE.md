@@ -19,8 +19,9 @@ Branch: **`desktop-v1`**
 
 The Linux-machine work through **`15c2c7a`** was preserved and pushed before
 the precision-camera feature commit **`99450df`** was integrated by cherry-pick.
-The integrated commit is **`5fd6d70`**; a later documentation/lint-only commit
-may supersede this snapshot hash without changing hardware behavior.
+The current branch also includes the later calibration, trace, persistence,
+transport, and release-hardening work described below; use Git history rather
+than this status document as the authoritative source revision.
 
 Baseline before consolidation: **`778532b` — Polish desktop controls and add camera focus workflow**
 
@@ -73,11 +74,11 @@ control settling remain physically unverified.
 
 Machine Setup now has a dedicated fresh keyed 5×5 base-bed mapping workflow for
 a remounted camera. It generates 23 regular crosses plus two larger interior
-orientation keys through the ordinary dry/Preview and guarded powered-job path;
+orientation keys through the ordinary zero-power Preview and guarded powered-job path;
 no old homography or manual image/machine point entry is required. Unseeded blob
 and symmetric-grid detection uses the two keys to resolve all eight grid
-rotations/reflections, rejects incomplete, unkeyed, ambiguous, duplicate, dry,
-stale, or altered sessions, and requires all 25 RANSAC inliers within `0.50 mm`
+rotations/reflections, rejects incomplete, unkeyed, ambiguous, duplicate,
+zero-power, stale, or altered sessions, and requires all 25 RANSAC inliers within `0.50 mm`
 RMS and `0.80 mm` maximum fit error. Candidate review does not mutate the active
 map. Accepted points and the homography are persisted transactionally with
 rollback, clear corrections tied to the old map, and record the unambiguous
@@ -119,7 +120,7 @@ One packaged, versioned Permanent Camera Setup Guide is now the canonical
 operator sequence. It is available from the Machine Setup footer and the main
 Help menu, opens modelessly at the current numbered tab, and explicitly covers
 the Preview-to-main-Start handoff. It warns that Preview Play only animates and
-that main **Generate** or **Dry frame** replaces a prepared calibration job.
+that main **Generate** replaces a prepared calibration job.
 Automated UI/content/package tests keep its five tab headings and exact action
 labels synchronized with the application.
 
@@ -150,8 +151,9 @@ jogging is the operator control used to measure the physical travel envelope.
 STOP, disconnect, jobs, controller uncertainty, and motor release invalidate
 the tracked jog position, and jogging is unavailable while armed or busy.
 Automated tests cover repeated and beyond-configured-area moves, numeric/feed
-rejection, UI gating, and a STOP/ACK race. Physical direction, endpoint, and
-STOP behavior on the active GRBL machine remain unverified.
+rejection, UI gating, and a STOP/ACK race. Direction and the selected mechanical
+endpoints were exercised on the active GRBL machine; STOP/reconnect behavior
+was not physically measured during that session.
 
 The native default workspace now gives Cuts/Layers and its related design tabs
 a full-height right column. A short row beneath the canvas places a narrow raw
@@ -252,7 +254,7 @@ Dense calibration now persists the 5×5 fit, 4×4 interstitial validation, and
 shifted confirmation as separate sessions. Each capture action explicitly
 selects its matching session, preventing a later 4×4 preparation from making
 the 5×5 capture reuse 4×4 targets. This repair is automated-test verified and
-has not yet been repeated against the physical marked sheet.
+was subsequently exercised against the restrained physical marked sheet.
 
 Shifted-confirmation preparation now records mutually exclusive confirmation
 metadata. The earlier UI path incorrectly set both validation and confirmation,
@@ -272,6 +274,15 @@ red as REJECTED, and report no inferred IDs; amber INFERRED is used only when
 exactly one excluded cell is safely reconstructed and the complete fit passes
 all application gates.
 
+The same 2026-08-09 physical setup subsequently completed the current fine and
+holdout sequence. The eight-mark fine capture reported an `0.342 mm` translation
+scatter and an 8/8-inlier full-bed candidate at `0.136 mm` in-sample RMS. The
+independent five-point capture passed at `0.283 mm` RMS, `0.385 mm` maximum,
+and mean error X `-0.087`, Y `-0.013 mm`. After the dense results recorded above,
+the operator also cut a label perimeter that visually tracked the printed
+outline closely. The photograph is useful workflow evidence but was not a
+metrology setup, so it does not establish a general physical accuracy limit.
+
 Interactive clarity-sensitive operations are separated from the 45-frame
 parked-bed calibration profile. Trace, template matching, color sampling,
 workspace capture, and ordinary stable stills now select the sharpest of five
@@ -280,7 +291,23 @@ deadline. This removes the calibration-burst delay from interactive work while
 keeping a small sharpness selection step. It is automated-test verified but its
 perceived latency has not yet been timed in the physical UI.
 
-The integrated Linux checkout passes all 1107 automated tests. Precision capture
+The final 2026-08-09 adversarial software audit hardened the boundaries shared
+by those workflows. Machine ownership now serializes reconnect, Home, jog, arm,
+and STOP generations; serial reopen discards old acknowledgement state and
+bounds receive data; motion-only completion drains the controller planner; and
+validated receipt/program integrity is rechecked at the hazardous execution
+boundary. Configuration, HTTP requests, project/material/template documents,
+SVG, G-code inputs, images, camera frames, calibration evidence, and vision
+options now reject duplicate keys, nonstandard constants, coerced types,
+non-finite values, malformed containers/topology, and oversized resources before
+side effects. Calibration state persists before publication, and generated
+G-code/captures use exclusive collision-resistant publication. Release ZIPs use
+only tracked regular files, reject every symlink component and checkout escape,
+and derive their version from canonical package metadata. Automatic post-job
+calibration scoring is bound to the exact start receipt and program digest, so a
+stale or merely same-named completed job cannot trigger capture.
+
+The integrated Linux checkout passes all 1468 automated tests. Precision capture
 is covered for genuinely fresh unique frames, configurable settling/discard and
 burst counts, camera-control readback, sharp-frame selection, temporal
 median/MAD rejection, jitter limits, persisted diagnostics, home-first capture,
@@ -293,8 +320,8 @@ Successful powered serial jobs now remain active through cancellation-aware
 extended command acknowledgements, a final `M5`, a pre-home planner-completion
 barrier, automatic homing, a bounded absolute move to the configured
 photography pose, a second motion-completion barrier, normal-idle restoration,
-and explicit motor release. They do not change fan/coolant state. Dry jobs and
-every stop, failure, emergency, and disconnect path skip the additional homing
+and explicit motor release. They do not change fan/coolant state. Zero-power
+jobs and every stop, failure, emergency, and disconnect path skip the additional homing
 and parking motion. The Laser panel distinguishes drain, home, park, and release
 phases after stream progress reaches 100%; a terminal background-job error now
 raises one desktop alert and is also copied into the in-app machine log.
@@ -344,7 +371,7 @@ The desktop now also owns a native Machine Setup workflow covering configured
 camera controls, raw preview, checkerboard lens calibration, manual and
 CSV-assisted bed mapping, 5×5 cross-grid detection, residual review, and
 workpiece/fiducial checks. It now includes a separate eight-point fine-
-registration stage that prepares dry or normally guarded powered cross jobs,
+registration stage that prepares zero-power or normally guarded powered cross jobs,
 classifies multi-point residuals, and can apply only a reviewed global
 camera-map translation within a 5 mm cumulative limit. Validated G-code can be
 exported from the desktop. The browser remains available, but no operator
@@ -403,8 +430,10 @@ fitting with 0.30 mm RMS and 0.60 mm maximum software gates.
 One coherent failed interstitial result can now produce a reviewed, bounded,
 one-time mesh refinement. The refinement is tied to the exact mesh revision and
 cannot be applied twice. Final verification uses a separately generated shifted
-16-point pattern on fresh material; this refinement and confirmation workflow
-is automated-test verified but has not yet been physically run.
+16-point pattern on fresh material. On 2026-08-09 the physical 4×4 check passed
+at `0.273 mm` RMS and `0.475 mm` maximum error, and the shifted confirmation
+passed at `0.237 mm` RMS and `0.376 mm` maximum error. Those measurements verify
+that session and surface, not general repeatability after a setup change.
 
 Machine Setup now stores explicit X/Y mapping-orientation flags with the bed
 calibration and presents unambiguous NORMAL/OFF and REVERSED/ON controls. Fresh
@@ -519,7 +548,7 @@ empty because Qt/X11 otherwise appends a duplicate product-name suffix to the
 complete native caption; the application name itself remains configured.
 
 The desktop now opens a dedicated graphical Preview after project generation,
-dry framing, and registration/validation job preparation. An immutable
+zero-power framing, and registration/validation job preparation. An immutable
 `JobPlan` is parsed from the exact finalized G-code stream and retains
 controller-ignored layer/pass/source context, physical laser-spot coordinates,
 per-move timing/feed/power, and cut/travel statistics. The Preview provides
@@ -543,7 +572,7 @@ also bounded. TIFF is intentionally rejected rather than depending on an
 optional Qt image plugin. Generated project jobs carry SHA-256 identities for
 their external raster sources, with a Qt-free verifier available to block a
 changed or moved asset. Image-only and mixed projects now include
-transformed image bounds in dry framing, and zero-power raster cut distance
+transformed image bounds in zero-power framing, and zero-power raster cut distance
 matches the exact unpowered plan for raster, fill, and line output. Nearest-path
 ordering falls back to recorded source order above 512 vector paths instead
 of entering quadratic planning.
@@ -571,7 +600,7 @@ newer renderer's busy state. Application shutdown defers runtime teardown until
 owned workers return. Generation no longer writes an implicit G-code artifact;
 explicit export is the only desktop file-write path. Offscreen tests cover 1k
 and 100k early close, stale success/failure registration collisions, all three
-renderer failure sites, Dry Frame, Start Here, project replacement/shutdown,
+renderer failure sites, zero-power framing, Start Here, project replacement/shutdown,
 250k snapshot responsiveness, and 250k backward scrubbing.
 
 Raster workspace items retain their exact payload-bound SHA across unrelated
@@ -592,11 +621,18 @@ machine program preflight.
 
 ## Verified in the current Linux checkout
 
-- **1107 tests passed** with Qt using the offscreen platform, including the HTTP
-  security tests with loopback socket access.
-- A clean temporary wheel build contains the canonical setup Markdown, its
-  package module, and the modeless desktop guide viewer. No repository-local
-  build output was produced by this verification.
+- **1468 tests passed in 352.43 seconds** with Qt using the offscreen platform,
+  including the HTTP security tests with loopback socket access.
+- A clean temporary wheel build produced
+  `laser_camera_aligner-0.2.0.dev0-py3-none-any.whl` (440,290 bytes, SHA-256
+  `0d54ead9f6269afa5205516e17dd019be39d7bc9d803f533fe4f90201256e3dc`).
+  Its installed package was byte-identical to the live package tree, both
+  entry-point help commands succeeded, packaged web/setup-guide resources were
+  present, and the installed simulator produced a `1920 x 1080` frame.
+- The tracked-manifest source ZIP contains 210 entries and passes `unzip -t`.
+  It excludes local configuration, captures, calibration state, generated jobs,
+  logs, caches, and build artifacts. All package/build/install outputs remained
+  under `/tmp`; no repository-local artifact was produced.
 - Exact-job Preview verification covers final-stream parsing, immutable move
   context, spot-offset recovery, powered-rapid warnings, time scrubbing,
   keyboard timeline navigation, operation visibility, planner comparison,
@@ -636,7 +672,7 @@ machine program preflight.
   commands retain their configured timeout.
 - Focused laser-offset verification covers zero-default configuration,
   configured-value loading and excessive-value rejection, desktop and browser
-  coordinate correction, dry-frame correction, camera-aligned preview, and
+  coordinate correction, zero-power framing correction, camera-aligned preview, and
   rejection when corrected controller motion would leave the work area.
 - Focused Machine Setup tests cover native tab availability, safe runtime
   authority, synthetic preview capture, manual bed-point add/delete, and
@@ -731,7 +767,7 @@ width, and the manually positioned target make that estimate unsuitable as a
 calibration value. This physically confirms that X reversal removed the major
 error; it does not yet verify final accuracy or justify a new spot offset.
 
-The next hardware action should be a laser-off homed dry frame followed by an
+The next hardware action at that time was a laser-off homed motion review followed by an
 independently measured, sparse fine-registration check rather than another
 overlapping full rectangle. Do not encode the estimated residual until
 controller identity/firmware, work-coordinate offsets, homing state, workpiece
@@ -770,11 +806,11 @@ physical application of the workflow, not yet an independent accuracy
 verification.
 
 Machine Setup now includes a separate five-point Accuracy validation workflow.
-It prepares dry or normally guarded powered holdout jobs, binds the session to
+It prepares zero-power or normally guarded powered holdout jobs, binds the session to
 the active homography, homes/parks for capture, and automatically reports
 per-point, RMS, maximum, and mean error. A pass requires all five confident
 detections, no more than `0.5 mm` RMS error, and no more than `1.0 mm` maximum
-error. Dry-only and stale-map sessions are rejected, and validation has no path
+error. Zero-power-only and stale-map sessions are rejected, and validation has no path
 that mutates calibration. On 2026-08-06 at 21:21, an independent powered
 holdout capture passed: all five marks were detected, RMS error was `0.258 mm`,
 maximum error was `0.417 mm`, and mean error was X `+0.019`, Y `+0.078 mm`.
@@ -967,7 +1003,7 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   mapping at the CSS 96 px/in reference conversion. Unsupported CSS
   stylesheets, clipping, masks, and geometry-changing presentation semantics
   are rejected rather than silently flattened incorrectly.
-- Bounds-checked vector G-code and dry framing.
+- Bounds-checked vector G-code and zero-power framing.
 - Simulator and guarded machine service.
 
 ### Browser
@@ -1011,7 +1047,7 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
 - Undo/redo.
 - `.e3laser` save/load, backup, autosave, and recovery.
 - SQLite material presets.
-- Multi-layer vector toolpaths, dry frames, previews, and estimates.
+- Multi-layer vector toolpaths, zero-power framing, previews, and estimates.
 - Automatic invalidation of generated G-code and toolpath previews after any
   project revision changes.
 - Camera focus controls and sharpness measurement.
@@ -1099,8 +1135,8 @@ physical placement. No marker detector is implemented. See
 
 ### Cross-platform
 
-- No Windows serial backend, hardware camera discovery/control layer,
-  install/launch scripts, or CI job exists.
+- No Windows serial backend, hardware camera discovery/control layer, or
+  install/launch scripts exist.
 - Selecting real serial hardware on Windows fails clearly and directs the user
   back to the simulator.
 - Camera hardware handling assumes V4L2 and `/dev/video*`.
@@ -1108,13 +1144,15 @@ physical placement. No marker detector is implemented. See
   root (XDG/userbase on Linux and LocalAppData/AppData on Windows). Existing
   legacy-root data is copied forward without deleting the source, with fallback
   to the legacy file if migration cannot complete.
-- CI covers Ubuntu and Python 3.10–3.12 only.
+- CI covers the portable suite on Windows and Linux; Linux also runs the full
+  supported Python-version matrix and repository-wide Ruff.
 
 ### Desktop and authoring
 
-- Guarded jogging is implemented and automated-test covered, but physical
-  direction, endpoint, and STOP behavior on a named controller profile remain
-  unverified.
+- Guarded jogging is implemented and automated-test covered. Direction and the
+  selected X5..245/Y5..215 mechanical envelope were operator-exercised, but the
+  controller/firmware identity and physical STOP/reconnect response were not
+  recorded.
 - No tested pause/resume behavior.
 - No text-to-outline conversion.
 - No DXF import. Raster image import currently stores an external absolute
@@ -1148,20 +1186,24 @@ physical placement. No marker detector is implemented. See
 
 - GRBL is selected and powered output has been observed, but controller
   identity/firmware and the power scale remain unverified.
-- The physical cut response confirmed that the saved X map required reversal,
-  but machine limits, final offsets, repeatability, and photo-pose accuracy
-  remain unverified.
-- C920 controls, real calibration residuals, repeatability, and parallax are
-  unverified.
-- Powered output has been observed, but placement was displaced and no powered
-  behavior is yet verified.
+- The physical cut response confirmed the historical X-map reversal diagnosis;
+  the later fresh keyed map records normal controller labels. Mechanical limits
+  were manually probed, but firmware identity, repeatability, and photo-pose
+  accuracy remain unverified.
+- C920 control readbacks, the lens workflow, and real calibration residuals were
+  exercised on the current rig. Repeatability after remounting, material-height
+  sensitivity, and parallax remain unverified.
+- Powered base, registration, validation, and label-placement output has been
+  observed. The latest independent five-point, 4×4, and shifted checks passed,
+  and the operator reported a close label-perimeter cut; no metrology-backed
+  general placement specification or verified power scale has been established.
 
 ## Recommended next sequence
 
 1. Manually exercise the safe native UI on Windows, including loaded and
    generated alignment images, and record usability issues.
 2. Add PowerShell setup/launch scripts.
-3. Add Windows CI while retaining Linux Python-version coverage.
+3. Keep the Windows/Linux CI matrix and Linux Python-version coverage green.
 4. Separate portable OpenCV capture from Linux V4L2 discovery/control.
 5. Keep the complete Linux suite and release-package smoke green.
 6. Extend behavioral Qt coverage for the remaining project-editing and

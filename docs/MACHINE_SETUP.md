@@ -169,7 +169,7 @@ does not use the old camera map and does not require manual point entry:
    configuration automatically and does not prove laser reach or collision
    clearance. If it exposes a discrepancy, correct the configuration, restart,
    use a project with matching bounds, and repeat the fresh base map.
-7. Optional: set **Detected ruler span** to the printed span (normally `190 mm`),
+6. Optional: set **Detected ruler span** to the printed span (normally `190 mm`),
    choose **Detect ruler reference (3 hints)**, then click roughly near the first
    endpoint, shared ruler corner, and other endpoint. These are search hints,
    not measured coordinates. The software must detect the physical baselines
@@ -186,7 +186,7 @@ The generated pattern contains 23 regular crosses plus a larger and a medium
 interior cross. Those two keys let the detector resolve rotation and reflection
 without assuming that camera-right is machine X-positive. Detection is bound to
 the exact powered-session targets, work area, boundary margin, and laser-spot
-offset. Dry-only, stale, incomplete, unkeyed, ambiguous, non-unique, or altered
+offset. Zero-power-only, stale, incomplete, unkeyed, ambiguous, non-unique, or altered
 sessions are rejected. Application requires all 25 RANSAC inliers, no more than
 `0.50 mm` RMS fit error, and no more than `0.80 mm` error at any point.
 
@@ -302,9 +302,9 @@ laser-head mounting offset and does not modify `laser.spot_offset_x_mm` or
 ### Dense local correction
 
 If the remaining error changes by bed position after the homography and fine
-translation are stable, use **Dense local correction (5 × 5)**. Run its dry
-path first, then the guarded powered 25-cross job on a clean, restrained
-sacrificial surface at calibration height. The reviewed mesh is a bounded
+translation are stable, use **Dense local correction (5 × 5)**. Review the
+exact powered 25-cross Preview, then run it on a clean, restrained sacrificial
+surface at calibration height. The reviewed mesh is a bounded
 nonlinear residual layer over the existing map and can be reset independently.
 
 The mesh is applied consistently to camera-to-machine conversion,
@@ -318,7 +318,7 @@ If that first independent check has a coherent bounded residual, **Apply
 reviewed validation refinement** becomes available. This applies one guarded
 update to the existing mesh; it cannot be repeated against the same mesh. Use a
 new sheet, the clean reverse side, or another clean restrained surface before
-running **Prepare dry/powered shifted confirmation**. The shifted 16 positions
+running **Prepare powered shifted confirmation**. The shifted 16 positions
 are different from both the original 25 fit marks and the 16 refinement marks.
 Only that fresh confirmation result is the final accuracy measurement.
 
@@ -353,7 +353,7 @@ All five crosses are required. The program reports each commanded and observed
 coordinate, X/Y error, total error, RMS error, maximum error, and mean bias. A
 **PASS** requires RMS error no greater than `0.5 mm`, maximum error no greater
 than `1.0 mm`, and confident detection of every mark. Low-confidence, incomplete,
-dry-only, or stale-map sessions are rejected rather than scored. Validation
+zero-power-only, or stale-map sessions are rejected rather than scored. Validation
 never applies a correction; a failure means the camera map is not physically
 verified.
 
@@ -365,7 +365,7 @@ secondary camera diagnostics. Those detectors are not accuracy proof.
 The desktop is the primary operator UI. It now exposes the browser's camera
 controls, still capture, synthetic scenes, lens calibration, manual/CSV/5×5
 bed mapping, workpiece detection, fiducial detection, SVG import/placement,
-G-code generation/export, dry framing, controller connection, diagnostics,
+G-code generation/export, controller connection, diagnostics,
 camera-pose parking, guarded execution, software stop, fine registration, and
 independent holdout accuracy validation. The browser remains a legacy
 single-SVG alternative, not a required setup surface.
@@ -378,8 +378,8 @@ an open serial port as a ready controller before this state completes.
 For serial-hardware jobs, desktop **Start** performs `M5`, Home, camera-pose
 parking, and an idle wait before arming and streaming the job. A failed
 preflight blocks the run. This removes the need to press **Home / park**
-manually before every job; it does not replace the operator's laser-off dry
-frame and origin/direction checks.
+manually before every job; it does not replace the operator's laser-off
+origin/direction checks.
 
 After a successful powered job, `machine.home_and_release_after_powered_job`
 keeps the job in its running state while the controller acknowledges `M5`,
@@ -388,7 +388,7 @@ pose, waits for the park move to finish, and releases the motors. It does not
 send fan or coolant commands. The default is enabled. The Laser panel labels
 the drain, home, park, and release phases; a completion-command failure also
 raises a one-time desktop error. The engraving may already be complete, so
-inspect the controller log and machine state before retrying. Dry jobs, stopped
+inspect the controller log and machine state before retrying. Zero-power jobs, stopped
 or failed jobs, emergency actions, and disconnects skip the additional homing
 and parking motion.
 

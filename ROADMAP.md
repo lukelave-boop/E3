@@ -29,9 +29,10 @@ Desktop foundation:
   Home/park, bounded laser-off incremental jogging, visible completion phases,
   failure alerts, and motor release; pause/resume remains disabled.
 - Safe browser and desktop simulator startup on Windows, with POSIX serial
-  selected only on supported systems.
+  selected only on supported systems, plus a Windows/Linux CI matrix.
 - Native lens calibration and fresh keyed 5×5 base mapping that does not depend
-  on a prior camera homography; real-machine verification remains outstanding.
+  on a prior camera homography; the workflow has been exercised on the current
+  Linux/C920 rig, while named-controller repeatability remains outstanding.
 
 Current branch feature:
 
@@ -66,7 +67,7 @@ These features have different verification levels; see `CURRENT_STATE.md`.
 
 ## Milestone 2 — Windows/Linux development consistency
 
-- Add Windows CI alongside the existing Linux Python matrix.
+- Keep the Windows/Linux CI matrix and package-import coverage green.
 - Add PowerShell setup/launch scripts and platform-appropriate CLI messages.
 - Separate portable OpenCV capture from Linux V4L2 discovery/control.
 
@@ -75,8 +76,9 @@ milestone. If added later, it needs its own serial transport and tests.
 
 ## Milestone 3 — native calibration and camera bring-up
 
-- Physically verify the native lens and keyed automatic base-map workflow after
-  a camera remount, including dry bounds, keyed detection, and axis direction.
+- Repeat the physically exercised lens and keyed automatic base-map workflow
+  after a camera remount, including Preview bounds, keyed detection, and axis
+  direction.
 - Validate stable C920 selection on the Linux workstation.
 - Add camera control presets and calibration-image quality guidance.
 - Add coverage visualization and repeatability measurements.
@@ -93,8 +95,8 @@ milestone. If added later, it needs its own serial transport and tests.
 - Confirm homing, coordinate origin, X/Y direction, and laser-head offset.
 - Establish verified work-area limits and a safe photo pose.
 - Add a versioned machine profile based on measured results.
-- Physically verify guarded jog direction, endpoint behavior, and STOP response
-  on the named controller profile.
+- Record the controller/firmware identity and repeat the observed jog direction
+  and endpoint behavior; physically verify STOP response on that named profile.
 - Test controller-specific realtime pause/resume before enabling it.
 
 ## Milestone 5 — improved authoring

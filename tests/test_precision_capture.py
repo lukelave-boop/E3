@@ -763,3 +763,53 @@ def test_crosshair_burst_rejects_an_incomplete_stable_consensus(monkeypatch) -> 
     assert result["detected"] is False
     assert "only 2 frames survived" in result["reason"]
     assert result["capture_diagnostics"]["required_consensus_frames"] == 3
+
+
+def test_crosshair_burst_rejects_malformed_frames_and_numeric_gates() -> None:
+    expected = [
+        {
+            "id": 1,
+            "image_x": 10.0,
+            "image_y": 12.0,
+            "machine_x": 5.0,
+            "machine_y": 6.0,
+        }
+    ]
+    frame = np.zeros((4, 4), dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="uint8"):
+        fiducials.detect_crosshairs_burst(
+            [np.empty((0, 0, 3), dtype=np.uint8)],
+            expected,
+        )
+    with pytest.raises(ValueError, match="finite"):
+        fiducials.detect_crosshairs_burst(
+            [frame],
+            expected,
+            frame_quality_scores=[float("nan")],
+        )
+    with pytest.raises(ValueError, match="cannot exceed"):
+        fiducials.detect_crosshairs_burst(
+            [frame],
+            expected,
+            minimum_valid_frames=2,
+        )
+
+
+def test_crosshair_burst_rejects_duplicate_or_nonfinite_expected_marks() -> None:
+    frame = np.zeros((4, 4), dtype=np.uint8)
+    expected = {
+        "id": 1,
+        "image_x": 10.0,
+        "image_y": 12.0,
+        "machine_x": 5.0,
+        "machine_y": 6.0,
+    }
+
+    with pytest.raises(ValueError, match="unique"):
+        fiducials.detect_crosshairs_burst([frame], [expected, dict(expected)])
+    with pytest.raises(ValueError, match="finite"):
+        fiducials.detect_crosshairs_burst(
+            [frame],
+            [{**expected, "image_x": float("nan")}],
+        )
