@@ -445,7 +445,10 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
         assert "ruler 0/0 maps to X10.0/Y10.0" in (
             dialog.honeycomb_support_status.text()
         )
-        assert (tmp_path / "data" / "honeycomb_support.json").exists()
+        assert (
+            runtime.context.calibration_profiles.active_dir
+            / "honeycomb_support.json"
+        ).exists()
         assert runtime.context.bed.calibration is calibration
         assert runtime.context.bed.calibration.to_dict() == calibration_before
         assert runtime.settings.machine.work_area == work_area_before
@@ -1150,7 +1153,7 @@ def test_machine_setup_prepares_dry_registration_through_main_job_signal(
         assert len(job.targets) == 8
         assert "M3 " not in job.program.text
         assert "M4 " not in job.program.text
-        assert (runtime.settings.app.data_dir / "fine_registration.json").exists()
+        assert runtime.context.fine_registration_path.exists()
     finally:
         dialog.close()
         runtime.stop()
@@ -1172,7 +1175,7 @@ def test_machine_setup_prepares_dry_base_map_through_main_job_signal(
         assert len(job.targets) == 25
         assert "M3 " not in job.program.text
         assert "M4 " not in job.program.text
-        assert (runtime.settings.app.data_dir / "base_bed_mapping.json").exists()
+        assert runtime.context.base_bed_mapping_path.exists()
     finally:
         dialog.close()
         runtime.stop()
@@ -1193,9 +1196,7 @@ def test_machine_setup_prepares_dry_validation_through_main_job_signal(
         assert job.powered is False
         assert len(job.targets) == 5
         assert "accuracy-validation-holdout-crosses" in job.program.text
-        assert (
-            runtime.settings.app.data_dir / "accuracy_validation.json"
-        ).exists()
+        assert runtime.context.accuracy_validation_path.exists()
     finally:
         dialog.close()
         runtime.stop()

@@ -15,6 +15,15 @@ Desktop **Start** no longer shows a powered-job warning or typed arming phrase;
 it creates the exact program's one-use temporary authorization internally and
 submits the prepared job immediately.
 
+Trace review uses fixed-screen-size, high-contrast numbered badges so object
+IDs remain readable over detailed camera imagery. A tri-state **Select /
+deselect all** checkbox reflects none, mixed, and complete selection and can
+change the whole detection list in one action. The focused desktop panel and
+workspace widget suites pass 45 tests for the current implementation. Loose
+identical-cell grids also repair only the affected center axis when a missed
+edge makes one observed cell materially narrower or shorter than the repeated
+size; unaffected placement and rotation remain independently observed.
+
 Branch: **`desktop-v1`**
 
 The Linux-machine work through **`15c2c7a`** was preserved and pushed before
@@ -71,6 +80,24 @@ timeouts, frame-copy ownership, acquisition-deadline semantics, deferred
 post-hold scoring, and restart rejection during deferred analysis. Real C920
 backend release timing, negotiated-mode reporting, sustained delivery, and
 control settling remain physically unverified.
+
+The Camera panel also provides a non-destructive **Test focus range…** operation.
+It serially applies each manual value, records three fresh post-settle sharpness
+scores, ranks their medians, and restores the original focus/autofocus controls
+without saving configuration or invalidating calibration. This permits focus
+comparison against an unchanged scene and calibration. Applying or saving a new
+final focus remains an optical change and still requires lens and bed
+recalibration before precision placement. The sweep lifecycle and result UI are
+automated-test verified; physical C920 sweep repeatability remains unverified.
+
+Calibration state is stored in optical profiles keyed by configured camera
+resolution and locked manual-focus value. Saving a new focus selects that
+profile on the next restart; its lens captures/model, bed map, registration and
+validation sessions, and honeycomb reference remain separate. Returning to a
+previously calibrated focus restores that stack. Existing unprofiled data is
+copied once into the profile inferred from recorded bed-map camera provenance,
+with the legacy source retained. Profile selection does not detect a camera
+remount or work-plane-height change; those still require fresh calibration.
 
 Machine Setup now has a dedicated fresh keyed 5×5 base-bed mapping workflow for
 a remounted camera. It generates 23 regular crosses plus two larger interior
@@ -202,12 +229,15 @@ the documented post-reset alarm as `M5 error:9`. The fallback now clears that
 expected alarm after reset, and Home / park can also recover from this exact
 pre-home error by unlocking, reissuing `M5`, and immediately running mandatory
 homing. Unrelated errors are not suppressed. Repeat detection remains to be
-physically rechecked with this recovery. Every new serial GRBL connection now
-requests an explicit release even when `$1` already appears finite. If
-`$1=255` persisted, it is restored first; if `$1` cannot be read, connection
-performs a best-effort finite restore and release, then fails clearly instead
-of trusting unknown state. An abnormal process or power loss can still
-interrupt restoration and warrants checking `$1`.
+physically rechecked with this recovery. Every new serial GRBL connection sends
+`M5` and checks `$1`. If `$1=255` persisted, it restores the configured finite
+idle delay; if `$1` cannot be read, connection performs that best-effort finite
+restore and then fails clearly instead of trusting unknown state. Ordinary
+connection no longer sends `$SLP` plus a soft reset merely to release
+already-idle motors, avoiding the controller's audible reset announcement.
+Explicit release after powered jobs and held captures retains the `$MD` or
+`$SLP`/reset fallback. An abnormal process or power loss can still interrupt
+restoration and warrants checking `$1`.
 
 Connect initialization, individual command/ack exchanges, complete Home / park
 sequences, and scoped camera holds now have exclusive ownership of the serial
@@ -219,12 +249,14 @@ followed by a false `G21 error:2`. Annotated, spaced, and integral-decimal `$1`
 reports are also accepted. The race is automated-test reproduced and fixed;
 the physical Connect-then-Home / park sequence still needs rechecking.
 
-Controller-required desktop actions now attempt connection themselves when the
-controller is offline. A prepared job therefore keeps **Start** available, and
-Home / park plus Machine Setup's parked calibration captures connect before
-continuing. Connection failure is reported as the operation failure; an
-untrusted connection after STOP or an uncertain acknowledgement remains blocked
-until the explicit reconnect path replaces it.
+Controller-required actions now attempt connection themselves when the
+controller is offline. This covers desktop jobs, Home / park, jogging,
+diagnostics, all parked Machine Setup captures, and the equivalent HTTP command,
+positioning, arming, and run routes. A prepared job therefore keeps **Start**
+available. Connection failure is reported as the operation failure and prevents
+the requested action; STOP generation invalidation prevents queued work from
+reconnecting and continuing. An untrusted connection after STOP or an uncertain
+acknowledgement remains blocked until the explicit reconnect path replaces it.
 
 `tools/live_desktop_driver.py` provides a narrow live Qt diagnostic driver for
 named status, Connect, Home / park, and camera-frame operations. It always starts
@@ -307,7 +339,7 @@ and derive their version from canonical package metadata. Automatic post-job
 calibration scoring is bound to the exact start receipt and program digest, so a
 stale or merely same-named completed job cannot trigger capture.
 
-The integrated Linux checkout passes all 1468 automated tests. Precision capture
+The integrated Linux checkout passes all 1476 automated tests. Precision capture
 is covered for genuinely fresh unique frames, configurable settling/discard and
 burst counts, camera-control readback, sharp-frame selection, temporal
 median/MAD rejection, jitter limits, persisted diagnostics, home-first capture,
@@ -502,7 +534,19 @@ bottom, while eight observed contours touch the right/top raster edge and may
 be cropped. Those cells remain visible in red and unchecked. Template matching
 also excludes them; exact-frame replay retains only six safe detections and
 rejects the resulting 37.5% feature coverage instead of accepting a false
-16/16 alignment.
+16/16 alignment. Fitted rounded-rectangle output now retains the existing
+uniform border offset as its default and also supports independent offsets for
+the rotated object's Top, Right, Bottom, and Left edges. A one-edge adjustment
+moves that edge and its adjoining corners without moving the opposite edge;
+focused core and offscreen panel regressions cover rotated top-only trimming,
+mode applicability, and option validation.
+Trace object creation now defaults to replacing objects created by earlier
+Trace captures as one undoable document operation. This prevents a completed
+physical workpiece from remaining in the next generated project job, while
+preserving drawings, imported objects, and all other non-Trace content. The
+operator can disable replacement to accumulate batches intentionally, and the
+temporary overlay action is explicitly distinguished from project-object
+removal.
 
 Machine Setup Step 3 now provides a parked work-area ruler reference. It holds
 the steppers through Home / park and the final raw frame, releases them before
@@ -621,7 +665,7 @@ machine program preflight.
 
 ## Verified in the current Linux checkout
 
-- **1468 tests passed in 352.43 seconds** with Qt using the offscreen platform,
+- **1476 tests passed in 374.33 seconds** with Qt using the offscreen platform,
   including the HTTP security tests with loopback socket access.
 - A clean temporary wheel build produced
   `laser_camera_aligner-0.2.0.dev0-py3-none-any.whl` (440,290 bytes, SHA-256
@@ -839,7 +883,9 @@ The repository contains:
 4. A native camera-object tracing workflow whose real-camera seam-selection
    failure is reproduced by the exact saved frame and covered by
    synthetic/offscreen adversarial tests; the repaired normalized-grid
-   created-object result still awaits a physical cut check.
+   created-object result still awaits a physical cut check. Loose normalized
+   grids can retain either each observed center or each detected top edge
+   without forcing direct observations onto an ideal lattice.
 5. A reusable cutting-template workflow with a versioned library, manual
    selection, geometric candidate ranking, rigid alignment review, and
    undoable project-object creation, plus a dedicated parametric designer for

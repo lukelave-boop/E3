@@ -760,6 +760,7 @@ class CameraPanel(QtWidgets.QWidget):
     focusApplyRequested = QtCore.Signal(bool, int)
     focusSaveRequested = QtCore.Signal(bool, int)
     sharpnessRequested = QtCore.Signal()
+    focusSweepRequested = QtCore.Signal(int, int, int)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -877,11 +878,25 @@ class CameraPanel(QtWidgets.QWidget):
         focus_layout.addWidget(self.apply_focus_button)
         focus_layout.addWidget(self.measure_button)
 
+        self.focus_sweep_button = QtWidgets.QPushButton("Test focus range…")
+        self.focus_sweep_button.setToolTip(
+            "Compare several manual focus values, then restore the current "
+            "camera focus without changing saved calibration."
+        )
+        focus_layout.addWidget(self.focus_sweep_button)
+
         self.save_focus_button = QtWidgets.QPushButton("Save focus")
         self.save_focus_button.setToolTip(
-            "Save as locked startup focus using the current value."
+            "Save as locked startup focus. A matching calibration profile is "
+            "selected after restart."
         )
         focus_layout.addWidget(self.save_focus_button)
+        self.calibration_profile_label = QtWidgets.QLabel(
+            "Calibration profile: waiting for runtime status"
+        )
+        self.calibration_profile_label.setObjectName("statusCard")
+        self.calibration_profile_label.setWordWrap(True)
+        focus_layout.addWidget(self.calibration_profile_label)
         self.sharpness_label = QtWidgets.QLabel("Sharpness score: —")
         self.sharpness_label.setObjectName("statusCard")
         self.sharpness_label.setWordWrap(True)
@@ -916,6 +931,7 @@ class CameraPanel(QtWidgets.QWidget):
         self.apply_focus_button.clicked.connect(self._apply_focus)
         self.save_focus_button.clicked.connect(self._save_focus)
         self.measure_button.clicked.connect(self.sharpnessRequested)
+        self.focus_sweep_button.clicked.connect(self._request_focus_sweep)
 
     def live_enabled(self) -> bool:
         return self.live_check.isChecked()
@@ -960,12 +976,44 @@ class CameraPanel(QtWidgets.QWidget):
                 f"Sharpness score: {float(payload['sharpness']):.1f}\n"
                 "Higher is sharper; compare values on the same scene."
             )
+        sweep = payload.get("focus_sweep")
+        if isinstance(sweep, list) and sweep:
+            ranked = sorted(
+                sweep,
+                key=lambda item: float(item["median_sharpness"]),
+                reverse=True,
+            )
+            lines = [
+                f"Best tested focus: {int(ranked[0]['focus'])} "
+                f"({float(ranked[0]['median_sharpness']):.1f})",
+                "  ".join(
+                    f"{int(item['focus'])}: {float(item['median_sharpness']):.1f}"
+                    for item in ranked
+                ),
+                f"Restored focus {int(payload['restored_focus'])}; calibration unchanged.",
+            ]
+            self.sharpness_label.setText("\n".join(lines))
         if payload.get("changed"):
             self.focus_warning.setVisible(True)
+        profile_label = payload.get("calibration_profile_label")
+        if profile_label:
+            prefix = "Saved profile" if payload.get("profile_restart_required") else "Active profile"
+            suffix = "\nRestart the app to activate it." if payload.get("profile_restart_required") else ""
+            self.calibration_profile_label.setText(f"{prefix}: {profile_label}{suffix}")
         skipped = payload.get("skipped") or {}
         self.sharpness_label.setToolTip(
             "; ".join(f"{name}: {reason}" for name, reason in skipped.items())
         )
+
+    def set_calibration_profile(self, payload: dict[str, Any] | None) -> None:
+        if not payload:
+            return
+        label = payload.get("active_label")
+        profiles = payload.get("profiles") or []
+        if label:
+            self.calibration_profile_label.setText(
+                f"Active profile: {label}\nSaved profiles: {len(profiles)}"
+            )
 
     def set_calibration_ready(self, ready: bool) -> None:
         self._calibration_ready = bool(ready)
@@ -1016,6 +1064,7 @@ class CameraPanel(QtWidgets.QWidget):
             self.apply_focus_button,
             self.save_focus_button,
             self.measure_button,
+            self.focus_sweep_button,
         ):
             widget.setEnabled(enabled)
         self._set_manual_focus_enabled(
@@ -1072,6 +1121,48 @@ class CameraPanel(QtWidgets.QWidget):
     def _save_focus(self) -> None:
         autofocus, value = self.focus_settings()
         self.focusSaveRequested.emit(autofocus, value)
+
+    def _request_focus_sweep(self) -> None:
+        dialog = QtWidgets.QDialog(self)
+        dialog.setWindowTitle("Test manual focus range")
+        layout = QtWidgets.QVBoxLayout(dialog)
+        form = _form_layout()
+        current = self.focus_spin.value()
+        start = QtWidgets.QSpinBox()
+        end = QtWidgets.QSpinBox()
+        step = QtWidgets.QSpinBox()
+        for widget in (start, end):
+            widget.setRange(0, 250)
+            widget.setSingleStep(5)
+        step.setRange(1, 50)
+        step.setSingleStep(1)
+        start.setValue(max(0, current - 10))
+        end.setValue(min(250, current + 20))
+        step.setValue(5)
+        form.addRow("From", start)
+        form.addRow("Through", end)
+        form.addRow("Step", step)
+        layout.addLayout(form)
+        layout.addWidget(
+            _muted(
+                "Three fresh sharpness readings are compared at each value. "
+                "The current focus is restored afterward; nothing is saved."
+            )
+        )
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+            | QtWidgets.QDialogButtonBox.StandardButton.Ok
+        )
+        buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Ok).setText(
+            "Run sweep"
+        )
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        first, last = sorted((start.value(), end.value()))
+        self.focusSweepRequested.emit(first, last, step.value())
 
 
 
@@ -1209,6 +1300,14 @@ class TracePanel(QtWidgets.QWidget):
             "and corner radius. Inferred cells remain on the fitted grid."
         )
         self.snap_grid_cells.setChecked(True)
+        self.normalize_anchor = QtWidgets.QComboBox()
+        self.normalize_anchor.addItem("Center", "center")
+        self.normalize_anchor.addItem("Detected top edge", "top")
+        self.normalize_anchor.setToolTip(
+            "Choose what stays fixed when direct cells receive an identical "
+            "height. Detected top edge prevents a damaged bottom edge from "
+            "shifting an otherwise clean top border."
+        )
         _form_row(filter_form, "Minimum area", self.min_area)
         _form_row(filter_form, "Maximum area", self.max_area)
         _form_row(filter_form, "Minimum width", self.min_width)
@@ -1222,6 +1321,7 @@ class TracePanel(QtWidgets.QWidget):
         filter_form.addRow(self.infer_missing)
         filter_form.addRow(self.normalize_grid)
         filter_form.addRow(self.snap_grid_cells)
+        _form_row(filter_form, "Identical-cell anchor", self.normalize_anchor)
         layout.addWidget(filter_group)
 
         output_group = QtWidgets.QGroupBox("Vector output")
@@ -1240,11 +1340,48 @@ class TracePanel(QtWidgets.QWidget):
             "Choose fitted rounded rectangles, simplified pixel contours, "
             "or the exact pixel-derived contours."
         )
+        self.border_offset_mode = QtWidgets.QComboBox()
+        self.border_offset_mode.addItem("Uniform", "uniform")
+        self.border_offset_mode.addItem("Per edge", "custom")
+        self.border_offset_mode.setToolTip(
+            "Use one offset on every edge, or adjust the top, right, bottom, "
+            "and left edges independently for fitted rounded rectangles."
+        )
         self.border_offset = QtWidgets.QDoubleSpinBox()
         self.border_offset.setRange(-25.0, 25.0)
         self.border_offset.setDecimals(2)
+        self.border_offset.setSingleStep(0.1)
         self.border_offset.setValue(0.0)
         self.border_offset.setSuffix(" mm")
+        self.border_offset.setToolTip(
+            "Positive values expand every edge; negative values trim every edge."
+        )
+        self.border_offset_label = QtWidgets.QLabel("Border offset")
+        self.border_offset_label.setToolTip(self.border_offset.toolTip())
+        self.edge_offsets = QtWidgets.QWidget()
+        edge_layout = QtWidgets.QGridLayout(self.edge_offsets)
+        edge_layout.setContentsMargins(0, 0, 0, 0)
+        edge_layout.setHorizontalSpacing(6)
+        edge_layout.setVerticalSpacing(4)
+        self.edge_offset_fields: dict[str, QtWidgets.QDoubleSpinBox] = {}
+        edge_tip = (
+            "Edges are relative to the rotated detected object, not the screen. "
+            "Positive expands that edge; negative trims that edge and its two "
+            "adjoining rounded corners."
+        )
+        for index, edge in enumerate(("Top", "Right", "Bottom", "Left")):
+            label = QtWidgets.QLabel(edge)
+            field = QtWidgets.QDoubleSpinBox()
+            field.setRange(-25.0, 25.0)
+            field.setDecimals(2)
+            field.setSingleStep(0.1)
+            field.setSuffix(" mm")
+            field.setToolTip(edge_tip)
+            label.setToolTip(edge_tip)
+            edge_layout.addWidget(label, index // 2, (index % 2) * 2)
+            edge_layout.addWidget(field, index // 2, (index % 2) * 2 + 1)
+            self.edge_offset_fields[edge.lower()] = field
+        self.edge_offsets.setToolTip(edge_tip)
         self.smoothing = QtWidgets.QDoubleSpinBox()
         self.smoothing.setRange(0.0, 10.0)
         self.smoothing.setDecimals(2)
@@ -1259,7 +1396,11 @@ class TracePanel(QtWidgets.QWidget):
         self.smoothing_label = QtWidgets.QLabel("Simplify tolerance")
         self.smoothing_label.setToolTip(smoothing_tip)
         _form_row(output_form, "Output shape", self.output_mode)
-        _form_row(output_form, "Border offset", self.border_offset)
+        _form_row(output_form, "Offset mode", self.border_offset_mode)
+        output_form.addRow(self.border_offset_label, self.border_offset)
+        self.edge_offsets_label = QtWidgets.QLabel("Edge offsets")
+        self.edge_offsets_label.setToolTip(edge_tip)
+        output_form.addRow(self.edge_offsets_label, self.edge_offsets)
         output_form.addRow(self.smoothing_label, self.smoothing)
         layout.addWidget(output_group)
 
@@ -1270,7 +1411,11 @@ class TracePanel(QtWidgets.QWidget):
             "through a fresh multi-frame capture, releases them, then traces "
             "the captured image. Ensure the travel path is clear."
         )
-        self.clear_button = QtWidgets.QPushButton("Clear preview")
+        self.clear_button = QtWidgets.QPushButton("Clear detection preview")
+        self.clear_button.setToolTip(
+            "Clear the temporary camera detection overlay. This does not delete "
+            "editable Trace objects that were already created in the project."
+        )
         layout.addWidget(self.detect_button)
         layout.addWidget(self.clear_button)
 
@@ -1314,6 +1459,14 @@ class TracePanel(QtWidgets.QWidget):
         self.result_tree.header().setSectionResizeMode(
             4, QtWidgets.QHeaderView.ResizeMode.Stretch
         )
+        self.select_all_checkbox = QtWidgets.QCheckBox("Select / deselect all")
+        self.select_all_checkbox.setTristate(True)
+        self.select_all_checkbox.setEnabled(False)
+        self.select_all_checkbox.setToolTip(
+            "Check to select every detected outline; clear to deselect every outline. "
+            "A partial check means only some outlines are selected."
+        )
+        result_layout.addWidget(self.select_all_checkbox)
         result_layout.addWidget(self.result_tree)
         select_row = QtWidgets.QVBoxLayout()
         self.select_grid_button = QtWidgets.QPushButton("Select complete grid")
@@ -1335,6 +1488,14 @@ class TracePanel(QtWidgets.QWidget):
         )
         self.create_button.setObjectName("primaryButton")
         self.create_button.setEnabled(False)
+        self.replace_previous = QtWidgets.QCheckBox("Replace earlier Trace objects")
+        self.replace_previous.setChecked(True)
+        self.replace_previous.setToolTip(
+            "When checked, creating this reviewed batch removes objects made by "
+            "earlier Trace captures while preserving drawings, imports, and other "
+            "project objects. The replacement is one undoable edit."
+        )
+        result_layout.addWidget(self.replace_previous)
         result_layout.addWidget(self.create_button)
         layout.addWidget(result_group)
         layout.addStretch(1)
@@ -1346,6 +1507,9 @@ class TracePanel(QtWidgets.QWidget):
         self.clear_button.clicked.connect(self._clear_clicked)
         self.create_button.clicked.connect(self._create_clicked)
         self.result_tree.itemChanged.connect(self._result_changed)
+        self.select_all_checkbox.stateChanged.connect(
+            self._select_all_checkbox_changed
+        )
         self.select_grid_button.clicked.connect(
             lambda: self._set_all_checked(True, include_inferred=True)
         )
@@ -1357,8 +1521,12 @@ class TracePanel(QtWidgets.QWidget):
             lambda: self._set_all_checked(False, include_inferred=True)
         )
         self.output_mode.currentIndexChanged.connect(self._sync_output_controls)
+        self.border_offset_mode.currentIndexChanged.connect(
+            self._sync_output_controls
+        )
         self.regular_grid.toggled.connect(self._sync_output_controls)
         self.normalize_grid.toggled.connect(self._sync_output_controls)
+        self.snap_grid_cells.toggled.connect(self._sync_output_controls)
 
         for widget in (
             self.mode_combo,
@@ -1374,8 +1542,11 @@ class TracePanel(QtWidgets.QWidget):
             self.infer_missing,
             self.normalize_grid,
             self.snap_grid_cells,
+            self.normalize_anchor,
             self.output_mode,
+            self.border_offset_mode,
             self.border_offset,
+            *self.edge_offset_fields.values(),
             self.smoothing,
         ):
             if isinstance(widget, QtWidgets.QComboBox):
@@ -1415,8 +1586,14 @@ class TracePanel(QtWidgets.QWidget):
             "infer_missing": self.infer_missing.isChecked(),
             "normalize_grid": self.normalize_grid.isChecked(),
             "snap_grid_cells": self.snap_grid_cells.isChecked(),
+            "normalize_anchor": str(self.normalize_anchor.currentData()),
             "output_mode": str(self.output_mode.currentData()),
+            "border_offset_mode": str(self.border_offset_mode.currentData()),
             "border_offset_mm": self.border_offset.value(),
+            "border_offset_top_mm": self.edge_offset_fields["top"].value(),
+            "border_offset_right_mm": self.edge_offset_fields["right"].value(),
+            "border_offset_bottom_mm": self.edge_offset_fields["bottom"].value(),
+            "border_offset_left_mm": self.edge_offset_fields["left"].value(),
             "smoothing_mm": self.smoothing.value(),
         }
 
@@ -1552,6 +1729,14 @@ class TracePanel(QtWidgets.QWidget):
                                 f"{float(diagnostics['observed_width_mm']):.2f} × "
                                 f"{float(diagnostics['observed_height_mm']):.2f} mm."
                             )
+                        repaired_axes = diagnostics.get("repaired_center_axes") or []
+                        if repaired_axes:
+                            geometry_tip += (
+                                " Its observed "
+                                + " and ".join(str(axis) for axis in repaired_axes)
+                                + " was truncated or enlarged, so that center axis "
+                                "uses the repeated-grid fit."
+                            )
                 else:
                     geometry_tip = (
                         "Irregular detected contour. Fitted rounded-rectangle "
@@ -1619,6 +1804,7 @@ class TracePanel(QtWidgets.QWidget):
                 "Select every fitted grid cell, including reviewed inferred gaps."
             )
         self.status_label.setText(str(result.get("message", "Detection complete")))
+        self._sync_select_all_checkbox()
         self._update_create_button()
         self.selectionChanged.emit(self.selected_ids())
 
@@ -1649,6 +1835,7 @@ class TracePanel(QtWidgets.QWidget):
         self.result_tree.clear()
         self.select_grid_button.setText("Select complete grid")
         self.select_grid_button.setEnabled(False)
+        self._sync_select_all_checkbox()
         self.create_button.setEnabled(False)
         self.status_label.setText("Trace preview cleared.")
 
@@ -1664,6 +1851,19 @@ class TracePanel(QtWidgets.QWidget):
 
     def _sync_output_controls(self, *args: Any) -> None:
         del args
+        rounded_output = self.output_mode.currentData() == "rounded"
+        if not rounded_output and self.border_offset_mode.currentData() == "custom":
+            self.border_offset_mode.setCurrentIndex(
+                self.border_offset_mode.findData("uniform")
+            )
+        custom_offset = (
+            rounded_output and self.border_offset_mode.currentData() == "custom"
+        )
+        self.border_offset_mode.setEnabled(rounded_output)
+        self.border_offset_label.setVisible(not custom_offset)
+        self.border_offset.setVisible(not custom_offset)
+        self.edge_offsets_label.setVisible(custom_offset)
+        self.edge_offsets.setVisible(custom_offset)
         smoothing_enabled = self.output_mode.currentData() == "smoothed"
         self.smoothing_label.setEnabled(smoothing_enabled)
         self.smoothing.setEnabled(smoothing_enabled)
@@ -1675,13 +1875,46 @@ class TracePanel(QtWidgets.QWidget):
         self.snap_grid_cells.setEnabled(
             self.normalize_grid.isEnabled() and self.normalize_grid.isChecked()
         )
+        self.normalize_anchor.setEnabled(
+            self.snap_grid_cells.isEnabled()
+            and not self.snap_grid_cells.isChecked()
+        )
 
     def _result_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         del item, column
         if self._updating:
             return
+        self._sync_select_all_checkbox()
         self._update_create_button()
         self.selectionChanged.emit(self.selected_ids())
+
+    def _sync_select_all_checkbox(self) -> None:
+        total = self.result_tree.topLevelItemCount()
+        selected = len(self.selected_ids())
+        if total == 0 or selected == 0:
+            state = QtCore.Qt.CheckState.Unchecked
+        elif selected == total:
+            state = QtCore.Qt.CheckState.Checked
+        else:
+            state = QtCore.Qt.CheckState.PartiallyChecked
+        was_updating = self._updating
+        self._updating = True
+        try:
+            self.select_all_checkbox.setEnabled(total > 0)
+            self.select_all_checkbox.setCheckState(state)
+        finally:
+            self._updating = was_updating
+
+    def _select_all_checkbox_changed(self, state: int) -> None:
+        if self._updating:
+            return
+        check_state = QtCore.Qt.CheckState(state)
+        if check_state == QtCore.Qt.CheckState.PartiallyChecked:
+            return
+        self._set_all_checked(
+            check_state == QtCore.Qt.CheckState.Checked,
+            include_inferred=True,
+        )
 
     def _update_create_button(self) -> None:
         count = len(self.selected_ids())
@@ -1705,6 +1938,7 @@ class TracePanel(QtWidgets.QWidget):
                     )
         finally:
             self._updating = False
+        self._sync_select_all_checkbox()
         self._update_create_button()
         self.selectionChanged.emit(self.selected_ids())
 
@@ -1728,6 +1962,7 @@ class TracePanel(QtWidgets.QWidget):
                 )
         finally:
             self._updating = False
+        self._sync_select_all_checkbox()
         self._update_create_button()
         self.selectionChanged.emit(self.selected_ids())
 
@@ -1742,6 +1977,7 @@ class TracePanel(QtWidgets.QWidget):
             {
                 "selected_ids": self.selected_ids(),
                 "output_mode": str(self.output_mode.currentData()),
+                "replace_previous": self.replace_previous.isChecked(),
             }
         )
 

@@ -118,6 +118,27 @@ def test_detect_keyed_crosshair_grid_ignores_surrounding_hardware_clutter():
     assert result["key_sizes_px"]["medium"] > result["key_sizes_px"]["regular_maximum"]
 
 
+def test_detect_keyed_crosshair_grid_falls_back_from_clustered_assembly(monkeypatch):
+    image, targets = _keyed_grid_image()
+    original = cv2.findCirclesGrid
+    attempted_flags: list[int] = []
+
+    def find_grid(*args, **kwargs):
+        flags = kwargs["flags"]
+        attempted_flags.append(flags)
+        if flags & cv2.CALIB_CB_CLUSTERING:
+            return False, None
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(cv2, "findCirclesGrid", find_grid)
+
+    result = detect_keyed_crosshair_grid(image, targets)
+
+    assert result["detected"] is True
+    assert any(flags & cv2.CALIB_CB_CLUSTERING for flags in attempted_flags)
+    assert cv2.CALIB_CB_SYMMETRIC_GRID in attempted_flags
+
+
 def test_detect_keyed_crosshair_grid_rejects_blank_image():
     _, targets = _keyed_grid_image()
 

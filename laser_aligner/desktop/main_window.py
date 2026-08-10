@@ -32,6 +32,7 @@ from ..project import (
     RemoveObjectsCommand,
     ReorderLayersCommand,
     ReorderObjectsCommand,
+    ReplaceObjectsCommand,
     SceneObject,
     Transform,
     UngroupObjectsCommand,
@@ -1026,6 +1027,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.camera_panel.sharpnessRequested.connect(
             self.controller.measure_camera_sharpness
+        )
+        self.camera_panel.focusSweepRequested.connect(
+            self.controller.test_camera_focus_range
         )
         self.camera_panel.lensCalibrationRequested.connect(
             lambda: self.open_machine_setup(1)
@@ -3488,26 +3492,51 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.show_notice("Select at least one detected outline")
             return
         output_mode = str(payload.get("output_mode", "rounded"))
+        replaced_count = 0
         try:
             objects = [
                 self._trace_detection_to_object(item, output_mode)
                 for item in detections
             ]
-            command = AddObjectsCommand(
-                self.document,
-                objects,
-                description=f"Create {len(objects)} traced objects",
-            )
+            replace_previous = bool(payload.get("replace_previous", True))
+            previous_trace_ids = [
+                item.id
+                for item in self.document.objects
+                if "trace_source" in item.metadata
+            ]
+            if replace_previous and previous_trace_ids:
+                replaced_count = len(previous_trace_ids)
+                command = ReplaceObjectsCommand(
+                    self.document,
+                    previous_trace_ids,
+                    objects,
+                    description=(
+                        f"Replace previous trace with {len(objects)} objects"
+                    ),
+                )
+            else:
+                command = AddObjectsCommand(
+                    self.document,
+                    objects,
+                    description=f"Create {len(objects)} traced objects",
+                )
             self.history.execute(command)
         except Exception as exc:
             self.show_error(f"Could not create traced objects: {exc}")
             return
         self._clear_trace_preview()
         self.workspace.select_objects([item.id for item in objects])
-        self.show_notice(
-            f"Created {len(objects)} editable vector object"
-            f"{'s' if len(objects) != 1 else ''}"
-        )
+        if replaced_count:
+            self.show_notice(
+                f"Replaced {replaced_count} earlier Trace object"
+                f"{'s' if replaced_count != 1 else ''} with {len(objects)} new "
+                f"object{'s' if len(objects) != 1 else ''}"
+            )
+        else:
+            self.show_notice(
+                f"Created {len(objects)} editable vector object"
+                f"{'s' if len(objects) != 1 else ''}"
+            )
 
     def _camera_image_ready(self, image: QtGui.QImage) -> None:
         self.workspace.set_camera_image(
@@ -3536,6 +3565,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         camera = status.get("camera")
         machine = status.get("machine")
         self.camera_panel.set_status(camera)
+        self.camera_panel.set_calibration_profile(status.get("calibration_profile"))
         calibration_ready = bool((status.get("bed") or {}).get("calibrated", False))
         self.camera_panel.set_calibration_ready(calibration_ready)
         self.trace_panel.set_calibration_ready(calibration_ready)

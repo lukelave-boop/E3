@@ -30,10 +30,14 @@ unlisted calibration step or interrupt a tab transition described here.
 ## Before Step 1
 
 1. Mount the camera permanently and independently of the bed and gantry.
-2. Confirm the configured work area and camera pose match the physical rig.
-3. Connect the camera. Connect the controller only when a step explicitly
+2. Choose and save the locked focus on the main Camera panel, then restart.
+   The active calibration profile is keyed by resolution and focus. A new
+   profile needs Steps 1-5 once; returning to a previously completed focus and
+   restarting restores that focus's full calibration stack.
+3. Confirm the configured work area and camera pose match the physical rig.
+4. Connect the camera. Connect the controller only when a step explicitly
    requires Home, park, commanded motion, or a guarded marking job.
-4. Open **Tools > Machine Setup**.
+5. Open **Tools > Machine Setup**.
 
 ## 1. Camera
 

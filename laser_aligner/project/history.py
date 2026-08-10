@@ -332,6 +332,60 @@ class RemoveObjectsCommand(Command):
             self.document.add_object(item, index)
 
 
+class ReplaceObjectsCommand(Command):
+    """Replace selected document objects with a new collection atomically."""
+
+    def __init__(
+        self,
+        document: ProjectDocument,
+        removed_ids: Iterable[str],
+        items: Iterable[SceneObject],
+        description: str = "Replace objects",
+    ) -> None:
+        self.document = document
+        self.removed_ids = list(dict.fromkeys(removed_ids))
+        self.items = list(items)
+        if not self.items:
+            raise ValueError("ReplaceObjectsCommand requires replacement objects")
+        if {item.id for item in self.items} & set(self.removed_ids):
+            raise ValueError("Replacement objects must have new identifiers")
+        self.description = description
+        self._removed: list[tuple[SceneObject, int]] = []
+        self._insertion_index: int | None = None
+
+    def redo(self) -> None:
+        if not self._removed:
+            self._removed = sorted(
+                [
+                    (
+                        self.document.get_object(object_id),
+                        self.document.objects.index(
+                            self.document.get_object(object_id)
+                        ),
+                    )
+                    for object_id in self.removed_ids
+                ],
+                key=lambda record: record[1],
+            )
+            self._insertion_index = (
+                self._removed[0][1] if self._removed else len(self.document.objects)
+            )
+        for item, _ in reversed(self._removed):
+            self.document.remove_object(item.id)
+        insertion = min(
+            self._insertion_index or 0,
+            len(self.document.objects),
+        )
+        for offset, item in enumerate(self.items):
+            self.document.add_object(item, insertion + offset)
+
+    def undo(self) -> None:
+        for item in reversed(self.items):
+            self.document.remove_object(item.id)
+        for item, index in self._removed:
+            self.document.add_object(item, index)
+
+
 class UpdateObjectPropertiesCommand(Command):
     _ALLOWED = {"name", "visible", "locked"}
 

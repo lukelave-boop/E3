@@ -2032,7 +2032,9 @@ def test_serial_connect_repairs_camera_hold_persisted_across_power_cycle(
 
     try:
         machine.connect()
-        assert transport.commands[:4] == ["$$", "M5", "$1=250", "$MD"]
+        assert transport.commands[:3] == ["$$", "M5", "$1=250"]
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
         assert any("Recovered stale camera motor hold" in line for line in machine.status()["log"])
     finally:
         machine.disconnect()
@@ -2068,8 +2070,10 @@ def test_serial_connect_explicitly_releases_motors_with_normal_idle_delay(
 
     try:
         machine.connect()
-        assert transport.commands[:3] == ["$$", "M5", "$MD"]
+        assert transport.commands[:2] == ["$$", "M5"]
         assert "$1=250" not in transport.commands
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
         assert not machine.status()["coordinate_reference_ready"]
     finally:
         machine.disconnect()
@@ -2268,7 +2272,9 @@ def test_serial_connect_forces_finite_idle_delay_when_grbl_omits_setting(
     with pytest.raises(MachineError, match=r"GRBL settings could not be read"):
         machine.connect()
 
-    assert transport.commands[:4] == ["$$", "M5", "$1=250", "$MD"]
+    assert transport.commands[:3] == ["$$", "M5", "$1=250"]
+    assert "$MD" not in transport.commands
+    assert "$SLP" not in transport.commands
     assert not machine.connected
     assert not transport.is_open
 
@@ -2315,7 +2321,9 @@ def test_explicit_grbl_connect_waits_for_controller_startup_before_querying(
 
     assert status["connected"] is True
     assert sleeps[0] == 2.0
-    assert transport.commands[:3] == ["$$", "M5", "$MD"]
+    assert transport.commands[:2] == ["$$", "M5"]
+    assert "$MD" not in transport.commands
+    assert "$SLP" not in transport.commands
     machine.disconnect()
 
 
@@ -3128,7 +3136,9 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
 
     machine.connect()
     try:
-        assert transport.commands[:5] == ["$$", "M5", "$MD", "$SLP", "$X"]
+        assert transport.commands[:2] == ["$$", "M5"]
+        assert "$SLP" not in transport.commands
+        assert transport.raw_writes == []
         machine.prepare_photo_position()
         transport.commands.clear()
         transport.raw_writes.clear()

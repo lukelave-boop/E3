@@ -63,6 +63,9 @@ class _SpyMachine:
         self._mutations.append(("preflight_program", gcode))
         return SimpleNamespace(digest="validated-program")
 
+    def ensure_connected(self) -> None:
+        self._mutations.append(("ensure_connected", None))
+
     def operation_generation(self) -> int:
         return 0
 
@@ -77,6 +80,18 @@ class _SpyMachine:
 
     def disarm(self) -> None:
         self._mutations.append(("disarm", None))
+
+    def send_command(self, command: str) -> list[str]:
+        self._mutations.append(("send_command", command))
+        return ["ok"]
+
+    def prepare_photo_position(self) -> dict[str, Any]:
+        self._mutations.append(("prepare_photo_position", None))
+        return {"position": {"x": 10.0, "y": 20.0}}
+
+    def start_job(self, gcode: str, name: str) -> dict[str, Any]:
+        self._mutations.append(("start_job", (gcode, name)))
+        return {"running": True, "name": name}
 
 
 class _SpyContext:
@@ -611,9 +626,76 @@ def test_arm_preflights_then_binds_authorization_to_that_program(http_app) -> No
     assert status == 200
     assert json.loads(payload) == {"ok": True, "armed_until": 1234.5}
     assert context.mutations == [
+        ("ensure_connected", None),
         ("preflight_program", gcode),
         ("arm_program", ("ARM LASER", "validated-program")),
     ]
+
+
+@pytest.mark.parametrize(
+    ("path", "body", "expected_mutation"),
+    [
+        (
+            "/api/machine/command",
+            {"command": "?"},
+            ("send_command", "?"),
+        ),
+        (
+            "/api/machine/photo-position",
+            {},
+            ("prepare_photo_position", None),
+        ),
+        (
+            "/api/machine/run",
+            {"gcode": "G21\nG90\nM5", "name": "job.gcode"},
+            ("start_job", ("G21\nG90\nM5", "job.gcode")),
+        ),
+    ],
+)
+def test_controller_routes_connect_before_continuing_once(
+    http_app,
+    path: str,
+    body: dict[str, Any],
+    expected_mutation: tuple[str, Any],
+) -> None:
+    server, context = http_app
+    token = _token_from_index(server)
+
+    status, _headers, _payload = _request(
+        server,
+        "POST",
+        path,
+        body=json.dumps(body),
+        headers=_authorized_headers(server, token),
+    )
+
+    assert status in {200, 202}
+    assert context.mutations == [
+        ("ensure_connected", None),
+        expected_mutation,
+    ]
+
+
+def test_failed_auto_connect_prevents_controller_action(http_app) -> None:
+    server, context = http_app
+    token = _token_from_index(server)
+
+    def fail_connection() -> None:
+        context.mutations.append(("ensure_connected", None))
+        raise MachineError("connection unavailable")
+
+    context.machine.ensure_connected = fail_connection
+    status, _headers, payload = _request(
+        server,
+        "POST",
+        "/api/machine/photo-position",
+        body="{}",
+        headers=_authorized_headers(server, token),
+    )
+
+    assert status == 400
+    assert "connection unavailable" in json.loads(payload)["error"]
+    assert context.mutations == [("ensure_connected", None)]
 
 
 def test_stale_arm_request_cannot_disarm_a_new_generation(http_app) -> None:

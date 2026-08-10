@@ -13,6 +13,8 @@ from ..config import WorkArea
 
 TRACE_MODES = {"auto", "color", "contrast"}
 OUTPUT_MODES = {"rounded", "smoothed", "exact"}
+BORDER_OFFSET_MODES = {"uniform", "custom"}
+NORMALIZE_ANCHORS = {"center", "top"}
 
 
 def _finite_option(value: Any, label: str) -> float:
@@ -53,8 +55,14 @@ class TraceOptions:
     infer_missing: bool = True
     normalize_grid: bool = True
     snap_grid_cells: bool = True
+    normalize_anchor: str = "center"
     output_mode: str = "rounded"
+    border_offset_mode: str = "uniform"
     border_offset_mm: float = 0.0
+    border_offset_top_mm: float = 0.0
+    border_offset_right_mm: float = 0.0
+    border_offset_bottom_mm: float = 0.0
+    border_offset_left_mm: float = 0.0
     smoothing_mm: float = 0.25
 
     def __post_init__(self) -> None:
@@ -111,13 +119,37 @@ class TraceOptions:
         ):
             if type(getattr(self, field_name)) is not bool:
                 raise ValueError(f"{field_name} must be a JSON boolean")
+        self.normalize_anchor = str(self.normalize_anchor).lower()
+        if self.normalize_anchor not in NORMALIZE_ANCHORS:
+            raise ValueError(
+                f"Unknown identical-cell anchor: {self.normalize_anchor}"
+            )
         self.output_mode = str(self.output_mode).lower()
         if self.output_mode not in OUTPUT_MODES:
             raise ValueError(f"Unknown output mode: {self.output_mode}")
+        self.border_offset_mode = str(self.border_offset_mode).lower()
+        if self.border_offset_mode not in BORDER_OFFSET_MODES:
+            raise ValueError(
+                f"Unknown border offset mode: {self.border_offset_mode}"
+            )
         self.border_offset_mm = max(
             -25.0,
             min(25.0, _finite_option(self.border_offset_mm, "border_offset_mm")),
         )
+        for field_name in (
+            "border_offset_top_mm",
+            "border_offset_right_mm",
+            "border_offset_bottom_mm",
+            "border_offset_left_mm",
+        ):
+            setattr(
+                self,
+                field_name,
+                max(
+                    -25.0,
+                    min(25.0, _finite_option(getattr(self, field_name), field_name)),
+                ),
+            )
         self.smoothing_mm = max(
             0.0,
             min(10.0, _finite_option(self.smoothing_mm, "smoothing_mm")),
@@ -448,6 +480,57 @@ def _adaptive_contrast_masks(
     return masks[0], masks[1]
 
 
+def _closed_outline_mask(
+    image: np.ndarray,
+    pixels_per_mm: float,
+    options: TraceOptions,
+) -> np.ndarray:
+    """Fill strong closed outlines so hollow printed labels remain traceable."""
+
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0)
+    median = float(np.median(blurred))
+    # Printed borders remain much thinner than filled targets. Keep the edge
+    # thresholds deliberately below the later filled-region thresholds so a
+    # pale label with dense interior text still contributes its outer loop.
+    lower = max(20.0, min(40.0, median * 0.20))
+    upper = max(lower + 35.0, min(120.0, median * 0.60))
+    edges = cv2.Canny(blurred, lower, upper)
+    kernel_width = max(3, int(round(pixels_per_mm * 1.25)))
+    if kernel_width % 2 == 0:
+        kernel_width += 1
+    closed = cv2.morphologyEx(
+        edges,
+        cv2.MORPH_CLOSE,
+        np.ones((3, kernel_width), dtype=np.uint8),
+        iterations=1,
+    )
+    contours, _ = cv2.findContours(
+        closed,
+        cv2.RETR_LIST,
+        cv2.CHAIN_APPROX_NONE,
+    )
+    output = np.zeros_like(gray)
+    minimum_area_px = options.min_area_mm2 * pixels_per_mm**2
+    maximum_area_px = options.max_area_mm2 * pixels_per_mm**2
+    minimum_width_px = options.min_width_mm * pixels_per_mm
+    minimum_height_px = options.min_height_mm * pixels_per_mm
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if not minimum_area_px <= area <= maximum_area_px:
+            continue
+        rectangle = _long_axis_rect(contour)
+        if rectangle is None:
+            continue
+        if (
+            rectangle["width"] < minimum_width_px
+            or rectangle["height"] < minimum_height_px
+        ):
+            continue
+        cv2.drawContours(output, [contour], -1, 255, -1)
+    return output
+
+
 def _long_axis_rect(contour: np.ndarray) -> dict[str, Any] | None:
     rect = cv2.minAreaRect(contour.astype(np.float32))
     box = cv2.boxPoints(rect).astype(np.float64)
@@ -590,21 +673,42 @@ def _machine_geometry(
     work_area: WorkArea,
     pixels_per_mm: float,
     offset_mm: float,
+    *,
+    edge_offsets_mm: Mapping[str, float] | None = None,
 ) -> dict[str, Any]:
     center = _pixel_to_machine(
         np.asarray(rectangle["center"]).reshape(1, 2), work_area, pixels_per_mm
     )[0]
-    width = max(0.01, float(rectangle["width"]) / pixels_per_mm + 2 * offset_mm)
-    height = max(0.01, float(rectangle["height"]) / pixels_per_mm + 2 * offset_mm)
     rotation = -float(rectangle["angle_image_deg"])
-    radius = max(
-        0.0,
-        float(rectangle.get("radius_px", 0.0)) / pixels_per_mm + offset_mm,
-    )
-    radius = min(radius, width / 2.0, height / 2.0)
+    base_width = float(rectangle["width"]) / pixels_per_mm
+    base_height = float(rectangle["height"]) / pixels_per_mm
+    if edge_offsets_mm is None:
+        top = right = bottom = left = float(offset_mm)
+        radius_offset = float(offset_mm)
+    else:
+        top = float(edge_offsets_mm["top"])
+        right = float(edge_offsets_mm["right"])
+        bottom = float(edge_offsets_mm["bottom"])
+        left = float(edge_offsets_mm["left"])
+        # Per-edge adjustment moves the selected side and its adjoining
+        # corners. Retaining the fitted radius keeps the other three sides
+        # geometrically unchanged instead of applying a second global offset.
+        radius_offset = 0.0
+    width = max(0.01, base_width + left + right)
+    height = max(0.01, base_height + bottom + top)
     angle = math.radians(rotation)
     u = np.array([math.cos(angle), math.sin(angle)])
     v = np.array([-u[1], u[0]])
+    center = (
+        center
+        + u * (right - left) / 2.0
+        + v * (top - bottom) / 2.0
+    )
+    radius = max(
+        0.0,
+        float(rectangle.get("radius_px", 0.0)) / pixels_per_mm + radius_offset,
+    )
+    radius = min(radius, width / 2.0, height / 2.0)
     box = []
     for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
         point = center + u * sx * width / 2 + v * sy * height / 2
@@ -616,6 +720,20 @@ def _machine_geometry(
         "rotation_deg": rotation,
         "corner_radius_mm": radius,
         "box_mm": box,
+    }
+
+
+def _custom_edge_offsets(options: TraceOptions) -> dict[str, float] | None:
+    if (
+        options.output_mode != "rounded"
+        or options.border_offset_mode != "custom"
+    ):
+        return None
+    return {
+        "top": options.border_offset_top_mm,
+        "right": options.border_offset_right_mm,
+        "bottom": options.border_offset_bottom_mm,
+        "left": options.border_offset_left_mm,
     }
 
 
@@ -692,12 +810,24 @@ def _candidate(
         shape = "contour"
         score = 0.42 * solidity + 0.33 * coverage + 0.25 * compactness
         confidence = max(0.0, min(1.0, (score - 0.30) / 0.55))
+    custom_edge_offsets = (
+        _custom_edge_offsets(options)
+        if options.output_mode == "rounded" and rounded
+        else None
+    )
     geometry = _machine_geometry(
-        rectangle, work_area, pixels_per_mm, options.border_offset_mm
+        rectangle,
+        work_area,
+        pixels_per_mm,
+        options.border_offset_mm,
+        edge_offsets_mm=custom_edge_offsets,
+    )
+    contour_offset_mm = (
+        options.border_offset_mm if custom_edge_offsets is None else 0.0
     )
     points = _offset_contour(
         contour,
-        options.border_offset_mm * pixels_per_mm,
+        contour_offset_mm * pixels_per_mm,
         0.0 if options.output_mode == "exact" else options.smoothing_mm * pixels_per_mm,
     )
     contour_mm = _pixel_to_machine(points, work_area, pixels_per_mm)
@@ -1016,11 +1146,39 @@ def _infer_grid(
             if use_lattice_pose or item is None
             else np.asarray(item["center_px"], dtype=np.float64)
         )
+        repaired_center_axes: list[str] = []
+        if item is not None and not use_lattice_pose and normalize:
+            # A clipped/obscured edge biases minAreaRect's center toward the
+            # surviving side. Expanding the shared size around that biased
+            # center shifts the proposed cut off the real object. Borrow the
+            # lattice center only on a materially malformed size axis.
+            width_delta = abs(float(item["width_px"]) - median_width)
+            height_delta = abs(float(item["height_px"]) - median_height)
+            width_threshold = max(2.0 * pixels_per_mm, median_width * 0.03)
+            height_threshold = max(2.0 * pixels_per_mm, median_height * 0.08)
+            if width_delta > width_threshold:
+                center_px = center_px + u * float((lattice_center_px - center_px) @ u)
+                repaired_center_axes.append("width")
+            if height_delta > height_threshold:
+                center_px = center_px + v * float((lattice_center_px - center_px) @ v)
+                repaired_center_axes.append("height")
         cell_angle = (
             common_angle
             if use_lattice_pose or item is None
             else float(item["angle_image_deg"])
         )
+        if (
+            item is not None
+            and not use_lattice_pose
+            and options.normalize_anchor == "top"
+        ):
+            angle = math.radians(cell_angle)
+            local_y = np.array([-math.sin(angle), math.cos(angle)])
+            # Keep the independently detected top fixed while replacing a
+            # bottom-damage-biased observed height with the shared height.
+            center_px = center_px + local_y * (
+                median_height - float(item["height_px"])
+            ) / 2.0
         rectangle = {
             "center": center_px,
             "width": median_width,
@@ -1029,7 +1187,11 @@ def _infer_grid(
             "radius_px": median_radius,
         }
         geometry = _machine_geometry(
-            rectangle, work_area, pixels_per_mm, options.border_offset_mm
+            rectangle,
+            work_area,
+            pixels_per_mm,
+            options.border_offset_mm,
+            edge_offsets_mm=_custom_edge_offsets(options),
         )
         rounded_contour = _rounded_polyline(
             geometry["center_mm"],
@@ -1097,6 +1259,7 @@ def _infer_grid(
                 "observed_height_mm": float(item["height_mm"]),
                 "observed_rotation_deg": float(item["rotation_deg"]),
                 "observed_corner_radius_mm": float(item["corner_radius_mm"]),
+                "repaired_center_axes": repaired_center_axes,
                 "observed_within_work_area": bool(
                     item.get("within_work_area", True)
                 ),
@@ -1159,6 +1322,7 @@ def _infer_grid(
         work_area,
         pixels_per_mm,
         options.border_offset_mm,
+        edge_offsets_mm=_custom_edge_offsets(options),
     )
     output_cells = [*direct, *inferred]
     outside_cells = sum(
@@ -1187,6 +1351,7 @@ def _infer_grid(
         ),
         "normalized": normalize,
         "cells_snapped": normalize and options.snap_grid_cells,
+        "normalization_anchor": options.normalize_anchor,
         "cell_width_mm": float(canonical_geometry["width_mm"]),
         "cell_height_mm": float(canonical_geometry["height_mm"]),
         "cell_corner_radius_mm": float(canonical_geometry["corner_radius_mm"]),
@@ -1276,6 +1441,9 @@ def _to_detection(
                     "observed_rotation_deg": float(item["observed_rotation_deg"]),
                     "observed_corner_radius_mm": float(
                         item["observed_corner_radius_mm"]
+                    ),
+                    "repaired_center_axes": list(
+                        item.get("repaired_center_axes", [])
                     ),
                     "observed_within_work_area": bool(
                         item.get("observed_within_work_area", True)
@@ -1369,6 +1537,14 @@ def detect_objects(
         masks.append(
             (
                 "contrast",
+                "closed_outline",
+                _closed_outline_mask(image, pixels_per_mm, options),
+                None,
+            )
+        )
+        masks.append(
+            (
+                "contrast",
                 "local_absolute",
                 _contrast_mask(image, pixels_per_mm),
                 None,
@@ -1409,6 +1585,7 @@ def detect_objects(
         "clahe_light",
         "adaptive_dark",
         "adaptive_light",
+        "closed_outline",
     }
     best = None
     for mode, mask_source, mask, hue in masks:

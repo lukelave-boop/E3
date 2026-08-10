@@ -24,6 +24,51 @@ from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY, DRAFTING_COLORS
 QtCore, QtGui, QtWidgets = require_qt()
 
 
+class _TraceIndexBadge(QtWidgets.QGraphicsItem):
+    """Fixed-screen-size detection number that remains legible over camera pixels."""
+
+    def __init__(self, text: str, accent: QtGui.QColor) -> None:
+        super().__init__()
+        self.text = str(text)
+        self.accent = QtGui.QColor(accent)
+        self.setFlag(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
+            True,
+        )
+        self.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+
+    def boundingRect(self) -> QtCore.QRectF:
+        return QtCore.QRectF(-15.0, -12.0, 30.0, 24.0)
+
+    def paint(
+        self,
+        painter: QtGui.QPainter,
+        option: QtWidgets.QStyleOptionGraphicsItem,
+        widget: QtWidgets.QWidget | None = None,
+    ) -> None:
+        del option, widget
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
+        fill = QtGui.QColor("#151A1E")
+        fill.setAlpha(235)
+        pen = QtGui.QPen(self.accent)
+        pen.setWidthF(2.0)
+        pen.setCosmetic(True)
+        painter.setPen(pen)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(self.boundingRect(), 5.0, 5.0)
+
+        font = painter.font()
+        font.setBold(True)
+        font.setPixelSize(12)
+        painter.setFont(font)
+        painter.setPen(QtGui.QColor("#FFFFFF"))
+        painter.drawText(
+            self.boundingRect(),
+            QtCore.Qt.AlignmentFlag.AlignCenter,
+            self.text,
+        )
+
+
 class WorkspaceScene(QtWidgets.QGraphicsScene):
     def __init__(self, work_area: Bounds, parent: QtCore.QObject | None = None) -> None:
         super().__init__(parent)
@@ -1842,17 +1887,12 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._trace_items.append(item)
 
             center = detection.get("center_mm")
-            if center and len(center) == 2:
-                label = QtWidgets.QGraphicsSimpleTextItem(str(detection.get("index", "")))
-                label.setBrush(color)
-                label.setFlag(
-                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations,
-                    True,
-                )
+            index_text = str(detection.get("index", ""))
+            if center and len(center) == 2 and index_text:
+                label = _TraceIndexBadge(index_text, color)
                 position = self.workspace_scene.machine_to_scene(*center)
-                label.setPos(position + QtCore.QPointF(1.5, -1.5))
+                label.setPos(position)
                 label.setZValue(261.0)
-                label.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
                 self.workspace_scene.addItem(label)
                 self._trace_items.append(label)
 

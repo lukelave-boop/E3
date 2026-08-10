@@ -353,14 +353,20 @@ def detect_keyed_crosshair_grid(
             candidate_params.filterByColor = True
             candidate_params.blobColor = 0
             candidate_detector = cv2.SimpleBlobDetector_create(candidate_params)
-            found, candidate_centers = cv2.findCirclesGrid(
-                candidate_image,
-                (grid_size, grid_size),
-                flags=cv2.CALIB_CB_SYMMETRIC_GRID | cv2.CALIB_CB_CLUSTERING,
-                blobDetector=candidate_detector,
-            )
-            if found and candidate_centers is not None:
-                centers = candidate_centers
+            for flags in (
+                cv2.CALIB_CB_SYMMETRIC_GRID | cv2.CALIB_CB_CLUSTERING,
+                cv2.CALIB_CB_SYMMETRIC_GRID,
+            ):
+                found, candidate_centers = cv2.findCirclesGrid(
+                    candidate_image,
+                    (grid_size, grid_size),
+                    flags=flags,
+                    blobDetector=candidate_detector,
+                )
+                if found and candidate_centers is not None:
+                    centers = candidate_centers
+                    break
+            if centers is not None:
                 break
         if centers is not None:
             break

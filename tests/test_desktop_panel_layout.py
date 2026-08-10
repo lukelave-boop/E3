@@ -82,6 +82,15 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
 
     assert panel.output_mode.currentData() == "rounded"
     assert panel.output_mode.currentText() == "Fitted rounded rectangles"
+    assert panel.border_offset_mode.currentData() == "uniform"
+    assert panel.border_offset_mode.isEnabled()
+    assert panel.border_offset.singleStep() == pytest.approx(0.1)
+    assert all(
+        field.singleStep() == pytest.approx(0.1)
+        for field in panel.edge_offset_fields.values()
+    )
+    assert panel.border_offset.isVisibleTo(panel)
+    assert not panel.edge_offsets.isVisibleTo(panel)
     assert not panel.smoothing.isEnabled()
     assert not panel.smoothing_label.isEnabled()
     assert panel.normalize_grid.isEnabled()
@@ -95,9 +104,24 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert panel.smoothing_label.isEnabled()
     assert not panel.normalize_grid.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
+    assert not panel.border_offset_mode.isEnabled()
+
+    panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
+    panel.border_offset_mode.setCurrentIndex(
+        panel.border_offset_mode.findData("custom")
+    )
+    panel.edge_offset_fields["top"].setValue(-1.25)
+    qt_application.processEvents()
+    assert not panel.border_offset.isVisibleTo(panel)
+    assert panel.edge_offsets.isVisibleTo(panel)
+    assert panel.options()["border_offset_mode"] == "custom"
+    assert panel.options()["border_offset_top_mm"] == pytest.approx(-1.25)
 
     panel.output_mode.setCurrentIndex(panel.output_mode.findData("exact"))
     qt_application.processEvents()
+    assert panel.border_offset_mode.currentData() == "uniform"
+    assert not panel.border_offset_mode.isEnabled()
+
     assert not panel.smoothing.isEnabled()
     assert not panel.smoothing_label.isEnabled()
     assert not panel.normalize_grid.isEnabled()
@@ -158,6 +182,48 @@ def test_trace_result_exposes_fitted_corner_radius(
     qt_application.processEvents()
 
 
+def test_trace_create_payload_can_keep_earlier_trace_batches(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    panel.set_result(
+        {
+            "message": "One fitted object",
+            "detections": [
+                {
+                    "id": "trace-new",
+                    "index": 1,
+                    "source": "direct",
+                    "confidence": 0.95,
+                    "selected_default": True,
+                    "shape": "rounded_rectangle",
+                    "width_mm": 80.0,
+                    "height_mm": 20.0,
+                    "corner_radius_mm": 3.0,
+                    "rotation_deg": 4.0,
+                }
+            ],
+        }
+    )
+    payloads: list[dict[str, object]] = []
+    panel.createRequested.connect(payloads.append)
+
+    assert panel.replace_previous.isChecked()
+    panel.replace_previous.setChecked(False)
+    panel.create_button.click()
+    qt_application.processEvents()
+
+    assert payloads == [
+        {
+            "selected_ids": ["trace-new"],
+            "output_mode": "rounded",
+            "replace_previous": False,
+        }
+    ]
+    panel.close()
+    panel.deleteLater()
+
+
 def test_trace_result_can_select_complete_normalized_grid(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -198,6 +264,63 @@ def test_trace_result_can_select_complete_normalized_grid(
     qt_application.processEvents()
     assert len(panel.selected_ids()) == 4
 
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_select_all_checkbox_tracks_and_controls_mixed_selection(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    panel.set_result(
+        {
+            "message": "Three objects",
+            "detections": [
+                {
+                    "id": f"trace-{index}",
+                    "index": index,
+                    "source": "direct",
+                    "confidence": 0.9,
+                    "selected_default": index == 1,
+                    "shape": "rounded_rectangle",
+                    "width_mm": 80.0,
+                    "height_mm": 20.0,
+                    "corner_radius_mm": 3.0,
+                    "rotation_deg": 0.0,
+                }
+                for index in range(1, 4)
+            ],
+        }
+    )
+
+    assert panel.select_all_checkbox.isEnabled()
+    assert (
+        panel.select_all_checkbox.checkState()
+        == QtCore.Qt.CheckState.PartiallyChecked
+    )
+
+    panel.select_all_checkbox.setCheckState(QtCore.Qt.CheckState.Checked)
+    qt_application.processEvents()
+    assert panel.selected_ids() == ["trace-1", "trace-2", "trace-3"]
+    assert panel.select_all_checkbox.checkState() == QtCore.Qt.CheckState.Checked
+
+    panel.result_tree.topLevelItem(1).setCheckState(
+        0, QtCore.Qt.CheckState.Unchecked
+    )
+    qt_application.processEvents()
+    assert (
+        panel.select_all_checkbox.checkState()
+        == QtCore.Qt.CheckState.PartiallyChecked
+    )
+
+    panel.select_all_checkbox.setCheckState(QtCore.Qt.CheckState.Unchecked)
+    qt_application.processEvents()
+    assert panel.selected_ids() == []
+    assert panel.select_all_checkbox.checkState() == QtCore.Qt.CheckState.Unchecked
+
+    panel.clear_result()
+    assert not panel.select_all_checkbox.isEnabled()
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()

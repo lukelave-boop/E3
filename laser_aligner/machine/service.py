@@ -761,7 +761,7 @@ class MachineService:
         return None
 
     def _normalize_and_release_grbl_after_connect(self) -> None:
-        """Ensure a newly connected controller is not left holding its motors."""
+        """Normalize a newly connected controller without resetting it."""
 
         timeout = _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS
         normal = int(self.settings.grbl_step_idle_delay_ms)
@@ -774,15 +774,25 @@ class MachineService:
         except Exception as exc:
             current = None
             settings_error = exc
-        self._release_grbl_motors(
-            restore_idle_delay=normal if current == 255 or settings_error is not None else None,
-            job_execution=False,
-            context="controller connection",
-        )
+        # An ordinary connection has not moved the machine, so it does not need
+        # the $SLP/soft-reset fallback used after a held capture or powered job.
+        # Some controllers audibly announce that reset. M5 plus restoration of
+        # the configured finite idle delay is sufficient to clear laser and
+        # stale $1=255 state without disturbing the controller session.
+        self.send_command("M5", timeout=timeout, _internal_motion=True)
+        if current == 255 or settings_error is not None:
+            self.send_command(
+                f"$1={normal}",
+                timeout=timeout,
+                _internal_motion=True,
+            )
+        self._coordinate_reference_ready = False
+        self._coordinate_state_reference = None
+        self._jog_position_mm = None
         if settings_error is not None:
             raise MachineError(
-                "Controller connection cleanup released the motors, but GRBL settings "
-                f"could not be read: {settings_error}"
+                "Controller connection normalized laser output and restored the configured "
+                f"step-idle delay, but GRBL settings could not be read: {settings_error}"
             ) from settings_error
         if current == 255:
             self._append_log(

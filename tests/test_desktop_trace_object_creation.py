@@ -8,6 +8,7 @@ from laser_aligner.project import (
     CommandStack,
     ObjectKind,
     ProjectDocument,
+    SceneObject,
     object_polylines,
 )
 
@@ -127,8 +128,25 @@ def test_normalized_grid_trace_creates_named_grid_cell_with_metadata() -> None:
     assert item.metadata["trace_grid_column"] == 4
 
 
-def test_successful_trace_object_creation_releases_camera_review() -> None:
+def test_trace_creation_replaces_only_previous_trace_objects_and_is_undoable() -> None:
     document = ProjectDocument.new()
+    old_trace = SceneObject.rectangle(
+        document.active_layer_id,
+        name="Earlier trace",
+        center=(30.0, 30.0),
+        width_mm=20.0,
+        height_mm=10.0,
+    )
+    old_trace.metadata["trace_source"] = "direct"
+    manual_object = SceneObject.rectangle(
+        document.active_layer_id,
+        name="Keep me",
+        center=(80.0, 80.0),
+        width_mm=12.0,
+        height_mm=12.0,
+    )
+    document.add_object(old_trace)
+    document.add_object(manual_object)
     cancellations: list[bool] = []
     preview_clears: list[bool] = []
     panel_clears: list[bool] = []
@@ -182,11 +200,22 @@ def test_successful_trace_object_creation_releases_camera_review() -> None:
         },
     )
 
-    assert len(document.objects) == 1
+    assert len(document.objects) == 2
+    assert old_trace.id not in {item.id for item in document.objects}
+    assert manual_object.id in {item.id for item in document.objects}
     assert cancellations == [True]
     assert preview_clears == [True]
     assert panel_clears == [True]
-    assert selected_objects == [[document.objects[0].id]]
+    new_trace = next(
+        item for item in document.objects if item.id != manual_object.id
+    )
+    assert selected_objects == [[new_trace.id]]
     assert harness._trace_result is None
-    assert notices == ["Created 1 editable vector object"]
+    assert notices == ["Replaced 1 earlier Trace object with 1 new object"]
     assert errors == []
+
+    harness.history.undo()
+    assert [item.id for item in document.objects] == [
+        old_trace.id,
+        manual_object.id,
+    ]

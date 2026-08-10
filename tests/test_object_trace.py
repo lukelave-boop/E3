@@ -10,6 +10,7 @@ from laser_aligner.config import WorkArea
 from laser_aligner.vision.object_trace import (
     TraceOptions,
     _long_axis_rect,
+    _machine_geometry,
     _rounded_fit,
     _rounded_mask,
     auto_target_hue,
@@ -365,7 +366,11 @@ def test_auto_neutral_grid_prefers_full_bodies_over_bright_seams() -> None:
     assert result.grid["rows"] == 8
     assert result.grid["columns"] == 2
     assert result.grid["observed_cells"] == 16
-    assert result.grid["mask_source"] in {"global_dark", "clahe_dark"}
+    assert result.grid["mask_source"] in {
+        "global_dark",
+        "clahe_dark",
+        "closed_outline",
+    }
     assert result.direct_count == 16
     assert result.inferred_count == 0
     assert len(result.detections) == 16
@@ -604,10 +609,58 @@ def test_auto_neutral_grid_survives_severe_exposure_gradient() -> None:
 
     assert result.grid is not None
     assert (result.grid["columns"], result.grid["rows"]) == (2, 8)
-    assert result.grid["mask_source"] == "adaptive_dark"
+    assert result.grid["mask_source"] in {"adaptive_dark", "closed_outline"}
     assert result.direct_count == 16
     assert result.inferred_count == 0
     assert all(item.height_mm > 14.0 for item in result.detections)
+
+
+def test_auto_grid_detects_hollow_label_borders_with_dense_interior_text() -> None:
+    image = np.full((800, 800, 3), 215, dtype=np.uint8)
+    for row in range(6):
+        for column in range(2):
+            x = 45 + column * 370
+            y = 40 + row * 120
+            cv2.rectangle(
+                image,
+                (x, y),
+                (x + 320, y + 82),
+                (55, 55, 55),
+                2,
+                cv2.LINE_AA,
+            )
+            for text_y in range(y + 18, y + 70, 10):
+                cv2.line(
+                    image,
+                    (x + 25, text_y),
+                    (x + 290, text_y),
+                    (80, 80, 80),
+                    1,
+                    cv2.LINE_AA,
+                )
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="auto",
+            min_area_mm2=1_000.0,
+            max_area_mm2=20_000.0,
+            min_width_mm=4.0,
+            min_height_mm=3.0,
+            regular_grid=True,
+            infer_missing=True,
+            normalize_grid=True,
+        ),
+        WorkArea(0.0, 200.0, 0.0, 200.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert (result.grid["columns"], result.grid["rows"]) == (2, 6)
+    assert result.direct_count == 12
+    assert result.inferred_count == 0
+    assert all(item.width_mm == pytest.approx(81.0, abs=1.0) for item in result.detections)
+    assert all(item.height_mm == pytest.approx(21.5, abs=1.0) for item in result.detections)
 
 
 def test_normalized_grid_retains_and_flags_cells_crossing_work_area() -> None:
@@ -846,6 +899,43 @@ def test_repeated_grid_repairs_one_malformed_direct_cell() -> None:
     assert max(observed_widths) - min(observed_widths) >= 5.0
 
 
+def test_loose_grid_repairs_center_on_only_the_truncated_size_axis() -> None:
+    image = _label_scene(obscure=False)
+    # Remove the left edge of one cell. Its fitted width and center are both
+    # biased right, while its independently observed vertical pose is valid.
+    image[291:362, 418:438] = image[291:362, 400:420]
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            min_saturation=35,
+            min_area_mm2=20,
+            min_width_mm=20,
+            min_height_mm=8,
+            regular_grid=True,
+            infer_missing=True,
+            normalize_grid=True,
+            snap_grid_cells=False,
+            output_mode="rounded",
+        ),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+
+    repaired = [
+        item
+        for item in result.detections
+        if item.diagnostics.get("repaired_center_axes")
+    ]
+    assert len(repaired) == 1
+    item = repaired[0]
+    assert item.diagnostics["repaired_center_axes"] == ["width"]
+    observed_center = item.diagnostics["observed_center_mm"]
+    assert abs(item.center_mm[0] - observed_center[0]) >= 1.0
+    assert item.center_mm[1] == pytest.approx(observed_center[1], abs=0.15)
+
+
 def test_loose_normalized_grid_keeps_direct_cell_pose_but_shares_dimensions() -> None:
     result = detect_objects(
         _label_scene(obscure=False),
@@ -878,6 +968,53 @@ def test_loose_normalized_grid_keeps_direct_cell_pose_but_shares_dimensions() ->
         assert item.rotation_deg == pytest.approx(
             item.diagnostics["observed_rotation_deg"]
         )
+
+
+def test_loose_normalized_grid_can_preserve_each_detected_top_edge() -> None:
+    result = detect_objects(
+        _label_scene(obscure=False),
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            min_saturation=35,
+            min_area_mm2=20,
+            min_width_mm=20,
+            min_height_mm=8,
+            regular_grid=True,
+            infer_missing=True,
+            normalize_grid=True,
+            snap_grid_cells=False,
+            normalize_anchor="top",
+            output_mode="rounded",
+        ),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+
+    direct = [item for item in result.detections if item.source == "direct"]
+    assert direct
+    assert result.grid["normalization_anchor"] == "top"
+    for item in direct:
+        image_angle = math.radians(-item.rotation_deg)
+        image_down = np.array([-math.sin(image_angle), math.cos(image_angle)])
+        output_center_px = np.array(
+            [item.center_mm[0] * 4.0, (190.0 - item.center_mm[1]) * 4.0]
+        )
+        observed_center_mm = item.diagnostics["observed_center_mm"]
+        observed_center_px = np.array(
+            [observed_center_mm[0] * 4.0, (190.0 - observed_center_mm[1]) * 4.0]
+        )
+        output_top = float(output_center_px @ image_down - item.height_mm * 2.0)
+        observed_top = float(
+            observed_center_px @ image_down
+            - float(item.diagnostics["observed_height_mm"]) * 2.0
+        )
+        assert output_top == pytest.approx(observed_top, abs=1e-6)
+
+
+def test_trace_options_reject_unknown_identical_cell_anchor() -> None:
+    with pytest.raises(ValueError, match="identical-cell anchor"):
+        TraceOptions(normalize_anchor="bottom")
 
 
 def test_border_offset_expands_fitted_output():
@@ -914,6 +1051,48 @@ def test_border_offset_expands_fitted_output():
     base_width = float(np.median([item.width_mm for item in base.detections]))
     expanded_width = float(np.median([item.width_mm for item in expanded.detections]))
     assert abs((expanded_width - base_width) - 2.0) < 0.2
+
+
+def test_custom_top_offset_moves_only_rotated_top_edge_and_corners():
+    rectangle = {
+        "center": np.array([400.0, 400.0]),
+        "width": 320.0,
+        "height": 80.0,
+        "angle_image_deg": -17.0,
+        "radius_px": 16.0,
+    }
+    area = WorkArea(0.0, 200.0, 0.0, 200.0)
+    base = _machine_geometry(rectangle, area, 4.0, 0.0)
+    trimmed = _machine_geometry(
+        rectangle,
+        area,
+        4.0,
+        0.0,
+        edge_offsets_mm={
+            "top": -2.0,
+            "right": 0.0,
+            "bottom": 0.0,
+            "left": 0.0,
+        },
+    )
+
+    rotation = math.radians(base["rotation_deg"])
+    local_x = np.array([math.cos(rotation), math.sin(rotation)])
+    local_y = np.array([-local_x[1], local_x[0]])
+
+    def bounds(geometry: dict[str, object], axis: np.ndarray) -> tuple[float, float]:
+        points = np.asarray(geometry["box_mm"], dtype=np.float64)
+        projected = points @ axis
+        return float(projected.min()), float(projected.max())
+
+    assert trimmed["width_mm"] == pytest.approx(base["width_mm"])
+    assert trimmed["height_mm"] == pytest.approx(base["height_mm"] - 2.0)
+    assert trimmed["corner_radius_mm"] == pytest.approx(base["corner_radius_mm"])
+    assert bounds(trimmed, local_x) == pytest.approx(bounds(base, local_x))
+    base_bottom, base_top = bounds(base, local_y)
+    trimmed_bottom, trimmed_top = bounds(trimmed, local_y)
+    assert trimmed_bottom == pytest.approx(base_bottom)
+    assert trimmed_top == pytest.approx(base_top - 2.0)
 
 
 def test_rounded_fit_supports_near_capsule_corner_radii():
@@ -1054,6 +1233,7 @@ def test_non_grid_mode_preserves_irregular_colored_silhouette():
         {"hue_tolerance": float("inf")},
         {"min_area_mm2": float("nan")},
         {"target_bgr": [0, float("nan"), 0]},
+        {"border_offset_top_mm": float("nan")},
     ],
 )
 def test_trace_options_reject_nonfinite_values(overrides: dict[str, object]) -> None:
@@ -1064,6 +1244,11 @@ def test_trace_options_reject_nonfinite_values(overrides: dict[str, object]) -> 
 def test_trace_options_reject_string_booleans() -> None:
     with pytest.raises(ValueError, match="JSON boolean"):
         TraceOptions(regular_grid="false")  # type: ignore[arg-type]
+
+
+def test_trace_options_reject_unknown_border_offset_mode() -> None:
+    with pytest.raises(ValueError, match="border offset mode"):
+        TraceOptions(border_offset_mode="diagonal")
 
 
 def test_trace_rejects_nonfinite_scale_and_malformed_images() -> None:

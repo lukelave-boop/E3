@@ -30,7 +30,8 @@ objects.
 5. For a repeated label sheet, leave **Use grid** and **Make grid cells
    identical** enabled. Enable **Infer gaps** only when you want suggested
    positions for missing or obscured cells.
-6. Choose the vector output described below and set any **Border offset**.
+6. Choose the vector output described below and set either a uniform **Border
+   offset** or the rounded rectangle's individual edge offsets.
 7. Press **Detect objects**.
 8. Review the numbered overlay and the **Geometry** column:
    - green: selected proposed vector output;
@@ -42,14 +43,20 @@ objects.
    C × R grid** selects direct and inferred cells together for explicit review.
    Red cells are also unchecked by default. Reposition the sheet fully inside
    the work area and detect again before creating or cutting them.
-10. Press **Create objects**. The selected set is inserted as one undoable
-    operation.
+10. Leave **Replace earlier Trace objects** checked for the normal one-workpiece-
+    at-a-time workflow, then press **Create objects**. The selected set replaces
+    only objects created by earlier Trace captures as one undoable operation.
+    Uncheck it when you intentionally want to accumulate multiple Trace batches
+    in the same project.
 
 Changing a detection or output setting marks the result stale. Run **Detect
 objects** again before creating objects.
 
 Created shapes are ordinary project objects. They can be assigned to layers,
 moved, resized, grouped, framed, and included in generated G-code.
+**Clear detection preview** removes only the temporary camera overlay; it never
+deletes those created project objects. Existing drawings, imports, and other
+non-Trace project objects are never removed by Trace replacement.
 
 ## Vector output choices
 
@@ -65,6 +72,17 @@ moved, resized, grouped, framed, and included in generated G-code.
 - **Exact contours** preserves the pixel-derived boundary without applying the
   simplification tolerance. It can contain many points and will naturally look
   stair-stepped when magnified.
+
+**Offset mode** defaults to **Uniform**, which applies the existing single
+**Border offset** equally on all sides. Positive values expand the output and
+negative values trim it. For **Fitted rounded rectangles**, choose **Per edge**
+to adjust **Top**, **Right**, **Bottom**, and **Left** independently. These are
+the detected object's own rotated edges, not screen directions. Moving one edge
+also moves its two adjoining rounded corners while leaving the opposite edge
+and the other two corners fixed. For example, a negative Top value with the
+other three values at zero trims only the object's top edge and top corners.
+Per-edge mode is intentionally unavailable for simplified and exact contours,
+whose arbitrary boundaries do not have four analytic sides.
 
 The detector retains its observed contour separately from the proposed vector.
 This keeps diagnostics honest while ensuring the preview and created object use
@@ -82,9 +100,11 @@ when created, so rotated or asymmetric traces do not shift after approval.
   surface while tolerating moderate lighting variation.
 - **By contrast** evaluates dark and light filled-region hypotheses from global
   Otsu, illumination-corrected, and adaptive thresholds. Signed local contrast
-  remains a fallback for difficult surfaces. Filled silhouettes are preferred
-  over narrow edge, highlight, or inter-object gap bands when both pass the
-  geometric filters.
+  remains a fallback for difficult surfaces. Strong closed outlines are also
+  filled as candidates, allowing pale labels with thin dark borders and dense
+  interior printing to be treated as whole objects. Filled silhouettes are
+  preferred over narrow edge, highlight, or inter-object gap bands when both
+  pass the geometric filters.
 
 ## Regular-grid inference
 
@@ -99,8 +119,19 @@ corner radius. With **Snap cells to fitted grid** enabled, centers and rotations
 also use the fitted lattice. With it disabled, direct cells retain their
 observed centers and rotations while inferred cells, which have no observed
 pose, still use the lattice. The raw direct observation remains in diagnostics
-and the Geometry tooltip. Grid objects are numbered and named in stable
-row-major order.
+and the Geometry tooltip. If one direct observation is materially narrower or
+shorter than the shared repeated-object size, its center is usually biased by
+the missing edge. In that case only the affected center axis is repaired from
+the fitted lattice; the other observed axis and rotation remain independent.
+The Geometry tooltip discloses this repair. Grid objects are numbered and named
+in stable row-major order.
+
+When snapping is disabled, **Identical-cell anchor** controls how the shared
+height is applied to direct observations. **Center** preserves the observed
+center. **Detected top edge** preserves each independently detected top edge
+and grows the shared height downward; use it when printing or damage extends
+from the bottom of otherwise clean labels. This does not force direct labels
+onto ideal grid positions.
 
 Missing cells are visual suggestions, not observed edges, and are never
 selected automatically. Inspect the proposed complete lattice before using

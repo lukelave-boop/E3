@@ -2,6 +2,45 @@
 
 ## Unreleased — `desktop-v1` / `0.2.0.dev0`
 
+- Trace review now draws each detection number as a fixed-size, high-contrast
+  badge over the camera image and provides a tri-state **Select / deselect all**
+  checkbox above the detected-outline list.
+- Identical-cell Trace normalization now repairs the center only along an axis
+  whose observed size is materially malformed. This prevents a missed edge
+  from shifting the shared-size cut while preserving genuine per-label
+  placement on the unaffected axis.
+- Added persistent optical calibration profiles keyed by configured camera
+  resolution and locked focus. Lens captures/models, bed maps, fine and dense
+  corrections, validation sessions, and honeycomb references no longer
+  overwrite another focus value's stack. Existing unprofiled calibration is
+  copied into the focus recorded in its bed-map provenance without deleting the
+  original files, and **Save focus** names the profile activated after restart.
+- Added a non-destructive **Test focus range…** workflow. It takes three fresh
+  sharpness measurements at each requested manual-focus value, ranks median
+  scores, restores the original autofocus/manual focus in all completion paths,
+  and does not save settings or invalidate calibration merely for comparison.
+- GRBL connection initialization no longer enters sleep and soft-resets the
+  controller merely to release already-idle motors. It still sends `M5` and
+  repairs a stale `$1=255` camera hold, avoiding the controller's audible reset
+  announcement while preserving explicit release after jobs and held captures.
+- Controller-required actions now connect automatically before continuing when
+  the controller is offline. This shared behavior covers desktop jobs,
+  Home / park, jogging, diagnostics, Trace detection, every parked Machine Setup capture, and
+  the equivalent HTTP command, positioning, arming, and run routes. Connection
+  failure prevents the requested action, while STOP generation invalidation
+  prevents queued work from reconnecting and continuing afterward.
+- Added optional per-edge Trace offsets for fitted rounded rectangles. The
+  existing uniform border offset remains the default; Top, Right, Bottom, and
+  Left can now independently expand or trim the rotated object and its
+  adjoining corners. Uniform and per-edge arrow controls step by `0.1 mm`.
+- Trace contrast detection now includes strong closed-outline evidence so pale
+  labels with thin black borders and dense interior text are recognized as
+  whole labels instead of reducing the result to unrelated solid bed objects.
+- New Trace captures now replace earlier Trace-created project objects by
+  default, preventing a completed workpiece from reappearing in the next
+  generated job. Replacement preserves all non-Trace content, is undoable, and
+  can be disabled when multiple captured batches should accumulate. The
+  temporary-clear action is now explicitly labeled **Clear detection preview**.
 - Removed the desktop powered-job warning and typed arming-phrase dialogs.
   **Start** now submits the already reviewed prepared job immediately while
   retaining an internal one-use, time-limited authorization bound to that exact
@@ -225,6 +264,9 @@
   separate **Snap cells to fitted grid** option: disabling it keeps canonical
   dimensions and corner radius while allowing each direct cell to retain its
   observed center and rotation; inferred cells remain lattice-bound.
+- Add a **Detected top edge** identical-cell anchor for loose printed grids, so
+  damaged or overprinted bottom contours cannot shift a clean observed top
+  border when canonical cell heights are applied.
 - Make desktop **Detect objects** establish its own hardware camera pose. It
   now performs guarded Home / park inside the temporary stepper-hold scope,
   captures a fresh stable frame set, restores the original motor idle behavior,

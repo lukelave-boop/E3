@@ -139,6 +139,8 @@ def test_job_controller_preflights_before_motion_and_arming(
     controller.jobStarted.connect(started.append)
 
     def run(callback, **kwargs):
+        if kwargs.get("requires_controller"):
+            runtime.context.machine.ensure_connected()
         kwargs["on_success"](callback())
 
     controller._run = run  # type: ignore[method-assign]
@@ -192,7 +194,12 @@ def test_job_controller_disarms_when_start_fails_after_arming(
 
     runtime = SimpleNamespace(context=SimpleNamespace(machine=Machine()))
     controller = DesktopController(runtime)
-    controller._run = lambda callback, **_kwargs: callback()  # type: ignore[method-assign]
+    def run(callback, **kwargs):
+        if kwargs.get("requires_controller"):
+            runtime.context.machine.ensure_connected()
+        return callback()
+
+    controller._run = run  # type: ignore[method-assign]
 
     with pytest.raises(RuntimeError, match="rejected"):
         controller.run_job("program", "job.gcode", arm_phrase="phrase")
@@ -503,6 +510,148 @@ def test_focus_change_discards_frame_captured_with_the_old_focus(
     qt_application.processEvents()
 
 
+def test_focus_sweep_ranks_samples_and_restores_original_without_mutating_settings(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    calls: list[int] = []
+    controls = {
+        "focus_automatic_continuous": 0,
+        "focus_auto": 0,
+        "focus_absolute": 5,
+    }
+
+    class Camera:
+        settings = SimpleNamespace(controls=controls)
+
+        def apply_controls_and_snapshot(
+            self,
+            requested: dict[str, int],
+            *,
+            settle_seconds: float,
+            timeout_seconds: float,
+        ) -> tuple[SimpleNamespace, np.ndarray]:
+            del settle_seconds, timeout_seconds
+            value = requested["focus_absolute"]
+            calls.append(value)
+            return SimpleNamespace(), np.full((4, 4), value, dtype=np.uint8)
+
+    context.camera = Camera()
+    controller._sharpness_score = lambda frame: float(frame[0, 0])  # type: ignore[method-assign]
+
+    result = controller._camera_focus_sweep(5, 15, 5)
+
+    assert calls == [5, 5, 5, 10, 10, 10, 15, 15, 15, 5]
+    assert [item["median_sharpness"] for item in result["focus_sweep"]] == [
+        5.0,
+        10.0,
+        15.0,
+    ]
+    assert result["restored_focus"] == 5
+    assert result["changed"] is False
+    assert controls["focus_absolute"] == 5
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_focus_sweep_restores_original_after_mid_sweep_failure(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    calls: list[int] = []
+    controls = {
+        "focus_automatic_continuous": 0,
+        "focus_auto": 0,
+        "focus_absolute": 5,
+    }
+
+    class Camera:
+        settings = SimpleNamespace(controls=controls)
+
+        def apply_controls_and_snapshot(
+            self,
+            requested: dict[str, int],
+            *,
+            settle_seconds: float,
+            timeout_seconds: float,
+        ) -> tuple[SimpleNamespace, np.ndarray]:
+            del settle_seconds, timeout_seconds
+            value = requested["focus_absolute"]
+            calls.append(value)
+            if value == 10:
+                raise RuntimeError("forced focus failure")
+            return SimpleNamespace(), np.full((4, 4), value, dtype=np.uint8)
+
+    context.camera = Camera()
+
+    with pytest.raises(RuntimeError, match="forced focus failure"):
+        controller._camera_focus_sweep(5, 15, 5)
+
+    assert calls == [5, 5, 5, 10, 5]
+    assert controls["focus_absolute"] == 5
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_camera_panel_displays_ranked_focus_sweep_without_change_warning(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = CameraPanel()
+
+    panel.set_focus_result(
+        {
+            "focus_sweep": [
+                {"focus": 5, "median_sharpness": 580.0},
+                {"focus": 10, "median_sharpness": 1_025.0},
+            ],
+            "restored_focus": 5,
+            "changed": False,
+        }
+    )
+
+    assert "Best tested focus: 10 (1025.0)" in panel.sharpness_label.text()
+    assert "Restored focus 5; calibration unchanged" in panel.sharpness_label.text()
+    assert not panel.focus_warning.isVisible()
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_camera_panel_reports_active_and_pending_focus_profiles(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = CameraPanel()
+    panel.set_calibration_profile(
+        {
+            "active_label": "1920 x 1080, manual focus 5",
+            "profiles": [{"key": "focus-5"}],
+        }
+    )
+    assert "Active profile: 1920 x 1080, manual focus 5" in (
+        panel.calibration_profile_label.text()
+    )
+
+    panel.set_focus_result(
+        {
+            "calibration_profile_label": "1920 x 1080, manual focus 10",
+            "profile_restart_required": True,
+        }
+    )
+    assert "Saved profile: 1920 x 1080, manual focus 10" in (
+        panel.calibration_profile_label.text()
+    )
+    assert "Restart the app to activate it" in panel.calibration_profile_label.text()
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
 def test_refresh_result_is_bound_to_exact_lens_and_bed_objects(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -808,6 +957,7 @@ def test_trace_requests_hold_camera_until_clear_and_reject_stale_callbacks(
     second_id = controller.detect_trace_objects({"detection_mode": "contrast"})
 
     assert (first_id, second_id) == (1, 2)
+    assert all(item["requires_controller"] is True for item in launched)
     assert controller._trace_review_active
     assert not controller._camera_live_timer.isActive()
 
@@ -1055,6 +1205,7 @@ def test_camera_panel_test_source_disables_camera_actions_and_preserves_status(
         panel.apply_focus_button,
         panel.save_focus_button,
         panel.measure_button,
+        panel.focus_sweep_button,
         panel.focus_slider,
         panel.focus_spin,
     ):
@@ -1080,6 +1231,7 @@ def test_camera_panel_test_source_disables_camera_actions_and_preserves_status(
         panel.apply_focus_button,
         panel.save_focus_button,
         panel.measure_button,
+        panel.focus_sweep_button,
         panel.focus_slider,
         panel.focus_spin,
     ):

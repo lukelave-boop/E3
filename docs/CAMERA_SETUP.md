@@ -37,7 +37,26 @@ Inspect the camera directly:
 v4l2-ctl -d /dev/video0 --list-ctrls-menus
 ```
 
-Use the Camera page to apply the configured controls. Adjust `focus_absolute` and exposure values in `config/local.json` until the entire work plane is sharp and highlights are not clipped. Recalibrate the lens after any optical change, focus change that moves lens elements substantially, resolution change, or camera remount.
+Use **Test focus range…** on the Camera page to compare manual focus values
+without disturbing the active calibration. The test takes three fresh
+measurements per value, reports median sharpness, and restores the original
+focus afterward. Keep the scene, lighting, camera pose, and work-plane height
+unchanged while comparing values; scores from different scenes are not
+comparable.
+
+**Apply** changes the live focus for inspection. **Save focus** writes the
+selected locked focus as the startup setting. Neither action reuses the sweep's
+temporary values. Calibration is stored in a separate profile for each
+configured resolution and manual-focus value. Restart after **Save focus** to
+activate the matching profile. A new focus starts with an empty calibration
+stack; complete Lens, Bed mapping, Fine registration, and Accuracy validation
+once for that focus. Returning to a previously calibrated focus and restarting
+reopens its saved lens model, bed map, corrections, validation sessions, and
+honeycomb reference rather than overwriting them.
+
+The profile key cannot detect a physically moved camera. A camera remount or a
+change in work-plane height still requires a fresh calibration even when the
+resolution and focus number match an existing profile.
 
 ## Lighting
 

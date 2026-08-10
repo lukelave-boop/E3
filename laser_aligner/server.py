@@ -9,10 +9,11 @@ import re
 import secrets
 import stat
 import traceback
+from collections.abc import Callable
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 from urllib.parse import parse_qs, unquote, urlparse
 
 from .app import AppContext
@@ -23,6 +24,7 @@ LOGGER = logging.getLogger(__name__)
 _REQUEST_TOKEN_HEADER = "X-E3-Request-Token"
 _REQUEST_TOKEN_PLACEHOLDER = "__E3_REQUEST_TOKEN__"
 _GENERATED_FILENAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,180}\.gcode")
+_T = TypeVar("_T")
 
 
 def _json_boolean(payload: dict[str, Any], key: str, default: bool) -> bool:
@@ -80,6 +82,15 @@ class AppRequestHandler(BaseHTTPRequestHandler):
     @property
     def context(self) -> AppContext:
         return self.server.context
+
+    def _with_controller(self, operation: Callable[[], _T]) -> _T:
+        """Connect and run one controller action under STOP cancellation authority."""
+
+        machine = self.context.machine
+        generation = machine.operation_generation()
+        with machine.operation_scope(generation):
+            machine.ensure_connected()
+            return operation()
 
     def _headers(self, content_type: str, content_length: int | None = None, cache: bool = False) -> None:
         self.send_header("Content-Type", content_type)
@@ -347,6 +358,7 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                             raise ValueError(
                                 "G-code is required before laser control can be armed"
                             )
+                        self.context.machine.ensure_connected()
                         program = self.context.machine.preflight_program(gcode)
                         until = self.context.machine.arm_program(
                             str(payload.get("phrase", "")),
@@ -364,12 +376,24 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                 self.context.machine.disarm()
                 self._send_json({"ok": True})
             elif path == "/api/machine/command":
-                responses = self.context.machine.send_command(str(payload["command"]))
+                responses = self._with_controller(
+                    lambda: self.context.machine.send_command(
+                        str(payload["command"])
+                    )
+                )
                 self._send_json({"ok": True, "responses": responses})
             elif path == "/api/machine/photo-position":
-                self._send_json({"ok": True, **self.context.machine.prepare_photo_position()})
+                result = self._with_controller(
+                    self.context.machine.prepare_photo_position
+                )
+                self._send_json({"ok": True, **result})
             elif path == "/api/machine/run":
-                result = self.context.machine.start_job(str(payload["gcode"]), str(payload.get("name", "job.gcode")))
+                result = self._with_controller(
+                    lambda: self.context.machine.start_job(
+                        str(payload["gcode"]),
+                        str(payload.get("name", "job.gcode")),
+                    )
+                )
                 self._send_json({"ok": True, "job": result}, status=HTTPStatus.ACCEPTED)
             elif path == "/api/machine/stop":
                 self.context.machine.stop_job(

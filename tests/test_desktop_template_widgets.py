@@ -21,7 +21,7 @@ import laser_aligner.desktop.controller as controller_module
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.template_panel import TemplatePanel
-from laser_aligner.desktop.workspace import WorkspaceView
+from laser_aligner.desktop.workspace import WorkspaceView, _TraceIndexBadge
 from laser_aligner.project import (
     AddObjectCommand,
     Bounds,
@@ -1695,6 +1695,44 @@ def test_workspace_trace_preview_prefers_vector_contour_with_legacy_fallback(
     assert fallback_bounds.right() == pytest.approx(90.0)
     assert fallback_bounds.top() == pytest.approx(-90.0)
     assert fallback_bounds.bottom() == pytest.approx(-10.0)
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_workspace_trace_preview_uses_fixed_high_contrast_number_badge(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    view.set_trace_preview(
+        [
+            {
+                "id": "numbered",
+                "index": 14,
+                "source": "direct",
+                "center_mm": [100.0, 120.0],
+                "vector_contour_mm": [
+                    [90.0, 110.0],
+                    [110.0, 110.0],
+                    [110.0, 130.0],
+                    [90.0, 130.0],
+                ],
+            }
+        ],
+        {"numbered"},
+    )
+
+    badge = next(
+        item for item in view._trace_items if isinstance(item, _TraceIndexBadge)
+    )
+    assert badge.text == "14"
+    assert badge.accent.name().upper() == "#4FE36F"
+    assert badge.boundingRect().width() >= 28
+    assert badge.boundingRect().height() >= 20
+    assert badge.flags() & (
+        QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIgnoresTransformations
+    )
 
     view.close()
     view.deleteLater()

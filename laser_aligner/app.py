@@ -20,6 +20,7 @@ import numpy as np
 from . import __version__
 from .calibration.bed import BedCalibration, BedMapper, BedPoint
 from .calibration.lens import LensCalibrator
+from .calibration.profiles import CalibrationProfileStore, signature_from_camera_settings
 from .calibration.registration import (
     AccuracyValidationJob,
     BaseBedCalibrationJob,
@@ -161,25 +162,30 @@ class AppContext:
             self.camera: CameraService = SyntheticCameraService(settings.camera, settings.machine.work_area)
         else:
             self.camera = CameraService(settings.camera)
-        self.lens = LensCalibrator(settings.app.data_dir, settings.calibration.lens)
-        self.bed = BedMapper(settings.app.data_dir, settings.calibration.bed, settings.machine.work_area)
-        self.honeycomb_support = HoneycombSupportStore(settings.app.data_dir)
+        self.calibration_profiles = CalibrationProfileStore(
+            settings.app.data_dir,
+            signature_from_camera_settings(settings.camera),
+        )
+        calibration_dir = self.calibration_profiles.active_dir
+        self.lens = LensCalibrator(calibration_dir, settings.calibration.lens)
+        self.bed = BedMapper(calibration_dir, settings.calibration.bed, settings.machine.work_area)
+        self.honeycomb_support = HoneycombSupportStore(calibration_dir)
         self.machine = MachineService(
             settings.machine,
             settings.laser,
             hardware_enabled=self.hardware_enabled,
             laser_lockout=self.laser_lockout,
         )
-        self.bed_reference_path = settings.app.data_dir / "bed_reference.png"
-        self.legacy_bed_reference_path = settings.app.data_dir / "bed_reference.jpg"
-        self.base_bed_mapping_path = settings.app.data_dir / "base_bed_mapping.json"
+        self.bed_reference_path = calibration_dir / "bed_reference.png"
+        self.legacy_bed_reference_path = calibration_dir / "bed_reference.jpg"
+        self.base_bed_mapping_path = calibration_dir / "base_bed_mapping.json"
         self.workspace_path = settings.app.data_dir / "captures" / "workspace.png"
         self.legacy_workspace_path = settings.app.data_dir / "captures" / "workspace.jpg"
-        self.fine_registration_path = settings.app.data_dir / "fine_registration.json"
-        self.accuracy_validation_path = settings.app.data_dir / "accuracy_validation.json"
-        self.dense_calibration_path = settings.app.data_dir / "dense_calibration.json"
-        self.dense_validation_path = settings.app.data_dir / "dense_validation.json"
-        self.dense_confirmation_path = settings.app.data_dir / "dense_confirmation.json"
+        self.fine_registration_path = calibration_dir / "fine_registration.json"
+        self.accuracy_validation_path = calibration_dir / "accuracy_validation.json"
+        self.dense_calibration_path = calibration_dir / "dense_calibration.json"
+        self.dense_validation_path = calibration_dir / "dense_validation.json"
+        self.dense_confirmation_path = calibration_dir / "dense_confirmation.json"
         self._migrate_legacy_dense_session()
         self._camera_start_error: str | None = None
         self._simulation_workspace_lock = threading.RLock()
@@ -2568,6 +2574,7 @@ class AppContext:
             "settings": self.settings.public_dict(),
             "camera": camera_status,
             "camera_calibration": self.camera_calibration_readiness(),
+            "calibration_profile": self.calibration_profiles.status(),
             "lens": lens_status,
             "bed": self.bed_status(lens_model_id=lens_model_id),
             "simulation_workspace_frame": self.simulation_workspace_frame_status(),

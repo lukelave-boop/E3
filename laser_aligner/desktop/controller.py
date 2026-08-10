@@ -8,6 +8,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from ..calibration.profiles import signature_from_values
 from ..config import WorkArea, effective_laser_output_area
 from ..core import CoreRuntime
 from ..templates import CutTemplate
@@ -270,6 +271,7 @@ class DesktopController(QtCore.QObject):
         on_failure: Callable[[str], None] | None = None,
         label: str = "Operation",
         show_busy: bool = True,
+        requires_controller: bool = False,
     ) -> FunctionTask:
         if show_busy:
             self._set_busy(1)
@@ -278,6 +280,8 @@ class DesktopController(QtCore.QObject):
 
         def guarded_callback() -> Any:
             with machine.operation_scope(operation_generation):
+                if requires_controller:
+                    machine.ensure_connected()
                 return callback()
 
         task = FunctionTask(guarded_callback)
@@ -879,6 +883,77 @@ class DesktopController(QtCore.QObject):
             show_busy=False,
         )
 
+    def _camera_focus_sweep(
+        self,
+        start: int,
+        end: int,
+        step: int,
+    ) -> dict[str, Any]:
+        if any(type(value) is not int for value in (start, end, step)):
+            raise ValueError("Focus sweep values must be integers")
+        if not 0 <= start <= end <= 250 or not 1 <= step <= 50:
+            raise ValueError("Focus sweep must stay within 0..250 with a positive step")
+        values = list(range(start, end + 1, step))
+        if values[-1] != end:
+            values.append(end)
+        if len(values) > 51:
+            raise ValueError("Focus sweep is limited to 51 tested values")
+
+        camera = self.runtime.context.camera
+        controls = dict(camera.settings.controls)
+        automatic = int(
+            controls.get(
+                "focus_automatic_continuous",
+                controls.get("focus_auto", 0),
+            )
+        )
+        original_focus = int(controls.get("focus_absolute", 0))
+
+        def request(value: int, *, autofocus: int = 0) -> dict[str, int]:
+            requested = dict(controls)
+            requested["focus_automatic_continuous"] = autofocus
+            requested["focus_auto"] = autofocus
+            requested["focus_absolute"] = value
+            return requested
+
+        results: list[dict[str, Any]] = []
+        try:
+            for value in values:
+                scores: list[float] = []
+                for sample in range(3):
+                    _result, frame = camera.apply_controls_and_snapshot(
+                        request(value),
+                        settle_seconds=0.35 if sample == 0 else 0.10,
+                        timeout_seconds=2.0,
+                    )
+                    scores.append(self._sharpness_score(frame))
+                results.append(
+                    {
+                        "focus": value,
+                        "median_sharpness": float(np.median(scores)),
+                        "scores": scores,
+                    }
+                )
+        finally:
+            camera.apply_controls_and_snapshot(
+                request(original_focus, autofocus=automatic),
+                settle_seconds=0.35,
+                timeout_seconds=2.0,
+            )
+
+        return {
+            "focus_sweep": results,
+            "restored_focus": original_focus,
+            "changed": False,
+        }
+
+    def test_camera_focus_range(self, start: int, end: int, step: int) -> None:
+        self._run(
+            lambda: self._camera_focus_sweep(start, end, step),
+            on_success=self.cameraFocusChanged.emit,
+            label="Test camera focus range",
+        )
+
     def save_camera_focus(
         self,
         autofocus: bool,
@@ -888,6 +963,23 @@ class DesktopController(QtCore.QObject):
             payload = self._apply_camera_focus(autofocus, focus_value)
             payload["saved_path"] = str(
                 self._persist_camera_focus(autofocus, focus_value)
+            )
+            signature = signature_from_values(
+                width=self.runtime.settings.camera.width,
+                height=self.runtime.settings.camera.height,
+                controls={
+                    "focus_automatic_continuous": 1 if autofocus else 0,
+                    "focus_absolute": focus_value,
+                },
+            )
+            active = self.runtime.context.calibration_profiles.current
+            payload.update(
+                {
+                    "calibration_profile_key": signature.key,
+                    "calibration_profile_label": signature.label,
+                    "active_calibration_profile_key": active.key,
+                    "profile_restart_required": signature != active,
+                }
             )
             return payload
 
@@ -934,7 +1026,13 @@ class DesktopController(QtCore.QObject):
         self.cameraFocusChanged.emit(payload)
         saved_path = payload.get("saved_path")
         if saved_path:
-            self.notice.emit(f"Saved locked camera focus to {saved_path}")
+            profile = payload.get("calibration_profile_label")
+            suffix = (
+                f"; restart to activate calibration profile {profile}"
+                if payload.get("profile_restart_required") and profile
+                else ""
+            )
+            self.notice.emit(f"Saved locked camera focus to {saved_path}{suffix}")
         else:
             self.notice.emit("Applied camera focus")
         if self.runtime.context.bed.calibration is not None:
@@ -986,6 +1084,7 @@ class DesktopController(QtCore.QObject):
                 message,
             ),
             label="Detect and trace objects",
+            requires_controller=True,
         )
         return request_id
 
@@ -1446,17 +1545,13 @@ class DesktopController(QtCore.QObject):
         )
 
     def park_at_camera_pose(self) -> None:
-        def operation() -> dict[str, Any]:
-            machine = self.runtime.context.machine
-            machine.ensure_connected()
-            return machine.prepare_photo_position()
-
         self._run(
-            operation,
+            self.runtime.context.machine.prepare_photo_position,
             on_success=lambda result: self._machine_changed(
                 f"Parked at X{result['position']['x']:.2f} Y{result['position']['y']:.2f}"
             ),
             label="Home and park",
+            requires_controller=True,
         )
 
 
@@ -1464,7 +1559,6 @@ class DesktopController(QtCore.QObject):
         def operation() -> dict[str, Any]:
             machine = self.runtime.context.machine
             try:
-                machine.ensure_connected()
                 program = machine.preflight_program(gcode)
                 if machine.settings.backend == "serial":
                     machine.prepare_photo_position()
@@ -1485,6 +1579,7 @@ class DesktopController(QtCore.QObject):
             operation,
             on_success=started,
             label="Home, park, and start job",
+            requires_controller=True,
         )
 
     def pause_resume(self) -> None:
@@ -1503,26 +1598,23 @@ class DesktopController(QtCore.QObject):
         self._machine_changed("Software stop sent; laser-off requested")
 
     def send_diagnostic(self, command: str) -> None:
-        def operation() -> list[str]:
-            machine = self.runtime.context.machine
-            machine.ensure_connected()
-            return machine.send_command(command)
-
         self._run(
-            operation,
+            lambda: self.runtime.context.machine.send_command(command),
             on_success=lambda responses: self._diagnostic_complete(command, responses),
             label="Diagnostic command",
+            requires_controller=True,
         )
 
     def jog(self, dx_mm: float, dy_mm: float, feed_mm_min: float) -> None:
-        def operation() -> dict[str, Any]:
-            self.runtime.context.machine.ensure_connected()
-            return self.runtime.context.machine.jog(dx_mm, dy_mm, feed_mm_min)
-
         self._run(
-            operation,
+            lambda: self.runtime.context.machine.jog(
+                dx_mm,
+                dy_mm,
+                feed_mm_min,
+            ),
             on_success=self._jog_complete,
             label="Jog",
+            requires_controller=True,
         )
 
     def _jog_complete(self, result: dict[str, Any]) -> None:

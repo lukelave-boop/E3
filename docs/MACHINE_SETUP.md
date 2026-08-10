@@ -75,8 +75,12 @@ models that produced them, so a late result from the prior calibration cannot be
 displayed.
 
 Mount the camera rigidly, independently of the moving bed and gantry. Changing
-the mount, resolution, or focus invalidates alignment evidence and requires the
-lens and bed calibrations to be checked again.
+the mount invalidates alignment evidence. Resolution and locked manual focus
+select separate persistent calibration profiles after restart. A newly selected
+profile must complete the workflow once; returning to a previously calibrated
+profile restores its own lens, bed, registration, validation, and ruler data.
+The profile does not make a moved camera valid merely because its focus value is
+unchanged.
 
 ## 2. Lens
 
