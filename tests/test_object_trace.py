@@ -9,6 +9,7 @@ import pytest
 from laser_aligner.config import WorkArea
 from laser_aligner.vision.object_trace import (
     TraceOptions,
+    _grid_cell_review_evidence,
     _long_axis_rect,
     _machine_geometry,
     _rounded_fit,
@@ -17,6 +18,44 @@ from laser_aligner.vision.object_trace import (
     detect_objects,
     sample_color,
 )
+
+
+def test_grid_review_flags_damage_and_textured_open_cells_conservatively() -> None:
+    image = np.full((240, 360, 3), 105, dtype=np.uint8)
+    centers = [(70, 70), (180, 70), (290, 70), (70, 170), (180, 170), (290, 170)]
+    candidates = []
+    for index, center in enumerate(centers):
+        candidates.append(
+            {
+                "grid_row": index // 3,
+                "grid_column": index % 3,
+                "center_px": np.asarray(center, dtype=np.float64),
+                "width_px": 80.0,
+                "height_px": 42.0,
+                "angle_image_deg": 0.0,
+                "observed_width_mm": 20.0,
+                "observed_height_mm": 10.5,
+                "observed_rotation_deg": 3.2 if index == 1 else 0.0,
+                "repaired_center_axes": [],
+            }
+        )
+    checker = np.random.default_rng(7).integers(35, 220, size=(50, 88), dtype=np.uint8)
+    for center in centers[-2:]:
+        x, y = center
+        image[y - 25 : y + 25, x - 44 : x + 44] = checker[:, :, None]
+
+    _grid_cell_review_evidence(
+        image,
+        candidates,
+        {"rotation_deg": 0.0, "cell_width_mm": 20.0, "cell_height_mm": 10.5},
+    )
+
+    assert candidates[1]["damage_suspected"] is True
+    assert "rotation differs" in candidates[1]["damage_reasons"][0]
+    assert all(item["damage_suspected"] is False for item in candidates[2:])
+    assert [item.get("likely_open_cell", False) for item in candidates] == [
+        False, False, False, False, True, True
+    ]
 
 
 def _label_scene(*, obscure: bool = True) -> np.ndarray:
@@ -713,6 +752,102 @@ def test_edge_cropped_observation_is_flagged_and_not_preselected() -> None:
     assert detection.diagnostics["image_edge_sides"] == ["right"]
     assert detection.selected_default is False
     assert "may be cropped" in result.message
+
+
+def test_concentric_circular_parent_and_hole_are_recognized_as_one_washer() -> None:
+    image = np.full((400, 400, 3), 230, dtype=np.uint8)
+    cv2.circle(image, (200, 200), 40, (30, 30, 30), -1)
+    cv2.circle(image, (200, 200), 16, (230, 230, 230), -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            regular_grid=False,
+            min_area_mm2=10.0,
+            min_width_mm=2.0,
+            min_height_mm=2.0,
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        4.0,
+    )
+
+    assert result.direct_count == 1
+    detection = result.detections[0]
+    assert detection.shape == "washer"
+    assert len(detection.vector_contours_mm) == 2
+    assert detection.width_mm == pytest.approx(20.0, abs=0.35)
+    assert detection.diagnostics["hole_ratio"] == pytest.approx(0.4, abs=0.03)
+    assert detection.diagnostics["center_offset_mm"] < 0.05
+    assert detection.diagnostics["outer_circle_residual"] < 0.035
+    assert detection.diagnostics["inner_circle_residual"] < 0.05
+
+
+@pytest.mark.parametrize("inner_center", ((203, 200), (200, 206)))
+def test_off_center_nested_circle_is_not_forced_to_washer(inner_center) -> None:
+    image = np.full((400, 400, 3), 230, dtype=np.uint8)
+    cv2.circle(image, (200, 200), 40, (30, 30, 30), -1)
+    cv2.circle(image, inner_center, 16, (230, 230, 230), -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            regular_grid=False,
+            min_area_mm2=10.0,
+            min_width_mm=2.0,
+            min_height_mm=2.0,
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        4.0,
+    )
+
+    assert all(item.shape != "washer" for item in result.detections)
+
+
+def test_multiple_annuli_remain_separate_logical_washers() -> None:
+    image = np.full((400, 400, 3), 230, dtype=np.uint8)
+    for center in ((120, 200), (280, 200)):
+        cv2.circle(image, center, 40, (30, 30, 30), -1)
+        cv2.circle(image, center, 16, (230, 230, 230), -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            regular_grid=True,
+            min_area_mm2=10.0,
+            min_width_mm=2.0,
+            min_height_mm=2.0,
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        4.0,
+    )
+
+    assert result.direct_count == 2
+    assert all(item.shape == "washer" for item in result.detections)
+    assert all(len(item.vector_contours_mm) == 2 for item in result.detections)
+
+
+def test_circular_outer_with_square_hole_is_not_forced_to_washer() -> None:
+    image = np.full((400, 400, 3), 230, dtype=np.uint8)
+    cv2.circle(image, (200, 200), 40, (30, 30, 30), -1)
+    cv2.rectangle(image, (184, 184), (216, 216), (230, 230, 230), -1)
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            regular_grid=False,
+            min_area_mm2=10.0,
+            min_width_mm=2.0,
+            min_height_mm=2.0,
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        4.0,
+    )
+
+    assert all(item.shape != "washer" for item in result.detections)
 
 
 def test_guarded_output_area_is_distinct_from_camera_work_area() -> None:

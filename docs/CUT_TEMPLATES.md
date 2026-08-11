@@ -152,11 +152,21 @@ Schema version 1 stores:
 - creation/modification timestamps and extensible metadata.
 
 Grid-authored templates use that extensible metadata for a versioned
-`rectangle_grid` authoring recipe. The stored recipe contains the name,
-description, rows, columns, cut dimensions, corner radius, and edge gaps.
+`shape_grid` authoring recipe. Supported semantic shapes are rectangle,
+rounded rectangle, circle, ellipse, capsule, triangle, diamond, regular
+polygon, star, one-flat circle, two-flat circle, and washer. The recipe stores
+one canonical set of dimensions plus validated shape-specific parameters and
+edge gaps. Legacy `rectangle_grid` version-1 recipes load as rounded rectangles
+and are upgraded only when resaved.
 Center pitch and footprint are derived rather than persisted as competing
 values. Editing rebuilds normalized objects and matching features while
 preserving the template ID, creation timestamp, and surviving cell identities.
+
+A washer is one logical path object containing concentric outer and inner
+closed contours. Its grid footprint uses the outer diameter. Vector planning
+uses geometric containment—not winding direction—to cut nested contours from
+deepest to outermost before applying nearest-path optimization within a nesting
+level.
 
 Only visible, output-enabled project objects are copied. Their positions are
 normalized around the center of their combined bounds. Original project
@@ -175,8 +185,16 @@ detector can use this field without changing the version-1 geometry model.
 
 Automatic identification compares unordered detected features with each
 template's feature geometry. It considers centers, dimensions, orientation,
-direct versus inferred detections, coverage, and residual error. Similar
+semantic shape compatibility, direct versus inferred detections, coverage,
+and residual error. Unknown and legacy shapes retain geometric fallback
+matching; circles and washers do not receive arbitrary orientation penalties.
+Washer descriptors include the inner/outer diameter ratio. Similar
 scores are reported as ambiguous rather than silently selecting a winner.
+
+Four concepts remain intentionally separate: the template's semantic shape,
+Trace's observed shape classification, Trace's requested vector reconstruction
+mode, and the native `SceneObject` representation. Several semantic shapes use
+closed PATH geometry; that storage choice does not erase their semantic kind.
 Every candidate and trace-option group is evaluated against the same captured
 corrected frame. Camera delivery stays frozen while an accepted overlay is
 reviewed, so the displayed image and proposed placement cannot drift apart.

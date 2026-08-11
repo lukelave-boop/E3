@@ -62,6 +62,31 @@ def test_dialog_calculates_live_grid_footprint_and_preview(
     dialog.deleteLater()
 
 
+def test_shape_controls_are_dynamic_and_washer_uses_outer_footprint(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    dialog = GridTemplateDesignerDialog(initial_spec=_spec())
+    assert dialog.shape_combo.currentData() == "rounded_rectangle"
+    assert dialog.corner_radius_spin.isHidden() is False
+    assert dialog.inner_diameter_spin.isHidden() is True
+
+    dialog.shape_combo.setCurrentIndex(dialog.shape_combo.findData("washer"))
+    dialog.width_spin.setValue(20.0)
+    dialog.inner_diameter_spin.setValue(8.0)
+    dialog.columns_spin.setValue(2)
+    dialog.horizontal_spacing_spin.setValue(3.0)
+    payload = dialog.spec()
+
+    assert dialog.corner_radius_spin.isHidden() is True
+    assert dialog.height_spin.isHidden() is True
+    assert dialog.inner_diameter_spin.isHidden() is False
+    assert dialog.ring_width_label.text() == "6.000 mm"
+    assert payload["shape_kind"] == "washer"
+    assert payload["footprint_width_mm"] == pytest.approx(43.0)
+    dialog.close()
+    dialog.deleteLater()
+
+
 def test_spacing_mode_switch_preserves_layout_and_dimension_changes_keep_gap(
     qt_application: QtWidgets.QApplication,
 ) -> None:

@@ -112,6 +112,24 @@ def test_recognized_rounded_trace_keeps_fitted_rectangle_transform() -> None:
     assert "trace_detector_center_mm" not in item.metadata
 
 
+def test_recognized_washer_trace_creates_one_compound_semantic_object() -> None:
+    detection = _contour_detection(shape="washer")
+    outer = [[10, 20], [30, 20], [30, 40], [10, 40]]
+    inner = [[17, 27], [17, 33], [23, 33], [23, 27]]
+    detection["vector_contours_mm"] = [outer, inner]
+    detection["diagnostics"] = {"hole_ratio": 0.3}
+
+    item = _create_trace_object(detection, "rounded")
+
+    assert item.kind == ObjectKind.PATH
+    assert item.metadata["shape_kind"] == "washer"
+    assert item.metadata["hole_ratio"] == pytest.approx(0.3)
+    paths = object_polylines(item)
+    assert len(paths) == 2
+    np.testing.assert_allclose(paths[0].points[:-1], outer)
+    np.testing.assert_allclose(paths[1].points[:-1], inner)
+
+
 def test_normalized_grid_trace_creates_named_grid_cell_with_metadata() -> None:
     detection = _contour_detection(shape="rounded_rectangle")
     detection["diagnostics"] = {

@@ -3443,14 +3443,17 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 rotation_deg=float(detection.get("rotation_deg", 0.0))
             )
         else:
-            points = [
-                [float(point[0]), float(point[1])]
-                for point in (
-                    detection.get("vector_contour_mm")
-                    or detection.get("contour_mm")
-                    or []
-                )
+            raw_contours = detection.get("vector_contours_mm") or [
+                detection.get("vector_contour_mm")
+                or detection.get("contour_mm")
+                or []
             ]
+            contours = [
+                [[float(point[0]), float(point[1])] for point in contour]
+                for contour in raw_contours
+                if len(contour) >= 3
+            ]
+            points = [point for contour in contours for point in contour]
             if len(points) < 3:
                 raise ValueError(f"Trace {index} has no usable contour")
             path_center = (
@@ -3461,7 +3464,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
             item = SceneObject.path(
                 self.active_layer_id,
-                [{"points": points, "closed": True}],
+                [
+                    {"points": contour, "closed": True}
+                    for contour in contours
+                ],
                 name=name,
                 center=path_center,
                 source_name="camera trace",
@@ -3472,8 +3478,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "trace_source": detection.get("source", "direct"),
                 "trace_confidence": float(detection.get("confidence", 0.0)),
                 "trace_shape": detection.get("shape", output_mode),
+                "shape_kind": detection.get("shape", "freeform_contour"),
             }
         )
+        diagnostics = detection.get("diagnostics") or {}
+        if detection.get("shape") == "washer" and "hole_ratio" in diagnostics:
+            item.metadata["hole_ratio"] = float(diagnostics["hole_ratio"])
         if diagnostics.get("grid_normalized"):
             item.metadata.update(
                 {

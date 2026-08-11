@@ -58,9 +58,25 @@ moved, resized, grouped, framed, and included in generated G-code.
 deletes those created project objects. Existing drawings, imports, and other
 non-Trace project objects are never removed by Trace replacement.
 
-## Vector output choices
+## Classification and vector output choices
 
-- **Fitted rounded rectangles** fits center, width, height, rotation, and corner
+Trace records a semantic classification separately from its vector-output
+choice. Direct high-confidence silhouettes may be classified as circle,
+ellipse, triangle, regular polygon, rounded rectangle, washer, or freeform contour.
+Classification is quantitative and ambiguous outlines remain freeform. This
+classification can improve template matching; it is not itself a request to
+change how the observed pixels are reconstructed.
+
+Washer recognition is deliberately strict. It considers only parent/child
+contours preserved by filled-region masks, fits the inner and outer circles
+independently, and checks circular residuals, circularity, containment,
+diameter ratio, and center offset. A passing annulus becomes one logical Trace
+object whose green proposed vector shows both contours. Offset or irregular
+nested contours are not forced into washers.
+
+- **Best-fit analytic shapes** uses a recognized circle, ellipse, triangle,
+  regular polygon, washer, or rounded rectangle when its quantitative fit
+  passes. Rounded rectangles fit center, width, height, rotation, and corner
   radius, then builds a clean analytic rounded-rectangle vector. The green
   preview is this proposed vector, not the jagged camera-pixel boundary. The
   **Geometry** column reports the fitted dimensions and radius. If a detection
@@ -125,6 +141,20 @@ the missing edge. In that case only the affected center axis is repaired from
 the fitted lattice; the other observed axis and rotation remain independent.
 The Geometry tooltip discloses this repair. Grid objects are numbered and named
 in stable row-major order.
+
+Direct cells are also reviewed against their repeated-cell family. A material
+rotation, width, height, or repaired-center disagreement is labeled
+**damaged?**, remains visible with an amber dash-dot outline, and is left
+unchecked. The proposed shared-size trace remains available for explicit
+operator approval.
+
+For grids with at least three direct observations, Trace compares texture and
+edge density inside a shrunken cell interior. Cells with substantially stronger
+exposed-bed texture than the lower-texture family baseline are labeled
+**likely cut/open**, drawn cyan dash-dot, and left unchecked. This is
+self-calibrated evidence from the current sheet, not a permanently learned
+honeycomb model: heavily printed, transparent, reflective, or unusually
+textured labels can remain ambiguous and require review.
 
 When snapping is disabled, **Identical-cell anchor** controls how the shared
 height is applied to direct observations. **Center** preserves the observed

@@ -178,6 +178,7 @@ class TemplateFeature:
     rotation_deg: float = 0.0
     object_id: str = ""
     kind: str = ""
+    descriptor: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         center = self.center_mm
@@ -196,6 +197,7 @@ class TemplateFeature:
         object.__setattr__(self, "rotation_deg", _normalized_rotation(self.rotation_deg))
         object.__setattr__(self, "object_id", _string(self.object_id, "feature.object_id"))
         object.__setattr__(self, "kind", _string(self.kind, "feature.kind"))
+        object.__setattr__(self, "descriptor", _json_object(self.descriptor, "feature.descriptor"))
 
     @property
     def center_x_mm(self) -> float:
@@ -213,6 +215,7 @@ class TemplateFeature:
             "rotation_deg": self.rotation_deg,
             "object_id": self.object_id,
             "kind": self.kind,
+            "descriptor": copy.deepcopy(self.descriptor),
         }
 
     @classmethod
@@ -228,6 +231,7 @@ class TemplateFeature:
                 rotation_deg=raw.get("rotation_deg", 0.0),
                 object_id=raw.get("object_id", ""),
                 kind=raw.get("kind", ""),
+                descriptor=raw.get("descriptor", {}),
             )
         except (KeyError, TypeError, ValueError) as exc:
             if isinstance(exc, TemplateFormatError):
@@ -236,13 +240,19 @@ class TemplateFeature:
 
 
 def _object_feature(item: SceneObject) -> TemplateFeature:
+    from .shapes import semantic_shape_kind
+
+    descriptor = {}
+    if isinstance(item.metadata.get("hole_ratio"), Real):
+        descriptor["hole_ratio"] = float(item.metadata["hole_ratio"])
     return TemplateFeature(
         center_mm=(item.transform.x_mm, item.transform.y_mm),
         width_mm=item.transform.width_mm,
         height_mm=item.transform.height_mm,
         rotation_deg=item.transform.rotation_deg,
         object_id=item.id,
-        kind=item.kind.value,
+        kind=semantic_shape_kind(item),
+        descriptor=descriptor,
     )
 
 

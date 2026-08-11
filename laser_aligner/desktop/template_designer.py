@@ -4,7 +4,7 @@ import math
 from collections.abc import Callable, Mapping
 from typing import Any
 
-from ..templates import MAX_GRID_OBJECTS
+from ..templates import MAX_GRID_OBJECTS, ShapeKind, shape_polylines
 from .controls import MeasurementSpinBox
 from .qt import require_qt
 
@@ -49,11 +49,7 @@ def _spin(
 
 
 def _representative_indices(count: int) -> list[int]:
-    return sorted(
-        index
-        for index in {0, 1, count // 2, count - 2, count - 1}
-        if 0 <= index < count
-    )
+    return sorted(index for index in {0, 1, count // 2, count - 2, count - 1} if 0 <= index < count)
 
 
 class _ActionButton(QtWidgets.QPushButton):
@@ -111,7 +107,7 @@ class _WrappedStatusLabel(QtWidgets.QLabel):
 
 
 class GridTemplatePreview(QtWidgets.QGraphicsView):
-    """Small, noninteractive preview for a regular rounded-rectangle grid."""
+    """Small preview using the same normalized contours as project objects."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -124,10 +120,7 @@ class GridTemplatePreview(QtWidgets.QGraphicsView):
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
         self.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setRenderHints(
-            QtGui.QPainter.RenderHint.Antialiasing
-            | QtGui.QPainter.RenderHint.TextAntialiasing
-        )
+        self.setRenderHints(QtGui.QPainter.RenderHint.Antialiasing | QtGui.QPainter.RenderHint.TextAntialiasing)
         self._content_rect = QtCore.QRectF(-1.0, -1.0, 2.0, 2.0)
 
     def set_spec(self, spec: Mapping[str, Any]) -> None:
@@ -149,6 +142,20 @@ class GridTemplatePreview(QtWidgets.QGraphicsView):
         footprint_height = float(spec["footprint_height_mm"])
 
         outline = QtGui.QPainterPath()
+        shape_kind = ShapeKind(spec.get("shape_kind", ShapeKind.ROUNDED_RECTANGLE))
+        if shape_kind in {ShapeKind.RECTANGLE, ShapeKind.ROUNDED_RECTANGLE}:
+            contours = None
+        else:
+            contours = shape_polylines(
+                shape_kind,
+                width_mm=width,
+                height_mm=height,
+                polygon_sides=int(spec.get("polygon_sides", 6)),
+                star_points=int(spec.get("star_points", 5)),
+                star_inner_ratio=float(spec.get("star_inner_ratio", 0.5)),
+                flat_distance_mm=spec.get("flat_distance_mm"),
+                inner_diameter_mm=spec.get("inner_diameter_mm"),
+            )
         total = rows * columns
         if total <= _MAX_PREVIEW_CUTS:
             row_indices = range(rows)
@@ -163,16 +170,18 @@ class GridTemplatePreview(QtWidgets.QGraphicsView):
             center_y = (row - (rows - 1) / 2.0) * pitch_y
             for column in column_indices:
                 center_x = (column - (columns - 1) / 2.0) * pitch_x
-                outline.addRoundedRect(
-                    QtCore.QRectF(
-                        center_x - width / 2.0,
-                        center_y - height / 2.0,
-                        width,
-                        height,
-                    ),
-                    radius,
-                    radius,
-                )
+                if contours is None:
+                    outline.addRoundedRect(
+                        QtCore.QRectF(center_x - width / 2, center_y - height / 2, width, height), radius, radius
+                    )
+                else:
+                    for contour in contours:
+                        points = contour["points"]
+                        outline.moveTo(center_x + points[0][0] * width, center_y + points[0][1] * height)
+                        for x, y in points[1:]:
+                            outline.lineTo(center_x + x * width, center_y + y * height)
+                        if contour["closed"]:
+                            outline.closeSubpath()
         cut_item = scene.addPath(outline)
         cut_pen = QtGui.QPen(QtGui.QColor("#45D7FF"))
         cut_pen.setWidthF(max(0.15, min(width, height) * 0.018))
@@ -245,12 +254,8 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         self._editing = bool(editing)
         self._selected_action: str | None = None
         self._source_extras: dict[str, Any] = {}
-        self._max_width_mm = self._optional_positive(
-            max_width_mm, "max_width_mm"
-        )
-        self._max_height_mm = self._optional_positive(
-            max_height_mm, "max_height_mm"
-        )
+        self._max_width_mm = self._optional_positive(max_width_mm, "max_width_mm")
+        self._max_height_mm = self._optional_positive(max_height_mm, "max_height_mm")
         self._submit_handler = submit_handler
 
         root = QtWidgets.QVBoxLayout(self)
@@ -261,8 +266,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         heading.setObjectName("panelHeading")
         root.addWidget(heading)
         intro = QtWidgets.QLabel(
-            "Set cut size and spacing. The preview updates live; choose an action "
-            "to change the project."
+            "Set cut size and spacing. The preview updates live; choose an action to change the project."
         )
         intro.setObjectName("mutedLabel")
         intro.setWordWrap(True)
@@ -280,18 +284,12 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
 
         identity_group = QtWidgets.QGroupBox("Template details")
         identity_form = QtWidgets.QFormLayout(identity_group)
-        identity_form.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
-        )
-        identity_form.setRowWrapPolicy(
-            QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
-        )
+        identity_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        identity_form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         self.name_edit = QtWidgets.QLineEdit()
         self.name_edit.setPlaceholderText("Example: 3 × 8 rounded labels")
         self.description_edit = QtWidgets.QPlainTextEdit()
-        self.description_edit.setPlaceholderText(
-            "Optional notes such as stock name, product, or orientation"
-        )
+        self.description_edit.setPlaceholderText("Optional notes such as stock name, product, or orientation")
         self.description_edit.setMinimumHeight(64)
         self.description_edit.setMaximumHeight(96)
         identity_form.addRow("Name", self.name_edit)
@@ -300,31 +298,58 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
 
         shape_group = QtWidgets.QGroupBox("Cut shape")
         shape_form = QtWidgets.QFormLayout(shape_group)
-        shape_form.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
-        )
-        shape_form.setRowWrapPolicy(
-            QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
-        )
+        shape_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        shape_form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         self.width_spin = _spin(0.001, 10000.0, value=50.0)
         self.height_spin = _spin(0.001, 10000.0, value=25.0)
+        self.shape_combo = QtWidgets.QComboBox()
+        for label, kind in (
+            ("Rectangle", ShapeKind.RECTANGLE),
+            ("Rounded rectangle", ShapeKind.ROUNDED_RECTANGLE),
+            ("Circle", ShapeKind.CIRCLE),
+            ("Ellipse", ShapeKind.ELLIPSE),
+            ("Capsule / obround", ShapeKind.CAPSULE),
+            ("Triangle", ShapeKind.TRIANGLE),
+            ("Diamond", ShapeKind.DIAMOND),
+            ("Regular polygon", ShapeKind.REGULAR_POLYGON),
+            ("Star", ShapeKind.STAR),
+            ("Circle with one flat", ShapeKind.CIRCLE_ONE_FLAT),
+            ("Circle with two parallel flats", ShapeKind.CIRCLE_TWO_FLATS),
+            ("Washer", ShapeKind.WASHER),
+        ):
+            self.shape_combo.addItem(label, kind.value)
+        self.shape_combo.setCurrentIndex(self.shape_combo.findData(ShapeKind.ROUNDED_RECTANGLE.value))
         self.corner_radius_spin = _spin(0.0, 12.5, value=3.0)
-        self.corner_radius_spin.setToolTip(
-            "0 mm makes square corners; the maximum makes pill-shaped ends."
-        )
+        self.corner_radius_spin.setToolTip("0 mm makes square corners; the maximum makes pill-shaped ends.")
+        self.polygon_sides_spin = QtWidgets.QSpinBox()
+        self.polygon_sides_spin.setRange(3, 12)
+        self.polygon_sides_spin.setValue(6)
+        self.star_points_spin = QtWidgets.QSpinBox()
+        self.star_points_spin.setRange(3, 12)
+        self.star_points_spin.setValue(5)
+        self.star_inner_ratio_spin = _spin(5.0, 95.0, value=50.0, suffix=" %")
+        self.flat_distance_spin = _spin(0.001, 10000.0, value=10.0)
+        self.inner_diameter_spin = _spin(0.001, 10000.0, value=8.0)
+        self.rotation_spin = _spin(-180.0, 180.0, value=0.0, suffix="°")
+        self.ring_width_label = QtWidgets.QLabel()
+        shape_form.addRow("Shape", self.shape_combo)
         shape_form.addRow("Cut width", self.width_spin)
         shape_form.addRow("Cut height", self.height_spin)
         shape_form.addRow("Corner radius", self.corner_radius_spin)
+        shape_form.addRow("Sides", self.polygon_sides_spin)
+        shape_form.addRow("Points", self.star_points_spin)
+        shape_form.addRow("Inner radius", self.star_inner_ratio_spin)
+        shape_form.addRow("Across flats", self.flat_distance_spin)
+        shape_form.addRow("Inner diameter", self.inner_diameter_spin)
+        shape_form.addRow("Rotation", self.rotation_spin)
+        shape_form.addRow("Ring width", self.ring_width_label)
+        self._shape_form = shape_form
         form_layout.addWidget(shape_group)
 
         grid_group = QtWidgets.QGroupBox("Grid layout")
         grid_form = QtWidgets.QFormLayout(grid_group)
-        grid_form.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow
-        )
-        grid_form.setRowWrapPolicy(
-            QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows
-        )
+        grid_form.setFieldGrowthPolicy(QtWidgets.QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
+        grid_form.setRowWrapPolicy(QtWidgets.QFormLayout.RowWrapPolicy.WrapLongRows)
         self.columns_spin = QtWidgets.QSpinBox()
         self.columns_spin.setRange(1, 999)
         self.columns_spin.setValue(3)
@@ -337,8 +362,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         self.spacing_mode_combo.addItem("Edge gap", "gap")
         self.spacing_mode_combo.addItem("Center pitch", "pitch")
         self.spacing_mode_combo.setToolTip(
-            "Gap measures clear space between cuts. Pitch measures from one "
-            "cut center to the next."
+            "Gap measures clear space between cuts. Pitch measures from one cut center to the next."
         )
         self.horizontal_spacing_spin = _spin(0.0, 10000.0, value=3.0)
         self.vertical_spacing_spin = _spin(0.0, 10000.0, value=3.0)
@@ -369,9 +393,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         form_scroll.setProperty("wheelScrollContainer", True)
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        form_scroll.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
+        form_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         form_scroll.setWidget(form_page)
         splitter.addWidget(form_scroll)
 
@@ -390,9 +412,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         preview_layout.addWidget(self.preview, 1)
         self.footprint_status = _WrappedStatusLabel()
         self.footprint_status.setObjectName("statusCard")
-        self.footprint_status.setToolTip(
-            "Cut count and overall footprint, center pitch, and edge gap."
-        )
+        self.footprint_status.setToolTip("Cut count and overall footprint, center pitch, and edge gap.")
         preview_layout.addWidget(self.footprint_status)
         splitter.addWidget(preview_page)
         splitter.setStretchFactor(0, 0)
@@ -436,15 +456,24 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         self.width_spin.valueChanged.connect(self._dimensions_changed)
         self.height_spin.valueChanged.connect(self._dimensions_changed)
         self.corner_radius_spin.valueChanged.connect(self._refresh)
-        self.spacing_mode_combo.currentIndexChanged.connect(
-            self._spacing_mode_changed
-        )
+        self.shape_combo.currentIndexChanged.connect(self._shape_changed)
+        for widget in (
+            self.polygon_sides_spin,
+            self.star_points_spin,
+            self.star_inner_ratio_spin,
+            self.flat_distance_spin,
+            self.inner_diameter_spin,
+            self.rotation_spin,
+        ):
+            widget.valueChanged.connect(self._refresh)
+        self.spacing_mode_combo.currentIndexChanged.connect(self._spacing_mode_changed)
         self.horizontal_spacing_spin.valueChanged.connect(self._refresh)
         self.vertical_spacing_spin.valueChanged.connect(self._refresh)
         self.cancel_button.clicked.connect(self.reject)
         self.save_button.clicked.connect(lambda: self._finish("save"))
         self.add_project_button.clicked.connect(lambda: self._finish("project"))
 
+        self._sync_shape_controls()
         self.set_editing(editing)
         if initial_spec is not None:
             self.set_spec(initial_spec)
@@ -551,15 +580,11 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
                 "footprint_height_mm",
                 "cut_count",
             }
-            self._source_extras = {
-                str(key): value for key, value in source.items() if key not in excluded
-            }
+            self._source_extras = {str(key): value for key, value in source.items() if key not in excluded}
         else:
             self._source_extras = {}
 
-        mode_value = str(
-            _value(source, "spacing_mode", default="")
-        ).strip().lower()
+        mode_value = str(_value(source, "spacing_mode", default="")).strip().lower()
         if mode_value not in {"gap", "pitch"}:
             has_pitch = (
                 _value(
@@ -574,9 +599,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
 
         self._updating = True
         try:
-            self.name_edit.setText(
-                str(_value(source, "name", default=self.name_edit.text()))
-            )
+            self.name_edit.setText(str(_value(source, "name", default=self.name_edit.text())))
             self.name_edit.setCursorPosition(0)
             self.description_edit.setPlainText(
                 str(
@@ -587,12 +610,8 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
                     )
                 )
             )
-            self.rows_spin.setValue(
-                int(_value(source, "rows", default=self.rows_spin.value()))
-            )
-            self.columns_spin.setValue(
-                int(_value(source, "columns", default=self.columns_spin.value()))
-            )
+            self.rows_spin.setValue(int(_value(source, "rows", default=self.rows_spin.value())))
+            self.columns_spin.setValue(int(_value(source, "columns", default=self.columns_spin.value())))
             self.width_spin.setValue(
                 float(
                     _value(
@@ -615,10 +634,29 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
                     )
                 )
             )
-            self._spacing_mode = mode_value
-            self.spacing_mode_combo.setCurrentIndex(
-                max(0, self.spacing_mode_combo.findData(mode_value))
+            shape = str(_value(source, "shape_kind", default=ShapeKind.ROUNDED_RECTANGLE.value))
+            index = self.shape_combo.findData(shape)
+            self.shape_combo.setCurrentIndex(
+                index if index >= 0 else self.shape_combo.findData(ShapeKind.ROUNDED_RECTANGLE.value)
             )
+            self.polygon_sides_spin.setValue(int(_value(source, "polygon_sides", default=6)))
+            self.star_points_spin.setValue(int(_value(source, "star_points", default=5)))
+            self.star_inner_ratio_spin.setValue(float(_value(source, "star_inner_ratio", default=0.5)) * 100.0)
+            self.flat_distance_spin.setValue(
+                float(
+                    _value(source, "flat_distance_mm", default=min(10.0, self.width_spin.value()))
+                    or min(10.0, self.width_spin.value())
+                )
+            )
+            self.inner_diameter_spin.setValue(
+                float(
+                    _value(source, "inner_diameter_mm", default=min(8.0, self.width_spin.value() / 2))
+                    or min(8.0, self.width_spin.value() / 2)
+                )
+            )
+            self.rotation_spin.setValue(float(_value(source, "shape_rotation_deg", default=0.0)))
+            self._spacing_mode = mode_value
+            self.spacing_mode_combo.setCurrentIndex(max(0, self.spacing_mode_combo.findData(mode_value)))
             self._sync_limits()
             if mode_value == "pitch":
                 horizontal = _value(
@@ -626,16 +664,14 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
                     "horizontal_spacing_mm",
                     "horizontal_pitch_mm",
                     "column_pitch_mm",
-                    default=self.width_spin.value()
-                    + float(_value(source, "horizontal_gap_mm", default=3.0)),
+                    default=self.width_spin.value() + float(_value(source, "horizontal_gap_mm", default=3.0)),
                 )
                 vertical = _value(
                     source,
                     "vertical_spacing_mm",
                     "vertical_pitch_mm",
                     "row_pitch_mm",
-                    default=self.height_spin.value()
-                    + float(_value(source, "vertical_gap_mm", default=3.0)),
+                    default=self.height_spin.value() + float(_value(source, "vertical_gap_mm", default=3.0)),
                 )
             else:
                 horizontal = _value(
@@ -681,16 +717,20 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
                     default=self.corner_radius_spin.value(),
                 )
             )
-            self.corner_radius_spin.setValue(
-                min(radius, self.corner_radius_spin.maximum())
-            )
+            self.corner_radius_spin.setValue(min(radius, self.corner_radius_spin.maximum()))
         finally:
             self._updating = False
+        self._sync_shape_controls()
         self._refresh()
 
     def spec(self) -> dict[str, Any]:
+        kind = ShapeKind(str(self.shape_combo.currentData()))
         width = self.width_spin.value()
-        height = self.height_spin.value()
+        height = (
+            width
+            if kind in {ShapeKind.CIRCLE, ShapeKind.CIRCLE_ONE_FLAT, ShapeKind.CIRCLE_TWO_FLATS, ShapeKind.WASHER}
+            else self.height_spin.value()
+        )
         horizontal = self.horizontal_spacing_spin.value()
         vertical = self.vertical_spacing_spin.value()
         if self._spacing_mode == "pitch":
@@ -714,7 +754,14 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
                 "columns": columns,
                 "width_mm": width,
                 "height_mm": height,
+                "shape_kind": kind.value,
                 "corner_radius_mm": self.corner_radius_spin.value(),
+                "polygon_sides": self.polygon_sides_spin.value(),
+                "star_points": self.star_points_spin.value(),
+                "star_inner_ratio": self.star_inner_ratio_spin.value() / 100.0,
+                "flat_distance_mm": self.flat_distance_spin.value(),
+                "inner_diameter_mm": self.inner_diameter_spin.value(),
+                "shape_rotation_deg": self.rotation_spin.value(),
                 "spacing_mode": self._spacing_mode,
                 "horizontal_spacing_mm": horizontal,
                 "vertical_spacing_mm": vertical,
@@ -745,6 +792,48 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
             self.vertical_spacing_spin.setMinimum(0.0)
             self.horizontal_spacing_label.setText("Horizontal gap")
             self.vertical_spacing_label.setText("Vertical gap")
+        diameter = self.width_spin.value()
+        self.flat_distance_spin.setMaximum(diameter)
+        self.inner_diameter_spin.setMaximum(max(0.001, diameter - 0.001))
+        self.ring_width_label.setText(f"{max(0.0, (diameter - self.inner_diameter_spin.value()) / 2):.3f} mm")
+
+    def _set_form_visible(self, widget: QtWidgets.QWidget, visible: bool) -> None:
+        widget.setVisible(visible)
+        label = self._shape_form.labelForField(widget)
+        if label is not None:
+            label.setVisible(visible)
+
+    def _shape_changed(self, *args: Any) -> None:
+        del args
+        self._sync_shape_controls()
+        self._sync_limits()
+        self._refresh()
+
+    def _sync_shape_controls(self) -> None:
+        kind = ShapeKind(str(self.shape_combo.currentData()))
+        circle = kind in {ShapeKind.CIRCLE, ShapeKind.CIRCLE_ONE_FLAT, ShapeKind.CIRCLE_TWO_FLATS, ShapeKind.WASHER}
+        width_label = self._shape_form.labelForField(self.width_spin)
+        if width_label is not None:
+            width_label.setText("Outer diameter" if kind == ShapeKind.WASHER else "Diameter" if circle else "Cut width")
+        self._set_form_visible(self.height_spin, not circle)
+        self._set_form_visible(self.corner_radius_spin, kind == ShapeKind.ROUNDED_RECTANGLE)
+        self._set_form_visible(self.polygon_sides_spin, kind == ShapeKind.REGULAR_POLYGON)
+        self._set_form_visible(self.star_points_spin, kind == ShapeKind.STAR)
+        self._set_form_visible(self.star_inner_ratio_spin, kind == ShapeKind.STAR)
+        self._set_form_visible(self.flat_distance_spin, kind in {ShapeKind.CIRCLE_ONE_FLAT, ShapeKind.CIRCLE_TWO_FLATS})
+        self._set_form_visible(self.inner_diameter_spin, kind == ShapeKind.WASHER)
+        self._set_form_visible(self.ring_width_label, kind == ShapeKind.WASHER)
+        self._set_form_visible(
+            self.rotation_spin,
+            kind
+            in {
+                ShapeKind.TRIANGLE,
+                ShapeKind.REGULAR_POLYGON,
+                ShapeKind.STAR,
+                ShapeKind.CIRCLE_ONE_FLAT,
+                ShapeKind.CIRCLE_TWO_FLATS,
+            },
+        )
 
     def _dimensions_changed(self, *args: Any) -> None:
         del args
@@ -783,26 +872,17 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         if int(spec["cut_count"]) > MAX_GRID_OBJECTS:
             return (
                 False,
-                f"This grid has {spec['cut_count']} cuts; the maximum is "
-                f"{MAX_GRID_OBJECTS}.",
+                f"This grid has {spec['cut_count']} cuts; the maximum is {MAX_GRID_OBJECTS}.",
             )
+        if spec["shape_kind"] == ShapeKind.WASHER.value and float(spec["inner_diameter_mm"]) >= float(spec["width_mm"]):
+            return False, "Washer inner diameter must be smaller than outer diameter."
         width = float(spec["footprint_width_mm"])
         height = float(spec["footprint_height_mm"])
         problems: list[str] = []
-        if (
-            self._max_width_mm is not None
-            and width > self._max_width_mm + WORK_AREA_TOLERANCE_MM
-        ):
-            problems.append(
-                f"width {width:.2f} mm exceeds the {self._max_width_mm:.2f} mm work area"
-            )
-        if (
-            self._max_height_mm is not None
-            and height > self._max_height_mm + WORK_AREA_TOLERANCE_MM
-        ):
-            problems.append(
-                f"height {height:.2f} mm exceeds the {self._max_height_mm:.2f} mm work area"
-            )
+        if self._max_width_mm is not None and width > self._max_width_mm + WORK_AREA_TOLERANCE_MM:
+            problems.append(f"width {width:.2f} mm exceeds the {self._max_width_mm:.2f} mm work area")
+        if self._max_height_mm is not None and height > self._max_height_mm + WORK_AREA_TOLERANCE_MM:
+            problems.append(f"height {height:.2f} mm exceeds the {self._max_height_mm:.2f} mm work area")
         if problems:
             return False, "This grid does not fit: " + "; ".join(problems) + "."
         if int(spec["cut_count"]) < 3:

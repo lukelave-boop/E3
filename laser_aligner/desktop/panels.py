@@ -1365,7 +1365,7 @@ class TracePanel(QtWidgets.QWidget):
         output_form = _form_layout()
         output_group.setLayout(output_form)
         self.output_mode = QtWidgets.QComboBox()
-        self.output_mode.addItem("Fitted rounded rectangles", "rounded")
+        self.output_mode.addItem("Best-fit analytic shapes", "rounded")
         self.output_mode.addItem("Simplified contours", "smoothed")
         self.output_mode.addItem("Exact contours", "exact")
         self.output_mode.setMinimumWidth(0)
@@ -1374,8 +1374,9 @@ class TracePanel(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
         self.output_mode.setToolTip(
-            "Choose fitted rounded rectangles, simplified pixel contours, "
-            "or the exact pixel-derived contours."
+            "Choose recognized analytic geometry (including washers, circles, "
+            "ellipses, polygons, and rounded rectangles), simplified pixel "
+            "contours, or exact pixel-derived contours."
         )
         self.border_offset_mode = QtWidgets.QComboBox()
         self.border_offset_mode.addItem("Uniform", "uniform")
@@ -1427,12 +1428,12 @@ class TracePanel(QtWidgets.QWidget):
         smoothing_tip = (
             "Maximum contour simplification tolerance for Simplified contours. "
             "Lower values preserve more edge detail. This setting does not "
-            "apply to fitted rounded rectangles or Exact contours."
+            "apply to best-fit analytic shapes or Exact contours."
         )
         self.smoothing.setToolTip(smoothing_tip)
         self.smoothing_label = QtWidgets.QLabel("Simplify tolerance")
         self.smoothing_label.setToolTip(smoothing_tip)
-        _form_row(output_form, "Output shape", self.output_mode)
+        _form_row(output_form, "Geometry output", self.output_mode)
         _form_row(output_form, "Offset mode", self.border_offset_mode)
         output_form.addRow(self.border_offset_label, self.border_offset)
         self.edge_offsets_label = QtWidgets.QLabel("Edge offsets")
@@ -1721,6 +1722,10 @@ class TracePanel(QtWidgets.QWidget):
                     source_text += " · cropped"
                 if not within_work_area:
                     source_text += " · outside"
+                if diagnostics.get("damage_suspected"):
+                    source_text += " · damaged?"
+                if diagnostics.get("likely_open_cell"):
+                    source_text += " · likely cut/open"
                 item.setText(2, source_text)
                 item.setText(3, f"{float(detection.get('confidence', 0)) * 100:.0f}%")
                 item.setText(
@@ -1774,11 +1779,48 @@ class TracePanel(QtWidgets.QWidget):
                                 + " was truncated or enlarged, so that center axis "
                                 "uses the repeated-grid fit."
                             )
+                elif shape == "washer":
+                    hole_ratio = float(diagnostics.get("hole_ratio", 0.0))
+                    outer_diameter = float(detection.get("width_mm", 0.0))
+                    inner_diameter = outer_diameter * hole_ratio
+                    item.setText(
+                        4,
+                        f"Washer · OD {outer_diameter:.2f} mm · "
+                        f"ID {inner_diameter:.2f} mm",
+                    )
+                    geometry_tip = (
+                        "Best-fit washer: concentric circular contours with "
+                        f"outer diameter {outer_diameter:.2f} mm, inner diameter "
+                        f"{inner_diameter:.2f} mm, and center offset "
+                        f"{float(diagnostics.get('center_offset_mm', 0.0)):.3f} mm."
+                    )
+                elif shape in {"circle", "ellipse", "triangle", "regular_polygon"}:
+                    display_shape = shape.replace("_", " ").title()
+                    item.setText(4, f"{display_shape} · {item.text(4)}")
+                    geometry_tip = (
+                        f"Best-fit {shape.replace('_', ' ')}: "
+                        f"{float(detection.get('width_mm', 0)):.2f} × "
+                        f"{float(detection.get('height_mm', 0)):.2f} mm."
+                    )
                 else:
                     geometry_tip = (
-                        "Irregular detected contour. Fitted rounded-rectangle "
-                        "output is unavailable for this outline, so contour "
-                        "geometry will be used."
+                        "No analytic fit passed the confidence gates, so the "
+                        "detected contour geometry will be used."
+                    )
+                if diagnostics.get("damage_suspected"):
+                    reasons = "; ".join(
+                        str(value) for value in diagnostics.get("damage_reasons", [])
+                    )
+                    geometry_tip += (
+                        " DAMAGE SUSPECTED: this observation disagrees with the "
+                        f"repeated-cell family ({reasons}). A trace is still "
+                        "shown, but it was left unchecked for review."
+                    )
+                if diagnostics.get("likely_open_cell"):
+                    geometry_tip += (
+                        " LIKELY ALREADY CUT / OPEN: the cell interior has much "
+                        "stronger exposed-bed texture and edge evidence than the "
+                        "label-family baseline. It was left unchecked."
                     )
                 if not within_work_area:
                     overrun = float(

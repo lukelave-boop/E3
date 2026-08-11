@@ -181,6 +181,7 @@ class TraceDetection:
     area_mm2: float
     contour_mm: list[list[float]]
     vector_contour_mm: list[list[float]]
+    vector_contours_mm: list[list[list[float]]]
     box_mm: list[list[float]]
     selected_default: bool
     diagnostics: dict[str, Any] = field(default_factory=dict)
@@ -791,8 +792,39 @@ def _candidate(
     coverage = 0.0 if not np.any(pixels) else float(np.mean(mask[pixels] > 0))
     perimeter = max(1.0, float(cv2.arcLength(contour, True)))
     compactness = max(0.0, min(1.0, 4.0 * math.pi * area_px / (perimeter * perimeter)))
-    rounded = rectangularity >= 0.78 and solidity >= 0.82 and fit_iou >= 0.82
-    if rounded:
+    aspect = min(rectangle["width"], rectangle["height"]) / max(
+        rectangle["width"], rectangle["height"]
+    )
+    approximation = cv2.approxPolyDP(contour, 0.025 * perimeter, True)
+    analytic_shape: str | None = None
+    if compactness >= 0.84 and solidity >= 0.94 and aspect >= 0.90:
+        analytic_shape = "circle"
+    elif (
+        compactness >= 0.66
+        and solidity >= 0.94
+        and rectangularity < 0.90
+        and len(contour) >= 5
+    ):
+        analytic_shape = "ellipse"
+    elif len(approximation) == 3 and solidity >= 0.90:
+        analytic_shape = "triangle"
+    elif (
+        4 <= len(approximation) <= 12
+        and solidity >= 0.90
+        and rectangularity < 0.76
+    ):
+        analytic_shape = "regular_polygon"
+    rounded = (
+        analytic_shape is None
+        and rectangularity >= 0.78
+        and solidity >= 0.82
+        and fit_iou >= 0.82
+    )
+    if analytic_shape is not None:
+        shape = analytic_shape
+        score = 0.44 * solidity + 0.28 * coverage + 0.28 * compactness
+        confidence = max(0.0, min(1.0, (score - 0.45) / 0.5))
+    elif rounded:
         shape = "rounded_rectangle"
         score = (
             0.48 * fit_iou
@@ -843,6 +875,29 @@ def _candidate(
         if options.output_mode == "rounded" and shape == "rounded_rectangle"
         else observed_contour_mm
     )
+    if options.output_mode == "rounded" and shape in {"circle", "ellipse"}:
+        cx, cy = geometry["center_mm"]
+        angle = math.radians(geometry["rotation_deg"])
+        cosine, sine = math.cos(angle), math.sin(angle)
+        vector_contour_mm = []
+        for step in range(73):
+            theta = 2.0 * math.pi * step / 72
+            x = geometry["width_mm"] * 0.5 * math.cos(theta)
+            y = geometry["height_mm"] * 0.5 * math.sin(theta)
+            vector_contour_mm.append(
+                [
+                    cx + x * cosine - y * sine,
+                    cy + x * sine + y * cosine,
+                ]
+            )
+    elif options.output_mode == "rounded" and shape in {
+        "triangle",
+        "regular_polygon",
+    }:
+        converted = _pixel_to_machine(
+            approximation.reshape(-1, 2), work_area, pixels_per_mm
+        )
+        vector_contour_mm = [[float(x), float(y)] for x, y in converted]
     contour_points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
     image_height, image_width = mask.shape[:2]
     image_edge_sides = []
@@ -1354,6 +1409,8 @@ def _infer_grid(
         "normalization_anchor": options.normalize_anchor,
         "cell_width_mm": float(canonical_geometry["width_mm"]),
         "cell_height_mm": float(canonical_geometry["height_mm"]),
+        "observed_cell_width_mm": median_width / pixels_per_mm,
+        "observed_cell_height_mm": median_height / pixels_per_mm,
         "cell_corner_radius_mm": float(canonical_geometry["corner_radius_mm"]),
         "column_pitch_mm": x_spacing / pixels_per_mm,
         "row_pitch_mm": y_spacing / pixels_per_mm,
@@ -1381,6 +1438,8 @@ def _to_detection(
     confidence = float(item["confidence"])
     within_work_area = bool(item.get("within_work_area", True))
     touches_image_edge = bool(item.get("touches_image_edge", False))
+    damage_suspected = bool(item.get("damage_suspected", False))
+    likely_open_cell = bool(item.get("likely_open_cell", False))
     return TraceDetection(
         id=_new_id(), index=0, source=source,
         confidence=confidence, score=float(item["score"]),
@@ -1395,12 +1454,21 @@ def _to_detection(
             list(point)
             for point in item.get("vector_contour_mm", item["contour_mm"])
         ],
+        vector_contours_mm=[
+            [list(point) for point in contour]
+            for contour in item.get(
+                "vector_contours_mm",
+                [item.get("vector_contour_mm", item["contour_mm"])],
+            )
+        ],
         box_mm=[list(point) for point in item["box_mm"]],
         selected_default=(
             source == "direct"
             and confidence >= options.confidence_threshold
             and within_work_area
             and not touches_image_edge
+            and not damage_suspected
+            and not likely_open_cell
         ),
         diagnostics={
             "rectangularity": float(item["rectangularity"]),
@@ -1408,6 +1476,27 @@ def _to_detection(
             "fit_iou": float(item["fit_iou"]),
             "color_coverage": float(item["coverage"]),
             "compactness": float(item.get("compactness", 0.0)),
+            "damage_suspected": damage_suspected,
+            "damage_reasons": list(item.get("damage_reasons", [])),
+            "grid_rotation_error_deg": float(item.get("grid_rotation_error_deg", 0.0)),
+            "grid_width_error_ratio": float(item.get("grid_width_error_ratio", 0.0)),
+            "grid_height_error_ratio": float(item.get("grid_height_error_ratio", 0.0)),
+            "likely_open_cell": likely_open_cell,
+            "cell_texture_score": float(item.get("cell_texture_score", 0.0)),
+            "cell_texture_baseline": float(item.get("cell_texture_baseline", 0.0)),
+            "cell_texture_threshold": float(item.get("cell_texture_threshold", 0.0)),
+            "cell_intensity_stddev": float(item.get("cell_intensity_stddev", 0.0)),
+            "cell_edge_density": float(item.get("cell_edge_density", 0.0)),
+            **(
+                {
+                    "hole_ratio": float(item["hole_ratio"]),
+                    "outer_circle_residual": float(item["outer_circle_residual"]),
+                    "inner_circle_residual": float(item["inner_circle_residual"]),
+                    "center_offset_mm": float(item["center_offset_mm"]),
+                }
+                if item.get("shape") == "washer"
+                else {}
+            ),
             "mask_source": str(item.get("mask_source", "unknown")),
             "touches_image_edge": touches_image_edge,
             "image_edge_sides": list(item.get("image_edge_sides", [])),
@@ -1457,6 +1546,236 @@ def _to_detection(
             ),
         },
     )
+
+
+def _circle_fit(contour: np.ndarray) -> dict[str, float] | None:
+    points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+    if len(points) < 12:
+        return None
+    center_x, center_y = np.mean(points, axis=0)
+    radii = np.linalg.norm(points - (center_x, center_y), axis=1)
+    radius = float(np.mean(radii))
+    if radius <= 2.0:
+        return None
+    residual = float(np.sqrt(np.mean((radii - radius) ** 2)) / radius)
+    perimeter = float(cv2.arcLength(contour, True))
+    area = abs(float(cv2.contourArea(contour)))
+    circularity = 0.0 if perimeter <= 0 else min(1.0, 4.0 * math.pi * area / perimeter**2)
+    return {
+        "center_x": float(center_x),
+        "center_y": float(center_y),
+        "radius": radius,
+        "residual": residual,
+        "circularity": circularity,
+    }
+
+
+def _circle_machine_contour(
+    center_px: tuple[float, float],
+    radius_px: float,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+    *,
+    reverse: bool = False,
+) -> list[list[float]]:
+    steps = range(72, -1, -1) if reverse else range(73)
+    pixels = np.asarray(
+        [
+            (
+                center_px[0] + radius_px * math.cos(2.0 * math.pi * step / 72),
+                center_px[1] + radius_px * math.sin(2.0 * math.pi * step / 72),
+            )
+            for step in steps
+        ],
+        dtype=np.float64,
+    )
+    return [
+        [float(x), float(y)]
+        for x, y in _pixel_to_machine(pixels, work_area, pixels_per_mm)
+    ]
+
+
+def _washer_candidates(
+    mask: np.ndarray,
+    options: TraceOptions,
+    work_area: WorkArea,
+    output_work_area: WorkArea,
+    pixels_per_mm: float,
+) -> list[dict[str, Any]]:
+    """Recognize only strong circular parent/child contour pairs as washers."""
+    contours, hierarchy = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE)
+    if hierarchy is None:
+        return []
+    parents = hierarchy[0, :, 3]
+    output: list[dict[str, Any]] = []
+    for inner_index, outer_index in enumerate(parents):
+        if outer_index < 0:
+            continue
+        outer = contours[int(outer_index)]
+        inner = contours[inner_index]
+        outer_fit, inner_fit = _circle_fit(outer), _circle_fit(inner)
+        if outer_fit is None or inner_fit is None:
+            continue
+        outer_radius, inner_radius = outer_fit["radius"], inner_fit["radius"]
+        ratio = inner_radius / outer_radius
+        center_offset = math.hypot(
+            outer_fit["center_x"] - inner_fit["center_x"],
+            outer_fit["center_y"] - inner_fit["center_y"],
+        )
+        residual_limit = max(0.035, 0.8 / outer_radius)
+        inner_residual_limit = max(0.045, 0.8 / inner_radius)
+        if not (
+            0.10 <= ratio <= 0.85
+            and center_offset <= max(1.0, outer_radius * 0.035)
+            and outer_fit["residual"] <= residual_limit
+            and inner_fit["residual"] <= inner_residual_limit
+            and outer_fit["circularity"] >= 0.82
+            and inner_fit["circularity"] >= 0.78
+        ):
+            continue
+        candidate = _candidate(
+            outer, mask, options, work_area, output_work_area, pixels_per_mm
+        )
+        if candidate is None:
+            continue
+        offset_px = options.border_offset_mm * pixels_per_mm
+        corrected_outer = outer_radius + offset_px
+        corrected_inner = inner_radius - offset_px
+        if corrected_inner <= 1.0 or corrected_inner >= corrected_outer:
+            continue
+        center = (
+            (outer_fit["center_x"] + inner_fit["center_x"]) / 2.0,
+            (outer_fit["center_y"] + inner_fit["center_y"]) / 2.0,
+        )
+        outer_mm = _circle_machine_contour(
+            center, corrected_outer, work_area, pixels_per_mm
+        )
+        inner_mm = _circle_machine_contour(
+            center, corrected_inner, work_area, pixels_per_mm, reverse=True
+        )
+        overruns = _work_area_overruns_mm([*outer_mm, *inner_mm], output_work_area)
+        camera_overruns = _work_area_overruns_mm([*outer_mm, *inner_mm], work_area)
+        fit_quality = math.exp(
+            -8.0 * (outer_fit["residual"] + inner_fit["residual"])
+            -4.0 * center_offset / outer_radius
+        )
+        candidate.update(
+            {
+                "shape": "washer",
+                "center_mm": tuple(
+                    _pixel_to_machine(
+                        np.asarray(center).reshape(1, 2), work_area, pixels_per_mm
+                    )[0]
+                ),
+                "width_mm": 2.0 * corrected_outer / pixels_per_mm,
+                "height_mm": 2.0 * corrected_outer / pixels_per_mm,
+                "rotation_deg": 0.0,
+                "corner_radius_mm": 0.0,
+                "vector_contour_mm": outer_mm,
+                "vector_contours_mm": [outer_mm, inner_mm],
+                "contour_mm": outer_mm,
+                "hole_ratio": corrected_inner / corrected_outer,
+                "outer_circle_residual": outer_fit["residual"],
+                "inner_circle_residual": inner_fit["residual"],
+                "center_offset_mm": center_offset / pixels_per_mm,
+                "score": max(candidate["score"], fit_quality),
+                "confidence": max(candidate["confidence"], fit_quality),
+                "within_camera_work_area": max(camera_overruns.values()) <= 1e-9,
+                "camera_work_area_overrun_mm": max(camera_overruns.values()),
+                "camera_work_area_overruns_mm": camera_overruns,
+                "within_work_area": max(overruns.values()) <= 1e-9,
+                "work_area_overrun_mm": max(overruns.values()),
+                "work_area_overruns_mm": overruns,
+            }
+        )
+        output.append(candidate)
+    return output
+
+
+def _axis_rotation_error(first_deg: float, second_deg: float) -> float:
+    return abs((float(first_deg) - float(second_deg) + 90.0) % 180.0 - 90.0)
+
+
+def _grid_cell_review_evidence(
+    image: np.ndarray,
+    candidates: list[dict[str, Any]],
+    grid: Mapping[str, Any] | None,
+) -> None:
+    """Annotate suspicious geometry and likely exposed-bed grid cells.
+
+    This is a review gate, not a material classifier. It uses a shrunken cell
+    interior so printed/damaged borders do not dominate the texture evidence.
+    """
+    if not grid or len(candidates) < 3:
+        return
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    gradient_image = cv2.magnitude(gradient_x, gradient_y)
+    common_image_angle = -float(grid.get("rotation_deg", 0.0))
+    canonical_width = float(
+        grid.get("observed_cell_width_mm", grid.get("cell_width_mm", 0.0))
+    )
+    canonical_height = float(
+        grid.get("observed_cell_height_mm", grid.get("cell_height_mm", 0.0))
+    )
+    texture_rows: list[tuple[dict[str, Any], float, float, float]] = []
+    for item in candidates:
+        if item.get("grid_row") is None or item.get("grid_column") is None:
+            continue
+        observed_width = float(item.get("observed_width_mm", item.get("width_mm", 0.0)))
+        observed_height = float(item.get("observed_height_mm", item.get("height_mm", 0.0)))
+        observed_rotation = float(
+            item.get("observed_rotation_deg", item.get("rotation_deg", 0.0))
+        )
+        rotation_error = _axis_rotation_error(observed_rotation, -common_image_angle)
+        width_error = abs(observed_width - canonical_width) / max(canonical_width, 1e-9)
+        height_error = abs(observed_height - canonical_height) / max(canonical_height, 1e-9)
+        reasons = []
+        if rotation_error > 1.75:
+            reasons.append(f"rotation differs by {rotation_error:.2f}°")
+        if width_error > 0.045:
+            reasons.append(f"width differs by {width_error * 100:.1f}%")
+        if height_error > 0.09:
+            reasons.append(f"height differs by {height_error * 100:.1f}%")
+        if item.get("repaired_center_axes"):
+            reasons.append("a damaged edge required center repair")
+        item["damage_suspected"] = bool(reasons)
+        item["damage_reasons"] = reasons
+        item["grid_rotation_error_deg"] = rotation_error
+        item["grid_width_error_ratio"] = width_error
+        item["grid_height_error_ratio"] = height_error
+
+        center = tuple(float(value) for value in item["center_px"])
+        width_px = max(3.0, float(item["width_px"]) * 0.68)
+        height_px = max(3.0, float(item["height_px"]) * 0.62)
+        box = cv2.boxPoints((center, (width_px, height_px), float(item["angle_image_deg"])))
+        mask = np.zeros(gray.shape, dtype=np.uint8)
+        cv2.fillConvexPoly(mask, np.round(box).astype(np.int32), 255)
+        pixels = gray[mask > 0]
+        if len(pixels) < 25:
+            continue
+        gradient = gradient_image[mask > 0]
+        deviation = float(np.std(pixels))
+        edge_density = float(np.mean(gradient > 80.0))
+        texture_score = deviation + 35.0 * edge_density
+        texture_rows.append((item, texture_score, deviation, edge_density))
+
+    if len(texture_rows) < 3:
+        return
+    scores = np.asarray([row[1] for row in texture_rows], dtype=np.float64)
+    lower = scores[scores <= np.percentile(scores, 50.0)]
+    baseline = float(np.median(lower)) if len(lower) else float(np.median(scores))
+    spread = float(np.median(np.abs(lower - baseline))) if len(lower) else 0.0
+    threshold = max(baseline + max(12.0, 5.0 * spread), baseline * 1.65)
+    for item, score, deviation, edge_density in texture_rows:
+        likely_open = score > threshold and deviation > 18.0 and edge_density > 0.08
+        item["likely_open_cell"] = likely_open
+        item["cell_texture_score"] = score
+        item["cell_texture_baseline"] = baseline
+        item["cell_texture_threshold"] = threshold
+        item["cell_intensity_stddev"] = deviation
+        item["cell_edge_density"] = edge_density
 
 
 def detect_objects(
@@ -1601,16 +1920,45 @@ def detect_objects(
                 pixels_per_mm,
             )) is not None
         ]
+        washers = (
+            _washer_candidates(
+                mask,
+                options,
+                work_area,
+                output_work_area,
+                pixels_per_mm,
+            )
+            if mask_source in filled_region_sources
+            and mask_source != "closed_outline"
+            else []
+        )
+        if washers:
+            retained = []
+            for candidate in candidates:
+                if any(
+                    math.hypot(
+                        float(candidate["center_px"][0]) - float(washer["center_px"][0]),
+                        float(candidate["center_px"][1]) - float(washer["center_px"][1]),
+                    )
+                    <= max(float(washer["width_px"]), float(washer["height_px"])) * 0.1
+                    for washer in washers
+                ):
+                    continue
+                retained.append(candidate)
+            candidates = [*retained, *washers]
         raw_quality = sum(item["score"] for item in candidates) + 0.35 * len(
             candidates
         )
-        direct, inferred, grid = _infer_grid(
-            candidates,
-            options,
-            work_area,
-            output_work_area,
-            pixels_per_mm,
-        )
+        if washers:
+            direct, inferred, grid = candidates, [], None
+        else:
+            direct, inferred, grid = _infer_grid(
+                candidates,
+                options,
+                work_area,
+                output_work_area,
+                pixels_per_mm,
+            )
         family = direct if grid is not None else candidates
         family_area = sum(float(item["area_mm2"]) for item in family)
         family_score = (
@@ -1623,6 +1971,13 @@ def detect_objects(
                 float(grid["observed_cells"]) * float(grid["quality"]),
                 family_score,
                 raw_quality,
+            )
+        elif washers:
+            rank = (
+                3.0,
+                float(len(washers)),
+                float(np.mean([item["score"] for item in washers])),
+                -float(len(candidates) - len(washers)),
             )
         else:
             rank = (
@@ -1641,6 +1996,7 @@ def detect_objects(
     _, mode_used, chosen_hue, candidates, inferred, grid = best
     if chosen_hue is not None:
         target_hue = chosen_hue
+    _grid_cell_review_evidence(image, candidates, grid)
     detections = [
         *[_to_detection(item, "direct", options) for item in candidates],
         *[_to_detection(item, "inferred", options) for item in inferred],
@@ -1755,6 +2111,22 @@ def detect_objects(
             f"{'s touch' if edge_cropped_count != 1 else ' touches'} the "
             f"{edge_summary} camera/work-area image edge, may be cropped, and "
             f"{'were' if edge_cropped_count != 1 else 'was'} not preselected"
+        )
+    damaged_count = sum(
+        bool(item.diagnostics.get("damage_suspected", False)) for item in detections
+    )
+    open_count = sum(
+        bool(item.diagnostics.get("likely_open_cell", False)) for item in detections
+    )
+    if damaged_count:
+        message += (
+            f"; {damaged_count} damaged/suspicious cell"
+            f"{'s were' if damaged_count != 1 else ' was'} left unchecked"
+        )
+    if open_count:
+        message += (
+            f"; {open_count} likely already-cut/open cell"
+            f"{'s were' if open_count != 1 else ' was'} left unchecked"
         )
     if not detections:
         message = "No objects passed the current filters"

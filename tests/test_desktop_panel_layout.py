@@ -81,7 +81,7 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     panel = TracePanel()
 
     assert panel.output_mode.currentData() == "rounded"
-    assert panel.output_mode.currentText() == "Fitted rounded rectangles"
+    assert panel.output_mode.currentText() == "Best-fit analytic shapes"
     assert panel.border_offset_mode.currentData() == "uniform"
     assert panel.border_offset_mode.isEnabled()
     assert panel.border_offset.singleStep() == pytest.approx(0.1)
@@ -176,6 +176,94 @@ def test_trace_result_exposes_fitted_corner_radius(
     assert panel.result_tree.headerItem().text(4) == "Geometry"
     assert "R 2.75 mm" in item.text(4)
     assert "corner radius 2.75 mm" in item.toolTip(4)
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_result_identifies_washer_dimensions(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    panel.set_result(
+        {
+            "message": "One washer",
+            "detections": [
+                {
+                    "id": "trace-washer",
+                    "index": 1,
+                    "source": "direct",
+                    "confidence": 0.97,
+                    "selected_default": True,
+                    "shape": "washer",
+                    "width_mm": 20.0,
+                    "height_mm": 20.0,
+                    "rotation_deg": 0.0,
+                    "diagnostics": {"hole_ratio": 0.4, "center_offset_mm": 0.02},
+                }
+            ],
+        }
+    )
+
+    item = panel.result_tree.topLevelItem(0)
+    assert "Washer · OD 20.00 mm · ID 8.00 mm" == item.text(4)
+    assert "Best-fit washer" in item.toolTip(4)
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_result_labels_damaged_and_already_open_cells(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    panel.set_result(
+        {
+            "message": "Review flags",
+            "detections": [
+                {
+                    "id": "damaged",
+                    "index": 1,
+                    "source": "direct",
+                    "confidence": 0.9,
+                    "selected_default": False,
+                    "shape": "rounded_rectangle",
+                    "width_mm": 20,
+                    "height_mm": 10,
+                    "corner_radius_mm": 1,
+                    "rotation_deg": 0,
+                    "diagnostics": {
+                        "damage_suspected": True,
+                        "damage_reasons": ["rotation differs by 3.00°"],
+                    },
+                },
+                {
+                    "id": "open",
+                    "index": 2,
+                    "source": "direct",
+                    "confidence": 0.9,
+                    "selected_default": False,
+                    "shape": "rounded_rectangle",
+                    "width_mm": 20,
+                    "height_mm": 10,
+                    "corner_radius_mm": 1,
+                    "rotation_deg": 0,
+                    "diagnostics": {"likely_open_cell": True},
+                },
+            ],
+        }
+    )
+
+    damaged = panel.result_tree.topLevelItem(0)
+    opened = panel.result_tree.topLevelItem(1)
+    assert "damaged?" in damaged.text(2)
+    assert "DAMAGE SUSPECTED" in damaged.toolTip(4)
+    assert "likely cut/open" in opened.text(2)
+    assert "LIKELY ALREADY CUT / OPEN" in opened.toolTip(4)
+    assert damaged.checkState(0) == QtCore.Qt.CheckState.Unchecked
+    assert opened.checkState(0) == QtCore.Qt.CheckState.Unchecked
 
     panel.close()
     panel.deleteLater()

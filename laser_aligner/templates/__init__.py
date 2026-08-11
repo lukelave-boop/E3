@@ -4,8 +4,11 @@ from .grid import (
     GRID_AUTHORING_VERSION,
     MAX_GRID_OBJECTS,
     RectangleGridSpec,
+    ShapeGridSpec,
     build_rectangle_grid_objects,
+    build_shape_grid_objects,
     template_from_rectangle_grid,
+    template_from_shape_grid,
 )
 from .library import TemplateCatalog, TemplateDiagnostic, TemplateLibrary
 from .model import (
@@ -17,6 +20,7 @@ from .model import (
     instantiate_template,
     template_from_project,
 )
+from .shapes import SHAPE_METADATA_KEY, ShapeKind, build_shape_object, semantic_shape_kind, shape_polylines
 from .synthetic import (
     SyntheticFeatureGroundTruth,
     SyntheticTemplateFrame,
@@ -33,6 +37,9 @@ __all__ = [
     "MAX_GRID_OBJECTS",
     "CutTemplate",
     "RectangleGridSpec",
+    "ShapeGridSpec",
+    "ShapeKind",
+    "SHAPE_METADATA_KEY",
     "TemplateFeature",
     "TemplateFormatError",
     "TemplateCatalog",
@@ -42,8 +49,13 @@ __all__ = [
     "SyntheticTemplateFrame",
     "SyntheticTemplateGroundTruth",
     "build_rectangle_grid_objects",
+    "build_shape_grid_objects",
+    "build_shape_object",
     "generate_template_test_frame",
     "instantiate_template",
     "template_from_rectangle_grid",
+    "template_from_shape_grid",
+    "semantic_shape_kind",
+    "shape_polylines",
     "template_from_project",
 ]

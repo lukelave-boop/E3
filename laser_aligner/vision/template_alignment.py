@@ -63,6 +63,8 @@ class _ObservedFeature:
     source: str
     confidence: float
     weight: float
+    shape_kind: str
+    descriptor: Mapping[str, Any]
 
 
 @dataclass(slots=True)
@@ -126,11 +128,7 @@ def _as_features(items: Sequence[Any], *, detections: bool) -> list[_ObservedFea
             continue
         if len(center) != 2 or not np.all(np.isfinite(center)):
             continue
-        if (
-            not all(math.isfinite(value) for value in (width, height, rotation, confidence))
-            or width < 0
-            or height < 0
-        ):
+        if not all(math.isfinite(value) for value in (width, height, rotation, confidence)) or width < 0 or height < 0:
             continue
         source = str(_value(item, "source", "direct")).lower() if detections else "template"
         confidence = max(0.0, min(1.0, confidence))
@@ -148,6 +146,21 @@ def _as_features(items: Sequence[Any], *, detections: bool) -> list[_ObservedFea
                 source=source,
                 confidence=confidence,
                 weight=weight,
+                shape_kind=str(
+                    _value(
+                        item,
+                        "shape_kind",
+                        _value(item, "shape", _value(item, "kind", "")),
+                    )
+                ).lower(),
+                descriptor=(
+                    _value(item, "descriptor", _value(item, "diagnostics", {}))
+                    if isinstance(
+                        _value(item, "descriptor", _value(item, "diagnostics", {})),
+                        Mapping,
+                    )
+                    else {}
+                ),
             )
         )
     return output
@@ -175,6 +188,8 @@ def _orientation_quality(
     detection: _ObservedFeature,
     rotation_deg: float,
 ) -> float:
+    if template.shape_kind in {"circle", "washer"} or detection.shape_kind in {"circle", "washer"}:
+        return 1.0
     # Orientation is not informative for nearly square features.
     maximum = max(template.width, template.height, detection.width, detection.height, _EPSILON)
     minimum = min(template.width, template.height, detection.width, detection.height)
@@ -182,6 +197,21 @@ def _orientation_quality(
         return 1.0
     error = _axis_angle_error(template.rotation + rotation_deg, detection.rotation)
     return math.exp(-0.5 * (error / 16.0) ** 2)
+
+
+def _shape_quality(template: _ObservedFeature, detection: _ObservedFeature) -> float:
+    unknown = {"", "path", "polygon", "contour", "freeform_contour", "unknown"}
+    if template.shape_kind in unknown or detection.shape_kind in unknown:
+        return 1.0
+    if template.shape_kind == detection.shape_kind:
+        if template.shape_kind == "washer":
+            first = template.descriptor.get("hole_ratio")
+            second = detection.descriptor.get("hole_ratio")
+            if isinstance(first, (int, float)) and isinstance(second, (int, float)):
+                return math.exp(-abs(float(first) - float(second)) / 0.12)
+        return 1.0
+    compatible = {frozenset(("rectangle", "rounded_rectangle")), frozenset(("circle", "ellipse"))}
+    return 0.55 if frozenset((template.shape_kind, detection.shape_kind)) in compatible else 0.08
 
 
 def _representative_pairs(points: np.ndarray, limit: int = 96) -> list[tuple[int, int, float, float]]:
@@ -298,10 +328,7 @@ def _has_half_turn_feature_symmetry(
                 target.width,
                 target.height,
             )
-            if (
-                minimum / maximum < 0.86
-                and _axis_angle_error(source.rotation, target.rotation) > 2.0
-            ):
+            if minimum / maximum < 0.86 and _axis_angle_error(source.rotation, target.rotation) > 2.0:
                 continue
             candidates.append((distance, source_index, target_index))
 
@@ -376,7 +403,8 @@ def _assign_matches(
         distance = float(distances[feature_index, detection_index])
         dimension = _dimension_quality(template_features[feature_index], detection)
         orientation = _orientation_quality(template_features[feature_index], detection, rotation_deg)
-        cost = distance / tolerance + 0.22 * (1.0 - dimension) + 0.10 * (1.0 - orientation)
+        shape = _shape_quality(template_features[feature_index], detection)
+        cost = distance / tolerance + 0.22 * (1.0 - dimension) + 0.10 * (1.0 - orientation) + 0.55 * (1.0 - shape)
         candidates.append((cost, distance, feature_index, detection_index, dimension, orientation))
 
     used_features: set[int] = set()
@@ -392,7 +420,12 @@ def _assign_matches(
         used_detections.add(detection_index)
         detection = detections[detection_index]
         pairs.append((feature_index, detection_index, distance))
-        weights.append(detection.weight * (0.65 + 0.35 * dimension) * (0.75 + 0.25 * orientation))
+        weights.append(
+            detection.weight
+            * (0.65 + 0.35 * dimension)
+            * (0.75 + 0.25 * orientation)
+            * (0.45 + 0.55 * _shape_quality(template_features[feature_index], detection))
+        )
         dimension_quality.append(dimension)
         orientation_quality.append(orientation)
     return (
@@ -424,12 +457,22 @@ def _refine_rigid_fit(
         template_centered = template_points - template_mean
         detection_centered = detection_points - detection_mean
         cross = float(
-            np.sum(safe_weights * (template_centered[:, 0] * detection_centered[:, 1]
-                                   - template_centered[:, 1] * detection_centered[:, 0]))
+            np.sum(
+                safe_weights
+                * (
+                    template_centered[:, 0] * detection_centered[:, 1]
+                    - template_centered[:, 1] * detection_centered[:, 0]
+                )
+            )
         )
         dot = float(
-            np.sum(safe_weights * (template_centered[:, 0] * detection_centered[:, 0]
-                                   + template_centered[:, 1] * detection_centered[:, 1]))
+            np.sum(
+                safe_weights
+                * (
+                    template_centered[:, 0] * detection_centered[:, 0]
+                    + template_centered[:, 1] * detection_centered[:, 1]
+                )
+            )
         )
         if abs(cross) + abs(dot) > _EPSILON:
             candidate = _normalise_rotation(math.degrees(math.atan2(cross, dot)))
@@ -628,8 +671,7 @@ def align_template(
         score_fraction *= max(0.45, math.exp(-abs(math.log(scale)) / 0.20))
     if dimension_scale is not None and abs(dimension_scale - 1.0) > 0.035:
         warnings.append(
-            "Detected feature dimensions suggest a "
-            f"{dimension_scale:.3f}x scale mismatch; scaling was not applied."
+            f"Detected feature dimensions suggest a {dimension_scale:.3f}x scale mismatch; scaling was not applied."
         )
         score_fraction *= max(
             0.45,
@@ -638,13 +680,10 @@ def align_template(
     if maximum > tolerance * 0.70:
         warnings.append("One or more matched features have a high positional residual.")
     symmetry_tolerance = max(0.05, min(0.75, tolerance * 0.10))
-    pose_ambiguous = (
-        _has_half_turn_feature_symmetry(
-            template_features,
-            symmetry_tolerance,
-        )
-        and _template_may_have_directional_geometry(template)
-    )
+    pose_ambiguous = _has_half_turn_feature_symmetry(
+        template_features,
+        symmetry_tolerance,
+    ) and _template_may_have_directional_geometry(template)
     if pose_ambiguous:
         warnings.append(
             "The observable feature layout has a 180-degree pose ambiguity for "

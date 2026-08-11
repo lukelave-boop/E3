@@ -225,6 +225,59 @@ def _nearest_order(paths: list[Polyline], start: np.ndarray) -> list[Polyline]:
     return ordered
 
 
+def _point_in_closed_path(point: np.ndarray, polygon: np.ndarray) -> bool:
+    """Even/odd containment independent of SVG winding direction."""
+    vertices = polygon[:-1] if np.linalg.norm(polygon[0] - polygon[-1]) <= 1e-9 else polygon
+    inside = False
+    previous = vertices[-1]
+    for current in vertices:
+        cross = (current[1] > point[1]) != (previous[1] > point[1])
+        if cross:
+            x = (previous[0] - current[0]) * (point[1] - current[1]) / (previous[1] - current[1]) + current[0]
+            if point[0] < x:
+                inside = not inside
+        previous = current
+    return inside
+
+
+def _containment_depths(paths: list[Polyline]) -> list[int]:
+    """Return closed-contour nesting depths; open paths remain depth zero."""
+    depths = [0] * len(paths)
+    bounds = []
+    for path in paths:
+        minimum = path.points.min(axis=0)
+        maximum = path.points.max(axis=0)
+        bounds.append((minimum, maximum))
+    for index, inner in enumerate(paths):
+        if not inner.closed or len(inner.points) < 4:
+            continue
+        probe = inner.points[0]
+        for other_index, outer in enumerate(paths):
+            if other_index == index or not outer.closed or len(outer.points) < 4:
+                continue
+            inner_min, inner_max = bounds[index]
+            outer_min, outer_max = bounds[other_index]
+            if (np.all(outer_min <= inner_min + 1e-9) and np.all(outer_max >= inner_max - 1e-9)
+                    and np.any(outer_max - outer_min > inner_max - inner_min + 1e-9)
+                    and _point_in_closed_path(probe, outer.points)):
+                depths[index] += 1
+    return depths
+
+
+def _containment_aware_nearest_order(paths: list[Polyline], start: np.ndarray) -> list[Polyline]:
+    """Optimize travel without ever releasing a containing contour first."""
+    depths = _containment_depths(paths)
+    ordered: list[Polyline] = []
+    current = start.copy()
+    for depth in sorted(set(depths), reverse=True):
+        group = [path for path, path_depth in zip(paths, depths, strict=True) if path_depth == depth]
+        selected = _nearest_order(group, current)
+        ordered.extend(selected)
+        if selected:
+            current = selected[-1].points[-1].copy()
+    return ordered
+
+
 def _bounds(paths: Iterable[Polyline]) -> tuple[float, float, float, float]:
     arrays = [path.points for path in paths if len(path.points)]
     if not arrays:
@@ -1480,7 +1533,7 @@ def generate_project_gcode(
                     np.linalg.norm(source_motion[0] - comparison_position)
                 )
                 comparison_position = source_motion[-1]
-            ordered = _nearest_order(paths, current) if nearest_enabled else paths
+            ordered = _containment_aware_nearest_order(paths, current) if nearest_enabled else paths
             for path in ordered:
                 points = path.points
                 if len(points) < 2:

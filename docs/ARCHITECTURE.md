@@ -49,7 +49,7 @@ camera/controller work through `DesktopController` worker tasks.
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
-| `templates/` | Versioned cut-template schema, rectangle-grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
+| `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
 | `materials/` | SQLite material-preset library |
 | `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
 | `machine/` | Safety policy, simulator, protocol probing, and serial transports |

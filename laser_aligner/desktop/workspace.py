@@ -1830,29 +1830,40 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         has_inferred = False
         has_unselected_direct = False
         has_outside = False
+        has_damaged = False
+        has_likely_open = False
         for detection in detections:
-            points = (
-                detection.get("vector_contour_mm")
-                or detection.get("contour_mm")
-                or detection.get("box_mm")
-                or []
-            )
-            if len(points) < 2:
+            contours = detection.get("vector_contours_mm") or [[
+                *(
+                    detection.get("vector_contour_mm")
+                    or detection.get("contour_mm")
+                    or detection.get("box_mm")
+                    or []
+                )
+            ]]
+            if not any(len(points) >= 2 for points in contours):
                 continue
             path = QtGui.QPainterPath()
-            first = self.workspace_scene.machine_to_scene(*points[0])
-            path.moveTo(first)
-            for point in points[1:]:
-                path.lineTo(self.workspace_scene.machine_to_scene(*point))
-            path.closeSubpath()
+            for points in contours:
+                if len(points) < 2:
+                    continue
+                first = self.workspace_scene.machine_to_scene(*points[0])
+                path.moveTo(first)
+                for point in points[1:]:
+                    path.lineTo(self.workspace_scene.machine_to_scene(*point))
+                path.closeSubpath()
             item = QtWidgets.QGraphicsPathItem(path)
             is_selected = detection.get("id") in selected
             is_inferred = detection.get("source") == "inferred"
             diagnostics = detection.get("diagnostics") or {}
             is_outside = not bool(diagnostics.get("within_work_area", True))
             is_cropped = bool(diagnostics.get("touches_image_edge", False))
-            is_flagged = is_outside or is_cropped
-            has_outside = has_outside or is_flagged
+            is_damaged = bool(diagnostics.get("damage_suspected", False))
+            is_likely_open = bool(diagnostics.get("likely_open_cell", False))
+            is_flagged = is_outside or is_cropped or is_damaged or is_likely_open
+            has_outside = has_outside or is_outside or is_cropped
+            has_damaged = has_damaged or is_damaged
+            has_likely_open = has_likely_open or is_likely_open
             has_selected_direct = has_selected_direct or (
                 is_selected and not is_inferred and not is_flagged
             )
@@ -1860,8 +1871,12 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             has_unselected_direct = has_unselected_direct or (
                 not is_selected and not is_inferred and not is_flagged
             )
-            if is_flagged:
+            if is_outside or is_cropped:
                 color = QtGui.QColor("#E06666")
+            elif is_likely_open:
+                color = QtGui.QColor("#45D7FF")
+            elif is_damaged:
+                color = QtGui.QColor("#E7B55C")
             elif is_selected and not is_inferred:
                 color = QtGui.QColor("#4FE36F")
             elif is_selected and is_inferred:
@@ -1904,6 +1919,14 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                     "#CD5FDC",
                     QtCore.Qt.PenStyle.DashLine,
                 )
+            )
+        if has_damaged:
+            trace_entries.append(
+                ("Damage suspected (amber)", "#E7B55C", QtCore.Qt.PenStyle.DashDotLine)
+            )
+        if has_likely_open:
+            trace_entries.append(
+                ("Likely already cut/open (cyan)", "#45D7FF", QtCore.Qt.PenStyle.DashDotLine)
             )
         if has_selected_direct:
             trace_entries.append(
@@ -1962,19 +1985,24 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             # that Trace shows. The camera pixels remain visible underneath;
             # falling back to the simplified raw contour preserves support for
             # older/non-rounded detection payloads.
-            points = (
-                detection.get("vector_contour_mm")
-                or detection.get("contour_mm")
-                or detection.get("box_mm")
-                or []
-            )
-            if len(points) < 2:
+            contours = detection.get("vector_contours_mm") or [[
+                *(
+                    detection.get("vector_contour_mm")
+                    or detection.get("contour_mm")
+                    or detection.get("box_mm")
+                    or []
+                )
+            ]]
+            if not any(len(points) >= 2 for points in contours):
                 continue
             path = QtGui.QPainterPath()
-            path.moveTo(self.workspace_scene.machine_to_scene(*points[0]))
-            for point in points[1:]:
-                path.lineTo(self.workspace_scene.machine_to_scene(*point))
-            path.closeSubpath()
+            for points in contours:
+                if len(points) < 2:
+                    continue
+                path.moveTo(self.workspace_scene.machine_to_scene(*points[0]))
+                for point in points[1:]:
+                    path.lineTo(self.workspace_scene.machine_to_scene(*point))
+                path.closeSubpath()
             item = QtWidgets.QGraphicsPathItem(path)
             diagnostics = detection.get("diagnostics") or {}
             is_outside = not bool(diagnostics.get("within_work_area", True))

@@ -12,6 +12,7 @@ import numpy as np
 from ..config import WorkArea
 from ..vision.object_trace import TraceOptions
 from .model import CutTemplate, TemplateFeature
+from .shapes import ShapeKind, shape_polylines
 
 
 @dataclass(slots=True, frozen=True)
@@ -312,6 +313,32 @@ def _label_region(
     return _LabelRegion(x_min, y_min, x_max, y_max, mask)
 
 
+def _polygon_region(
+    polygons_mm: list[np.ndarray],
+    work_area: WorkArea,
+    pixels_per_mm: float,
+    image_width: int,
+    image_height: int,
+) -> _LabelRegion | None:
+    pixel_polygons = [
+        np.round(_machine_to_pixels(points, work_area, pixels_per_mm)).astype(np.int32)
+        for points in polygons_mm
+    ]
+    combined = np.vstack(pixel_polygons)
+    x_min = max(0, int(combined[:, 0].min()) - 2)
+    y_min = max(0, int(combined[:, 1].min()) - 2)
+    x_max = min(image_width, int(combined[:, 0].max()) + 3)
+    y_max = min(image_height, int(combined[:, 1].max()) + 3)
+    if x_min >= x_max or y_min >= y_max:
+        return None
+    offset = np.asarray((x_min, y_min), dtype=np.int32)
+    mask = np.zeros((y_max - y_min, x_max - x_min), dtype=np.uint8)
+    cv2.fillPoly(mask, [pixel_polygons[0] - offset], 255)
+    for hole in pixel_polygons[1:]:
+        cv2.fillPoly(mask, [hole - offset], 0)
+    return _LabelRegion(x_min, y_min, x_max, y_max, mask)
+
+
 def _fill_mask(image: np.ndarray, mask: np.ndarray, color: tuple[int, int, int]) -> None:
     alpha = mask.astype(np.float32)[:, :, None] / 255.0
     image[:] = np.clip(
@@ -503,16 +530,38 @@ def generate_template_test_frame(
         local_center = np.asarray(feature.center_mm, dtype=np.float64)
         world_center = local_center @ pose_rotation.T + np.asarray((center_x, center_y))
         world_rotation = _normalise_rotation(feature.rotation_deg + rotation)
-        local_polygon = _rounded_rectangle(
-            feature.width_mm,
-            feature.height_mm,
-            _feature_radius_mm(feature, object_corner_radii),
-        )
-        world_polygon = _transform_points(
-            local_polygon,
-            (float(world_center[0]), float(world_center[1])),
-            world_rotation,
-        )
+        try:
+            shape_kind = ShapeKind(feature.kind)
+        except ValueError:
+            shape_kind = ShapeKind.ROUNDED_RECTANGLE
+        if shape_kind in {ShapeKind.RECTANGLE, ShapeKind.ROUNDED_RECTANGLE}:
+            local_polygons = [_rounded_rectangle(
+                feature.width_mm, feature.height_mm,
+                _feature_radius_mm(feature, object_corner_radii),
+            )]
+        else:
+            descriptor = feature.descriptor
+            inner = (
+                float(descriptor.get("hole_ratio", 0.4)) * feature.width_mm
+                if shape_kind == ShapeKind.WASHER else None
+            )
+            contours = shape_polylines(
+                shape_kind, width_mm=feature.width_mm, height_mm=feature.height_mm,
+                polygon_sides=int(descriptor.get("polygon_sides", 6)),
+                star_points=int(descriptor.get("star_points", 5)),
+                star_inner_ratio=float(descriptor.get("star_inner_ratio", 0.5)),
+                flat_distance_mm=descriptor.get("flat_distance_mm"),
+                inner_diameter_mm=inner,
+            )
+            local_polygons = [
+                np.asarray([(x * feature.width_mm, y * feature.height_mm) for x, y in contour["points"]])
+                for contour in contours
+            ]
+        world_polygons = [
+            _transform_points(points, (float(world_center[0]), float(world_center[1])), world_rotation)
+            for points in local_polygons
+        ]
+        world_polygon = world_polygons[0]
         clipped = any(
             not work_area.contains(float(point[0]), float(point[1]))
             for point in world_polygon
@@ -533,16 +582,15 @@ def generate_template_test_frame(
         feature_truth.append(truth)
         if not rendered:
             continue
-        region = _label_region(
-            feature.width_mm,
-            feature.height_mm,
-            _feature_radius_mm(feature, object_corner_radii),
-            (float(world_center[0]), float(world_center[1])),
-            world_rotation,
-            work_area,
-            ppm,
-            image_width,
-            image_height,
+        region = (
+            _label_region(
+                feature.width_mm, feature.height_mm,
+                _feature_radius_mm(feature, object_corner_radii),
+                (float(world_center[0]), float(world_center[1])), world_rotation,
+                work_area, ppm, image_width, image_height,
+            )
+            if shape_kind in {ShapeKind.RECTANGLE, ShapeKind.ROUNDED_RECTANGLE}
+            else _polygon_region(world_polygons, work_area, ppm, image_width, image_height)
         )
         if region is None:
             continue

@@ -7,6 +7,36 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-11**
 
+The cutting-template designer now authors twelve semantic shapes through one
+Qt-independent geometry vocabulary: rectangle, rounded rectangle, circle,
+ellipse, capsule, triangle, diamond, regular polygon, star, one-flat circle,
+two-flat circle, and washer. New `shape_grid` recipes retain row-major identity
+and bounding-box spacing; legacy `rectangle_grid` version-1 templates migrate
+as rounded rectangles. Washer OD/ID is stored as one logical compound object,
+and containment-aware vector ordering cuts nested closed contours deepest-first
+before nearest-travel optimization. Template features carry semantic shape and
+optional hole ratio, while legacy/unknown matching retains geometric fallback.
+Direct Trace classification now recognizes high-confidence circle, ellipse,
+triangle, regular-polygon, and washer silhouettes without forcing weak
+candidates. Washer recognition uses parent/child contour hierarchy only from
+filled-region masks and requires independent circular residual, circularity,
+diameter-ratio, and strict concentricity gates; its proposed vector retains
+both contours as one semantic object.
+The Trace **Geometry output** selector now names this mode **Best-fit analytic
+shapes** rather than the obsolete **Fitted rounded rectangles**, and recognized
+washer rows display their fitted outer and inner diameters explicitly.
+Repeated-grid review now flags direct cells whose observed rotation/dimensions
+or repaired center disagree materially with the shared family as **damaged?**.
+It also compares shrunken-interior intensity variation and edge density across
+the current grid, marks strong exposed-bed outliers **likely cut/open**, and
+leaves both categories unchecked while retaining their proposed traces. This
+is a conservative current-sheet texture comparison, not a persistent learned
+honeycomb appearance model, and has synthetic/offscreen rather than real-C920
+verification.
+Automated geometry, migration, UI, matching, Trace, and toolpath tests cover
+the implementation. No generated shape or containment ordering has been run on
+physical hardware.
+
 Per-operation and material-preset Power Correction is implemented as a bounded,
 material-specific commanded-power bias layered over GRBL `M4`. Vector paths use
 turn-angle severity and the configured acceleration model to add at most three

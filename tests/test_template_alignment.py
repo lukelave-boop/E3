@@ -8,7 +8,13 @@ import pytest
 
 from laser_aligner.project import SceneObject
 from laser_aligner.templates import TemplateFeature
-from laser_aligner.vision.template_alignment import align_template, rank_templates
+from laser_aligner.vision.template_alignment import (
+    _as_features,
+    _orientation_quality,
+    _shape_quality,
+    align_template,
+    rank_templates,
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,24 @@ def _grid(*, x_spacing: float = 40.0, y_spacing: float = 30.0) -> tuple[Template
                 )
             )
     return tuple(features)
+
+
+def test_shape_quality_discriminates_equal_size_shapes_and_preserves_legacy() -> None:
+    template_circle = _as_features(
+        [TemplateFeature((0, 0), 20, 20, kind="circle")], detections=False
+    )[0]
+    circle, square, legacy = _as_features(
+        [
+            {"center_mm": (0, 0), "width_mm": 20, "height_mm": 20, "shape": "circle"},
+            {"center_mm": (0, 0), "width_mm": 20, "height_mm": 20, "shape": "rectangle"},
+            {"center_mm": (0, 0), "width_mm": 20, "height_mm": 20},
+        ],
+        detections=True,
+    )
+    assert _shape_quality(template_circle, circle) == 1.0
+    assert _shape_quality(template_circle, square) < 0.1
+    assert _shape_quality(template_circle, legacy) == 1.0
+    assert _orientation_quality(template_circle, circle, 73.0) == 1.0
 
 
 def _symmetric_grid() -> tuple[TemplateFeature, ...]:
