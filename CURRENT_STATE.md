@@ -7,6 +7,23 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-09**
 
+Exact Job Preview operation rows now translate generated powered-motion feed
+into mm/s and percentage of the configured work-feed limit, independently from
+the requested percentage/controller `S` power pair. The live move readout uses
+the configured travel limit for rapid moves and work limit otherwise. Values
+come from the immutable parsed G-code plan; this is a review display change and
+does not modify generated or submitted controller output, whose required `F`
+words remain intact.
+
+All editable desktop dimensional spin boxes now accept explicit metric or
+imperial values while continuing to return canonical millimetres to project,
+calibration, bounds, and machine code. This includes lengths, areas, feed
+rates, template/grid geometry, Trace settings, material/layer settings,
+Machine Setup values, and editable jog distance. The browser's coordinate,
+size, calibration-point, feed-rate, and coordinate-CSV inputs provide the same
+conversion. Focused unit/parser and affected desktop widget suites pass; no
+controller, calibration, or G-code storage schema was changed.
+
 Powered Machine Setup calibration jobs now hand off automatically to their
 matching Home / park precision capture and scoring operation after successful
 completion. The handoff is bound to the exact prepared filename and is cleared

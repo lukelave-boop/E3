@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .controls import MeasurementSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -357,7 +358,7 @@ class TemplatePanel(QtWidgets.QWidget):
         maximum: float,
         step: float,
     ) -> QtWidgets.QDoubleSpinBox:
-        spin = QtWidgets.QDoubleSpinBox()
+        spin = MeasurementSpinBox() if suffix == " mm" else QtWidgets.QDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setDecimals(3)
         spin.setSingleStep(step)

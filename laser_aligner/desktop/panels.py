@@ -11,6 +11,8 @@ from ..project import (
     SceneObject,
     Transform,
 )
+from ..units import parse_to_mm
+from .controls import MeasurementSpinBox
 from .qt import require_qt
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY
 
@@ -154,7 +156,7 @@ class LayerPanel(QtWidgets.QWidget):
         settings_grid.setContentsMargins(0, 0, 0, 0)
         settings_grid.setHorizontalSpacing(4)
         settings_grid.setVerticalSpacing(2)
-        self.speed_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_spin = MeasurementSpinBox("speed")
         self.speed_spin.setRange(1.0, 100000.0)
         self.speed_spin.setDecimals(1)
         self.speed_spin.setToolTip("Operation speed in millimetres per minute")
@@ -194,7 +196,7 @@ class LayerPanel(QtWidgets.QWidget):
         scan_layout.setContentsMargins(0, 0, 0, 0)
         scan_layout.setHorizontalSpacing(4)
         scan_layout.setVerticalSpacing(2)
-        self.interval_spin = QtWidgets.QDoubleSpinBox()
+        self.interval_spin = MeasurementSpinBox()
         self.interval_spin.setRange(0.02, 10.0)
         self.interval_spin.setDecimals(3)
         self.interval_spin.setSuffix(" mm")
@@ -634,7 +636,7 @@ class TransformPanel(QtWidgets.QWidget):
 
     @staticmethod
     def _spin(minimum: float, maximum: float, suffix: str) -> QtWidgets.QDoubleSpinBox:
-        spin = QtWidgets.QDoubleSpinBox()
+        spin = MeasurementSpinBox() if suffix == " mm" else QtWidgets.QDoubleSpinBox()
         spin.setRange(minimum, maximum)
         spin.setDecimals(3)
         spin.setSingleStep(1.0)
@@ -1244,19 +1246,19 @@ class TracePanel(QtWidgets.QWidget):
         filter_group = QtWidgets.QGroupBox("Object filters")
         filter_form = _form_layout()
         filter_group.setLayout(filter_form)
-        self.min_area = QtWidgets.QDoubleSpinBox()
+        self.min_area = MeasurementSpinBox("area")
         self.min_area.setRange(0.01, 100_000.0)
         self.min_area.setValue(30.0)
         self.min_area.setSuffix(" mm²")
-        self.max_area = QtWidgets.QDoubleSpinBox()
+        self.max_area = MeasurementSpinBox("area")
         self.max_area.setRange(0.1, 1_000_000.0)
         self.max_area.setValue(20_000.0)
         self.max_area.setSuffix(" mm²")
-        self.min_width = QtWidgets.QDoubleSpinBox()
+        self.min_width = MeasurementSpinBox()
         self.min_width.setRange(0.1, 1000.0)
         self.min_width.setValue(4.0)
         self.min_width.setSuffix(" mm")
-        self.min_height = QtWidgets.QDoubleSpinBox()
+        self.min_height = MeasurementSpinBox()
         self.min_height.setRange(0.1, 1000.0)
         self.min_height.setValue(3.0)
         self.min_height.setSuffix(" mm")
@@ -1347,7 +1349,7 @@ class TracePanel(QtWidgets.QWidget):
             "Use one offset on every edge, or adjust the top, right, bottom, "
             "and left edges independently for fitted rounded rectangles."
         )
-        self.border_offset = QtWidgets.QDoubleSpinBox()
+        self.border_offset = MeasurementSpinBox()
         self.border_offset.setRange(-25.0, 25.0)
         self.border_offset.setDecimals(2)
         self.border_offset.setSingleStep(0.1)
@@ -1371,7 +1373,7 @@ class TracePanel(QtWidgets.QWidget):
         )
         for index, edge in enumerate(("Top", "Right", "Bottom", "Left")):
             label = QtWidgets.QLabel(edge)
-            field = QtWidgets.QDoubleSpinBox()
+            field = MeasurementSpinBox()
             field.setRange(-25.0, 25.0)
             field.setDecimals(2)
             field.setSingleStep(0.1)
@@ -1382,7 +1384,7 @@ class TracePanel(QtWidgets.QWidget):
             edge_layout.addWidget(field, index // 2, (index % 2) * 2 + 1)
             self.edge_offset_fields[edge.lower()] = field
         self.edge_offsets.setToolTip(edge_tip)
-        self.smoothing = QtWidgets.QDoubleSpinBox()
+        self.smoothing = MeasurementSpinBox()
         self.smoothing.setRange(0.0, 10.0)
         self.smoothing.setDecimals(2)
         self.smoothing.setValue(0.25)
@@ -2023,7 +2025,9 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_step = QtWidgets.QComboBox()
         for value in (0.1, 1.0, 5.0, 10.0, 50.0):
             self.jog_step.addItem(f"{value:g} mm", value)
-        self.jog_speed = QtWidgets.QDoubleSpinBox()
+        self.jog_step.setEditable(True)
+        self.jog_step.setToolTip("Jog distance; enter a value in mm or in")
+        self.jog_speed = MeasurementSpinBox("speed")
         self.jog_speed.setRange(1.0, 10000.0)
         self.jog_speed.setValue(2000.0)
         self.jog_speed.setSuffix(" mm/min")
@@ -2074,7 +2078,13 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_right.clicked.connect(lambda: self._jog(1.0, 0.0))
 
     def _jog(self, x_direction: float, y_direction: float) -> None:
-        step = float(self.jog_step.currentData())
+        try:
+            step = parse_to_mm(self.jog_step.currentText(), "mm")
+        except ValueError:
+            self.state_label.setText(
+                'Jog step must be a measurement such as "5 mm" or "0.25 in"'
+            )
+            return
         self.jogRequested.emit(
             x_direction * step,
             y_direction * step,
@@ -2535,7 +2545,7 @@ class MaterialPanel(QtWidgets.QWidget):
         form = _form_layout()
         self.material_edit = QtWidgets.QLineEdit()
         self.name_edit = QtWidgets.QLineEdit()
-        self.thickness_spin = QtWidgets.QDoubleSpinBox()
+        self.thickness_spin = MeasurementSpinBox()
         self.thickness_spin.setRange(-1.0, 1000.0)
         self.thickness_spin.setDecimals(3)
         self.thickness_spin.setSpecialValueText("Any")
@@ -2543,7 +2553,7 @@ class MaterialPanel(QtWidgets.QWidget):
         self.mode_combo = QtWidgets.QComboBox()
         for mode in LayerMode:
             self.mode_combo.addItem(mode.value.title(), mode.value)
-        self.speed_spin = QtWidgets.QDoubleSpinBox()
+        self.speed_spin = MeasurementSpinBox("speed")
         self.speed_spin.setRange(1.0, 100000.0)
         self.speed_spin.setSuffix(" mm/min")
         self.power_spin = QtWidgets.QDoubleSpinBox()
@@ -2551,7 +2561,7 @@ class MaterialPanel(QtWidgets.QWidget):
         self.power_spin.setSuffix(" %")
         self.passes_spin = QtWidgets.QSpinBox()
         self.passes_spin.setRange(1, 999)
-        self.interval_spin = QtWidgets.QDoubleSpinBox()
+        self.interval_spin = MeasurementSpinBox()
         self.interval_spin.setRange(0.001, 100.0)
         self.interval_spin.setDecimals(3)
         self.interval_spin.setSuffix(" mm")

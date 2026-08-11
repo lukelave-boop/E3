@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..config import WorkArea
+from .controls import MeasurementSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -46,7 +47,7 @@ def _placement_spin(
     *,
     suffix: str,
 ) -> QtWidgets.QDoubleSpinBox:
-    spin = QtWidgets.QDoubleSpinBox()
+    spin = MeasurementSpinBox() if suffix == " mm" else QtWidgets.QDoubleSpinBox()
     spin.setRange(float(minimum), float(maximum))
     spin.setDecimals(3)
     spin.setSingleStep(0.1)

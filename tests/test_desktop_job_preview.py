@@ -95,6 +95,8 @@ def test_preview_scrubber_reports_explicit_power_and_coordinates(
         plan,
         (0.0, 100.0, 0.0, 100.0),
         "test.gcode",
+        max_work_feed_mm_min=6000.0,
+        max_travel_feed_mm_min=6000.0,
     )
     dialog.show()
     qt_application.processEvents()
@@ -102,6 +104,8 @@ def test_preview_scrubber_reports_explicit_power_and_coordinates(
     dialog.set_elapsed(plan.moves[1].start_seconds + 0.1)
 
     assert "POWER 20.0% / S200" in dialog.move_label.text()
+    assert "16.67 mm/s · 16.7%" in dialog.move_label.text()
+    assert "F1000" not in dialog.move_label.full_text
     assert "Line 01" in dialog.move_label.text()
     assert "X80.000 Y20.000" in dialog.move_label.text()
     dialog.travel_check.setChecked(False)
@@ -144,6 +148,8 @@ def test_preview_layer_table_controls_only_that_operation(
         _plan(),
         (0.0, 100.0, 0.0, 100.0),
         "test.gcode",
+        max_work_feed_mm_min=6000.0,
+        max_travel_feed_mm_min=6000.0,
     )
     dialog.show()
     qt_application.processEvents()
@@ -151,7 +157,9 @@ def test_preview_layer_table_controls_only_that_operation(
     assert dialog.layer_tree.topLevelItemCount() == 1
     layer = dialog.layer_tree.topLevelItem(0)
     assert layer.text(1) == "Line 01 · Line"
-    assert "20.0% / S200" in layer.text(4)
+    assert layer.text(4) == "16.67 mm/s · 16.7%"
+    assert "20.0% / S200" in layer.text(5)
+    assert "16.67 mm/s · 16.7% of configured 100.00 mm/s work limit" in layer.toolTip(4)
     layer.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
     qt_application.processEvents()
 
@@ -279,7 +287,7 @@ def test_preview_remains_useful_at_compact_geometry_with_large_text(
         assert not dialog.canvas.geometry().intersects(dialog.sidebar.geometry())
         header = dialog.layer_tree.header()
         final_column_right = (
-            header.sectionViewportPosition(4) + header.sectionSize(4)
+            header.sectionViewportPosition(5) + header.sectionSize(5)
         )
         assert final_column_right <= dialog.layer_tree.viewport().width()
         assert "…" in dialog.move_label.text()

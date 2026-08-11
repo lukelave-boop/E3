@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from ..project import ObjectKind, ProjectDocument, SceneObject, Transform
+from .controls import MeasurementSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -323,7 +324,11 @@ class ContextPropertyBar(QtWidgets.QWidget):
         suffix: str,
         accessible_name: str,
     ) -> QtWidgets.QDoubleSpinBox:
-        spin = QtWidgets.QDoubleSpinBox()
+        spin = (
+            MeasurementSpinBox(storage="display")
+            if suffix == " mm"
+            else QtWidgets.QDoubleSpinBox()
+        )
         spin.setObjectName("context" + accessible_name.replace(" ", "") + "Spin")
         spin.setRange(minimum, maximum)
         spin.setDecimals(3)
@@ -503,6 +508,8 @@ class ContextPropertyBar(QtWidgets.QWidget):
             decimals = 4 if new_unit == "in" else 3
             step = 0.1 if new_unit == "in" else 1.0
             for spin in self._metric_spins:
+                if isinstance(spin, MeasurementSpinBox):
+                    spin.setDisplayUnit(new_unit)
                 spin.setDecimals(decimals)
                 spin.setSingleStep(step)
                 spin.setProperty("contextNormalSuffix", suffix)

@@ -33,6 +33,7 @@ class PreviewLayerRow:
     mode: str
     distance: float
     seconds: float
+    feeds: tuple[float, ...]
     power: float
 
 
@@ -59,12 +60,16 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
                 "mode": move.layer_mode,
                 "distance": 0.0,
                 "seconds": 0.0,
+                "feeds": set(),
                 "power": 0.0,
             },
         )
         if move.laser_on:
             row["distance"] = float(row["distance"]) + move.distance_mm
             row["seconds"] = float(row["seconds"]) + move.duration_seconds
+            feeds = row["feeds"]
+            assert isinstance(feeds, set)
+            feeds.add(float(move.feed_mm_min))
             row["power"] = max(float(row["power"]), move.power)
     return PreparedJobPreview(
         move_ends=tuple(move.end_seconds for move in plan.moves),
@@ -76,6 +81,7 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
                 mode=str(row["mode"]),
                 distance=float(row["distance"]),
                 seconds=float(row["seconds"]),
+                feeds=tuple(sorted(float(value) for value in row["feeds"])),
                 power=float(row["power"]),
             )
             for row in rows.values()
@@ -90,6 +96,31 @@ def _duration(value: float) -> str:
     if hours:
         return f"{hours:d}:{minutes:02d}:{seconds:02d}"
     return f"{minutes:d}:{seconds:02d}"
+
+
+def _speed_text(
+    feeds: tuple[float, ...],
+    *,
+    maximum_feed_mm_min: float | None = None,
+    detailed: bool = False,
+) -> str:
+    if not feeds:
+        return "—"
+    maximum = (
+        float(maximum_feed_mm_min)
+        if maximum_feed_mm_min is not None and maximum_feed_mm_min > 0
+        else None
+    )
+    values: list[str] = []
+    for feed in feeds:
+        speed = feed / 60.0
+        text = f"{speed:.2f} mm/s"
+        if maximum is not None:
+            text += f" · {feed / maximum * 100.0:.1f}%"
+            if detailed:
+                text += f" of configured {maximum / 60.0:.2f} mm/s work limit"
+        values.append(text)
+    return ", ".join(values)
 
 
 def _display_color(value: object, fallback: str = "#E35D6A") -> str:
@@ -528,10 +559,14 @@ class JobPreviewDialog(QtWidgets.QDialog):
         *,
         prepared: PreparedJobPreview | None = None,
         defer_render: bool = False,
+        max_work_feed_mm_min: float | None = None,
+        max_travel_feed_mm_min: float | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
         self.prepared = prepared or prepare_job_preview(plan)
+        self.max_work_feed_mm_min = max_work_feed_mm_min
+        self.max_travel_feed_mm_min = max_travel_feed_mm_min
         self._deferred_render = bool(defer_render)
         self._render_completed = not self._deferred_render
         self.setWindowTitle(f"Job Preview — {job_name}")
@@ -833,7 +868,9 @@ class JobPreviewDialog(QtWidgets.QDialog):
     def _build_layer_tree(self) -> QtWidgets.QTreeWidget:
         tree = QtWidgets.QTreeWidget()
         tree.setObjectName("previewLayers")
-        tree.setHeaderLabels(("Show", "Operation", "Cut", "Time", "Max power"))
+        tree.setHeaderLabels(
+            ("Show", "Operation", "Cut", "Time", "Speed", "Max power")
+        )
         tree.setRootIsDecorated(False)
         tree.setAlternatingRowColors(True)
         tree.setMinimumWidth(0)
@@ -856,6 +893,10 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     f"{row.name} · {row.mode.title()}",
                     f"{row.distance:.1f} mm",
                     _duration(row.seconds),
+                    _speed_text(
+                        row.feeds,
+                        maximum_feed_mm_min=self.max_work_feed_mm_min,
+                    ),
                     f"{row.power / self.plan.power_max * 100:.1f}% / "
                     f"S{row.power:g}",
                 ]
@@ -866,7 +907,18 @@ class JobPreviewDialog(QtWidgets.QDialog):
             swatch = QtGui.QPixmap(12, 12)
             swatch.fill(QtGui.QColor(_display_color(row.color)))
             item.setIcon(1, QtGui.QIcon(swatch))
-            details = " · ".join(item.text(column) for column in range(1, 5))
+            details = " · ".join(
+                (
+                    _speed_text(
+                        row.feeds,
+                        maximum_feed_mm_min=self.max_work_feed_mm_min,
+                        detailed=True,
+                    )
+                    if column == 4
+                    else item.text(column)
+                )
+                for column in range(1, 6)
+            )
             for column in range(tree.columnCount()):
                 item.setToolTip(column, html.escape(details, quote=True))
             tree.addTopLevelItem(item)
@@ -879,7 +931,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 column,
                 QtWidgets.QHeaderView.ResizeMode.Interactive,
             )
-        for column, width in enumerate((38, 84, 54, 38, 88)):
+        for column, width in enumerate((32, 64, 44, 34, 52, 80)):
             header.resizeSection(column, width)
         return tree
 
@@ -942,7 +994,8 @@ class JobPreviewDialog(QtWidgets.QDialog):
             self.move_label.set_full_text(
                 f"Move {move.index + 1}/{len(self.plan.moves)} · {move.layer_name} · "
                 f"pass {move.pass_index}/{move.pass_count} · {role} · "
-                f"F{move.feed_mm_min:g} · X{move.end_x:.3f} Y{move.end_y:.3f}"
+                f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} "
+                f"· X{move.end_x:.3f} Y{move.end_y:.3f}"
             )
         self.start_here_button.setEnabled(self._current_move_index is not None)
 

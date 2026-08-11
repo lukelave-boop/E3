@@ -28,7 +28,8 @@ motor-release phases after the previewed stream reaches 100%.
   Left/Right to step by one second.
 - Playback speeds range from 0.1× to 40× and affect only the animation.
 - The current-move readout shows rapid/feed state, laser-off or explicit planned
-  percentage and `S` value, feed rate, X/Y destination, layer, and pass.
+  percentage and `S` value, speed in mm/s and as a percentage of the configured
+  work or travel limit, X/Y destination, layer, and pass.
 - Toggle rapid travel, controller-power shading, display inversion, and the
   legend without changing the job. Power shading retains distinct `S` values
   within one operation instead of assigning one shade to the complete layer.
@@ -78,8 +79,10 @@ bounds checking, the conservative command allowlist, rapid-with-laser rejection,
 or stop/disarm behavior. It is not a safety-rated beam-location guarantee; zero-power
 frame every real job and keep the operator present.
 
-Preview includes an operation table with independent display visibility,
-cut/time/power statistics, and a generated-layer legend. Generation can retain
+Preview includes an operation table with independent display visibility and
+generated speed shown in mm/s plus percentage of the configured work-feed
+limit alongside cut/time/power statistics and a generated-layer legend. The
+raw generated G-code retains the controller-required `F` words. Generation can retain
 source ordering or apply nearest-path ordering; the exact selected planner is
 recorded in the program and Preview heading. Above 512 vector paths, nearest
 ordering falls back to recorded source order so quadratic planning cannot stall

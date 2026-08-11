@@ -50,6 +50,9 @@ Shared core and browser workflow:
 
 Native desktop workflow:
 
+- Dimensional inputs accept either metric or imperial suffixes (`25.4 mm` or
+  `1 in`; likewise `mm²`/`in²` and `mm/min`/`in/min`) while project geometry,
+  calibration, safety bounds, and generated G-code remain in millimetres
 - LightBurn-inspired compact icon chrome with a bright drafting bed, persistent
   runtime/safety status, always-present selection properties, split design and
   laser inspector stacks, and a fixed 30-color operation palette

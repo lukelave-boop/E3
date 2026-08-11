@@ -57,7 +57,8 @@ without copying LightBurn branding or changing the E3 machine-control model:
    wide windows and moves to its own row below 1100 logical pixels so STOP can
    never disappear into toolbar overflow.
 4. An always-present two-row property bar exposes X, Y, width, height,
-   percentage scaling, aspect lock, rotation, millimetre/inch display,
+   percentage scaling, aspect lock, rotation, millimetre/inch display, and
+   explicit `mm` or `in` entry in dimensional fields,
    mirroring, and contextual rectangle radius. Controls disable when the
    selection cannot be edited instead of making the toolbar collapse.
 5. A compact left rail holds selection, creation, trace/template, fit, zoom,

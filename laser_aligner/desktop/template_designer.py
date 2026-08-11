@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..templates import MAX_GRID_OBJECTS
+from .controls import MeasurementSpinBox
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -37,7 +38,7 @@ def _spin(
     value: float,
     suffix: str = " mm",
 ) -> QtWidgets.QDoubleSpinBox:
-    widget = QtWidgets.QDoubleSpinBox()
+    widget = MeasurementSpinBox()
     widget.setRange(minimum, maximum)
     widget.setDecimals(3)
     widget.setSingleStep(0.1)

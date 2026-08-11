@@ -2169,6 +2169,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 self,
                 prepared=self.last_job_preview_data,
                 defer_render=deferred,
+                max_work_feed_mm_min=(
+                    self.runtime.settings.machine.max_work_feed_mm_min
+                ),
+                max_travel_feed_mm_min=(
+                    self.runtime.settings.machine.max_travel_feed_mm_min
+                ),
             )
         except Exception as exc:
             self._job_render_failed(

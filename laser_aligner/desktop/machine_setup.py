@@ -15,6 +15,8 @@ from ..calibration.registration import base_bed_grid_mark_sizes, base_bed_grid_t
 from ..calibration.support import HoneycombSupportReference
 from ..config import effective_laser_output_area
 from ..core import CoreRuntime
+from ..units import parse_to_mm
+from .controls import MeasurementSpinBox
 from .qt import require_qt
 from .setup_guide import show_setup_guide
 from .tasks import FunctionTask
@@ -1095,13 +1097,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.base_grid_power.setDecimals(1)
         self.base_grid_power.setSuffix(" %")
         self.base_grid_power.setValue(0.0)
-        self.base_grid_mark_size = QtWidgets.QDoubleSpinBox()
+        self.base_grid_mark_size = MeasurementSpinBox()
         self.base_grid_mark_size.setRange(2.0, 5.0)
         self.base_grid_mark_size.setDecimals(1)
         self.base_grid_mark_size.setSuffix(" mm")
         self.base_grid_mark_size.setValue(4.0)
         self.base_grid_mark_size.valueChanged.connect(self._refresh_base_grid_geometry_status)
-        self.base_grid_speed = QtWidgets.QDoubleSpinBox()
+        self.base_grid_speed = MeasurementSpinBox("speed")
         self.base_grid_speed.setRange(1.0, 50000.0)
         self.base_grid_speed.setDecimals(0)
         self.base_grid_speed.setSuffix(" mm/min")
@@ -1186,7 +1188,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         support_geometry = QtWidgets.QGridLayout()
         support_geometry.setContentsMargins(0, 0, 0, 0)
-        self.honeycomb_ruler_mark = QtWidgets.QDoubleSpinBox()
+        self.honeycomb_ruler_mark = MeasurementSpinBox()
         self.honeycomb_ruler_mark.setRange(10.0, 1_000.0)
         self.honeycomb_ruler_mark.setDecimals(1)
         self.honeycomb_ruler_mark.setSuffix(" mm")
@@ -1256,10 +1258,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.image_y = QtWidgets.QDoubleSpinBox()
         self.image_y.setRange(0, 10000)
         self.image_y.setDecimals(2)
-        self.machine_x = QtWidgets.QDoubleSpinBox()
+        self.machine_x = MeasurementSpinBox()
         self.machine_x.setRange(-10000, 10000)
         self.machine_x.setDecimals(3)
-        self.machine_y = QtWidgets.QDoubleSpinBox()
+        self.machine_y = MeasurementSpinBox()
         self.machine_y.setRange(-10000, 10000)
         self.machine_y.setDecimals(3)
         self.point_label = QtWidgets.QLineEdit()
@@ -1368,12 +1370,12 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.registration_power.setDecimals(1)
         self.registration_power.setSuffix(" %")
         self.registration_power.setValue(0.0)
-        self.registration_mark_size = QtWidgets.QDoubleSpinBox()
+        self.registration_mark_size = MeasurementSpinBox()
         self.registration_mark_size.setRange(2.0, 10.0)
         self.registration_mark_size.setDecimals(1)
         self.registration_mark_size.setSuffix(" mm")
         self.registration_mark_size.setValue(5.0)
-        self.registration_speed = QtWidgets.QDoubleSpinBox()
+        self.registration_speed = MeasurementSpinBox("speed")
         self.registration_speed.setRange(1.0, 50000.0)
         self.registration_speed.setDecimals(0)
         self.registration_speed.setSuffix(" mm/min")
@@ -1510,12 +1512,12 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.validation_power.setDecimals(1)
         self.validation_power.setSuffix(" %")
         self.validation_power.setValue(0.0)
-        self.validation_mark_size = QtWidgets.QDoubleSpinBox()
+        self.validation_mark_size = MeasurementSpinBox()
         self.validation_mark_size.setRange(2.0, 10.0)
         self.validation_mark_size.setDecimals(1)
         self.validation_mark_size.setSuffix(" mm")
         self.validation_mark_size.setValue(5.0)
-        self.validation_speed = QtWidgets.QDoubleSpinBox()
+        self.validation_speed = MeasurementSpinBox("speed")
         self.validation_speed.setRange(1.0, 50000.0)
         self.validation_speed.setDecimals(0)
         self.validation_speed.setSuffix(" mm/min")
@@ -2507,20 +2509,22 @@ class MachineSetupDialog(QtWidgets.QDialog):
             with open(path, newline="", encoding="utf-8-sig") as handle:
                 rows = list(csv.DictReader(handle))
             normalized = {name.lower(): name for name in (rows[0] if rows else {})}
-            x_key = next((normalized[name] for name in ("x_mm", "machine_x", "x") if name in normalized), None)
-            y_key = next((normalized[name] for name in ("y_mm", "machine_y", "y") if name in normalized), None)
+            x_key = next((normalized[name] for name in ("x_mm", "x_in", "machine_x", "x") if name in normalized), None)
+            y_key = next((normalized[name] for name in ("y_mm", "y_in", "machine_y", "y") if name in normalized), None)
             label_key = next(
                 (normalized[name] for name in ("fiducial", "index", "id", "label") if name in normalized), None
             )
             if x_key is None or y_key is None:
-                raise ValueError("CSV headers must include x_mm and y_mm")
+                raise ValueError("CSV headers must include x_mm/y_mm or x_in/y_in")
+            x_unit = "in" if x_key.lower() == "x_in" else "mm"
+            y_unit = "in" if y_key.lower() == "y_in" else "mm"
             targets = []
             for index, row in enumerate(rows):
                 identifier = row.get(label_key, "") if label_key else str(index + 1)
                 targets.append(
                     {
-                        "machine_x": float(row[x_key]),
-                        "machine_y": float(row[y_key]),
+                        "machine_x": parse_to_mm(row[x_key], x_unit),
+                        "machine_y": parse_to_mm(row[y_key], y_unit),
                         "label": f"Fiducial {identifier or index + 1}",
                     }
                 )

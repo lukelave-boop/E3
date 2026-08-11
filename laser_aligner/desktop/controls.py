@@ -1,8 +1,64 @@
 from __future__ import annotations
 
+from typing import Literal
+
+from ..units import DisplayUnit, MeasurementKind, from_mm, parse_to_mm
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+
+class MeasurementSpinBox(QtWidgets.QDoubleSpinBox):
+    """A numeric control that accepts explicit metric or imperial input.
+
+    Most controls keep their underlying value in canonical millimetres.  The
+    transform bar is the one exception because it already stores its current
+    display value; ``storage="display"`` preserves that established behavior.
+    """
+
+    def __init__(
+        self,
+        kind: MeasurementKind = "length",
+        *,
+        storage: Literal["mm", "display"] = "mm",
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._measurement_kind = kind
+        self._display_unit: DisplayUnit = "mm"
+        self._storage = storage
+
+    def setDisplayUnit(self, unit: DisplayUnit) -> None:
+        self._display_unit = unit
+
+    def valueFromText(self, text: str) -> float:
+        candidate = text.strip()
+        own_suffix = self.suffix().strip()
+        if own_suffix and candidate.lower().endswith(own_suffix.lower()):
+            candidate = candidate[: -len(own_suffix)].strip()
+        value_mm = parse_to_mm(candidate, self._display_unit, self._measurement_kind)
+        if self._storage == "display":
+            return from_mm(value_mm, self._display_unit, self._measurement_kind)
+        return value_mm
+
+    def validate(
+        self,
+        text: str,
+        position: int,
+    ) -> tuple[QtGui.QValidator.State, str, int]:
+        candidate = text.strip()
+        if candidate in {"", "+", "-", ".", "+.", "-."}:
+            return QtGui.QValidator.State.Intermediate, text, position
+        try:
+            value = self.valueFromText(text)
+        except ValueError:
+            # Unit suffixes are typed progressively ("1 i" before "1 in").
+            if any(candidate.lower().endswith(part) for part in ("m", "i", "mm/", "in/")):
+                return QtGui.QValidator.State.Intermediate, text, position
+            return QtGui.QValidator.State.Invalid, text, position
+        if self.minimum() <= value <= self.maximum():
+            return QtGui.QValidator.State.Acceptable, text, position
+        return QtGui.QValidator.State.Invalid, text, position
 
 
 class PanelScrollArea(QtWidgets.QScrollArea):
