@@ -32,6 +32,8 @@ class PlannedMove:
     duration_seconds: float
     start_seconds: float
     end_seconds: float
+    vector_power_correction: float = 0.0
+    raster_power_correction: float = 0.0
 
 
 @dataclass(slots=True, frozen=True)
@@ -214,6 +216,8 @@ def build_job_plan(
             duration_seconds=duration,
             start_seconds=elapsed,
             end_seconds=elapsed + duration,
+            vector_power_correction=float(layer.get("vector_power_correction", 0.0)),
+            raster_power_correction=float(layer.get("raster_power_correction", 0.0)),
         )
         moves.append(move)
         elapsed += duration

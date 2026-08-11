@@ -18,6 +18,8 @@ from laser_aligner.project import (
 
 def test_atomic_save_and_load(tmp_path):
     document = ProjectDocument.new("Fixture")
+    document.layers[0].vector_power_correction = -22.5
+    document.layers[0].raster_power_correction = 17.5
     document.add_object(SceneObject.rectangle(document.active_layer_id))
 
     path = save_project(document, tmp_path / "fixture")
@@ -25,6 +27,20 @@ def test_atomic_save_and_load(tmp_path):
 
     assert path.suffix == ".e3laser"
     assert restored.to_dict() == document.to_dict()
+
+
+def test_project_file_without_power_correction_loads_zero_defaults(tmp_path):
+    document = ProjectDocument.new("Legacy correction defaults")
+    payload = document.to_dict()
+    payload["layers"][0].pop("vector_power_correction")
+    payload["layers"][0].pop("raster_power_correction")
+    path = tmp_path / "legacy.e3laser"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = load_project(path)
+
+    assert restored.layers[0].vector_power_correction == 0
+    assert restored.layers[0].raster_power_correction == 0
 
 
 @pytest.mark.parametrize("field", ["passes", "priority"])

@@ -212,6 +212,32 @@ def test_powered_program_preflight_is_side_effect_free() -> None:
         machine._check_line_safety("M4 S5")
 
 
+def test_inline_g1_power_is_allowed_only_after_laser_mode_and_remains_bounded() -> None:
+    machine = MachineService(
+        MachineSettings(backend="simulator"),
+        LaserSettings(power_max=1000),
+    )
+    valid = (
+        "G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S500\n"
+        "G1 X20 Y20 F500 S450\nG1 X30 Y20 F500 S550\nM5\n"
+    )
+    assert machine.validate_program(valid)[-1] == "M5"
+
+    with pytest.raises(SafetyError, match="after M3/M4"):
+        machine.validate_program(
+            "G21\nG90\nM5\nG0 X10 Y10 F1000\nG1 X20 Y20 F500 S5\nM5\n"
+        )
+    with pytest.raises(SafetyError, match="bounded inline S on G1"):
+        machine.validate_program(
+            "G21\nG90\nM5\nG0 X10 Y10 F1000 S5\nM5\n"
+        )
+    with pytest.raises(SafetyError, match="between 0 and 1000"):
+        machine.validate_program(
+            "G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S500\n"
+            "G1 X20 Y20 F500 S1001\nM5\n"
+        )
+
+
 def test_program_requires_laser_off_xy_position_before_enable() -> None:
     machine = MachineService(
         MachineSettings(backend="simulator"),

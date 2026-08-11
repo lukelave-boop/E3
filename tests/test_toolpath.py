@@ -94,6 +94,129 @@ def test_project_gcode_is_bracketed_by_laser_off():
     assert job.cut_length_mm > 200
 
 
+@pytest.mark.parametrize(
+    ("correction", "comparison"),
+    [(-100.0, lambda value: value < 100), (100.0, lambda value: value > 100)],
+)
+def test_vector_power_correction_emits_local_bounded_inline_s_without_m3(
+    correction,
+    comparison,
+):
+    document = ProjectDocument.new("Correction", Bounds(0, 0, 100, 100))
+    layer = document.layers[0]
+    layer.speed_mm_min = 2000
+    layer.power_percent = 10
+    layer.vector_power_correction = correction
+    document.add_object(
+        SceneObject.rectangle(
+            layer.id,
+            center=(50, 50),
+            width_mm=40,
+            height_mm=20,
+            corner_radius_mm=0,
+        )
+    )
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000, preview_acceleration_mm_s2=500),
+    )
+    inline = [
+        int(match.group(1))
+        for line in job.text.splitlines()
+        if line.startswith("G1 ")
+        and (match := re.search(r"\bS(\d+)\b", line)) is not None
+    ]
+
+    assert "M4 S100" in job.text
+    assert "M3" not in job.text
+    assert inline and any(comparison(value) for value in inline)
+    assert all(0 <= value <= 1000 for value in inline)
+    assert job.text.splitlines()[-2] == "M5"
+    MachineService(
+        MachineSettings(backend="simulator", work_area=Bounds(0, 0, 100, 100)),
+        LaserSettings(power_max=1000, boundary_margin_mm=0),
+    ).validate_program(job.text)
+
+
+def test_zero_vector_correction_retains_unsplit_gcode_and_straight_has_no_zone():
+    document = ProjectDocument.new("Straight", Bounds(0, 0, 100, 100))
+    layer = document.layers[0]
+    layer.vector_power_correction = -100
+    document.add_object(
+        SceneObject.line(layer.id, center=(50, 10), length_mm=80)
+    )
+
+    corrected = generate_project_gcode(document, LaserSettings(power_max=1000))
+    layer.vector_power_correction = 0
+    neutral = generate_project_gcode(document, LaserSettings(power_max=1000))
+
+    corrected_motion = [line for line in corrected.text.splitlines() if line.startswith("G1 ")]
+    neutral_motion = [line for line in neutral.text.splitlines() if line.startswith("G1 ")]
+    assert corrected_motion == neutral_motion
+    assert all(" S" not in line for line in corrected_motion)
+
+
+def test_rounded_rectangle_does_not_expand_tessellation_into_corner_ramps():
+    document = make_document()
+    layer = document.layers[0]
+    neutral = generate_project_gcode(document, LaserSettings(power_max=1000))
+    layer.vector_power_correction = -100
+
+    job = generate_project_gcode(document, LaserSettings(power_max=1000))
+    powered_moves = [move for move in job.plan.moves if move.laser_on]
+
+    assert len(powered_moves) == len([move for move in neutral.plan.moves if move.laser_on])
+    assert all(" S" not in line for line in job.text.splitlines() if line.startswith("G1 "))
+
+
+def test_frame_ignores_power_correction_and_remains_unpowered():
+    document = make_document()
+    document.layers[0].vector_power_correction = 100
+    document.layers[0].raster_power_correction = 100
+
+    frame = generate_project_frame(document, LaserSettings(power_max=1000))
+
+    assert "M3 S" not in frame.text
+    assert "M4 S" not in frame.text
+    assert not re.search(r"\bS[1-9]\d*\b", frame.text)
+
+
+def test_raster_correction_only_enters_image_when_overscan_is_insufficient():
+    document = ProjectDocument.new("Raster correction", Bounds(0, 0, 100, 100))
+    layer = document.layers[0]
+    layer.mode = LayerMode.RASTER
+    layer.line_interval_mm = 5
+    layer.speed_mm_min = 1000
+    layer.raster_power_correction = -100
+    document.add_object(
+        SceneObject.rectangle(
+            layer.id,
+            center=(50, 50),
+            width_mm=20,
+            height_mm=20,
+            corner_radius_mm=0,
+        )
+    )
+
+    layer.overscan_percent = 0
+    insufficient = generate_project_gcode(document, LaserSettings(power_max=1000))
+    layer.overscan_percent = 10
+    sufficient = generate_project_gcode(document, LaserSettings(power_max=1000))
+
+    assert any(
+        line.startswith("G1 ") and " S" in line
+        for line in insufficient.text.splitlines()
+    )
+    assert all(
+        " S" not in line
+        for line in sufficient.text.splitlines()
+        if line.startswith("G1 ")
+    )
+    assert "M4 S100" in insufficient.text
+    assert "M3" not in insufficient.text
+
+
 def test_project_gcode_applies_laser_spot_offset_but_keeps_design_bounds():
     baseline = generate_project_gcode(make_document(), LaserSettings(power_max=1000))
     corrected = generate_project_gcode(

@@ -70,6 +70,9 @@ Native desktop workflow:
 - Per-layer line, fill, vector-raster, and grayscale-image speed, power, pass
   count, ordering, exact scan interval/absolute machine angle, laser-off raster
   overscan, estimates, and image-aware zero-power framing
+- Material-specific, acceleration-aware Vector and Raster Power Correction
+  layered over GRBL `M4`, with bounded corner/image-edge ramps and exact Preview
+  diagnostics
 - Dedicated exact-job Preview with a time scrubber, animated playback up to
   40×, cut/travel visibility, power shading, live move coordinates, timing and
   distance statistics, and PNG export
@@ -99,6 +102,8 @@ Follow the [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANEN
 for the native calibration workflow. See [docs/MACHINE_SETUP.md](docs/MACHINE_SETUP.md)
 for technical detail and browser parity, and [docs/JOB_PREVIEW.md](docs/JOB_PREVIEW.md)
 for the generated-job review workflow.
+See [Power Correction](docs/POWER_CORRECTION.md) for its mapping, motion model,
+overscan interaction, limitations, and tuning guidance.
 
 The desktop branch also contains a synthetically and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable

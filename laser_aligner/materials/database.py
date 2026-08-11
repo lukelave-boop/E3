@@ -83,6 +83,8 @@ class MaterialPreset:
     power_percent: float = 10.0
     passes: int = 1
     line_interval_mm: float = 0.10
+    vector_power_correction: float = 0.0
+    raster_power_correction: float = 0.0
     notes: str = ""
     id: int | None = None
 
@@ -106,6 +108,14 @@ class MaterialPreset:
             self.line_interval_mm,
             "Preset line interval",
         )
+        self.vector_power_correction = _finite_number(
+            self.vector_power_correction,
+            "Preset vector power correction",
+        )
+        self.raster_power_correction = _finite_number(
+            self.raster_power_correction,
+            "Preset raster power correction",
+        )
         self.notes = _string(self.notes, "Preset notes")[:2000]
         if self.speed_mm_min <= 0:
             raise ValueError("Preset speed must be positive")
@@ -115,6 +125,10 @@ class MaterialPreset:
             raise ValueError("Preset passes must be at least one")
         if self.line_interval_mm <= 0:
             raise ValueError("Preset line interval must be positive")
+        if not -100 <= self.vector_power_correction <= 100:
+            raise ValueError("Preset vector power correction must be between -100 and 100")
+        if not -100 <= self.raster_power_correction <= 100:
+            raise ValueError("Preset raster power correction must be between -100 and 100")
         if self.id is not None:
             if type(self.id) is not int:
                 raise ValueError("Preset ID must be an integer")
@@ -128,6 +142,8 @@ class MaterialPreset:
                 "power_percent": self.power_percent,
                 "passes": self.passes,
                 "line_interval_mm": self.line_interval_mm,
+                "vector_power_correction": self.vector_power_correction,
+                "raster_power_correction": self.raster_power_correction,
             }
         )
         return OperationLayer.from_dict(payload)
@@ -167,6 +183,15 @@ class MaterialDatabase:
                 )
                 """
             )
+            columns = {
+                row[1]
+                for row in connection.execute("PRAGMA table_info(material_presets)")
+            }
+            for name in ("vector_power_correction", "raster_power_correction"):
+                if name not in columns:
+                    connection.execute(
+                        f"ALTER TABLE material_presets ADD COLUMN {name} REAL NOT NULL DEFAULT 0"
+                    )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_material_presets_material "
                 "ON material_presets(material, name)"
@@ -184,6 +209,8 @@ class MaterialDatabase:
             power_percent=row["power_percent"],
             passes=row["passes"],
             line_interval_mm=row["line_interval_mm"],
+            vector_power_correction=row["vector_power_correction"],
+            raster_power_correction=row["raster_power_correction"],
             notes=row["notes"],
         )
 
@@ -219,8 +246,9 @@ class MaterialDatabase:
                     """
                     INSERT INTO material_presets (
                         material, name, thickness_mm, mode, speed_mm_min,
-                        power_percent, passes, line_interval_mm, notes
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        power_percent, passes, line_interval_mm,
+                        vector_power_correction, raster_power_correction, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         preset.material,
@@ -231,6 +259,8 @@ class MaterialDatabase:
                         preset.power_percent,
                         preset.passes,
                         preset.line_interval_mm,
+                        preset.vector_power_correction,
+                        preset.raster_power_correction,
                         preset.notes,
                     ),
                 )
@@ -241,7 +271,8 @@ class MaterialDatabase:
                     UPDATE material_presets SET
                         material = ?, name = ?, thickness_mm = ?, mode = ?,
                         speed_mm_min = ?, power_percent = ?, passes = ?,
-                        line_interval_mm = ?, notes = ?
+                        line_interval_mm = ?, vector_power_correction = ?,
+                        raster_power_correction = ?, notes = ?
                     WHERE id = ?
                     """,
                     (
@@ -253,6 +284,8 @@ class MaterialDatabase:
                         preset.power_percent,
                         preset.passes,
                         preset.line_interval_mm,
+                        preset.vector_power_correction,
+                        preset.raster_power_correction,
                         preset.notes,
                         preset.id,
                     ),

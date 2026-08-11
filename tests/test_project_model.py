@@ -103,6 +103,35 @@ def test_layer_power_scales_to_controller_range():
     assert layer.controller_power(255) == 32
 
 
+def test_layer_power_correction_defaults_and_round_trip() -> None:
+    legacy = OperationLayer().to_dict()
+    legacy.pop("vector_power_correction")
+    legacy.pop("raster_power_correction")
+    restored = OperationLayer.from_dict(legacy)
+    assert restored.vector_power_correction == 0
+    assert restored.raster_power_correction == 0
+
+    layer = OperationLayer(
+        vector_power_correction=-37.5,
+        raster_power_correction=62.5,
+    )
+    assert OperationLayer.from_dict(layer.to_dict()).to_dict() == layer.to_dict()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("vector_power_correction", -100.1),
+        ("vector_power_correction", 100.1),
+        ("raster_power_correction", float("nan")),
+        ("raster_power_correction", "10"),
+    ],
+)
+def test_layer_power_correction_rejects_invalid_values(field: str, value: object) -> None:
+    with pytest.raises(ProjectFormatError):
+        OperationLayer(**{field: value})
+
+
 def test_invalid_layer_color_is_rejected():
     with pytest.raises(ProjectFormatError):
         OperationLayer(color="red")

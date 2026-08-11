@@ -260,6 +260,8 @@ class OperationLayer:
     line_interval_mm: float = 0.10
     scan_angle_deg: float = 0.0
     overscan_percent: float = 2.5
+    vector_power_correction: float = 0.0
+    raster_power_correction: float = 0.0
     air_assist: bool = False
     output_enabled: bool = True
     visible: bool = True
@@ -283,6 +285,20 @@ class OperationLayer:
         self.overscan_percent = _finite(self.overscan_percent, "layer.overscan_percent")
         if not 0.0 <= self.overscan_percent <= 100.0:
             raise ProjectFormatError("layer.overscan_percent must be between 0 and 100")
+        self.vector_power_correction = _finite(
+            self.vector_power_correction,
+            "layer.vector_power_correction",
+        )
+        self.raster_power_correction = _finite(
+            self.raster_power_correction,
+            "layer.raster_power_correction",
+        )
+        for name, value in (
+            ("vector_power_correction", self.vector_power_correction),
+            ("raster_power_correction", self.raster_power_correction),
+        ):
+            if not -100.0 <= value <= 100.0:
+                raise ProjectFormatError(f"layer.{name} must be between -100 and 100")
         self.air_assist = _boolean(self.air_assist, "layer.air_assist")
         self.output_enabled = _boolean(
             self.output_enabled,
@@ -309,6 +325,8 @@ class OperationLayer:
             "line_interval_mm": self.line_interval_mm,
             "scan_angle_deg": self.scan_angle_deg,
             "overscan_percent": self.overscan_percent,
+            "vector_power_correction": self.vector_power_correction,
+            "raster_power_correction": self.raster_power_correction,
             "air_assist": self.air_assist,
             "output_enabled": self.output_enabled,
             "visible": self.visible,
@@ -331,6 +349,8 @@ class OperationLayer:
             line_interval_mm=raw.get("line_interval_mm", 0.10),
             scan_angle_deg=raw.get("scan_angle_deg", 0.0),
             overscan_percent=raw.get("overscan_percent", 2.5),
+            vector_power_correction=raw.get("vector_power_correction", 0.0),
+            raster_power_correction=raw.get("raster_power_correction", 0.0),
             air_assist=_boolean(raw.get("air_assist", False), "layer.air_assist"),
             output_enabled=_boolean(
                 raw.get("output_enabled", True),

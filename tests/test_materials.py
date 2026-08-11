@@ -62,6 +62,40 @@ def test_material_database_migrates_legacy_presets_without_overwriting_source(
     assert legacy_path.read_bytes() == original
 
 
+def test_material_database_adds_zero_correction_to_legacy_schema(tmp_path) -> None:
+    path = tmp_path / "legacy-schema.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE material_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material TEXT NOT NULL,
+                name TEXT NOT NULL,
+                thickness_mm REAL,
+                mode TEXT NOT NULL,
+                speed_mm_min REAL NOT NULL,
+                power_percent REAL NOT NULL,
+                passes INTEGER NOT NULL,
+                line_interval_mm REAL NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                UNIQUE(material, name, thickness_mm)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO material_presets (
+                material, name, mode, speed_mm_min, power_percent,
+                passes, line_interval_mm, notes
+            ) VALUES ('Cardstock', 'Legacy', 'line', 1000, 10, 1, 0.1, '')
+            """
+        )
+
+    preset = MaterialDatabase(path).list()[0]
+
+    assert preset.vector_power_correction == 0
+    assert preset.raster_power_correction == 0
+
 def test_material_database_falls_back_when_legacy_migration_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -112,12 +146,16 @@ def test_material_database_crud_and_search(tmp_path):
             thickness_mm=3.0,
             speed_mm_min=2500,
             power_percent=12,
+            vector_power_correction=-12.5,
+            raster_power_correction=27.5,
             notes="Crisp surface mark",
         )
     )
 
     assert saved.id is not None
     assert database.get(saved.id).material == "Birch plywood"
+    assert database.get(saved.id).vector_power_correction == -12.5
+    assert database.get(saved.id).raster_power_correction == 27.5
     assert [item.id for item in database.list("crisp")] == [saved.id]
 
     saved.power_percent = 18
@@ -139,6 +177,8 @@ def test_material_preset_applies_to_layer_without_changing_identity():
         speed_mm_min=800,
         power_percent=35,
         passes=2,
+        vector_power_correction=-25,
+        raster_power_correction=40,
     )
 
     updated = preset.apply_to_layer(layer)
@@ -148,6 +188,8 @@ def test_material_preset_applies_to_layer_without_changing_identity():
     assert updated.speed_mm_min == 800
     assert updated.power_percent == 35
     assert updated.passes == 2
+    assert updated.vector_power_correction == -25
+    assert updated.raster_power_correction == 40
 
 
 def test_invalid_material_values_are_rejected():
@@ -163,6 +205,8 @@ def test_invalid_material_values_are_rejected():
         ("speed_mm_min", float("nan")),
         ("speed_mm_min", float("inf")),
         ("power_percent", float("nan")),
+        ("vector_power_correction", float("nan")),
+        ("raster_power_correction", float("inf")),
         ("line_interval_mm", float("nan")),
         ("line_interval_mm", float("inf")),
         ("passes", True),

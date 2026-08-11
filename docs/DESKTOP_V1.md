@@ -143,6 +143,9 @@ rejected consistently because its Qt decode plugin is not portable.
 - Colored operation layers with line/fill/raster mode, speed, power, passes,
   visibility, output state and priority
 - SQLite material-preset library stored outside the source tree
+- Per-operation and material-preset Vector/Raster Power Correction controls;
+  zero retains ordinary GRBL `M4`, while nonzero settings add bounded localized
+  commanded-power bias near modeled motion changes
 - Material presets can be applied to the active operation layer
 
 ### Toolpaths and machine controls

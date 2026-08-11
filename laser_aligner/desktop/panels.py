@@ -222,6 +222,35 @@ class LayerPanel(QtWidgets.QWidget):
         scan_layout.setColumnStretch(2, 1)
         editor_layout.addWidget(self.scan_row)
 
+        correction_group = QtWidgets.QGroupBox("Advanced · Power Correction")
+        correction_layout = QtWidgets.QGridLayout(correction_group)
+        correction_layout.setContentsMargins(6, 8, 6, 6)
+        correction_layout.setHorizontalSpacing(4)
+        correction_layout.setVerticalSpacing(2)
+        self.vector_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.vector_correction_spin.setRange(-100.0, 100.0)
+        self.vector_correction_spin.setDecimals(1)
+        self.vector_correction_spin.setSuffix(" %")
+        self.vector_correction_spin.setToolTip(
+            "Adjusts commanded laser power near corners and other direction "
+            "changes. 0 uses normal GRBL M4 dynamic power only. Negative values "
+            "reduce power further; positive values increase it."
+        )
+        self.raster_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.raster_correction_spin.setRange(-100.0, 100.0)
+        self.raster_correction_spin.setDecimals(1)
+        self.raster_correction_spin.setSuffix(" %")
+        self.raster_correction_spin.setToolTip(
+            "Adjusts commanded laser power near raster direction reversals. 0 "
+            "uses normal GRBL M4 dynamic power only. Negative values reduce power "
+            "further; positive values increase it."
+        )
+        correction_layout.addWidget(QtWidgets.QLabel("Vector"), 0, 0)
+        correction_layout.addWidget(self.vector_correction_spin, 0, 1)
+        correction_layout.addWidget(QtWidgets.QLabel("Raster"), 1, 0)
+        correction_layout.addWidget(self.raster_correction_spin, 1, 1)
+        editor_layout.addWidget(correction_group)
+
         action_row = QtWidgets.QHBoxLayout()
         action_row.setSpacing(4)
         self.add_button = QtWidgets.QPushButton("+")
@@ -274,6 +303,8 @@ class LayerPanel(QtWidgets.QWidget):
         self.interval_spin.editingFinished.connect(self._emit_edit)
         self.angle_spin.editingFinished.connect(self._emit_edit)
         self.overscan_spin.editingFinished.connect(self._emit_edit)
+        self.vector_correction_spin.editingFinished.connect(self._emit_edit)
+        self.raster_correction_spin.editingFinished.connect(self._emit_edit)
         self.output_check.toggled.connect(self._emit_edit)
         self.visible_check.toggled.connect(self._emit_edit)
 
@@ -410,6 +441,8 @@ class LayerPanel(QtWidgets.QWidget):
             self.interval_spin.setValue(layer.line_interval_mm)
             self.angle_spin.setValue(layer.scan_angle_deg)
             self.overscan_spin.setValue(layer.overscan_percent)
+            self.vector_correction_spin.setValue(layer.vector_power_correction)
+            self.raster_correction_spin.setValue(layer.raster_power_correction)
             self.output_check.setChecked(layer.output_enabled)
             self.visible_check.setChecked(layer.visible)
             self.output_check.setToolTip("Include this operation when generating a job.")
@@ -452,6 +485,8 @@ class LayerPanel(QtWidgets.QWidget):
                 "line_interval_mm": self.interval_spin.value(),
                 "scan_angle_deg": self.angle_spin.value(),
                 "overscan_percent": self.overscan_spin.value(),
+                "vector_power_correction": self.vector_correction_spin.value(),
+                "raster_power_correction": self.raster_correction_spin.value(),
                 "output_enabled": self.output_check.isChecked(),
                 "visible": self.visible_check.isChecked(),
             },
@@ -2565,6 +2600,18 @@ class MaterialPanel(QtWidgets.QWidget):
         self.interval_spin.setRange(0.001, 100.0)
         self.interval_spin.setDecimals(3)
         self.interval_spin.setSuffix(" mm")
+        self.vector_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.vector_correction_spin.setRange(-100.0, 100.0)
+        self.vector_correction_spin.setSuffix(" %")
+        self.vector_correction_spin.setToolTip(
+            "Material-specific commanded-power bias near vector direction changes"
+        )
+        self.raster_correction_spin = QtWidgets.QDoubleSpinBox()
+        self.raster_correction_spin.setRange(-100.0, 100.0)
+        self.raster_correction_spin.setSuffix(" %")
+        self.raster_correction_spin.setToolTip(
+            "Material-specific commanded-power bias near raster reversals"
+        )
         self.notes_edit = QtWidgets.QPlainTextEdit()
         self.notes_edit.setMaximumHeight(80)
         _form_row(form, "Material", self.material_edit)
@@ -2575,6 +2622,8 @@ class MaterialPanel(QtWidgets.QWidget):
         _form_row(form, "Power", self.power_spin)
         _form_row(form, "Passes", self.passes_spin)
         _form_row(form, "Line interval", self.interval_spin)
+        _form_row(form, "Vector correction", self.vector_correction_spin)
+        _form_row(form, "Raster correction", self.raster_correction_spin)
         _form_row(form, "Notes", self.notes_edit)
         layout.addLayout(form)
 
@@ -2638,6 +2687,8 @@ class MaterialPanel(QtWidgets.QWidget):
             self.power_spin.setValue(10.0)
             self.passes_spin.setValue(1)
             self.interval_spin.setValue(0.10)
+            self.vector_correction_spin.setValue(0.0)
+            self.raster_correction_spin.setValue(0.0)
             self.notes_edit.clear()
         finally:
             self._updating = False
@@ -2670,6 +2721,8 @@ class MaterialPanel(QtWidgets.QWidget):
             self.power_spin.setValue(preset.power_percent)
             self.passes_spin.setValue(preset.passes)
             self.interval_spin.setValue(preset.line_interval_mm)
+            self.vector_correction_spin.setValue(preset.vector_power_correction)
+            self.raster_correction_spin.setValue(preset.raster_power_correction)
             self.notes_edit.setPlainText(preset.notes)
         finally:
             self._updating = False
@@ -2688,6 +2741,8 @@ class MaterialPanel(QtWidgets.QWidget):
             power_percent=self.power_spin.value(),
             passes=self.passes_spin.value(),
             line_interval_mm=self.interval_spin.value(),
+            vector_power_correction=self.vector_correction_spin.value(),
+            raster_power_correction=self.raster_correction_spin.value(),
             notes=self.notes_edit.toPlainText(),
         )
 

@@ -1418,8 +1418,14 @@ class MachineService:
                     f"{motion.capitalize()} feed F{values['F']:g} exceeds the "
                     f"configured {motion} ceiling of {maximum_feed:g} mm/min"
                 )
-            if any(word.letter not in {"G", "X", "Y", "F"} for word in words):
-                raise SafetyError("Only X, Y, and F are permitted on streamed G0/G1 lines")
+            allowed_motion_letters = {"G", "X", "Y", "F"}
+            if g_codes == {1}:
+                allowed_motion_letters.add("S")
+            if any(word.letter not in allowed_motion_letters for word in words):
+                raise SafetyError(
+                    "Only X, Y, F, and bounded inline S on G1 are permitted "
+                    "on streamed motion lines"
+                )
         elif g_codes in ({21}, {90}):
             if len(words) != 1:
                 raise SafetyError("G21 and G90 must be standalone lines")
@@ -1475,6 +1481,13 @@ class MachineService:
                     raise SafetyError(f"Line {index}: G21 and G90 must appear before motion")
                 if not seen_initial_m5:
                     raise SafetyError(f"Line {index}: M5 must appear before the first motion")
+                if "S" in values:
+                    if g_codes != {1} or last_m_code not in {3, 4}:
+                        raise SafetyError(
+                            f"Line {index}: inline S is allowed only on G1 after M3/M4"
+                        )
+                    requires_laser_authorization = True
+                    laser_on = values["S"] > 0
                 if x is None or y is None:
                     if "X" not in values or "Y" not in values:
                         raise SafetyError(f"Line {index}: the first move must establish both X and Y")

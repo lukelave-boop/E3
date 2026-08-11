@@ -51,6 +51,7 @@ camera/controller work through `DesktopController` worker tasks.
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
 | `templates/` | Versioned cut-template schema, rectangle-grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
 | `materials/` | SQLite material-preset library |
+| `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
 | `machine/` | Safety policy, simulator, protocol probing, and serial transports |
 | `server.py` + `web/` | Local HTTP API and browser UI |
 | `core/` | Shared runtime lifecycle for non-HTTP consumers |

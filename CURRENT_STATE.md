@@ -5,7 +5,28 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-tab sequence.
 
-Snapshot: **2026-08-09**
+Snapshot: **2026-08-11**
+
+Per-operation and material-preset Power Correction is implemented as a bounded,
+material-specific commanded-power bias layered over GRBL `M4`. Vector paths use
+turn-angle severity and the configured acceleration model to add at most three
+collinear ramp blocks on each side of a real junction. Raster correction first
+credits laser-off overscan and changes image-area power only when that overscan
+is shorter than the modeled braking distance. Zero correction retains the prior
+program shape; raw G-code keeps `M4`, laser-off rapid travel, guarded inline `S`
+on `G1`, and final `M5`. Projects and migrated material databases default both
+new values to zero. Focused model, mapping, geometry, raster, exact-Preview, UI,
+material, and guarded-stream tests pass. No corrected powered job has been run
+on hardware. The platform-neutral suite passes 1,448 tests with the 103
+loopback-server security tests run separately outside the socket-restricted
+sandbox; all 1,551 tests pass. Repository-wide Ruff checks also pass.
+
+On 2026-08-11, a read-only `$$` query against the connected controller reported
+`$120=500.000` and `$121=500.000` mm/s², matching the configured
+`laser.preview_acceleration_mm_s2=500`. It also reported `$110/$111=10000`
+mm/min, `$30=1000`, and `$32=1`. Controller/firmware identity and physical
+acceleration were not independently measured, so this is stored-setting
+readback rather than physical verification.
 
 Exact Job Preview operation rows now translate generated powered-motion feed
 into mm/s and percentage of the configured work-feed limit, independently from

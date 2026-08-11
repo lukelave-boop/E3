@@ -140,7 +140,13 @@ nearest-path reordering. Raster planning accepts only bounded PNG/JPEG/BMP
 metadata, file size, and conservative decoded bytes before full decode, then
 caps aggregate row, sample, vector-edge, span, and command work. Programs
 beyond the 250,000 streamed-command limit are rejected. Inspect the powered
-pattern and maximum power in Preview. A Start Here program
+pattern and maximum power in Preview. Nonzero Power Correction deliberately
+changes commanded `S` values near modeled corners or insufficiently overscanned
+raster edges while retaining GRBL `M4`; positive correction can increase the
+commanded value above the layer's base power up to the configured controller
+limit. Treat every correction change as a new material/process setting, review
+the exact Preview, and validate it only with small supervised sacrificial tests.
+A Start Here program
 intentionally omits earlier motion. It is prepared only at a complete move
 boundary, begins with `G21`, `G90`, and `M5`, positions with the laser off, and
 does not bypass the ordinary homing, arming, or execution gates.

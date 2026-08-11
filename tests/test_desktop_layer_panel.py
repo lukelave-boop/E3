@@ -16,8 +16,9 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.desktop.controls import PanelScrollArea
 from laser_aligner.desktop.main_window import LAYER_PALETTE_COLORS, LayerPaletteBar
-from laser_aligner.desktop.panels import LayerPanel
+from laser_aligner.desktop.panels import LayerPanel, MaterialPanel
 from laser_aligner.desktop.theme import DARK_STYLESHEET
+from laser_aligner.materials import MaterialDatabase, MaterialPreset
 from laser_aligner.project import LayerMode, OperationLayer, ProjectDocument
 
 
@@ -35,6 +36,8 @@ def _document_with_operations() -> ProjectDocument:
     line.speed_mm_min = 1250.0
     line.power_percent = 42.5
     line.passes = 2
+    line.vector_power_correction = -25.0
+    line.raster_power_correction = 35.0
 
     fill = document.add_layer(name="Legacy fill", mode=LayerMode.FILL)
     fill.speed_mm_min = 800.0
@@ -65,6 +68,8 @@ def test_layer_panel_summarizes_operations_and_preserves_list_api(
     assert not panel.mode_notice.isVisibleTo(panel)
     assert panel.scan_row.isVisibleTo(panel)
     assert "Include this operation" in panel.output_check.toolTip()
+    assert panel.vector_correction_spin.value() == 0.0
+    assert panel.raster_correction_spin.value() == 0.0
 
     fill_index = panel.mode_combo.findData(LayerMode.FILL.value)
     raster_index = panel.mode_combo.findData(LayerMode.RASTER.value)
@@ -229,6 +234,66 @@ def test_layer_numeric_editor_emits_once_when_the_value_is_committed(
     assert len(edits) == 1
     assert edits[0][0] == document.active_layer_id
     assert edits[0][1]["speed_mm_min"] == pytest.approx(2345.6)
+
+    panel.close()
+    panel.deleteLater()
+
+
+def test_layer_power_correction_editor_emits_exact_values_on_commit(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    document = _document_with_operations()
+    panel = LayerPanel()
+    panel.set_document(document, document.layers[0].id)
+    edits: list[tuple[str, dict[str, object]]] = []
+    panel.layerEdited.connect(
+        lambda layer_id, values: edits.append((layer_id, values))
+    )
+
+    assert panel.vector_correction_spin.value() == -25.0
+    assert panel.raster_correction_spin.value() == 35.0
+    panel.vector_correction_spin.setValue(-40.5)
+    panel.vector_correction_spin.editingFinished.emit()
+    qt_application.processEvents()
+
+    assert edits[-1][1]["vector_power_correction"] == -40.5
+    assert edits[-1][1]["raster_power_correction"] == 35.0
+    assert "normal GRBL M4" in panel.vector_correction_spin.toolTip()
+
+    panel.close()
+    panel.deleteLater()
+
+
+def test_material_panel_round_trips_and_applies_power_correction(
+    qt_application: QtWidgets.QApplication,
+    tmp_path,
+) -> None:
+    database = MaterialDatabase(tmp_path / "materials.sqlite")
+    preset = database.save(
+        MaterialPreset(
+            material="Cardstock",
+            name="Corrected",
+            vector_power_correction=-15.5,
+            raster_power_correction=22.5,
+        )
+    )
+    panel = MaterialPanel(database)
+    applied: list[MaterialPreset] = []
+    panel.applyPresetRequested.connect(applied.append)
+    item = next(
+        panel.list.item(index)
+        for index in range(panel.list.count())
+        if panel.list.item(index).data(QtCore.Qt.ItemDataRole.UserRole) == preset.id
+    )
+    panel.list.setCurrentItem(item)
+    qt_application.processEvents()
+
+    assert panel.vector_correction_spin.value() == -15.5
+    assert panel.raster_correction_spin.value() == 22.5
+    panel.apply_current()
+
+    assert applied[0].vector_power_correction == -15.5
+    assert applied[0].raster_power_correction == 22.5
 
     panel.close()
     panel.deleteLater()

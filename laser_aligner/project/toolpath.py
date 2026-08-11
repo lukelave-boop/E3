@@ -14,6 +14,11 @@ from ..gcode.generator import ToolpathOptions, generate_frame_gcode, validate_pa
 from ..gcode.job_plan import JobPlan, build_job_plan, e3_metadata_line
 from ..geometry.svg import Polyline
 from .model import LayerMode, ObjectKind, OperationLayer, ProjectDocument, SceneObject
+from .power_correction import (
+    DEFAULT_RAMP_STEPS,
+    corrected_raster_span_motions,
+    corrected_vector_motions,
+)
 from .raster_asset import (
     RasterAssetIdentity,
     RasterAssetMetadata,
@@ -325,6 +330,7 @@ def _raster_row_command_count(
     overscan_percent: float,
     *,
     powered: bool,
+    power_correction: float = 0.0,
 ) -> int:
     motion = _raster_motion_points(row.points, overscan_percent)
     count = 1  # G0 to the row's laser-off lead-in.
@@ -337,6 +343,11 @@ def _raster_row_command_count(
         if float(np.linalg.norm(span.points[0] - position)) > 1e-9:
             count += 1  # Laser-off gap.
         count += 3  # M3/M4, powered G1, standalone M5.
+        if power_correction != 0.0:
+            # Each image edge can add at most ``ramp_steps`` subdivisions.
+            # This conservative bound keeps the final stream below its hard cap
+            # without doing controller-specific motion planning here.
+            count += 2 * DEFAULT_RAMP_STEPS
         position = span.points[-1]
     if float(np.linalg.norm(row.points[-1] - position)) > 1e-9:
         count += 1
@@ -957,6 +968,7 @@ def _image_raster_rows(
             row,
             layer.overscan_percent,
             powered=powered,
+            power_correction=layer.raster_power_correction,
         )
         if estimated_commands * layer.passes >= command_budget:
             raise ValueError(
@@ -997,6 +1009,7 @@ def _raster_rows(
                 row,
                 layer.overscan_percent,
                 powered=powered,
+                power_correction=layer.raster_power_correction,
             )
             for row in item_rows
         ) * layer.passes
@@ -1043,6 +1056,7 @@ def _emit_raster_row(
     layer: OperationLayer,
     laser: LaserSettings,
     power: int,
+    power_max: int,
     current: np.ndarray,
 ) -> tuple[np.ndarray, float, float, int, int]:
     """Emit one scan row and return position, cut/travel, points, and paths."""
@@ -1057,6 +1071,8 @@ def _emit_raster_row(
     cut = 0.0
     point_count = 0
     path_count = 0
+    lead_in_mm = float(np.linalg.norm(row_start - lead_start))
+    lead_out_mm = float(np.linalg.norm(lead_end - row_end))
     lines.append(e3_metadata_line("path", {"name": row.source_tag}))
     lines.append(
         f"G0 X{_fmt(lead_start[0])} Y{_fmt(lead_start[1])} "
@@ -1092,10 +1108,29 @@ def _emit_raster_row(
                     f"F{_fmt(layer.speed_mm_min)}"
                 )
             lines.append(f"{laser.power_mode.upper()} S{power}")
-            lines.append(
-                f"G1 X{_fmt(span_end[0])} Y{_fmt(span_end[1])} "
-                f"F{_fmt(layer.speed_mm_min)}"
+            commanded_power = power
+            motions = corrected_raster_span_motions(
+                row_start,
+                row_end,
+                span_start,
+                span_end,
+                lead_in_mm=lead_in_mm,
+                lead_out_mm=lead_out_mm,
+                base_power=power,
+                correction=layer.raster_power_correction,
+                power_max=power_max,
+                feed_mm_min=layer.speed_mm_min,
+                acceleration_mm_s2=laser.preview_acceleration_mm_s2,
             )
+            for motion in motions:
+                power_word = ""
+                if motion.power != commanded_power:
+                    power_word = f" S{motion.power}"
+                    commanded_power = motion.power
+                lines.append(
+                    f"G1 X{_fmt(motion.x)} Y{_fmt(motion.y)} "
+                    f"F{_fmt(layer.speed_mm_min)}{power_word}"
+                )
             lines.append("M5")
             distance = _length(span.points)
             cut += distance
@@ -1255,7 +1290,22 @@ def generate_project_gcode(
         powered = layer.controller_power(controller_power_max) > 0
         per_path_overhead = 2 if powered else 1
         vector_command_estimate += layer.passes * sum(
-            len(path.points) + per_path_overhead
+            (
+                len(
+                    corrected_vector_motions(
+                        path.points,
+                        base_power=layer.controller_power(controller_power_max),
+                        correction=layer.vector_power_correction,
+                        power_max=controller_power_max,
+                        feed_mm_min=layer.speed_mm_min,
+                        acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                    )
+                )
+                + 1
+                if powered and layer.vector_power_correction != 0
+                else len(path.points)
+            )
+            + per_path_overhead
             for path in paths
             if len(path.points) >= 2
         )
@@ -1337,7 +1387,9 @@ def generate_project_gcode(
         lines.append(
             f"; Layer {layer.name.replace(';', ',')[:80]} · "
             f"{layer.speed_mm_min:g} mm/min · {layer.power_percent:g}% · "
-            f"{layer.passes} pass(es)"
+            f"{layer.passes} pass(es) · vector correction "
+            f"{layer.vector_power_correction:+g} · raster correction "
+            f"{layer.raster_power_correction:+g}"
         )
         if layer_plan.dithered_image:
             lines.append("; Raster tone: deterministic 8x8 ordered grayscale dither")
@@ -1353,6 +1405,8 @@ def generate_project_gcode(
                     "name": layer.name,
                     "color": layer.color,
                     "power_percent": layer.power_percent,
+                    "vector_power_correction": layer.vector_power_correction,
+                    "raster_power_correction": layer.raster_power_correction,
                     "mode": layer.mode.value,
                     "raster_tone": (
                         "ordered-dither-8x8"
@@ -1407,6 +1461,7 @@ def generate_project_gcode(
                         layer,
                         laser,
                         power,
+                        controller_power_max,
                         current,
                     )
                     layer_cut += row_cut
@@ -1442,10 +1497,34 @@ def generate_project_gcode(
                 )
                 if power > 0:
                     lines.append(f"{laser.power_mode.upper()} S{power}")
+                motions = (
+                    corrected_vector_motions(
+                        points,
+                        base_power=power,
+                        correction=layer.vector_power_correction,
+                        power_max=controller_power_max,
+                        feed_mm_min=layer.speed_mm_min,
+                        acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                    )
+                    if power > 0
+                    else []
+                )
+                commanded_power = power
                 for point in points[1:]:
+                    if power > 0:
+                        continue
                     lines.append(
                         f"G1 X{_fmt(point[0])} Y{_fmt(point[1])} "
                         f"F{_fmt(layer.speed_mm_min)}"
+                    )
+                for motion in motions:
+                    power_word = ""
+                    if motion.power != commanded_power:
+                        power_word = f" S{motion.power}"
+                        commanded_power = motion.power
+                    lines.append(
+                        f"G1 X{_fmt(motion.x)} Y{_fmt(motion.y)} "
+                        f"F{_fmt(layer.speed_mm_min)}{power_word}"
                     )
                 lines.append("M5")
                 distance = _length(points)
@@ -1469,6 +1548,8 @@ def generate_project_gcode(
                 "power": power,
                 "speed_mm_min": layer.speed_mm_min,
                 "passes": layer.passes,
+                "vector_power_correction": layer.vector_power_correction,
+                "raster_power_correction": layer.raster_power_correction,
             }
         )
 

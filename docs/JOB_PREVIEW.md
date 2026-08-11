@@ -81,7 +81,9 @@ frame every real job and keep the operator present.
 
 Preview includes an operation table with independent display visibility and
 generated speed shown in mm/s plus percentage of the configured work-feed
-limit alongside cut/time/power statistics and a generated-layer legend. The
+limit, Vector/Raster Power Correction settings, and cut/time/power statistics
+alongside a generated-layer legend. Inline corrected `S` values are parsed from
+the exact program, so maximum power and power shading include correction. The
 raw generated G-code retains the controller-required `F` words. Generation can retain
 source ordering or apply nearest-path ordering; the exact selected planner is
 recorded in the program and Preview heading. Above 512 vector paths, nearest

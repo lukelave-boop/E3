@@ -158,7 +158,8 @@ def test_preview_layer_table_controls_only_that_operation(
     layer = dialog.layer_tree.topLevelItem(0)
     assert layer.text(1) == "Line 01 · Line"
     assert layer.text(4) == "16.67 mm/s · 16.7%"
-    assert "20.0% / S200" in layer.text(5)
+    assert layer.text(5) == "V +0 / R +0"
+    assert "20.0% / S200" in layer.text(6)
     assert "16.67 mm/s · 16.7% of configured 100.00 mm/s work limit" in layer.toolTip(4)
     layer.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
     qt_application.processEvents()
@@ -170,6 +171,47 @@ def test_preview_layer_table_controls_only_that_operation(
     ]
     assert powered_items and all(not item.isVisible() for item in powered_items)
     assert "Line 01" in dialog.legend.text()
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_preview_reports_layer_power_correction_metadata(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    text = "\n".join(
+        [
+            "G21",
+            "G90",
+            "M5",
+            e3_metadata_line(
+                "layer",
+                {
+                    "id": "corrected",
+                    "name": "Corrected",
+                    "color": "#185CFF",
+                    "vector_power_correction": -25,
+                    "raster_power_correction": 40,
+                },
+            ),
+            "G0 X10 Y10 F2000",
+            "M4 S200",
+            "G1 X40 Y10 F1000 S180",
+            "M5",
+        ]
+    )
+    dialog = JobPreviewDialog(
+        build_job_plan(text, power_max=1000),
+        (0.0, 100.0, 0.0, 100.0),
+        "corrected.gcode",
+    )
+    dialog.show()
+    qt_application.processEvents()
+
+    row = dialog.layer_tree.topLevelItem(0)
+    assert row.text(5) == "V -25 / R +40"
+    assert row.text(6) == "18.0% / S180"
 
     dialog.close()
     dialog.deleteLater()
@@ -287,7 +329,7 @@ def test_preview_remains_useful_at_compact_geometry_with_large_text(
         assert not dialog.canvas.geometry().intersects(dialog.sidebar.geometry())
         header = dialog.layer_tree.header()
         final_column_right = (
-            header.sectionViewportPosition(5) + header.sectionSize(5)
+            header.sectionViewportPosition(6) + header.sectionSize(6)
         )
         assert final_column_right <= dialog.layer_tree.viewport().width()
         assert "…" in dialog.move_label.text()

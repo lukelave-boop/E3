@@ -34,6 +34,8 @@ class PreviewLayerRow:
     distance: float
     seconds: float
     feeds: tuple[float, ...]
+    vector_power_correction: float
+    raster_power_correction: float
     power: float
 
 
@@ -61,6 +63,8 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
                 "distance": 0.0,
                 "seconds": 0.0,
                 "feeds": set(),
+                "vector_power_correction": move.vector_power_correction,
+                "raster_power_correction": move.raster_power_correction,
                 "power": 0.0,
             },
         )
@@ -82,6 +86,8 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
                 distance=float(row["distance"]),
                 seconds=float(row["seconds"]),
                 feeds=tuple(sorted(float(value) for value in row["feeds"])),
+                vector_power_correction=float(row["vector_power_correction"]),
+                raster_power_correction=float(row["raster_power_correction"]),
                 power=float(row["power"]),
             )
             for row in rows.values()
@@ -869,7 +875,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         tree = QtWidgets.QTreeWidget()
         tree.setObjectName("previewLayers")
         tree.setHeaderLabels(
-            ("Show", "Operation", "Cut", "Time", "Speed", "Max power")
+            ("Show", "Operation", "Cut", "Time", "Speed", "Correction", "Max power")
         )
         tree.setRootIsDecorated(False)
         tree.setAlternatingRowColors(True)
@@ -897,6 +903,8 @@ class JobPreviewDialog(QtWidgets.QDialog):
                         row.feeds,
                         maximum_feed_mm_min=self.max_work_feed_mm_min,
                     ),
+                    f"V {row.vector_power_correction:+g} / "
+                    f"R {row.raster_power_correction:+g}",
                     f"{row.power / self.plan.power_max * 100:.1f}% / "
                     f"S{row.power:g}",
                 ]
@@ -917,7 +925,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     if column == 4
                     else item.text(column)
                 )
-                for column in range(1, 6)
+                for column in range(1, 7)
             )
             for column in range(tree.columnCount()):
                 item.setToolTip(column, html.escape(details, quote=True))
@@ -931,7 +939,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 column,
                 QtWidgets.QHeaderView.ResizeMode.Interactive,
             )
-        for column, width in enumerate((32, 64, 44, 34, 52, 80)):
+        for column, width in enumerate((28, 48, 34, 30, 44, 48, 70)):
             header.resizeSection(column, width)
         return tree
 
