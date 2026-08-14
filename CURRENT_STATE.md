@@ -20,22 +20,37 @@ and, on Windows, the file ID plus native change time; project reads verify the
 same opened file twice and compare the exact bytes. SQLite migration connections
 are explicitly closed before temporary-file cleanup, no-clobber autosave
 publication uses Windows' atomic rename semantics, and release-path/line-ending
-tests now express platform-independent behavior. These paths have focused Linux
-unit coverage but still require the updated Windows CI matrix before they count
-as Windows-verified.
+tests now express platform-independent behavior. The first native Windows
+Python 3.13 run confirmed those identity/read fixes but exposed that Windows
+rejects `fsync` on the read-only descriptors used after migration timestamping.
+The follow-up opens completed artifacts read/write solely for that flush and
+routes material-database publication through the shared no-clobber writer. A
+native Windows rerun and the hosted matrix remain required before these paths
+count as Windows-verified.
 
 Compact desktop pages now opt into viewport-width reflow instead of retaining a
 hidden horizontal scroll range when Windows or large-text font metrics produce a
 wide child size hint. The layer and Trace result trees are also explicitly
-shrinkable, the ruler-overlay action uses the compact **Capture ruler overlay**
-label with its Home/park behavior retained in the tooltip and accessible
-description, and Job Preview elides only the trailing coordinates so move,
-layer, power, and speed remain visible. These Qt changes have source/runbook
-coverage here but were not executed offscreen in this environment because
-PySide6 was unavailable; Linux and Windows desktop CI remain the required
-verification.
+shrinkable. The first native Windows offscreen run found three remaining display
+cases: the ruler-overlay action still exceeded a 900-pixel large-text layout, its
+Home/park tooltip was cleared by a valid-bed refresh, and single-pass detail
+pushed Job Preview speed beyond the visible readout. The follow-up uses the
+compact **Capture view** label, preserves its descriptive tooltip through
+validity refreshes, and gives the visible move readout a priority string that
+omits redundant `pass 1/1` and coordinates while retaining the complete value in
+the tooltip and accessibility text. Linux source/runbook tests pass; native
+Windows and hosted desktop reruns remain required.
 
-On x86-64 Linux with Python 3.13.5, the complete non-Qt suite passed `1,368`
+The same native Windows run completed **1,709 tests with only eight failures and
+9 expected platform skips**, down from the original 47 failures. Seven were the
+deterministic UI/migration/autosave cases described above; the eighth was a
+Winsock reset while receiving an intentional 403 response. Rejected HTTP
+requests now advertise `Connection: close` and drain only one unambiguously
+framed, configured-size-bounded body before sending the error, preserving the
+request-smuggling fail-closed behavior while allowing Windows clients to receive
+the generated response. The focused Linux follow-up suite passes 254 tests.
+
+On x86-64 Linux with Python 3.13.5, the complete non-Qt suite passed `1,369`
 tests with `27` Qt-only modules skipped. The follow-up desktop source and
 canonical-runbook group passed `29` tests with the same `27` Qt modules skipped.
 No controller, arming, laser-output, bounds, G-code, or physical calibration

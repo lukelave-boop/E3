@@ -1242,12 +1242,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         reference_layout.addWidget(reference_note)
-        self.work_area_reference_button = QtWidgets.QPushButton(
-            "Capture ruler overlay"
-        )
-        self.work_area_reference_button.setToolTip(
+        self.work_area_reference_button = QtWidgets.QPushButton("Capture view")
+        work_area_reference_tooltip = (
             "Home and park the machine, then capture the work-area ruler overlay."
         )
+        self.work_area_reference_button.setProperty(
+            "availableToolTip",
+            work_area_reference_tooltip,
+        )
+        self.work_area_reference_button.setToolTip(work_area_reference_tooltip)
         self.work_area_reference_button.setAccessibleDescription(
             "Homes and parks the machine before capturing the work-area ruler overlay."
         )
@@ -2032,7 +2035,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
         unavailable = f"Requires a VALID bed map{': ' + reasons if reasons else ''}"
         for action in self._bed_dependent_actions:
             action.setEnabled(valid)
-            action.setToolTip("" if valid else unavailable)
+            available_tooltip = str(action.property("availableToolTip") or "")
+            if valid:
+                action.setToolTip(available_tooltip)
+            else:
+                action.setToolTip(
+                    f"{available_tooltip}\n\n{unavailable}"
+                    if available_tooltip
+                    else unavailable
+                )
         self.rough_grid_detect_button.setEnabled(valid)
         self.rough_grid_detect_button.setToolTip("" if valid else unavailable)
         if not valid:

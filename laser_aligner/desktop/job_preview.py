@@ -146,6 +146,7 @@ class _ElidedLabel(QtWidgets.QLabel):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._full_text = ""
+        self._display_text = ""
         self.setTextFormat(QtCore.Qt.TextFormat.PlainText)
         self.setMinimumWidth(0)
         self.setSizePolicy(
@@ -157,15 +158,23 @@ class _ElidedLabel(QtWidgets.QLabel):
     def full_text(self) -> str:
         return self._full_text
 
-    def set_full_text(self, value: object) -> None:
+    def set_full_text(
+        self,
+        value: object,
+        *,
+        display_text: object | None = None,
+    ) -> None:
         self._full_text = str(value)
+        self._display_text = (
+            self._full_text if display_text is None else str(display_text)
+        )
         self.setAccessibleDescription(self._full_text)
         self._refresh_text()
 
     def _refresh_text(self) -> None:
         width = max(0, self.contentsRect().width())
         rendered = self.fontMetrics().elidedText(
-            self._full_text,
+            self._display_text,
             # Keep the move, layer, power, and speed visible.  Coordinates
             # are still available through ``full_text`` and the tooltip when
             # the tail must be elided on compact or large-font layouts.
@@ -175,7 +184,7 @@ class _ElidedLabel(QtWidgets.QLabel):
         super().setText(rendered)
         self.setToolTip(
             html.escape(self._full_text, quote=True)
-            if rendered != self._full_text
+            if rendered != self._full_text or self._display_text != self._full_text
             else ""
         )
 
@@ -1050,11 +1059,30 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     f"Honeycomb X{local_x:.3f} Y{local_y:.3f} · "
                     + coordinate_text
                 )
+            speed_text = _speed_text(
+                (move.feed_mm_min,),
+                maximum_feed_mm_min=(
+                    self.max_travel_feed_mm_min
+                    if move.rapid
+                    else self.max_work_feed_mm_min
+                ),
+            )
+            move_text = f"Move {move.index + 1}/{len(self.plan.moves)}"
+            pass_text = f"pass {move.pass_index}/{move.pass_count}"
+            full_text = (
+                f"{move_text} · {move.layer_name} · {pass_text} · {role} · "
+                f"{speed_text} · {coordinate_text}"
+            )
+            compact_parts = [
+                f"{move.index + 1}/{len(self.plan.moves)}",
+                move.layer_name,
+            ]
+            if move.pass_count > 1:
+                compact_parts.append(pass_text)
+            compact_parts.extend((role, speed_text))
             self.move_label.set_full_text(
-                f"Move {move.index + 1}/{len(self.plan.moves)} · {move.layer_name} · "
-                f"pass {move.pass_index}/{move.pass_count} · {role} · "
-                f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} "
-                f"· {coordinate_text}"
+                full_text,
+                display_text=" · ".join(compact_parts),
             )
         self.start_here_button.setEnabled(self._current_move_index is not None)
 

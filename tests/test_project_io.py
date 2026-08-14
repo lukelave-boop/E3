@@ -372,12 +372,13 @@ def test_default_autosave_migrates_legacy_recovery_without_deleting_it(
     legacy.write_bytes(payload)
     timestamp_ns = 1_700_000_000_123_456_789
     os.utime(legacy, ns=(timestamp_ns, timestamp_ns))
+    legacy_timestamp_ns = legacy.stat().st_mtime_ns
 
     migrated = autosave_path(document)
 
     assert migrated == (preferred_root / "backups" / filename).resolve()
     assert migrated.read_bytes() == payload
-    assert migrated.stat().st_mtime_ns == timestamp_ns
+    assert migrated.stat().st_mtime_ns == legacy_timestamp_ns
     assert legacy.read_bytes() == payload
 
     project_io.clear_autosave(document)
@@ -444,10 +445,12 @@ def test_legacy_autosave_migration_cannot_backdate_concurrent_native_replace(
     publish = project_io.atomic_write_bytes_if_absent
 
     def publish_then_replace(path, data, **kwargs):
+        nonlocal native_time
         installed = publish(path, data, **kwargs)
         replacement = path.with_suffix(".new")
         replacement.write_bytes(b"new native autosave")
         os.utime(replacement, ns=(native_time, native_time))
+        native_time = replacement.stat().st_mtime_ns
         os.replace(replacement, path)
         return installed
 

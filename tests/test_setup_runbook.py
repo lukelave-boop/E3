@@ -33,7 +33,7 @@ def test_runbook_tracks_exact_setup_and_job_handoff_labels() -> None:
         "**Solve current-resolution calibration**",
         "**Prepare powered base-map job**",
         "**Home / park, capture and detect base grid**",
-        "**Capture ruler overlay**",
+        "**Capture view**",
         "**Detect honeycomb automatically**",
         "**Fallback: detect with 3 hints**",
         "**Prepare powered mark job**",

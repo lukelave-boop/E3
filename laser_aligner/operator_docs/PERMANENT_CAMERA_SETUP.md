@@ -101,7 +101,7 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
    reports 25/25 detected, 25/25 inliers, RMS no greater than `0.50 mm`, and
    maximum error no greater than `0.80 mm`.
 6. Click **Yes** in **Apply fresh base map**.
-7. With the new map active, click **Capture ruler overlay**. The
+7. With the new map active, click **Capture view**. The
    orange outline is the configured camera/work rectangle; the green outline
    is the smaller laser-output rectangle after the configured boundary margin
    and any configured laser-spot offset.

@@ -11,7 +11,11 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from ..project import LayerMode, OperationLayer
-from ..storage import default_user_data_dir, legacy_user_data_dir
+from ..storage import (
+    _publish_temp_if_absent,
+    default_user_data_dir,
+    legacy_user_data_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -50,13 +54,13 @@ def _migrate_database(source: Path, destination: Path) -> bool:
         ) as legacy, closing(sqlite3.connect(temporary)) as migrated:
             legacy.backup(migrated)
             migrated.commit()
-        with temporary.open("rb") as handle:
+        with temporary.open("r+b") as handle:
             os.fsync(handle.fileno())
-        try:
-            os.link(temporary, destination)
-        except FileExistsError:
-            # A native-path database created during migration wins. Never
-            # replace operator data with the legacy snapshot.
+        # A native-path database created during migration wins. Never replace
+        # operator data with the legacy snapshot. The shared publisher uses a
+        # no-overwrite rename on Windows and a hard link on POSIX, avoiding an
+        # unbounded second in-memory copy of the SQLite snapshot.
+        if not _publish_temp_if_absent(temporary, destination):
             return True
     except (OSError, sqlite3.Error) as exc:
         logger.warning("Could not migrate legacy material presets: %s", exc)

@@ -18,6 +18,14 @@
   other paths outside the checkout.
 - Replaced optimization-removable assertions in direct washer and flat-circle
   geometry construction with explicit validation errors and focused tests.
+- Followed up the first native Windows run by retaining Job Preview speed before
+  optional pass/coordinate detail, preserving the Machine Setup Home/park
+  tooltip across validity refreshes, and shortening that action to **Capture
+  view** for large-text layouts.
+- Fixed Windows migration/autosave flushes to use writable descriptors, shared
+  the atomic no-clobber publication primitive with SQLite migration, and drained
+  bounded rejected HTTP bodies before connection close so Winsock clients still
+  receive the generated security response.
 
 - Fixed Fine registration reset leaving the reviewed full-bed map disabled:
   retained marks are re-reviewed after reset, and the broad-coverage gate now

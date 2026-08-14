@@ -154,7 +154,10 @@ def atomic_write_bytes_if_absent(
             os.fsync(handle.fileno())
         if timestamps_ns is not None:
             os.utime(temp_path, ns=timestamps_ns)
-            with temp_path.open("rb") as handle:
+            # Windows rejects fsync on a read-only descriptor. Reopen the
+            # completed file read/write so the timestamp update can be flushed
+            # before its no-overwrite publication.
+            with temp_path.open("r+b") as handle:
                 os.fsync(handle.fileno())
         if not _publish_temp_if_absent(temp_path, path):
             return False

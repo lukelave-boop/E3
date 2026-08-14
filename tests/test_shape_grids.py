@@ -18,8 +18,8 @@ from laser_aligner.templates import (
     ShapeGridSpec,
     ShapeKind,
     TemplateFormatError,
-    shape_polylines,
     instantiate_template,
+    shape_polylines,
     template_from_shape_grid,
 )
 
