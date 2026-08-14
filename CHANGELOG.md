@@ -2,6 +2,10 @@
 
 ## Unreleased — `desktop-v1` / `0.2.0.dev0`
 
+- Fixed the final lower-version CI incompatibilities: cleanup failures now
+  preserve the original operation error with an attached note on Python 3.10,
+  and excessive JSON nesting reports one stable project-format error across
+  Python 3.10 through 3.13.
 - Stabilized the cross-platform test and persistence foundation: CI now uses
   bounded development dependencies, current Node 24 actions, Linux EGL/OpenGL
   bootstrap, `pip check`, bytecode compilation, and superseded-run cancellation.

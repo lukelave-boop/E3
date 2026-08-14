@@ -50,6 +50,18 @@ framed, configured-size-bounded body before sending the error, preserving the
 request-smuggling fail-closed behavior while allowing Windows clients to receive
 the generated response. The focused Linux follow-up suite passes 254 tests.
 
+The native Windows Python 3.13 pass-2 rerun now passes **1,717 tests** with
+9 expected platform skips, and repository-wide Ruff checks pass. The first
+hosted matrix run also passes Ubuntu Python 3.12 desktop, Windows Python
+3.12 desktop, and lint. Its remaining lower-version failures identified two
+compatibility cases: Python 3.10 lacks `BaseException.add_note`, and Python
+3.10/3.11 produced a different recursion message while rejecting excessively
+nested project JSON. Cleanup-note attachment now uses a compatibility helper
+that preserves the original operation error on every supported version, and
+JSON recursion receives one stable **nested too deeply** project-format
+message. Focused machine, project-I/O, and compatibility tests pass; a hosted
+rerun remains required before the complete matrix counts as green.
+
 On x86-64 Linux with Python 3.13.5, the complete non-Qt suite passed `1,369`
 tests with `27` Qt-only modules skipped. The follow-up desktop source and
 canonical-runbook group passed `29` tests with the same `27` Qt modules skipped.

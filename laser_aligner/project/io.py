@@ -174,7 +174,11 @@ def load_project(path: str | Path) -> ProjectDocument:
             parse_constant=_reject_json_constant,
             object_pairs_hook=_strict_json_object,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except RecursionError as exc:
+        raise ProjectFormatError(
+            f"Project JSON is nested too deeply in {source}"
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ProjectFormatError(f"Invalid JSON in {source}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ProjectFormatError("Project root must be a JSON object")

@@ -5,6 +5,8 @@ import sys
 import types
 from pathlib import Path
 
+from laser_aligner._compat import add_exception_note
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -35,3 +37,17 @@ def test_python_310_string_enum_fallback_preserves_required_behavior() -> None:
     assert Example.VALUE == "value"
     assert str(Example.VALUE) == "value"
     assert Example("value") is Example.VALUE
+
+
+def test_exception_notes_fall_back_on_python_310() -> None:
+    class LegacyError(Exception):
+        add_note = None
+
+    error = LegacyError("operation failed")
+    add_exception_note(error, "cleanup also failed")
+    add_exception_note(error, "second cleanup detail")
+
+    assert error.__notes__ == [
+        "cleanup also failed",
+        "second cleanup detail",
+    ]

@@ -14,4 +14,23 @@ except ImportError:  # pragma: no cover - exercised by the Python 3.10 CI job
             return str(self.value)
 
 
-__all__ = ["StrEnum"]
+def add_exception_note(error: BaseException, note: str) -> None:
+    """Attach one PEP 678-style note on every supported Python version."""
+
+    if not isinstance(note, str):
+        raise TypeError("exception note must be a string")
+    native_add_note = getattr(error, "add_note", None)
+    if callable(native_add_note):
+        native_add_note(note)
+        return
+    notes = getattr(error, "__notes__", None)
+    if notes is None:
+        notes = []
+        error.__notes__ = notes
+    elif not isinstance(notes, list):
+        notes = list(notes)
+        error.__notes__ = notes
+    notes.append(note)
+
+
+__all__ = ["StrEnum", "add_exception_note"]

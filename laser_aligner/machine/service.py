@@ -11,6 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from .._compat import add_exception_note
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from ..gcode.preview import contains_motion, parse_words, strip_comment
@@ -925,8 +926,9 @@ class MachineService:
                     )
                     if operation_error is None:
                         raise
-                    operation_error.add_note(
-                        f"Temporary camera motor-release cleanup also failed: {cleanup_error}"
+                    add_exception_note(
+                        operation_error,
+                        f"Temporary camera motor-release cleanup also failed: {cleanup_error}",
                     )
                 else:
                     self._append_log(
