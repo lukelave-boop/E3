@@ -1243,7 +1243,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         reference_layout.addWidget(reference_note)
         self.work_area_reference_button = QtWidgets.QPushButton(
-            "Home / park, capture ruler overlay"
+            "Capture ruler overlay"
+        )
+        self.work_area_reference_button.setToolTip(
+            "Home and park the machine, then capture the work-area ruler overlay."
+        )
+        self.work_area_reference_button.setAccessibleDescription(
+            "Homes and parks the machine before capturing the work-area ruler overlay."
         )
         self.work_area_reference_button.clicked.connect(
             self.capture_work_area_reference

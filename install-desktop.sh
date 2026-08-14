@@ -9,7 +9,23 @@ if [[ ! -x .venv/bin/python ]]; then
   exit 1
 fi
 
+if ! command -v apt-get >/dev/null 2>&1; then
+  echo "The desktop installer currently targets Linux Mint, Ubuntu, and Debian systems with apt." >&2
+  exit 1
+fi
+
+# Qt's Linux wheels still rely on the system EGL/OpenGL loader.  Install the
+# same minimal runtime used by the offscreen desktop CI job before importing
+# PySide6 so a missing shared library fails here rather than at first launch.
+sudo apt-get install -y libegl1 libgl1
+
 .venv/bin/python -m pip install -e '.[desktop]'
+.venv/bin/python -m pip check
+QT_QPA_PLATFORM=offscreen .venv/bin/python - <<'PYQT'
+from PySide6 import QtCore, QtGui, QtWidgets
+
+print(f"PySide6 desktop runtime is importable (Qt {QtCore.qVersion()}).")
+PYQT
 
 APPLICATIONS="$HOME/.local/share/applications"
 mkdir -p "$APPLICATIONS"

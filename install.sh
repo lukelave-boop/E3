@@ -36,6 +36,8 @@ python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip setuptools wheel
 .venv/bin/python -m pip install --editable .
 .venv/bin/python -m pip install -r requirements-dev.txt
+.venv/bin/python -m pip check
+.venv/bin/python -m compileall -q laser_aligner
 
 if [[ ! -f config/local.json ]]; then
   cp config/default.json config/local.json

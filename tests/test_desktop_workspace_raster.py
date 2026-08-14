@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# The Qt platform must be selected before importing PySide6-backed modules.
+# ruff: noqa: E402, I001
+
 import os
 import time
 from collections.abc import Iterator
@@ -8,6 +11,7 @@ from pathlib import Path
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from laser_aligner.desktop import workspace as workspace_module
 from laser_aligner.desktop.qt import require_qt

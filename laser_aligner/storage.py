@@ -112,6 +112,26 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def _publish_temp_if_absent(temp_path: Path, path: Path) -> bool:
+    """Publish one complete temporary file without replacing an existing path."""
+
+    if os.name == "nt":
+        try:
+            os.rename(temp_path, path)
+        except OSError as exc:
+            if isinstance(exc, FileExistsError) or getattr(
+                exc, "winerror", None
+            ) in {80, 183}:
+                return False
+            raise
+        return True
+    try:
+        os.link(temp_path, path)
+    except FileExistsError:
+        return False
+    return True
+
+
 def atomic_write_bytes_if_absent(
     path: Path,
     data: bytes,
@@ -120,8 +140,8 @@ def atomic_write_bytes_if_absent(
 ) -> bool:
     """Install complete bytes only when no destination exists.
 
-    The hard-link publication is atomic and cannot overwrite a file created by
-    another process while the temporary payload is being prepared.
+    Final publication is an atomic no-overwrite rename on Windows and an
+    atomic hard link on POSIX, so a concurrently created destination always wins.
     """
 
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -136,9 +156,7 @@ def atomic_write_bytes_if_absent(
             os.utime(temp_path, ns=timestamps_ns)
             with temp_path.open("rb") as handle:
                 os.fsync(handle.fileno())
-        try:
-            os.link(temp_path, path)
-        except FileExistsError:
+        if not _publish_temp_if_absent(temp_path, path):
             return False
         _fsync_parent_directory(path)
         return True

@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import math
-from enum import StrEnum
 from typing import Any
 
+from .._compat import StrEnum
 from ..project import ObjectKind, SceneObject
 
 
@@ -53,7 +53,8 @@ def shape_polylines(
     if kind in {ShapeKind.CIRCLE, ShapeKind.ELLIPSE}:
         return [_closed(_ellipse_points())]
     if kind == ShapeKind.WASHER:
-        assert inner_diameter_mm is not None
+        if inner_diameter_mm is None:
+            raise ValueError("inner_diameter_mm is required for washer geometry")
         ratio_x = inner_diameter_mm / width_mm
         ratio_y = inner_diameter_mm / height_mm
         inner = [(x * ratio_x, y * ratio_y) for x, y in reversed(_ellipse_points())]
@@ -105,7 +106,8 @@ def shape_polylines(
                 points.append((0.5 * math.cos(a), -center + radius * math.sin(a)))
         return [_closed(points)]
     if kind in {ShapeKind.CIRCLE_ONE_FLAT, ShapeKind.CIRCLE_TWO_FLATS}:
-        assert flat_distance_mm is not None
+        if flat_distance_mm is None:
+            raise ValueError("flat_distance_mm is required for flat-circle geometry")
         half = flat_distance_mm / (2.0 * width_mm)
         # Intersections are sampled exactly at x=+/- half; all intervening
         # points remain on the radius-0.5 circle.

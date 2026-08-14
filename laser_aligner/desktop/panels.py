@@ -82,7 +82,15 @@ class LayerPanel(QtWidgets.QWidget):
         self.layer_list = _LayerOperationsTree()
         self.layer_list.setObjectName("operationsLayerTree")
         self.layer_list.setAlternatingRowColors(True)
+        self.layer_list.setMinimumWidth(0)
         self.layer_list.setMinimumHeight(104)
+        self.layer_list.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.layer_list.setSizeAdjustPolicy(
+            QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
+        )
         self.layer_list.setSelectionMode(
             QtWidgets.QAbstractItemView.SelectionMode.SingleSelection
         )
@@ -1475,7 +1483,15 @@ class TracePanel(QtWidgets.QWidget):
             )
         )
         self.result_tree = QtWidgets.QTreeWidget()
+        self.result_tree.setMinimumWidth(0)
         self.result_tree.setMinimumHeight(220)
+        self.result_tree.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Expanding,
+        )
+        self.result_tree.setSizeAdjustPolicy(
+            QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
+        )
         self.result_tree.setColumnCount(5)
         self.result_tree.setHeaderLabels(
             ["Use", "#", "Source", "Confidence", "Geometry"]

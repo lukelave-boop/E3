@@ -177,7 +177,7 @@ authorize this step.
    retry.
 4. Inspect the numbered overlay. Apply only when every circle is centered on
    its mark and the reported 25-point fit passes.
-5. After applying the map, choose **Home / park, capture ruler overlay**. The
+5. After applying the map, choose **Capture ruler overlay**. The
    raw parked-camera view shows a 10 mm machine-coordinate grid with larger
    coordinate labels every 40 mm, the configured camera/work boundary in
    orange, and the guarded laser-output area

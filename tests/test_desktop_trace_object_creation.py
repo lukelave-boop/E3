@@ -1,7 +1,14 @@
+# The Qt platform must be selected before importing PySide6-backed modules.
+# ruff: noqa: E402, I001
+
+import os
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.project import (

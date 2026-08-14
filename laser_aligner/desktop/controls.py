@@ -81,16 +81,24 @@ class PanelScrollArea(QtWidgets.QScrollArea):
             QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+        self.setSizeAdjustPolicy(
+            QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
+        )
 
         panel.setObjectName("inspectorPage")
         panel.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
+        # Inspector pages must follow the viewport width even when a platform's
+        # font metrics make one child report a very wide size hint.  The scroll
+        # area deliberately has no horizontal bar, so retaining that preferred
+        # width would hide controls instead of making them reflow.
+        panel.setMinimumWidth(0)
         panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         if panel.layout() is not None:
             panel.layout().setSizeConstraint(
-                QtWidgets.QLayout.SizeConstraint.SetMinAndMaxSize
+                QtWidgets.QLayout.SizeConstraint.SetDefaultConstraint
             )
         self.setWidget(panel)
 

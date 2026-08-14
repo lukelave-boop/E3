@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased — `desktop-v1` / `0.2.0.dev0`
+
+- Stabilized the cross-platform test and persistence foundation: CI now uses
+  bounded development dependencies, current Node 24 actions, Linux EGL/OpenGL
+  bootstrap, `pip check`, bytecode compilation, and superseded-run cancellation.
+- Fixed Windows false-positive "changed while being read" failures for image
+  evidence and project files without weakening same-file replacement checks;
+  SQLite migration handles are closed before cleanup and autosave publication
+  now has an atomic Windows no-overwrite path.
+- Fixed compact/large-text desktop layouts that could hide inspector controls,
+  shortened the ruler-overlay action while retaining its Home/park explanation,
+  and made Job Preview preserve layer, power, and speed when its move readout is
+  elided. The canonical setup runbook now uses the displayed button label.
+- Updated release portability checks so archives preserve the tracked working-
+  tree bytes and rooted Windows paths receive the same invalid-manifest error as
+  other paths outside the checkout.
+- Replaced optimization-removable assertions in direct washer and flat-circle
+  geometry construction with explicit validation errors and focused tests.
+
 - Fixed Fine registration reset leaving the reviewed full-bed map disabled:
   retained marks are re-reviewed after reset, and the broad-coverage gate now
   accommodates the support-contained eight-mark layout.
@@ -16,8 +35,6 @@
   saved projects remain unchanged.
 - Powered Machine Setup jobs now transform their machine-coordinate paths into
   the active honeycomb-local canvas for both workspace and popup previews.
-
-## Unreleased — `desktop-v1` / `0.2.0.dev0`
 
 - Projects now explicitly distinguish legacy machine coordinates from a
   movable honeycomb-local coordinate system. New projects use the current

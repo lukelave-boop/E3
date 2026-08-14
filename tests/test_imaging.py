@@ -127,3 +127,32 @@ def test_sharpness_rejects_nonfinite_crop_fraction() -> None:
             np.zeros((20, 20), dtype=np.uint8),
             crop_fraction=float("nan"),
         )
+
+
+def test_windows_handle_identity_uses_file_key_and_change_time() -> None:
+    selected = imaging.ImageFileIdentity(
+        size=128,
+        mtime_ns=500,
+        ctime_ns=100,
+        device=1,
+        inode=2,
+        windows_file_key=(42, 99),
+        windows_change_time=700,
+    )
+    reopened = imaging.ImageFileIdentity(
+        size=128,
+        mtime_ns=500,
+        ctime_ns=999,
+        device=88,
+        inode=77,
+        windows_file_key=(42, 99),
+        windows_change_time=700,
+    )
+
+    assert selected.same_version(reopened)
+    assert not selected.same_version(
+        replace(reopened, windows_change_time=701)
+    )
+    assert not selected.same_version(
+        replace(reopened, windows_file_key=(42, 100))
+    )

@@ -166,7 +166,10 @@ class _ElidedLabel(QtWidgets.QLabel):
         width = max(0, self.contentsRect().width())
         rendered = self.fontMetrics().elidedText(
             self._full_text,
-            QtCore.Qt.TextElideMode.ElideMiddle,
+            # Keep the move, layer, power, and speed visible.  Coordinates
+            # are still available through ``full_text`` and the tooltip when
+            # the tail must be elided on compact or large-font layouts.
+            QtCore.Qt.TextElideMode.ElideRight,
             width,
         )
         super().setText(rendered)

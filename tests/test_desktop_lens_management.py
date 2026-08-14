@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+# The Qt platform must be selected before importing PySide6-backed modules.
+# ruff: noqa: E402, I001
+
 import json
 import os
 import threading
@@ -13,6 +16,7 @@ import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from laser_aligner.calibration.lens import LensModel
 from laser_aligner.core import CoreRuntime

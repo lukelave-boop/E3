@@ -42,7 +42,18 @@ Log out and back in after a group change.
 
 Open `http://127.0.0.1:8080` if the browser does not open automatically. Load `sample_data/sample_design.svg` and exercise the placement and simulated-controller flow.
 
-## 4. Common permission checks
+## 4. Optional native desktop
+
+```bash
+./install-desktop.sh
+./run-desktop.sh
+```
+
+The desktop installer adds PySide6 and the minimal EGL/OpenGL loader packages,
+runs `pip check`, and verifies an offscreen Qt import before installing the menu
+launchers. It does not enable serial hardware or motion.
+
+## 5. Common permission checks
 
 ```bash
 groups
@@ -52,7 +63,7 @@ ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 
 The current user should normally be a member of `video` for the camera and `dialout` for the serial controller.
 
-## 5. Optional service installation
+## 6. Optional service installation
 
 The included systemd unit is only an example. Replace the user and paths first:
 

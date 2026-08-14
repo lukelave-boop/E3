@@ -11,6 +11,57 @@ from typing import Any
 import cv2
 import numpy as np
 
+if os.name == "nt":  # pragma: no cover - exercised by Windows CI
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    class _WindowsFileTime(ctypes.Structure):
+        _fields_ = [
+            ("low", wintypes.DWORD),
+            ("high", wintypes.DWORD),
+        ]
+
+    class _WindowsHandleInformation(ctypes.Structure):
+        _fields_ = [
+            ("attributes", wintypes.DWORD),
+            ("creation_time", _WindowsFileTime),
+            ("last_access_time", _WindowsFileTime),
+            ("last_write_time", _WindowsFileTime),
+            ("volume_serial_number", wintypes.DWORD),
+            ("file_size_high", wintypes.DWORD),
+            ("file_size_low", wintypes.DWORD),
+            ("number_of_links", wintypes.DWORD),
+            ("file_index_high", wintypes.DWORD),
+            ("file_index_low", wintypes.DWORD),
+        ]
+
+    class _WindowsBasicFileInformation(ctypes.Structure):
+        _fields_ = [
+            ("creation_time", ctypes.c_longlong),
+            ("last_access_time", ctypes.c_longlong),
+            ("last_write_time", ctypes.c_longlong),
+            ("change_time", ctypes.c_longlong),
+            ("attributes", wintypes.DWORD),
+        ]
+
+    _WINDOWS_FILE_BASIC_INFO = 0
+    _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    _get_file_information_by_handle = _kernel32.GetFileInformationByHandle
+    _get_file_information_by_handle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(_WindowsHandleInformation),
+    ]
+    _get_file_information_by_handle.restype = wintypes.BOOL
+    _get_file_information_by_handle_ex = _kernel32.GetFileInformationByHandleEx
+    _get_file_information_by_handle_ex.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    _get_file_information_by_handle_ex.restype = wintypes.BOOL
+
 from .storage import atomic_write_bytes
 
 _MAX_IMAGE_HEADER_BYTES = 1024 * 1024
@@ -22,6 +73,36 @@ class ImageEvidenceChangedError(ValueError):
     """Raised when a path no longer names the bytes selected for analysis."""
 
 
+def _windows_handle_version(
+    descriptor: int,
+) -> tuple[tuple[int, int] | None, int | None]:
+    """Return stable Windows handle identity and change-time tokens when available."""
+
+    if os.name != "nt":
+        return None, None
+    try:  # pragma: no cover - exercised by Windows CI
+        handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+        identity = _WindowsHandleInformation()
+        basic = _WindowsBasicFileInformation()
+        if not _get_file_information_by_handle(handle, ctypes.byref(identity)):
+            return None, None
+        if not _get_file_information_by_handle_ex(
+            handle,
+            _WINDOWS_FILE_BASIC_INFO,
+            ctypes.byref(basic),
+            ctypes.sizeof(basic),
+        ):
+            return None, None
+        file_index = (int(identity.file_index_high) << 32) | int(
+            identity.file_index_low
+        )
+        return (int(identity.volume_serial_number), file_index), int(
+            basic.change_time
+        )
+    except (OSError, ValueError):
+        return None, None
+
+
 @dataclass(frozen=True, slots=True)
 class ImageFileIdentity:
     size: int
@@ -29,6 +110,8 @@ class ImageFileIdentity:
     ctime_ns: int
     device: int
     inode: int
+    windows_file_key: tuple[int, int] | None = None
+    windows_change_time: int | None = None
 
     @classmethod
     def from_stat(cls, value: os.stat_result) -> ImageFileIdentity:
@@ -38,6 +121,48 @@ class ImageFileIdentity:
             ctime_ns=int(value.st_ctime_ns),
             device=int(value.st_dev),
             inode=int(value.st_ino),
+        )
+
+    @classmethod
+    def from_descriptor(cls, descriptor: int) -> ImageFileIdentity:
+        value = os.fstat(descriptor)
+        windows_file_key, windows_change_time = _windows_handle_version(descriptor)
+        return cls(
+            size=int(value.st_size),
+            mtime_ns=int(value.st_mtime_ns),
+            ctime_ns=int(value.st_ctime_ns),
+            device=int(value.st_dev),
+            inode=int(value.st_ino),
+            windows_file_key=windows_file_key,
+            windows_change_time=windows_change_time,
+        )
+
+    def same_version(self, other: ImageFileIdentity) -> bool:
+        """Compare one opened file version without mixing path/stat semantics."""
+
+        if self.windows_file_key is not None or other.windows_file_key is not None:
+            return (
+                self.windows_file_key is not None
+                and other.windows_file_key is not None
+                and self.windows_change_time is not None
+                and other.windows_change_time is not None
+                and self.windows_file_key == other.windows_file_key
+                and self.windows_change_time == other.windows_change_time
+                and self.size == other.size
+                and self.mtime_ns == other.mtime_ns
+            )
+        return (
+            self.size,
+            self.mtime_ns,
+            self.ctime_ns,
+            self.device,
+            self.inode,
+        ) == (
+            other.size,
+            other.mtime_ns,
+            other.ctime_ns,
+            other.device,
+            other.inode,
         )
 
 
@@ -325,15 +450,14 @@ def read_encoded_image_payload(
     if type(max_encoded_bytes) is not int or max_encoded_bytes <= 0:
         raise ValueError("Encoded image byte limit must be a positive integer")
     try:
-        path_before = ImageFileIdentity.from_stat(source.stat())
-        if path_before.size <= 0:
-            raise ValueError(f"Image payload is empty: {source}")
-        if path_before.size > max_encoded_bytes:
-            raise ValueError(
-                f"Encoded image exceeds the {max_encoded_bytes:,}-byte limit: {source}"
-            )
         with source.open("rb") as stream:
-            descriptor_before = ImageFileIdentity.from_stat(os.fstat(stream.fileno()))
+            descriptor_before = ImageFileIdentity.from_descriptor(stream.fileno())
+            if descriptor_before.size <= 0:
+                raise ValueError(f"Image payload is empty: {source}")
+            if descriptor_before.size > max_encoded_bytes:
+                raise ValueError(
+                    f"Encoded image exceeds the {max_encoded_bytes:,}-byte limit: {source}"
+                )
             chunks: list[bytes] = []
             total = 0
             while chunk := stream.read(min(1024 * 1024, max_encoded_bytes + 1 - total)):
@@ -343,13 +467,15 @@ def read_encoded_image_payload(
                     raise ValueError(
                         f"Encoded image exceeds the {max_encoded_bytes:,}-byte limit: {source}"
                     )
-            descriptor_after = ImageFileIdentity.from_stat(os.fstat(stream.fileno()))
-        path_after = ImageFileIdentity.from_stat(source.stat())
+            descriptor_after = ImageFileIdentity.from_descriptor(stream.fileno())
+        with source.open("rb") as current_stream:
+            path_after = ImageFileIdentity.from_descriptor(current_stream.fileno())
     except OSError as exc:
         raise ValueError(f"Image payload could not be read: {source}: {exc}") from exc
     if not (
-        path_before == descriptor_before == descriptor_after == path_after
-        and total == path_before.size
+        descriptor_before.same_version(descriptor_after)
+        and descriptor_after.same_version(path_after)
+        and total == descriptor_before.size
     ):
         raise ImageEvidenceChangedError(
             f"Image evidence changed while its encoded bytes were being read: {source}"
@@ -377,12 +503,13 @@ def assert_image_payload_current(payload: EncodedImagePayload) -> None:
     if expected is None:
         return
     try:
-        current = ImageFileIdentity.from_stat(payload.source.stat())
+        with payload.source.open("rb") as stream:
+            current = ImageFileIdentity.from_descriptor(stream.fileno())
     except OSError as exc:
         raise ImageEvidenceChangedError(
             f"Image evidence disappeared during analysis: {payload.source}"
         ) from exc
-    if current != expected:
+    if not current.same_version(expected):
         raise ImageEvidenceChangedError(
             f"Image evidence changed during analysis: {payload.source}"
         )

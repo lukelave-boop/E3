@@ -6,7 +6,8 @@ Inspect `git status --short` first and preserve unrelated or uncommitted work.
 
 ```bash
 git checkout -b feature/descriptive-name
-python -m pytest
+python -m pytest -q
+python -m ruff check .
 git add .
 git commit -m "Describe the tested change"
 ```

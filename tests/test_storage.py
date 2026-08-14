@@ -67,3 +67,45 @@ def test_atomic_publishers_sync_the_parent_after_success(
 
     assert synced == [json_path, bytes_path, unique_path]
     assert unique_path.read_bytes() == b"capture"
+
+
+def test_windows_publish_if_absent_uses_atomic_no_replace_rename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary = tmp_path / "temporary.bin"
+    destination = tmp_path / "destination.bin"
+    temporary.write_bytes(b"complete")
+    renamed: list[tuple[Path, Path]] = []
+
+    def rename(source: Path, target: Path) -> None:
+        renamed.append((source, target))
+        storage.os.replace(source, target)
+
+    monkeypatch.setattr(storage.os, "name", "nt")
+    monkeypatch.setattr(storage.os, "rename", rename)
+
+    assert storage._publish_temp_if_absent(temporary, destination)
+    assert renamed == [(temporary, destination)]
+    assert destination.read_bytes() == b"complete"
+    assert not temporary.exists()
+
+
+def test_windows_publish_if_absent_preserves_existing_destination(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    temporary = tmp_path / "temporary.bin"
+    destination = tmp_path / "destination.bin"
+    temporary.write_bytes(b"new")
+    destination.write_bytes(b"existing")
+
+    def already_exists(_source: Path, _target: Path) -> None:
+        raise FileExistsError("destination exists")
+
+    monkeypatch.setattr(storage.os, "name", "nt")
+    monkeypatch.setattr(storage.os, "rename", already_exists)
+
+    assert not storage._publish_temp_if_absent(temporary, destination)
+    assert destination.read_bytes() == b"existing"
+    assert temporary.read_bytes() == b"new"

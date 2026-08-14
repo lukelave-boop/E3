@@ -5,7 +5,43 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-tab sequence.
 
-Snapshot: **2026-08-13**
+Snapshot: **2026-08-14**
+
+A repository-stabilization pass now separates dependency/bootstrap failures from
+application regressions. CI uses the Node 24 GitHub actions, installs the bounded
+development requirements rather than an unconstrained latest pytest, provisions
+Linux EGL/OpenGL for offscreen Qt, performs `pip check` and bytecode compilation,
+and cancels superseded runs. The declared Python 3.10 contract is retained through
+the internal `StrEnum` compatibility layer already present in this snapshot.
+
+Portable image and project reads no longer compare incompatible Windows path and
+open-handle timestamp identities. Image evidence uses an opened-handle identity
+and, on Windows, the file ID plus native change time; project reads verify the
+same opened file twice and compare the exact bytes. SQLite migration connections
+are explicitly closed before temporary-file cleanup, no-clobber autosave
+publication uses Windows' atomic rename semantics, and release-path/line-ending
+tests now express platform-independent behavior. These paths have focused Linux
+unit coverage but still require the updated Windows CI matrix before they count
+as Windows-verified.
+
+Compact desktop pages now opt into viewport-width reflow instead of retaining a
+hidden horizontal scroll range when Windows or large-text font metrics produce a
+wide child size hint. The layer and Trace result trees are also explicitly
+shrinkable, the ruler-overlay action uses the compact **Capture ruler overlay**
+label with its Home/park behavior retained in the tooltip and accessible
+description, and Job Preview elides only the trailing coordinates so move,
+layer, power, and speed remain visible. These Qt changes have source/runbook
+coverage here but were not executed offscreen in this environment because
+PySide6 was unavailable; Linux and Windows desktop CI remain the required
+verification.
+
+On x86-64 Linux with Python 3.13.5, the complete non-Qt suite passed `1,368`
+tests with `27` Qt-only modules skipped. The follow-up desktop source and
+canonical-runbook group passed `29` tests with the same `27` Qt modules skipped.
+No controller, arming, laser-output, bounds, G-code, or physical calibration
+behavior was changed by this stabilization pass. The stale source test for job
+start was aligned with the already documented single laser-off Home/no-camera-
+park sequence.
 
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and

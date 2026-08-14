@@ -47,7 +47,7 @@ laser_aligner = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra --strict-config --strict-markers"
 
 [tool.ruff]
 line-length = 120

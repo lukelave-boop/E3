@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from zipfile import ZipFile
 
 import pytest
@@ -21,7 +21,9 @@ def test_release_archive_contains_only_explicit_tracked_regular_files(
         '[project]\nname = "example"\nversion = "1.2.3"\n',
         encoding="utf-8",
     )
-    (root / "README.md").write_text("tracked working-tree content\n", encoding="utf-8")
+    readme = root / "README.md"
+    readme.write_text("tracked working-tree content\n", encoding="utf-8")
+    expected_readme = readme.read_bytes()
     (root / ".env").write_text("SECRET=not-for-release\n", encoding="utf-8")
     output = tmp_path / "release.zip"
 
@@ -36,9 +38,7 @@ def test_release_archive_contains_only_explicit_tracked_regular_files(
             "laser-camera-aligner/README.md",
             "laser-camera-aligner/laser_aligner/__init__.py",
         ]
-        assert archive.read("laser-camera-aligner/README.md") == (
-            b"tracked working-tree content\n"
-        )
+        assert archive.read("laser-camera-aligner/README.md") == expected_readme
         assert all(".env" not in name for name in archive.namelist())
     assert release_version(root) == "1.2.3"
 
@@ -88,10 +88,19 @@ def test_release_manifest_rejects_files_beneath_a_symbolic_link(
         release_files(root, (Path("package/secret.txt"),))
 
 
-@pytest.mark.parametrize("relative", [Path("../secret.txt"), Path("/absolute.txt")])
+@pytest.mark.parametrize(
+    "relative",
+    [
+        Path("../secret.txt"),
+        Path("/absolute.txt"),
+        PureWindowsPath(r"\absolute.txt"),
+        PureWindowsPath(r"C:\absolute.txt"),
+        PureWindowsPath(r"C:drive-relative.txt"),
+    ],
+)
 def test_release_manifest_rejects_paths_outside_checkout(
     tmp_path: Path,
-    relative: Path,
+    relative: Path | PureWindowsPath,
 ) -> None:
     with pytest.raises(RuntimeError, match="Invalid tracked release path"):
         release_files(tmp_path, (relative,))

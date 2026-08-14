@@ -5,7 +5,7 @@ from collections.abc import Callable, Mapping
 from typing import Any
 
 from ..templates import MAX_GRID_OBJECTS, ShapeKind, shape_polylines
-from .controls import MeasurementSpinBox
+from .controls import MeasurementSpinBox, PanelScrollArea
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -388,13 +388,7 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         form_layout.addWidget(self.validation_label)
         form_layout.addStretch(1)
 
-        form_scroll = QtWidgets.QScrollArea()
-        form_scroll.setObjectName("inspectorScroll")
-        form_scroll.setProperty("wheelScrollContainer", True)
-        form_scroll.setWidgetResizable(True)
-        form_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        form_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        form_scroll.setWidget(form_page)
+        form_scroll = PanelScrollArea(form_page)
         splitter.addWidget(form_scroll)
 
         preview_page = QtWidgets.QWidget()

@@ -27,7 +27,9 @@ def test_inspector_pages_are_opaque_and_scrollable():
     controls = source("controls.py")
     theme = source("theme.py")
     assert "class PanelScrollArea" in controls
-    assert "SetMinAndMaxSize" in controls
+    assert "panel.setMinimumWidth(0)" in controls
+    assert "QSizePolicy.Policy.Ignored" in controls
+    assert "SetDefaultConstraint" in controls
     assert "wheelScrollContainer" in controls
     assert "QWidget#inspectorPage" in theme
     assert "QTabWidget#inspectorTabs::pane" in theme
@@ -102,3 +104,10 @@ def test_machine_controls_expose_guarded_jogging_and_keep_pause_disabled():
     assert "self.runtime.context.machine.jog" in controller
     assert "def jog(" in service
     assert "self.pause_button.setEnabled(False)" in panels
+
+
+def test_job_preview_keeps_power_and_speed_before_any_elided_tail():
+    text = source("job_preview.py")
+    assert "TextElideMode.ElideRight" in text
+    assert "TextElideMode.ElideMiddle" not in text
+    assert 'f"POWER {power:.1f}% / S{move.power:g}"' in text

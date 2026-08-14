@@ -192,6 +192,10 @@ For the native desktop after the base installation:
 ./run-desktop.sh
 ```
 
+The desktop installer adds PySide6 plus the required Linux EGL/OpenGL runtime,
+checks the installed dependency set, and performs an offscreen Qt import smoke
+test before creating launchers.
+
 The desktop includes the complete native Machine Setup workflow. The browser
 uses the same calibration files and remains available as a legacy alternative.
 
@@ -293,8 +297,9 @@ tests/           unit and integration tests
 Linux:
 
 ```bash
-# Run all tests
-.venv/bin/python -m pytest
+# Run all tests and lint
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check .
 
 # Generate calibration targets
 .venv/bin/python -m laser_aligner --config config/local.json --generate-targets
