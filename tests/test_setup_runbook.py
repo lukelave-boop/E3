@@ -34,7 +34,8 @@ def test_runbook_tracks_exact_setup_and_job_handoff_labels() -> None:
         "**Prepare powered base-map job**",
         "**Home / park, capture and detect base grid**",
         "**Home / park, capture ruler overlay**",
-        "**Detect ruler reference (3 hints)**",
+        "**Detect honeycomb automatically**",
+        "**Fallback: detect with 3 hints**",
         "**Prepare powered mark job**",
         "**Home / park, precision capture**",
         "**Prepare powered validation job**",
@@ -48,9 +49,7 @@ def test_runbook_tracks_exact_setup_and_job_handoff_labels() -> None:
     assert "Continue directly to Step 4" in RUNBOOK
     assert "These three hints do not calibrate the camera or machine" in RUNBOOK
     assert "are not used as ruler coordinates" in normalized
-    assert "keyed 25-point map remains the sole camera-to-machine calibration" in (
-        RUNBOOK
-    )
+    assert "keyed 25-point map remains the sole camera-to-machine calibration" in normalized
 
 
 def test_runbook_is_packaged_and_linked_as_the_canonical_operator_sequence() -> None:

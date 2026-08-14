@@ -21,6 +21,24 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 - Treat **Detect objects** as a motion command on hardware: it automatically
   homes and parks before capturing. Keep the complete travel path clear even
   though tracing never requests positive laser output.
+- Trace may display camera pixels beyond the camera-calibration rectangle.
+  Only the separate green guarded-output outline indicates software-authorized
+  output; red observations outside it remain blocked. Camera visibility is not
+  evidence of laser reach. The local hardware profile contains an explicit,
+  fixed machine-coordinate polygon for honeycomb-bound jobs. It is not inferred
+  or moved by live detection; ordinary jobs retain the guarded machine rectangle.
+- A honeycomb-local project displays the complete 190 mm cutting surface. The
+  configured green polygon is 210 × 210 mm, extending 10 mm beyond each support
+  edge in the accepted pose. Generation rejects powered or laser-off controller
+  motion that leaves that polygon; the display never grants reach. Honeycomb-local jobs
+  require an accepted automatic four-edge teaching image and bind its four
+  measured corners, rigid pose, and complete bed-map digest. A legacy schema-1
+  or three-hint visual reference is not execution evidence. Start rechecks the
+  prepared support/map/output-polygon identity but does not capture another
+  camera image. Do not move the honeycomb or workpiece after tracing or job
+  generation; if either moves, recapture, re-detect, and regenerate. Camera
+  alignment is not safety-rated and does not replace physical restraint, end
+  stops, or a zero-power frame.
 - Inspect the dedicated generated-job Preview, including maximum planned power,
   powered/travel motion, bounds, and warnings. Preview is a review aid, not a
   safety function and not a substitute for reviewing a zero-power frame.
@@ -56,6 +74,18 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 - For fine registration, review the zero-power eight-cross path first. Use only a
   previously established visible-marking power on a clean, restrained
   sacrificial surface; inspect every detected point before applying a result.
+- Every powered post-map Machine Setup job—fine registration, dense 5×5 fit,
+  five-cross accuracy validation, 4×4 mesh validation, and shifted
+  confirmation—requires a current accepted automatic four-corner support. Its
+  powered segments are generated inside that support and its complete program
+  remains inside the configured machine area. The prepared session binds the
+  exact program, support, and bed map; Start rechecks containment and the
+  immutable prepared binding before arming. These are software guardrails,
+  not proof of physical containment or a substitute for zero-power review.
+- The powered keyed base-map job is the sole setup bootstrap exception because
+  that map is required before support corners can be expressed in machine
+  coordinates. It remains machine-bounded. Review its exact pattern and use a
+  rigidly restrained sacrificial sheet that covers every displayed target.
 - Parked-bed precision capture temporarily keeps GRBL motors energized and
   explicitly disables them after its final frame, using FluidNC motor-disable
   or standard GRBL sleep/reset as available, while preserving the prior
@@ -70,8 +100,9 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
   the default for this profile is 250 ms. A controller that does not report
   `$1` is rejected after a best-effort finite-delay restore and motor release.
 - For accuracy validation, inspect the separate five-cross holdout path in
-  Preview before running its powered job. Validation reports camera-to-laser
-  error but is not a safety test or proof that unattended operation is safe.
+  Preview before running its powered job. It remains subject to the automatic
+  four-corner support binding above. Validation reports camera-to-laser error
+  but is not a safety test or proof that unattended operation is safe.
 - Keep the operator present for the entire job.
 
 ## Software guardrails in this repository
@@ -79,13 +110,14 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
 The default project profile is simulation-only. Real serial access requires
 the exact boolean `--hardware` gate; real motion requires the exact boolean
 `machine.allow_motion` gate and a successfully
-homed coordinate reference for the current connection; the desktop homes and
-parks before each hardware job, then arms only after that preflight. Positive
+homed coordinate reference for the current connection; the desktop performs one
+laser-off Home before each hardware job, then arms only after that preflight. Positive
 laser commands require temporary arming bounded to 1–600 seconds; arming is
 cleared after every job;
 low-power framing is disabled; streamed jobs are restricted to a conservative
-G-code subset; generated paths are checked against a configured rectangular
-work area; rapid travel is blocked while laser state is active; and `M5` is
+G-code subset; generated paths are checked against either the guarded machine
+rectangle or the exact fixed polygon explicitly bound to a honeycomb job;
+rapid travel is blocked while laser state is active; and `M5` is
 placed before travel and at job end.
 
 MachineService revalidates those gates and numeric ceilings even when settings
@@ -132,9 +164,10 @@ workpiece, or physical beam path is correct.
 Fill and raster scanlines can create much longer powered jobs than outlines.
 Raster overscan motion is emitted only with the laser off and is included in
 controller-space bounds validation. Imported grayscale images use deterministic
-ordered dithering at the configured exact physical line pitch and absolute
-machine-coordinate scan angle, with area prefiltering when that pitch minifies
-the source. Their lead-in, white gaps, and lead-out are
+ordered dithering at the configured exact physical line pitch and scan angle in
+the active project frame, with area prefiltering when that pitch minifies the
+source. Honeycomb-local rows are rigidly placed in machine coordinates before
+the controller checks them. Their lead-in, white gaps, and lead-out are
 emitted at engraving feed with the laser off; rows are never passed through
 nearest-path reordering. Raster planning accepts only bounded PNG/JPEG/BMP
 metadata, file size, and conservative decoded bytes before full decode, then

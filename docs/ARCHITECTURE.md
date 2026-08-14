@@ -104,6 +104,28 @@ The desktop camera panel and workspace share one presentation constant for the
 initial corrected-overlay opacity. It is 70%, remains operator-adjustable from
 0–100%, and does not alter captured pixels or any vision analysis input.
 
+## Coordinate domains
+
+The desktop has three deliberately separate coordinate domains:
+
+- machine/controller millimetres and its independently configured output
+  authority;
+- calibrated camera coverage in machine millimetres;
+- honeycomb-local design millimetres, with ruler zero at `(0, 0)` and an
+  orthonormal rigid pose derived from the detected square.
+
+Schema-2 projects persist their coordinate-space kind. Legacy schema-1 files
+migrate as machine-coordinate projects. A honeycomb-local project stores only
+local geometry; the movable support pose remains calibration state. Camera
+rectification maps each local output pixel through the rigid support pose and
+the complete bed/lens mapping. Project generation performs the inverse boundary
+operation: it plans vectors and raster rows locally, validates them against the
+support, rigidly places them in machine coordinates, applies laser-spot
+correction, and validates both desired-beam and controller paths against the
+selected execution authority. Ordinary jobs use the guarded machine rectangle;
+an execution-bound honeycomb job may use the separately configured fixed convex
+polygon. Generated G-code remains absolute machine millimetres.
+
 Fine registration, dense fit/validation/confirmation, and accuracy validation
 detect every expected cross in every burst frame and screen each center with
 median/MAD rejection. The default `stable_clarity_consensus` strategy ranks
@@ -181,8 +203,9 @@ should own a physical camera at a time.
 
 ## Vision flows
 
-- Rectangular workpiece detection runs on the rectified image and reports
-  machine-coordinate placement hints.
+- Rectangular workpiece detection runs on the active rectified image. It reports
+  machine-coordinate placement hints for machine projects and honeycomb-local
+  placement hints when a current support frame drives the desktop canvas.
 - ArUco, keyed unseeded cross-grid, and rough-map-seeded crosshair detection
   support bed mapping.
 - The object-tracing pipeline evaluates color, global/illumination-corrected/
@@ -190,7 +213,7 @@ should own a physical camera at a time.
   repeated-grid hypothesis by coherent filled-region support so narrow gaps or
   highlights cannot win merely by producing more clean contours, optionally
   infers missing cells, then records both the observed raster contour and the
-  proposed vector geometry in machine millimetres.
+  proposed vector geometry in the rectified image's active coordinate domain.
 - Live desktop trace capture establishes the photography pose rather than
   trusting prior machine state: temporary hold encloses Home / park and the
   stable camera frame set, while rectification and vision analysis run only
@@ -208,8 +231,10 @@ should own a physical camera at a time.
 - Grid detections retain row/column identity and sort in stable row-major order.
   Proposed cells crossing the work area remain visible but are marked outside
   and unselected by default; occupancy and emitted detections therefore cannot
-  silently disagree. Desktop Trace capture and color picking first require the
-  project and machine work areas to match.
+  silently disagree. Desktop Trace capture and color picking use the project's
+  coordinate domain: machine projects retain the configured-area behavior,
+  while honeycomb-local projects use the current support frame and review the
+  mapped machine-output polygon independently.
 - The workspace previews the proposed vector that object creation will consume.
   The exact analyzed frame is delivered with the result and remains frozen
   during review. Corrected pixels use the rectifier's exact pixels/mm scale
@@ -219,7 +244,8 @@ should own a physical camera at a time.
   It defaults to the upper-left, remains fixed through canvas scrolling,
   workpiece movement, zooming, and refits, and moves only when dragged directly.
 - Inferred trace cells are deliberately not selected by default.
-- Template alignment compares unordered machine-coordinate detections with
+- Template alignment compares unordered detections in the active project
+  coordinate domain with
   normalized template features, ranks rigid rotation/translation candidates,
   and reports coverage, residual, ambiguity, and scale diagnostics.
 - Scale diagnostics are warnings only. The matcher never scales cut geometry.
@@ -285,10 +311,10 @@ controller's Home/park position to the reviewed move boundary.
 The desktop supports line, fill, and raster operation layers. Fill and binary
 vector raster convert closed silhouettes into angled scanlines. Imported images
 are alpha-composited onto white, sampled on an exact physical-pitch lattice at
-the operation's absolute machine-coordinate scan angle, area-prefiltered when
+the operation's angle in the active project frame, area-prefiltered when
 that lattice minifies the source, and converted with deterministic 8x8 ordered
 grayscale dithering. The source top edge follows the
-same positive-machine-Y, mirror, and rotation transform shown by the canvas.
+same positive-project-Y, mirror, and rotation transform shown by the canvas.
 One shared PNG/JPEG/BMP contract bounds encoded bytes, dimensions, bit depth,
 channels, and conservative decoded bytes before decode; TIFF is rejected.
 `read_raster_asset_payload` returns metadata, SHA-256 identity, and the exact
@@ -376,26 +402,33 @@ Both pipelines generate conservative G-code that is revalidated by
 - Browser and image pixels increase downward, so UI/image Y conversion is
   inverted.
 - SVG coordinates normally increase downward. Import/placement flips SVG Y so
-  artwork appears visually upright in machine coordinates.
-- Positive project rotation is counter-clockwise in machine coordinates.
-- Project, camera, and template coordinates describe the desired physical
-  laser-spot location. `laser.spot_offset_*_mm` is the physical spot relative
-  to the commanded controller reference, so generated motion subtracts that
-  vector. The unshifted spot path and shifted controller path are both checked
-  against the configured work area. G-code comments carry the offset so the
-  desktop preview converts controller motion back to the physical spot path.
+  artwork appears visually upright in the active project coordinate domain.
+- Positive project rotation is counter-clockwise in the active project frame.
+- Machine-project coordinates describe the desired physical laser-spot
+  location directly. Honeycomb-local project, camera, and template coordinates
+  first describe that location in the rigid support frame. Generation places
+  local geometry in machine coordinates before applying
+  `laser.spot_offset_*_mm`, which is the physical spot relative to the commanded
+  controller reference. Local geometry, placed spot geometry, and shifted
+  controller motion are checked in their respective boundaries. G-code
+  comments carry the offset so Preview can recover the physical spot path.
 - Corrected-image coordinates address pixel centers: OpenCV pixel `(i, j)` maps
   directly through the bed transform. The desktop offsets the Qt pixmap by
   `(-0.5, -0.5)` local pixels so its displayed centers, vector overlays, color
   picking, and vision output share that convention.
 - Template feature coordinates are local to the center of the combined cut
   bounds. Placement rotates those local coordinates and then translates them
-  into machine coordinates; it never applies scale.
+  into the active project domain; it never applies scale.
 - CSS display rotation uses the opposite sign because browser Y is inverted.
 
-The project's work area is stored in `.e3laser`; the execution boundary also
-uses the configured machine work area. These values must not be allowed to
-silently diverge when a project is run.
+The project's work area and coordinate-space kind are stored in `.e3laser`.
+Machine projects retain the historical requirement that their area match the
+configured machine area. Honeycomb-local projects instead require X0..width,
+Y0..height to match the current rigid support frame. Their placed beam and
+spot-corrected controller paths are checked against the separately configured
+fixed convex polygon when that polygon is explicitly carried by the
+support-bound preflight; without it, the guarded machine rectangle remains the
+execution authority.
 
 ## Machine safety boundary
 
@@ -408,7 +441,8 @@ silently diverge when a project is run.
 - limits diagnostics to read-only queries and `M5`;
 - requires temporary arming for positive-power jobs;
 - restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset;
-- validates every destination against the configured work area;
+- validates every destination against the guarded machine rectangle, or the
+  exact configured convex polygon carried by a support-bound preflight;
 - exposes incremental desktop jogging only as absolute, laser-off moves from a
   Home / park-established position; jogs deliberately bypass project/work-area
   geometry for physical limit measurement and invalidate their tracked position

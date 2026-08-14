@@ -14,6 +14,11 @@ from typing import Any
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from ..gcode.preview import contains_motion, parse_words, strip_comment
+from ..geometry.polygon import (
+    ConvexPolygon,
+    convex_polygon_contains_normalized,
+    normalize_convex_polygon,
+)
 from .serial_backend import (
     MachineTransport,
     create_serial_transport,
@@ -91,6 +96,7 @@ class ValidatedProgram:
     requires_laser_authorization: bool
     requires_motion: bool
     safety_profile: tuple[Any, ...]
+    guarded_output_polygon_mm: ConvexPolygon | None = None
 
 
 class MachineService:
@@ -1100,13 +1106,30 @@ class MachineService:
         operation_stop_epoch = self._operation_stop_epoch()
         with self._command_lock:
             return self._prepare_photo_position_locked(
-                operation_stop_epoch=operation_stop_epoch
+                operation_stop_epoch=operation_stop_epoch,
+                park_at_photo_position=True,
+            )
+
+    def prepare_job_start(self) -> dict[str, Any]:
+        """Home once and establish coordinates without moving to the camera pose.
+
+        This routine never emits a laser-enable command.  The validated program
+        remains responsible for its initial laser-off travel from Home to the
+        first toolpath position.
+        """
+
+        operation_stop_epoch = self._operation_stop_epoch()
+        with self._command_lock:
+            return self._prepare_photo_position_locked(
+                operation_stop_epoch=operation_stop_epoch,
+                park_at_photo_position=False,
             )
 
     def _prepare_photo_position_locked(
         self,
         *,
         operation_stop_epoch: int,
+        park_at_photo_position: bool,
     ) -> dict[str, Any]:
         with self._stop_epoch_lock:
             if self._stop_epoch != operation_stop_epoch:
@@ -1122,10 +1145,15 @@ class MachineService:
             )
         x = float(self.settings.photo_x)
         y = float(self.settings.photo_y)
-        if not self.settings.work_area.contains(x, y, self.laser_settings.boundary_margin_mm):
+        if park_at_photo_position and not self.settings.work_area.contains(
+            x,
+            y,
+            self.laser_settings.boundary_margin_mm,
+        ):
             raise SafetyError("Configured photography position lies outside the safe work area")
 
         transcript: list[dict[str, Any]] = []
+        idle_responses: list[str] = []
 
         def require_not_stopped() -> None:
             with self._stop_epoch_lock:
@@ -1189,29 +1217,32 @@ class MachineService:
                 self._require_zero_xy_coordinate_offsets(coordinate_state)
             execute("G21")
             execute("G90")
-            execute(
-                f"G0 X{x:.3f} Y{y:.3f} F{float(self.laser_settings.travel_feed_mm_min):.3f}",
-                timeout=max(
-                    _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS,
-                    self.settings.read_timeout,
-                ),
-            )
-            idle_responses = self._wait_for_motion_complete(
-                timeout=120.0,
-                expected_stop_epoch=operation_stop_epoch,
-            )
-            parked_coordinate_state = (
-                self._read_grbl_coordinate_state()
-                if self.settings.backend == "serial" and self._protocol == "grbl"
-                else None
-            )
-            require_not_stopped()
-            if parked_coordinate_state is not None:
-                self._require_zero_xy_coordinate_offsets(parked_coordinate_state)
-                coordinate_state = parked_coordinate_state
+            if park_at_photo_position:
+                execute(
+                    f"G0 X{x:.3f} Y{y:.3f} F{float(self.laser_settings.travel_feed_mm_min):.3f}",
+                    timeout=max(
+                        _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS,
+                        self.settings.read_timeout,
+                    ),
+                )
+                idle_responses = self._wait_for_motion_complete(
+                    timeout=120.0,
+                    expected_stop_epoch=operation_stop_epoch,
+                )
+                parked_coordinate_state = (
+                    self._read_grbl_coordinate_state()
+                    if self.settings.backend == "serial" and self._protocol == "grbl"
+                    else None
+                )
+                require_not_stopped()
+                if parked_coordinate_state is not None:
+                    self._require_zero_xy_coordinate_offsets(parked_coordinate_state)
+                    coordinate_state = parked_coordinate_state
+            if coordinate_state is not None:
                 self._append_log(
                     "INFO",
-                    "Home / park GRBL coordinate reference: "
+                    ("Home / park" if park_at_photo_position else "Job-start Home")
+                    + " GRBL coordinate reference: "
                     + self._coordinate_state_summary(coordinate_state),
                 )
         except Exception:
@@ -1234,16 +1265,21 @@ class MachineService:
                 )
             self._coordinate_reference_ready = True
             self._coordinate_state_reference = coordinate_state
-            self._jog_position_mm = (x, y)
+            self._jog_position_mm = (x, y) if park_at_photo_position else None
         return {
-            "position": {"x": x, "y": y, "z": self.settings.photo_z},
+            "position": (
+                {"x": x, "y": y, "z": self.settings.photo_z}
+                if park_at_photo_position
+                else None
+            ),
             "homed": self.settings.home_before_photo,
+            "parked": park_at_photo_position,
             "transcript": transcript,
             "idle_responses": idle_responses,
             "coordinate_state": coordinate_state,
             "warning": (
                 "photo_position.z is recorded but is not moved automatically; set laser focus/material height manually."
-                if self.settings.photo_z is not None
+                if park_at_photo_position and self.settings.photo_z is not None
                 else None
             ),
         }
@@ -1439,8 +1475,51 @@ class MachineService:
             raise SafetyError("Unsupported streamed G-code line")
         return words, g_codes, m_codes
 
-    def _analyze_program(self, text: str) -> tuple[list[str], bool]:
+    def _configured_guarded_output_polygon(self) -> ConvexPolygon | None:
+        configured = self.laser_settings.guarded_output_polygon_mm
+        if configured is None:
+            return None
+        try:
+            return normalize_convex_polygon(
+                configured,
+                label="laser.guarded_output_polygon_mm",
+            )
+        except ValueError as exc:
+            raise SafetyError(str(exc)) from exc
+
+    def _resolve_guarded_output_polygon(
+        self,
+        requested: tuple[tuple[float, float], ...] | None,
+    ) -> ConvexPolygon | None:
+        if requested is None:
+            return None
+        configured = self._configured_guarded_output_polygon()
+        if configured is None:
+            raise SafetyError(
+                "A support-bound output polygon was requested, but none is configured"
+            )
+        try:
+            normalized = normalize_convex_polygon(
+                requested,
+                label="guarded output polygon",
+            )
+        except ValueError as exc:
+            raise SafetyError(str(exc)) from exc
+        if normalized != configured:
+            raise SafetyError(
+                "The requested guarded output polygon does not match the configured authority"
+            )
+        return normalized
+
+    def _analyze_program(
+        self,
+        text: str,
+        guarded_output_polygon_mm: ConvexPolygon | None = None,
+    ) -> tuple[list[str], bool]:
         self._require_safety_configuration()
+        guarded_polygon = self._resolve_guarded_output_polygon(
+            guarded_output_polygon_mm
+        )
         lines = [strip_comment(line) for line in text.splitlines()]
         lines = [line for line in lines if line]
         if not lines:
@@ -1494,22 +1573,39 @@ class MachineService:
                 new_x = values.get("X", x)
                 new_y = values.get("Y", y)
                 assert new_x is not None and new_y is not None
-                if not self.settings.work_area.contains(
-                    new_x, new_y, self.laser_settings.boundary_margin_mm
-                ):
+                controller_allowed = (
+                    convex_polygon_contains_normalized(
+                        (new_x, new_y), guarded_polygon
+                    )
+                    if guarded_polygon is not None
+                    else self.settings.work_area.contains(
+                        new_x,
+                        new_y,
+                        self.laser_settings.boundary_margin_mm,
+                    )
+                )
+                if not controller_allowed:
                     raise SafetyError(
-                        f"Line {index}: G-code point X{new_x:.3f} Y{new_y:.3f} lies outside the configured safe work area"
+                        f"Line {index}: G-code point X{new_x:.3f} Y{new_y:.3f} "
+                        "lies outside the configured guarded output authority"
                     )
                 spot_x = new_x + float(self.laser_settings.spot_offset_x_mm)
                 spot_y = new_y + float(self.laser_settings.spot_offset_y_mm)
-                if not self.settings.work_area.contains(
-                    spot_x,
-                    spot_y,
-                    self.laser_settings.boundary_margin_mm,
-                ):
+                spot_allowed = (
+                    convex_polygon_contains_normalized(
+                        (spot_x, spot_y), guarded_polygon
+                    )
+                    if guarded_polygon is not None
+                    else self.settings.work_area.contains(
+                        spot_x,
+                        spot_y,
+                        self.laser_settings.boundary_margin_mm,
+                    )
+                )
+                if not spot_allowed:
                     raise SafetyError(
                         f"Line {index}: physical laser spot X{spot_x:.3f} "
-                        f"Y{spot_y:.3f} lies outside the configured safe work area"
+                        f"Y{spot_y:.3f} lies outside the configured guarded output authority"
                     )
                 if g_codes == {0} and laser_on:
                     raise SafetyError(f"Line {index}: rapid G0 motion is blocked while the laser is enabled")
@@ -1651,7 +1747,10 @@ class MachineService:
     def validate_program(self, text: str) -> list[str]:
         return list(self.preflight_program(text).lines)
 
-    def _program_safety_profile(self) -> tuple[Any, ...]:
+    def _program_safety_profile(
+        self,
+        guarded_output_polygon_mm: ConvexPolygon | None = None,
+    ) -> tuple[Any, ...]:
         self._require_safety_configuration()
         area = self.settings.work_area
         return (
@@ -1677,10 +1776,23 @@ class MachineService:
             float(self.settings.photo_x),
             float(self.settings.photo_y),
             None if self.settings.photo_z is None else float(self.settings.photo_z),
+            self._configured_guarded_output_polygon(),
+            guarded_output_polygon_mm,
         )
 
-    def preflight_program(self, text: str) -> ValidatedProgram:
-        lines, requires_laser_authorization = self._analyze_program(text)
+    def preflight_program(
+        self,
+        text: str,
+        *,
+        guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
+    ) -> ValidatedProgram:
+        guarded_polygon = self._resolve_guarded_output_polygon(
+            guarded_output_polygon_mm
+        )
+        lines, requires_laser_authorization = self._analyze_program(
+            text,
+            guarded_polygon,
+        )
         if self.laser_lockout and requires_laser_authorization:
             raise SafetyError(
                 "Program contains laser-enable commands while process laser lockout is active"
@@ -1691,7 +1803,8 @@ class MachineService:
             digest=hashlib.sha256(canonical).hexdigest(),
             requires_laser_authorization=requires_laser_authorization,
             requires_motion=any(contains_motion(line) for line in lines),
-            safety_profile=self._program_safety_profile(),
+            safety_profile=self._program_safety_profile(guarded_polygon),
+            guarded_output_polygon_mm=guarded_polygon,
         )
 
     def _require_current_safety_profile(self, program: ValidatedProgram) -> None:
@@ -1710,16 +1823,23 @@ class MachineService:
             type(program.requires_laser_authorization) is not bool
             or type(program.requires_motion) is not bool
             or type(program.safety_profile) is not tuple
+            or (
+                program.guarded_output_polygon_mm is not None
+                and type(program.guarded_output_polygon_mm) is not tuple
+            )
         ):
             raise SafetyError("Program authorization contains invalid safety metadata")
 
         lines, requires_laser_authorization = self._analyze_program(
-            "\n".join(program.lines)
+            "\n".join(program.lines),
+            program.guarded_output_polygon_mm,
         )
         canonical_lines = tuple(lines)
         canonical_digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
         requires_motion = any(contains_motion(line) for line in lines)
-        current_profile = self._program_safety_profile()
+        current_profile = self._program_safety_profile(
+            program.guarded_output_polygon_mm
+        )
         if (
             program.lines != canonical_lines
             or program.digest != canonical_digest

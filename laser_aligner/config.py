@@ -152,6 +152,7 @@ class CameraSettings:
     autostart: bool = True
     jpeg_quality: int = 90
     warmup_frames: int = 12
+    view_rotation_degrees: int = 0
     controls: dict[str, int | bool] = field(default_factory=dict)
     precision_capture: PrecisionCaptureSettings = field(default_factory=PrecisionCaptureSettings)
 
@@ -265,6 +266,9 @@ class LaserSettings:
     engrave_feed_mm_min: float = 1200.0
     curve_tolerance_mm: float = 0.15
     boundary_margin_mm: float = 0.0
+    # Optional final guarded output authority for support-bound jobs. Unlike
+    # machine.work_area, this polygon is not a camera crop or parking bound.
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
     # Physical laser spot position relative to the controller's commanded
     # carriage/tool-reference position. To place the spot at a design point,
     # generated motion subtracts this vector from the design coordinates.
@@ -312,6 +316,7 @@ class Settings:
                 "width": self.camera.width,
                 "height": self.camera.height,
                 "fps": self.camera.fps,
+                "view_rotation_degrees": self.camera.view_rotation_degrees,
                 "precision_capture": {
                     "settle_seconds": self.camera.precision_capture.settle_seconds,
                     "discard_frames": self.camera.precision_capture.discard_frames,
@@ -369,6 +374,11 @@ class Settings:
                 "travel_feed_mm_min": self.laser.travel_feed_mm_min,
                 "engrave_feed_mm_min": self.laser.engrave_feed_mm_min,
                 "curve_tolerance_mm": self.laser.curve_tolerance_mm,
+                "guarded_output_polygon_mm": (
+                    None
+                    if self.laser.guarded_output_polygon_mm is None
+                    else [list(point) for point in self.laser.guarded_output_polygon_mm]
+                ),
                 "spot_offset_x_mm": self.laser.spot_offset_x_mm,
                 "spot_offset_y_mm": self.laser.spot_offset_y_mm,
                 "allow_low_power_frame": self.laser.allow_low_power_frame,
@@ -397,6 +407,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "autostart": True,
         "jpeg_quality": 90,
         "warmup_frames": 12,
+        "view_rotation_degrees": 0,
         "controls": {
             "focus_automatic_continuous": 0,
             "focus_auto": 0,
@@ -459,6 +470,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "engrave_feed_mm_min": 1200.0,
         "curve_tolerance_mm": 0.15,
         "boundary_margin_mm": 0.0,
+        "guarded_output_polygon_mm": None,
         "spot_offset_x_mm": 0.0,
         "spot_offset_y_mm": 0.0,
         "arm_timeout_seconds": 60,
@@ -556,6 +568,21 @@ def _validate(raw: Mapping[str, Any]) -> None:
     )
     for label, value in number_values:
         _require_number(value, label)
+    guarded_polygon = laser.get("guarded_output_polygon_mm")
+    if guarded_polygon is not None:
+        if not isinstance(guarded_polygon, list) or len(guarded_polygon) != 4:
+            raise ConfigError(
+                "laser.guarded_output_polygon_mm must be null or four ordered XY points"
+            )
+        try:
+            from .geometry.polygon import normalize_convex_polygon
+
+            normalize_convex_polygon(
+                guarded_polygon,
+                label="laser.guarded_output_polygon_mm",
+            )
+        except (TypeError, ValueError) as exc:
+            raise ConfigError(str(exc)) from exc
     if photo.get("z") is not None:
         _require_number(photo["z"], "machine.photo_position.z")
     controls = raw["camera"].get("controls", {})
@@ -598,6 +625,14 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("camera.jpeg_quality must be between 1 and 100")
     if int(raw["camera"]["warmup_frames"]) < 0:
         raise ConfigError("camera.warmup_frames cannot be negative")
+    view_rotation = _require_integer(
+        raw["camera"]["view_rotation_degrees"],
+        "camera.view_rotation_degrees",
+    )
+    if view_rotation not in {0, 90, 180, 270}:
+        raise ConfigError(
+            "camera.view_rotation_degrees must be 0, 90, 180, or 270"
+        )
     if not 0 <= int(raw["machine"]["grbl_step_idle_delay_ms"]) < 255:
         raise ConfigError("machine.grbl_step_idle_delay_ms must be between 0 and 254")
     if float(precision["settle_seconds"]) < 0:
@@ -781,6 +816,7 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             autostart=_require_boolean(raw["camera"]["autostart"], "camera.autostart"),
             jpeg_quality=int(raw["camera"]["jpeg_quality"]),
             warmup_frames=int(raw["camera"]["warmup_frames"]),
+            view_rotation_degrees=int(raw["camera"]["view_rotation_degrees"]),
             controls=dict(raw["camera"].get("controls", {})),
             precision_capture=PrecisionCaptureSettings(
                 settle_seconds=float(raw["camera"]["precision_capture"]["settle_seconds"]),
@@ -849,6 +885,14 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             engrave_feed_mm_min=float(raw["laser"]["engrave_feed_mm_min"]),
             curve_tolerance_mm=float(raw["laser"]["curve_tolerance_mm"]),
             boundary_margin_mm=float(raw["laser"]["boundary_margin_mm"]),
+            guarded_output_polygon_mm=(
+                None
+                if raw["laser"].get("guarded_output_polygon_mm") is None
+                else tuple(
+                    (float(point[0]), float(point[1]))
+                    for point in raw["laser"]["guarded_output_polygon_mm"]
+                )
+            ),
             spot_offset_x_mm=float(raw["laser"]["spot_offset_x_mm"]),
             spot_offset_y_mm=float(raw["laser"]["spot_offset_y_mm"]),
             arm_timeout_seconds=int(raw["laser"]["arm_timeout_seconds"]),

@@ -3,6 +3,7 @@ import pytest
 
 from laser_aligner.project import (
     Bounds,
+    CoordinateSpace,
     LayerMode,
     OperationLayer,
     ProjectDocument,
@@ -54,6 +55,58 @@ def test_document_round_trip_preserves_layers_objects_and_svg():
 
     assert restored.to_dict() == document.to_dict()
     assert restored.get_object(imported.id).metadata["source_svg"] == "<svg/>"
+
+
+def test_honeycomb_coordinate_space_round_trips_explicitly():
+    document = ProjectDocument.new(
+        "Honeycomb-local",
+        Bounds(0, 0, 190, 190),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+
+    payload = document.to_dict()
+    restored = ProjectDocument.from_dict(payload)
+
+    assert payload["schema_version"] == 2
+    assert payload["coordinate_space"] == "honeycomb_local"
+    assert restored.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
+
+
+def test_schema_one_project_migrates_as_machine_coordinates():
+    payload = ProjectDocument.new().to_dict()
+    payload["schema_version"] = 1
+    payload.pop("coordinate_space")
+
+    restored = ProjectDocument.from_dict(payload)
+
+    assert restored.coordinate_space is CoordinateSpace.MACHINE
+    assert restored.to_dict()["schema_version"] == 2
+
+
+def test_schema_one_project_cannot_claim_honeycomb_coordinates():
+    payload = ProjectDocument.new().to_dict()
+    payload["schema_version"] = 1
+    payload["coordinate_space"] = "honeycomb_local"
+
+    restored = ProjectDocument.from_dict(payload)
+
+    assert restored.coordinate_space is CoordinateSpace.MACHINE
+
+
+def test_schema_two_requires_explicit_coordinate_space():
+    payload = ProjectDocument.new().to_dict()
+    payload.pop("coordinate_space")
+
+    with pytest.raises(ProjectFormatError, match="coordinate_space"):
+        ProjectDocument.from_dict(payload)
+
+
+def test_invalid_coordinate_space_is_rejected():
+    payload = ProjectDocument.new().to_dict()
+    payload["coordinate_space"] = "looks_like_a_square"
+
+    with pytest.raises(ProjectFormatError, match="CoordinateSpace"):
+        ProjectDocument.from_dict(payload)
 
 
 def test_path_is_normalized_around_its_center():

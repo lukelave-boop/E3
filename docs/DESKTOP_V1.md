@@ -18,8 +18,9 @@ geometry, G-code, safety and controller services.
 - A full-height right-side inspector for Cuts/Layers, Cameras, Objects, Shape
   Properties, Templates, and Trace, plus a compact bottom row with G-code on
   the left and Laser, Machine, and Material Library tabs beside it
-- Physical machine-coordinate workspace with adaptive grid, rulers, origin,
-  pan, zoom and selectable snap spacing
+- Physical coordinate-aware workspace with adaptive grid, rulers, origin, pan,
+  zoom and selectable snap spacing. Machine projects use machine coordinates;
+  current honeycomb-local projects use the detected support's rigid X0/Y0 frame.
 - Corrected camera image behind the workspace with adjustable opacity
 - Safe-simulation controls to load a corrected full-bed test image or generate
   one from a selected cutting template, with a persistent frozen-source badge,
@@ -63,9 +64,10 @@ without copying LightBurn branding or changing the E3 machine-control model:
    selection cannot be edited instead of making the toolbar collapse.
 5. A compact left rail holds selection, creation, trace/template, fit, zoom,
    and snap tools.
-6. The central machine-coordinate workspace uses a near-white adaptive grid,
-   thin light rulers, no permanent scroll-bar chrome, auto-fit until the user
-   zooms or pans, and a 70% corrected-camera overlay by default. A dynamic
+6. The central workspace uses the active project's physical coordinate space,
+   a near-white adaptive grid, thin light rulers, no permanent scroll-bar
+   chrome, auto-fit until the user zooms or pans, and a 70% corrected-camera
+   overlay by default. A dynamic
    key identifies transient Trace, camera-detection, template-cut, and toolpath
    lines by both role and line style. The key stays in the upper-left viewport
    corner during canvas interaction unless the operator drags the key itself.
@@ -151,6 +153,9 @@ rejected consistently because its Qt decode plugin is not portable.
 ### Toolpaths and machine controls
 
 - Multi-layer vector G-code generation using the existing safety/bounds core
+- Honeycomb-local vector, fill, raster, frame, and exact-preview placement
+  through the current rigid support frame; emitted G-code remains absolute
+  machine millimetres
 - Per-layer speed, power and pass count
 - Nearest-path travel ordering and time/distance estimates, with a recorded
   source-order fallback above 512 vector paths
@@ -168,7 +173,7 @@ rejected consistently because its Qt decode plugin is not portable.
   their exact motion is counted as travel rather than cut distance
 - Existing camera and controller status in native dock panels
 - Guarded controller connect, diagnostics, software stop and job run; hardware
-  Start automatically homes and parks before arming and execution, while a
+  Start automatically performs one laser-off Home before arming and execution, while a
   successful powered job drains queued motion, homes, and parks again before
   motor release and finish. Drain/home/park/release phases remain visibly
   running, and an asynchronous completion failure raises a one-time error
@@ -241,16 +246,19 @@ Direct launch commands:
 
 ## Project format
 
-`.e3laser` files are readable JSON. Version 1 stores:
+`.e3laser` files are readable JSON. The current schema stores:
 
 - physical work area;
+- an explicit machine or honeycomb-local coordinate-space kind;
 - operation layers;
 - vector objects and their z-order;
 - object transforms, visibility, lock and group membership;
 - embedded original SVG text when available;
 - project metadata and timestamps.
 
-The format deliberately does not depend on LightBurn project files.
+Legacy schema-1 files migrate explicitly as machine-coordinate projects and are
+never silently reinterpreted as honeycomb-local. The format deliberately does
+not depend on LightBurn project files.
 
 ## Data locations
 
@@ -282,7 +290,14 @@ The desktop shell does not relax the existing machine controls:
 - motion must still be enabled in the local configuration;
 - powered G-code still requires exact-program, one-use authorization, created
   internally when the desktop **Start** action submits it;
-- programs are validated against the project work area;
+- machine-coordinate programs remain validated against the configured guarded
+  machine rectangle. Honeycomb-local geometry is first validated against the
+  complete support, then its placed beam and spot-corrected controller paths are
+  validated against the exact fixed configured polygon bound to that prepared
+  job;
+- the desktop passes that stored polygon to `MachineService` unchanged, and a
+  configuration change invalidates the immutable preflight before arming or
+  Start;
 - every generated vector path is bracketed by `M5`;
 - rapid travel occurs only while the laser is off;
 - the software stop is not a replacement for a physical emergency stop.

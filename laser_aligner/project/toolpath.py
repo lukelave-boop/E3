@@ -5,15 +5,32 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from ..config import LaserSettings, WorkArea
-from ..gcode.generator import ToolpathOptions, generate_frame_gcode, validate_paths
+from ..errors import SafetyError
+from ..gcode.generator import (
+    ToolpathOptions,
+    generate_frame_gcode,
+    generate_frame_path_gcode,
+    validate_paths,
+)
 from ..gcode.job_plan import JobPlan, build_job_plan, e3_metadata_line
+from ..geometry.polygon import (
+    convex_polygon_violation_normalized_mm,
+    normalize_convex_polygon,
+)
 from ..geometry.svg import Polyline
-from .model import LayerMode, ObjectKind, OperationLayer, ProjectDocument, SceneObject
+from .model import (
+    CoordinateSpace,
+    LayerMode,
+    ObjectKind,
+    OperationLayer,
+    ProjectDocument,
+    SceneObject,
+)
 from .power_correction import (
     DEFAULT_RAMP_STEPS,
     corrected_raster_span_motions,
@@ -28,6 +45,9 @@ from .raster_asset import (
     verify_raster_asset_identities,
 )
 
+if TYPE_CHECKING:
+    from ..calibration.support import HoneycombCoordinateFrame
+
 
 @dataclass(slots=True)
 class ProjectJob:
@@ -41,6 +61,10 @@ class ProjectJob:
     layer_summaries: list[dict[str, Any]] = field(default_factory=list)
     plan: JobPlan | None = None
     raster_assets: tuple[RasterAssetIdentity, ...] = ()
+    coordinate_space: CoordinateSpace = CoordinateSpace.MACHINE
+    coordinate_frame_signature: tuple[str, int, str] | None = None
+    execution_signature: tuple[Any, ...] | None = None
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
 
 
 @dataclass(slots=True)
@@ -286,6 +310,148 @@ def _bounds(paths: Iterable[Polyline]) -> tuple[float, float, float, float]:
     minimum = points.min(axis=0)
     maximum = points.max(axis=0)
     return float(minimum[0]), float(minimum[1]), float(maximum[0]), float(maximum[1])
+
+
+def _project_work_area(document: ProjectDocument) -> WorkArea:
+    return WorkArea(
+        x_min=document.work_area.x_min,
+        x_max=document.work_area.x_max,
+        y_min=document.work_area.y_min,
+        y_max=document.work_area.y_max,
+    )
+
+
+def _coordinate_context(
+    document: ProjectDocument,
+    coordinate_frame: HoneycombCoordinateFrame | None,
+    machine_work_area: WorkArea | None,
+) -> tuple[WorkArea, WorkArea, tuple[str, int, str] | None]:
+    """Resolve separate document and execution coordinate domains.
+
+    Machine-coordinate projects preserve the historical behavior. A
+    honeycomb-local project is intentionally unusable without both the exact
+    reviewed rigid frame and an independent machine envelope.
+    """
+
+    local_work_area = _project_work_area(document)
+    if document.coordinate_space is CoordinateSpace.MACHINE:
+        if coordinate_frame is not None:
+            raise ValueError(
+                "A honeycomb coordinate frame cannot be applied to a machine-coordinate project"
+            )
+        return local_work_area, machine_work_area or local_work_area, None
+
+    if document.coordinate_space is not CoordinateSpace.HONEYCOMB_LOCAL:
+        raise ValueError(
+            f"Unsupported project coordinate space: {document.coordinate_space!r}"
+        )
+    if coordinate_frame is None:
+        raise SafetyError(
+            "Honeycomb-local output requires the reviewed honeycomb coordinate frame"
+        )
+    if machine_work_area is None:
+        raise SafetyError(
+            "Honeycomb-local output requires an independent machine work area"
+        )
+    expected = (0.0, float(coordinate_frame.width_mm), 0.0, float(coordinate_frame.height_mm))
+    actual = (
+        local_work_area.x_min,
+        local_work_area.x_max,
+        local_work_area.y_min,
+        local_work_area.y_max,
+    )
+    if any(abs(left - right) > 1e-6 for left, right in zip(actual, expected, strict=True)):
+        raise SafetyError(
+            "Honeycomb-local project bounds do not match the reviewed support frame: "
+            f"project X{actual[0]:g}..{actual[1]:g} Y{actual[2]:g}..{actual[3]:g}; "
+            f"support X0..{expected[1]:g} Y0..{expected[3]:g}"
+        )
+    return local_work_area, machine_work_area, coordinate_frame.provenance_signature
+
+
+def _validate_paths_in_guarded_polygon(
+    paths: list[Polyline],
+    polygon: tuple[tuple[float, float], ...],
+    *,
+    coordinate_label: str,
+) -> None:
+    normalized = normalize_convex_polygon(
+        polygon,
+        label="guarded output polygon",
+    )
+    if not paths or any(
+        len(path.points) == 0 or not np.isfinite(path.points).all()
+        for path in paths
+    ):
+        raise ValueError("Path coordinates must be finite and nonempty")
+    maximum = max(
+        convex_polygon_violation_normalized_mm(point, normalized)
+        for path in paths
+        for point in path.points
+    )
+    if maximum > 1e-6:
+        raise SafetyError(
+            f"Path exceeds the configured guarded output polygon: "
+            f"{coordinate_label} escapes by {maximum:.2f} mm"
+        )
+
+
+def _coordinate_frame_matrix(
+    coordinate_frame: HoneycombCoordinateFrame,
+) -> tuple[np.ndarray, np.ndarray]:
+    origin = np.asarray(coordinate_frame.origin_machine_mm, dtype=np.float64)
+    axes = np.asarray(
+        [coordinate_frame.x_axis_machine, coordinate_frame.y_axis_machine],
+        dtype=np.float64,
+    )
+    if origin.shape != (2,) or axes.shape != (2, 2) or not (
+        np.isfinite(origin).all() and np.isfinite(axes).all()
+    ):
+        raise ValueError("Honeycomb coordinate frame contains invalid geometry")
+    if not np.allclose(axes @ axes.T, np.eye(2), atol=1e-9, rtol=0.0) or not math.isclose(
+        float(np.linalg.det(axes)), 1.0, abs_tol=1e-9
+    ):
+        raise ValueError("Honeycomb coordinate frame must be a right-handed rigid transform")
+    return origin, axes
+
+
+def _place_points(
+    points: np.ndarray,
+    coordinate_frame: HoneycombCoordinateFrame | None,
+) -> np.ndarray:
+    output = np.asarray(points, dtype=np.float64).reshape(-1, 2).copy()
+    if coordinate_frame is None:
+        return output
+    origin, axes = _coordinate_frame_matrix(coordinate_frame)
+    return output @ axes + origin
+
+
+def _place_paths(
+    paths: Iterable[Polyline],
+    coordinate_frame: HoneycombCoordinateFrame | None,
+) -> list[Polyline]:
+    return [
+        Polyline(
+            _place_points(path.points, coordinate_frame),
+            closed=path.closed,
+            source_tag=path.source_tag,
+        )
+        for path in paths
+    ]
+
+
+def _place_raster_rows(
+    rows: Iterable[_RasterRow],
+    coordinate_frame: HoneycombCoordinateFrame | None,
+) -> list[_RasterRow]:
+    return [
+        _RasterRow(
+            points=_place_points(row.points, coordinate_frame),
+            spans=_place_paths(row.spans, coordinate_frame),
+            source_tag=row.source_tag,
+        )
+        for row in rows
+    ]
 
 
 def _length(points: np.ndarray) -> float:
@@ -1220,19 +1386,44 @@ def generate_project_gcode(
     power_max: int | None = None,
     optimize_order: bool = True,
     start_position: tuple[float, float] | None = None,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
+    machine_work_area: WorkArea | None = None,
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
 ) -> ProjectJob:
     """Generate one guarded vector program containing all enabled line layers."""
     document.validate()
     controller_power_max = int(power_max or laser.power_max)
     raster_sources = _preflight_raster_budget(document, controller_power_max)
-    work_area = WorkArea(
-        x_min=document.work_area.x_min,
-        x_max=document.work_area.x_max,
-        y_min=document.work_area.y_min,
-        y_max=document.work_area.y_max,
+    local_work_area, execution_work_area, coordinate_frame_signature = (
+        _coordinate_context(document, coordinate_frame, machine_work_area)
     )
+    guarded_polygon = (
+        None
+        if guarded_output_polygon_mm is None
+        else normalize_convex_polygon(
+            guarded_output_polygon_mm,
+            label="guarded output polygon",
+        )
+    )
+    configured_polygon = (
+        None
+        if laser.guarded_output_polygon_mm is None
+        else normalize_convex_polygon(
+            laser.guarded_output_polygon_mm,
+            label="laser.guarded_output_polygon_mm",
+        )
+    )
+    if coordinate_frame is not None and guarded_polygon != configured_polygon:
+        raise SafetyError(
+            "Prepared output polygon does not match the configured laser authority"
+        )
+    if guarded_polygon is not None and coordinate_frame is None:
+        raise SafetyError(
+            "A guarded output polygon may be used only with a honeycomb-local project"
+        )
+    local_margin = 0.0 if coordinate_frame is not None else laser.boundary_margin_mm
     start = np.array(
-        start_position or (work_area.x_min, work_area.y_min),
+        start_position or (execution_work_area.x_min, execution_work_area.y_min),
         dtype=np.float64,
     )
     current = start.copy()
@@ -1292,28 +1483,53 @@ def generate_project_gcode(
                 raster_sources=raster_sources,
             )
             raster_command_estimate += layer_raster_commands
-            design_paths = [span for row in design_rows for span in row.spans]
-            design_motion_paths = _raster_motion_paths(
+            local_design_motion_paths = _raster_motion_paths(
                 design_rows,
                 layer.overscan_percent,
             )
             validate_paths(
-                design_motion_paths,
-                work_area,
-                laser.boundary_margin_mm,
-                coordinate_label="raster overscan path",
+                local_design_motion_paths,
+                local_work_area,
+                local_margin,
+                coordinate_label="local raster overscan path",
             )
-            controller_rows = _controller_raster_rows(design_rows, laser)
+            placed_rows = _place_raster_rows(design_rows, coordinate_frame)
+            design_paths = [span for row in placed_rows for span in row.spans]
+            design_motion_paths = _raster_motion_paths(
+                placed_rows,
+                layer.overscan_percent,
+            )
+            if guarded_polygon is None:
+                validate_paths(
+                    design_motion_paths,
+                    execution_work_area,
+                    laser.boundary_margin_mm,
+                    coordinate_label="placed raster overscan path",
+                )
+            else:
+                _validate_paths_in_guarded_polygon(
+                    design_motion_paths,
+                    guarded_polygon,
+                    coordinate_label="placed raster overscan path",
+                )
+            controller_rows = _controller_raster_rows(placed_rows, laser)
             controller_motion_paths = _raster_motion_paths(
                 controller_rows,
                 layer.overscan_percent,
             )
-            validate_paths(
-                controller_motion_paths,
-                work_area,
-                laser.boundary_margin_mm,
-                coordinate_label="raster overscan path after laser spot correction",
-            )
+            if guarded_polygon is None:
+                validate_paths(
+                    controller_motion_paths,
+                    execution_work_area,
+                    laser.boundary_margin_mm,
+                    coordinate_label="raster overscan path after laser spot correction",
+                )
+            else:
+                _validate_paths_in_guarded_polygon(
+                    controller_motion_paths,
+                    guarded_polygon,
+                    coordinate_label="raster overscan path after laser spot correction",
+                )
             layer_plans.append(
                 _LayerPlan(
                     layer=layer,
@@ -1328,17 +1544,43 @@ def generate_project_gcode(
             all_controller_paths.extend(controller_motion_paths)
             continue
 
-        design_paths = _operation_paths(document, layer, layer_objects)
-        if not design_paths:
+        local_design_paths = _operation_paths(document, layer, layer_objects)
+        if not local_design_paths:
             continue
-        validate_paths(design_paths, work_area, laser.boundary_margin_mm)
-        paths = _controller_paths(design_paths, laser)
         validate_paths(
-            paths,
-            work_area,
-            laser.boundary_margin_mm,
-            coordinate_label="controller path after laser spot correction",
+            local_design_paths,
+            local_work_area,
+            local_margin,
+            coordinate_label="local design",
         )
+        design_paths = _place_paths(local_design_paths, coordinate_frame)
+        if guarded_polygon is None:
+            validate_paths(
+                design_paths,
+                execution_work_area,
+                laser.boundary_margin_mm,
+                coordinate_label="placed design",
+            )
+        else:
+            _validate_paths_in_guarded_polygon(
+                design_paths,
+                guarded_polygon,
+                coordinate_label="placed design",
+            )
+        paths = _controller_paths(design_paths, laser)
+        if guarded_polygon is None:
+            validate_paths(
+                paths,
+                execution_work_area,
+                laser.boundary_margin_mm,
+                coordinate_label="controller path after laser spot correction",
+            )
+        else:
+            _validate_paths_in_guarded_polygon(
+                paths,
+                guarded_polygon,
+                coordinate_label="controller path after laser spot correction",
+            )
         layer_plans.append(_LayerPlan(layer=layer, paths=paths))
         powered = layer.controller_power(controller_power_max) > 0
         per_path_overhead = 2 if powered else 1
@@ -1653,6 +1895,9 @@ def generate_project_gcode(
             for layer_plan in layer_plans
             for identity in layer_plan.raster_assets
         ),
+        coordinate_space=document.coordinate_space,
+        coordinate_frame_signature=coordinate_frame_signature,
+        guarded_output_polygon_mm=guarded_polygon,
     )
 
 
@@ -1661,7 +1906,38 @@ def generate_project_frame(
     laser: LaserSettings,
     *,
     start_position: tuple[float, float] | None = None,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
+    machine_work_area: WorkArea | None = None,
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
 ) -> ProjectJob:
+    document.validate()
+    local_work_area, execution_work_area, coordinate_frame_signature = (
+        _coordinate_context(document, coordinate_frame, machine_work_area)
+    )
+    guarded_polygon = (
+        None
+        if guarded_output_polygon_mm is None
+        else normalize_convex_polygon(
+            guarded_output_polygon_mm,
+            label="guarded output polygon",
+        )
+    )
+    configured_polygon = (
+        None
+        if laser.guarded_output_polygon_mm is None
+        else normalize_convex_polygon(
+            laser.guarded_output_polygon_mm,
+            label="laser.guarded_output_polygon_mm",
+        )
+    )
+    if coordinate_frame is not None and guarded_polygon != configured_polygon:
+        raise SafetyError(
+            "Prepared output polygon does not match the configured laser authority"
+        )
+    if guarded_polygon is not None and coordinate_frame is None:
+        raise SafetyError(
+            "A guarded output polygon may be used only with a honeycomb-local project"
+        )
     objects = document.visible_output_objects()
     raster_sources = _preflight_raster_sources(objects)
     for source in raster_sources.values():
@@ -1692,32 +1968,94 @@ def generate_project_frame(
             paths.extend(object_polylines(item))
     if not paths:
         raise ValueError("The project contains no visible output geometry")
-    bounds = _bounds(paths)
-    work_area = WorkArea(
-        x_min=document.work_area.x_min,
-        x_max=document.work_area.x_max,
-        y_min=document.work_area.y_min,
-        y_max=document.work_area.y_max,
+    local_bounds = _bounds(paths)
+    local_rectangle = Polyline(
+        np.asarray(
+            [
+                [local_bounds[0], local_bounds[1]],
+                [local_bounds[2], local_bounds[1]],
+                [local_bounds[2], local_bounds[3]],
+                [local_bounds[0], local_bounds[3]],
+                [local_bounds[0], local_bounds[1]],
+            ],
+            dtype=np.float64,
+        ),
+        closed=True,
+        source_tag="frame",
     )
+    validate_paths(
+        [local_rectangle],
+        local_work_area,
+        0.0 if coordinate_frame is not None else laser.boundary_margin_mm,
+        coordinate_label="local frame path",
+    )
+    placed_rectangle = _place_paths([local_rectangle], coordinate_frame)[0]
+    if guarded_polygon is not None:
+        _validate_paths_in_guarded_polygon(
+            [placed_rectangle],
+            guarded_polygon,
+            coordinate_label="placed frame path",
+        )
+        _validate_paths_in_guarded_polygon(
+            _controller_paths([placed_rectangle], laser),
+            guarded_polygon,
+            coordinate_label="frame path after laser spot correction",
+        )
+    bounds = _bounds([placed_rectangle])
     options = ToolpathOptions(
         power_mode=laser.power_mode,
         power=0,
         power_max=laser.power_max,
         travel_feed_mm_min=laser.travel_feed_mm_min,
         engrave_feed_mm_min=laser.travel_feed_mm_min,
-        boundary_margin_mm=laser.boundary_margin_mm,
+        boundary_margin_mm=(
+            0.0 if guarded_polygon is not None else laser.boundary_margin_mm
+        ),
         spot_offset_x_mm=laser.spot_offset_x_mm,
         spot_offset_y_mm=laser.spot_offset_y_mm,
         optimize_order=False,
-        start_x_mm=(start_position or (work_area.x_min, work_area.y_min))[0],
-        start_y_mm=(start_position or (work_area.x_min, work_area.y_min))[1],
+        start_x_mm=(
+            start_position
+            or (execution_work_area.x_min, execution_work_area.y_min)
+        )[0],
+        start_y_mm=(
+            start_position
+            or (execution_work_area.x_min, execution_work_area.y_min)
+        )[1],
     )
-    program = generate_frame_gcode(bounds, options, work_area, laser_enabled=False)
+    frame_work_area = execution_work_area
+    if guarded_polygon is not None:
+        planned_start = start_position or (
+            execution_work_area.x_min,
+            execution_work_area.y_min,
+        )
+        frame_work_area = WorkArea(
+            min(*(point[0] for point in guarded_polygon), planned_start[0]),
+            max(*(point[0] for point in guarded_polygon), planned_start[0]),
+            min(*(point[1] for point in guarded_polygon), planned_start[1]),
+            max(*(point[1] for point in guarded_polygon), planned_start[1]),
+        )
+    program = (
+        generate_frame_gcode(
+            bounds,
+            options,
+            execution_work_area,
+            laser_enabled=False,
+        )
+        if coordinate_frame is None
+        else generate_frame_path_gcode(
+            placed_rectangle,
+            options,
+            frame_work_area,
+            laser_enabled=False,
+        )
+    )
     plan = build_job_plan(
         program.text,
         power_max=laser.power_max,
         default_feed_mm_min=laser.travel_feed_mm_min,
-        start_position=start_position or (work_area.x_min, work_area.y_min),
+        start_position=start_position
+        or (execution_work_area.x_min, execution_work_area.y_min),
         acceleration_mm_s2=laser.preview_acceleration_mm_s2,
         command_delay_ms=laser.preview_command_delay_ms,
     )
@@ -1736,6 +2074,9 @@ def generate_project_frame(
             for source in raster_sources.values()
             if source.identity is not None
         ),
+        coordinate_space=document.coordinate_space,
+        coordinate_frame_signature=coordinate_frame_signature,
+        guarded_output_polygon_mm=guarded_polygon,
     )
 
 

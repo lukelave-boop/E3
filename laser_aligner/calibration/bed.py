@@ -16,6 +16,7 @@ import numpy as np
 from ..config import BedCalibrationSettings, WorkArea
 from ..errors import CalibrationError
 from ..storage import atomic_write_json, read_json
+from .support import HoneycombCoordinateFrame
 
 LOGGER = logging.getLogger(__name__)
 _MAX_RECTIFIED_PIXELS = 64_000_000
@@ -51,6 +52,31 @@ def _validated_pixels_per_mm(value: Any) -> float:
     if not math.isfinite(result) or result <= 0.0:
         raise CalibrationError("Rectification pixels_per_mm must be finite and positive")
     return result
+
+
+def _coordinate_frame_transform(
+    coordinate_frame: HoneycombCoordinateFrame | None,
+) -> tuple[np.ndarray | None, tuple[float, ...]]:
+    """Return a rigid honeycomb-local-to-machine transform and cache key."""
+
+    if coordinate_frame is None:
+        return None, ()
+    if not isinstance(coordinate_frame, HoneycombCoordinateFrame):
+        raise CalibrationError(
+            "Rectification coordinate_frame must be a HoneycombCoordinateFrame"
+        )
+    origin_x, origin_y = coordinate_frame.origin_machine_mm
+    x_axis_x, x_axis_y = coordinate_frame.x_axis_machine
+    y_axis_x, y_axis_y = coordinate_frame.y_axis_machine
+    transform = np.asarray(
+        [
+            [x_axis_x, y_axis_x, origin_x],
+            [x_axis_y, y_axis_y, origin_y],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    return transform, tuple(float(value) for value in transform.ravel())
 
 
 @dataclass(slots=True)
@@ -416,7 +442,7 @@ class BedMapper:
         self._calibration = self._load_calibration()
         self._rectification_map_lock = threading.RLock()
         self._rectification_map_cache: dict[
-            tuple[int, float],
+            tuple[object, ...],
             tuple[BedCalibration, tuple[np.ndarray, np.ndarray]],
         ] = {}
 
@@ -1226,8 +1252,11 @@ class BedMapper:
     def rectification_map(
         self,
         pixels_per_mm: float | None = None,
+        *,
+        work_area: WorkArea | None = None,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Map corrected-camera pixels into the top-down workspace canvas."""
+        """Map corrected-camera pixels into a top-down coordinate canvas."""
 
         calibration = self._require()
         ppm = _validated_pixels_per_mm(
@@ -1235,22 +1264,39 @@ class BedMapper:
             if pixels_per_mm is None
             else pixels_per_mm
         )
-        key = (id(calibration), ppm)
+        area = self.work_area if work_area is None else work_area
+        area_values = (
+            float(area.x_min),
+            float(area.x_max),
+            float(area.y_min),
+            float(area.y_max),
+        )
+        if not all(math.isfinite(value) for value in area_values):
+            raise CalibrationError("Rectification work-area limits must be finite")
+        if area.width <= 0.0 or area.height <= 0.0:
+            raise CalibrationError("Rectification work area must have positive dimensions")
+        local_to_machine, frame_key = _coordinate_frame_transform(coordinate_frame)
+        key = (id(calibration), ppm, *area_values, *frame_key)
         with self._rectification_map_lock:
             cached = self._rectification_map_cache.get(key)
             if cached is not None and cached[0] is calibration:
                 return cached[1]
 
-        output_width = max(1, int(round(self.work_area.width * ppm)))
-        output_height = max(1, int(round(self.work_area.height * ppm)))
+        output_width = max(1, int(round(area.width * ppm)))
+        output_height = max(1, int(round(area.height * ppm)))
         if output_width * output_height > _MAX_RECTIFIED_PIXELS:
             raise CalibrationError(
                 "Requested bed rectification exceeds the decoded-image pixel limit"
             )
-        canvas_x = self.work_area.x_min + np.arange(output_width) / ppm
-        canvas_y = self.work_area.y_max - np.arange(output_height) / ppm
+        canvas_x = area.x_min + np.arange(output_width) / ppm
+        canvas_y = area.y_max - np.arange(output_height) / ppm
         xx, yy = np.meshgrid(canvas_x, canvas_y)
         target = np.column_stack((xx.ravel(), yy.ravel()))
+        if local_to_machine is not None:
+            target = (
+                target @ local_to_machine[:2, :2].T
+                + local_to_machine[:2, 2]
+            )
         base = target.copy()
         if calibration.residual_mesh is not None:
             for _ in range(12):
@@ -1272,7 +1318,14 @@ class BedMapper:
             self._rectification_map_cache = {key: (calibration, result)}
         return result
 
-    def rectify(self, image: np.ndarray, pixels_per_mm: float | None = None) -> np.ndarray:
+    def rectify(
+        self,
+        image: np.ndarray,
+        pixels_per_mm: float | None = None,
+        *,
+        work_area: WorkArea | None = None,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
+    ) -> np.ndarray:
         calibration = self._require()
         if (
             not isinstance(image, np.ndarray)
@@ -1295,7 +1348,11 @@ class BedMapper:
             if pixels_per_mm is None
             else pixels_per_mm
         )
-        map_x, map_y = self.rectification_map(ppm)
+        map_x, map_y = self.rectification_map(
+            ppm,
+            work_area=work_area,
+            coordinate_frame=coordinate_frame,
+        )
         if self._calibration is not calibration:
             raise CalibrationError("Bed calibration changed while rectification was being prepared")
         rectified = cv2.remap(

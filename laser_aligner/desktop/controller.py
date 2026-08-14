@@ -11,6 +11,10 @@ import numpy as np
 from ..calibration.profiles import signature_from_values
 from ..config import WorkArea, effective_laser_output_area
 from ..core import CoreRuntime
+from ..geometry.polygon import (
+    convex_polygon_violation_normalized_mm,
+    normalize_convex_polygon,
+)
 from ..templates import CutTemplate
 from ..vision.object_trace import TraceOptions, detect_objects, sample_color
 from ..vision.template_alignment import TemplateAlignment, rank_templates
@@ -38,7 +42,27 @@ def _guarded_output_work_area(runtime: CoreRuntime) -> WorkArea:
     )
 
 
-def _honeycomb_support_metadata(runtime: CoreRuntime) -> dict[str, Any] | None:
+def _configured_guarded_output_polygon(
+    runtime: CoreRuntime,
+) -> tuple[tuple[float, float], ...] | None:
+    settings = getattr(runtime, "settings", None)
+    laser = getattr(settings, "laser", None)
+    configured = getattr(laser, "guarded_output_polygon_mm", None)
+    return (
+        None
+        if configured is None
+        else normalize_convex_polygon(
+            configured,
+            label="laser.guarded_output_polygon_mm",
+        )
+    )
+
+
+def _honeycomb_support_metadata(
+    runtime: CoreRuntime,
+    *,
+    coordinate_space: str = "machine",
+) -> dict[str, Any] | None:
     """Expose an approximate physical reference without affecting output."""
 
     context = runtime.context
@@ -61,17 +85,140 @@ def _honeycomb_support_metadata(runtime: CoreRuntime) -> dict[str, Any] | None:
         "bed_map_current": current,
         "reference_only": True,
     }
+    if coordinate_space == "honeycomb_local":
+        metadata["corners_local_mm"] = [
+            [0.0, 0.0],
+            [float(reference.support_width_mm), 0.0],
+            [float(reference.support_width_mm), float(reference.support_height_mm)],
+            [0.0, float(reference.support_height_mm)],
+        ]
     if not current:
         metadata["message"] = (
             "Recorded honeycomb support was measured with a different bed map; "
             "re-record it before visually comparing the support outline."
         )
         return metadata
-    metadata["message"] = (
-        "The approximate honeycomb outline is shown for visual comparison only; "
-        "it does not classify detections or change laser limits."
-    )
+    output_polygon = _configured_guarded_output_polygon(runtime)
+    output = _guarded_output_work_area(runtime)
+    corners = np.asarray(reference.support_corners_machine_mm, dtype=np.float64)
+    if output_polygon is None:
+        overruns = {
+            "left": max(0.0, float(output.x_min - np.min(corners[:, 0]))),
+            "right": max(0.0, float(np.max(corners[:, 0]) - output.x_max)),
+            "bottom": max(0.0, float(output.y_min - np.min(corners[:, 1]))),
+            "top": max(0.0, float(np.max(corners[:, 1]) - output.y_max)),
+        }
+    else:
+        maximum = max(
+            convex_polygon_violation_normalized_mm(point, output_polygon)
+            for point in corners
+        )
+        overruns = {"polygon": maximum}
+    metadata["guarded_output_overruns_mm"] = overruns
+    outside = {side: value for side, value in overruns.items() if value > 1e-9}
+    if outside:
+        details = ", ".join(
+            f"{side} {value:.1f} mm" for side, value in outside.items()
+        )
+        metadata["message"] = (
+            "The full honeycomb is shown, but it extends beyond guarded laser "
+            f"output ({details}); those portions remain blocked and unselected."
+        )
+    else:
+        metadata["message"] = (
+            "The approximate honeycomb outline is shown for visual comparison only; "
+            "it does not classify detections or change laser limits."
+        )
     return metadata
+
+
+def _apply_local_output_review(
+    detections: list[Any],
+    coordinate_frame: Any,
+    output: WorkArea | tuple[tuple[float, float], ...],
+) -> tuple[list[list[float]], int]:
+    """Review local Trace contours against the configured machine authority."""
+
+    machine_corners = (
+        (
+            (output.x_min, output.y_min),
+            (output.x_max, output.y_min),
+            (output.x_max, output.y_max),
+            (output.x_min, output.y_max),
+        )
+        if isinstance(output, WorkArea)
+        else normalize_convex_polygon(output, label="guarded output polygon")
+    )
+    output_polygon = [
+        list(coordinate_frame.machine_to_local(x, y))
+        for x, y in machine_corners
+    ]
+    outside = 0
+    for detection in detections:
+        contours = detection.vector_contours_mm or [detection.vector_contour_mm]
+        local_points = [point for contour in contours for point in contour]
+        local_overruns = {
+            "left": max(
+                0.0,
+                max((-float(point[0]) for point in local_points), default=0.0),
+            ),
+            "right": max(
+                0.0,
+                max(
+                    (
+                        float(point[0]) - float(coordinate_frame.width_mm)
+                        for point in local_points
+                    ),
+                    default=0.0,
+                ),
+            ),
+            "bottom": max(
+                0.0,
+                max((-float(point[1]) for point in local_points), default=0.0),
+            ),
+            "top": max(
+                0.0,
+                max(
+                    (
+                        float(point[1]) - float(coordinate_frame.height_mm)
+                        for point in local_points
+                    ),
+                    default=0.0,
+                ),
+            ),
+        }
+        machine_points = [
+            coordinate_frame.local_to_machine(float(point[0]), float(point[1]))
+            for point in local_points
+        ]
+        if machine_points and isinstance(output, WorkArea):
+            coordinates = np.asarray(machine_points, dtype=np.float64)
+            overruns = {
+                "left": max(0.0, float(output.x_min - np.min(coordinates[:, 0]))),
+                "right": max(0.0, float(np.max(coordinates[:, 0]) - output.x_max)),
+                "bottom": max(0.0, float(output.y_min - np.min(coordinates[:, 1]))),
+                "top": max(0.0, float(np.max(coordinates[:, 1]) - output.y_max)),
+            }
+        elif machine_points:
+            maximum = max(
+                convex_polygon_violation_normalized_mm(point, machine_corners)
+                for point in machine_points
+            )
+            overruns = {"polygon": maximum}
+        else:
+            overruns = {side: 0.0 for side in ("left", "right", "bottom", "top")}
+        maximum = max(overruns.values(), default=0.0)
+        support_escape = max(local_overruns.values(), default=0.0)
+        review_escape = max(maximum, support_escape)
+        detection.diagnostics["within_work_area"] = review_escape <= 1e-9
+        detection.diagnostics["work_area_overrun_mm"] = review_escape
+        detection.diagnostics["work_area_overruns_mm"] = overruns
+        detection.diagnostics["support_overruns_mm"] = local_overruns
+        detection.diagnostics["output_review_frame"] = "machine"
+        if review_escape > 1e-9:
+            detection.selected_default = False
+            outside += 1
+    return output_polygon, outside
 
 
 def _usable_template_detections(
@@ -173,6 +320,7 @@ class DesktopController(QtCore.QObject):
     traceColorReady = QtCore.Signal(dict)
     traceColorFailed = QtCore.Signal(str)
     templateMatchReady = QtCore.Signal(dict)
+    reviewEvidenceInvalidated = QtCore.Signal()
     simulationFrameChanged = QtCore.Signal(dict)
     stopInitiated = QtCore.Signal()
     tasksDrained = QtCore.Signal()
@@ -201,11 +349,16 @@ class DesktopController(QtCore.QObject):
         self._camera_reconnect_generation: int | None = None
         self._trace_request_id = 0
         self._trace_review_active = False
+        self._trace_sample_image: np.ndarray | None = None
+        self._trace_sample_area: WorkArea | None = None
+        self._trace_sample_signature: tuple[object, ...] | None = None
         self._template_match_request_id = 0
         self._template_review_active = False
+        self._template_review_signature: tuple[object, ...] | None = None
         self._live_camera_enabled = False
         self._live_camera_interval_ms = 1000
         self._reported_terminal_job: tuple[object, object] | None = None
+        self._workspace_coordinate_space = "machine"
         self._shutdown_started = False
         self._poll_timer = QtCore.QTimer(self)
         self._poll_timer.setInterval(750)
@@ -220,6 +373,49 @@ class DesktopController(QtCore.QObject):
             on_success=lambda _: self._started(),
             label="Start core services",
         )
+
+    def set_workspace_coordinate_space(self, coordinate_space: str) -> None:
+        """Select the persisted project frame used by live camera and Trace."""
+
+        value = str(coordinate_space)
+        if value not in {"machine", "honeycomb_local"}:
+            raise ValueError(f"Unsupported workspace coordinate space: {value}")
+        if value == self._workspace_coordinate_space:
+            return
+        if (
+            value == "honeycomb_local"
+            and getattr(
+                self.runtime.context,
+                "has_simulation_workspace_frame",
+                False,
+            )
+        ):
+            # Frozen test frames are explicitly machine-work-area rasters.
+            # Never reinterpret those pixels as honeycomb-local coordinates.
+            self.runtime.context.clear_simulation_workspace_frame()
+            self.simulationFrameChanged.emit(
+                {
+                    "active": False,
+                    "source_name": "",
+                    "reason": (
+                        "Machine-coordinate test image cleared for a "
+                        "honeycomb-local project"
+                    ),
+                }
+            )
+        self._workspace_coordinate_space = value
+        self._camera_source_generation += 1
+        self._invalidate_camera_image()
+        self._trace_request_id += 1
+        self._trace_review_active = False
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
+        self._template_match_request_id += 1
+        self._template_review_active = False
+        self._template_review_signature = None
+        if self.runtime.running:
+            self.request_camera_refresh()
 
     def _started(self) -> None:
         if self._shutdown_started:
@@ -247,8 +443,12 @@ class DesktopController(QtCore.QObject):
         self._camera_live_timer.stop()
         self._trace_request_id += 1
         self._trace_review_active = False
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
         self._template_match_request_id += 1
         self._template_review_active = False
+        self._template_review_signature = None
         # Request laser-off before waiting for unrelated background work.
         try:
             self.runtime.context.machine.request_stop(emergency=False)
@@ -388,21 +588,80 @@ class DesktopController(QtCore.QObject):
             self._invalidate_camera_image()
             self._report_camera_mapping_required(validity)
             return
+        area_provider = getattr(
+            self.runtime.context,
+            "trace_camera_work_area",
+            None,
+        )
+        frame_provider = getattr(
+            self.runtime.context,
+            "current_honeycomb_coordinate_frame",
+            None,
+        )
+        coordinate_frame = (
+            frame_provider()
+            if self._workspace_coordinate_space == "honeycomb_local"
+            and callable(frame_provider)
+            else None
+        )
+        if (
+            self._workspace_coordinate_space == "honeycomb_local"
+            and coordinate_frame is None
+        ):
+            self._invalidate_camera_image()
+            message = (
+                "The honeycomb-local camera view requires a current honeycomb "
+                "reference; re-detect the honeycomb"
+            )
+            if self._camera_overlay_error_latched != message:
+                self._camera_overlay_error_latched = message
+                self.cameraOverlayErrorOccurred.emit(message)
+            return
         expected_revision = (
             getattr(getattr(self.runtime.context, "lens", None), "model", None),
             self.runtime.context.bed.calibration,
+            (
+                None
+                if coordinate_frame is None
+                else tuple(coordinate_frame.provenance_signature)
+            ),
+        )
+        camera_area = (
+            WorkArea(
+                0.0,
+                coordinate_frame.width_mm,
+                0.0,
+                coordinate_frame.height_mm,
+            )
+            if coordinate_frame is not None
+            else area_provider() if callable(area_provider) else None
         )
         source_generation = self._camera_source_generation
         self._camera_refresh_in_flight = True
         self._camera_refresh_generation = source_generation
+
+        def corrected_image() -> QtGui.QImage:
+            options: dict[str, Any] = {}
+            if camera_area is not None:
+                options["work_area"] = camera_area
+            if coordinate_frame is not None:
+                options["coordinate_frame"] = coordinate_frame
+            frame = self.runtime.context.rectified_frame(
+                refresh=True,
+                **options,
+            )
+            return image_to_qimage(frame)
+
         task = self._run(
-            lambda: image_to_qimage(self.runtime.context.rectified_frame(refresh=True)),
+            corrected_image,
             on_success=lambda image, source_generation=source_generation,
-            expected_revision=expected_revision: (
+            expected_revision=expected_revision,
+            camera_area=camera_area: (
                 self._camera_refresh_ready(
                     image,
                     source_generation,
                     expected_revision,
+                    image_area=camera_area,
                 )
             ),
             on_failure=lambda message, source_generation=source_generation,
@@ -508,6 +767,15 @@ class DesktopController(QtCore.QObject):
         self._camera_mapping_latched = None
         self._camera_overlay_error_latched = None
         self._invalidate_camera_image()
+        self._trace_request_id += 1
+        self._trace_review_active = False
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
+        self._template_match_request_id += 1
+        self._template_review_active = False
+        self._template_review_signature = None
+        self.reviewEvidenceInvalidated.emit()
         self._camera_refresh_pending = True
         self.request_camera_refresh()
 
@@ -531,23 +799,23 @@ class DesktopController(QtCore.QObject):
         self,
         image: QtGui.QImage,
         source_generation: int | None = None,
-        expected_revision: tuple[object | None, object | None] | None = None,
+        expected_revision: tuple[object | None, ...] | None = None,
+        *,
+        image_area: WorkArea | None = None,
     ) -> None:
         if (
             source_generation is not None
             and source_generation != self._camera_source_generation
         ):
             return
-        if expected_revision is not None and (
-            getattr(getattr(self.runtime.context, "lens", None), "model", None)
-            is not expected_revision[0]
-            or self.runtime.context.bed.calibration is not expected_revision[1]
+        if expected_revision is not None and not self._camera_revision_is_current(
+            expected_revision
         ):
             self._invalidate_camera_image()
             self._camera_refresh_pending = True
             return
         if not self._camera_review_active():
-            self._publish_camera_image(image)
+            self._publish_camera_image(image, image_area=image_area)
         camera_recovered = self._camera_error_latched is not None
         mapping_recovered = self._camera_mapping_latched is not None
         overlay_recovered = self._camera_overlay_error_latched is not None
@@ -561,9 +829,100 @@ class DesktopController(QtCore.QObject):
         elif mapping_recovered:
             self.notice.emit("Corrected camera overlay recovered")
 
-    def _publish_camera_image(self, image: QtGui.QImage) -> None:
+    def _camera_revision_is_current(
+        self,
+        expected_revision: tuple[object | None, ...],
+    ) -> bool:
+        if (
+            len(expected_revision) < 2
+            or getattr(getattr(self.runtime.context, "lens", None), "model", None)
+            is not expected_revision[0]
+            or self.runtime.context.bed.calibration is not expected_revision[1]
+        ):
+            return False
+        if len(expected_revision) < 3:
+            return True
+        frame_provider = getattr(
+            self.runtime.context,
+            "current_honeycomb_coordinate_frame",
+            None,
+        )
+        frame = (
+            frame_provider()
+            if self._workspace_coordinate_space == "honeycomb_local"
+            and callable(frame_provider)
+            else None
+        )
+        current_signature = (
+            None if frame is None else tuple(frame.provenance_signature)
+        )
+        return current_signature == expected_revision[2]
+
+    def _current_review_signature(
+        self,
+        coordinate_frame: Any | None = None,
+    ) -> tuple[object, ...]:
+        context = self.runtime.context
+        if coordinate_frame is None and self._workspace_coordinate_space == "honeycomb_local":
+            frame_provider = getattr(
+                context,
+                "current_honeycomb_coordinate_frame",
+                None,
+            )
+            coordinate_frame = frame_provider() if callable(frame_provider) else None
+            if coordinate_frame is None:
+                raise ValueError(
+                    "The honeycomb-local review requires a current honeycomb reference"
+                )
+        mapping_provider = getattr(context, "bed_mapping_digest", None)
+        mapping_digest = mapping_provider() if callable(mapping_provider) else None
+        if mapping_digest is None:
+            calibration = context.bed.calibration
+            mapping_digest = (
+                None
+                if calibration is None
+                else id(calibration)
+            )
+        frame_signature = (
+            None
+            if coordinate_frame is None
+            else tuple(coordinate_frame.provenance_signature)
+        )
+        return (
+            self._workspace_coordinate_space,
+            frame_signature,
+            mapping_digest,
+        )
+
+    def review_signature_is_current(self, signature: object) -> bool:
+        if not isinstance(signature, (tuple, list)):
+            return False
+        try:
+            return tuple(signature) == self._current_review_signature()
+        except Exception:
+            return False
+
+    def _publish_camera_image(
+        self,
+        image: QtGui.QImage,
+        *,
+        image_area: WorkArea | None = None,
+    ) -> None:
         self._camera_image_published = True
-        self.cameraImageReady.emit(image)
+        if image_area is None:
+            self.cameraImageReady.emit(image)
+            return
+        self.cameraImageReady.emit(
+            {
+                "image": image,
+                "camera_image_area": {
+                    "x_min": float(image_area.x_min),
+                    "x_max": float(image_area.x_max),
+                    "y_min": float(image_area.y_min),
+                    "y_max": float(image_area.y_max),
+                },
+            }
+        )
 
     def _invalidate_camera_image(self) -> None:
         if not self._camera_image_published:
@@ -609,14 +968,12 @@ class DesktopController(QtCore.QObject):
         self,
         message: str,
         source_generation: int,
-        expected_revision: tuple[object | None, object | None] | None = None,
+        expected_revision: tuple[object | None, ...] | None = None,
     ) -> None:
         if source_generation != self._camera_source_generation:
             return
-        if expected_revision is not None and (
-            getattr(getattr(self.runtime.context, "lens", None), "model", None)
-            is not expected_revision[0]
-            or self.runtime.context.bed.calibration is not expected_revision[1]
+        if expected_revision is not None and not self._camera_revision_is_current(
+            expected_revision
         ):
             self._invalidate_camera_image()
             self._camera_refresh_pending = True
@@ -698,6 +1055,12 @@ class DesktopController(QtCore.QObject):
     ) -> dict[str, Any]:
         """Activate one frozen corrected frame behind all desktop vision tools."""
 
+        if self._workspace_coordinate_space != "machine":
+            raise ValueError(
+                "Corrected test images use machine coordinates and cannot be "
+                "activated on a honeycomb-local canvas"
+            )
+
         info = self.runtime.context.set_simulation_workspace_frame(
             image,
             source_name=source_name,
@@ -712,8 +1075,12 @@ class DesktopController(QtCore.QObject):
         self._camera_refresh_pending = False
         self._trace_request_id += 1
         self._trace_review_active = False
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
         self._template_match_request_id += 1
         self._template_review_active = False
+        self._template_review_signature = None
         self._sync_camera_timer()
         self._publish_camera_image(
             image_to_qimage(self.runtime.context.rectified_frame())
@@ -738,8 +1105,12 @@ class DesktopController(QtCore.QObject):
         self._invalidate_camera_image()
         self._trace_request_id += 1
         self._trace_review_active = False
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
         self._template_match_request_id += 1
         self._template_review_active = False
+        self._template_review_signature = None
         self.simulationFrameChanged.emit(
             {"active": False, "source_name": "Synthetic camera", "metadata": {}}
         )
@@ -758,6 +1129,7 @@ class DesktopController(QtCore.QObject):
         """Invalidate any in-flight match result and resume normal camera updates."""
 
         self._template_match_request_id += 1
+        self._template_review_signature = None
         self.set_template_review_active(False)
 
     def cancel_trace_detection(self) -> None:
@@ -766,6 +1138,9 @@ class DesktopController(QtCore.QObject):
         self._trace_request_id += 1
         was_held = self._camera_review_active()
         self._trace_review_active = False
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
         self._resume_live_camera_after_review(was_held)
 
     def set_live_camera(self, enabled: bool, interval_ms: int | None = None) -> None:
@@ -1053,24 +1428,110 @@ class DesktopController(QtCore.QObject):
                 raise ValueError(
                     "Bed mapping is required before tracing camera objects"
                 )
-            image = context.capture_parked_trace_frame()
+            frame_provider = getattr(
+                context,
+                "current_honeycomb_coordinate_frame",
+                None,
+            )
+            coordinate_frame = (
+                frame_provider()
+                if self._workspace_coordinate_space == "honeycomb_local"
+                and callable(frame_provider)
+                else None
+            )
+            if (
+                self._workspace_coordinate_space == "honeycomb_local"
+                and coordinate_frame is None
+            ):
+                raise ValueError(
+                    "The honeycomb-local Trace view requires a current honeycomb reference"
+                )
+            review_signature = self._current_review_signature(coordinate_frame)
+            if coordinate_frame is None:
+                camera_area = context.trace_camera_work_area()
+            else:
+                guarded_polygon = _configured_guarded_output_polygon(self.runtime)
+                if guarded_polygon is None:
+                    camera_area = WorkArea(
+                        0.0,
+                        coordinate_frame.width_mm,
+                        0.0,
+                        coordinate_frame.height_mm,
+                    )
+                else:
+                    local_authority = [
+                        coordinate_frame.machine_to_local(*point)
+                        for point in guarded_polygon
+                    ]
+                    camera_area = WorkArea(
+                        min(0.0, *(point[0] for point in local_authority)),
+                        max(
+                            coordinate_frame.width_mm,
+                            *(point[0] for point in local_authority),
+                        ),
+                        min(0.0, *(point[1] for point in local_authority)),
+                        max(
+                            coordinate_frame.height_mm,
+                            *(point[1] for point in local_authority),
+                        ),
+                    )
+            capture_options: dict[str, Any] = {"work_area": camera_area}
+            if coordinate_frame is not None:
+                capture_options["coordinate_frame"] = coordinate_frame
+            image = context.capture_parked_trace_frame(**capture_options)
             options = TraceOptions.from_mapping(raw_options)
+            guarded_output = _guarded_output_work_area(self.runtime)
+            guarded_polygon = _configured_guarded_output_polygon(self.runtime)
             result = detect_objects(
                 image,
                 options,
-                self.runtime.settings.machine.work_area,
+                camera_area,
                 self.runtime.settings.calibration.bed.pixels_per_mm,
-                output_work_area=_guarded_output_work_area(self.runtime),
+                output_work_area=(
+                    guarded_output
+                    if coordinate_frame is None
+                    else camera_area
+                ),
             )
-            support = _honeycomb_support_metadata(self.runtime)
+            output_polygon = None
+            if coordinate_frame is not None:
+                output_polygon, outside = _apply_local_output_review(
+                    result.detections,
+                    coordinate_frame,
+                    guarded_polygon or guarded_output,
+                )
+                if outside:
+                    result.message += (
+                        f"; WARNING: {outside} outline"
+                        f"{'s are' if outside != 1 else ' is'} outside the "
+                        "configured machine-output envelope and left unchecked"
+                    )
+            support = _honeycomb_support_metadata(
+                self.runtime,
+                coordinate_space=self._workspace_coordinate_space,
+            )
             payload = result.to_dict()
+            if output_polygon is not None:
+                payload["output_work_area"] = None
+                payload["output_polygon_local_mm"] = output_polygon
+                payload["coordinate_space"] = "honeycomb_local"
             if support is not None:
                 payload["honeycomb_support"] = support
                 payload["message"] = (
                     f"{payload['message']} {support['message']}"
                 )
+            payload["camera_image_area"] = {
+                "x_min": float(camera_area.x_min),
+                "x_max": float(camera_area.x_max),
+                "y_min": float(camera_area.y_min),
+                "y_max": float(camera_area.y_max),
+            }
             payload["request_id"] = request_id
             payload["camera_image"] = image_to_qimage(image)
+            payload["_trace_sample_image"] = image
+            payload["_trace_sample_area"] = camera_area
+            payload["_trace_sample_signature"] = review_signature
+            payload["review_signature"] = review_signature
             return payload
 
         self._run(
@@ -1096,6 +1557,41 @@ class DesktopController(QtCore.QObject):
     ) -> None:
         if request_id != self._trace_request_id:
             return
+        sample_image = payload.pop("_trace_sample_image", None)
+        sample_area = payload.pop("_trace_sample_area", None)
+        sample_signature = payload.pop("_trace_sample_signature", None)
+        if sample_signature is None and sample_image is None and sample_area is None:
+            # Compatibility for injected/non-camera test payloads. The real
+            # operation always supplies all three private evidence fields.
+            self.traceResultReady.emit(payload)
+            return
+        try:
+            current_signature = self._current_review_signature()
+        except Exception:
+            current_signature = None
+        if sample_signature is None or tuple(sample_signature) != current_signature:
+            was_held = self._camera_review_active()
+            self._trace_review_active = False
+            self._trace_sample_image = None
+            self._trace_sample_area = None
+            self._trace_sample_signature = None
+            self._resume_live_camera_after_review(was_held)
+            self.errorOccurred.emit(
+                "Detect and trace objects failed: the honeycomb or bed mapping "
+                "changed during capture; run detection again"
+            )
+            return
+        if request_id != self._trace_request_id:
+            return
+        self._trace_sample_image = (
+            np.ascontiguousarray(sample_image).copy()
+            if isinstance(sample_image, np.ndarray)
+            else None
+        )
+        self._trace_sample_area = (
+            sample_area if isinstance(sample_area, WorkArea) else None
+        )
+        self._trace_sample_signature = tuple(sample_signature)
         self.traceResultReady.emit(payload)
 
     @QtCore.Slot(int, str)
@@ -1104,6 +1600,9 @@ class DesktopController(QtCore.QObject):
             return
         was_held = self._camera_review_active()
         self._trace_review_active = False
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
         self._resume_live_camera_after_review(was_held)
         self.errorOccurred.emit(f"Detect and trace objects failed: {message}")
 
@@ -1280,9 +1779,64 @@ class DesktopController(QtCore.QObject):
         if not templates:
             raise ValueError("No cutting templates are available to match")
 
+        frame_provider = getattr(
+            context,
+            "current_honeycomb_coordinate_frame",
+            None,
+        )
+        coordinate_frame = (
+            frame_provider()
+            if self._workspace_coordinate_space == "honeycomb_local"
+            and callable(frame_provider)
+            else None
+        )
+        if (
+            self._workspace_coordinate_space == "honeycomb_local"
+            and coordinate_frame is None
+        ):
+            raise ValueError(
+                "The honeycomb-local template review requires a current honeycomb reference"
+            )
+        review_signature = self._current_review_signature(coordinate_frame)
+        if coordinate_frame is None:
+            camera_area = self.runtime.settings.machine.work_area
+        else:
+            configured_polygon = _configured_guarded_output_polygon(self.runtime)
+            if configured_polygon is None:
+                camera_area = WorkArea(
+                    0.0,
+                    coordinate_frame.width_mm,
+                    0.0,
+                    coordinate_frame.height_mm,
+                )
+            else:
+                local_authority = [
+                    coordinate_frame.machine_to_local(*point)
+                    for point in configured_polygon
+                ]
+                camera_area = WorkArea(
+                    min(0.0, *(point[0] for point in local_authority)),
+                    max(
+                        coordinate_frame.width_mm,
+                        *(point[0] for point in local_authority),
+                    ),
+                    min(0.0, *(point[1] for point in local_authority)),
+                    max(
+                        coordinate_frame.height_mm,
+                        *(point[1] for point in local_authority),
+                    ),
+                )
+
         # One corrected camera frame is shared across every options group so an
         # automatic ranking never compares sheets captured at different times.
-        image = context.rectified_frame(refresh=True, precision=True)
+        frame_options: dict[str, Any] = {
+            "refresh": True,
+            "precision": True,
+        }
+        if coordinate_frame is not None:
+            frame_options["work_area"] = camera_area
+            frame_options["coordinate_frame"] = coordinate_frame
+        image = context.rectified_frame(**frame_options)
         if image is None or image.size == 0:
             raise ValueError("The corrected camera frame is empty")
 
@@ -1304,14 +1858,27 @@ class DesktopController(QtCore.QObject):
         alignments: list[TemplateAlignment] = []
         traces_by_template: dict[str, Any] = {}
         evidence_by_template: dict[str, dict[str, Any]] = {}
+        guarded_output = _guarded_output_work_area(self.runtime)
+        guarded_polygon = _configured_guarded_output_polygon(self.runtime)
+        output_polygon: list[list[float]] | None = None
         for options, grouped_templates in option_groups.values():
             trace_result = detect_objects(
                 image,
                 options,
-                self.runtime.settings.machine.work_area,
+                camera_area,
                 pixels_per_mm,
-                output_work_area=_guarded_output_work_area(self.runtime),
+                output_work_area=(
+                    guarded_output
+                    if coordinate_frame is None
+                    else camera_area
+                ),
             )
+            if coordinate_frame is not None:
+                output_polygon, _outside = _apply_local_output_review(
+                    trace_result.detections,
+                    coordinate_frame,
+                    guarded_polygon or guarded_output,
+                )
             usable_detections, usable_indices, evidence = (
                 _usable_template_detections(trace_result.detections)
             )
@@ -1420,7 +1987,7 @@ class DesktopController(QtCore.QObject):
         evidence_warning = str(best.get("template_evidence_warning", ""))
         if evidence_warning:
             message = f"{message} {evidence_warning}"
-        return {
+        payload = {
             **best,
             "matched": accepted,
             "feature_match_found": feature_match_found,
@@ -1431,12 +1998,24 @@ class DesktopController(QtCore.QObject):
             "review_required": True,
             "message": message,
             "camera_image": image_to_qimage(image),
+            "camera_image_area": {
+                "x_min": float(camera_area.x_min),
+                "x_max": float(camera_area.x_max),
+                "y_min": float(camera_area.y_min),
+                "y_max": float(camera_area.y_max),
+            },
+            "review_signature": review_signature,
             "detections": [
                 detection.to_dict()
                 for detection in winning_trace.detections
             ],
             "candidates": candidates,
         }
+        if output_polygon is not None:
+            payload["output_work_area"] = None
+            payload["output_polygon_local_mm"] = output_polygon
+            payload["coordinate_space"] = "honeycomb_local"
+        return payload
 
     def match_cut_templates(
         self,
@@ -1483,6 +2062,35 @@ class DesktopController(QtCore.QObject):
     ) -> None:
         if request_id != self._template_match_request_id:
             return
+        signature = payload.get("review_signature")
+        if signature is None:
+            # Compatibility for non-camera harnesses; production matching always
+            # supplies a signature from _match_cut_templates_once().
+            self.templateMatchReady.emit(payload)
+            return
+        try:
+            current_signature = self._current_review_signature()
+        except Exception:
+            current_signature = None
+        if signature is None or tuple(signature) != current_signature:
+            self._template_review_active = False
+            self._template_review_signature = None
+            self.templateMatchReady.emit(
+                {
+                    "request_id": int(request_id),
+                    "matched": False,
+                    "message": (
+                        "Template matching was discarded because the honeycomb "
+                        "or bed mapping changed during capture. Run alignment again."
+                    ),
+                    "error": True,
+                    "candidates": [],
+                }
+            )
+            return
+        if request_id != self._template_match_request_id:
+            return
+        self._template_review_signature = tuple(signature)
         self.templateMatchReady.emit(payload)
 
     @QtCore.Slot(int, str)
@@ -1505,22 +2113,91 @@ class DesktopController(QtCore.QObject):
         self.errorOccurred.emit(f"Match cutting templates failed: {message}")
 
     def sample_trace_color(self, x_mm: float, y_mm: float) -> None:
+        cached_image = (
+            None
+            if self._trace_sample_image is None
+            else self._trace_sample_image.copy()
+        )
+        cached_area = self._trace_sample_area
+        cached_signature = self._trace_sample_signature
+
         def operation() -> dict[str, Any]:
             context = self.runtime.context
             if context.bed.calibration is None:
                 raise ValueError(
                     "Bed mapping is required before sampling camera color"
                 )
-            image = context.rectified_frame(refresh=True, precision=True)
-            area = self.runtime.settings.machine.work_area
+            frame_provider = getattr(
+                context,
+                "current_honeycomb_coordinate_frame",
+                None,
+            )
+            coordinate_frame = (
+                frame_provider()
+                if self._workspace_coordinate_space == "honeycomb_local"
+                and callable(frame_provider)
+                else None
+            )
+            if (
+                self._workspace_coordinate_space == "honeycomb_local"
+                and coordinate_frame is None
+            ):
+                raise ValueError(
+                    "The honeycomb-local color sample requires a current honeycomb reference"
+                )
+            current_signature = self._current_review_signature(coordinate_frame)
+            if (
+                cached_image is not None
+                and (
+                    cached_signature is None
+                    or tuple(cached_signature) != current_signature
+                )
+            ):
+                raise ValueError(
+                    "The honeycomb or bed mapping changed after Trace capture; "
+                    "run detection again before sampling a color"
+                )
+            fresh_area = cached_area
+            if fresh_area is None and coordinate_frame is not None:
+                fresh_area = WorkArea(
+                    0.0,
+                    coordinate_frame.width_mm,
+                    0.0,
+                    coordinate_frame.height_mm,
+                )
+            image = (
+                context.rectified_frame(
+                    refresh=True,
+                    precision=True,
+                    work_area=fresh_area,
+                    coordinate_frame=(
+                        coordinate_frame
+                        if cached_area is None
+                        else None
+                    ),
+                )
+                if cached_image is None
+                else cached_image
+            )
+            area = (
+                fresh_area
+                if fresh_area is not None
+                else self.runtime.settings.machine.work_area
+            )
             ppm = float(
                 self.runtime.settings.calibration.bed.pixels_per_mm
             )
             pixel_x = (float(x_mm) - area.x_min) * ppm
             pixel_y = (area.y_max - float(y_mm)) * ppm
             payload = sample_color(image, pixel_x, pixel_y, radius_px=6)
-            payload["machine_x"] = float(x_mm)
-            payload["machine_y"] = float(y_mm)
+            if coordinate_frame is None:
+                machine_x, machine_y = float(x_mm), float(y_mm)
+            else:
+                machine_x, machine_y = coordinate_frame.local_to_machine(x_mm, y_mm)
+                payload["honeycomb_x"] = float(x_mm)
+                payload["honeycomb_y"] = float(y_mm)
+            payload["machine_x"] = machine_x
+            payload["machine_y"] = machine_y
             return payload
 
         self._run(
@@ -1555,13 +2232,38 @@ class DesktopController(QtCore.QObject):
         )
 
 
-    def run_job(self, gcode: str, name: str, *, arm_phrase: str | None = None) -> None:
+    def run_job(
+        self,
+        gcode: str,
+        name: str,
+        *,
+        arm_phrase: str | None = None,
+        honeycomb_signature: tuple[Any, ...] | None = None,
+        guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
+    ) -> None:
         def operation() -> dict[str, Any]:
             machine = self.runtime.context.machine
             try:
-                program = machine.preflight_program(gcode)
+                # Reject malformed, stale calibration, or out-of-envelope
+                # programs before the single job-start Home performs motion.
+                self.runtime.context.validate_powered_calibration_support(gcode, name)
+                program = (
+                    machine.preflight_program(gcode)
+                    if guarded_output_polygon_mm is None
+                    else machine.preflight_program(
+                        gcode,
+                        guarded_output_polygon_mm=guarded_output_polygon_mm,
+                    )
+                )
+                if honeycomb_signature is not None:
+                    # Recheck immutable preparation provenance without moving
+                    # or capturing. The operator already reviewed the traced
+                    # image before generation.
+                    self.runtime.context.validate_honeycomb_execution_binding(
+                        honeycomb_signature
+                    )
                 if machine.settings.backend == "serial":
-                    machine.prepare_photo_position()
+                    machine.prepare_job_start()
                 if arm_phrase is not None:
                     machine.arm_program(arm_phrase, program)
                 return machine.start_validated_program(program, name)
@@ -1573,12 +2275,12 @@ class DesktopController(QtCore.QObject):
 
         def started(result: dict[str, Any]) -> None:
             self.jobStarted.emit(dict(result))
-            self._machine_changed(f"Homed, parked, and started {name}")
+            self._machine_changed(f"Homed and started {name}")
 
         self._run(
             operation,
             on_success=started,
-            label="Home, park, and start job",
+            label="Home and start job",
             requires_controller=True,
         )
 

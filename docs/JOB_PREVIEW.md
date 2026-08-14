@@ -12,7 +12,10 @@ Preview parses the finalized G-code text that is exported or passed to
 controller-ignored comments retain layer, pass, and source-object context.
 Configured laser-spot offsets are converted back to physical spot coordinates,
 so the graphical path remains registered to the camera workspace while the
-raw program retains controller coordinates.
+raw program retains controller coordinates. For a honeycomb-local project, the
+machine-coordinate plan is transformed through the prepared rigid honeycomb
+frame for display on the local X0..width, Y0..height canvas. This display
+transform does not replace or reindex the immutable plan.
 
 The cyan head marker at the end of the timeline is the final point in that
 generated stream. Automatic hardware preflight and successful-powered-job
@@ -29,7 +32,9 @@ motor-release phases after the previewed stream reaches 100%.
 - Playback speeds range from 0.1× to 40× and affect only the animation.
 - The current-move readout shows rapid/feed state, laser-off or explicit planned
   percentage and `S` value, speed in mm/s and as a percentage of the configured
-  work or travel limit, X/Y destination, layer, and pass.
+  work or travel limit, destination, layer, and pass. Honeycomb-local jobs show
+  both the honeycomb X/Y destination and the underlying machine X/Y destination;
+  machine-coordinate jobs show machine X/Y.
 - Toggle rapid travel, controller-power shading, display inversion, and the
   legend without changing the job. Power shading retains distinct `S` values
   within one operation instead of assigning one shade to the complete layer.
@@ -71,7 +76,10 @@ delays can still differ. Preview display options do not mutate the G-code. Large
 backward timeline jumps rebuild painter paths in bounded event-loop slices, so
 scrubbing does not monopolize the GUI. Any project revision invalidates the
 generated program and closes its Preview, requiring generation again before
-preview, export, or run.
+preview, export, or run. A honeycomb-local prepared job also binds the exact
+support pose, camera-to-machine map, and configured output polygon. Preview
+construction, reopening, export, Start Here, and Start reject the job if any of
+those bindings changed.
 
 The existing guarded run path remains authoritative. Preview cannot connect,
 home, enable motion, arm the laser, or submit commands, and it does not relax
@@ -126,5 +134,7 @@ boundary; it records the configured controller photography pose, inserts a
 fresh absolute-mm, laser-off positioning prologue, and opens another Preview.
 The replacement Preview therefore includes the physical laser-spot approach
 from Home/park to the selected boundary, including the configured spot offset.
-It never starts the machine, and it requires the normal confirmation, homing,
-bounds, preflight, and arming path afterward.
+It preserves the original prepared coordinate-space and fixed-polygon binding
+and retains the reviewed source move index even when its canvas is displayed in
+honeycomb-local coordinates. It never starts the machine, and it requires the
+normal confirmation, homing, bounds, preflight, and arming path afterward.

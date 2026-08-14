@@ -433,7 +433,9 @@ def test_trace_capture_uses_simulation_workspace_without_machine_activity() -> N
     assert result is not frame
 
 
-def test_work_area_reference_holds_only_through_raw_frame_capture() -> None:
+def test_work_area_reference_holds_only_through_raw_frame_capture(
+    tmp_path: Path,
+) -> None:
     calls: list[str] = []
     holding = False
     frame = np.full((8, 8, 3), 90, dtype=np.uint8)
@@ -486,6 +488,7 @@ def test_work_area_reference_holds_only_through_raw_frame_capture() -> None:
             _sharpness_score=score,
         ),
         lens=SimpleNamespace(model=None),
+        honeycomb_detection_input_path=tmp_path / "honeycomb-detection-test.png",
     )
     harness._stable_camera_burst = lambda: AppContext._stable_camera_burst(harness)
     harness._prepare_camera_burst = lambda value, *, undistort: (

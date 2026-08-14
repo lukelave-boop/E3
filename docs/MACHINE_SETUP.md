@@ -34,6 +34,13 @@ restoring it. A result that arrives after STOP is discarded.
 
 ## 1. Camera
 
+- `camera.view_rotation_degrees` rotates every raw-camera image shown in native
+  Machine Setup clockwise by 0, 90, 180, or 270 degrees. Clicks are transformed
+  back into the original sensor coordinates before calibration, ruler fitting,
+  or manual point entry. This is a presentation setting: it does not rotate
+  captured files, change lens/bed calibration coordinates, swap controller
+  axes, or alter motion and output bounds. Choose the quarter-turn that makes
+  machine X increase to screen-right and machine Y increase toward screen-top.
 - Inspect a raw preview and save a corrected still.
 - Apply every camera control from the active configuration. Unsupported or
   rejected V4L2 controls are reported rather than silently treated as applied;
@@ -151,6 +158,13 @@ is redone against the current lens model.
 After a camera move, use **Fresh automatic base mapping (keyed 5 x 5)**. It
 does not use the old camera map and does not require manual point entry:
 
+The powered base-map pattern is the sole support-containment bootstrap
+exception in Machine Setup: its image-to-machine map must exist before the
+honeycomb corners can be expressed in machine coordinates. The job remains
+bounded by the configured machine area. The restrained sacrificial sheet must
+cover the exact reviewed target pattern; the honeycomb outline does not
+authorize this step.
+
 1. Rigidly restrain a clean sacrificial sheet that covers every displayed grid
    coordinate.
 2. Enter a previously established visible-marking power,
@@ -169,22 +183,45 @@ does not use the old camera map and does not require manual point entry:
    orange, and the guarded laser-output area
    after boundary margin and any configured laser-spot offset in green. Compare
    both axes to rigid honeycomb rulers.
-   This is a diagnostic for origin, scale, and crop errors; it never changes
-   configuration automatically and does not prove laser reach or collision
-   clearance. If it exposes a discrepancy, correct the configuration, restart,
-   use a project with matching bounds, and repeat the fresh base map.
-6. Optional: set **Detected ruler span** to the printed span (normally `190 mm`),
-   choose **Detect ruler reference (3 hints)**, then click roughly near the first
-   endpoint, shared ruler corner, and other endpoint. These are search hints,
-   not measured coordinates. The software must detect the physical baselines
-   and repeated 1 mm ticks, verify spacing/perpendicularity, and show the fitted
-   magenta outline for review. A failed fit saves nothing. The result is a visual
-   reference for the movable honeycomb. It is not calibration evidence and
-   cannot modify or veto
-   the bed map, Trace selection, template matching, generated paths, work area,
-   guarded limits, preflight, arming, or execution. The laser-burned keyed map
-   remains authoritative. Use **Clear visual reference** or re-detect after the
-   honeycomb moves.
+   This is a diagnostic for camera-to-machine origin, scale, and crop errors;
+   it never changes configuration automatically and does not prove laser reach
+   or collision clearance. If it exposes a discrepancy, stop and correct the
+   camera/machine calibration evidence before proceeding. Do not resize the
+   machine-output envelope merely to match the movable honeycomb.
+6. Set **Physical ruler span** to the printed span (normally `190 mm`)
+   and choose **Detect honeycomb automatically**. Vision segments the dominant
+   rectangular honeycomb and independently fits all four cutting-surface edges.
+   The active bed map maps those four measured intersections into machine
+   coordinates and preserves their semantic order as origin, +X, opposite, and
+   +Y. **Physical ruler span** defines the nominal honeycomb-local width and
+   height; it does not replace the four measured corners or fabricate 190 mm
+   observed edge lengths. Printed tick recognition is not required.
+   Review and accept the detected outline. Acceptance stores a schema-2 support
+   plus the exact reviewed teaching image, its four image corners, and digests
+   binding the image, support frame, and complete bed map. Only this accepted
+   automatic four-edge result is execution-verifiable. At Start, image
+   registration uses only fresh, spatially distributed features inside the
+   accepted cutting surface and projects the four taught corners as the pose
+   measurement. Missing, stale, insufficiently covered, ambiguous,
+   displaced, scaled, or non-square evidence fails before arming.
+7. **Fallback: detect with 3 hints** is a display/diagnostic last resort. Its
+   X-ruler, approximate shared-zero, and Y-ruler clicks only select search
+   corridors; they are not measured corners. It can save a legacy visual
+   reference, but it lacks four-corner evidence and cannot authorize a
+   honeycomb-local job or any powered post-map Machine Setup job. Run automatic
+   detection successfully before powered work.
+
+The execution-verifiable result defines the movable honeycomb's rigid
+honeycomb-local X0..190, Y0..190 job frame. The live camera, grid, Trace, and
+project geometry share that frame. Green maps the configured output authority
+into it. For the active hardware profile this is a fixed 210 × 210 mm machine
+polygon, locally X/Y−10..200, recorded from the operator-confirmed output area;
+automatic detection never moves or expands it. Features outside green remain
+red, unchecked, and blocked. Ordinary machine-coordinate jobs retain their
+guarded rectangle. Preflight, arming, and execution use the same selected
+authority. The laser-burned keyed map remains the camera-to-machine
+calibration. Use **Clear visual reference** or re-detect automatically after the
+honeycomb moves.
 
 The generated pattern contains 23 regular crosses plus a larger and a medium
 interior cross. Those two keys let the detector resolve rotation and reflection
@@ -251,6 +288,16 @@ Fine registration verifies the solved bed map using eight fresh crosses placed
 between the common 5×5 grid locations. Use a clean sacrificial surface at the
 calibrated material height and rigidly restrain it to the moving bed.
 
+Powered preparation requires the current accepted automatic four-corner
+honeycomb reference. The targets are laid out inside that cutting surface and
+the configured machine area. Generation checks every powered segment against
+the support polygon and the complete program against machine bounds. The
+prepared session binds its exact G-code, support corners, and complete bed-map
+identity. Start repeats those checks, performs one laser-off Home, and begins
+the validated program without another camera capture or photography-position
+park. This remains a software guardrail, not a
+safety-rated containment system.
+
 Each newly prepared session records the exact active homography and
 residual-mesh revision. If either changes before capture, or an older session
 lacks that identity, capture is rejected before Home / park and a new mark job
@@ -303,6 +350,11 @@ The fine translation belongs to camera-to-machine registration. It is not a
 laser-head mounting offset and does not modify `laser.spot_offset_x_mm` or
 `laser.spot_offset_y_mm`.
 
+Applying or resetting a translation/full-bed refinement changes the complete
+bed-map identity and clears the support reference. Capture a new ruler overlay,
+run automatic four-edge detection, and accept the new teaching image before
+preparing another powered post-map calibration job.
+
 ### Dense local correction
 
 If the remaining error changes by bed position after the homography and fine
@@ -311,12 +363,20 @@ exact powered 25-cross Preview, then run it on a clean, restrained sacrificial
 surface at calibration height. The reviewed mesh is a bounded
 nonlinear residual layer over the existing map and can be reset independently.
 
+Powered dense preparation requires the current accepted automatic four-corner
+support. Its regular Cartesian grid remains machine-axis aligned inside a
+shrunken rectangle whose complete powered crosses fit the support and machine
+area. The session is bound and reverified at Start in the same way as fine
+registration.
+
 The mesh is applied consistently to camera-to-machine conversion,
 machine-to-camera placement, and image rectification. It rejects missing or
 low-confidence marks, corrections over 3 mm, and abrupt local distortion.
 After applying it, use the 4 × 4 mesh check on **Accuracy validation**. Its 16
 interstitial marks were not used for fitting; passing requires at most 0.30 mm
-RMS and 0.60 mm maximum error.
+RMS and 0.60 mm maximum error. Applying or resetting the mesh clears the support
+because it changes the bed-map identity; automatically detect and accept the
+support again before preparing the powered 4×4 check.
 
 If that first independent check has a coherent bounded residual, **Apply
 reviewed validation refinement** becomes available. This applies one guarded
@@ -324,7 +384,10 @@ update to the existing mesh; it cannot be repeated against the same mesh. Use a
 new sheet, the clean reverse side, or another clean restrained surface before
 running **Prepare powered shifted confirmation**. The shifted 16 positions
 are different from both the original 25 fit marks and the 16 refinement marks.
-Only that fresh confirmation result is the final accuracy measurement.
+Applying the reviewed validation refinement also clears the support; detect and
+accept it again before preparing the shifted powered job. Both 4×4 jobs require
+support-contained powered segments and the exact support/map Start check. Only
+that fresh confirmation result is the final accuracy measurement.
 
 A failed fit is still a review result. The captured image and all 25 measured
 positions remain visible. One occluded or clearly unreliable grid detection can
@@ -339,8 +402,11 @@ This is the independent holdout check for a translation or full-bed refinement.
 It uses five locations that are not among the eight fine-registration marks and
 does not fit or change calibration.
 
-The validation session is likewise bound to the exact active homography and
-residual-mesh revision and fails before motion when that map has changed.
+Powered validation requires the current accepted automatic four-corner support.
+Its powered segments fit both that polygon and the configured machine area. The
+session is bound to the exact active homography, residual-mesh revision, support,
+and G-code; Start rejects a changed binding before its single laser-off Home and
+arming sequence.
 
 1. Put a clean sacrificial surface at the calibrated height and rigidly restrain
    it to the moving bed.

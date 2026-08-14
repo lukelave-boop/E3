@@ -97,8 +97,11 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             label_text
         )
         assert "Detected honeycomb rulers" in label_text
+        assert dialog.honeycomb_support_auto_button.text() == (
+            "Detect honeycomb automatically"
+        )
         assert dialog.honeycomb_support_record_button.text() == (
-            "Detect ruler reference (3 hints)"
+            "Fallback: detect with 3 hints"
         )
         assert "not recorded" in dialog.honeycomb_support_status.text()
         assert dialog.points.rowCount() >= 4
@@ -251,6 +254,44 @@ def test_image_picker_zoom_keeps_source_pixel_mapping(
         / picker._display_rect.height()
     )
     assert picked == [pytest.approx((expected_x, expected_y))]
+    picker.close()
+
+
+def test_image_picker_clockwise_view_rotation_preserves_source_click_coordinates(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    picker = ImagePicker(rotation_degrees=90)
+    picker.resize(400, 600)
+    picker.show()
+    image = np.zeros((100, 200, 3), dtype=np.uint8)
+    image[20, 30] = (10, 20, 30)
+    picker.set_image(image)
+    qt_application.processEvents()
+
+    assert picker._image is not None
+    assert (picker._image.width(), picker._image.height()) == (100, 200)
+    display_x = 99.0 - 20.0
+    display_y = 30.0
+    cursor = QtCore.QPointF(
+        picker._display_rect.x()
+        + display_x * picker._display_rect.width() / picker._image.width(),
+        picker._display_rect.y()
+        + display_y * picker._display_rect.height() / picker._image.height(),
+    )
+    picked: list[tuple[float, float]] = []
+    picker.pointPicked.connect(lambda x, y: picked.append((x, y)))
+    picker.mousePressEvent(
+        QtGui.QMouseEvent(
+            QtCore.QEvent.Type.MouseButtonPress,
+            cursor,
+            cursor,
+            QtCore.Qt.MouseButton.LeftButton,
+            QtCore.Qt.MouseButton.LeftButton,
+            QtCore.Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+    assert picked == [pytest.approx((30.0, 20.0))]
     picker.close()
 
 
@@ -440,7 +481,7 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
             np.asarray(((10.0, 10.0), (200.0, 10.0), (200.0, 200.0), (10.0, 200.0)))
         )
         assert dialog.honeycomb_support_record_button.text() == (
-            "Detect ruler reference (3 hints)"
+            "Fallback: detect with 3 hints"
         )
         assert "ruler 0/0 maps to X10.0/Y10.0" in (
             dialog.honeycomb_support_status.text()
@@ -463,6 +504,8 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
         metadata = _honeycomb_support_metadata(runtime)
         usable, indices, evidence = _usable_template_detections([detection])
         assert metadata is not None and metadata["reference_only"] is True
+        assert "corners_local_mm" not in metadata
+        assert metadata["corners_machine_mm"][0] == pytest.approx([10.0, 10.0])
         assert "visual comparison only" in metadata["message"]
         assert usable == [detection]
         assert indices == [0]

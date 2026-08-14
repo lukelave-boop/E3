@@ -69,6 +69,7 @@ def test_pick_color_button_drives_canvas_sample_and_updates_real_color(
     )
     harness._clear_template_preview = lambda show_message=False: None
     harness._work_area_signature = E3MainWindow._work_area_signature
+    harness._reconcile_pristine_project_frame = lambda: False
     harness._require_project_machine_work_area_match = lambda: (
         E3MainWindow._require_project_machine_work_area_match(harness)
     )

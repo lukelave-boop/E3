@@ -2,6 +2,71 @@
 
 ## Unreleased — `desktop-v1` / `0.2.0.dev0`
 
+- Projects now explicitly distinguish legacy machine coordinates from a
+  movable honeycomb-local coordinate system. New projects use the current
+  detected cutting surface as X0..190, Y0..190; schema-1 projects migrate as
+  machine-coordinate projects and are never silently reinterpreted.
+- Corrected camera images can now be rectified directly into the rigid
+  honeycomb-local frame. This aligns camera pixels, rulers, the authoring grid,
+  Trace results, and object coordinates while keeping the configured machine
+  envelope independent. The rigid fit removes small ruler-detection shear.
+- Honeycomb-local vector, fill, image-raster, and frame jobs are transformed to
+  machine coordinates only at generation. Local geometry, transformed beam
+  geometry, laser-spot-corrected controller motion, and the independent machine
+  envelope are each validated. Jobs bind the exact support and complete bed-map
+  digest and are rejected after either changes. Start rechecks that immutable
+  binding without another camera capture, then performs one laser-off Home and
+  begins the validated program without parking at the photography pose. The
+  active hardware profile can bind these jobs to an explicit
+  fixed convex output polygon independent of the camera-calibration rectangle.
+  The current operator-confirmed polygon is a 210 × 210 mm square centered on
+  the accepted 190 mm support (local X/Y −10..200); it is immutable across live
+  detections and is rechecked by low-level preflight.
+- Execution no longer repeats camera pose verification after the operator has
+  traced, generated, reviewed, and selected Start. This removes the previous
+  Home/park/capture/release/Home sequence. The prepared support, bed-map, and
+  output-polygon signatures remain mandatory and stale software bindings are
+  still rejected before the single job-start Home.
+
+- The desktop live camera overlay and Trace now display and analyze a direct
+  honeycomb-local rectification containing the complete current support instead
+  of cropping it to the configured machine rectangle. The canvas separately
+  maps the configured guarded laser-output polygon into that local frame, and
+  observations outside it remain red, unchecked, and blocked from output.
+- Replacing a detected support now updates any clean, empty, unsaved
+  honeycomb-local project to the replacement's exact dimensions. Trace and
+  color sampling repeat that reconciliation before their strict frame check,
+  fixing a stale 192 mm project left behind after accepting a 190 mm support.
+  Saved, edited, or nonempty projects are still never reinterpreted.
+- Fine-registration targets now follow the current detected honeycomb cutting
+  surface instead of fixed machine-work-area fractions. Complete cross extents
+  must fit both the honeycomb polygon and guarded machine rectangle, and Start
+  rechecks the exact powered segments against the unchanged support reference.
+- Added validated quarter-turn rotation for native Machine Setup camera views.
+  All overlays rotate with the image, while picker clicks are mapped back into
+  unchanged sensor coordinates so existing lens and bed calibration data stay
+  valid. The active hardware profile uses a 90-degree clockwise view, making
+  machine X screen-right and machine Y screen-up for its sideways camera mount.
+- Base-grid detection now skips duplicate, irregular, and edge-contaminated
+  OpenCV lattices instead of accepting the first nominal 25-point result.
+  Honeycomb-ruler pitch measurement also refines its autocorrelation peak below
+  one pixel, avoiding whole-pixel scale errors at the current camera resolution.
+  Its three clicks now select the X ruler, Y ruler, and their approximate shared
+  zero rather than acting as measured endpoints; detected baseline intersection
+  and 1 mm pitch project the configured physical span for independent bed-map
+  comparison.
+  Automatic honeycomb detection is now the primary workflow: it segments the
+  dominant dense rectangle, uses its outer frame only as a search envelope,
+  refines inward to four continuous ruler-square borders, and orders those corners with
+  the active bed map, and uses the configured physical span to construct the ideal
+  square. The outer visual frame is not treated as a ruler measurement and printed
+  tick recognition is not required.
+  Three hints remain only as an
+  explicitly labeled fallback for failed or ambiguous automatic detection.
+  The active hardware calibration profile can also use its supplied annotated
+  homed-bed photograph as a visual template: feature registration projects the
+  explicitly taught green cutting-surface corners into a fresh capture, avoiding
+  confusion with the red outer physical frame.
 - Trace review now draws each detection number as a fixed-size, high-contrast
   badge over the camera image and provides a tri-state **Select / deselect all**
   checkbox above the detected-outline list.
@@ -96,11 +161,13 @@
   configured and margin/spot-offset-aware guarded boundaries; it is diagnostic
   only and never rewrites machine limits from a movable honeycomb ruler.
   Step 3 can also persist an optional detected honeycomb-ruler outline for
-  visual comparison. Three rough clicks only seed the ruler search; verified
-  baselines and repeated tick marks define the saved reference. The hints and
-  result cannot change calibration, detection
-  selection, template matching, generated paths, or any machine/output safety
-  boundary.
+  visual comparison and, in the new desktop workflow, the rigid local job
+  frame. Three rough clicks identify both ruler corridors and their
+  approximate shared zero; verified baselines, intersection, and repeated tick
+  pitch define the saved reference. The hints and
+  result cannot change the bed map or any machine/output safety boundary;
+  honeycomb-local camera, Trace, project, and generated-path placement now bind
+  to its exact digest.
   Template alignment now excludes cropped/out-of-output evidence instead of
   allowing it to support a seemingly viable match, and held-capture errors show
   any secondary motor-release cleanup failure in the same operator message.

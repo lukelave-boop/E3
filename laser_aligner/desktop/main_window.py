@@ -9,6 +9,7 @@ from ..camera import load_corrected_test_image
 from ..core import CoreRuntime
 from ..errors import SvgError
 from ..gcode.job_plan import build_job_plan, restart_program_from_move
+from ..geometry.polygon import normalize_convex_polygon
 from ..geometry.svg import parse_svg
 from ..identity import application_identity, application_window_title
 from ..materials import MaterialDatabase, MaterialPreset
@@ -21,6 +22,7 @@ from ..project import (
     AssignLayerCommand,
     Bounds,
     CommandStack,
+    CoordinateSpace,
     DuplicateObjectsCommand,
     GroupObjectsCommand,
     LayerMode,
@@ -298,6 +300,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_powered = False
         self.last_job_revision: int | None = None
         self.last_job_work_area: tuple[float, float, float, float] | None = None
+        self.last_job_coordinate_frame: tuple[Any, ...] | None = None
         self.last_job_preview_data: PreparedJobPreview | None = None
         self._job_preview_dialog: JobPreviewDialog | None = None
         self._machine_setup_dialog: MachineSetupDialog | None = None
@@ -372,6 +375,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.start()
 
     def _new_document(self) -> ProjectDocument:
+        support = self.runtime.context._current_honeycomb_support()
+        # The authoring/display frame and execution authority are deliberately
+        # separate.  A current legacy three-point reference is still enough to
+        # place the camera raster and the empty X0/Y0 drafting surface over the
+        # physical honeycomb.  It remains unable to generate or run a powered
+        # honeycomb-local job: _project_coordinate_frame() requires the newer
+        # automatic four-corner evidence before toolpath preparation.
+        if support is not None:
+            return ProjectDocument.new(
+                work_area=Bounds(
+                    0.0,
+                    0.0,
+                    support.support_width_mm,
+                    support.support_height_mm,
+                ),
+                coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+            )
         area = self.runtime.settings.machine.work_area
         return ProjectDocument.new(
             work_area=Bounds(area.x_min, area.y_min, area.x_max, area.y_max)
@@ -922,7 +942,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _connect_signals(self) -> None:
         self.workspace.cursorPositionChanged.connect(
-            lambda x, y: self.cursor_label.setText(f"X {x:8.3f}  Y {y:8.3f} mm")
+            lambda x, y: self.cursor_label.setText(
+                (
+                    "Honeycomb "
+                    if self.document.coordinate_space
+                    is CoordinateSpace.HONEYCOMB_LOCAL
+                    else ""
+                )
+                + f"X {x:8.3f}  Y {y:8.3f} mm"
+            )
         )
         self.workspace.zoomChanged.connect(
             lambda zoom: self.zoom_label.setText(f"Zoom {zoom * 100:.0f}%")
@@ -1074,6 +1102,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.templateMatchReady.connect(
             self._template_match_ready
         )
+        self.controller.reviewEvidenceInvalidated.connect(
+            self._calibration_review_evidence_invalidated
+        )
         self.controller.simulationFrameChanged.connect(
             self._simulation_frame_changed
         )
@@ -1092,6 +1123,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.tasksDrained.connect(self._background_tasks_drained)
 
     def _refresh_document(self, selected_ids: list[str] | None = None) -> None:
+        self.controller.set_workspace_coordinate_space(
+            self.document.coordinate_space.value
+        )
         if not any(layer.id == self.active_layer_id for layer in self.document.layers):
             self.active_layer_id = self.document.active_layer_id
         if self.workspace.creation_tool == "rectangle":
@@ -1181,6 +1215,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_powered = False
         self.last_job_revision = None
         self.last_job_work_area = None
+        self.last_job_coordinate_frame = None
         self.last_job_preview_data = None
         preview_dialog = getattr(self, "_job_preview_dialog", None)
         if preview_dialog is not None:
@@ -1819,7 +1854,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         source_document = self.document
         revision = self.document.revision
-        work_area = self._work_area_signature(self.document.work_area)
+        machine_work_area = self.runtime.settings.machine.work_area
+        work_area = self._work_area_signature(machine_work_area)
+        coordinate_frame = self._project_coordinate_frame()
+        coordinate_frame_signature = self._project_execution_signature()
+        guarded_output_polygon_mm = (
+            self.runtime.settings.laser.guarded_output_polygon_mm
+            if coordinate_frame_signature is not None
+            else None
+        )
         start_position = self._planned_job_start_position()
         optimize_order = self.actions["optimize_paths"].isChecked()
         laser = self.runtime.settings.laser
@@ -1840,6 +1883,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "source_document": source_document,
             "revision": revision,
             "work_area": work_area,
+            "machine_work_area": machine_work_area,
+            "coordinate_frame": coordinate_frame,
+            "coordinate_frame_signature": coordinate_frame_signature,
+            "guarded_output_polygon_mm": guarded_output_polygon_mm,
             "start_position": start_position,
             "optimize_order": optimize_order,
             "laser": laser,
@@ -1902,6 +1949,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 laser,
                 optimize_order=bool(context["optimize_order"]),
                 start_position=start_position,
+                coordinate_frame=context["coordinate_frame"],
+                machine_work_area=context["machine_work_area"],
+                guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
             )
             plan = job.plan
             if plan is None:
@@ -1928,6 +1978,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "powered": powered,
                 "revision": context["revision"],
                 "work_area": context["work_area"],
+                "coordinate_frame_signature": context[
+                    "coordinate_frame_signature"
+                ],
             }
 
         self.controller.run_background(
@@ -1952,6 +2005,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
         cancellation = self._job_worker_requests.get(request_id)
         self._finish_job_worker(request_id)
         owner = ("worker", request_id)
+        try:
+            current_frame_signature = self._project_execution_signature()
+        except Exception:
+            current_frame_signature = object()
+        authority_current = False
+        if payload is not None:
+            authority_current = self._prepared_output_authority_is_current(
+                payload["job"]
+            )
         if (
             payload is None
             or cancellation is None
@@ -1959,6 +2021,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             or request_id != self._job_request_id
             or self._job_preparation_owner != owner
             or int(payload["revision"]) != self.document.revision
+            or payload.get("coordinate_frame_signature")
+            != current_frame_signature
+            or not authority_current
         ):
             if self._job_preparation_owner == owner:
                 self._release_job_preparation(owner)
@@ -2016,11 +2081,33 @@ class E3MainWindow(QtWidgets.QMainWindow):
         payload: dict[str, Any],
     ) -> None:
         job = payload["job"]
+        prepared_space = getattr(job, "coordinate_space", CoordinateSpace.MACHINE)
+        prepared_signature = payload.get("coordinate_frame_signature")
+        if prepared_space is CoordinateSpace.HONEYCOMB_LOCAL:
+            if prepared_signature is None:
+                raise ValueError(
+                    "A honeycomb-local prepared job is missing its execution binding"
+                )
+            frame_signature = getattr(job, "coordinate_frame_signature", None)
+            if tuple(prepared_signature[:3]) != tuple(frame_signature or ()):
+                raise ValueError(
+                    "Prepared honeycomb job and execution binding disagree"
+                )
+        elif prepared_signature is not None:
+            raise ValueError(
+                "A machine-coordinate prepared job cannot carry a honeycomb binding"
+            )
+        if not self._prepared_output_authority_is_current(job):
+            raise ValueError(
+                "Prepared job and configured laser-output authority disagree"
+            )
+        job.execution_signature = prepared_signature
         self.last_job = job
         self.last_job_name = str(payload["filename"])
         self.last_job_powered = bool(payload["powered"])
         self.last_job_revision = int(payload["revision"])
         self.last_job_work_area = tuple(payload["work_area"])
+        self.last_job_coordinate_frame = prepared_signature
         self.last_job_preview_data = payload["prepared"]
         if payload.get("summary"):
             summary = str(payload["summary"])
@@ -2073,9 +2160,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._gcode_render_timer.start()
 
             plan = self.last_job.plan
-            self.workspace.start_toolpath_preview(
-                plan,
-                on_progress=lambda completed, total, request_id=request_id: (
+            preview_kwargs = {
+                "on_progress": lambda completed, total, request_id=request_id: (
                     self._job_render_progressed(
                         request_id,
                         "workspace",
@@ -2083,17 +2169,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
                         total,
                     )
                 ),
-                on_finished=lambda completed, request_id=request_id: (
+                "on_finished": lambda completed, request_id=request_id: (
                     self._job_render_stage_finished(request_id, "workspace")
                     if completed
                     else None
                 ),
-                on_failed=lambda message, request_id=request_id: (
+                "on_failed": lambda message, request_id=request_id: (
                     self._job_render_failed(
                         request_id,
                         f"Workspace preview failed: {message}",
                     )
                 ),
+            }
+            if self.last_job_coordinate_frame is not None:
+                preview_kwargs["coordinate_frame"] = self._project_coordinate_frame()
+            self.workspace.start_toolpath_preview(
+                plan,
+                **preview_kwargs,
             )
         except Exception as exc:
             self._job_render_failed(
@@ -2157,11 +2249,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "Exact job Preview lost its prepared plan before construction",
             )
             return
+        if not self._prepared_frame_is_current():
+            self._job_render_failed(
+                request_id,
+                "Exact job Preview authority changed before construction; regenerate",
+            )
+            return
         previous = self._job_preview_dialog
         if previous is not None:
             previous.close()
         area = self.document.work_area
         try:
+            coordinate_frame = (
+                self._project_coordinate_frame()
+                if self.last_job_coordinate_frame is not None
+                else None
+            )
             dialog = JobPreviewDialog(
                 self.last_job.plan,
                 (area.x_min, area.x_max, area.y_min, area.y_max),
@@ -2175,6 +2278,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 max_travel_feed_mm_min=(
                     self.runtime.settings.machine.max_travel_feed_mm_min
                 ),
+                coordinate_frame=coordinate_frame,
             )
         except Exception as exc:
             self._job_render_failed(
@@ -2343,7 +2447,133 @@ class E3MainWindow(QtWidgets.QMainWindow):
             float(area.y_max),
         )
 
+    def _project_coordinate_frame(self) -> Any | None:
+        coordinate_space = getattr(
+            self.document,
+            "coordinate_space",
+            CoordinateSpace.MACHINE,
+        )
+        if coordinate_space is CoordinateSpace.MACHINE:
+            return None
+        support = self.runtime.context._current_honeycomb_support()
+        if support is None or not support.is_execution_verifiable:
+            raise ValueError(
+                "This project uses honeycomb-local coordinates, but no current "
+                "automatic four-corner honeycomb reference is available. "
+                "Re-detect the honeycomb."
+            )
+        expected = (support.support_width_mm, support.support_height_mm)
+        actual = (self.document.work_area.width, self.document.work_area.height)
+        if any(abs(left - right) > 1e-6 for left, right in zip(expected, actual, strict=True)):
+            raise ValueError(
+                "The project honeycomb dimensions do not match the current "
+                f"reference ({actual[0]:g} × {actual[1]:g} mm project; "
+                f"{expected[0]:g} × {expected[1]:g} mm detected)."
+            )
+        if abs(self.document.work_area.x_min) > 1e-6 or abs(self.document.work_area.y_min) > 1e-6:
+            raise ValueError("Honeycomb-local projects must start at X0 Y0")
+        return support.coordinate_frame
+
+    def _project_execution_signature(self) -> tuple[Any, ...] | None:
+        if getattr(
+            self.document,
+            "coordinate_space",
+            CoordinateSpace.MACHINE,
+        ) is CoordinateSpace.MACHINE:
+            return None
+        self._project_coordinate_frame()
+        signature = self.runtime.context.honeycomb_execution_signature()
+        if signature is None:
+            raise ValueError(
+                "The active honeycomb or camera-to-machine mapping is not current"
+            )
+        return tuple(signature)
+
+    def _configured_guarded_output_polygon(
+        self,
+    ) -> tuple[tuple[float, float], ...] | None:
+        polygon = getattr(
+            getattr(getattr(self, "runtime", None), "settings", None),
+            "laser",
+            None,
+        )
+        polygon = getattr(polygon, "guarded_output_polygon_mm", None)
+        if polygon is None:
+            return None
+        return E3MainWindow._canonical_guarded_output_polygon(
+            polygon,
+            label="laser.guarded_output_polygon_mm",
+        )
+
+    @staticmethod
+    def _canonical_guarded_output_polygon(
+        polygon: Any,
+        *,
+        label: str,
+    ) -> tuple[tuple[float, float], ...]:
+        normalized = normalize_convex_polygon(
+            polygon,
+            label=label,
+        )
+        start = min(range(len(normalized)), key=lambda index: normalized[index])
+        return normalized[start:] + normalized[:start]
+
+    def _prepared_output_authority_is_current(self, job: ProjectJob) -> bool:
+        coordinate_space = getattr(job, "coordinate_space", CoordinateSpace.MACHINE)
+        prepared_polygon = getattr(job, "guarded_output_polygon_mm", None)
+        if coordinate_space is CoordinateSpace.MACHINE:
+            return prepared_polygon is None
+        if coordinate_space is not CoordinateSpace.HONEYCOMB_LOCAL:
+            return False
+        try:
+            if prepared_polygon is not None:
+                prepared_polygon = E3MainWindow._canonical_guarded_output_polygon(
+                    prepared_polygon,
+                    label="prepared guarded output polygon",
+                )
+            return prepared_polygon == E3MainWindow._configured_guarded_output_polygon(
+                self
+            )
+        except (TypeError, ValueError):
+            return False
+
+    def _prepared_frame_is_current(self) -> bool:
+        job = self.last_job
+        if job is None:
+            return False
+        coordinate_space = getattr(job, "coordinate_space", CoordinateSpace.MACHINE)
+        if coordinate_space is CoordinateSpace.MACHINE:
+            return (
+                self.last_job_coordinate_frame is None
+                and E3MainWindow._prepared_output_authority_is_current(self, job)
+            )
+        if (
+            coordinate_space is not CoordinateSpace.HONEYCOMB_LOCAL
+            or self.last_job_coordinate_frame is None
+            or getattr(job, "execution_signature", None)
+            != self.last_job_coordinate_frame
+        ):
+            return False
+        try:
+            frame_signature = getattr(job, "coordinate_frame_signature", None)
+            if tuple(self.last_job_coordinate_frame[:3]) != tuple(
+                frame_signature or ()
+            ):
+                return False
+            if not E3MainWindow._prepared_output_authority_is_current(self, job):
+                return False
+            return self.last_job_coordinate_frame == self._project_execution_signature()
+        except Exception:
+            return False
+
     def _require_project_machine_work_area_match(self) -> None:
+        if getattr(
+            self.document,
+            "coordinate_space",
+            CoordinateSpace.MACHINE,
+        ) is CoordinateSpace.HONEYCOMB_LOCAL:
+            self._project_coordinate_frame()
+            return
         project = self._work_area_signature(self.document.work_area)
         machine = self._work_area_signature(self.runtime.settings.machine.work_area)
         if any(abs(left - right) > 1e-6 for left, right in zip(project, machine, strict=True)):
@@ -2430,6 +2660,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self.last_job_revision != self.document.revision:
             self._invalidate_generated_job()
             self.show_error("The project changed; regenerate before previewing")
+            return
+        if not self._prepared_frame_is_current():
+            self._invalidate_generated_job()
+            self.show_error(
+                "The honeycomb pose, camera mapping, or configured output boundary "
+                "changed; regenerate before previewing"
+            )
             return
         if not self._verify_prepared_job_assets("opening Preview"):
             return
@@ -2544,6 +2781,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._invalidate_generated_job()
             self.show_error("The project changed; regenerate before using Start Here")
             return
+        if not self._prepared_frame_is_current():
+            self._invalidate_generated_job()
+            self.show_error(
+                "The honeycomb pose or camera-to-machine mapping changed; "
+                "regenerate before using Start Here"
+            )
+            return
         answer = QtWidgets.QMessageBox.warning(
             self,
             "Prepare Start Here job",
@@ -2558,7 +2802,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if answer != QtWidgets.QMessageBox.StandardButton.Ok:
             return
         revision = self.document.revision
-        work_area = self._work_area_signature(self.document.work_area)
+        work_area = self._work_area_signature(self.runtime.settings.machine.work_area)
+        coordinate_frame_signature = self.last_job_coordinate_frame
         power_mode = self.runtime.settings.laser.power_mode
         controller_start_position = self._planned_job_start_position()
         source_job = self.last_job
@@ -2591,7 +2836,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 point_count=len(restarted.moves),
                 plan=restarted,
                 raster_assets=source_job.raster_assets,
+                coordinate_space=getattr(
+                    source_job,
+                    "coordinate_space",
+                    CoordinateSpace.MACHINE,
+                ),
+                coordinate_frame_signature=getattr(
+                    source_job,
+                    "coordinate_frame_signature",
+                    None,
+                ),
+                guarded_output_polygon_mm=getattr(
+                    source_job,
+                    "guarded_output_polygon_mm",
+                    None,
+                ),
             )
+            job.execution_signature = coordinate_frame_signature
             verify_project_job_assets(job)
             prepared = prepare_job_preview(restarted)
             if cancellation.is_set():
@@ -2603,6 +2864,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "powered": restarted.powered,
                 "revision": revision,
                 "work_area": work_area,
+                "coordinate_frame_signature": coordinate_frame_signature,
                 "frame": False,
                 "summary": (
                     f"Start Here at original move {move_index + 1} · "
@@ -2656,6 +2918,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._invalidate_generated_job()
             self.show_error("The project changed; regenerate before exporting")
             return
+        if not self._prepared_frame_is_current():
+            self._invalidate_generated_job()
+            self.show_error(
+                "The honeycomb pose or camera-to-machine mapping changed; "
+                "regenerate before exporting"
+            )
+            return
+        machine_area = self._work_area_signature(
+            self.runtime.settings.machine.work_area
+        )
+        if self.last_job_work_area != machine_area:
+            self.show_error(
+                "The prepared job work area does not match the configured machine. "
+                "Regenerate or prepare the job for this machine before exporting."
+            )
+            return
         if not self._verify_prepared_job_assets("exporting"):
             return
         path, _ = QtWidgets.QFileDialog.getSaveFileName(
@@ -2684,6 +2962,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._invalidate_generated_job()
             self.show_error("The project changed; regenerate the toolpath before running")
             return
+        if not self._prepared_frame_is_current():
+            self._invalidate_generated_job()
+            self.show_error(
+                "The honeycomb pose or camera-to-machine mapping changed; "
+                "regenerate the toolpath before running"
+            )
+            return
         if not self._verify_prepared_job_assets("running"):
             return
         machine_area = self._work_area_signature(
@@ -2711,10 +2996,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
             pending.pop("started_at", None)
             pending.pop("program_digest", None)
 
+        run_options: dict[str, Any] = {"arm_phrase": phrase}
+        if self.last_job_coordinate_frame is not None:
+            run_options["honeycomb_signature"] = self.last_job_coordinate_frame
+            run_options["guarded_output_polygon_mm"] = getattr(
+                self.last_job,
+                "guarded_output_polygon_mm",
+                None,
+            )
+        elif self.last_job_powered:
+            calibration_signature = (
+                self.runtime.context.calibration_job_honeycomb_signature(
+                    self.last_job_name
+                )
+            )
+            if calibration_signature is not None:
+                run_options["honeycomb_signature"] = calibration_signature
         self.controller.run_job(
             self.last_job.text,
             self.last_job_name,
-            arm_phrase=phrase,
+            **run_options,
         )
         if self.runtime.settings.machine.backend == "serial":
             self.show_notice("Homing and parking before job start…")
@@ -3142,7 +3443,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.template_panel.set_busy(False)
         camera_image = payload.get("camera_image")
         if isinstance(camera_image, QtGui.QImage) and not camera_image.isNull():
-            self._camera_image_ready(camera_image)
+            if payload.get("camera_image_area") is None:
+                self._camera_image_ready(camera_image)
+            else:
+                self._camera_image_ready(
+                    camera_image,
+                    image_area=E3MainWindow._camera_image_area(
+                        payload.get("camera_image_area")
+                    ),
+                    fit=True,
+                )
         candidates = [dict(item) for item in payload.get("candidates", [])]
         self.template_panel.set_rankings(candidates)
         template_id = str(payload.get("template_id") or "")
@@ -3198,6 +3508,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._template_match_result is not None
             and self._template_match_result.get("template_id") == template_id
         ):
+            signature = self._template_match_result.get("review_signature")
+            if signature is not None and not self.controller.review_signature_is_current(
+                signature
+            ):
+                self._calibration_review_evidence_invalidated()
+                self.show_notice(
+                    "The honeycomb or bed mapping changed; run template alignment again"
+                )
+                return
             detections = list(self._template_match_result.get("detections", []))
         self.workspace.set_template_preview(
             objects,
@@ -3279,6 +3598,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if template is None:
             self.show_notice("Select an available cutting template first")
             return
+        if self._template_match_result is not None:
+            signature = self._template_match_result.get("review_signature")
+            if signature is not None and not self.controller.review_signature_is_current(
+                signature
+            ):
+                self._calibration_review_evidence_invalidated()
+                self.show_error(
+                    "The honeycomb or bed mapping changed; run template alignment again"
+                )
+                return
         try:
             objects = instantiate_template(
                 template,
@@ -3338,6 +3667,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
+        self._reconcile_pristine_project_frame()
         try:
             self._require_project_machine_work_area_match()
         except Exception as exc:
@@ -3350,6 +3680,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self.runtime.context.bed.calibration is None:
             self.show_error("Bed mapping is required before sampling camera color")
             return
+        self._reconcile_pristine_project_frame()
         try:
             self._require_project_machine_work_area_match()
         except Exception as exc:
@@ -3374,6 +3705,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _trace_color_ready(self, payload: dict[str, Any]) -> None:
         self.trace_panel.set_color_sample(payload)
         self.inspector_tabs.select_panel("trace")
+        if "honeycomb_x" in payload:
+            self.show_notice(
+                f"Sampled target color at honeycomb X{payload['honeycomb_x']:.2f} "
+                f"Y{payload['honeycomb_y']:.2f}"
+            )
+            return
         self.show_notice(
             f"Sampled target color at X{payload['machine_x']:.2f} "
             f"Y{payload['machine_y']:.2f}"
@@ -3386,25 +3723,62 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _trace_result_ready(self, result: dict[str, Any]) -> None:
         camera_image = result.get("camera_image")
         if isinstance(camera_image, QtGui.QImage) and not camera_image.isNull():
-            self._camera_image_ready(camera_image)
+            if result.get("camera_image_area") is None:
+                self._camera_image_ready(camera_image)
+            else:
+                self._camera_image_ready(
+                    camera_image,
+                    image_area=E3MainWindow._camera_image_area(
+                        result.get("camera_image_area")
+                    ),
+                    fit=True,
+                )
         self._trace_result = result
         self.trace_panel.set_result(result)
         self.inspector_tabs.select_panel("trace")
-        self.workspace.set_trace_preview(
+        preview_args = (
             list(result.get("detections", [])),
             self.trace_panel.selected_ids(),
             result.get("honeycomb_support"),
         )
+        if result.get("output_work_area") is None:
+            output_polygon = result.get("output_polygon_local_mm")
+            if output_polygon is None:
+                self.workspace.set_trace_preview(*preview_args)
+            else:
+                self.workspace.set_trace_preview(
+                    *preview_args,
+                    output_polygon=output_polygon,
+                )
+        else:
+            self.workspace.set_trace_preview(
+                *preview_args,
+                result.get("output_work_area"),
+            )
         self.show_notice(str(result.get("message", "Object detection complete")))
 
     def _trace_selection_changed(self, selected_ids: list[str]) -> None:
         if self._trace_result is None:
             return
-        self.workspace.set_trace_preview(
+        preview_args = (
             list(self._trace_result.get("detections", [])),
             selected_ids,
             self._trace_result.get("honeycomb_support"),
         )
+        if self._trace_result.get("output_work_area") is None:
+            output_polygon = self._trace_result.get("output_polygon_local_mm")
+            if output_polygon is None:
+                self.workspace.set_trace_preview(*preview_args)
+            else:
+                self.workspace.set_trace_preview(
+                    *preview_args,
+                    output_polygon=output_polygon,
+                )
+        else:
+            self.workspace.set_trace_preview(
+                *preview_args,
+                self._trace_result.get("output_work_area"),
+            )
 
     def _clear_trace_preview(self) -> None:
         self.controller.cancel_trace_detection()
@@ -3498,6 +3872,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self._trace_result is None:
             self.show_error("Run object detection before creating vector paths")
             return
+        signature = self._trace_result.get("review_signature")
+        if signature is not None and not self.controller.review_signature_is_current(
+            signature
+        ):
+            self._clear_trace_preview()
+            self.show_error(
+                "The honeycomb or bed mapping changed; run object detection again"
+            )
+            return
         selected = set(str(value) for value in payload.get("selected_ids", []))
         detections = [
             item
@@ -3554,11 +3937,53 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 f"{'s' if len(objects) != 1 else ''}"
             )
 
-    def _camera_image_ready(self, image: QtGui.QImage) -> None:
+    @staticmethod
+    def _camera_image_area(payload: object) -> Bounds | None:
+        if not isinstance(payload, dict):
+            return None
+        try:
+            return Bounds(
+                float(payload["x_min"]),
+                float(payload["y_min"]),
+                float(payload["x_max"]),
+                float(payload["y_max"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _camera_image_ready(
+        self,
+        payload: object,
+        *,
+        image_area: Bounds | None = None,
+        fit: bool = False,
+    ) -> None:
+        image = payload
+        if isinstance(payload, dict):
+            image = payload.get("image")
+            if image_area is None:
+                image_area = self._camera_image_area(
+                    payload.get("camera_image_area")
+                )
+        if not isinstance(image, QtGui.QImage) or image.isNull():
+            return
+        effective_area = (
+            self.workspace.workspace_scene.work_area
+            if image_area is None
+            else image_area
+        )
+        area_changed = getattr(
+            self.workspace,
+            "_camera_image_area",
+            None,
+        ) != effective_area
         self.workspace.set_camera_image(
             image,
             pixels_per_mm=self.runtime.settings.calibration.bed.pixels_per_mm,
+            image_area=image_area,
         )
+        if fit or area_changed:
+            self.workspace.fit_camera_image()
         self.camera_panel.set_image_updated()
 
     def _camera_image_invalidated(self) -> None:
@@ -3823,6 +4248,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         dialog.tabs.setCurrentIndex(tab_index)
         dialog.calibrationChanged.connect(self.controller.poll_status)
         dialog.calibrationChanged.connect(self.controller.calibration_changed)
+        dialog.calibrationChanged.connect(self._calibration_project_frame_changed)
         # Build the Preview only after the modal Setup event loop has unwound.
         # Constructing it synchronously from accept() can strand the first render
         # behind the closing modal dialog.
@@ -3848,6 +4274,69 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.controller.set_live_camera(was_live, self.camera_panel.refresh_interval_ms())
         self.controller.poll_status()
 
+    def _reconcile_pristine_project_frame(self) -> bool:
+        """Move only a disposable empty project into the current coordinate frame."""
+
+        if (
+            self.project_path is not None
+            or self.document.objects
+            or not self.history.is_clean
+        ):
+            return False
+        replacement = self._new_document()
+        current_frame = (
+            self.document.coordinate_space,
+            self._work_area_signature(self.document.work_area),
+        )
+        replacement_frame = (
+            replacement.coordinate_space,
+            self._work_area_signature(replacement.work_area),
+        )
+        if current_frame == replacement_frame:
+            return False
+        self._invalidate_generated_job()
+        self.document = replacement
+        self.active_layer_id = self.document.active_layer_id
+        self.history.clear()
+        self.history.mark_clean()
+        self._clear_trace_preview()
+        self._clear_template_preview(show_message=False)
+        self._refresh_document()
+        if self.document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL:
+            self.show_notice(
+                "Updated the empty project to the detected honeycomb X0 Y0 frame "
+                f"({self.document.work_area.width:g} × "
+                f"{self.document.work_area.height:g} mm)"
+            )
+        else:
+            self.show_notice(
+                "Returned the empty project to machine coordinates because no "
+                "honeycomb reference is current"
+            )
+        return True
+
+    def _calibration_project_frame_changed(self) -> None:
+        """Reconcile prepared work and a pristine project with a new fixture pose."""
+
+        if not self._reconcile_pristine_project_frame():
+            self._invalidate_generated_job()
+
+    def _calibration_review_evidence_invalidated(self) -> None:
+        """Remove camera evidence whose coordinates belonged to the old map/pose."""
+
+        self._trace_result = None
+        self._template_match_result = None
+        self.workspace.clear_trace_preview()
+        self.workspace.clear_template_preview()
+        if hasattr(self, "trace_panel"):
+            self.trace_panel.clear_result()
+        if hasattr(self, "template_panel"):
+            self.template_panel.set_busy(False)
+            self.template_panel.clear_placement()
+            self.template_panel.set_match_message(
+                "Camera alignment changed. Run template alignment again."
+            )
+
     def _load_fine_registration_job(self, registration_job: Any) -> None:
         source_job = registration_job.program
         plan = getattr(source_job, "plan", None) or build_job_plan(
@@ -3859,6 +4348,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if isinstance(source_job, ProjectJob):
             job = source_job
             job.plan = plan
+            job.coordinate_space = CoordinateSpace.MACHINE
+            job.coordinate_frame_signature = None
+            job.execution_signature = None
+            job.guarded_output_polygon_mm = None
         else:
             job = ProjectJob(
                 text=source_job.text,
@@ -3869,6 +4362,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 path_count=source_job.path_count,
                 point_count=source_job.point_count,
                 plan=plan,
+                coordinate_space=CoordinateSpace.MACHINE,
             )
         exact_powered = plan.powered
         mode = (
@@ -3913,6 +4407,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "work_area": self._work_area_signature(
                     self.runtime.settings.machine.work_area
                 ),
+                "coordinate_frame_signature": None,
                 "frame": not exact_powered,
                 "summary": (
                     f"{display_name} · {len(registration_job.targets)} crosses · "

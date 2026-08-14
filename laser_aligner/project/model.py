@@ -10,7 +10,7 @@ from enum import Enum
 from numbers import Real
 from typing import Any
 
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
 
 
 class ProjectFormatError(ValueError):
@@ -31,6 +31,13 @@ class ObjectKind(str, Enum):
     PATH = "path"
     TEXT = "text"
     IMAGE = "image"
+
+
+class CoordinateSpace(str, Enum):
+    """Coordinate domain used by persisted project geometry."""
+
+    MACHINE = "machine"
+    HONEYCOMB_LOCAL = "honeycomb_local"
 
 
 def _new_id(prefix: str) -> str:
@@ -631,6 +638,7 @@ class ProjectDocument:
     id: str = field(default_factory=lambda: _new_id("project"))
     name: str = "Untitled"
     work_area: Bounds = field(default_factory=lambda: Bounds(0.0, 0.0, 220.0, 220.0))
+    coordinate_space: CoordinateSpace = CoordinateSpace.MACHINE
     layers: list[OperationLayer] = field(default_factory=list)
     objects: list[SceneObject] = field(default_factory=list)
     created_at: str = field(default_factory=_utc_now)
@@ -643,6 +651,16 @@ class ProjectDocument:
         self.name = str(self.name or "Untitled")[:160]
         if not isinstance(self.work_area, Bounds):
             self.work_area = Bounds.from_dict(self.work_area)
+        try:
+            self.coordinate_space = (
+                self.coordinate_space
+                if isinstance(self.coordinate_space, CoordinateSpace)
+                else CoordinateSpace(str(self.coordinate_space))
+            )
+        except ValueError as exc:
+            raise ProjectFormatError(
+                f"Unsupported project coordinate space: {self.coordinate_space!r}"
+            ) from exc
         self.layers = [
             layer if isinstance(layer, OperationLayer) else OperationLayer.from_dict(layer)
             for layer in self.layers
@@ -669,8 +687,14 @@ class ProjectDocument:
         cls,
         name: str = "Untitled",
         work_area: Bounds | None = None,
+        *,
+        coordinate_space: CoordinateSpace = CoordinateSpace.MACHINE,
     ) -> ProjectDocument:
-        return cls(name=name, work_area=work_area or Bounds(0.0, 0.0, 220.0, 220.0))
+        return cls(
+            name=name,
+            work_area=work_area or Bounds(0.0, 0.0, 220.0, 220.0),
+            coordinate_space=coordinate_space,
+        )
 
     @property
     def active_layer_id(self) -> str:
@@ -831,6 +855,7 @@ class ProjectDocument:
             "id": self.id,
             "name": self.name,
             "work_area": self.work_area.to_dict(),
+            "coordinate_space": self.coordinate_space.value,
             "layers": [layer.to_dict() for layer in self.layers],
             "objects": [item.to_dict() for item in self.objects],
             "created_at": self.created_at,
@@ -845,9 +870,9 @@ class ProjectDocument:
         schema = raw.get("schema_version", 0)
         if type(schema) is not int:
             raise ProjectFormatError("Project schema_version must be an integer")
-        if schema != PROJECT_SCHEMA_VERSION:
+        if schema not in (1, PROJECT_SCHEMA_VERSION):
             raise ProjectFormatError(
-                f"Unsupported project schema {schema}; expected {PROJECT_SCHEMA_VERSION}"
+                f"Unsupported project schema {schema}; expected 1 or {PROJECT_SCHEMA_VERSION}"
             )
         try:
             work_area = _object(raw["work_area"], "project.work_area")
@@ -858,6 +883,19 @@ class ProjectDocument:
                 id=_string(raw.get("id", _new_id("project")), "project.id"),
                 name=_string(raw.get("name", "Untitled"), "project.name"),
                 work_area=Bounds.from_dict(work_area),
+                # Schema 1 projects predate movable-support coordinates. They
+                # were authored directly in the machine frame and must never
+                # be silently reinterpreted as honeycomb-local geometry.
+                coordinate_space=(
+                    CoordinateSpace.MACHINE
+                    if schema == 1
+                    else CoordinateSpace(
+                        _string(
+                            raw["coordinate_space"],
+                            "project.coordinate_space",
+                        )
+                    )
+                ),
                 layers=[OperationLayer.from_dict(item) for item in layers],
                 objects=[SceneObject.from_dict(item) for item in objects],
                 created_at=_string(

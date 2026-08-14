@@ -5,6 +5,8 @@ import pytest
 
 import laser_aligner.project.io as project_io
 from laser_aligner.project import (
+    Bounds,
+    CoordinateSpace,
     OperationLayer,
     ProjectDocument,
     ProjectFormatError,
@@ -27,6 +29,49 @@ def test_atomic_save_and_load(tmp_path):
 
     assert path.suffix == ".e3laser"
     assert restored.to_dict() == document.to_dict()
+
+
+def test_save_and_load_preserves_honeycomb_local_coordinate_space(tmp_path):
+    document = ProjectDocument.new(
+        "Honeycomb-local",
+        Bounds(0.0, 0.0, 190.0, 190.0),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+
+    path = save_project(document, tmp_path / "honeycomb-local")
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    restored = load_project(path)
+
+    assert raw["schema_version"] == 2
+    assert raw["coordinate_space"] == "honeycomb_local"
+    assert restored.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
+    assert restored.work_area == Bounds(0.0, 0.0, 190.0, 190.0)
+
+
+def test_load_schema_one_migrates_to_explicit_machine_coordinates(tmp_path):
+    payload = ProjectDocument.new("Legacy machine project").to_dict()
+    payload["schema_version"] = 1
+    payload.pop("coordinate_space")
+    source = tmp_path / "legacy.e3laser"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    restored = load_project(source)
+    migrated = save_project(restored, tmp_path / "migrated.e3laser")
+    migrated_payload = json.loads(migrated.read_text(encoding="utf-8"))
+
+    assert restored.coordinate_space is CoordinateSpace.MACHINE
+    assert migrated_payload["schema_version"] == 2
+    assert migrated_payload["coordinate_space"] == "machine"
+
+
+def test_load_schema_two_requires_coordinate_space(tmp_path):
+    payload = ProjectDocument.new().to_dict()
+    payload.pop("coordinate_space")
+    source = tmp_path / "missing-coordinate-space.e3laser"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+
+    with pytest.raises(ProjectFormatError, match="coordinate_space"):
+        load_project(source)
 
 
 def test_project_file_without_power_correction_loads_zero_defaults(tmp_path):

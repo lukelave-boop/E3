@@ -31,6 +31,7 @@ def _work_area_reference_overlay(
     boundary_margin_mm: float,
     spot_offset_x_mm: float = 0.0,
     spot_offset_y_mm: float = 0.0,
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     support_reference: HoneycombSupportReference | None = None,
     picked_image_points: tuple[tuple[float, float], ...] = (),
 ) -> np.ndarray:
@@ -161,7 +162,24 @@ def _work_area_reference_overlay(
         (0, 165, 255),
         border_width,
     )
-    rectangle(guarded, (70, 220, 90), border_width)
+    if guarded_output_polygon_mm is None:
+        rectangle(guarded, (70, 220, 90), border_width)
+    else:
+        guarded_points: list[tuple[int, int]] = []
+        for index, start in enumerate(guarded_output_polygon_mm):
+            end = guarded_output_polygon_mm[
+                (index + 1) % len(guarded_output_polygon_mm)
+            ]
+            segment = sampled_line(start, end)
+            guarded_points.extend(tuple(point[0]) for point in segment)
+        cv2.polylines(
+            preview,
+            [np.asarray(guarded_points, dtype=np.int32).reshape(-1, 1, 2)],
+            True,
+            (70, 220, 90),
+            border_width,
+            cv2.LINE_AA,
+        )
 
     if support_reference is not None:
         support_points = support_reference.support_corners_machine_mm
@@ -278,12 +296,22 @@ class ImagePicker(QtWidgets.QLabel):
 
     _MAX_ZOOM = 12.0
 
-    def __init__(self) -> None:
+    def __init__(self, *, rotation_degrees: int = 0) -> None:
         super().__init__("No image captured")
+        if type(rotation_degrees) is not int or rotation_degrees not in {
+            0,
+            90,
+            180,
+            270,
+        }:
+            raise ValueError("Image view rotation must be 0, 90, 180, or 270 degrees")
+        self._rotation_degrees = rotation_degrees
         self.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(520, 320)
         self.setStyleSheet("background: #15191e; border: 1px solid #4b5563;")
         self._image: QtGui.QImage | None = None
+        self._source_width = 0
+        self._source_height = 0
         self._display_rect = QtCore.QRectF()
         self._zoom = 1.0
         self._pan = QtCore.QPointF()
@@ -293,7 +321,16 @@ class ImagePicker(QtWidgets.QLabel):
 
     def set_image(self, image: np.ndarray, *, preserve_view: bool = False) -> None:
         previous_size = self._image.size() if self._image is not None else None
-        self._image = _qimage(image)
+        self._source_height, self._source_width = image.shape[:2]
+        if self._rotation_degrees == 90:
+            displayed = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+        elif self._rotation_degrees == 180:
+            displayed = cv2.rotate(image, cv2.ROTATE_180)
+        elif self._rotation_degrees == 270:
+            displayed = cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        else:
+            displayed = image
+        self._image = _qimage(displayed)
         if not preserve_view or previous_size != self._image.size():
             self.reset_view()
         self._render()
@@ -355,9 +392,29 @@ class ImagePicker(QtWidgets.QLabel):
             return
         if self._image is None or not self._display_rect.contains(event.position()):
             return
-        x = (event.position().x() - self._display_rect.x()) * self._image.width() / self._display_rect.width()
-        y = (event.position().y() - self._display_rect.y()) * self._image.height() / self._display_rect.height()
-        self.pointPicked.emit(float(x), float(y))
+        display_x = (
+            (event.position().x() - self._display_rect.x())
+            * self._image.width()
+            / self._display_rect.width()
+        )
+        display_y = (
+            (event.position().y() - self._display_rect.y())
+            * self._image.height()
+            / self._display_rect.height()
+        )
+        if self._rotation_degrees == 90:
+            source_x = display_y
+            source_y = self._source_height - 1.0 - display_x
+        elif self._rotation_degrees == 180:
+            source_x = self._source_width - 1.0 - display_x
+            source_y = self._source_height - 1.0 - display_y
+        elif self._rotation_degrees == 270:
+            source_x = self._source_width - 1.0 - display_y
+            source_y = display_x
+        else:
+            source_x = display_x
+            source_y = display_y
+        self.pointPicked.emit(float(source_x), float(source_y))
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         if self._pan_anchor is None:
@@ -449,6 +506,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             str(self.context.settings.app.data_dir / "desktop-settings.ini"),
             QtCore.QSettings.Format.IniFormat,
         )
+        self._camera_view_rotation = self.context.settings.camera.view_rotation_degrees
 
         layout = QtWidgets.QVBoxLayout(self)
         self.calibration_warning = QtWidgets.QLabel(
@@ -899,7 +957,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def _build_camera_tab(self) -> None:
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
-        self.camera_preview = ImagePicker()
+        self.camera_preview = ImagePicker(
+            rotation_degrees=self._camera_view_rotation
+        )
         layout.addWidget(self.camera_preview, 1)
         self.camera_status = QtWidgets.QLabel()
         self.camera_status.setWordWrap(True)
@@ -950,7 +1010,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         instructions.setWordWrap(True)
         layout.addWidget(instructions)
-        self.lens_preview = ImagePicker()
+        self.lens_preview = ImagePicker(
+            rotation_degrees=self._camera_view_rotation
+        )
         self.lens_preview.setMinimumSize(520, 220)
         layout.addWidget(self.lens_preview)
         self.lens_status = QtWidgets.QLabel()
@@ -1076,7 +1138,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         left_widget.setMinimumWidth(360)
         left = QtWidgets.QVBoxLayout(left_widget)
         left.setContentsMargins(0, 0, 0, 0)
-        self.bed_preview = ImagePicker()
+        self.bed_preview = ImagePicker(
+            rotation_degrees=self._camera_view_rotation
+        )
         self.bed_preview.setMinimumSize(360, 240)
         self.bed_preview.setMinimumHeight(270)
         self.bed_preview.pointPicked.connect(self._bed_point_picked)
@@ -1193,7 +1257,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.honeycomb_ruler_mark.setDecimals(1)
         self.honeycomb_ruler_mark.setSuffix(" mm")
         self.honeycomb_ruler_mark.setValue(190.0)
-        support_geometry.addWidget(QtWidgets.QLabel("Detected ruler span"), 0, 0)
+        support_geometry.addWidget(QtWidgets.QLabel("Physical ruler span"), 0, 0)
         support_geometry.addWidget(self.honeycomb_ruler_mark, 0, 1)
         support_geometry.setColumnStretch(1, 1)
         reference_layout.addLayout(support_geometry)
@@ -1207,8 +1271,14 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         reference_layout.addWidget(self.honeycomb_support_status)
         support_buttons = QtWidgets.QHBoxLayout()
+        self.honeycomb_support_auto_button = QtWidgets.QPushButton(
+            "Detect honeycomb automatically"
+        )
+        self.honeycomb_support_auto_button.clicked.connect(
+            self.detect_honeycomb_support_automatically
+        )
         self.honeycomb_support_record_button = QtWidgets.QPushButton(
-            "Detect ruler reference (3 hints)"
+            "Fallback: detect with 3 hints"
         )
         self.honeycomb_support_record_button.clicked.connect(
             self.toggle_honeycomb_support_picking
@@ -1219,11 +1289,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.honeycomb_support_clear_button.clicked.connect(
             self.clear_honeycomb_support_reference
         )
-        support_buttons.addWidget(self.honeycomb_support_record_button, 1)
+        support_buttons.addWidget(self.honeycomb_support_auto_button, 1)
+        support_buttons.addWidget(self.honeycomb_support_record_button)
         support_buttons.addWidget(self.honeycomb_support_clear_button)
         reference_layout.addLayout(support_buttons)
         right.addWidget(reference)
         self._bed_dependent_actions.append(self.work_area_reference_button)
+        self._bed_dependent_actions.append(self.honeycomb_support_auto_button)
         self._bed_dependent_actions.append(self.honeycomb_support_record_button)
         self._refresh_work_area_reference_status()
 
@@ -1345,7 +1417,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(tab)
         left = QtWidgets.QVBoxLayout()
-        self.registration_preview = ImagePicker()
+        self.registration_preview = ImagePicker(
+            rotation_degrees=self._camera_view_rotation
+        )
         left.addWidget(self.registration_preview, 1)
         self.registration_status = QtWidgets.QLabel(
             "Prepare the powered registration marks, review the exact Preview, then run them."
@@ -1491,7 +1565,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def _build_check_tab(self) -> None:
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QHBoxLayout(tab)
-        self.validation_preview = ImagePicker()
+        self.validation_preview = ImagePicker(
+            rotation_degrees=self._camera_view_rotation
+        )
         self.validation_preview.setText("No accuracy-validation capture")
         self.validation_preview.setMinimumSize(420, 360)
         layout.addWidget(self.validation_preview, 3)
@@ -2328,6 +2404,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.context.settings.laser.boundary_margin_mm,
             self.context.settings.laser.spot_offset_x_mm,
             self.context.settings.laser.spot_offset_y_mm,
+            self.context.settings.laser.guarded_output_polygon_mm,
             support_reference=(
                 self._honeycomb_candidate_reference
                 or self.context.honeycomb_support.reference
@@ -2342,8 +2419,37 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._honeycomb_candidate_reference = None
         if hasattr(self, "honeycomb_support_record_button"):
             self.honeycomb_support_record_button.setText(
-                "Detect ruler reference (3 hints)"
+                "Fallback: detect with 3 hints"
             )
+
+    def detect_honeycomb_support_automatically(self) -> None:
+        calibration = self.context.bed.calibration
+        if (
+            self._bed_image is None
+            or calibration is None
+            or self._work_area_reference_calibration is not calibration
+        ):
+            QtWidgets.QMessageBox.information(
+                self,
+                "Honeycomb support",
+                "Capture a fresh work-area ruler overlay before automatic detection.",
+            )
+            return
+        image = self._bed_image.copy()
+        span = self.honeycomb_ruler_mark.value()
+        self._start_operation(
+            "Automatic honeycomb detection",
+            lambda: self.context.detect_honeycomb_support_reference_automatically(
+                image,
+                ruler_mark_mm=span,
+            ),
+            lambda result: self._honeycomb_detection_succeeded(
+                result,
+                automatic=True,
+                teaching_image=image,
+            ),
+            on_failure=lambda _message: self._refresh_work_area_reference_status(),
+        )
 
     def toggle_honeycomb_support_picking(self) -> None:
         if self._honeycomb_pick_active:
@@ -2404,53 +2510,89 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self._render_work_area_reference_preview()
             self._refresh_work_area_reference_status()
 
-        def succeeded(result: tuple[HoneycombSupportReference, Any]) -> None:
-            candidate, detection = result
-            self._honeycomb_candidate_reference = candidate
-            self._render_work_area_reference_preview()
-            x_span, y_span = candidate.measured_ruler_span_mm
-            corners = candidate.support_corners_machine_mm
-            corner_text = ", ".join(
-                f"X{machine_x:.1f}/Y{machine_y:.1f}"
-                for machine_x, machine_y in corners
-            )
-            answer = QtWidgets.QMessageBox.warning(
-                self,
-                "Review detected ruler reference",
-                "The three clicks were search hints only. The magenta outline comes "
-                "from detected ruler baselines and repeated tick marks.\n\n"
-                f"Ticks found: {detection.axis_x.tick_candidate_count} and "
-                f"{detection.axis_y.tick_candidate_count}; periodicity "
-                f"{detection.axis_x.periodicity_score:.2f}/"
-                f"{detection.axis_y.periodicity_score:.2f}; axis angle "
-                f"{detection.axis_angle_deg:.1f} deg.\n"
-                f"The {candidate.ruler_mark_mm:g} mm spans map to "
-                f"{x_span:.1f} mm and {y_span:.1f} mm.\n"
-                f"Detected outline: {corner_text}.\n\n"
-                "This remains a visual reference only. It cannot alter precision "
-                "calibration, Trace selection, templates, generated paths, controller "
-                "bounds, guarded laser limits, or authorize output. Save it?",
-                QtWidgets.QMessageBox.StandardButton.Yes
-                | QtWidgets.QMessageBox.StandardButton.Cancel,
-                QtWidgets.QMessageBox.StandardButton.Cancel,
-            )
-            if answer == QtWidgets.QMessageBox.StandardButton.Yes:
-                try:
-                    self.context.save_honeycomb_support_reference(candidate)
-                except Exception as exc:
-                    QtWidgets.QMessageBox.critical(
-                        self, "Honeycomb support was not saved", str(exc)
-                    )
-            self._cancel_honeycomb_support_picking()
-            self._render_work_area_reference_preview()
-            self._refresh_work_area_reference_status()
-
         self._start_operation(
             "Honeycomb ruler detection",
             operation,
-            succeeded,
+            lambda result: self._honeycomb_detection_succeeded(
+                result,
+                automatic=False,
+            ),
             on_failure=failed,
         )
+
+    def _honeycomb_detection_succeeded(
+        self,
+        result: tuple[HoneycombSupportReference, Any],
+        *,
+        automatic: bool,
+        teaching_image: np.ndarray | None = None,
+    ) -> None:
+        candidate, detection = result
+        self._honeycomb_candidate_reference = candidate
+        self._render_work_area_reference_preview()
+        x_span, y_span = candidate.measured_ruler_span_mm
+        corners = candidate.support_corners_machine_mm
+        corner_text = ", ".join(
+            f"X{machine_x:.1f}/Y{machine_y:.1f}"
+            for machine_x, machine_y in corners
+        )
+        method = (
+            "Vision automatically segmented the honeycomb rectangle, fitted all four "
+            "frame edges, and used the active bed map to identify lower-left, +X, +Y, "
+            "and the opposite corner."
+            if automatic
+            else "The fallback hints selected the X/Y ruler corridors and approximate shared zero."
+        )
+        evidence = (
+            f"Detected frame angle: {detection.axis_angle_deg:.1f} deg. The entered "
+            f"{candidate.ruler_mark_mm:g} × {candidate.ruler_mark_mm:g} mm physical "
+            "span defines the ideal square.\n"
+            if automatic
+            else (
+                f"X/Y ticks found: {detection.axis_x.tick_candidate_count}/"
+                f"{detection.axis_y.tick_candidate_count}; X/Y periodicity "
+                f"{detection.axis_x.periodicity_score:.2f}/"
+                f"{detection.axis_y.periodicity_score:.2f}; axis angle "
+                f"{detection.axis_angle_deg:.1f} deg.\n"
+            )
+        )
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "Review detected honeycomb reference",
+            method
+            + " The magenta outline comes from the detected four-corner rectangle.\n\n"
+            + evidence
+            + f"The {candidate.ruler_mark_mm:g} mm spans map to "
+            f"{x_span:.1f} mm and {y_span:.1f} mm.\n"
+            f"Detected outline: {corner_text}.\n\n"
+            "This establishes the movable honeycomb-local X0/Y0 job frame for "
+            "the camera, grid, Trace, templates, and newly generated paths. It "
+            "does not alter camera calibration, configured machine bounds, "
+            "guarded laser limits, or authorize output. Save it?",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QtWidgets.QMessageBox.StandardButton.Yes:
+            try:
+                save_options: dict[str, Any] = {}
+                if automatic:
+                    save_options = {
+                        "teaching_image": teaching_image,
+                        "teaching_corners_px": detection.frame_corners_image_px,
+                    }
+                self.context.save_honeycomb_support_reference(
+                    candidate,
+                    **save_options,
+                )
+                self.calibrationChanged.emit()
+            except Exception as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Honeycomb support was not saved", str(exc)
+                )
+        self._cancel_honeycomb_support_picking()
+        self._render_work_area_reference_preview()
+        self._refresh_work_area_reference_status()
 
     def clear_honeycomb_support_reference(self) -> None:
         if self.context.honeycomb_support.reference is None:
@@ -2467,6 +2609,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
             return
         self.context.clear_honeycomb_support_reference()
+        self.calibrationChanged.emit()
         self._cancel_honeycomb_support_picking()
         self._render_work_area_reference_preview()
         self._refresh_work_area_reference_status()
@@ -2803,10 +2946,16 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 f"Y{laser.spot_offset_y_mm:g}"
             )
         self.work_area_reference_status.setText(
-            f"Camera/work: X{area.x_min:g}..{area.x_max:g}, "
-            f"Y{area.y_min:g}..{area.y_max:g} mm\nGuarded laser output after "
-            f"{margin:g} mm margin{offset_note}: X{output.x_min:g}.."
-            f"{output.x_max:g}, Y{output.y_min:g}..{output.y_max:g} mm"
+            f"Camera/calibration map: X{area.x_min:g}..{area.x_max:g}, "
+            f"Y{area.y_min:g}..{area.y_max:g} mm\nGuarded laser output: "
+            "explicit 210 × 210 mm four-corner machine polygon"
+            if laser.guarded_output_polygon_mm is not None
+            else (
+                f"Camera/work: X{area.x_min:g}..{area.x_max:g}, "
+                f"Y{area.y_min:g}..{area.y_max:g} mm\nGuarded laser output after "
+                f"{margin:g} mm margin{offset_note}: X{output.x_min:g}.."
+                f"{output.x_max:g}, Y{output.y_min:g}..{output.y_max:g} mm"
+            )
         )
         reference = self.context.honeycomb_support.reference
         if reference is not None and not self._honeycomb_dimensions_initialized:
@@ -2815,11 +2964,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         if self._honeycomb_pick_active:
             instructions = (
-                "Hint 1: near the first ruler endpoint (approximately 0).",
-                f"Hint 2: near the shared {self.honeycomb_ruler_mark.value():g} mm "
-                "ruler corner.",
-                f"Hint 3: near the other ruler's {self.honeycomb_ruler_mark.value():g} "
-                "mm endpoint.",
+                "Hint 1: anywhere along the X ruler, away from its zero.",
+                "Hint 2: near the shared zero/intersection of both rulers.",
+                "Hint 3: anywhere along the Y ruler, away from its zero.",
             )
             index = min(len(self._honeycomb_pick_points), len(instructions) - 1)
             support_text = instructions[index]
@@ -2827,7 +2974,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
             support_text = (
                 self.context.honeycomb_support.load_error
                 or "Detected honeycomb reference: not recorded. Capture the ruler "
-                "overlay, then give three rough endpoint hints for ruler detection."
+                "overlay, then run automatic detection. Use the three-hint control "
+                "only if automatic detection fails or is ambiguous."
             )
         else:
             corners = reference.support_corners_machine_mm
@@ -2845,8 +2993,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
             ):
                 stale_note = " Bed map changed since recording; review and re-record."
             support_text = (
-                f"Detected honeycomb reference: {reference.support_width_mm:g} x "
-                f"{reference.support_height_mm:g} mm; ruler 0/0 maps to "
+                f"Honeycomb-local job frame: X0..{reference.support_width_mm:g}, "
+                f"Y0..{reference.support_height_mm:g} mm; "
+                "ruler 0/0 maps to "
                 f"X{reference.ruler_origin_machine_mm[0]:.1f}/"
                 f"Y{reference.ruler_origin_machine_mm[1]:.1f}. Measured "
                 f"{reference.ruler_mark_mm:g} mm spans: X{x_span:.1f}, Y{y_span:.1f}. "

@@ -34,7 +34,9 @@ unlisted calibration step or interrupt a tab transition described here.
    The active calibration profile is keyed by resolution and focus. A new
    profile needs Steps 1-5 once; returning to a previously completed focus and
    restarting restores that focus's full calibration stack.
-3. Confirm the configured work area and camera pose match the physical rig.
+3. Confirm the configured machine/output envelope and camera pose match dated
+   physical verification. This rectangle is independent from the movable
+   190 × 190 mm honeycomb job coordinates.
 4. Connect the camera. Connect the controller only when a step explicitly
    requires Home, park, commanded motion, or a guarded marking job.
 5. Open **Tools > Machine Setup**.
@@ -79,6 +81,11 @@ and calibration readiness is `READY`.
 **Goal:** map corrected camera pixels to machine coordinates without trusting
 an old camera map.
 
+The powered base-map job is the sole support-containment bootstrap exception:
+the image-to-machine map must exist before honeycomb corners can be expressed
+in machine coordinates. It remains bounded by the configured machine area. The
+restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
+
 1. Secure a clean sacrificial sheet at the final calibration surface height.
 2. Enter a previously tested visible-marking power
    and click **Prepare powered base-map job**.
@@ -99,30 +106,58 @@ an old camera map.
    is the smaller laser-output rectangle after the configured boundary margin
    and any configured laser-spot offset.
    Compare the 10 mm machine grid (coordinate labels every 40 mm) to both rigid
-   honeycomb rulers. If origin, scale, or an edge disagrees, stop: correct the work-area
-   configuration, restart, create or load a matching project, and repeat Step
-   3. The ruler is a diagnostic reference, not automatic proof of laser reach.
-8. To keep a detected outline of the movable honeycomb rulers visible for
-    later comparison, set **Detected ruler span** to the printed span (normally
-    `190 mm`), then click **Detect ruler reference (3 hints)**. Click roughly
-    near the first endpoint, shared corner, and other endpoint. The clicks only
-    define search corridors. Vision must independently fit both ruler baselines,
-    detect repeated 1 mm tick marks, verify their spacing and perpendicularity,
-    and snap the endpoints to detected ticks. Review the detected magenta outline
-    and fit report before saving it. If those checks fail, nothing is saved.
+   honeycomb rulers. If origin, scale, or an edge disagrees, stop and correct
+   the camera-to-machine calibration evidence before repeating Step 3. Do not
+   resize the machine-output envelope merely to match the movable honeycomb.
+   The ruler overlay is a diagnostic, not automatic proof of laser reach.
+8. To establish the movable honeycomb's rigid job frame, set **Physical ruler
+    span** to the printed span (normally
+    `190 mm`), then click **Detect honeycomb automatically**. Vision segments the
+    dominant rectangle, independently fits all four cutting-surface edges, and
+    maps their intersections through the active bed map. It preserves their
+    order as origin, +X, opposite, and +Y. **Physical ruler span** defines the
+    nominal local width and height; it does not replace the four observed
+    corners or fabricate measured 190 mm edges. Printed tick recognition is not
+    required. Review and accept the magenta outline and fit report. Acceptance
+    stores the exact reviewed teaching image, its four corners, and the digests
+    that bind it to the schema-2 support and complete bed map.
+
+    At Start, registration uses fresh, spatially distributed features only from
+    inside the accepted cutting surface and projects the four taught corners as
+    the pose measurement. Missing, stale, insufficiently covered, ambiguous,
+    moved, scaled, or non-square
+    evidence blocks arming.
+
+    **Fallback: detect with 3 hints** is display/diagnostic only. Click anywhere
+    along the X ruler, near the shared zero, and anywhere along the Y ruler. The
+    clicks only identify search corridors; they are not measured points. If the
+    fit fails, nothing is saved. A saved three-hint result remains legacy visual
+    evidence and cannot authorize honeycomb-local or powered post-map work.
 
     **These three hints do not calibrate the camera or machine and are not used
-    as ruler coordinates.** The detected result is an optional visual annotation
-    only. It cannot change the laser-burned
-    25-point bed map, machine work area, guarded laser limits, Trace selection,
-    template matching, generated paths, preflight, arming, or execution. The
-    keyed 25-point map remains the sole camera-to-machine calibration. Clear or
-    re-record the reference whenever the movable honeycomb shifts.
+    as ruler coordinates.** Only the accepted automatic four-edge result
+    establishes the execution-verifiable honeycomb-local job frame: ruler zero
+    is `(0,0)`, +X follows the bottom edge, and +Y follows the left edge. New
+    projects use X0..190, Y0..190; the live camera, grid, Trace, and object
+    coordinates share that frame. Green shows the independently verified
+    machine-output envelope mapped into honeycomb coordinates; red observations
+    outside green remain unchecked and blocked. The support frame cannot expand
+    machine authority. The keyed 25-point map remains the sole camera-to-machine
+    calibration. Clear and automatically re-record the support frame whenever
+    the support shifts. A changed bed map also invalidates it.
 
-**Continue directly to Step 4 when:** the reviewed base map has been applied
-and the ruler overlay has no unexplained origin, scale, or crop discrepancy.
-Recording the optional detected honeycomb annotation is not a completion
-gate.
+9. Install rigid locating stops that constrain translation and rotation without
+   bowing the honeycomb. Remove and reseat it twenty times, running automatic
+   detection after each reseat. Record the maximum four-corner displacement.
+   Do not treat the support as repeatable until every cycle meets the chosen
+   tolerance. This repeatability study is a physical acceptance test, not a
+   software calibration gate.
+
+**Continue directly to Step 4 when:** the reviewed base map has been applied,
+the ruler overlay has no unexplained origin, scale, or crop discrepancy, and a
+current accepted automatic four-corner honeycomb frame has been recorded.
+Legacy schema-1 and three-hint visual references do not qualify for any powered
+post-map Machine Setup job, including a machine-coordinate calibration job.
 The separate laser-off direction/bounds check is a pre-production hardware
 check, not a hidden Step 3-to-Step 4 gate. Do not change **Reverse X mapping** or
 **Reverse Y mapping** merely because the camera image is rotated.
@@ -136,7 +171,14 @@ saved capture receipt can be reanalyzed after an application restart.
 **Goal:** measure and, when justified, correct the remaining camera-to-machine
 error at eight positions not used by the base map.
 
-1. Secure a clean sacrificial sheet at the same calibrated surface height.
+Every powered segment in this job must fit the accepted automatic four-corner
+honeycomb support, and the complete program must fit the configured machine
+area. The prepared session binds the exact G-code, support, and bed map. Start
+rechecks containment and the immutable support/map binding, performs one
+laser-off Home, and starts without another camera capture or camera-position park.
+
+1. Confirm the accepted automatic support is current, then secure a clean
+   sacrificial sheet at the same calibrated surface height.
 2. Enter a previously tested marking power,
    and click **Prepare powered mark job**.
 3. Review, close Preview, and run the guarded powered job. Do not click
@@ -151,19 +193,33 @@ error at eight positions not used by the base map.
    its independent fit gates pass and the translation workflow is not being
    stacked with it. If errors are already acceptably small, applying no
    correction is valid; Step 5 provides the independent verdict.
+7. Applying or resetting a translation/full-bed refinement changes the bed-map
+   identity and clears the support. If you changed the map, return to Step 3's
+   ruler-overlay capture and accept a new automatic four-edge support before
+   preparing any other powered post-map job.
 
 **Continue to Step 5 when:** the eight-point result has been reviewed and any
 chosen eligible correction has finished applying.
 
 Dense 5 x 5 local correction is optional troubleshooting for repeatable,
-position-dependent residuals. It is not part of the normal five-step path.
+position-dependent residuals. It is not part of the normal five-step path. Its
+powered 5×5 fit, 4×4 validation, and shifted confirmation all require
+support-contained targets and the same exact support/map Start check. Applying
+or resetting a mesh/refinement clears the support; re-detect it automatically
+before the next powered stage.
 
 ## 5. Accuracy Validation
 
 **Goal:** independently test the final map at five positions that were not used
 to fit it.
 
-1. Secure a clean sacrificial sheet at the calibrated surface height.
+The powered five-cross session requires the current accepted automatic
+four-corner support. Its powered segments must fit that polygon, its complete
+program remains machine-bounded, and Start rechecks the exact support/map
+binding before the single laser-off Home and arming sequence.
+
+1. Confirm the accepted automatic support is current, then secure a clean
+   sacrificial sheet at the calibrated surface height.
 2. Enter a previously tested marking power,
    and click **Prepare powered validation job**.
 3. Review, close Preview, and run the guarded powered job. Do not click
@@ -216,7 +272,7 @@ not depend on a machine pose and do not request this hold.
 | Prepared calibration job is visible but **Start** is disabled | Wait for active preparation to finish. **Start** attempts an offline connection automatically; do not click **Generate**. |
 | **Generate** says the project has no enabled output paths | Return to the numbered Setup tab and prepare that calibration job again. |
 | A powered grid was burned but detection failed | Do not move or reburn the sheet; diagnose or reanalyze the saved capture. |
-| Trace says a label is outside even though it sits on the honeycomb | Compare the Step 3 ruler overlay. The honeycomb support, camera/work crop, and guarded laser-output rectangle are separate limits. |
+| Trace says a label is outside even though it sits on the honeycomb | Compare the Step 3 ruler overlay. The visible honeycomb and mapped guarded machine-output polygon are separate limits; visibility does not grant output authority. |
 | A restart says the exact job did not run | Preserve the sheet and session. A matching verified saved capture receipt may be recovered; never fabricate or edit it. |
 | Lens RMS improved but the gate rejects | Add edge, distance, and two-axis pose diversity; do not optimize only the error number. |
 | Step 5 fails | Return to Step 4 or Step 3 based on the residual pattern; validation itself never applies a correction. |

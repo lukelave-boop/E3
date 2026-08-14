@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from laser_aligner.calibration.bed import BedMapper, BedPoint
+from laser_aligner.calibration.support import HoneycombCoordinateFrame
 from laser_aligner.config import BedCalibrationSettings, WorkArea
 from laser_aligner.errors import CalibrationError
 
@@ -286,6 +287,127 @@ def test_rectification_preserves_output_dimensions_and_uses_neutral_border(
     assert rectified.shape == (4, 4, 3)
     assert tuple(rectified[0, 0]) == (35, 35, 35)
     assert tuple(rectified[3, 3]) == (200, 200, 200)
+
+
+def test_rectification_map_supports_an_expanded_camera_only_area(
+    tmp_path: Path,
+) -> None:
+    mapper = _solved_square_mapper(tmp_path)
+    default_x, default_y = mapper.rectification_map(2.0)
+    expanded = WorkArea(x_min=-5.0, x_max=110.0, y_min=-10.0, y_max=115.0)
+
+    map_x, map_y = mapper.rectification_map(2.0, work_area=expanded)
+    cached_x, cached_y = mapper.rectification_map(2.0, work_area=expanded)
+
+    assert map_x.shape == (250, 230)
+    assert map_y.shape == (250, 230)
+    assert map_x is cached_x
+    assert map_y is cached_y
+    assert map_x is not default_x
+    assert map_y is not default_y
+    for row, column in ((0, 0), (100, 80), (249, 229)):
+        machine_x = expanded.x_min + column / 2.0
+        machine_y = expanded.y_max - row / 2.0
+        expected_x, expected_y = mapper.mm_to_image(machine_x, machine_y)
+        assert float(map_x[row, column]) == pytest.approx(expected_x, abs=2e-5)
+        assert float(map_y[row, column]) == pytest.approx(expected_y, abs=2e-5)
+
+    restored_x, restored_y = mapper.rectification_map(2.0)
+    assert restored_x.shape == (200, 200)
+    assert restored_y.shape == (200, 200)
+
+
+def test_rectification_map_supports_a_rigid_honeycomb_local_frame(
+    tmp_path: Path,
+) -> None:
+    mapper = _solved_square_mapper(tmp_path)
+    local_area = WorkArea(x_min=0.0, x_max=10.0, y_min=0.0, y_max=10.0)
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 30.0),
+        x_axis_machine=(0.0, 1.0),
+        y_axis_machine=(-1.0, 0.0),
+        width_mm=10.0,
+        height_mm=10.0,
+        provenance_digest="0" * 64,
+    )
+
+    map_x, map_y = mapper.rectification_map(
+        1.0,
+        work_area=local_area,
+        coordinate_frame=frame,
+    )
+    cached_x, cached_y = mapper.rectification_map(
+        1.0,
+        work_area=local_area,
+        coordinate_frame=frame,
+    )
+
+    assert map_x.shape == (10, 10)
+    assert map_y.shape == (10, 10)
+    assert map_x is cached_x
+    assert map_y is cached_y
+    for row, column in ((0, 0), (4, 7), (9, 9)):
+        local_x = float(column)
+        local_y = 10.0 - float(row)
+        machine = frame.local_to_machine(local_x, local_y)
+        expected_x, expected_y = mapper.mm_to_image(*machine)
+        assert float(map_x[row, column]) == pytest.approx(expected_x, abs=2e-6)
+        assert float(map_y[row, column]) == pytest.approx(expected_y, abs=2e-6)
+
+    raw = np.zeros((240, 240, 3), dtype=np.uint8)
+    raw[:, :, 0] = np.arange(240, dtype=np.uint8)[None, :]
+    raw[:, :, 1] = np.arange(240, dtype=np.uint8)[:, None]
+    rectified = mapper.rectify(
+        raw,
+        1.0,
+        work_area=local_area,
+        coordinate_frame=frame,
+    )
+    assert tuple(rectified[0, 0]) == (
+        int(round(float(map_x[0, 0]))),
+        int(round(float(map_y[0, 0]))),
+        0,
+    )
+
+
+def test_rectification_cache_distinguishes_honeycomb_coordinate_frames(
+    tmp_path: Path,
+) -> None:
+    mapper = _solved_square_mapper(tmp_path)
+    area = WorkArea(x_min=0.0, x_max=10.0, y_min=0.0, y_max=10.0)
+    first_frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 30.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=10.0,
+        height_mm=10.0,
+        provenance_digest="1" * 64,
+    )
+    second_frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(25.0, 30.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=10.0,
+        height_mm=10.0,
+        provenance_digest="2" * 64,
+    )
+
+    first_x, first_y = mapper.rectification_map(
+        1.0,
+        work_area=area,
+        coordinate_frame=first_frame,
+    )
+    second_x, second_y = mapper.rectification_map(
+        1.0,
+        work_area=area,
+        coordinate_frame=second_frame,
+    )
+    machine_x, machine_y = mapper.rectification_map(1.0, work_area=area)
+
+    assert not np.array_equal(first_x, second_x)
+    assert np.array_equal(first_y, second_y)
+    assert not np.array_equal(first_x, machine_x)
+    assert not np.array_equal(first_y, machine_y)
 
 
 @pytest.mark.parametrize("operation", ("map", "matrix", "rectify"))

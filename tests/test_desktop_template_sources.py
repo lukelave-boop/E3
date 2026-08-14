@@ -29,9 +29,9 @@ def test_controller_matches_templates_off_thread_and_ignores_stale_results() -> 
     assert "def set_template_review_active(" in controller
     assert "def _camera_review_active(" in controller
     assert "self._template_review_active or self._trace_review_active" in controller
-    assert (
-        "image = context.rectified_frame(refresh=True, precision=True)" in controller
-    )
+    assert '"refresh": True' in controller
+    assert '"precision": True' in controller
+    assert "image = context.rectified_frame(**frame_options)" in controller
     assert "image_to_qimage(image)" in controller
 
 

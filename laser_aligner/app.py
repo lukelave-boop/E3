@@ -18,7 +18,12 @@ import cv2
 import numpy as np
 
 from . import __version__
-from .calibration.bed import BedCalibration, BedMapper, BedPoint
+from .calibration.bed import (
+    BedCalibration,
+    BedMapper,
+    BedPoint,
+    _coordinate_frame_transform,
+)
 from .calibration.lens import LensCalibrator
 from .calibration.profiles import CalibrationProfileStore, signature_from_camera_settings
 from .calibration.registration import (
@@ -37,28 +42,36 @@ from .calibration.registration import (
     dense_mesh_targets,
     dense_validation_targets,
     generate_registration_program,
+    points_fit_support,
     registration_targets,
     review_registration_measurements,
     suggested_registration_exclusions,
+    targets_fit_support,
 )
-from .calibration.support import HoneycombSupportReference, HoneycombSupportStore
+from .calibration.support import (
+    HoneycombCoordinateFrame,
+    HoneycombSupportReference,
+    HoneycombSupportStore,
+)
 from .camera.service import (
     CameraService,
     FrameBurst,
     SyntheticCameraService,
     list_video_devices,
 )
-from .config import Settings
+from .config import Settings, WorkArea
 from .errors import CalibrationError
 from .gcode.generator import (
     DesignPlacement,
     ToolpathOptions,
     generate_vector_gcode,
 )
+from .gcode.preview import parse_gcode_segments
 from .geometry.svg import parse_svg
 from .imaging import encode_image, image_quality, read_image, write_image_atomic
 from .machine.service import MachineService, list_serial_ports
 from .storage import (
+    atomic_write_bytes,
     atomic_write_bytes_if_absent,
     atomic_write_json,
     read_json,
@@ -69,7 +82,13 @@ from .vision.fiducials import (
     detect_crosshairs_near,
     detect_keyed_crosshair_grid,
 )
-from .vision.ruler import HoneycombRulerDetection, detect_honeycomb_rulers
+from .vision.ruler import (
+    HoneycombRulerDetection,
+    RulerAxisDetection,
+    detect_honeycomb_frame,
+    detect_honeycomb_rulers,
+    register_honeycomb_reference,
+)
 from .vision.workpiece import detect_workpiece
 
 LOGGER = logging.getLogger(__name__)
@@ -77,6 +96,67 @@ _SAFE_NAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
 _CURRENT_LENS_MODEL = object()
 _GENERATED_NAME_LOCK = threading.Lock()
 _GENERATED_NAME_SEQUENCE = 0
+
+
+def _ordered_honeycomb_corners(
+    frame_image_px: np.ndarray,
+    frame_machine_mm: np.ndarray,
+) -> tuple[np.ndarray, tuple[int, int, int, int]]:
+    """Order a fresh quad as origin, +X, opposite, +Y using machine axes."""
+
+    frame = np.asarray(frame_image_px, dtype=np.float64)
+    machine = np.asarray(frame_machine_mm, dtype=np.float64)
+    if (
+        frame.shape != (4, 2)
+        or machine.shape != (4, 2)
+        or not np.isfinite(frame).all()
+        or not np.isfinite(machine).all()
+    ):
+        raise CalibrationError(
+            "Automatic honeycomb verification requires four finite measured corners"
+        )
+    origin_index = min(
+        range(4),
+        key=lambda index: float(machine[index, 0] + machine[index, 1]),
+    )
+    adjacent = ((origin_index - 1) % 4, (origin_index + 1) % 4)
+    x_index = max(adjacent, key=lambda index: float(machine[index, 0]))
+    y_index = next(index for index in adjacent if index != x_index)
+    opposite_index = next(
+        index
+        for index in range(4)
+        if index not in {origin_index, x_index, y_index}
+    )
+    indices = (origin_index, x_index, opposite_index, y_index)
+    return machine[np.asarray(indices)], indices
+
+
+def _reference_topology_indices(
+    reference: HoneycombSupportReference,
+    frame_machine_mm: np.ndarray,
+) -> tuple[int, int, int, int]:
+    """Match taught origin/+X/opposite/+Y to fresh topology without axis inference."""
+
+    frame = np.asarray(frame_machine_mm, dtype=np.float64)
+    if frame.shape != (4, 2) or not np.isfinite(frame).all():
+        raise CalibrationError(
+            "Automatic honeycomb verification requires four finite measured corners"
+        )
+    taught = np.asarray(reference.support_corners_machine_mm, dtype=np.float64)
+    if taught.shape != (4, 2) or not np.isfinite(taught).all():
+        raise CalibrationError("The taught honeycomb topology is invalid")
+    # The detector preserves the cyclic ordering emitted by registered taught
+    # corners. Select only the cyclic start/direction that best corresponds to
+    # the already-taught four-corner topology; never infer zero from machine axes.
+    candidates: list[tuple[float, tuple[int, int, int, int]]] = []
+    for start in range(4):
+        for step in (1, -1):
+            indices = tuple((start + step * offset) % 4 for offset in range(4))
+            ordered = frame[np.asarray(indices)]
+            offset = np.mean(taught - ordered, axis=0)
+            residual = float(np.sum((ordered + offset - taught) ** 2))
+            candidates.append((residual, indices))
+    return min(candidates, key=lambda item: item[0])[1]
 
 
 def _unique_artifact_filename(stem: str, suffix: str) -> str:
@@ -179,6 +259,18 @@ class AppContext:
         self.bed_reference_path = calibration_dir / "bed_reference.png"
         self.legacy_bed_reference_path = calibration_dir / "bed_reference.jpg"
         self.base_bed_mapping_path = calibration_dir / "base_bed_mapping.json"
+        self.honeycomb_detection_input_path = (
+            calibration_dir / "honeycomb_detection_input.png"
+        )
+        self.honeycomb_detection_diagnostic_path = (
+            calibration_dir / "honeycomb_detection_diagnostic.png"
+        )
+        self.honeycomb_visual_reference_path = (
+            calibration_dir / "honeycomb_visual_reference.png"
+        )
+        self.honeycomb_visual_reference_metadata_path = (
+            calibration_dir / "honeycomb_visual_reference.json"
+        )
         self.workspace_path = settings.app.data_dir / "captures" / "workspace.png"
         self.legacy_workspace_path = settings.app.data_dir / "captures" / "workspace.jpg"
         self.fine_registration_path = calibration_dir / "fine_registration.json"
@@ -756,6 +848,35 @@ class AppContext:
             None if mesh is None else mesh.refinement_count,
         )
 
+    def bed_mapping_digest(self) -> str | None:
+        """Return a digest of the complete active image↔machine mapping."""
+
+        calibration = self.bed.calibration
+        if calibration is None:
+            return None
+        payload = json.dumps(
+            calibration.to_dict(),
+            allow_nan=False,
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    def honeycomb_execution_signature(self) -> tuple[str, int, str, str] | None:
+        """Bind a support pose to the complete camera-to-machine mapping."""
+
+        support = self._current_honeycomb_support()
+        mapping = self.bed_mapping_digest()
+        if (
+            support is None
+            or not support.is_execution_verifiable
+            or mapping is None
+        ):
+            return None
+        kind, version, digest = support.coordinate_frame.provenance_signature
+        return kind, version, digest, mapping
+
     def _cache_workspace(self, image: np.ndarray) -> None:
         with self._workspace_lock:
             self._workspace_image = np.ascontiguousarray(image).copy()
@@ -777,10 +898,20 @@ class AppContext:
             [cv2.IMWRITE_PNG_COMPRESSION, 3],
         )
 
-    def _rectify_camera_image(self, image: np.ndarray) -> np.ndarray:
+    def _rectify_camera_image(
+        self,
+        image: np.ndarray,
+        *,
+        work_area: WorkArea | None = None,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
+    ) -> np.ndarray:
         lens = self.lens.model
         if lens is None:
-            return self.bed.rectify(image)
+            return self.bed.rectify(
+                image,
+                work_area=work_area,
+                coordinate_frame=coordinate_frame,
+            )
         height, width = image.shape[:2]
         if (width, height) != lens.image_size:
             raise CalibrationError(
@@ -797,12 +928,19 @@ class AppContext:
                 f"{calibration.image_width}x{calibration.image_height})"
             )
         ppm = float(self.settings.calibration.bed.pixels_per_mm)
+        area = self.settings.machine.work_area if work_area is None else work_area
+        _frame_transform, frame_key = _coordinate_frame_transform(coordinate_frame)
         key = (
             lens.model_id,
             id(calibration),
             width,
             height,
             ppm,
+            float(area.x_min),
+            float(area.x_max),
+            float(area.y_min),
+            float(area.y_max),
+            *frame_key,
         )
         with self._workspace_lock:
             cached = self._composed_map_cache.get(key)
@@ -810,7 +948,11 @@ class AppContext:
         if cached is not None and cached[0] is lens and cached[1] is calibration:
             maps = cached[2]
         if maps is None:
-            corrected_x, corrected_y = self.bed.rectification_map(ppm)
+            corrected_x, corrected_y = self.bed.rectification_map(
+                ppm,
+                work_area=area,
+                coordinate_frame=coordinate_frame,
+            )
             corrected_points = np.stack((corrected_x, corrected_y), axis=-1)
             raw_points = lens.distort_points(corrected_points)
             raw_x = np.ascontiguousarray(raw_points[:, :, 0], dtype=np.float32)
@@ -842,12 +984,24 @@ class AppContext:
         *,
         precision: bool = False,
         persist: bool = False,
+        work_area: WorkArea | None = None,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
     ) -> np.ndarray:
         with self._simulation_workspace_lock:
             if self._simulation_workspace_image is not None:
                 return self._simulation_workspace_image.copy()
         self._require_valid_bed_calibration()
-        if not refresh:
+        configured = self.settings.machine.work_area
+        uses_configured_area = coordinate_frame is None and (
+            work_area is None
+            or (
+                abs(work_area.x_min - configured.x_min) <= 1e-9
+                and abs(work_area.x_max - configured.x_max) <= 1e-9
+                and abs(work_area.y_min - configured.y_min) <= 1e-9
+                and abs(work_area.y_max - configured.y_max) <= 1e-9
+            )
+        )
+        if not refresh and uses_configured_area:
             cached = self._cached_workspace()
             if cached is not None:
                 return cached
@@ -861,13 +1015,24 @@ class AppContext:
             if precision
             else self.camera_frame(undistort=False)
         )
-        rectified = self._rectify_camera_image(image)
-        self._cache_workspace(rectified)
-        if persist:
-            self._persist_workspace(rectified)
+        rectify_options: dict[str, Any] = {}
+        if work_area is not None:
+            rectify_options["work_area"] = work_area
+        if coordinate_frame is not None:
+            rectify_options["coordinate_frame"] = coordinate_frame
+        rectified = self._rectify_camera_image(image, **rectify_options)
+        if uses_configured_area:
+            self._cache_workspace(rectified)
+            if persist:
+                self._persist_workspace(rectified)
         return rectified
 
-    def capture_parked_trace_frame(self) -> np.ndarray:
+    def capture_parked_trace_frame(
+        self,
+        *,
+        work_area: WorkArea | None = None,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
+    ) -> np.ndarray:
         """Home, park, hold, and capture the frame used for object tracing."""
 
         with self._simulation_workspace_lock:
@@ -879,9 +1044,24 @@ class AppContext:
             burst = self._stable_camera_burst()
         burst = self._prepare_camera_burst(burst, undistort=False)
         image = burst.sharpest_frame
-        rectified = self._rectify_camera_image(image)
-        self._cache_workspace(rectified)
-        self._persist_workspace(rectified)
+        rectify_options: dict[str, Any] = {}
+        if work_area is not None:
+            rectify_options["work_area"] = work_area
+        if coordinate_frame is not None:
+            rectify_options["coordinate_frame"] = coordinate_frame
+        rectified = self._rectify_camera_image(image, **rectify_options)
+        uses_configured_area = coordinate_frame is None and work_area is None
+        if coordinate_frame is None and work_area is not None:
+            configured = self.settings.machine.work_area
+            uses_configured_area = (
+                abs(work_area.x_min - configured.x_min) <= 1e-9
+                and abs(work_area.x_max - configured.x_max) <= 1e-9
+                and abs(work_area.y_min - configured.y_min) <= 1e-9
+                and abs(work_area.y_max - configured.y_max) <= 1e-9
+            )
+        if uses_configured_area:
+            self._cache_workspace(rectified)
+            self._persist_workspace(rectified)
         return rectified
 
     def capture_parked_work_area_reference(self) -> np.ndarray:
@@ -898,7 +1078,13 @@ class AppContext:
             raise CalibrationError(
                 "Bed calibration changed while the work-area reference was captured"
             )
-        return burst.sharpest_frame.copy()
+        image = burst.sharpest_frame.copy()
+        write_image_atomic(
+            self.honeycomb_detection_input_path,
+            image,
+            [cv2.IMWRITE_PNG_COMPRESSION, 3],
+        )
+        return image
 
     def detect_honeycomb_support_reference(
         self,
@@ -920,6 +1106,19 @@ class AppContext:
             image_points,
             ruler_span_mm=ruler_mark_mm,
         )
+        return self._honeycomb_reference_from_detection(
+            detection,
+            ruler_mark_mm=ruler_mark_mm,
+            calibration=calibration,
+        ), detection
+
+    def _honeycomb_reference_from_detection(
+        self,
+        detection: HoneycombRulerDetection,
+        *,
+        ruler_mark_mm: float,
+        calibration: Any,
+    ) -> HoneycombSupportReference:
         machine_points = tuple(
             self.bed.image_to_mm(float(image_x), float(image_y))
             for image_x, image_y in detection.image_points
@@ -951,11 +1150,302 @@ class AppContext:
                 f"reference: {details}. Adjust the hints and try again; the "
                 "saved visual reference was not changed."
             )
+        return reference
+
+    def detect_honeycomb_support_reference_automatically(
+        self,
+        image: np.ndarray,
+        *,
+        ruler_mark_mm: float,
+        require_taught_reference: bool = False,
+    ) -> tuple[HoneycombSupportReference, HoneycombRulerDetection]:
+        """Select one visually and geometrically valid automatic ruler result."""
+        self._require_valid_bed_calibration()
+        calibration = self.bed.calibration
+        visual_metadata = read_json(self.honeycomb_visual_reference_metadata_path, {})
+        taught_reference_digest: str | None = None
+        if self.honeycomb_visual_reference_path.exists() and isinstance(
+            visual_metadata, dict
+        ):
+            reference_image = read_image(self.honeycomb_visual_reference_path)
+            accepted_support = self._current_honeycomb_support()
+            legacy_seed_available = bool(
+                reference_image is not None
+                and visual_metadata.get("schema_version") == 1
+                and np.asarray(
+                    visual_metadata.get("cutting_surface_corners_px")
+                ).shape
+                == (4, 2)
+            )
+            metadata_valid = bool(
+                reference_image is not None
+                and visual_metadata.get("schema_version") == 2
+                and visual_metadata.get("kind")
+                == "accepted-automatic-honeycomb-teaching-reference"
+                and visual_metadata.get("image_sha256")
+                == hashlib.sha256(
+                    self.honeycomb_visual_reference_path.read_bytes()
+                ).hexdigest()
+                and visual_metadata.get("bed_mapping_digest")
+                == self.bed_mapping_digest()
+                and (
+                    not require_taught_reference
+                    or (
+                        accepted_support is not None
+                        and visual_metadata.get(
+                            "support_coordinate_frame_digest"
+                        )
+                        == accepted_support.coordinate_frame_digest
+                    )
+                )
+            )
+            if metadata_valid:
+                assert reference_image is not None
+                try:
+                    seed_frame = register_honeycomb_reference(
+                        image,
+                        reference_image,
+                        np.asarray(
+                            visual_metadata.get("cutting_surface_corners_px")
+                        ),
+                    )
+                except ValueError:
+                    if require_taught_reference:
+                        raise CalibrationError(
+                            "The fresh camera image could not be registered to the "
+                            "accepted honeycomb reference; output remains blocked"
+                        ) from None
+                    if accepted_support is None:
+                        frame = detect_honeycomb_frame(image)
+                    else:
+                        support_seed = np.asarray(
+                            [
+                                self.bed.mm_to_image(float(x), float(y))
+                                for x, y in accepted_support.support_corners_machine_mm
+                            ],
+                            dtype=np.float64,
+                        )
+                        frame = detect_honeycomb_frame(
+                            image,
+                            seed_corners=support_seed,
+                        )
+                else:
+                    taught_hasher = hashlib.sha256()
+                    taught_hasher.update(
+                        json.dumps(
+                            visual_metadata,
+                            allow_nan=False,
+                            ensure_ascii=True,
+                            separators=(",", ":"),
+                            sort_keys=True,
+                        ).encode("utf-8")
+                    )
+                    taught_hasher.update(str(reference_image.shape).encode("ascii"))
+                    taught_hasher.update(str(reference_image.dtype).encode("ascii"))
+                    taught_hasher.update(reference_image.tobytes())
+                    taught_reference_digest = taught_hasher.hexdigest()
+                    if require_taught_reference:
+                        # Start-time pose evidence comes from a broad,
+                        # support-local registration of the exact accepted
+                        # teaching image.  The cutting frame can contain ticked
+                        # rulers and interrupted edges, so requiring four
+                        # uniform intensity transitions here produced false
+                        # rejections even when registration was sub-pixel
+                        # stable.  Setup still performs the independent
+                        # four-edge fit before a reference can be accepted.
+                        frame = seed_frame
+                    else:
+                        frame = detect_honeycomb_frame(
+                            image,
+                            seed_corners=seed_frame,
+                        )
+            elif legacy_seed_available and not require_taught_reference:
+                assert reference_image is not None
+                try:
+                    seed_frame = register_honeycomb_reference(
+                        image,
+                        reference_image,
+                        np.asarray(
+                            visual_metadata.get("cutting_surface_corners_px")
+                        ),
+                    )
+                    frame = detect_honeycomb_frame(
+                        image,
+                        seed_corners=seed_frame,
+                    )
+                except ValueError:
+                    # A legacy annotated image can guide the one-time upgrade,
+                    # but it is never execution evidence. If registration or
+                    # fresh edge fitting fails, continue with independent
+                    # automatic segmentation for Setup review.
+                    if accepted_support is None:
+                        frame = detect_honeycomb_frame(image)
+                    else:
+                        support_seed = np.asarray(
+                            [
+                                self.bed.mm_to_image(float(x), float(y))
+                                for x, y in accepted_support.support_corners_machine_mm
+                            ],
+                            dtype=np.float64,
+                        )
+                        frame = detect_honeycomb_frame(
+                            image,
+                            seed_corners=support_seed,
+                        )
+            elif require_taught_reference:
+                raise CalibrationError(
+                    "The accepted honeycomb teaching reference is missing, stale, "
+                    "or corrupt; run automatic honeycomb detection again"
+                )
+            else:
+                if accepted_support is None:
+                    frame = detect_honeycomb_frame(image)
+                else:
+                    # A current legacy three-point reference is not execution
+                    # evidence, but its mapped outline is a strong automatic
+                    # search prior for upgrading the same physical fixture. Four
+                    # fresh edge fits still supply every persisted schema-2
+                    # corner; the projected legacy corners are never returned.
+                    support_seed = np.asarray(
+                        [
+                            self.bed.mm_to_image(float(x), float(y))
+                            for x, y in accepted_support.support_corners_machine_mm
+                        ],
+                        dtype=np.float64,
+                    )
+                    frame = detect_honeycomb_frame(
+                        image,
+                        seed_corners=support_seed,
+                    )
+        else:
+            if require_taught_reference:
+                raise CalibrationError(
+                    "No accepted automatic honeycomb teaching image is recorded; "
+                    "run automatic honeycomb detection again"
+                )
+            accepted_support = self._current_honeycomb_support()
+            if accepted_support is None:
+                frame = detect_honeycomb_frame(image)
+            else:
+                support_seed = np.asarray(
+                    [
+                        self.bed.mm_to_image(float(x), float(y))
+                        for x, y in accepted_support.support_corners_machine_mm
+                    ],
+                    dtype=np.float64,
+                )
+                frame = detect_honeycomb_frame(
+                    image,
+                    seed_corners=support_seed,
+                )
+        diagnostic = image.copy()
+        frame_int = np.rint(frame).astype(np.int32).reshape(-1, 1, 2)
+        cv2.polylines(diagnostic, [frame_int], True, (205, 95, 220), 4, cv2.LINE_AA)
+        for index, point in enumerate(frame_int[:, 0], start=1):
+            cv2.circle(diagnostic, tuple(point), 10, (0, 225, 255), 3, cv2.LINE_AA)
+            cv2.putText(
+                diagnostic,
+                str(index),
+                (int(point[0]) + 12, int(point[1]) - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.7,
+                (0, 225, 255),
+                2,
+                cv2.LINE_AA,
+            )
+        write_image_atomic(
+            self.honeycomb_detection_input_path,
+            image,
+            [cv2.IMWRITE_PNG_COMPRESSION, 3],
+        )
+        write_image_atomic(
+            self.honeycomb_detection_diagnostic_path,
+            diagnostic,
+            [cv2.IMWRITE_PNG_COMPRESSION, 3],
+        )
+        machine = np.asarray(
+            [self.bed.image_to_mm(float(point[0]), float(point[1])) for point in frame],
+            dtype=np.float64,
+        )
+        if self.bed.calibration is not calibration or calibration is None:
+            raise CalibrationError(
+                "Bed calibration changed while the honeycomb frame was measured"
+            )
+        # For initial teaching, the active homography supplies direction; no
+        # printed-number OCR or assumption about camera rotation is needed.
+        _ordered_machine, ordered_indices = _ordered_honeycomb_corners(frame, machine)
+        origin_index, x_index, opposite_index, y_index = ordered_indices
+        origin = frame[origin_index]
+        x_corner = frame[x_index]
+        y_corner = frame[y_index]
+        opposite = frame[opposite_index]
+        x_length_px = float(np.linalg.norm(x_corner - origin))
+        y_length_px = float(np.linalg.norm(y_corner - origin))
+        detection = HoneycombRulerDetection(
+            ruler_origin_image_px=(float(origin[0]), float(origin[1])),
+            ruler_x_mark_image_px=(float(x_corner[0]), float(x_corner[1])),
+            ruler_xy_mark_image_px=(float(opposite[0]), float(opposite[1])),
+            axis_x=RulerAxisDetection(
+                (float(origin[0]), float(origin[1])),
+                (float(x_corner[0]), float(x_corner[1])),
+                x_length_px / float(ruler_mark_mm),
+                0,
+                0.0,
+                0.0,
+                0.0,
+            ),
+            axis_y=RulerAxisDetection(
+                (float(x_corner[0]), float(x_corner[1])),
+                (float(opposite[0]), float(opposite[1])),
+                y_length_px / float(ruler_mark_mm),
+                0,
+                0.0,
+                0.0,
+                0.0,
+            ),
+            corner_error_px=0.0,
+            axis_angle_deg=float(
+                math.degrees(
+                    math.acos(
+                        min(
+                            1.0,
+                            abs(
+                                float(
+                                    np.dot(x_corner - origin, y_corner - origin)
+                                    / (x_length_px * y_length_px)
+                                )
+                            ),
+                        )
+                    )
+                )
+            ),
+            frame_corners_image_px=tuple(
+                (float(point[0]), float(point[1])) for point in frame
+            ),
+        )
+        # The fresh four-edge fit is physical evidence. Preserve its independently
+        # observed edge lengths and angle; never fabricate a unit 190 mm square
+        # from configured dimensions. The reference model's ruler mark is the
+        # nominal physical coordinate associated with each measured far edge.
+        span = float(ruler_mark_mm)
+        reference = HoneycombSupportReference.from_four_corner_observations(
+            raw_corners_machine_mm=tuple(
+                (float(point[0]), float(point[1])) for point in machine
+            ),
+            corner_topology=(origin_index, x_index, opposite_index, y_index),
+            support_width_mm=span,
+            support_height_mm=span,
+            bed_calibration_created_at=calibration.created_at,
+            taught_reference_digest=taught_reference_digest,
+        )
         return reference, detection
 
     def save_honeycomb_support_reference(
         self,
         reference: HoneycombSupportReference,
+        *,
+        teaching_image: np.ndarray | None = None,
+        teaching_corners_px: tuple[tuple[float, float], ...] | None = None,
     ) -> HoneycombSupportReference:
         """Persist a reviewed visual reference if its precision map is still active."""
 
@@ -971,11 +1461,531 @@ class AppContext:
             raise CalibrationError(
                 "Bed calibration changed after ruler detection; detect it again"
             )
+        if reference.is_execution_verifiable:
+            if teaching_image is None or teaching_corners_px is None:
+                raise CalibrationError(
+                    "Saving an automatic four-corner honeycomb requires the exact "
+                    "reviewed teaching image and corners"
+                )
+            corners = np.asarray(teaching_corners_px, dtype=np.float64)
+            if corners.shape != (4, 2) or not np.isfinite(corners).all():
+                raise CalibrationError(
+                    "The reviewed honeycomb teaching corners are invalid"
+                )
+            encoded = encode_image(teaching_image, ".png")
+            image_digest = hashlib.sha256(encoded).hexdigest()
+            metadata = {
+                "schema_version": 2,
+                "kind": "accepted-automatic-honeycomb-teaching-reference",
+                "cutting_surface_corners_px": corners.tolist(),
+                "image_sha256": image_digest,
+                "bed_mapping_digest": self.bed_mapping_digest(),
+                "support_coordinate_frame_digest": reference.coordinate_frame_digest,
+                "created_at": reference.created_at,
+            }
+            atomic_write_bytes(self.honeycomb_visual_reference_path, encoded)
+            atomic_write_json(
+                self.honeycomb_visual_reference_metadata_path,
+                metadata,
+            )
         self.honeycomb_support.save(reference)
         return reference
 
     def clear_honeycomb_support_reference(self) -> None:
         self.honeycomb_support.clear()
+
+    def _current_honeycomb_support(self) -> HoneycombSupportReference | None:
+        """Return only a support reference measured through the active bed map."""
+
+        reference = self.honeycomb_support.reference
+        calibration = self.bed.calibration
+        if reference is None or calibration is None:
+            return None
+        if abs(reference.bed_calibration_created_at - calibration.created_at) > 1e-9:
+            return None
+        return reference
+
+    def verify_honeycomb_pose_for_execution(
+        self,
+        expected_signature: tuple[Any, ...],
+        *,
+        corner_tolerance_mm: float = 0.5,
+        edge_length_tolerance_mm: float = 0.75,
+        orthogonality_tolerance_deg: float = 1.0,
+    ) -> dict[str, Any]:
+        """Re-measure four support edges from a fresh parked capture before motion."""
+
+        recorded = self._current_honeycomb_support()
+        if recorded is None:
+            raise CalibrationError(
+                "The prepared honeycomb reference is no longer current; detect it again"
+            )
+        if not recorded.has_four_corner_evidence:
+            raise CalibrationError(
+                "The prepared honeycomb reference lacks four independent automatic "
+                "corner measurements; run automatic honeycomb detection again"
+            )
+        recorded_calibration = self.bed.calibration
+        if recorded_calibration is None:
+            raise CalibrationError(
+                "The camera-to-machine map is unavailable for honeycomb verification"
+            )
+        before = self.honeycomb_execution_signature()
+        if before is None or tuple(before) != tuple(expected_signature):
+            raise CalibrationError(
+                "The honeycomb pose or camera-to-machine mapping changed after job preparation"
+            )
+        image = self.capture_parked_work_area_reference()
+        observed, _detection = self.detect_honeycomb_support_reference_automatically(
+            image,
+            ruler_mark_mm=recorded.support_width_mm,
+            require_taught_reference=True,
+        )
+        if not observed.has_four_corner_evidence:
+            raise CalibrationError(
+                "Automatic honeycomb verification did not retain four independent corners"
+            )
+        expected_corners = np.asarray(
+            recorded.support_corners_machine_mm,
+            dtype=np.float64,
+        )
+        if expected_corners.shape != (4, 2) or not np.isfinite(expected_corners).all():
+            raise CalibrationError(
+                "The prepared honeycomb reference does not contain four valid corners"
+            )
+        measured_machine = np.asarray(
+            observed.raw_corners_machine_mm,
+            dtype=np.float64,
+        )
+        if measured_machine.shape != (4, 2) or not np.isfinite(measured_machine).all():
+            raise CalibrationError(
+                "Automatic honeycomb verification did not retain four freshly measured corners"
+            )
+        if self.bed.calibration is not recorded_calibration:
+            raise CalibrationError(
+                "Bed calibration changed while the honeycomb pose was verified"
+            )
+        topology = _reference_topology_indices(recorded, measured_machine)
+        observed_corners = measured_machine[np.asarray(topology)]
+        expected_edges = np.linalg.norm(
+            np.roll(expected_corners, -1, axis=0) - expected_corners,
+            axis=1,
+        )
+        observed_edges = np.linalg.norm(
+            np.roll(observed_corners, -1, axis=0) - observed_corners,
+            axis=1,
+        )
+        edge_errors = np.abs(observed_edges - expected_edges)
+        maximum_edge_error = float(np.max(edge_errors))
+        if maximum_edge_error > float(edge_length_tolerance_mm) + 1e-9:
+            raise CalibrationError(
+                "The fresh honeycomb edge measurement changed scale: maximum "
+                f"edge-length difference is {maximum_edge_error:.3f} mm (limit "
+                f"{float(edge_length_tolerance_mm):.3f} mm)"
+            )
+        observed_x = observed_corners[1] - observed_corners[0]
+        observed_y = observed_corners[3] - observed_corners[0]
+        axis_angle = math.degrees(
+            math.acos(
+                min(
+                    1.0,
+                    abs(
+                        float(
+                            np.dot(observed_x, observed_y)
+                            / (
+                                np.linalg.norm(observed_x)
+                                * np.linalg.norm(observed_y)
+                            )
+                        )
+                    ),
+                )
+            )
+        )
+        angle_error = abs(90.0 - axis_angle)
+        if angle_error > float(orthogonality_tolerance_deg) + 1e-9:
+            raise CalibrationError(
+                "The fresh honeycomb edges are not square enough: measured "
+                f"{axis_angle:.3f} degrees (limit "
+                f"±{float(orthogonality_tolerance_deg):.3f} degrees)"
+            )
+        errors = np.linalg.norm(observed_corners - expected_corners, axis=1)
+        maximum = float(np.max(errors))
+        if maximum > float(corner_tolerance_mm) + 1e-9:
+            raise CalibrationError(
+                "The honeycomb moved after job preparation: automatic corner "
+                f"check differs by {maximum:.3f} mm (limit "
+                f"{float(corner_tolerance_mm):.3f} mm)"
+            )
+        after = self.honeycomb_execution_signature()
+        if after is None or tuple(after) != tuple(expected_signature):
+            raise CalibrationError(
+                "The honeycomb or camera-to-machine mapping changed during start verification"
+            )
+        return {
+            "verified": True,
+            "maximum_corner_error_mm": maximum,
+            "corner_tolerance_mm": float(corner_tolerance_mm),
+            "maximum_edge_length_error_mm": maximum_edge_error,
+            "edge_length_tolerance_mm": float(edge_length_tolerance_mm),
+            "axis_angle_deg": axis_angle,
+            "orthogonality_tolerance_deg": float(orthogonality_tolerance_deg),
+        }
+
+    def validate_honeycomb_execution_binding(
+        self,
+        expected_signature: tuple[Any, ...],
+    ) -> None:
+        """Reject a stale prepared honeycomb binding without camera motion."""
+
+        current = self.honeycomb_execution_signature()
+        if current is None or tuple(current) != tuple(expected_signature):
+            raise CalibrationError(
+                "The honeycomb reference or camera-to-machine mapping changed "
+                "after job preparation; generate the job again"
+            )
+
+    def current_honeycomb_coordinate_frame(
+        self,
+    ) -> HoneycombCoordinateFrame | None:
+        """Return the current rigid honeycomb-local frame, if one is valid."""
+
+        reference = self._current_honeycomb_support()
+        return None if reference is None else reference.coordinate_frame
+
+    def trace_camera_work_area(self) -> WorkArea:
+        """Return a display/detection area containing the work area and honeycomb.
+
+        This area controls camera rectification only. It does not alter machine,
+        project, guarded-output, preflight, arming, or execution bounds.
+        """
+
+        configured = self.settings.machine.work_area
+        with self._simulation_workspace_lock:
+            if self._simulation_workspace_image is not None:
+                return WorkArea(
+                    configured.x_min,
+                    configured.x_max,
+                    configured.y_min,
+                    configured.y_max,
+                )
+        support = self._current_honeycomb_support()
+        if support is None:
+            return WorkArea(
+                configured.x_min,
+                configured.x_max,
+                configured.y_min,
+                configured.y_max,
+            )
+        corners = np.asarray(support.support_corners_machine_mm, dtype=np.float64)
+        padding_mm = 2.0
+        ppm = float(self.settings.calibration.bed.pixels_per_mm)
+        x_min = min(float(configured.x_min), float(np.min(corners[:, 0])) - padding_mm)
+        x_max = max(float(configured.x_max), float(np.max(corners[:, 0])) + padding_mm)
+        y_min = min(float(configured.y_min), float(np.min(corners[:, 1])) - padding_mm)
+        y_max = max(float(configured.y_max), float(np.max(corners[:, 1])) + padding_mm)
+        # Pixel-aligned limits preserve the exact px/mm scale and keep image
+        # dimensions stable across captures with the same support reference.
+        return WorkArea(
+            math.floor(x_min * ppm) / ppm,
+            math.ceil(x_max * ppm) / ppm,
+            math.floor(y_min * ppm) / ppm,
+            math.ceil(y_max * ppm) / ppm,
+        )
+
+    def validate_powered_calibration_support(self, gcode: str, filename: str) -> None:
+        """Reject any support-bound powered setup job outside its taught surface.
+
+        The fresh base-map job is intentionally not included here: it is the
+        bootstrap measurement that creates the image-to-machine transform needed
+        to locate the honeycomb in machine coordinates. Every later powered
+        camera-registration/validation job is support-bound.
+        """
+
+        matched = self._calibration_support_session(filename)
+        if matched is None:
+            return
+        label, session = matched
+        if not self._session_boolean(session, "powered", label):
+            return
+        expected_digest = session.get("program_digest")
+        actual_digest = self.machine.preflight_program(gcode).digest
+        if not isinstance(expected_digest, str) or actual_digest != expected_digest:
+            raise CalibrationError(
+                f"The {label} program no longer matches the support-bound prepared session"
+            )
+        recorded = session.get("honeycomb_execution_signature")
+        if not isinstance(recorded, list) or len(recorded) != 4:
+            raise CalibrationError(
+                f"The powered {label} job predates four-corner honeycomb binding; prepare it again"
+            )
+        support = self._current_honeycomb_support()
+        current = self.honeycomb_execution_signature()
+        if (
+            support is None
+            or not support.is_execution_verifiable
+            or current is None
+            or tuple(recorded) != tuple(current)
+        ):
+            raise CalibrationError(
+                f"The detected honeycomb or camera map changed after this {label} job "
+                "was prepared; prepare it again"
+            )
+        segments = [segment for segment in parse_gcode_segments(gcode) if segment.laser_on]
+        spot_x = float(self.settings.laser.spot_offset_x_mm)
+        spot_y = float(self.settings.laser.spot_offset_y_mm)
+        points = np.asarray(
+            [
+                (point[0] + spot_x, point[1] + spot_y)
+                for segment in segments
+                for point in ((segment.start_x, segment.start_y), (segment.end_x, segment.end_y))
+            ],
+            dtype=np.float64,
+        )
+        if not segments or not points_fit_support(points, support):
+            raise CalibrationError(
+                f"Powered {label} motion leaves the detected honeycomb cutting surface"
+            )
+
+    def calibration_job_honeycomb_signature(
+        self,
+        filename: str,
+    ) -> tuple[Any, ...] | None:
+        """Return the prepared fixture binding for a powered setup job."""
+
+        matched = self._calibration_support_session(filename)
+        if matched is None:
+            return None
+        _label, session = matched
+        if session.get("powered") is not True:
+            return None
+        signature = session.get("honeycomb_execution_signature")
+        if not isinstance(signature, list) or len(signature) != 4:
+            return None
+        return tuple(signature)
+
+    def _calibration_support_session(
+        self,
+        filename: str,
+    ) -> tuple[str, dict[str, Any]] | None:
+        sessions = (
+            ("fine registration", self.fine_registration_path),
+            ("accuracy validation", self.accuracy_validation_path),
+            ("dense local correction", self.dense_calibration_path),
+            ("dense validation", self.dense_validation_path),
+            ("dense confirmation", self.dense_confirmation_path),
+        )
+        for label, path in sessions:
+            session = read_json(path, {})
+            if isinstance(session, dict) and session.get("filename") == filename:
+                return label, session
+        return None
+
+    def _required_calibration_support(
+        self,
+        *,
+        powered: bool,
+        label: str,
+    ) -> HoneycombSupportReference | None:
+        support = self._current_honeycomb_support()
+        if powered and (
+            support is None or not support.is_execution_verifiable
+        ):
+            raise CalibrationError(
+                f"Automatically detect and save the four honeycomb corners before "
+                f"preparing powered {label} marks"
+            )
+        return support if support is not None and support.is_execution_verifiable else None
+
+    def _calibration_support_fields(
+        self,
+        support: HoneycombSupportReference | None,
+    ) -> dict[str, Any]:
+        if support is None:
+            return {"honeycomb_execution_signature": None}
+        signature = self.honeycomb_execution_signature()
+        if signature is None:
+            raise CalibrationError(
+                "The honeycomb or complete camera-to-machine mapping is not current"
+            )
+        return {
+            "honeycomb_execution_signature": list(signature),
+            "honeycomb_support_corners_machine_mm": [
+                list(point) for point in support.support_corners_machine_mm
+            ],
+        }
+
+    def _support_contained_calibration_targets(
+        self,
+        target_factory: Any,
+        support: HoneycombSupportReference,
+        *,
+        mark_size_mm: float,
+        boundary_margin_mm: float,
+    ) -> tuple[tuple[Any, ...], WorkArea]:
+        """Find the broadest axis-aligned target grid contained by the support.
+
+        Dense residual meshes must stay regular in machine X/Y, so their nodes
+        cannot simply be rotated into the movable support frame. Shrinking the
+        configured rectangle toward a point inside the machine/support
+        intersection retains a regular machine grid while keeping complete
+        cross extents on the cutting surface.
+        """
+
+        machine_area = self.settings.machine.work_area
+        polygon = [
+            np.asarray(point, dtype=np.float64)
+            for point in support.support_corners_machine_mm
+        ]
+
+        def clip(
+            points: list[np.ndarray],
+            inside: Any,
+            intersection: Any,
+        ) -> list[np.ndarray]:
+            if not points:
+                return []
+            output: list[np.ndarray] = []
+            previous = points[-1]
+            previous_inside = bool(inside(previous))
+            for current in points:
+                current_inside = bool(inside(current))
+                if current_inside != previous_inside:
+                    output.append(intersection(previous, current))
+                if current_inside:
+                    output.append(current)
+                previous = current
+                previous_inside = current_inside
+            return output
+
+        def vertical_intersection(
+            left: np.ndarray,
+            right: np.ndarray,
+            x_value: float,
+        ) -> np.ndarray:
+            delta = right - left
+            if abs(float(delta[0])) <= 1e-12:
+                return np.asarray((x_value, float(left[1])), dtype=np.float64)
+            ratio = (x_value - float(left[0])) / float(delta[0])
+            return left + ratio * delta
+
+        def horizontal_intersection(
+            left: np.ndarray,
+            right: np.ndarray,
+            y_value: float,
+        ) -> np.ndarray:
+            delta = right - left
+            if abs(float(delta[1])) <= 1e-12:
+                return np.asarray((float(left[0]), y_value), dtype=np.float64)
+            ratio = (y_value - float(left[1])) / float(delta[1])
+            return left + ratio * delta
+
+        polygon = clip(
+            polygon,
+            lambda point: point[0] >= machine_area.x_min,
+            lambda left, right: vertical_intersection(left, right, machine_area.x_min),
+        )
+        polygon = clip(
+            polygon,
+            lambda point: point[0] <= machine_area.x_max,
+            lambda left, right: vertical_intersection(left, right, machine_area.x_max),
+        )
+        polygon = clip(
+            polygon,
+            lambda point: point[1] >= machine_area.y_min,
+            lambda left, right: horizontal_intersection(left, right, machine_area.y_min),
+        )
+        polygon = clip(
+            polygon,
+            lambda point: point[1] <= machine_area.y_max,
+            lambda left, right: horizontal_intersection(left, right, machine_area.y_max),
+        )
+        if len(polygon) < 3:
+            raise CalibrationError(
+                "The detected honeycomb does not overlap the configured machine work area"
+            )
+        center = np.mean(np.asarray(polygon), axis=0)
+
+        def targets_at(scale: float) -> tuple[Any, ...] | None:
+            area = WorkArea(
+                x_min=float(center[0] + (machine_area.x_min - center[0]) * scale),
+                x_max=float(center[0] + (machine_area.x_max - center[0]) * scale),
+                y_min=float(center[1] + (machine_area.y_min - center[1]) * scale),
+                y_max=float(center[1] + (machine_area.y_max - center[1]) * scale),
+            )
+            try:
+                targets = target_factory(
+                    area,
+                    mark_size_mm=mark_size_mm,
+                    boundary_margin_mm=boundary_margin_mm,
+                )
+            except CalibrationError:
+                return None
+            clearance = boundary_margin_mm + mark_size_mm * 0.5
+            return (
+                targets
+                if targets_fit_support(targets, support, clearance)
+                else None
+            )
+
+        failed_scale = 1.0
+        successful_scale: float | None = None
+        successful_targets: tuple[Any, ...] | None = None
+        for index in range(201):
+            scale = 1.0 - index / 200.0
+            candidate = targets_at(scale)
+            if candidate is not None:
+                successful_scale = scale
+                successful_targets = candidate
+                break
+            failed_scale = scale
+        if successful_scale is None or successful_targets is None:
+            raise CalibrationError(
+                "No regular calibration grid fits inside both the detected honeycomb "
+                "and configured machine work area"
+            )
+        lower = successful_scale
+        upper = min(1.0, failed_scale)
+        for _iteration in range(40):
+            middle = (lower + upper) * 0.5
+            candidate = targets_at(middle)
+            if candidate is None:
+                upper = middle
+            else:
+                lower = middle
+                successful_targets = candidate
+        fitted_area = WorkArea(
+            x_min=float(center[0] + (machine_area.x_min - center[0]) * lower),
+            x_max=float(center[0] + (machine_area.x_max - center[0]) * lower),
+            y_min=float(center[1] + (machine_area.y_min - center[1]) * lower),
+            y_max=float(center[1] + (machine_area.y_max - center[1]) * lower),
+        )
+        return successful_targets, fitted_area
+
+    @staticmethod
+    def _dense_mesh_target_area(calibration: BedCalibration) -> WorkArea:
+        mesh = calibration.residual_mesh
+        if mesh is None:
+            raise CalibrationError(
+                "Apply the dense 5×5 fit before preparing its validation grid"
+            )
+        x_nodes = np.asarray(mesh.x_nodes_mm, dtype=np.float64)
+        y_nodes = np.asarray(mesh.y_nodes_mm, dtype=np.float64)
+        if (
+            x_nodes.shape != (5,)
+            or y_nodes.shape != (5,)
+            or not np.isfinite(x_nodes).all()
+            or not np.isfinite(y_nodes).all()
+        ):
+            raise CalibrationError("The active dense mesh nodes are invalid")
+        fraction_span = 0.85 - 0.15
+        width = float((x_nodes[-1] - x_nodes[0]) / fraction_span)
+        height = float((y_nodes[-1] - y_nodes[0]) / fraction_span)
+        return WorkArea(
+            x_min=float(x_nodes[0] - 0.15 * width),
+            x_max=float(x_nodes[-1] + 0.15 * width),
+            y_min=float(y_nodes[0] - 0.15 * height),
+            y_max=float(y_nodes[-1] + 0.15 * height),
+        )
 
     @property
     def simulation_workspace_frame_supported(self) -> bool:
@@ -1411,11 +2421,24 @@ class AppContext:
         calibration = self.bed.calibration
         if calibration is None:
             raise CalibrationError("Solve the bed mapping before fine registration")
+        support_reference = self._required_calibration_support(
+            powered=powered,
+            label="fine-registration",
+        )
         targets = registration_targets(
             self.settings.machine.work_area,
             mark_size_mm=mark_size_mm,
             boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+            support_reference=support_reference,
         )
+        if support_reference is not None and not targets_fit_support(
+            targets,
+            support_reference,
+            self.settings.laser.boundary_margin_mm + mark_size_mm * 0.5,
+        ):
+            raise CalibrationError(
+                "Fine-registration crosses do not fit inside the detected honeycomb cutting surface"
+            )
         program = generate_registration_program(
             targets,
             self.settings.laser,
@@ -1445,6 +2468,7 @@ class AppContext:
                 "mark_size_mm": mark_size_mm,
                 "speed_mm_min": speed_mm_min,
                 "targets": [target.to_dict() for target in targets],
+                **self._calibration_support_fields(support_reference),
                 **self._bed_mapping_session_fields(calibration),
             },
         )
@@ -1468,11 +2492,23 @@ class AppContext:
         calibration = self.bed.calibration
         if calibration is None:
             raise CalibrationError("Solve the bed mapping before accuracy validation")
-        targets = accuracy_validation_targets(
-            self.settings.machine.work_area,
-            mark_size_mm=mark_size_mm,
-            boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+        support_reference = self._required_calibration_support(
+            powered=powered,
+            label="accuracy-validation",
         )
+        if support_reference is not None:
+            targets, _target_area = self._support_contained_calibration_targets(
+                accuracy_validation_targets,
+                support_reference,
+                mark_size_mm=mark_size_mm,
+                boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+            )
+        else:
+            targets = accuracy_validation_targets(
+                self.settings.machine.work_area,
+                mark_size_mm=mark_size_mm,
+                boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+            )
         program = generate_registration_program(
             targets,
             self.settings.laser,
@@ -1503,6 +2539,7 @@ class AppContext:
                 "mark_size_mm": mark_size_mm,
                 "speed_mm_min": speed_mm_min,
                 "targets": [target.to_dict() for target in targets],
+                **self._calibration_support_fields(support_reference),
                 **self._bed_mapping_session_fields(calibration),
             },
         )
@@ -1532,17 +2569,49 @@ class AppContext:
             raise CalibrationError("Apply a dense local correction before its 4×4 validation")
         if not validation and not confirmation and calibration.residual_mesh is not None:
             raise CalibrationError("Reset the existing local correction mesh before fitting another")
+        support_reference = self._required_calibration_support(
+            powered=powered,
+            label=(
+                "dense confirmation"
+                if confirmation
+                else "dense validation"
+                if validation
+                else "dense local correction"
+            ),
+        )
         if confirmation:
             if calibration.residual_mesh is None or calibration.residual_mesh.refinement_count != 1:
                 raise CalibrationError("Apply the reviewed validation refinement before confirmation")
             target_factory = dense_confirmation_targets
         else:
             target_factory = dense_validation_targets if validation else dense_mesh_targets
-        targets = target_factory(
-            self.settings.machine.work_area,
-            mark_size_mm=mark_size_mm,
-            boundary_margin_mm=self.settings.laser.boundary_margin_mm,
-        )
+        if support_reference is not None and not validation and not confirmation:
+            targets, target_area = self._support_contained_calibration_targets(
+                target_factory,
+                support_reference,
+                mark_size_mm=mark_size_mm,
+                boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+            )
+        else:
+            target_area = (
+                self._dense_mesh_target_area(calibration)
+                if validation or confirmation
+                else self.settings.machine.work_area
+            )
+            targets = target_factory(
+                target_area,
+                mark_size_mm=mark_size_mm,
+                boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+            )
+            if support_reference is not None and not targets_fit_support(
+                targets,
+                support_reference,
+                self.settings.laser.boundary_margin_mm + mark_size_mm * 0.5,
+            ):
+                raise CalibrationError(
+                    "The dense validation crosses do not fit inside the detected "
+                    "honeycomb cutting surface"
+                )
         design_name = (
             "dense-mesh-confirmation-crosses"
             if confirmation
@@ -1588,6 +2657,8 @@ class AppContext:
                 "mark_size_mm": mark_size_mm,
                 "targets": [target.to_dict() for target in targets],
                 "image_to_machine": calibration.image_to_machine.tolist(),
+                "target_area": asdict(target_area),
+                **self._calibration_support_fields(support_reference),
                 "residual_mesh_created_at": (
                     None if calibration.residual_mesh is None else calibration.residual_mesh.created_at
                 ),
@@ -1928,16 +2999,20 @@ class AppContext:
         )
         if not analysis.get("can_apply"):
             raise CalibrationError("Dense-grid analysis did not pass its application gates")
-        return self.bed.apply_residual_mesh(
+        calibration = self.bed.apply_residual_mesh(
             np.asarray(analysis["x_nodes_mm"]),
             np.asarray(analysis["y_nodes_mm"]),
             np.asarray(analysis["corrections_mm"]),
             fit_rms_mm=float(analysis["fit_rms_mm"]),
             fit_max_mm=float(analysis["fit_max_mm"]),
-        ).to_dict()
+        )
+        self.honeycomb_support.clear()
+        return calibration.to_dict()
 
     def reset_dense_calibration(self) -> dict[str, Any]:
-        return self.bed.reset_residual_mesh().to_dict()
+        calibration = self.bed.reset_residual_mesh()
+        self.honeycomb_support.clear()
+        return calibration.to_dict()
 
     def apply_dense_validation_refinement(self, analysis: dict[str, Any]) -> dict[str, Any]:
         analysis = self._require_current_analysis(
@@ -1948,12 +3023,14 @@ class AppContext:
         refinement = analysis.get("refinement")
         if not isinstance(refinement, dict) or not refinement.get("can_refine"):
             raise CalibrationError("This validation result did not pass the refinement gates")
-        return self.bed.refine_residual_mesh(
+        calibration = self.bed.refine_residual_mesh(
             np.asarray(refinement["delta_corrections_mm"], dtype=np.float64),
             analyzed_mesh_created_at=float(refinement["base_mesh_created_at"]),
             predicted_rms_mm=float(refinement["predicted_rms_mm"]),
             predicted_max_mm=float(refinement["predicted_max_mm"]),
-        ).to_dict()
+        )
+        self.honeycomb_support.clear()
+        return calibration.to_dict()
 
     def analyze_accuracy_validation_image(self, image: np.ndarray) -> dict[str, Any]:
         return self._analyze_accuracy_validation_capture(image, (image,), None)
@@ -2419,6 +3496,7 @@ class AppContext:
             float(analysis["correction_y_mm"]),
             analysis=analysis,
         )
+        self.honeycomb_support.clear()
         return calibration.to_dict()
 
     def apply_fine_registration_homography(self, analysis: dict[str, Any]) -> dict[str, Any]:
@@ -2434,13 +3512,18 @@ class AppContext:
             np.asarray(refinement["image_to_machine"], dtype=np.float64),
             analysis=refinement,
         )
+        self.honeycomb_support.clear()
         return calibration.to_dict()
 
     def reset_fine_registration(self) -> dict[str, Any]:
-        return self.bed.reset_registration_translation().to_dict()
+        calibration = self.bed.reset_registration_translation()
+        self.honeycomb_support.clear()
+        return calibration.to_dict()
 
     def reset_fine_registration_homography(self) -> dict[str, Any]:
-        return self.bed.reset_registration_homography().to_dict()
+        calibration = self.bed.reset_registration_homography()
+        self.honeycomb_support.clear()
+        return calibration.to_dict()
 
     def replace_bed_points(self, payload: dict[str, Any]) -> dict[str, Any]:
         raw_points = payload.get("points")

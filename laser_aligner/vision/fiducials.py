@@ -323,6 +323,7 @@ def detect_keyed_crosshair_grid(
     # lattice. Running findCirclesGrid on the photograph directly lets bed
     # edges, rulers, screws, and the parked head dominate its clustering.
     centers = None
+    malformed_grid_found = False
     minimum_dimension = float(min(gray.shape[:2]))
     for maximum_factor in (0.023, 0.03, 0.04, 0.05):
         for minimum_factor in (0.0074, 0.0065, 0.0085, 0.0055):
@@ -364,8 +365,51 @@ def detect_keyed_crosshair_grid(
                     blobDetector=candidate_detector,
                 )
                 if found and candidate_centers is not None:
-                    centers = candidate_centers
-                    break
+                    candidate_matrix = np.asarray(
+                        candidate_centers, dtype=np.float64
+                    ).reshape(grid_size, grid_size, 2)
+                    candidate_horizontal = np.linalg.norm(
+                        np.diff(candidate_matrix, axis=1), axis=2
+                    ).reshape(-1)
+                    candidate_vertical = np.linalg.norm(
+                        np.diff(candidate_matrix, axis=0), axis=2
+                    ).reshape(-1)
+                    candidate_steps = np.concatenate(
+                        (candidate_horizontal, candidate_vertical)
+                    )
+                    candidate_spacing = float(np.median(candidate_steps))
+                    candidate_radius = max(8, int(round(candidate_spacing * 0.22)))
+                    candidate_band = max(
+                        1, int(round(minimum_dimension * 0.0015))
+                    )
+                    candidate_gap = max(
+                        candidate_band + 2,
+                        int(round(minimum_dimension * 0.005)),
+                    )
+                    flat_centers = candidate_matrix.reshape(-1, 2)
+                    pairwise = np.linalg.norm(
+                        flat_centers[:, None, :] - flat_centers[None, :, :],
+                        axis=2,
+                    )
+                    np.fill_diagonal(pairwise, np.inf)
+                    edge_clearance = candidate_radius + candidate_gap + candidate_band
+                    regular = bool(
+                        np.isfinite(candidate_spacing)
+                        and candidate_spacing > 0.0
+                        and np.min(pairwise) >= candidate_spacing * 0.35
+                        and np.min(candidate_steps) >= candidate_spacing * 0.35
+                        and np.max(candidate_steps) <= candidate_spacing * 1.8
+                    )
+                    inside = bool(
+                        np.all(flat_centers[:, 0] >= edge_clearance)
+                        and np.all(flat_centers[:, 0] < gray.shape[1] - edge_clearance)
+                        and np.all(flat_centers[:, 1] >= edge_clearance)
+                        and np.all(flat_centers[:, 1] < gray.shape[0] - edge_clearance)
+                    )
+                    if regular and inside:
+                        centers = candidate_centers
+                        break
+                    malformed_grid_found = True
             if centers is not None:
                 break
         if centers is not None:
@@ -374,7 +418,11 @@ def detect_keyed_crosshair_grid(
     if not found or centers is None or len(centers) != grid_size * grid_size:
         return {
             "detected": False,
-            "reason": "Could not find all 25 keyed base-grid crosses",
+            "reason": (
+                "Only malformed or edge-contaminated 25-point base-grid candidates were found"
+                if malformed_grid_found
+                else "Could not find all 25 keyed base-grid crosses"
+            ),
             "points": [],
         }
 

@@ -23,7 +23,9 @@ from laser_aligner.calibration.registration import (
     registration_targets,
     review_registration_measurements,
     suggested_registration_exclusions,
+    targets_fit_support,
 )
+from laser_aligner.calibration.support import HoneycombSupportReference
 from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.service import FrameBurst
 from laser_aligner.config import (
@@ -43,6 +45,32 @@ def _run_prepared_job(context: AppContext, job: object) -> None:
     while context.machine.status()["job"]["running"] and time.monotonic() < deadline:
         time.sleep(0.01)
     assert context.machine.status()["job"]["error"] is None
+
+
+def _save_execution_support(context: AppContext) -> HoneycombSupportReference:
+    """Store an automatic four-corner support inside the guarded machine area."""
+
+    calibration = context.bed.calibration
+    assert calibration is not None
+    area = context.settings.machine.work_area
+    margin = context.settings.laser.boundary_margin_mm
+    inset = max(10.0, margin + 5.0)
+    side = min(190.0, area.width - 2.0 * inset, area.height - 2.0 * inset)
+    origin = (area.x_min + inset, area.y_min + inset)
+    reference = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=(
+            origin,
+            (origin[0] + side, origin[1]),
+            (origin[0] + side, origin[1] + side),
+            (origin[0], origin[1] + side),
+        ),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=side,
+        support_height_mm=side,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    context.honeycomb_support.save(reference)
+    return reference
 
 
 def test_dense_mesh_targets_form_complete_five_by_five_grid() -> None:
@@ -67,6 +95,7 @@ def test_dense_fit_and_validation_sessions_do_not_overwrite_each_other(tmp_path:
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _save_execution_support(context)
         fit_job = context.prepare_dense_calibration_job(
             powered=True,
             power_percent=10,
@@ -82,6 +111,7 @@ def test_dense_fit_and_validation_sessions_do_not_overwrite_each_other(tmp_path:
             fit_rms_mm=0.0,
             fit_max_mm=0.0,
         )
+        _save_execution_support(context)
         validation_job = context.prepare_dense_calibration_job(
             powered=True,
             power_percent=10,
@@ -157,6 +187,7 @@ def test_malformed_confirmation_session_is_repaired_before_capture(
     assert calibration is None
     context.start()
     try:
+        _save_execution_support(context)
         fit_job = context.prepare_dense_calibration_job(
             powered=True,
             power_percent=10,
@@ -177,6 +208,7 @@ def test_malformed_confirmation_session_is_repaired_before_capture(
             predicted_rms_mm=0.0,
             predicted_max_mm=0.0,
         )
+        _save_execution_support(context)
         confirmation_job = context.prepare_dense_calibration_job(
             powered=True,
             power_percent=10,
@@ -425,6 +457,30 @@ def test_registration_program_has_sparse_safe_dry_and_powered_variants() -> None
     )
     assert powered.text.count("M4 S100") == 16
     assert powered.bounds_mm == pytest.approx((32.5, 32.5, 187.5, 187.5))
+
+
+def test_registration_targets_follow_and_fit_detected_honeycomb() -> None:
+    work_area = WorkArea(x_min=10, x_max=210, y_min=10, y_max=210)
+    support = HoneycombSupportReference.from_observations(
+        ruler_origin_machine_mm=(29.2, 37.3),
+        ruler_x_mark_machine_mm=(219.2, 40.8),
+        ruler_xy_mark_machine_mm=(217.6, 230.8),
+        ruler_mark_mm=190.0,
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=1.0,
+    )
+
+    targets = registration_targets(
+        work_area,
+        mark_size_mm=5.0,
+        boundary_margin_mm=5.0,
+        support_reference=support,
+    )
+
+    assert min(target.machine_y for target in targets) > 60.0
+    assert targets_fit_support(targets, support, 7.5)
+    assert all(work_area.contains(target.machine_x, target.machine_y, 7.5) for target in targets)
 
 
 def test_powered_registration_requires_a_nonzero_verified_power() -> None:
@@ -793,6 +849,62 @@ def test_dry_registration_session_cannot_be_analyzed_as_burned_marks(
         context.stop()
 
 
+def test_powered_registration_is_rechecked_against_detected_support_at_start(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    area = context.settings.machine.work_area
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0, 599, area.x_min, area.y_min),
+            BedPoint(799, 599, area.x_max, area.y_min),
+            BedPoint(799, 0, area.x_max, area.y_max),
+            BedPoint(0, 0, area.x_min, area.y_max),
+        ],
+        800,
+        600,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    _save_execution_support(context)
+    job = context.prepare_fine_registration_job(
+        powered=True,
+        power_percent=10,
+        mark_size_mm=5,
+        speed_mm_min=1200,
+    )
+
+    context.validate_powered_calibration_support(job.program.text, job.filename)
+    lines = job.program.text.splitlines()
+    rapid_index = next(index for index, line in enumerate(lines) if line.startswith("G0 "))
+    powered_index = next(index for index, line in enumerate(lines) if line.startswith("G1 "))
+    escape_x = area.x_min + context.settings.laser.boundary_margin_mm
+    escape_y = area.y_min + context.settings.laser.boundary_margin_mm
+    lines[rapid_index] = f"G0 X{escape_x:g} Y{escape_y:g} F3000"
+    lines[powered_index] = f"G1 X{escape_x + 1:g} Y{escape_y:g} F1200"
+    escaped = "\n".join(lines) + "\n"
+    assert escaped != job.program.text
+    # Preserve the independent containment rejection after the newer exact-
+    # program digest guard by binding this deliberately escaped fixture to its
+    # altered program, as though it had been prepared that way.
+    session = json.loads(context.fine_registration_path.read_text(encoding="utf-8"))
+    session["program_digest"] = context.machine.preflight_program(escaped).digest
+    context.fine_registration_path.write_text(json.dumps(session), encoding="utf-8")
+    with pytest.raises(CalibrationError, match="leaves the detected honeycomb"):
+        context.validate_powered_calibration_support(escaped, job.filename)
+
+
 def test_fine_registration_session_is_bound_to_the_active_bed_map(
     tmp_path: Path,
 ) -> None:
@@ -814,6 +926,7 @@ def test_fine_registration_session_is_bound_to_the_active_bed_map(
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _save_execution_support(context)
         job = context.prepare_fine_registration_job(
             powered=True,
             power_percent=10,
@@ -879,6 +992,7 @@ def test_stale_fine_registration_capture_fails_before_motor_hold(
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _save_execution_support(context)
         job = context.prepare_fine_registration_job(
             powered=True,
             power_percent=10,
@@ -920,6 +1034,7 @@ def test_legacy_fine_registration_session_without_map_identity_is_rejected(
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _save_execution_support(context)
         job = context.prepare_fine_registration_job(
             powered=True,
             power_percent=10,
@@ -1002,6 +1117,58 @@ def test_fine_registration_apply_rejects_modified_and_stale_analysis(
         context.stop()
 
 
+def test_bed_map_corrections_clear_honeycomb_pose(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "data_dir": "data",
+                    "simulation": True,
+                    "open_browser": False,
+                },
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    context.start()
+    try:
+        calibration = context.bed.calibration
+        assert calibration is not None
+        context.honeycomb_support.save(
+            HoneycombSupportReference.from_observations(
+                ruler_origin_machine_mm=(10.0, 10.0),
+                ruler_x_mark_machine_mm=(200.0, 10.0),
+                ruler_xy_mark_machine_mm=(200.0, 200.0),
+                ruler_mark_mm=190.0,
+                support_width_mm=190.0,
+                support_height_mm=190.0,
+                bed_calibration_created_at=calibration.created_at,
+            )
+        )
+        reviewed = context._seal_analysis(
+            {
+                "can_apply_translation": True,
+                "correction_x_mm": 0.1,
+                "correction_y_mm": -0.1,
+            }
+        )
+        context.fine_registration_path.write_text(
+            json.dumps({"analysis": reviewed}),
+            encoding="utf-8",
+        )
+
+        context.apply_fine_registration(reviewed)
+
+        assert context.honeycomb_support.reference is None
+        assert context.honeycomb_execution_signature() is None
+    finally:
+        context.stop()
+
+
 def test_dry_accuracy_validation_cannot_be_analyzed_as_burned_holdouts(
     tmp_path: Path,
 ) -> None:
@@ -1059,6 +1226,7 @@ def test_powered_accuracy_validation_scores_synthetic_holdouts_and_rejects_stale
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _save_execution_support(context)
         job = context.prepare_accuracy_validation_job(
             powered=True,
             power_percent=10,

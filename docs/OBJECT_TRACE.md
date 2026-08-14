@@ -172,30 +172,31 @@ arbitrary pixel contours identical would require choosing a separate canonical
 path.
 
 Direct and inferred grid cells are retained in the review even when their
-proposed vector crosses the guarded laser-output boundary. That boundary is the
-configured camera/work rectangle inset by `laser.boundary_margin_mm` and
-reduced asymmetrically when needed so both the controller position and its
-configured `laser.spot_offset_x_mm` / `laser.spot_offset_y_mm` physical spot
-remain inside the inset rectangle. It may be smaller than the visible
-honeycomb. Red cells report the exceeded side and distance and remain
+proposed vector crosses the guarded laser-output boundary. For ordinary
+machine-coordinate work, that boundary is the configured camera/work rectangle
+inset by `laser.boundary_margin_mm` and reduced for the physical spot offset.
+For a current honeycomb-bound project, it can instead be an explicit fixed
+machine-coordinate polygon. The active profile's polygon maps to local
+X/Y−10..200, a 210 × 210 mm square centered on the 190 mm support. Camera
+detection does not move or enlarge it. Red cells report the exceeded edge and
+distance and remain
 unchecked. If raw observed geometry was inside but shared grid sizing caused
 the overrun, the Geometry tooltip says so explicitly.
 
 An observed mask that reaches any corrected-raster edge is separately labeled
 **cropped**, drawn red, and left unchecked even when its partial contour is
-inside the numeric rectangle. The unseen part of an edge-touching object cannot
+inside the selected authority. The unseen part of an edge-touching object cannot
 be inferred safely from that observation. Reposition the workpiece, or verify
 the configured crop and guarded limits with the Step 3 ruler overlay, before
 creating output. Never treat physical support on a movable honeycomb as proof
 that the laser spot can reach the same coordinate.
 
-When Step 3 has an optional tick-detected honeycomb-ruler reference, Trace may
-draw its outline in magenta for visual comparison. The three operator clicks
-only seed ruler searches; they are never treated as measured coordinates. That
-annotation does not
-classify, select, exclude, or resize detections and is not passed into output
-authorization. Only the camera/work crop, guarded laser-output area, and crop
-edge evidence affect these review gates.
+When Step 3 has a current automatic four-edge honeycomb reference, Trace draws
+its 190 mm support outline in magenta and uses its rigid local frame. The
+three-click fallback remains diagnostic-only and cannot authorize output. The
+magenta support and green output polygon are distinct evidence: detection never
+changes the configured polygon. Camera coverage, the selected guarded-output
+authority, and crop-edge evidence affect the review gates.
 
 These checks keep the fitted grid and its occupancy internally coherent while
 making the required remedy explicit. Trace and color sampling also refuse to

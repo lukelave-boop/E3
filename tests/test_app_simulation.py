@@ -1,4 +1,6 @@
 import json
+import math
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,9 +11,12 @@ import pytest
 from laser_aligner.app import AppContext
 from laser_aligner.calibration.bed import BedPoint
 from laser_aligner.calibration.lens import LensModel
-from laser_aligner.calibration.support import HoneycombSupportReference
+from laser_aligner.calibration.support import (
+    HoneycombCoordinateFrame,
+    HoneycombSupportReference,
+)
 from laser_aligner.camera.service import CameraStatus
-from laser_aligner.config import load_settings
+from laser_aligner.config import WorkArea, load_settings
 from laser_aligner.core.runtime import CoreRuntime
 from laser_aligner.errors import CalibrationError
 from laser_aligner.gcode.preview import parse_gcode_segments
@@ -48,6 +53,100 @@ def test_simulation_auto_maps_bed_and_generates_workspace(tmp_path: Path) -> Non
         assert detection["detected"]
     finally:
         context.stop()
+
+
+def test_expanded_rectified_frame_does_not_replace_configured_workspace_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    configured = np.full((440, 440, 3), 17, dtype=np.uint8)
+    expanded = WorkArea(-5.0, 230.0, -10.0, 240.0)
+    context._cache_workspace(configured)
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    monkeypatch.setattr(
+        context,
+        "camera_frame",
+        lambda **_kwargs: np.zeros((24, 32, 3), dtype=np.uint8),
+    )
+
+    def fake_rectify(
+        _image: np.ndarray,
+        *,
+        work_area: WorkArea | None = None,
+    ) -> np.ndarray:
+        area = context.settings.machine.work_area if work_area is None else work_area
+        ppm = context.settings.calibration.bed.pixels_per_mm
+        return np.zeros(
+            (
+                int(round(area.height * ppm)),
+                int(round(area.width * ppm)),
+                3,
+            ),
+            dtype=np.uint8,
+        )
+
+    monkeypatch.setattr(context, "_rectify_camera_image", fake_rectify)
+
+    display = context.rectified_frame(
+        refresh=True,
+        persist=True,
+        work_area=expanded,
+    )
+    cached = context.rectified_frame(refresh=False)
+
+    assert display.shape[:2] == (500, 470)
+    assert np.array_equal(cached, configured)
+    assert not context.workspace_path.exists()
+
+
+def test_local_rectified_frame_does_not_replace_configured_workspace_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    configured = np.full((440, 440, 3), 17, dtype=np.uint8)
+    context._cache_workspace(configured)
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    monkeypatch.setattr(
+        context,
+        "camera_frame",
+        lambda **_kwargs: np.zeros((24, 32, 3), dtype=np.uint8),
+    )
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(29.0, 37.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=220.0,
+        height_mm=220.0,
+        provenance_digest="3" * 64,
+    )
+    calls: list[tuple[WorkArea | None, HoneycombCoordinateFrame | None]] = []
+
+    def fake_rectify(
+        _image: np.ndarray,
+        *,
+        work_area: WorkArea | None = None,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
+    ) -> np.ndarray:
+        calls.append((work_area, coordinate_frame))
+        return np.full((440, 440, 3), 99, dtype=np.uint8)
+
+    monkeypatch.setattr(context, "_rectify_camera_image", fake_rectify)
+    local_area = WorkArea(0.0, 220.0, 0.0, 220.0)
+
+    display = context.rectified_frame(
+        refresh=False,
+        persist=True,
+        work_area=local_area,
+        coordinate_frame=frame,
+    )
+    cached = context.rectified_frame(refresh=False)
+
+    assert np.all(display == 99)
+    assert calls == [(local_area, frame)]
+    assert np.array_equal(cached, configured)
+    assert not context.workspace_path.exists()
 
 
 def test_browser_generation_uses_configured_photo_pose_for_exact_preview(
@@ -360,6 +459,26 @@ def test_raw_to_bed_composition_uses_one_remap_and_reduces_resampling_error(
     sequential_error = float(np.mean(np.abs(sequential.astype(np.float64) - ideal)))
     assert composed_error < sequential_error * 0.92
 
+    local_frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(1.0, 2.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=64.0,
+        height_mm=64.0,
+        provenance_digest="4" * 64,
+    )
+    local = context._rectify_camera_image(raw, coordinate_frame=local_frame)
+    local_maps = next(iter(context._composed_map_cache.values()))[2]
+    local_repeated = context._rectify_camera_image(raw, coordinate_frame=local_frame)
+    assert local_maps is next(iter(context._composed_map_cache.values()))[2]
+    assert np.array_equal(local, local_repeated)
+    assert not np.array_equal(local, composed)
+
+    restored = context._rectify_camera_image(raw)
+    restored_maps = next(iter(context._composed_map_cache.values()))[2]
+    assert restored_maps is not local_maps
+    assert np.array_equal(restored, composed)
+
     context.bed.apply_registration_translation(0.25, 0.0)
     context.bed.apply_registration_translation(0.5, 0.0)
     updated = context._rectify_camera_image(raw)
@@ -532,6 +651,703 @@ def test_app_and_runtime_reject_non_boolean_laser_lockout(
         AppContext(_settings(tmp_path), laser_lockout=value)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="laser_lockout must be an exact boolean"):
         CoreRuntime(_settings(tmp_path), laser_lockout=value)  # type: ignore[arg-type]
+
+
+def test_automatic_honeycomb_preserves_fresh_measured_rectangle_without_tick_recognition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    frame = np.asarray(
+        [
+            context.bed.mm_to_image(*point)
+            for point in ((10.0, 200.0), (200.0, 200.0), (200.0, 10.0), (10.0, 10.0))
+        ],
+        dtype=np.float64,
+    )
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    monkeypatch.setattr("laser_aligner.app.detect_honeycomb_frame", lambda _image: frame)
+
+    reference, detection = context.detect_honeycomb_support_reference_automatically(
+        np.zeros((440, 440, 3), dtype=np.uint8),
+        ruler_mark_mm=190.0,
+    )
+
+    assert reference.ruler_origin_machine_mm == pytest.approx((10.0, 10.0))
+    assert reference.ruler_x_mark_machine_mm == pytest.approx((200.0, 10.0))
+    assert reference.ruler_xy_mark_machine_mm == pytest.approx((200.0, 200.0))
+    assert reference.measured_ruler_span_mm == pytest.approx((190.0, 190.0))
+    assert reference.schema_version == 2
+    assert reference.has_four_corner_evidence is True
+    assert np.asarray(reference.raw_corners_machine_mm) == pytest.approx(
+        np.asarray(((10.0, 200.0), (200.0, 200.0), (200.0, 10.0), (10.0, 10.0)))
+    )
+    assert reference.corner_topology == (3, 2, 1, 0)
+    assert reference.measurement_method == "automatic-four-edge-fit"
+    assert detection.axis_x.tick_candidate_count == 0
+    assert detection.axis_y.tick_candidate_count == 0
+
+
+def _save_execution_support(context: AppContext) -> HoneycombSupportReference:
+    calibration = context.bed.calibration
+    assert calibration is not None
+    reference = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=(
+            (10.0, 10.0),
+            (200.0, 10.0),
+            (200.0, 200.0),
+            (10.0, 200.0),
+        ),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    context.honeycomb_support.save(reference)
+    return reference
+
+
+def test_execution_pose_measurement_uses_broad_taught_registration_without_refitting_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    machine_corners = ((10.0, 10.0), (200.0, 10.0), (200.0, 200.0), (10.0, 200.0))
+    teaching_corners = tuple(context.bed.mm_to_image(*point) for point in machine_corners)
+    reference = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=machine_corners,
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    image = np.zeros((440, 440, 3), dtype=np.uint8)
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    context.save_honeycomb_support_reference(
+        reference,
+        teaching_image=image,
+        teaching_corners_px=teaching_corners,
+    )
+    registered = np.asarray(teaching_corners, dtype=np.float64) + (0.2, -0.1)
+    monkeypatch.setattr(
+        "laser_aligner.app.register_honeycomb_reference",
+        lambda *_args: registered.copy(),
+    )
+    monkeypatch.setattr(
+        "laser_aligner.app.detect_honeycomb_frame",
+        lambda *_args, **_kwargs: pytest.fail(
+            "execution verification must not require four uniform edge transitions"
+        ),
+    )
+
+    observed, detection = context.detect_honeycomb_support_reference_automatically(
+        image,
+        ruler_mark_mm=190.0,
+        require_taught_reference=True,
+    )
+
+    assert np.asarray(detection.frame_corners_image_px) == pytest.approx(registered)
+    assert np.asarray(observed.raw_corners_machine_mm) == pytest.approx(
+        np.asarray([context.bed.image_to_mm(*point) for point in registered])
+    )
+
+
+def _automatic_detection_for_corners(
+    context: AppContext,
+    machine_corners: tuple[tuple[float, float], ...],
+) -> tuple[HoneycombSupportReference, HoneycombRulerDetection]:
+    calibration = context.bed.calibration
+    assert calibration is not None
+    origin, x_corner, opposite, y_corner = machine_corners
+    x_length = float(np.linalg.norm(np.asarray(x_corner) - np.asarray(origin)))
+    y_length = float(np.linalg.norm(np.asarray(opposite) - np.asarray(x_corner)))
+    x_vector = np.asarray(x_corner) - np.asarray(origin)
+    y_vector = np.asarray(y_corner) - np.asarray(origin)
+    angle = math.degrees(
+        math.acos(
+            min(1.0, abs(float(np.dot(x_vector, y_vector) / (x_length * y_length))))
+        )
+    )
+    reference = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=machine_corners,
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    detection = HoneycombRulerDetection(
+        ruler_origin_image_px=origin,
+        ruler_x_mark_image_px=x_corner,
+        ruler_xy_mark_image_px=opposite,
+        axis_x=RulerAxisDetection(origin, x_corner, 1.0, 0, 0.0, 0.0, 0.0),
+        axis_y=RulerAxisDetection(x_corner, opposite, 1.0, 0, 0.0, 0.0, 0.0),
+        corner_error_px=0.0,
+        axis_angle_deg=angle,
+        frame_corners_image_px=(origin, x_corner, opposite, y_corner),
+    )
+    return reference, detection
+
+
+def test_execution_pose_verifier_accepts_fresh_matching_four_edge_measurement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    recorded = _save_execution_support(context)
+    corners = ((10.0, 10.0), (200.0, 10.0), (200.0, 200.0), (10.0, 200.0))
+    observed = _automatic_detection_for_corners(
+        context,
+        corners,
+    )
+    monkeypatch.setattr(
+        context,
+        "capture_parked_work_area_reference",
+        lambda: np.zeros((32, 32, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        context,
+        "detect_honeycomb_support_reference_automatically",
+        lambda _image, *, ruler_mark_mm, require_taught_reference=False: observed,
+    )
+    monkeypatch.setattr(context.bed, "image_to_mm", lambda x, y: (x, y))
+
+    result = context.verify_honeycomb_pose_for_execution(
+        context.honeycomb_execution_signature()
+    )
+
+    assert recorded.measured_ruler_span_mm == pytest.approx((190.0, 190.0))
+    assert result["verified"] is True
+    assert result["maximum_corner_error_mm"] == pytest.approx(0.0)
+    assert result["maximum_edge_length_error_mm"] == pytest.approx(0.0)
+
+
+def test_execution_pose_verifier_rejects_legacy_three_point_reference(
+    tmp_path: Path,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    context.honeycomb_support.save(
+        HoneycombSupportReference.from_observations(
+            ruler_origin_machine_mm=(10.0, 10.0),
+            ruler_x_mark_machine_mm=(200.0, 10.0),
+            ruler_xy_mark_machine_mm=(200.0, 200.0),
+            ruler_mark_mm=190.0,
+            support_width_mm=190.0,
+            support_height_mm=190.0,
+            bed_calibration_created_at=calibration.created_at,
+        )
+    )
+
+    assert context.honeycomb_execution_signature() is None
+    with pytest.raises(CalibrationError, match="lacks four independent"):
+        context.verify_honeycomb_pose_for_execution(
+            ("honeycomb-rigid-frame", 2, "legacy", "bed-map")
+        )
+
+
+def test_execution_binding_check_is_camera_free_and_rejects_changed_support(
+    tmp_path: Path,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    _save_execution_support(context)
+    signature = context.honeycomb_execution_signature()
+    assert signature is not None
+
+    context.validate_honeycomb_execution_binding(signature)
+    context.honeycomb_support.clear()
+
+    with pytest.raises(CalibrationError, match="changed after job preparation"):
+        context.validate_honeycomb_execution_binding(signature)
+
+
+def test_legacy_annotated_reference_seeds_automatic_schema_two_upgrade(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 220.0, 0.0, 0.0),
+            BedPoint(220.0, 220.0, 220.0, 0.0),
+            BedPoint(220.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        221,
+        221,
+    )
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    reference_image = np.zeros((221, 221, 3), dtype=np.uint8)
+    write_image_atomic(context.honeycomb_visual_reference_path, reference_image)
+    context.honeycomb_visual_reference_metadata_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "cutting_surface_corners_px": [
+                    [10.0, 200.0],
+                    [200.0, 200.0],
+                    [200.0, 10.0],
+                    [10.0, 10.0],
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    seeded = np.asarray(
+        ((10.0, 200.0), (200.0, 200.0), (200.0, 10.0), (10.0, 10.0)),
+        dtype=np.float64,
+    )
+    calls: list[tuple[np.ndarray | None, bool]] = []
+    monkeypatch.setattr(
+        "laser_aligner.app.register_honeycomb_reference",
+        lambda *_args: seeded.copy(),
+    )
+
+    def detect(_image: np.ndarray, *, seed_corners=None) -> np.ndarray:
+        calls.append((seed_corners, seed_corners is not None))
+        return seeded.copy()
+
+    monkeypatch.setattr("laser_aligner.app.detect_honeycomb_frame", detect)
+
+    support, detection = context.detect_honeycomb_support_reference_automatically(
+        reference_image,
+        ruler_mark_mm=190.0,
+    )
+
+    assert support.is_execution_verifiable
+    assert support.schema_version == 2
+    assert len(calls) == 1
+    assert calls[0][1] is True
+    assert calls[0][0] == pytest.approx(seeded)
+    assert np.asarray(detection.frame_corners_image_px) == pytest.approx(seeded)
+
+
+def test_execution_pose_verifier_rejects_fresh_moved_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    _save_execution_support(context)
+    corners = ((11.0, 10.0), (201.0, 10.0), (201.0, 200.0), (11.0, 200.0))
+    observed = _automatic_detection_for_corners(
+        context,
+        corners,
+    )
+    monkeypatch.setattr(
+        context,
+        "capture_parked_work_area_reference",
+        lambda: np.zeros((32, 32, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        context,
+        "detect_honeycomb_support_reference_automatically",
+        lambda _image, *, ruler_mark_mm, require_taught_reference=False: observed,
+    )
+    monkeypatch.setattr(context.bed, "image_to_mm", lambda x, y: (x, y))
+
+    with pytest.raises(CalibrationError, match="honeycomb moved"):
+        context.verify_honeycomb_pose_for_execution(
+            context.honeycomb_execution_signature()
+        )
+
+
+def test_execution_pose_verifier_rejects_fresh_edge_length_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    _save_execution_support(context)
+    # This remains inside the automatic detector's strict 2 mm nominal-side
+    # acceptance, but exceeds the tighter 0.75 mm start-to-taught comparison.
+    corners = ((10.0, 10.0), (198.5, 10.0), (198.5, 200.0), (10.0, 200.0))
+    observed = _automatic_detection_for_corners(
+        context,
+        corners,
+    )
+    monkeypatch.setattr(
+        context,
+        "capture_parked_work_area_reference",
+        lambda: np.zeros((32, 32, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        context,
+        "detect_honeycomb_support_reference_automatically",
+        lambda _image, *, ruler_mark_mm, require_taught_reference=False: observed,
+    )
+    monkeypatch.setattr(context.bed, "image_to_mm", lambda x, y: (x, y))
+
+    with pytest.raises(CalibrationError, match="changed scale"):
+        context.verify_honeycomb_pose_for_execution(
+            context.honeycomb_execution_signature(),
+            corner_tolerance_mm=20.0,
+        )
+
+
+def test_execution_pose_verifier_rejects_fresh_nonorthogonal_edges(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    _save_execution_support(context)
+    corners = ((10.0, 10.0), (200.0, 10.0), (203.3, 199.97), (13.3, 199.94))
+    observed = _automatic_detection_for_corners(context, corners)
+    monkeypatch.setattr(
+        context,
+        "capture_parked_work_area_reference",
+        lambda: np.zeros((32, 32, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        context,
+        "detect_honeycomb_support_reference_automatically",
+        lambda _image, *, ruler_mark_mm, require_taught_reference=False: observed,
+    )
+    monkeypatch.setattr(context.bed, "image_to_mm", lambda x, y: (x, y))
+
+    with pytest.raises(CalibrationError, match="not square enough"):
+        context.verify_honeycomb_pose_for_execution(
+            context.honeycomb_execution_signature(),
+            corner_tolerance_mm=10.0,
+            orthogonality_tolerance_deg=0.5,
+        )
+
+
+def test_execution_pose_verifier_preserves_taught_zero_topology(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    _save_execution_support(context)
+    canonical = ((10.0, 10.0), (200.0, 10.0), (200.0, 200.0), (10.0, 200.0))
+    observed_reference, detection = _automatic_detection_for_corners(
+        context,
+        canonical,
+    )
+    # Registration preserves a cyclic topology but may begin at any corner and
+    # may reverse winding. Verification must match it to the taught topology,
+    # not infer a new zero from machine-axis extrema.
+    detection = replace(
+        detection,
+        frame_corners_image_px=(canonical[2], canonical[1], canonical[0], canonical[3]),
+    )
+    monkeypatch.setattr(
+        context,
+        "capture_parked_work_area_reference",
+        lambda: np.zeros((32, 32, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        context,
+        "detect_honeycomb_support_reference_automatically",
+        lambda _image, *, ruler_mark_mm, require_taught_reference=False: (
+            observed_reference,
+            detection,
+        ),
+    )
+    monkeypatch.setattr(context.bed, "image_to_mm", lambda x, y: (x, y))
+
+    result = context.verify_honeycomb_pose_for_execution(
+        context.honeycomb_execution_signature()
+    )
+
+    assert result["maximum_corner_error_mm"] == pytest.approx(0.0)
+
+
+def test_trace_camera_area_expands_to_show_current_honeycomb_without_changing_machine_area(
+    tmp_path: Path,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    context.honeycomb_support.save(
+        HoneycombSupportReference.from_observations(
+            ruler_origin_machine_mm=(29.2, 37.3),
+            ruler_x_mark_machine_mm=(219.2, 40.8),
+            ruler_xy_mark_machine_mm=(217.6, 230.8),
+            ruler_mark_mm=190.0,
+            support_width_mm=190.0,
+            support_height_mm=190.0,
+            bed_calibration_created_at=calibration.created_at,
+        )
+    )
+
+    configured = context.settings.machine.work_area
+    expanded = context.trace_camera_work_area()
+
+    assert (configured.x_min, configured.x_max, configured.y_min, configured.y_max) == (
+        0.0,
+        220.0,
+        0.0,
+        220.0,
+    )
+    assert expanded.x_min == 0.0
+    assert expanded.x_max >= 221.0
+    assert expanded.y_min == 0.0
+    assert expanded.y_max >= 233.0
+    frame = context.current_honeycomb_coordinate_frame()
+    assert frame is not None
+    assert frame.origin_machine_mm == pytest.approx((29.2, 37.3))
+
+    context.clear_honeycomb_support_reference()
+    assert context.current_honeycomb_coordinate_frame() is None
+
+
+def test_execution_pose_verification_accepts_automatic_corner_agreement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    recorded = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=(
+            (20.0, 30.0),
+            (210.0, 30.0),
+            (210.0, 220.0),
+            (20.0, 220.0),
+        ),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    observed = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=(
+            (20.3, 29.8),
+            (210.3, 29.8),
+            (210.3, 219.8),
+            (20.3, 219.8),
+        ),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    signature = ("honeycomb-rigid-frame", 2, "pose", "bed-map")
+    monkeypatch.setattr(context, "_current_honeycomb_support", lambda: recorded)
+    monkeypatch.setattr(context, "honeycomb_execution_signature", lambda: signature)
+    monkeypatch.setattr(
+        context,
+        "capture_parked_work_area_reference",
+        lambda: np.zeros((12, 12, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        context,
+        "detect_honeycomb_support_reference_automatically",
+        lambda _image, **_kwargs: (
+            observed,
+            type(
+                "Detection",
+                (),
+                {
+                    "frame_corners_image_px": (
+                        (20.3, 29.8),
+                        (210.3, 29.8),
+                        (210.3, 219.8),
+                        (20.3, 219.8),
+                    )
+                },
+            )(),
+        ),
+    )
+    monkeypatch.setattr(context.bed, "image_to_mm", lambda x, y: (x, y))
+
+    result = context.verify_honeycomb_pose_for_execution(signature)
+
+    assert result["verified"] is True
+    assert result["maximum_corner_error_mm"] == pytest.approx(
+        np.hypot(0.3, 0.2)
+    )
+    assert result["corner_tolerance_mm"] == pytest.approx(0.5)
+
+
+def test_execution_pose_verification_rejects_automatic_corner_displacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    recorded = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=(
+            (20.0, 30.0),
+            (210.0, 30.0),
+            (210.0, 220.0),
+            (20.0, 220.0),
+        ),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    displaced = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=(
+            (20.0, 30.75),
+            (210.0, 30.75),
+            (210.0, 220.75),
+            (20.0, 220.75),
+        ),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    signature = ("honeycomb-rigid-frame", 2, "pose", "bed-map")
+    monkeypatch.setattr(context, "_current_honeycomb_support", lambda: recorded)
+    monkeypatch.setattr(context, "honeycomb_execution_signature", lambda: signature)
+    monkeypatch.setattr(
+        context,
+        "capture_parked_work_area_reference",
+        lambda: np.zeros((12, 12, 3), dtype=np.uint8),
+    )
+    monkeypatch.setattr(
+        context,
+        "detect_honeycomb_support_reference_automatically",
+        lambda _image, **_kwargs: (
+            displaced,
+            type(
+                "Detection",
+                (),
+                {
+                    "frame_corners_image_px": (
+                        (20.0, 30.75),
+                        (210.0, 30.75),
+                        (210.0, 220.75),
+                        (20.0, 220.75),
+                    )
+                },
+            )(),
+        ),
+    )
+    monkeypatch.setattr(context.bed, "image_to_mm", lambda x, y: (x, y))
+
+    with pytest.raises(
+        CalibrationError,
+        match=r"differs by 0\.750 mm \(limit 0\.500 mm\)",
+    ):
+        context.verify_honeycomb_pose_for_execution(signature)
 
 
 def test_honeycomb_clicks_seed_detection_but_never_define_saved_geometry(

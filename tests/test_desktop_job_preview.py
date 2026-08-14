@@ -18,6 +18,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from laser_aligner.desktop.job_preview import JobPreviewDialog
 from laser_aligner.desktop.panels import JobPanel
 from laser_aligner.desktop.theme import DARK_STYLESHEET
+from laser_aligner.calibration.support import HoneycombCoordinateFrame
 from laser_aligner.gcode.job_plan import build_job_plan, e3_metadata_line
 
 
@@ -107,7 +108,7 @@ def test_preview_scrubber_reports_explicit_power_and_coordinates(
     assert "16.67 mm/s · 16.7%" in dialog.move_label.text()
     assert "F1000" not in dialog.move_label.full_text
     assert "Line 01" in dialog.move_label.text()
-    assert "X80.000 Y20.000" in dialog.move_label.text()
+    assert "Machine X80.000 Y20.000" in dialog.move_label.full_text
     dialog.travel_check.setChecked(False)
     travel_items = [
         item
@@ -115,6 +116,112 @@ def test_preview_scrubber_reports_explicit_power_and_coordinates(
         if key[0] == "travel"
     ]
     assert travel_items and all(not item.isVisible() for item in travel_items)
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_honeycomb_preview_renders_machine_plan_in_local_frame_without_reindexing(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    plan = _plan()
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 20.0),
+        x_axis_machine=(0.0, 1.0),
+        y_axis_machine=(-1.0, 0.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="a" * 64,
+    )
+    dialog = JobPreviewDialog(
+        plan,
+        (0.0, 190.0, 0.0, 190.0),
+        "local.gcode",
+        coordinate_frame=frame,
+    )
+    dialog.show()
+    qt_application.processEvents()
+
+    powered_paths = [
+        item.path()
+        for key, item in dialog.canvas._items.items()
+        if key[0] == "powered"
+    ]
+    assert powered_paths
+    bounds = powered_paths[0].boundingRect()
+    # Machine (20,20)->(80,20)->(80,40) becomes local
+    # (0,0)->(0,-60)->(20,-60); scene Y is inverted for display.
+    assert bounds.left() == pytest.approx(0.0)
+    assert bounds.right() == pytest.approx(20.0)
+    assert bounds.top() == pytest.approx(0.0)
+    assert bounds.bottom() == pytest.approx(60.0)
+    assert dialog.plan.moves is plan.moves
+    assert [move.index for move in dialog.plan.moves] == [
+        move.index for move in plan.moves
+    ]
+    dialog.set_elapsed(plan.moves[1].start_seconds + 0.1)
+    assert "Honeycomb X0.000 Y-60.000" in dialog.move_label.full_text
+    assert "Machine X80.000 Y20.000" in dialog.move_label.full_text
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_honeycomb_deferred_preview_keeps_start_here_move_identity(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    plan = _plan()
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 20.0),
+        x_axis_machine=(0.0, 1.0),
+        y_axis_machine=(-1.0, 0.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="b" * 64,
+    )
+    dialog = JobPreviewDialog(
+        plan,
+        (0.0, 190.0, 0.0, 190.0),
+        "local.gcode",
+        defer_render=True,
+        coordinate_frame=frame,
+    )
+    requested: list[int] = []
+    dialog.startHereRequested.connect(requested.append)
+
+    # Drive the deferred slice directly so this exercises its separate path
+    # builder without depending on event-loop timing.
+    dialog.canvas.start_deferred_render()
+    while dialog.canvas._building:
+        dialog.canvas._build_slice()
+
+    powered_path = next(
+        item.path()
+        for key, item in dialog.canvas._items.items()
+        if key[0] == "powered"
+    )
+    bounds = powered_path.boundingRect()
+    assert bounds.left() == pytest.approx(0.0)
+    assert bounds.right() == pytest.approx(20.0)
+    assert bounds.top() == pytest.approx(0.0)
+    assert bounds.bottom() == pytest.approx(60.0)
+
+    reviewed = plan.moves[1]
+    elapsed = reviewed.start_seconds + 0.01
+    dialog.set_elapsed(elapsed)
+    assert dialog.canvas.move_at(elapsed) is reviewed
+    fraction = 0.01 / reviewed.duration_seconds
+    machine_x = reviewed.start_x + (reviewed.end_x - reviewed.start_x) * fraction
+    machine_y = reviewed.start_y + (reviewed.end_y - reviewed.start_y) * fraction
+    local_x, local_y = frame.machine_to_local(machine_x, machine_y)
+    assert dialog.canvas._head_item.pos().x() == pytest.approx(local_x)
+    assert dialog.canvas._head_item.pos().y() == pytest.approx(-local_y)
+    dialog.start_here_button.click()
+
+    assert requested == [reviewed.index]
+    assert dialog.plan.moves is plan.moves
 
     dialog.close()
     dialog.deleteLater()

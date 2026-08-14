@@ -9,12 +9,14 @@ import numpy as np
 import pytest
 
 import laser_aligner.project.toolpath as toolpath_module
-from laser_aligner.config import LaserSettings, MachineSettings
+from laser_aligner.calibration.support import HoneycombCoordinateFrame
+from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
 from laser_aligner.errors import SafetyError
 from laser_aligner.geometry import Polyline
 from laser_aligner.machine.service import MachineService
 from laser_aligner.project import (
     Bounds,
+    CoordinateSpace,
     LayerMode,
     ObjectKind,
     ProjectDocument,
@@ -82,6 +84,25 @@ def make_image_document(
         )
     )
     return document
+
+
+def honeycomb_frame(
+    *,
+    origin: tuple[float, float] = (100.0, 50.0),
+    x_axis: tuple[float, float] = (0.0, 1.0),
+    y_axis: tuple[float, float] = (-1.0, 0.0),
+    width: float = 100.0,
+    height: float = 100.0,
+    digest: str = "a" * 64,
+) -> HoneycombCoordinateFrame:
+    return HoneycombCoordinateFrame(
+        origin_machine_mm=origin,
+        x_axis_machine=x_axis,
+        y_axis_machine=y_axis,
+        width_mm=width,
+        height_mm=height,
+        provenance_digest=digest,
+    )
 
 
 def test_project_gcode_is_bracketed_by_laser_off():
@@ -248,6 +269,233 @@ def test_project_offset_rejects_shifted_controller_bounds():
         )
 
 
+def test_honeycomb_local_vector_is_rigidly_placed_before_spot_correction():
+    document = ProjectDocument.new(
+        "Local vector",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.line(
+            document.active_layer_id,
+            center=(20, 20),
+            length_mm=20,
+        )
+    )
+    frame = honeycomb_frame()
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(
+            power_max=1000,
+            boundary_margin_mm=0,
+            spot_offset_x_mm=2,
+            spot_offset_y_mm=-3,
+        ),
+        optimize_order=False,
+        start_position=(0, 0),
+        coordinate_frame=frame,
+        machine_work_area=WorkArea(0, 120, 0, 160),
+    )
+
+    assert job.coordinate_frame_signature == frame.provenance_signature
+    assert job.bounds_mm == pytest.approx((80, 60, 80, 80))
+    assert "G0 X78 Y63" in job.text
+    assert "G1 X78 Y83" in job.text
+    powered = [move for move in job.plan.moves if move.laser_on]
+    assert [(move.end_x, move.end_y) for move in powered] == pytest.approx([(80, 80)])
+
+
+def test_honeycomb_local_output_requires_frame_and_independent_machine_area():
+    document = ProjectDocument.new(
+        "Local",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.line(
+            document.active_layer_id,
+            center=(20, 20),
+            length_mm=20,
+        )
+    )
+
+    with pytest.raises(SafetyError, match="coordinate frame"):
+        generate_project_gcode(document, LaserSettings())
+    with pytest.raises(SafetyError, match="independent machine work area"):
+        generate_project_gcode(
+            document,
+            LaserSettings(),
+            coordinate_frame=honeycomb_frame(),
+        )
+
+
+def test_honeycomb_local_rejects_placed_vector_outside_machine_area():
+    document = ProjectDocument.new(
+        "Escaping local vector",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.line(
+            document.active_layer_id,
+            center=(20, 20),
+            length_mm=20,
+        )
+    )
+
+    with pytest.raises(SafetyError, match="placed design"):
+        generate_project_gcode(
+            document,
+            LaserSettings(boundary_margin_mm=0),
+            coordinate_frame=honeycomb_frame(),
+            machine_work_area=WorkArea(0, 75, 0, 160),
+        )
+
+
+def test_honeycomb_local_rejects_controller_escape_after_spot_correction():
+    document = ProjectDocument.new(
+        "Controller escape",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.line(
+            document.active_layer_id,
+            center=(20, 20),
+            length_mm=20,
+        )
+    )
+
+    with pytest.raises(SafetyError, match="after laser spot correction"):
+        generate_project_gcode(
+            document,
+            LaserSettings(
+                boundary_margin_mm=0,
+                spot_offset_x_mm=10,
+            ),
+            coordinate_frame=honeycomb_frame(),
+            machine_work_area=WorkArea(75, 100, 0, 160),
+        )
+
+
+def test_honeycomb_local_vector_uses_same_explicit_polygon_as_machine_preflight():
+    document = ProjectDocument.new(
+        "Full support vector",
+        Bounds(0, 0, 190, 190),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.rectangle(
+            document.active_layer_id,
+            center=(185, 185),
+            width_mm=10,
+            height_mm=10,
+            corner_radius_mm=0,
+        )
+    )
+    frame = honeycomb_frame(
+        origin=(28, 40),
+        x_axis=(1, 0),
+        y_axis=(0, 1),
+        width=190,
+        height=190,
+    )
+    polygon = ((18.0, 30.0), (228.0, 30.0), (228.0, 240.0), (18.0, 240.0))
+    machine_area = WorkArea(10, 210, 10, 210)
+    laser = LaserSettings(
+        power_max=1000,
+        boundary_margin_mm=0,
+        guarded_output_polygon_mm=polygon,
+    )
+
+    with pytest.raises(SafetyError, match="configured laser authority"):
+        generate_project_gcode(
+            document,
+            laser,
+            coordinate_frame=frame,
+            machine_work_area=machine_area,
+        )
+
+    job = generate_project_gcode(
+        document,
+        laser,
+        coordinate_frame=frame,
+        machine_work_area=machine_area,
+        guarded_output_polygon_mm=polygon,
+        start_position=(28, 40),
+    )
+    preflight = MachineService(
+        MachineSettings(backend="simulator", work_area=machine_area),
+        laser,
+    ).preflight_program(
+        job.text,
+        guarded_output_polygon_mm=polygon,
+    )
+
+    assert job.bounds_mm == pytest.approx((208.0, 220.0, 218.0, 230.0))
+    assert preflight.guarded_output_polygon_mm == polygon
+
+
+def test_honeycomb_local_frame_uses_explicit_guarded_polygon() -> None:
+    document = ProjectDocument.new(
+        "Full support frame",
+        Bounds(0, 0, 190, 190),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.rectangle(
+            document.active_layer_id,
+            center=(185, 185),
+            width_mm=10,
+            height_mm=10,
+            corner_radius_mm=0,
+        )
+    )
+    frame = honeycomb_frame(
+        origin=(28, 40),
+        x_axis=(1, 0),
+        y_axis=(0, 1),
+        width=190,
+        height=190,
+    )
+    polygon = ((18.0, 30.0), (228.0, 30.0), (228.0, 240.0), (18.0, 240.0))
+    machine_area = WorkArea(10, 210, 10, 210)
+
+    frame_job = generate_project_frame(
+        document,
+        LaserSettings(
+            boundary_margin_mm=0,
+            guarded_output_polygon_mm=polygon,
+        ),
+        coordinate_frame=frame,
+        machine_work_area=machine_area,
+        guarded_output_polygon_mm=polygon,
+        start_position=(28, 40),
+    )
+
+    assert frame_job.bounds_mm == pytest.approx((208.0, 220.0, 218.0, 230.0))
+
+    restricted_polygon = (
+        (18.0, 30.0),
+        (215.0, 30.0),
+        (215.0, 240.0),
+        (18.0, 240.0),
+    )
+    with pytest.raises(SafetyError, match="placed frame path"):
+        generate_project_frame(
+            document,
+            LaserSettings(
+                boundary_margin_mm=0,
+                guarded_output_polygon_mm=restricted_polygon,
+            ),
+            coordinate_frame=frame,
+            machine_work_area=machine_area,
+            guarded_output_polygon_mm=restricted_polygon,
+            start_position=(28, 40),
+        )
+
+
 def test_multiple_layers_keep_distinct_power_and_speed():
     document = make_document()
     second = document.add_layer(
@@ -325,6 +573,39 @@ def test_frame_contains_no_positive_laser_command():
 
     assert not re.search(r"\bM[34]\b", job.text)
     assert "M5" in job.text
+
+
+def test_honeycomb_local_frame_follows_rotated_corners_not_machine_aabb():
+    document = ProjectDocument.new(
+        "Local frame",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.rectangle(
+            document.active_layer_id,
+            center=(20, 30),
+            width_mm=20,
+            height_mm=10,
+            corner_radius_mm=0,
+        )
+    )
+    frame = honeycomb_frame()
+
+    job = generate_project_frame(
+        document,
+        LaserSettings(boundary_margin_mm=0),
+        start_position=(0, 0),
+        coordinate_frame=frame,
+        machine_work_area=WorkArea(0, 120, 0, 160),
+    )
+
+    assert job.coordinate_frame_signature == frame.provenance_signature
+    assert job.bounds_mm == pytest.approx((65, 60, 75, 80))
+    assert "G0 X75 Y60" in job.text
+    assert "G1 X75 Y80" in job.text
+    assert "G1 X65 Y80" in job.text
+    assert "G1 X65 Y60" in job.text
 
 
 def test_frame_includes_rotated_image_and_mixed_vector_bounds(tmp_path: Path) -> None:
@@ -473,6 +754,179 @@ def test_image_raster_uses_contiguous_serpentine_rows_and_off_overscan(
     ).preflight_program(job.text)
     assert preflight.requires_laser_authorization
     assert preflight.lines[-1] == "M5"
+
+
+def test_honeycomb_local_raster_rows_are_sampled_locally_then_rigidly_placed():
+    document = ProjectDocument.new(
+        "Local raster",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    layer = document.layers[0]
+    layer.mode = LayerMode.RASTER
+    layer.line_interval_mm = 10
+    layer.overscan_percent = 0
+    document.add_object(
+        SceneObject.rectangle(
+            layer.id,
+            center=(20, 30),
+            width_mm=20,
+            height_mm=20,
+            corner_radius_mm=0,
+        )
+    )
+    frame = honeycomb_frame()
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(boundary_margin_mm=0),
+        optimize_order=False,
+        start_position=(0, 0),
+        coordinate_frame=frame,
+        machine_work_area=WorkArea(0, 120, 0, 160),
+    )
+
+    powered = [move for move in job.plan.moves if move.laser_on]
+    assert powered
+    # Local horizontal rows become vertical machine rows under this +90-degree frame.
+    assert all(move.start_x == pytest.approx(move.end_x) for move in powered)
+    assert sorted({move.start_x for move in powered}) == pytest.approx([70.0, 80.0])
+    assert all(abs(move.end_y - move.start_y) == pytest.approx(20.0) for move in powered)
+
+
+def test_honeycomb_local_raster_overscan_is_checked_after_placement():
+    document = ProjectDocument.new(
+        "Local raster escape",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    layer = document.layers[0]
+    layer.mode = LayerMode.RASTER
+    layer.line_interval_mm = 10
+    layer.overscan_percent = 50
+    document.add_object(
+        SceneObject.rectangle(
+            layer.id,
+            center=(20, 30),
+            width_mm=20,
+            height_mm=20,
+            corner_radius_mm=0,
+        )
+    )
+
+    with pytest.raises(SafetyError, match="placed raster overscan path"):
+        generate_project_gcode(
+            document,
+            LaserSettings(boundary_margin_mm=0),
+            coordinate_frame=honeycomb_frame(),
+            machine_work_area=WorkArea(0, 120, 0, 75),
+        )
+
+
+def test_honeycomb_local_raster_uses_explicit_guarded_polygon() -> None:
+    document = ProjectDocument.new(
+        "Full support raster",
+        Bounds(0, 0, 190, 190),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    layer = document.layers[0]
+    layer.mode = LayerMode.RASTER
+    layer.line_interval_mm = 2
+    layer.overscan_percent = 0
+    document.add_object(
+        SceneObject.rectangle(
+            layer.id,
+            center=(185, 185),
+            width_mm=10,
+            height_mm=10,
+            corner_radius_mm=0,
+        )
+    )
+    frame = honeycomb_frame(
+        origin=(28, 40),
+        x_axis=(1, 0),
+        y_axis=(0, 1),
+        width=190,
+        height=190,
+    )
+    polygon = ((18.0, 30.0), (228.0, 30.0), (228.0, 240.0), (18.0, 240.0))
+    laser = LaserSettings(
+        boundary_margin_mm=0,
+        guarded_output_polygon_mm=polygon,
+    )
+
+    job = generate_project_gcode(
+        document,
+        laser,
+        coordinate_frame=frame,
+        machine_work_area=WorkArea(10, 210, 10, 210),
+        guarded_output_polygon_mm=polygon,
+        start_position=(28, 40),
+    )
+
+    assert job.plan is not None and job.plan.powered
+    assert all(
+        208.0 <= coordinate <= 218.0
+        for move in job.plan.moves
+        if move.laser_on
+        for coordinate in (move.start_x, move.end_x)
+    )
+    assert all(
+        220.0 <= coordinate <= 230.0
+        for move in job.plan.moves
+        if move.laser_on
+        for coordinate in (move.start_y, move.end_y)
+    )
+
+    restricted_polygon = (
+        (18.0, 30.0),
+        (215.0, 30.0),
+        (215.0, 240.0),
+        (18.0, 240.0),
+    )
+    restricted_laser = LaserSettings(
+        boundary_margin_mm=0,
+        guarded_output_polygon_mm=restricted_polygon,
+    )
+    with pytest.raises(SafetyError, match="placed raster overscan path"):
+        generate_project_gcode(
+            document,
+            restricted_laser,
+            coordinate_frame=frame,
+            machine_work_area=WorkArea(10, 210, 10, 210),
+            guarded_output_polygon_mm=restricted_polygon,
+            start_position=(28, 40),
+        )
+
+
+def test_honeycomb_local_image_raster_preserves_local_sampling(tmp_path: Path):
+    image_path = tmp_path / "local-image.png"
+    assert cv2.imwrite(str(image_path), np.zeros((2, 4), dtype=np.uint8))
+    document = make_image_document(
+        image_path,
+        width_mm=4,
+        height_mm=2,
+        line_interval_mm=1,
+        work_area=Bounds(0, 0, 100, 100),
+    )
+    document.coordinate_space = CoordinateSpace.HONEYCOMB_LOCAL
+    document.objects[0].transform.x_mm = 20
+    document.objects[0].transform.y_mm = 30
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(boundary_margin_mm=0),
+        optimize_order=False,
+        start_position=(0, 0),
+        coordinate_frame=honeycomb_frame(),
+        machine_work_area=WorkArea(0, 120, 0, 160),
+    )
+
+    powered = [move for move in job.plan.moves if move.laser_on]
+    assert powered
+    assert all(move.start_x == pytest.approx(move.end_x) for move in powered)
+    assert sorted({move.start_x for move in powered}) == pytest.approx([69.5, 70.5])
+    assert all(abs(move.end_y - move.start_y) == pytest.approx(4.0) for move in powered)
 
 
 def test_image_source_top_matches_canvas_machine_y_with_mirrors_and_rotation(

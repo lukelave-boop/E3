@@ -18,6 +18,8 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget te
 from PySide6 import QtCore, QtTest, QtWidgets
 
 import laser_aligner.desktop.controller as controller_module
+from laser_aligner.calibration.support import HoneycombCoordinateFrame
+from laser_aligner.config import WorkArea
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.template_panel import TemplatePanel
@@ -213,6 +215,9 @@ class _StaleJobHarness:
         self.last_job_name = "stale.gcode"
         self.last_job_powered = False
         self.last_job_revision: int | None = self.document.revision
+        self.last_job_work_area: tuple[float, float, float, float] | None = None
+        self.last_job_coordinate_frame: tuple[object, ...] | None = None
+        self.last_job_preview_data: object | None = None
         self.errors: list[str] = []
         self.refreshes: list[list[str]] = []
         self.machine_status_calls = 0
@@ -240,6 +245,9 @@ class _StaleJobHarness:
 
     def _invalidate_generated_job(self) -> None:
         E3MainWindow._invalidate_generated_job(self)
+
+    def _prepared_frame_is_current(self) -> bool:
+        return E3MainWindow._prepared_frame_is_current(self)
 
     def _refresh_document(self, selected_ids: list[str] | None = None) -> None:
         self.refreshes.append(list(selected_ids or []))
@@ -918,6 +926,142 @@ def test_controller_uses_one_frozen_frame_for_all_template_option_groups(
     qt_application.processEvents()
 
 
+def test_local_template_matching_rectifies_and_reviews_in_honeycomb_coordinates(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = ProjectDocument.new(work_area=Bounds(0.0, 0.0, 190.0, 190.0))
+    for index in range(3):
+        source.add_object(
+            SceneObject.rectangle(
+                source.active_layer_id,
+                center=(40.0 + index * 30.0, 50.0),
+                width_mm=12.0,
+                height_mm=8.0,
+            )
+        )
+    template = template_from_project(source, "Local labels")
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 30.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="7" * 64,
+    )
+    rectified_calls: list[dict[str, Any]] = []
+    context = SimpleNamespace(
+        bed=SimpleNamespace(
+            calibration=SimpleNamespace(
+                image_to_machine=np.eye(3),
+                image_width=190,
+                image_height=190,
+            )
+        ),
+        bed_mapping_digest=lambda: "bed-map",
+        current_honeycomb_coordinate_frame=lambda: frame,
+        rectified_frame=lambda **kwargs: (
+            rectified_calls.append(dict(kwargs))
+            or np.zeros((190, 190, 3), dtype=np.uint8)
+        ),
+    )
+    runtime = SimpleNamespace(
+        running=True,
+        context=context,
+        settings=SimpleNamespace(
+            calibration=SimpleNamespace(bed=SimpleNamespace(pixels_per_mm=1.0)),
+            laser=SimpleNamespace(
+                boundary_margin_mm=0.0,
+                spot_offset_x_mm=0.0,
+                spot_offset_y_mm=0.0,
+            ),
+            machine=SimpleNamespace(
+                work_area=WorkArea(20.0, 160.0, 30.0, 170.0)
+            ),
+        ),
+    )
+    detections = [
+        SimpleNamespace(
+            id=f"detection-{index}",
+            diagnostics={},
+            selected_default=True,
+            vector_contours_mm=[[
+                (35.0 + index * 30.0, 45.0),
+                (45.0 + index * 30.0, 45.0),
+                (45.0 + index * 30.0, 55.0),
+            ]],
+            vector_contour_mm=[],
+            to_dict=lambda index=index: {
+                "id": f"detection-{index}",
+                "diagnostics": {},
+            },
+        )
+        for index in range(3)
+    ]
+
+    def fake_detect(
+        image: np.ndarray,
+        options: TraceOptions,
+        work_area: WorkArea,
+        pixels_per_mm: float,
+        **kwargs: Any,
+    ) -> SimpleNamespace:
+        assert image.shape == (190, 190, 3)
+        assert work_area == WorkArea(0.0, 190.0, 0.0, 190.0)
+        assert kwargs["output_work_area"] == work_area
+        return SimpleNamespace(
+            detections=detections,
+            mode_used=options.detection_mode,
+            message="local detections",
+            direct_count=3,
+            inferred_count=0,
+            options=options,
+        )
+
+    monkeypatch.setattr(controller_module, "detect_objects", fake_detect)
+    monkeypatch.setattr(
+        controller_module,
+        "rank_templates",
+        lambda templates, _detections: [
+            _alignment(
+                template_id=templates[0].id,
+                template_name=templates[0].name,
+            )
+        ],
+    )
+    controller = DesktopController(runtime)
+    controller._workspace_coordinate_space = "honeycomb_local"
+
+    payload = controller._match_cut_templates_once(18, (template,), template.id)
+
+    assert rectified_calls == [
+        {
+            "refresh": True,
+            "precision": True,
+            "work_area": WorkArea(0.0, 190.0, 0.0, 190.0),
+            "coordinate_frame": frame,
+        }
+    ]
+    assert payload["coordinate_space"] == "honeycomb_local"
+    assert payload["camera_image_area"] == {
+        "x_min": 0.0,
+        "x_max": 190.0,
+        "y_min": 0.0,
+        "y_max": 190.0,
+    }
+    assert payload["review_signature"] == (
+        "honeycomb_local",
+        tuple(frame.provenance_signature),
+        "bed-map",
+    )
+    assert np.asarray(payload["output_polygon_local_mm"]) == pytest.approx(
+        np.asarray([[0.0, 0.0], [140.0, 0.0], [140.0, 140.0], [0.0, 140.0]])
+    )
+
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
 def test_trace_uses_boundary_margin_reduced_output_area() -> None:
     runtime = SimpleNamespace(
         settings=SimpleNamespace(
@@ -1197,6 +1341,27 @@ def test_run_current_job_refuses_a_stale_generated_revision() -> None:
     assert window.run_calls == []
     assert window.errors == [
         "The project changed; regenerate the toolpath before running"
+    ]
+
+
+def test_run_current_job_refuses_a_changed_honeycomb_frame_binding() -> None:
+    window = _StaleJobHarness()
+    window.last_job_coordinate_frame = ("honeycomb-rigid-frame", 1, "old", "bed")
+    window._project_execution_signature = lambda: (  # type: ignore[method-assign]
+        "honeycomb-rigid-frame",
+        1,
+        "moved",
+        "bed",
+    )
+
+    E3MainWindow.run_current_job(window)
+
+    assert window.last_job is None
+    assert window.machine_status_calls == 0
+    assert window.run_calls == []
+    assert window.errors == [
+        "The honeycomb pose or camera-to-machine mapping changed; "
+        "regenerate the toolpath before running"
     ]
 
 
@@ -1806,6 +1971,81 @@ def test_workspace_trace_preview_marks_out_of_bounds_cells_red(
     )
     assert cropped_path.pen().color().name().upper() == "#E06666"
     assert cropped_path.pen().style() == QtCore.Qt.PenStyle.DashDotLine
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_workspace_trace_preview_draws_support_and_guarded_output_separately(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(10.0, 10.0, 210.0, 210.0))
+    _show_workspace(view, qt_application)
+
+    view.set_trace_preview(
+        [],
+        set(),
+        {
+            "bed_map_current": True,
+            "corners_machine_mm": [
+                [29.2, 37.3],
+                [219.2, 40.8],
+                [217.6, 230.8],
+                [27.6, 227.3],
+            ],
+        },
+        {"x_min": 15.0, "x_max": 205.0, "y_min": 15.0, "y_max": 205.0},
+    )
+
+    paths = [
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    ]
+    assert len(paths) == 2
+    assert {item.pen().color().name().upper() for item in paths} == {
+        "#CD5FDC",
+        "#67E05C",
+    }
+    assert [entry[0] for entry in view._overlay_legend.entries] == [
+        "Approx. honeycomb reference (magenta)",
+        "Guarded laser output (green)",
+    ]
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_workspace_trace_preview_draws_local_machine_output_polygon(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 190.0, 190.0))
+    output_polygon = [
+        [5.0, 4.0],
+        [185.0, 8.0],
+        [181.0, 186.0],
+        [2.0, 182.0],
+    ]
+
+    view.set_trace_preview([], set(), output_polygon=output_polygon)
+
+    paths = [
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    ]
+    assert len(paths) == 1
+    boundary = paths[0]
+    assert boundary.toolTip() == (
+        "Configured machine-output boundary in honeycomb coordinates"
+    )
+    assert boundary.pen().color().name().upper() == "#67E05C"
+    assert boundary.path().boundingRect() == QtCore.QRectF(2.0, -186.0, 183.0, 182.0)
+    assert [entry[0] for entry in view._overlay_legend.entries] == [
+        "Guarded laser output (green)"
+    ]
 
     view.close()
     view.deleteLater()

@@ -17,8 +17,12 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget te
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from laser_aligner.calibration.support import HoneycombCoordinateFrame
 from laser_aligner.config import WorkArea
-from laser_aligner.desktop.controller import DesktopController
+from laser_aligner.desktop.controller import (
+    DesktopController,
+    _apply_local_output_review,
+)
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.panels import CameraPanel
 from laser_aligner.desktop.theme import DEFAULT_CAMERA_OVERLAY_OPACITY
@@ -107,8 +111,8 @@ def test_job_controller_preflights_before_motion_and_arming(
             calls.append(f"validate:{gcode}")
             return "validated"
 
-        def prepare_photo_position(self) -> None:
-            calls.append("park")
+        def prepare_job_start(self) -> None:
+            calls.append("home")
 
         def arm_program(self, phrase: str, program: str) -> None:
             assert program == "validated"
@@ -131,7 +135,10 @@ def test_job_controller_preflights_before_motion_and_arming(
             calls.append("disarm")
 
     runtime = SimpleNamespace(
-        context=SimpleNamespace(machine=Machine()),
+        context=SimpleNamespace(
+            machine=Machine(),
+            validate_powered_calibration_support=lambda _gcode, _name: None,
+        ),
         running=False,
     )
     controller = DesktopController(runtime)
@@ -150,7 +157,7 @@ def test_job_controller_preflights_before_motion_and_arming(
     assert calls == [
         "connect",
         "validate:program",
-        "park",
+        "home",
         "arm:phrase",
         "start:job.gcode:validated",
     ]
@@ -179,8 +186,8 @@ def test_job_controller_disarms_when_start_fails_after_arming(
             calls.append("validate")
             return "validated"
 
-        def prepare_photo_position(self) -> None:
-            calls.append("park")
+        def prepare_job_start(self) -> None:
+            calls.append("home")
 
         def arm_program(self, _phrase: str, _program: str) -> None:
             calls.append("arm")
@@ -192,7 +199,12 @@ def test_job_controller_disarms_when_start_fails_after_arming(
         def disarm(self) -> None:
             calls.append("disarm-m5")
 
-    runtime = SimpleNamespace(context=SimpleNamespace(machine=Machine()))
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            machine=Machine(),
+            validate_powered_calibration_support=lambda _gcode, _name: None,
+        )
+    )
     controller = DesktopController(runtime)
     def run(callback, **kwargs):
         if kwargs.get("requires_controller"):
@@ -204,7 +216,432 @@ def test_job_controller_disarms_when_start_fails_after_arming(
     with pytest.raises(RuntimeError, match="rejected"):
         controller.run_job("program", "job.gcode", arm_phrase="phrase")
 
-    assert calls == ["connect", "validate", "park", "arm", "start", "disarm-m5"]
+    assert calls == ["connect", "validate", "home", "arm", "start", "disarm-m5"]
+
+
+def test_job_controller_preflights_then_homes_once_without_camera_capture(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    calls: list[str] = []
+    signature = ("honeycomb-rigid-frame", 1, "pose", "bed-map")
+    polygon = ((18.0, 30.0), (228.0, 30.0), (228.0, 240.0), (18.0, 240.0))
+
+    class Machine:
+        settings = SimpleNamespace(backend="serial")
+
+        def ensure_connected(self) -> None:
+            calls.append("connect")
+
+        def preflight_program(self, gcode: str, **kwargs: Any) -> str:
+            calls.append(
+                f"preflight:{gcode}:{kwargs['guarded_output_polygon_mm']!r}"
+            )
+            return "validated"
+
+        def prepare_job_start(self) -> None:
+            calls.append("start-home")
+
+        def arm_program(self, phrase: str, program: str) -> None:
+            calls.append(f"arm:{phrase}:{program}")
+
+        def start_validated_program(
+            self,
+            program: str,
+            name: str,
+        ) -> dict[str, object]:
+            calls.append(f"start:{name}:{program}")
+            return {"running": True}
+
+        def disarm(self) -> None:
+            calls.append("disarm")
+
+    context = SimpleNamespace(
+        machine=Machine(),
+        validate_honeycomb_execution_binding=lambda value: calls.append(
+            f"binding:{tuple(value)!r}"
+        ),
+        validate_powered_calibration_support=lambda _gcode, _name: calls.append(
+            "calibration-guard"
+        ),
+    )
+    runtime = SimpleNamespace(
+        context=context,
+        running=False,
+        settings=SimpleNamespace(
+            laser=SimpleNamespace(guarded_output_polygon_mm=polygon)
+        ),
+    )
+    controller = DesktopController(runtime)
+
+    def run(callback: Any, **kwargs: Any) -> None:
+        if kwargs.get("requires_controller"):
+            context.machine.ensure_connected()
+        kwargs["on_success"](callback())
+
+    controller._run = run  # type: ignore[method-assign]
+    controller.run_job(
+        "program",
+        "local.gcode",
+        arm_phrase="phrase",
+        honeycomb_signature=signature,
+        guarded_output_polygon_mm=polygon,
+    )
+
+    assert calls == [
+        "connect",
+        "calibration-guard",
+        f"preflight:program:{polygon!r}",
+        f"binding:{signature!r}",
+        "start-home",
+        "arm:phrase:validated",
+        "start:local.gcode:validated",
+    ]
+
+
+def test_job_controller_binding_check_does_not_imply_polygon_authority(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    calls: list[str] = []
+
+    class Machine:
+        settings = SimpleNamespace(backend="simulator")
+
+        def preflight_program(self, gcode: str) -> str:
+            calls.append(f"preflight:{gcode}")
+            return "validated"
+
+        def start_validated_program(self, program: str, name: str) -> dict[str, bool]:
+            calls.append(f"start:{name}:{program}")
+            return {"running": True}
+
+        def disarm(self) -> None:
+            calls.append("disarm")
+
+    context = SimpleNamespace(
+        machine=Machine(),
+        validate_powered_calibration_support=lambda _gcode, _name: calls.append(
+            "calibration-guard"
+        ),
+        validate_honeycomb_execution_binding=lambda signature: calls.append(
+            f"binding:{signature!r}"
+        ),
+    )
+    controller = DesktopController(SimpleNamespace(context=context, running=False))
+    controller._run = (  # type: ignore[method-assign]
+        lambda callback, **kwargs: kwargs["on_success"](callback())
+    )
+
+    controller.run_job(
+        "calibration-program",
+        "accuracy-validation.gcode",
+        honeycomb_signature=("bound-pose",),
+    )
+
+    assert calls == [
+        "calibration-guard",
+        "preflight:calibration-program",
+        "binding:('bound-pose',)",
+        "start:accuracy-validation.gcode:validated",
+    ]
+
+
+def test_job_controller_binding_failure_disarms_after_static_preflight(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    calls: list[str] = []
+
+    class Machine:
+        settings = SimpleNamespace(backend="serial")
+
+        def ensure_connected(self) -> None:
+            calls.append("connect")
+
+        def preflight_program(self, _gcode: str, **_kwargs: Any) -> str:
+            calls.append("preflight")
+            return "validated"
+
+        def disarm(self) -> None:
+            calls.append("disarm-m5")
+
+    def reject_pose(_signature: tuple[object, ...]) -> None:
+        calls.append("binding")
+        raise RuntimeError("honeycomb moved")
+
+    context = SimpleNamespace(
+        machine=Machine(),
+        validate_honeycomb_execution_binding=reject_pose,
+        validate_powered_calibration_support=lambda _gcode, _name: calls.append(
+            "calibration-guard"
+        ),
+    )
+    runtime = SimpleNamespace(
+        context=context,
+        running=False,
+        settings=SimpleNamespace(
+            laser=SimpleNamespace(guarded_output_polygon_mm=None)
+        ),
+    )
+    controller = DesktopController(runtime)
+
+    def run(callback: Any, **kwargs: Any) -> None:
+        if kwargs.get("requires_controller"):
+            context.machine.ensure_connected()
+        callback()
+
+    controller._run = run  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="honeycomb moved"):
+        controller.run_job(
+            "program",
+            "local.gcode",
+            honeycomb_signature=("bound-pose",),
+        )
+
+    assert calls == [
+        "connect",
+        "calibration-guard",
+        "preflight",
+        "binding",
+        "disarm-m5",
+    ]
+
+
+def test_job_controller_static_preflight_failure_never_homes_or_checks_binding(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    calls: list[str] = []
+
+    class Machine:
+        settings = SimpleNamespace(backend="serial")
+
+        def ensure_connected(self) -> None:
+            calls.append("connect")
+
+        def preflight_program(self, _gcode: str, **_kwargs: Any) -> None:
+            calls.append("preflight-reject")
+            raise RuntimeError("outside configured output")
+
+        def disarm(self) -> None:
+            calls.append("disarm-m5")
+
+    context = SimpleNamespace(
+        machine=Machine(),
+        validate_honeycomb_execution_binding=lambda _signature: pytest.fail(
+            "Invalid G-code must not reach the prepared binding check"
+        ),
+        validate_powered_calibration_support=lambda _gcode, _name: calls.append(
+            "calibration-guard"
+        ),
+    )
+    runtime = SimpleNamespace(
+        context=context,
+        running=False,
+        settings=SimpleNamespace(
+            laser=SimpleNamespace(guarded_output_polygon_mm=None)
+        ),
+    )
+    controller = DesktopController(runtime)
+
+    def run(callback: Any, **kwargs: Any) -> None:
+        if kwargs.get("requires_controller"):
+            context.machine.ensure_connected()
+        callback()
+
+    controller._run = run  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="outside configured output"):
+        controller.run_job(
+            "bad-program",
+            "local.gcode",
+            honeycomb_signature=("bound-pose",),
+        )
+
+    assert calls == [
+        "connect",
+        "calibration-guard",
+        "preflight-reject",
+        "disarm-m5",
+    ]
+
+
+def test_trace_color_sampling_uses_the_expanded_review_frame(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    image = np.zeros((20, 20, 3), dtype=np.uint8)
+    image[:, 10:] = (0, 0, 255)
+    context = SimpleNamespace(
+        bed=SimpleNamespace(calibration=object()),
+        rectified_frame=lambda **_kwargs: (_ for _ in ()).throw(
+            AssertionError("expanded review sampling must not recapture")
+        ),
+    )
+    runtime = SimpleNamespace(
+        context=context,
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(work_area=WorkArea(0.0, 10.0, 0.0, 10.0)),
+            calibration=SimpleNamespace(bed=SimpleNamespace(pixels_per_mm=2.0)),
+        ),
+    )
+    controller = DesktopController(runtime)
+    controller._trace_sample_image = image
+    controller._trace_sample_area = WorkArea(10.0, 20.0, 10.0, 20.0)
+    controller._trace_sample_signature = controller._current_review_signature()
+    results: list[dict[str, Any]] = []
+    controller.traceColorReady.connect(results.append)
+
+    def run(callback, **kwargs):
+        kwargs["on_success"](callback())
+
+    controller._run = run  # type: ignore[method-assign]
+    controller.sample_trace_color(18.0, 18.0)
+
+    assert len(results) == 1
+    assert results[0]["rgb"][0] > 240
+    assert results[0]["machine_x"] == 18.0
+    assert results[0]["machine_y"] == 18.0
+
+
+def test_local_trace_review_returns_rotated_machine_output_polygon_and_rejects_escape() -> None:
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 30.0),
+        x_axis_machine=(0.0, 1.0),
+        y_axis_machine=(-1.0, 0.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="4" * 64,
+    )
+    inside = SimpleNamespace(
+        vector_contours_mm=[[(20.0, 10.0), (30.0, 10.0), (30.0, 20.0)]],
+        vector_contour_mm=[],
+        diagnostics={},
+        selected_default=True,
+    )
+    outside = SimpleNamespace(
+        vector_contours_mm=[[(80.0, 100.0), (90.0, 100.0), (90.0, 110.0)]],
+        vector_contour_mm=[],
+        diagnostics={},
+        selected_default=True,
+    )
+
+    polygon, outside_count = _apply_local_output_review(
+        [inside, outside],
+        frame,
+        WorkArea(0.0, 60.0, 0.0, 80.0),
+    )
+
+    assert np.asarray(polygon) == pytest.approx(
+        np.asarray(((-30.0, 20.0), (-30.0, -40.0), (50.0, -40.0), (50.0, 20.0)))
+    )
+    assert outside_count == 1
+    assert inside.diagnostics["within_work_area"] is True
+    assert outside.diagnostics["within_work_area"] is False
+    assert outside.diagnostics["output_review_frame"] == "machine"
+    assert outside.selected_default is False
+
+
+def test_local_trace_review_maps_explicit_padded_support_square_exactly() -> None:
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(28.0, 40.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="5" * 64,
+    )
+    machine_polygon = (
+        (18.0, 30.0),
+        (228.0, 30.0),
+        (228.0, 240.0),
+        (18.0, 240.0),
+    )
+    inside = SimpleNamespace(
+        vector_contours_mm=[[(0.0, 0.0), (190.0, 0.0), (190.0, 190.0)]],
+        vector_contour_mm=[],
+        diagnostics={},
+        selected_default=True,
+    )
+    outside = SimpleNamespace(
+        vector_contours_mm=[[(200.1, 100.0), (201.0, 100.0), (201.0, 101.0)]],
+        vector_contour_mm=[],
+        diagnostics={},
+        selected_default=True,
+    )
+
+    polygon, outside_count = _apply_local_output_review(
+        [inside, outside],
+        frame,
+        machine_polygon,
+    )
+
+    assert np.asarray(polygon) == pytest.approx(
+        np.asarray(((-10.0, -10.0), (200.0, -10.0), (200.0, 200.0), (-10.0, 200.0)))
+    )
+    assert outside_count == 1
+    assert inside.diagnostics["within_work_area"] is True
+    assert inside.selected_default is True
+    assert outside.diagnostics["within_work_area"] is False
+    assert outside.diagnostics["work_area_overrun_mm"] == pytest.approx(11.0)
+    assert outside.diagnostics["support_overruns_mm"]["right"] == pytest.approx(
+        11.0
+    )
+    assert outside.selected_default is False
+
+
+def test_cached_local_trace_sample_rejects_changed_support_frame(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    first = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 30.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="5" * 64,
+    )
+    moved = HoneycombCoordinateFrame(
+        origin_machine_mm=(21.0, 30.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="6" * 64,
+    )
+    current = [first]
+    context = SimpleNamespace(
+        bed=SimpleNamespace(calibration=object()),
+        bed_mapping_digest=lambda: "bed-map",
+        current_honeycomb_coordinate_frame=lambda: current[0],
+    )
+    runtime = SimpleNamespace(
+        context=context,
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(work_area=WorkArea(0.0, 220.0, 0.0, 220.0)),
+            calibration=SimpleNamespace(bed=SimpleNamespace(pixels_per_mm=2.0)),
+        ),
+    )
+    controller = DesktopController(runtime)
+    controller._workspace_coordinate_space = "honeycomb_local"
+    controller._trace_sample_image = np.zeros((380, 380, 3), dtype=np.uint8)
+    controller._trace_sample_area = WorkArea(0.0, 190.0, 0.0, 190.0)
+    controller._trace_sample_signature = controller._current_review_signature(first)
+    current[0] = moved
+    failures: list[str] = []
+    controller.traceColorFailed.connect(failures.append)
+
+    def run(callback: Any, **kwargs: Any) -> None:
+        try:
+            callback()
+        except Exception as exc:
+            kwargs["on_failure"](str(exc))
+
+    controller._run = run  # type: ignore[method-assign]
+    controller.sample_trace_color(10.0, 10.0)
+
+    assert len(failures) == 1
+    assert "changed after Trace capture" in failures[0]
+
+    controller.deleteLater()
+    qt_application.processEvents()
 
 
 def test_software_stop_bypasses_shared_worker_pool(
@@ -243,6 +680,71 @@ def test_project_machine_work_area_mismatch_is_rejected() -> None:
         E3MainWindow._require_project_machine_work_area_match(fake)
 
 
+def test_controller_workspace_coordinate_space_switch_invalidates_camera_and_trace() -> None:
+    controller, _context = _controller()
+    invalidations: list[bool] = []
+    refreshes: list[bool] = []
+    controller.request_camera_refresh = lambda: refreshes.append(True)  # type: ignore[method-assign]
+    controller._camera_image_published = True
+    controller.cameraImageInvalidated.connect(lambda: invalidations.append(True))
+    controller._trace_sample_image = np.zeros((2, 2, 3), dtype=np.uint8)
+    controller._trace_sample_area = WorkArea(0.0, 1.0, 0.0, 1.0)
+    generation = controller._camera_source_generation
+    trace_request = controller._trace_request_id
+
+    controller.set_workspace_coordinate_space("honeycomb_local")
+
+    assert controller._workspace_coordinate_space == "honeycomb_local"
+    assert controller._camera_source_generation == generation + 1
+    assert controller._trace_request_id == trace_request + 1
+    assert controller._trace_sample_image is None
+    assert controller._trace_sample_area is None
+    assert invalidations == [True]
+    assert refreshes == [True]
+
+
+def test_controller_rejects_unknown_workspace_coordinate_space() -> None:
+    controller, _context = _controller()
+
+    with pytest.raises(ValueError, match="Unsupported workspace coordinate space"):
+        controller.set_workspace_coordinate_space("maybe-square")
+
+
+def test_switching_to_local_clears_machine_coordinate_test_frame() -> None:
+    controller, context = _controller()
+    context.has_simulation_workspace_frame = True
+    source_changes: list[dict[str, Any]] = []
+    controller.simulationFrameChanged.connect(source_changes.append)
+    controller.request_camera_refresh = lambda: None  # type: ignore[method-assign]
+
+    controller.set_workspace_coordinate_space("honeycomb_local")
+
+    assert not context.has_simulation_workspace_frame
+    assert source_changes == [
+        {
+            "active": False,
+            "source_name": "",
+            "reason": (
+                "Machine-coordinate test image cleared for a "
+                "honeycomb-local project"
+            ),
+        }
+    ]
+
+
+def test_machine_coordinate_test_frame_cannot_activate_on_local_canvas() -> None:
+    controller, context = _controller()
+    controller._workspace_coordinate_space = "honeycomb_local"
+
+    with pytest.raises(ValueError, match="machine coordinates"):
+        controller.activate_simulation_workspace_frame(
+            np.zeros((8, 8, 3), dtype=np.uint8),
+            source_name="Wrong coordinate domain",
+        )
+
+    assert not context.has_simulation_workspace_frame
+
+
 def test_trace_detection_and_color_pick_reject_work_area_mismatch() -> None:
     errors: list[str] = []
     detection_requests: list[dict[str, Any]] = []
@@ -261,6 +763,7 @@ def test_trace_detection_and_color_pick_reject_work_area_mismatch() -> None:
         ),
         show_error=errors.append,
         _work_area_signature=E3MainWindow._work_area_signature,
+        _reconcile_pristine_project_frame=lambda: False,
     )
     fake._require_project_machine_work_area_match = lambda: (
         E3MainWindow._require_project_machine_work_area_match(fake)
@@ -357,6 +860,198 @@ def test_controller_drops_stale_camera_refresh_delivery_and_cleanup(
     controller._camera_refresh_finished(4)
     assert not controller._camera_refresh_in_flight
     assert controller._camera_refresh_generation is None
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_controller_drops_local_camera_raster_when_support_pose_changes(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    controller._workspace_coordinate_space = "honeycomb_local"
+    first = HoneycombCoordinateFrame(
+        origin_machine_mm=(10.0, 20.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="1" * 64,
+    )
+    moved = HoneycombCoordinateFrame(
+        origin_machine_mm=(11.0, 20.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="2" * 64,
+    )
+    current = [first]
+    context.current_honeycomb_coordinate_frame = lambda: current[0]  # type: ignore[attr-defined]
+    expected_revision = (
+        context.lens.model,
+        context.bed.calibration,
+        tuple(first.provenance_signature),
+    )
+    delivered: list[object] = []
+    controller.cameraImageReady.connect(delivered.append)
+    image = QtGui.QImage(190, 190, QtGui.QImage.Format.Format_RGB888)
+
+    current[0] = moved
+    controller._camera_refresh_ready(
+        image,
+        controller._camera_source_generation,
+        expected_revision,
+        image_area=WorkArea(0.0, 190.0, 0.0, 190.0),
+    )
+
+    assert delivered == []
+    assert controller._camera_refresh_pending
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_live_camera_refresh_publishes_expanded_frame_with_its_exact_area(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    expanded = WorkArea(10.0, 221.0, 10.0, 233.0)
+    calls: list[tuple[bool, WorkArea | None]] = []
+    launches: list[dict[str, Any]] = []
+
+    context.trace_camera_work_area = lambda: expanded  # type: ignore[attr-defined]
+
+    def rectified_frame(
+        refresh: bool = True,
+        *,
+        precision: bool = False,
+        work_area: WorkArea | None = None,
+    ) -> np.ndarray:
+        del precision
+        calls.append((refresh, work_area))
+        return np.zeros((892, 844, 3), dtype=np.uint8)
+
+    context.rectified_frame = rectified_frame  # type: ignore[method-assign]
+
+    class FinishedSignal:
+        def connect(self, _callback: Any, _connection: Any) -> None:
+            return
+
+    def fake_run(operation: Any, **kwargs: Any) -> object:
+        launches.append({"operation": operation, **kwargs})
+        return SimpleNamespace(signals=SimpleNamespace(finished=FinishedSignal()))
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    delivered: list[object] = []
+    controller.cameraImageReady.connect(delivered.append)
+
+    controller.refresh_camera_image()
+    image = launches[0]["operation"]()
+    launches[0]["on_success"](image)
+
+    assert calls == [(True, expanded)]
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert isinstance(payload, dict)
+    assert payload["image"].size() == QtCore.QSize(844, 892)
+    assert payload["camera_image_area"] == {
+        "x_min": 10.0,
+        "x_max": 221.0,
+        "y_min": 10.0,
+        "y_max": 233.0,
+    }
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_live_camera_refresh_uses_local_honeycomb_raster_and_area(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    controller._workspace_coordinate_space = "honeycomb_local"
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(29.0, 37.0),
+        x_axis_machine=(0.8, 0.6),
+        y_axis_machine=(-0.6, 0.8),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="3" * 64,
+    )
+    context.current_honeycomb_coordinate_frame = lambda: frame  # type: ignore[attr-defined]
+    calls: list[dict[str, Any]] = []
+    launches: list[dict[str, Any]] = []
+
+    def rectified_frame(**kwargs: Any) -> np.ndarray:
+        calls.append(dict(kwargs))
+        return np.zeros((380, 380, 3), dtype=np.uint8)
+
+    context.rectified_frame = rectified_frame  # type: ignore[method-assign]
+
+    class FinishedSignal:
+        def connect(self, _callback: Any, _connection: Any) -> None:
+            return
+
+    def fake_run(operation: Any, **kwargs: Any) -> object:
+        launches.append({"operation": operation, **kwargs})
+        return SimpleNamespace(signals=SimpleNamespace(finished=FinishedSignal()))
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    delivered: list[object] = []
+    controller.cameraImageReady.connect(delivered.append)
+
+    controller.refresh_camera_image()
+    image = launches[0]["operation"]()
+    launches[0]["on_success"](image)
+
+    assert calls == [
+        {
+            "refresh": True,
+            "work_area": WorkArea(0.0, 190.0, 0.0, 190.0),
+            "coordinate_frame": frame,
+        }
+    ]
+    assert len(delivered) == 1
+    payload = delivered[0]
+    assert isinstance(payload, dict)
+    assert payload["image"].size() == QtCore.QSize(380, 380)
+    assert payload["camera_image_area"] == {
+        "x_min": 0.0,
+        "x_max": 190.0,
+        "y_min": 0.0,
+        "y_max": 190.0,
+    }
+
+    controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_live_camera_refresh_fails_closed_without_local_honeycomb_frame(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, context = _controller()
+    controller._workspace_coordinate_space = "honeycomb_local"
+    context.current_honeycomb_coordinate_frame = lambda: None  # type: ignore[attr-defined]
+    context.rectified_frame = lambda **_kwargs: pytest.fail(  # type: ignore[method-assign]
+        "Machine-space pixels must not be published on a local canvas"
+    )
+    errors: list[str] = []
+    delivered: list[object] = []
+    controller.cameraOverlayErrorOccurred.connect(errors.append)
+    controller.cameraImageReady.connect(delivered.append)
+
+    controller.refresh_camera_image()
+    controller.refresh_camera_image()
+
+    assert delivered == []
+    assert len(errors) == 1
+    assert "requires a current honeycomb reference" in errors[0]
+    assert not controller._camera_refresh_in_flight
 
     controller._camera_live_timer.stop()
     controller.deleteLater()
@@ -778,6 +1473,38 @@ def test_machine_setup_review_defers_mapping_refresh_until_dialog_closes(
     assert refreshes == [True]
     assert not controller._camera_refresh_pending
     controller._camera_live_timer.stop()
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
+def test_calibration_change_invalidates_cached_trace_and_template_evidence(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    controller, _context = _controller()
+    controller.request_camera_refresh = lambda: None  # type: ignore[method-assign]
+    controller._trace_review_active = True
+    controller._trace_sample_image = np.zeros((2, 2, 3), dtype=np.uint8)
+    controller._trace_sample_area = WorkArea(0.0, 1.0, 0.0, 1.0)
+    controller._trace_sample_signature = ("machine", None, "old-bed")
+    controller._template_review_active = True
+    controller._template_review_signature = ("machine", None, "old-bed")
+    trace_request = controller._trace_request_id
+    template_request = controller._template_match_request_id
+    invalidations: list[bool] = []
+    controller.reviewEvidenceInvalidated.connect(lambda: invalidations.append(True))
+
+    controller.calibration_changed()
+
+    assert controller._trace_request_id == trace_request + 1
+    assert controller._template_match_request_id == template_request + 1
+    assert not controller._trace_review_active
+    assert not controller._template_review_active
+    assert controller._trace_sample_image is None
+    assert controller._trace_sample_area is None
+    assert controller._trace_sample_signature is None
+    assert controller._template_review_signature is None
+    assert invalidations == [True]
+
     controller.deleteLater()
     qt_application.processEvents()
 
@@ -1363,6 +2090,102 @@ def test_camera_overlay_rejects_raster_dimensions_that_disagree_with_ppm(
     workspace.close()
     workspace.deleteLater()
     qt_application.processEvents()
+
+
+def test_camera_overlay_places_and_fits_an_expanded_display_area(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    workspace = WorkspaceView(Bounds(10.0, 10.0, 210.0, 210.0))
+    expanded = Bounds(10.0, 10.0, 221.0, 233.0)
+    image = QtGui.QImage(844, 892, QtGui.QImage.Format.Format_RGB888)
+    image.fill(QtGui.QColor("#2468AC"))
+
+    workspace.set_camera_image(
+        image,
+        pixels_per_mm=4.0,
+        image_area=expanded,
+    )
+    workspace.fit_camera_image()
+
+    assert workspace._camera_image_area == expanded
+    assert workspace._camera_item.pos() == QtCore.QPointF(10.0, -233.0)
+    visible = workspace.mapToScene(workspace.viewport().rect()).boundingRect()
+    image_rect = workspace._camera_item.sceneBoundingRect()
+    assert visible.contains(image_rect)
+
+    invalid = QtGui.QImage(843, 892, QtGui.QImage.Format.Format_RGB888)
+    with pytest.raises(ValueError, match="received 843 x 892, expected 844 x 892"):
+        workspace.set_camera_image(
+            invalid,
+            pixels_per_mm=4.0,
+            image_area=expanded,
+        )
+
+    workspace.close()
+    workspace.deleteLater()
+    qt_application.processEvents()
+
+
+def test_main_window_live_camera_payload_fits_only_when_area_changes() -> None:
+    configured = Bounds(10.0, 10.0, 210.0, 210.0)
+    expanded = Bounds(10.0, 10.0, 221.0, 233.0)
+    changed = Bounds(9.0, 10.0, 221.0, 233.0)
+    set_calls: list[tuple[QtCore.QSize, float, Bounds | None]] = []
+    fits: list[bool] = []
+    updates: list[bool] = []
+    workspace = SimpleNamespace(
+        workspace_scene=SimpleNamespace(work_area=configured),
+        _camera_image_area=None,
+    )
+
+    def set_camera_image(
+        image: QtGui.QImage,
+        *,
+        pixels_per_mm: float,
+        image_area: Bounds | None,
+    ) -> None:
+        set_calls.append((image.size(), pixels_per_mm, image_area))
+        workspace._camera_image_area = configured if image_area is None else image_area
+
+    workspace.set_camera_image = set_camera_image
+    workspace.fit_camera_image = lambda: fits.append(True)
+    harness = SimpleNamespace(
+        workspace=workspace,
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                calibration=SimpleNamespace(
+                    bed=SimpleNamespace(pixels_per_mm=4.0)
+                )
+            )
+        ),
+        camera_panel=SimpleNamespace(
+            set_image_updated=lambda: updates.append(True)
+        ),
+        _camera_image_area=E3MainWindow._camera_image_area,
+    )
+
+    def payload(area: Bounds) -> dict[str, object]:
+        return {
+            "image": QtGui.QImage(
+                int(round(area.width * 4.0)),
+                int(round(area.height * 4.0)),
+                QtGui.QImage.Format.Format_RGB888,
+            ),
+            "camera_image_area": {
+                "x_min": area.x_min,
+                "x_max": area.x_max,
+                "y_min": area.y_min,
+                "y_max": area.y_max,
+            },
+        }
+
+    E3MainWindow._camera_image_ready(harness, payload(expanded))
+    E3MainWindow._camera_image_ready(harness, payload(expanded))
+    E3MainWindow._camera_image_ready(harness, payload(changed))
+
+    assert [call[2] for call in set_calls] == [expanded, expanded, changed]
+    assert fits == [True, True]
+    assert updates == [True, True, True]
 
 
 def test_returning_from_test_source_clears_pixels_before_hiding_badge(

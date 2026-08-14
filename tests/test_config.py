@@ -75,6 +75,7 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     settings = load_settings(config)
     assert settings.app.data_dir == (tmp_path / "runtime").resolve()
     assert settings.camera.width == 1280
+    assert settings.camera.view_rotation_degrees == 0
     assert settings.machine.work_area.width == 200
     assert settings.machine.home_and_release_after_powered_job
     assert settings.machine.grbl_step_idle_delay_ms == 250
@@ -83,6 +84,84 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     assert settings.laser.spot_offset_x_mm == 0.0
     assert settings.laser.spot_offset_y_mm == 0.0
     assert (settings.app.data_dir / "captures").is_dir()
+
+
+def test_guarded_output_polygon_loads_as_exact_four_point_authority(
+    tmp_path: Path,
+) -> None:
+    polygon = [
+        [18.0, 30.0],
+        [228.0, 30.0],
+        [228.0, 240.0],
+        [18.0, 240.0],
+    ]
+    config = tmp_path / "guarded-output.json"
+    config.write_text(
+        json.dumps({"laser": {"guarded_output_polygon_mm": polygon}}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.laser.guarded_output_polygon_mm == tuple(
+        tuple(point) for point in polygon
+    )
+    assert settings.public_dict()["laser"]["guarded_output_polygon_mm"] == polygon
+
+
+@pytest.mark.parametrize(
+    "polygon",
+    [
+        [[0.0, 0.0], [210.0, 0.0], [0.0, 210.0]],
+        [[0.0, 0.0], [210.0, 0.0], [210.0, 0.0], [0.0, 210.0]],
+        [[0.0, 0.0], [210.0, 0.0], [100.0, 100.0], [0.0, 210.0]],
+        [[0.0, 0.0], [210.0, 0.0], [210.0, True], [0.0, 210.0]],
+    ],
+    ids=("three-points", "repeated", "not-convex", "boolean-coordinate"),
+)
+def test_guarded_output_polygon_rejects_malformed_authority(
+    tmp_path: Path,
+    polygon: list[list[object]],
+) -> None:
+    config = tmp_path / "bad-guarded-output.json"
+    config.write_text(
+        json.dumps({"laser": {"guarded_output_polygon_mm": polygon}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="guarded_output_polygon_mm"):
+        load_settings(config)
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_camera_view_rotation_accepts_quarter_turns(
+    tmp_path: Path,
+    rotation: int,
+) -> None:
+    config = tmp_path / "rotation.json"
+    config.write_text(
+        json.dumps({"camera": {"view_rotation_degrees": rotation}}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.camera.view_rotation_degrees == rotation
+
+
+@pytest.mark.parametrize("rotation", [True, -90, 45, 360, "90"])
+def test_camera_view_rotation_rejects_non_quarter_turns(
+    tmp_path: Path,
+    rotation: object,
+) -> None:
+    config = tmp_path / "bad-rotation.json"
+    config.write_text(
+        json.dumps({"camera": {"view_rotation_degrees": rotation}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="camera.view_rotation_degrees"):
+        load_settings(config)
 
 
 @pytest.mark.parametrize("root", [None, [], "settings", 7])

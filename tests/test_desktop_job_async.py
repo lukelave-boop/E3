@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -15,10 +16,14 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from laser_aligner.calibration.support import HoneycombSupportReference
+from laser_aligner.config import WorkArea
 from laser_aligner.core import CoreRuntime
 from laser_aligner.desktop import main_window as main_window_module
+from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.job_preview import JobPreviewCanvas
 from laser_aligner.desktop.main_window import E3MainWindow
+from laser_aligner.desktop.workspace import WorkspaceView
 from laser_aligner.gcode.generator import GcodeProgram
 from laser_aligner.gcode.job_plan import JobPlan, PlannedMove, build_job_plan
 from laser_aligner.project import (
@@ -132,6 +137,614 @@ def _registration_job(job: ProjectJob) -> SimpleNamespace:
         filename="registration.gcode",
         targets=(object(),),
     )
+
+
+def _legacy_honeycomb_support() -> HoneycombSupportReference:
+    return HoneycombSupportReference.from_observations(
+        ruler_origin_machine_mm=(29.0, 37.0),
+        ruler_x_mark_machine_mm=(219.0, 37.0),
+        ruler_xy_mark_machine_mm=(219.0, 227.0),
+        ruler_mark_mm=190.0,
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=123.0,
+        created_at=456.0,
+    )
+
+
+def test_legacy_support_selects_local_empty_workspace_but_not_execution() -> None:
+    support = _legacy_honeycomb_support()
+    machine_area = WorkArea(10.0, 210.0, 10.0, 210.0)
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(_current_honeycomb_support=lambda: support),
+        settings=SimpleNamespace(machine=SimpleNamespace(work_area=machine_area)),
+    )
+    harness = SimpleNamespace(runtime=runtime)
+
+    document = E3MainWindow._new_document(harness)
+
+    assert support.is_execution_verifiable is False
+    assert document.name == "Untitled"
+    assert document.objects == []
+    assert (
+        document.coordinate_space
+        is main_window_module.CoordinateSpace.HONEYCOMB_LOCAL
+    )
+    assert document.work_area == main_window_module.Bounds(0.0, 0.0, 190.0, 190.0)
+
+    # The legacy support is visual placement evidence only. The execution gate
+    # used before job generation must continue to require schema-2 evidence.
+    harness.document = document
+    with pytest.raises(ValueError, match="automatic four-corner"):
+        E3MainWindow._project_coordinate_frame(harness)
+
+
+def test_legacy_support_empty_workspace_drives_exact_local_camera_area(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    support = _legacy_honeycomb_support()
+    coordinate_frame = support.coordinate_frame
+    machine_area = WorkArea(10.0, 210.0, 10.0, 210.0)
+    calls: list[dict[str, object]] = []
+    launches: list[dict[str, object]] = []
+    calibration = object()
+
+    def rectified_frame(**kwargs: object) -> np.ndarray:
+        calls.append(dict(kwargs))
+        area = kwargs.get("work_area")
+        assert isinstance(area, WorkArea)
+        return np.zeros(
+            (
+                int(round((area.y_max - area.y_min) * 2.0)),
+                int(round((area.x_max - area.x_min) * 2.0)),
+                3,
+            ),
+            dtype=np.uint8,
+        )
+
+    context = SimpleNamespace(
+        _current_honeycomb_support=lambda: support,
+        current_honeycomb_coordinate_frame=lambda: coordinate_frame,
+        trace_camera_work_area=lambda: machine_area,
+        has_simulation_workspace_frame=False,
+        bed=SimpleNamespace(calibration=calibration),
+        lens=SimpleNamespace(model=None),
+        bed_calibration_validity=lambda: {"state": "VALID", "reasons": []},
+        rectified_frame=rectified_frame,
+    )
+    runtime = SimpleNamespace(
+        running=False,
+        context=context,
+        settings=SimpleNamespace(machine=SimpleNamespace(work_area=machine_area)),
+    )
+    document = E3MainWindow._new_document(SimpleNamespace(runtime=runtime))
+    controller = DesktopController(runtime)
+    workspace = WorkspaceView(main_window_module.Bounds(10.0, 10.0, 210.0, 210.0))
+
+    class FinishedSignal:
+        def connect(self, _callback: object, _connection: object) -> None:
+            return
+
+    def fake_run(operation: object, **kwargs: object) -> object:
+        launches.append({"operation": operation, **kwargs})
+        return SimpleNamespace(signals=SimpleNamespace(finished=FinishedSignal()))
+
+    controller._run = fake_run  # type: ignore[method-assign]
+    delivered: list[object] = []
+    controller.cameraImageReady.connect(delivered.append)
+
+    try:
+        workspace.set_document(document)
+        controller.set_workspace_coordinate_space(document.coordinate_space.value)
+        runtime.running = True
+        controller.refresh_camera_image()
+        assert len(launches) == 1
+        operation = launches[0]["operation"]
+        assert callable(operation)
+        image = operation()
+        on_success = launches[0]["on_success"]
+        assert callable(on_success)
+        on_success(image)
+
+        assert calls == [
+            {
+                "refresh": True,
+                "work_area": WorkArea(0.0, 190.0, 0.0, 190.0),
+                "coordinate_frame": coordinate_frame,
+            }
+        ]
+        assert len(delivered) == 1
+        payload = delivered[0]
+        assert isinstance(payload, dict)
+        camera_image = payload["image"]
+        assert isinstance(camera_image, QtGui.QImage)
+        assert camera_image.size() == QtCore.QSize(380, 380)
+        assert payload["camera_image_area"] == {
+            "x_min": 0.0,
+            "x_max": 190.0,
+            "y_min": 0.0,
+            "y_max": 190.0,
+        }
+        local_area = main_window_module.Bounds(0.0, 0.0, 190.0, 190.0)
+        workspace.set_camera_image(
+            camera_image,
+            pixels_per_mm=2.0,
+            image_area=local_area,
+        )
+        assert workspace.workspace_scene.work_area == local_area
+        assert workspace._camera_image_area == local_area
+    finally:
+        controller._camera_live_timer.stop()
+        controller.deleteLater()
+        workspace.close()
+        workspace.deleteLater()
+        qt_application.processEvents()
+
+
+def test_machine_frame_calibration_job_does_not_inherit_local_project_pose() -> None:
+    job = _job()
+    fake = SimpleNamespace(
+        last_job=job,
+        last_job_coordinate_frame=None,
+        _project_execution_signature=lambda: (
+            "honeycomb-coordinate-frame",
+            1,
+            "support-digest",
+            "bed-map-digest",
+        ),
+    )
+
+    assert E3MainWindow._prepared_frame_is_current(fake)
+
+
+def test_local_job_requires_its_exact_current_execution_signature() -> None:
+    current = (
+        "honeycomb-coordinate-frame",
+        1,
+        "support-digest",
+        "bed-map-digest",
+    )
+    job = _job()
+    job.coordinate_space = main_window_module.CoordinateSpace.HONEYCOMB_LOCAL
+    job.coordinate_frame_signature = current[:3]
+    job.execution_signature = current
+    polygon = (
+        (18.0, 30.0),
+        (228.0, 30.0),
+        (228.0, 240.0),
+        (18.0, 240.0),
+    )
+    job.guarded_output_polygon_mm = polygon
+    fake = SimpleNamespace(
+        last_job=job,
+        last_job_coordinate_frame=current,
+        _project_execution_signature=lambda: current,
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                laser=SimpleNamespace(guarded_output_polygon_mm=polygon)
+            )
+        ),
+    )
+
+    assert E3MainWindow._prepared_frame_is_current(fake)
+    fake.runtime.settings.laser.guarded_output_polygon_mm = (
+        polygon[0],
+        polygon[1],
+        (229.0, 240.0),
+        polygon[3],
+    )
+    assert not E3MainWindow._prepared_frame_is_current(fake)
+    fake.runtime.settings.laser.guarded_output_polygon_mm = polygon
+    fake._project_execution_signature = lambda: (*current[:2], "moved", current[3])
+    assert not E3MainWindow._prepared_frame_is_current(fake)
+
+
+@pytest.mark.parametrize(
+    "configured_polygon",
+    [
+        None,
+        ((18.0, 30.0), (228.0, 30.0), (18.0, 30.0)),
+    ],
+)
+def test_local_prepared_job_rejects_missing_or_malformed_current_authority(
+    configured_polygon: object,
+) -> None:
+    polygon = (
+        (18.0, 30.0),
+        (228.0, 30.0),
+        (228.0, 240.0),
+        (18.0, 240.0),
+    )
+    job = _job()
+    job.coordinate_space = main_window_module.CoordinateSpace.HONEYCOMB_LOCAL
+    job.guarded_output_polygon_mm = polygon
+    fake = SimpleNamespace(
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                laser=SimpleNamespace(
+                    guarded_output_polygon_mm=configured_polygon
+                )
+            )
+        )
+    )
+
+    assert not E3MainWindow._prepared_output_authority_is_current(fake, job)
+
+
+def test_local_start_here_preserves_prepared_output_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = (
+        "honeycomb-coordinate-frame",
+        1,
+        "support-digest",
+        "bed-map-digest",
+    )
+    polygon = (
+        (18.0, 30.0),
+        (228.0, 30.0),
+        (228.0, 240.0),
+        (18.0, 240.0),
+    )
+    source = _job(8)
+    source.coordinate_space = main_window_module.CoordinateSpace.HONEYCOMB_LOCAL
+    source.coordinate_frame_signature = current[:3]
+    source.execution_signature = current
+    source.guarded_output_polygon_mm = polygon
+    payloads: list[dict[str, object]] = []
+
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Ok,
+    )
+
+    def run_background(operation: object, **_kwargs: object) -> None:
+        assert callable(operation)
+        payload = operation()
+        assert isinstance(payload, dict)
+        payloads.append(payload)
+
+    harness = SimpleNamespace(
+        document=SimpleNamespace(revision=7),
+        last_job=source,
+        last_job_revision=7,
+        last_job_coordinate_frame=current,
+        _current_job_plan=lambda: source.plan,
+        _prepared_frame_is_current=lambda: True,
+        _invalidate_generated_job=lambda **_kwargs: None,
+        _work_area_signature=lambda area: (
+            area.x_min,
+            area.x_max,
+            area.y_min,
+            area.y_max,
+        ),
+        _planned_job_start_position=lambda: (110.0, 110.0),
+        _job_request_id=3,
+        _job_worker_requests={},
+        _job_worker_phases={},
+        _job_cancel_reason="",
+        _claim_job_preparation=lambda *_args: None,
+        show_error=lambda message: pytest.fail(message),
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                machine=SimpleNamespace(
+                    work_area=WorkArea(10.0, 210.0, 10.0, 210.0)
+                ),
+                laser=SimpleNamespace(power_mode="M4"),
+            )
+        ),
+        controller=SimpleNamespace(run_background=run_background),
+    )
+
+    E3MainWindow._prepare_start_here(harness, 0)
+
+    assert len(payloads) == 1
+    restarted = payloads[0]["job"]
+    assert isinstance(restarted, ProjectJob)
+    assert restarted.guarded_output_polygon_mm == polygon
+    assert restarted.execution_signature == current
+
+
+def test_local_run_passes_exact_prepared_output_authority() -> None:
+    current = (
+        "honeycomb-coordinate-frame",
+        1,
+        "support-digest",
+        "bed-map-digest",
+    )
+    polygon = (
+        (18.0, 30.0),
+        (228.0, 30.0),
+        (228.0, 240.0),
+        (18.0, 240.0),
+    )
+    job = _job()
+    job.coordinate_space = main_window_module.CoordinateSpace.HONEYCOMB_LOCAL
+    job.coordinate_frame_signature = current[:3]
+    job.execution_signature = current
+    job.guarded_output_polygon_mm = polygon
+    calls: list[dict[str, object]] = []
+    harness = SimpleNamespace(
+        last_job=job,
+        last_job_name="local.gcode",
+        last_job_revision=3,
+        last_job_powered=False,
+        last_job_work_area=(10.0, 210.0, 10.0, 210.0),
+        last_job_coordinate_frame=current,
+        document=SimpleNamespace(revision=3),
+        _job_preparation_busy=False,
+        _prepared_frame_is_current=lambda: True,
+        _verify_prepared_job_assets=lambda _action: True,
+        _work_area_signature=lambda _area: (10.0, 210.0, 10.0, 210.0),
+        _pending_calibration_capture=None,
+        _invalidate_generated_job=lambda: pytest.fail("job must remain current"),
+        show_error=lambda message: pytest.fail(message),
+        show_notice=lambda _message: None,
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                machine=SimpleNamespace(
+                    work_area=WorkArea(10.0, 210.0, 10.0, 210.0),
+                    allow_motion=True,
+                    backend="simulator",
+                )
+            ),
+            context=SimpleNamespace(
+                machine=SimpleNamespace(status=lambda: {}),
+            ),
+        ),
+        controller=SimpleNamespace(
+            run_job=lambda text, name, **kwargs: calls.append(
+                {"text": text, "name": name, **kwargs}
+            )
+        ),
+    )
+
+    E3MainWindow.run_current_job(harness)
+
+    assert calls == [
+        {
+            "text": job.text,
+            "name": "local.gcode",
+            "arm_phrase": None,
+            "honeycomb_signature": current,
+            "guarded_output_polygon_mm": polygon,
+        }
+    ]
+
+
+def test_pristine_machine_project_switches_to_new_honeycomb_frame() -> None:
+    old_document = ProjectDocument.new()
+    new_document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(0.0, 0.0, 190.0, 190.0),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    notices: list[str] = []
+    refreshed: list[bool] = []
+    fake = SimpleNamespace(
+        project_path=None,
+        document=old_document,
+        history=SimpleNamespace(
+            is_clean=True,
+            clear=lambda: None,
+            mark_clean=lambda: None,
+        ),
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(
+                current_honeycomb_coordinate_frame=lambda: object()
+            )
+        ),
+        _new_document=lambda: new_document,
+        _invalidate_generated_job=lambda: None,
+        _clear_trace_preview=lambda: None,
+        _clear_template_preview=lambda **_kwargs: None,
+        _refresh_document=lambda: refreshed.append(True),
+        show_notice=notices.append,
+        _work_area_signature=E3MainWindow._work_area_signature,
+    )
+    fake._reconcile_pristine_project_frame = lambda: (
+        E3MainWindow._reconcile_pristine_project_frame(fake)
+    )
+
+    E3MainWindow._calibration_project_frame_changed(fake)
+
+    assert fake.document is new_document
+    assert fake.active_layer_id == new_document.active_layer_id
+    assert refreshed == [True]
+    assert notices == [
+        "Updated the empty project to the detected honeycomb X0 Y0 frame "
+        "(190 × 190 mm)"
+    ]
+
+
+def test_pristine_local_project_switches_to_remeasured_honeycomb_dimensions() -> None:
+    old_document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(0.0, 0.0, 192.0, 192.0),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    new_document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(0.0, 0.0, 190.0, 190.0),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    notices: list[str] = []
+    refreshed: list[bool] = []
+    fake = SimpleNamespace(
+        project_path=None,
+        document=old_document,
+        history=SimpleNamespace(
+            is_clean=True,
+            clear=lambda: None,
+            mark_clean=lambda: None,
+        ),
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(
+                current_honeycomb_coordinate_frame=lambda: object()
+            )
+        ),
+        _new_document=lambda: new_document,
+        _invalidate_generated_job=lambda: None,
+        _clear_trace_preview=lambda: None,
+        _clear_template_preview=lambda **_kwargs: None,
+        _refresh_document=lambda: refreshed.append(True),
+        show_notice=notices.append,
+        _work_area_signature=E3MainWindow._work_area_signature,
+    )
+    fake._reconcile_pristine_project_frame = lambda: (
+        E3MainWindow._reconcile_pristine_project_frame(fake)
+    )
+
+    E3MainWindow._calibration_project_frame_changed(fake)
+
+    assert fake.document is new_document
+    assert fake.active_layer_id == new_document.active_layer_id
+    assert refreshed == [True]
+    assert notices == [
+        "Updated the empty project to the detected honeycomb X0 Y0 frame "
+        "(190 × 190 mm)"
+    ]
+
+
+def test_trace_self_heals_pristine_stale_local_project_before_strict_check() -> None:
+    old_document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(0.0, 0.0, 192.0, 192.0),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    new_document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(0.0, 0.0, 190.0, 190.0),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    support = SimpleNamespace(
+        is_execution_verifiable=True,
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        coordinate_frame=object(),
+    )
+    requests: list[dict[str, object]] = []
+    errors: list[str] = []
+    fake = SimpleNamespace(
+        project_path=None,
+        document=old_document,
+        history=SimpleNamespace(
+            is_clean=True,
+            clear=lambda: None,
+            mark_clean=lambda: None,
+        ),
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(_current_honeycomb_support=lambda: support)
+        ),
+        controller=SimpleNamespace(detect_trace_objects=requests.append),
+        _new_document=lambda: new_document,
+        _invalidate_generated_job=lambda: None,
+        _clear_trace_preview=lambda: None,
+        _clear_template_preview=lambda **_kwargs: None,
+        _refresh_document=lambda: None,
+        show_notice=lambda _message: None,
+        show_error=errors.append,
+        _work_area_signature=E3MainWindow._work_area_signature,
+    )
+    fake._reconcile_pristine_project_frame = lambda: (
+        E3MainWindow._reconcile_pristine_project_frame(fake)
+    )
+    fake._require_project_machine_work_area_match = lambda: (
+        E3MainWindow._require_project_machine_work_area_match(fake)
+    )
+    fake._project_coordinate_frame = lambda: E3MainWindow._project_coordinate_frame(
+        fake
+    )
+
+    options = {"detection_mode": "auto"}
+    E3MainWindow._detect_trace_objects(fake, options)
+
+    assert fake.document is new_document
+    assert requests == [options]
+    assert errors == []
+
+
+def test_nonempty_machine_project_is_not_reinterpreted_after_detection() -> None:
+    document = ProjectDocument.new()
+    document.add_object(
+        SceneObject.line(
+            document.layers[0].id,
+            center=(20.0, 20.0),
+            length_mm=10.0,
+        )
+    )
+    fake = SimpleNamespace(
+        project_path=None,
+        document=document,
+        history=SimpleNamespace(is_clean=False),
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(
+                current_honeycomb_coordinate_frame=lambda: object()
+            )
+        ),
+        _invalidate_generated_job=lambda: None,
+        _new_document=lambda: pytest.fail("must not reinterpret existing geometry"),
+    )
+
+    changed = E3MainWindow._reconcile_pristine_project_frame(fake)
+
+    assert changed is False
+    assert fake.document is document
+
+
+def test_nonempty_local_project_is_not_reinterpreted_after_redetection() -> None:
+    document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(0.0, 0.0, 192.0, 192.0),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.line(
+            document.layers[0].id,
+            center=(20.0, 20.0),
+            length_mm=10.0,
+        )
+    )
+    fake = SimpleNamespace(
+        project_path=None,
+        document=document,
+        history=SimpleNamespace(is_clean=False),
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(
+                current_honeycomb_coordinate_frame=lambda: object()
+            )
+        ),
+        _invalidate_generated_job=lambda: None,
+        _new_document=lambda: pytest.fail("must not reinterpret existing geometry"),
+    )
+
+    changed = E3MainWindow._reconcile_pristine_project_frame(fake)
+
+    assert changed is False
+    assert fake.document is document
+
+
+@pytest.mark.parametrize(
+    ("project_path", "history_clean"),
+    ((Path("saved.e3laser"), True), (None, False)),
+    ids=("saved", "dirty"),
+)
+def test_empty_stale_local_project_is_not_silently_reinterpreted(
+    project_path: Path | None,
+    history_clean: bool,
+) -> None:
+    document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(0.0, 0.0, 192.0, 192.0),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    fake = SimpleNamespace(
+        project_path=project_path,
+        document=document,
+        history=SimpleNamespace(is_clean=history_clean),
+        _new_document=lambda: pytest.fail(
+            "must not reinterpret a saved or dirty project"
+        ),
+    )
+
+    changed = E3MainWindow._reconcile_pristine_project_frame(fake)
+
+    assert changed is False
+    assert fake.document is document
 
 
 def _core_registration_job(job: ProjectJob) -> SimpleNamespace:

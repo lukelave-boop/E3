@@ -12,8 +12,9 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget tests")
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
+from laser_aligner.desktop.theme import DRAFTING_COLORS
 from laser_aligner.desktop.workspace import WorkspaceView
 from laser_aligner.project import Bounds
 
@@ -53,6 +54,42 @@ def test_interactive_view_paints_the_light_bed_without_a_camera_frame(
 
     view.close()
     view.deleteLater()
+
+
+def test_camera_overlay_has_no_machine_rectangle_background_tint(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    work_area = Bounds(10.0, 10.0, 210.0, 210.0)
+    camera_area = Bounds(0.0, 0.0, 220.0, 220.0)
+    view = WorkspaceView(work_area)
+    camera = QtGui.QImage(220, 220, QtGui.QImage.Format.Format_RGB888)
+    camera.fill(QtGui.QColor("#808080"))
+    view.set_camera_opacity(0.5)
+    view.set_camera_image(camera, pixels_per_mm=1.0, image_area=camera_area)
+
+    rendered = QtGui.QImage(220, 220, QtGui.QImage.Format.Format_RGB888)
+    rendered.fill(QtGui.QColor("#FF00FF"))
+    painter = QtGui.QPainter(rendered)
+    try:
+        view.workspace_scene.render(
+            painter,
+            QtCore.QRectF(0.0, 0.0, 220.0, 220.0),
+            QtCore.QRectF(0.0, -220.0, 220.0, 220.0),
+        )
+    finally:
+        painter.end()
+
+    # These points contain the same camera pixel. The first lies outside the
+    # X10..210 machine rectangle and the second lies inside it; the configured
+    # machine area must not appear as a lighter rectangle through the overlay.
+    outside_machine = rendered.pixelColor(5, 119)
+    inside_machine = rendered.pixelColor(100, 119)
+    assert outside_machine == inside_machine
+    assert outside_machine != QtGui.QColor(DRAFTING_COLORS["bed"])
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
 
 
 def test_detailed_toolpath_overlay_batches_segments_into_three_scene_items(

@@ -4,9 +4,13 @@ import bisect
 import html
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ..gcode.job_plan import JobPlan, PlannedMove
 from .qt import require_qt
+
+if TYPE_CHECKING:
+    from ..calibration.support import HoneycombCoordinateFrame
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -195,10 +199,12 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         *,
         move_ends: tuple[float, ...] | None = None,
         defer_render: bool = False,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
         self.work_area = tuple(float(value) for value in work_area)
+        self.coordinate_frame = coordinate_frame
         self._scene = QtWidgets.QGraphicsScene(self)
         self.setScene(self._scene)
         self.setRenderHints(
@@ -261,12 +267,29 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
 
     def _draw_bed(self) -> None:
         x_min, x_max, y_min, y_max = self.work_area
-        margin = max(x_max - x_min, y_max - y_min) * 0.06
+        plan_x_min, plan_y_min, plan_x_max, plan_y_max = self.plan.bounds_mm
+        display_points = tuple(
+            self._display_point(x, y)
+            for x, y in (
+                (plan_x_min, plan_y_min),
+                (plan_x_max, plan_y_min),
+                (plan_x_max, plan_y_max),
+                (plan_x_min, plan_y_max),
+            )
+        )
+        content_x_min = min([x_min, *(point[0] for point in display_points)])
+        content_x_max = max([x_max, *(point[0] for point in display_points)])
+        content_y_min = min([y_min, *(point[1] for point in display_points)])
+        content_y_max = max([y_max, *(point[1] for point in display_points)])
+        margin = max(
+            content_x_max - content_x_min,
+            content_y_max - content_y_min,
+        ) * 0.06
         scene_rect = QtCore.QRectF(
-            x_min - margin,
-            -(y_max + margin),
-            x_max - x_min + 2 * margin,
-            y_max - y_min + 2 * margin,
+            content_x_min - margin,
+            -(content_y_max + margin),
+            content_x_max - content_x_min + 2 * margin,
+            content_y_max - content_y_min + 2 * margin,
         )
         self._scene.setSceneRect(scene_rect)
         bed = QtWidgets.QGraphicsRectItem(
@@ -280,6 +303,11 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         bed.setZValue(-20.0)
         self._scene.addItem(bed)
         self.setBackgroundBrush(QtGui.QColor("#202326"))
+
+    def _display_point(self, x_mm: float, y_mm: float) -> tuple[float, float]:
+        if self.coordinate_frame is None:
+            return float(x_mm), float(y_mm)
+        return self.coordinate_frame.machine_to_local(x_mm, y_mm)
 
     @staticmethod
     def _key(move: PlannedMove) -> RenderKey:
@@ -339,8 +367,10 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             key = self._key(move)
             self._ensure_item(key, move)
             path = self._paths[key]
-            path.moveTo(move.start_x, -move.start_y)
-            path.lineTo(move.end_x, -move.end_y)
+            start_x, start_y = self._display_point(move.start_x, move.start_y)
+            end_x, end_y = self._display_point(move.end_x, move.end_y)
+            path.moveTo(start_x, -start_y)
+            path.lineTo(end_x, -end_y)
             changed.add(key)
         if commit:
             for key in changed:
@@ -388,8 +418,10 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
                 key = self._key(move)
                 self._ensure_item(key, move)
                 path = self._paths[key]
-                path.moveTo(move.start_x, -move.start_y)
-                path.lineTo(move.end_x, -move.end_y)
+                start_x, start_y = self._display_point(move.start_x, move.start_y)
+                end_x, end_y = self._display_point(move.end_x, move.end_y)
+                path.moveTo(start_x, -start_y)
+                path.lineTo(end_x, -end_y)
                 count += 1
                 if timer.elapsed() >= 8:
                     break
@@ -477,7 +509,8 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
             self._active_item.hide()
             if self.plan.moves:
                 final = self.plan.moves[-1]
-                self._head_item.setPos(final.end_x, -final.end_y)
+                end_x, end_y = self._display_point(final.end_x, final.end_y)
+                self._head_item.setPos(end_x, -end_y)
                 self._head_item.show()
             else:
                 self._head_item.hide()
@@ -490,7 +523,9 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
         fraction = max(0.0, min(1.0, fraction))
         x = active.start_x + (active.end_x - active.start_x) * fraction
         y = active.start_y + (active.end_y - active.start_y) * fraction
-        self._active_item.setLine(active.start_x, -active.start_y, x, -y)
+        start_x, start_y = self._display_point(active.start_x, active.start_y)
+        x, y = self._display_point(x, y)
+        self._active_item.setLine(start_x, -start_y, x, -y)
         self._active_item.show()
         self._head_item.setPos(x, -y)
         self._head_item.show()
@@ -567,10 +602,12 @@ class JobPreviewDialog(QtWidgets.QDialog):
         defer_render: bool = False,
         max_work_feed_mm_min: float | None = None,
         max_travel_feed_mm_min: float | None = None,
+        coordinate_frame: HoneycombCoordinateFrame | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
         self.prepared = prepared or prepare_job_preview(plan)
+        self.coordinate_frame = coordinate_frame
         self.max_work_feed_mm_min = max_work_feed_mm_min
         self.max_travel_feed_mm_min = max_travel_feed_mm_min
         self._deferred_render = bool(defer_render)
@@ -630,6 +667,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
             self,
             move_ends=self.prepared.move_ends,
             defer_render=self._deferred_render,
+            coordinate_frame=coordinate_frame,
         )
         self.canvas.setObjectName("jobPreviewCanvas")
         self.canvas.setMinimumSize(_MIN_CANVAS_WIDTH, _MIN_CANVAS_HEIGHT)
@@ -999,11 +1037,21 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     else "FEED · laser off"
                 )
             )
+            coordinate_text = f"Machine X{move.end_x:.3f} Y{move.end_y:.3f}"
+            if self.coordinate_frame is not None:
+                local_x, local_y = self.coordinate_frame.machine_to_local(
+                    move.end_x,
+                    move.end_y,
+                )
+                coordinate_text = (
+                    f"Honeycomb X{local_x:.3f} Y{local_y:.3f} · "
+                    + coordinate_text
+                )
             self.move_label.set_full_text(
                 f"Move {move.index + 1}/{len(self.plan.moves)} · {move.layer_name} · "
                 f"pass {move.pass_index}/{move.pass_count} · {role} · "
                 f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} "
-                f"· X{move.end_x:.3f} Y{move.end_y:.3f}"
+                f"· {coordinate_text}"
             )
         self.start_here_button.setEnabled(self._current_move_index is not None)
 

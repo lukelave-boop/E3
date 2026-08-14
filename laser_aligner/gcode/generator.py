@@ -447,13 +447,37 @@ def generate_frame_gcode(
     work_area: WorkArea,
     laser_enabled: bool = False,
 ) -> GcodeProgram:
-    _validate_toolpath_options(options)
     min_x, min_y, max_x, max_y = bounds_mm
     rectangle = np.array(
         [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]],
         dtype=np.float64,
     )
-    paths = [Polyline(rectangle, closed=True, source_tag="frame")]
+    return generate_frame_path_gcode(
+        Polyline(rectangle, closed=True, source_tag="frame"),
+        options,
+        work_area,
+        laser_enabled=laser_enabled,
+    )
+
+
+def generate_frame_path_gcode(
+    path: Polyline,
+    options: ToolpathOptions,
+    work_area: WorkArea,
+    laser_enabled: bool = False,
+) -> GcodeProgram:
+    """Generate a guarded framing pass around one exact closed polygon."""
+
+    _validate_toolpath_options(options)
+    if (
+        not isinstance(path, Polyline)
+        or not path.closed
+        or len(path.points) < 4
+        or not np.isfinite(path.points).all()
+        or float(np.linalg.norm(path.points[0] - path.points[-1])) > 1e-9
+    ):
+        raise ValueError("Frame path must be one finite closed polygon")
+    paths = [path]
     validate_paths(paths, work_area, options.boundary_margin_mm)
     controller_paths = _controller_paths(paths, options)
     validate_paths(
@@ -465,7 +489,7 @@ def generate_frame_gcode(
     controller_rectangle = controller_paths[0].points
     start = _program_start(options, work_area)
     effective_power = options.power if laser_enabled else 0
-    frame_length = _path_length(rectangle)
+    frame_length = _path_length(path.points)
     approach_length = float(
         np.linalg.norm(
             controller_rectangle[0]
@@ -508,11 +532,11 @@ def generate_frame_gcode(
     lines.extend(["M5", ""])
     return GcodeProgram(
         text="\n".join(lines),
-        bounds_mm=bounds_mm,
+        bounds_mm=_program_bounds(paths),
         cut_length_mm=frame_length if effective_power > 0 else 0.0,
         travel_length_mm=(
             approach_length if effective_power > 0 else approach_length + frame_length
         ),
         path_count=1,
-        point_count=len(rectangle),
+        point_count=len(path.points),
     )

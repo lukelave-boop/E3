@@ -5,7 +5,146 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-tab sequence.
 
-Snapshot: **2026-08-11**
+Snapshot: **2026-08-13**
+
+The desktop now models an automatically detected 190 × 190 mm honeycomb as a
+real movable job coordinate system instead of conflating it with the persisted
+X10..210, Y10..210 machine rectangle. New projects created with a current,
+execution-verifiable schema-2 support use explicit `honeycomb_local`
+coordinates X0..190, Y0..190; legacy schema-1 projects migrate explicitly as
+`machine`. The four independently fitted and mapped corners are reduced to a
+closest-fit right-handed rigid frame so small edge disagreement cannot shear
+project geometry. Camera rectification, the authoring grid, Trace, and toolpath
+preview can share that local frame.
+
+Vector, fill, image-raster, and frame output is planned in local coordinates,
+then rigidly placed in machine coordinates before laser-spot correction.
+Generation independently checks local support bounds, placed beam geometry,
+spot-corrected controller paths, and the selected execution authority. A prepared
+honeycomb-local job binds the support pose, a digest of the complete bed map,
+and the exact configured output polygon reviewed with the job; Preview, export,
+Start Here, and Start reject stale bindings. Every powered segment in a
+post-map Machine Setup pattern is likewise contained in the measured support,
+the complete program remains machine-bounded, and the session is bound to that
+exact support/map identity. Start first runs static program and machine-bound
+preflight, rechecks the immutable support/map/output-polygon binding without a
+camera capture, performs one laser-off Home, and begins the validated program
+without parking at the photography pose. A missing, legacy, corrupt, or stale
+support binding fails closed. The
+powered base-map pattern is the intentional bootstrap exception because that
+map is required to express a support in machine coordinates; it remains bounded
+by the configured machine area and requires a restrained sacrificial sheet over
+the exact reviewed pattern.
+The complete 190 mm surface is available for authoring. On 2026-08-13 the
+operator explicitly confirmed that the physical output authority covers a
+210 × 210 mm square centered on the detected support. The local hardware
+configuration records that exact fixed machine-coordinate polygon, in support
+order, as `(18.218005, 29.679375)`, `(228.217364, 30.198421)`,
+`(227.698319, 240.197779)`, and `(17.698960, 239.678734)` mm. Its
+machine-axis-aligned bounds are X17.698960..228.217364 and
+Y29.679375..240.197779 mm. It is not inferred from later camera detections and
+does not alter camera calibration or Home/park bounds. Unreachable geometry is
+rejected.
+Core coordinate, rectification, persistence, toolpath, Trace, and offscreen
+desktop tests pass. This workflow has not yet been physically acceptance-tested,
+and physical stops/controller max-travel values remain operator verification
+items. An automatic schema-2 teaching reference was accepted on 2026-08-13,
+but it has not yet passed a repeated fresh-capture or powered-job physical
+acceptance test; do not treat its presence as proof of output accuracy.
+
+The desktop live camera overlay and Trace review now rectify directly into a
+current honeycomb's X0..width, Y0..height frame. Without a current frame they
+retain the machine-coordinate camera-area fallback, which can expand beyond the
+configured rectangle solely to avoid cropping visible evidence. The active
+saved schema-2 support spans about machine X27.0..218.7 and Y38.7..231.1 and is
+execution-verifiable in software, but is not physically verified.
+A separate green polygon maps the explicit guarded-output square into
+honeycomb coordinates. Its local bounds are X−10..200, Y−10..200: exactly
+10 mm beyond each edge of the 190 mm support. Trace, template review, project
+generation, and `MachineService` preflight use the same polygon. Only a job
+bound to the current honeycomb signature may opt into it; ordinary jobs retain
+the legacy rectangular policy, and the immutable preflight result binds the
+exact polygon so a config change invalidates it. Focused rectification, display,
+detection-boundary, color-sampling, live-overlay routing, cache-isolation, and
+authority-separation tests pass. Direct honeycomb-local live-overlay framing was
+interactively confirmed on 2026-08-13. A follow-on Trace attempt exposed a stale
+in-memory 192 × 192 mm empty project after accepting the 190 × 190 mm
+support: camera framing had updated, but the project-frame callback ignored an
+already-local document. Clean, empty, unsaved projects now reconcile
+local-to-local dimensions when the support changes and again immediately before
+Trace or color sampling. Saved, dirty, and nonempty projects retain the strict
+mismatch rejection. Focused offscreen lifecycle tests pass; the corrected Trace
+button flow has not yet been repeated on hardware.
+
+On 2026-08-12, a live powered fine-registration run exposed that its historical
+fixed work-area fractions were independent of the newly detected honeycomb.
+The saved support began near machine Y37.3 mm while the generated cross extended
+to Y32.5 mm, and the operator reported a mark beyond the honeycomb. Fine
+registration now derives its targets in the current detected support frame,
+clips them to the guarded machine rectangle, verifies the complete cross extents
+inside both regions during generation, binds the prepared session to that exact
+support reference, and repeats polygon containment on the exact powered G-code
+immediately before job preflight. The same support/map binding, containment,
+and Start-time revalidation now applies to accuracy validation, dense 5×5 fit,
+4×4 mesh validation, and shifted confirmation jobs. Dense target rectangles
+remain machine-axis aligned inside the shrunken support-contained region so the
+Cartesian mesh remains valid. Focused generation/start acceptance and rejection
+tests pass; this correction has not yet been physically run.
+
+Base-grid detection now rejects duplicate, irregularly spaced, and
+edge-contaminated 25-point OpenCV lattices and continues through its remaining
+candidate thresholds. The saved 2026-08-12 C920 capture that previously chose
+a duplicate lattice containing a false bottom-edge hardware point now resolves
+the correct keyed 25-point grid. Honeycomb-ruler periodicity now refines the
+integer autocorrelation peak to a fractional-pixel tick pitch, avoiding the
+observed 5 px quantization that reported 206.8 ticks across a physical 190 mm
+ruler. Focused synthetic detector tests pass; the honeycomb change has not yet
+been repeated with a fresh physical three-hint detection.
+
+Honeycomb hints no longer act as ruler endpoints. They select the X ruler,
+approximate shared zero/intersection, and Y ruler.
+Vision fits both baselines, measures fractional-pixel 1 mm pitch, uses their
+intersection as the detected zero, and projects the configured physical span;
+the active bed map still independently checks that projected span before the
+optional reference can be saved. Focused unit, application, and offscreen UI
+tests pass; this redesigned interaction awaits a live C920 retry.
+
+Honeycomb reference detection is now automatic-first. Edge-density segmentation
+locates one dominant rectangular honeycomb, fits all four cutting-surface edges,
+and retains their four mapped intersections as measured evidence. The active
+bed map orders those raw corners as origin, +X, opposite, and +Y; the configured
+physical span defines the nominal honeycomb-local dimensions but does not
+fabricate the observed edge lengths or corners. Printed tick recognition is not
+required. Accepting the reviewed result creates an execution-verifiable schema-2
+reference. The three-click path is explicitly a last-resort display/diagnostic
+fallback for failed or ambiguous automatic results and cannot authorize
+honeycomb-local or powered post-map execution. Synthetic segmentation and
+focused application/UI tests pass; the full automatic pipeline awaits a live
+C920 capture.
+
+Accepting automatic detection stores the exact reviewed homed-bed teaching PNG
+and metadata as atomic files bound by its four image corners, image digest,
+bed-map digest, and support-frame digest. Automatic re-detection can register
+that image from support-local matches with bounded count and spatial coverage.
+Job Start deliberately does not recapture or register it after the operator has
+traced and reviewed the current image.
+The older annotated `1920x1080-manual-focus-010` template and schema-1 support
+artifacts remain diagnostic only and cannot pass the execution predicate.
+Synthetic support-local registration, moved-support, scale-mismatch, and
+coverage-rejection tests pass. A 2026-08-13 live Start capture exposed that the
+former automatic pose check both falsely rejected interrupted ruler edges and
+caused a redundant Home/park/capture/release/Home sequence. At the operator's
+direction, Start now uses one Home with no intervening camera pose check. This
+correction has not yet completed a powered physical job.
+
+Native Machine Setup camera views now support a validated clockwise quarter-turn
+presentation transform. The local C920 hardware profile is set to 90 degrees so
+its sideways mount displays machine X toward screen-right and machine Y toward
+screen-top. Overlays are rotated as image pixels and pointer selections are
+inverted back to the original sensor coordinates; lens images, bed points,
+homographies, saved captures, controller axes, and output bounds remain
+unchanged. Configuration and offscreen picker-coordinate tests pass. The rotated
+view has not yet been interactively inspected in the live hardware process.
 
 The cutting-template designer now authors twelve semantic shapes through one
 Qt-independent geometry vocabulary: rectangle, rounded rectangle, circle,
@@ -47,9 +186,9 @@ program shape; raw G-code keeps `M4`, laser-off rapid travel, guarded inline `S`
 on `G1`, and final `M5`. Projects and migrated material databases default both
 new values to zero. Focused model, mapping, geometry, raster, exact-Preview, UI,
 material, and guarded-stream tests pass. No corrected powered job has been run
-on hardware. The platform-neutral suite passes 1,448 tests with the 103
+on hardware. The platform-neutral suite passes 1,596 tests with the 103
 loopback-server security tests run separately outside the socket-restricted
-sandbox; all 1,551 tests pass. Repository-wide Ruff checks also pass.
+sandbox; all 1,699 tests pass. Repository-wide Ruff checks also pass.
 
 On 2026-08-11, a read-only `$$` query against the connected controller reported
 `$120=500.000` and `$121=500.000` mm/s², matching the configured
@@ -203,13 +342,24 @@ support. Direction was then clarified against the configured Home / park pose
 **Y−190/Y+20 mm** established the selected Y5..215 envelope. Y−200 reached the
 negative endstop near controller Y−5, while Y−190 retained the operator's 10 mm
 clearance. The earlier Y−90/Y105 report was a transcription error and is
-superseded. These are measured mechanical-jog reaches only. They are not the
+superseded. The fixed polygon now explicitly requested by the operator reaches
+Y240.197779, beyond that earlier laser-off Y215 jog evidence. The operator's
+2026-08-13 assertion authorizes the configured software polygon for this
+installation, but neither controller travel nor physical beam reach at those
+extremes has been acceptance-tested. These are measured mechanical-jog reaches
+only. They are not the
 camera/calibration rectangle or authorization for laser output. The local
-machine work area remains the physically calibrated X10..210, Y10..210 rectangle;
-with the 5 mm laser boundary margin and zero spot offset, guarded output remains
-X15..205, Y15..205. Jogging intentionally permits travel beyond that configured
-rectangle so the mechanical envelope can be measured without expanding the
-camera crop, base-map target layout, or laser-output bounds.
+machine work area remains the configured and previously calibrated X10..210,
+Y10..210 rectangle; the operator has since clarified that it was never intended
+to define the physical honeycomb. It therefore remains conservative execution
+authority pending documented laser-spot reach verification, not evidence of the
+support size;
+with the 5 mm laser boundary margin and zero spot offset, ordinary machine-frame
+jobs retain guarded output X15..205, Y15..205. Honeycomb-bound jobs instead use
+the separately configured fixed four-corner output polygon. Jogging intentionally
+permits travel beyond the camera/calibration rectangle so the mechanical envelope
+can be measured without changing calibration provenance. Honeycomb-local display
+alone does not grant motion authority.
 
 One packaged, versioned Permanent Camera Setup Guide is now the canonical
 operator sequence. It is available from the Machine Setup footer and the main
@@ -219,23 +369,30 @@ that main **Generate** replaces a prepared calibration job.
 Automated UI/content/package tests keep its five tab headings and exact action
 labels synchronized with the application.
 
-Step 3 can also record an optional vision-detected outline of the movable
-honeycomb rulers after a ruler-overlay capture. Three rough clicks only seed
-search corridors; fitted ruler baselines and verified repeated tick marks
-define the saved reference, and an unverified fit saves nothing. This remains
-separate from calibration and is shown only as a magenta visual reference.
+Step 3 records a vision-detected pose for the movable honeycomb after a
+ruler-overlay capture. Automatic square detection fits four independent edges;
+reviewing and saving it records the raw mapped corners, their semantic topology,
+and the exact accepted teaching image as an execution-verifiable schema-2
+reference. This is separate from camera calibration but establishes the rigid
+local job frame. Trace rectifies directly into it while a green polygon shows
+guarded machine output.
+Three rough clicks remain a last-resort corridor hint. Their fitted
+baselines/shared zero can be saved as a legacy visual/diagnostic reference, but
+they do not contain four-corner evidence and cannot authorize a honeycomb-local
+or powered post-map job.
 While those three hints are being placed, the picker shows the clean captured
 frame rather than the diagnostic coordinate overlay. Cursor-centered wheel zoom,
 middle/right-button panning, and double-click-to-fit improve placement without
 changing the source-image coordinates supplied to detection.
-After detection, each ruler's bed-map-measured span must agree with the entered
-physical span within 2 mm (or 1 percent for larger rulers); a poorer hinted fit
-is rejected before it can replace the saved visual reference.
-Recording or clearing it does not mutate the laser-burned keyed bed map,
-configured work area, guarded laser limits, Trace selection, template evidence,
-generated paths, preflight, arming, or execution. Automated tests freeze and
-compare the active calibration and output-review state across detection and
-recording.
+For the hinted fallback, each ruler's bed-map-measured span must agree with the
+entered physical span within 2 mm (or 1 percent for larger rulers); a poorer fit
+is rejected before it can replace the saved visual reference. Recording or
+clearing either reference does not mutate the laser-burned keyed bed map,
+configured machine area, or guarded laser limits. An accepted automatic
+reference does determine whether support-bound execution is available, and
+prepared jobs are bound to its digest and invalidated when it changes.
+Automated tests compare calibration and output-review state across detection
+and recording and cover the execution-grade/legacy distinction.
 
 The desktop Machine panel now exposes separately tested incremental XY jogging.
 Home / park establishes the only accepted starting pose; each request is
@@ -525,7 +682,11 @@ verified 5×5 dense local-correction workflow for residual error that varies by
 bed position. It preserves the current homography underneath, bounds node
 movement and local gradients, maps consistently in both directions, and can be
 removed independently. A 4×4 interstitial job validates positions not used for
-fitting with 0.30 mm RMS and 0.60 mm maximum software gates.
+fitting with 0.30 mm RMS and 0.60 mm maximum software gates. Powered 5×5,
+4×4, and shifted-confirmation sessions require the current automatic four-corner
+support, are generated within both it and the configured machine area, and are
+rechecked against the exact support/map binding at Start. These new containment
+and Start-verification paths have automated coverage but no physical run.
 
 One coherent failed interstitial result can now produce a reviewed, bounded,
 one-time mesh refinement. The refinement is tied to the exact mesh revision and
@@ -553,13 +714,15 @@ Connect/Disconnect action above every calibration tab. It uses the existing
 guarded `MachineService`; connecting does not bypass hardware authority,
 motion, homing, or arming gates.
 
-Fine-registration and accuracy-validation sessions now persist the exact bed
-homography and residual-mesh revision active when their mark job is prepared.
-Capture and offline analysis reject a legacy unidentified session or any map
-change; the live capture path performs that check before entering Home / park or
-the temporary motor hold. This prevents an old powered session from being
-accepted after a fresh base map, translation, full-map refinement, or mesh
-change.
+Fine-registration, accuracy-validation, dense-fit, dense-validation, and
+dense-confirmation sessions persist the exact bed homography/residual-mesh
+revision active when their mark job is prepared. Powered sessions also persist
+the execution-verifiable support signature, four taught corners, and complete
+bed-map digest. Capture and offline analysis reject a legacy unidentified
+session or any map change; Start additionally rechecks the exact program's
+powered segments and current immutable support binding before arming. This prevents an old
+powered session from being accepted after a fresh base map, translation,
+full-map refinement, mesh change, or support change.
 
 Live camera-refresh errors are now latched before the first modal notification.
 The operator acknowledges one Camera unavailable message; timer-driven repeats
@@ -622,8 +785,8 @@ scoring and annotation, then overlays a 10 mm machine grid, orange camera/work
 boundary, and green margin/spot-offset-aware output boundary. Full-size Qt
 swatches and 40 mm coordinate labels remain readable at 900x680 and 1080x780.
 The reference never changes configuration automatically and explicitly keeps
-movable honeycomb support separate from calibrated camera crop and verified
-laser reach. The repaired trace and ruler overlay have been reviewed against
+movable honeycomb support separate from the configured calibration/output
+rectangles and verified laser reach. The repaired trace and ruler overlay have been reviewed against
 the real frame, but the created-object trace has not yet been physically cut.
 
 Home/park setup and park commands now receive a scoped minimum six-second
@@ -671,8 +834,8 @@ legend. Generation can use source or nearest-path order, and Preview reports
 the latter's rapid-travel savings against source order. Raster rows are kept in
 fixed serpentine order so individual dark islands cannot be reordered or given
 separate acceleration cycles. Imported images are alpha-composited onto white,
-sampled at the configured exact physical pitch and absolute machine-coordinate
-scan angle, and converted with deterministic 8x8 grayscale dithering. Source
+sampled at the configured exact physical pitch and scan angle in the active
+project frame, and converted with deterministic 8x8 grayscale dithering. Source
 minification is area-prefiltered before affine sampling so high-frequency detail
 does not depend on source pixel phase or resolution. Source top/mirror/rotation
 orientation matches the canvas. Full-row lead-in, white
@@ -997,9 +1160,10 @@ CameraService or SyntheticCameraService
   -> cached composed raw-camera-to-bed rectification map
      (lens distortion + bed homography + optional residual mesh)
   -> one cv2.remap interpolation into the top-down bed image
+  -> configured machine coordinates or the current rigid honeycomb-local frame
   -> optional memory-only corrected-frame override in safe simulation
   -> workpiece / fiducial / object-trace detection
-  -> machine-coordinate geometry
+  -> geometry in the active project coordinate domain
 ```
 
 Cutting-template path:
@@ -1131,7 +1295,8 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
 
 ### Desktop
 
-- Native workspace with machine coordinates, grid, rulers, pan, zoom, snap,
+- Native workspace with explicit machine or honeycomb-local coordinates, grid,
+  rulers, pan, zoom, snap,
   and a fully adjustable corrected-camera overlay whose control and renderer
   share a 70% default.
 - LightBurn-inspired desktop hierarchy with original compact icons, a bright

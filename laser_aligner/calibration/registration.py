@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import cv2
 import numpy as np
@@ -16,6 +16,9 @@ from ..gcode.generator import (
     generate_vector_gcode,
 )
 from ..geometry.svg import Polyline, SvgGeometry
+
+if TYPE_CHECKING:
+    from .support import HoneycombSupportReference
 
 _TARGET_FRACTIONS = (
     (0.125, 0.125),
@@ -139,23 +142,102 @@ def registration_targets(
     *,
     mark_size_mm: float = 5.0,
     boundary_margin_mm: float = 0.0,
+    support_reference: HoneycombSupportReference | None = None,
 ) -> tuple[RegistrationTarget, ...]:
     if not math.isfinite(mark_size_mm) or not 2.0 <= mark_size_mm <= 10.0:
         raise CalibrationError("Registration mark size must be between 2 and 10 mm")
     if work_area.width <= 0 or work_area.height <= 0:
         raise CalibrationError("Configured work area is invalid")
     clearance = boundary_margin_mm + mark_size_mm * 0.5
-    targets = tuple(
-        RegistrationTarget(
-            id=index,
-            machine_x=work_area.x_min + fraction_x * work_area.width,
-            machine_y=work_area.y_min + fraction_y * work_area.height,
-        )
-        for index, (fraction_x, fraction_y) in enumerate(_TARGET_FRACTIONS, start=1)
+    targets = _fractional_targets(
+        work_area, _TARGET_FRACTIONS, support_reference, clearance
     )
     if any(not work_area.contains(target.machine_x, target.machine_y, clearance) for target in targets):
         raise CalibrationError("Work area is too small for the fine-registration marks and configured boundary margin")
     return targets
+
+
+def _fractional_targets(
+    work_area: WorkArea,
+    fractions: tuple[tuple[float, float], ...],
+    support_reference: HoneycombSupportReference | None,
+    clearance_mm: float,
+) -> tuple[RegistrationTarget, ...]:
+    if support_reference is None:
+        points = (
+            (work_area.x_min + fx * work_area.width, work_area.y_min + fy * work_area.height)
+            for fx, fy in fractions
+        )
+    else:
+        origin = np.asarray(support_reference.ruler_origin_machine_mm, dtype=np.float64)
+        x_edge = support_reference.x_basis_machine_per_mm * support_reference.support_width_mm
+        y_edge = support_reference.y_basis_machine_per_mm * support_reference.support_height_mm
+        raw_points = (origin + fx * x_edge + fy * y_edge for fx, fy in fractions)
+        points = (
+            np.asarray(
+                (
+                    min(max(float(point[0]), work_area.x_min + clearance_mm), work_area.x_max - clearance_mm),
+                    min(max(float(point[1]), work_area.y_min + clearance_mm), work_area.y_max - clearance_mm),
+                ),
+                dtype=np.float64,
+            )
+            for point in raw_points
+        )
+    return tuple(
+        RegistrationTarget(index, float(point[0]), float(point[1]))
+        for index, point in enumerate(points, start=1)
+    )
+
+
+def targets_fit_support(
+    targets: tuple[RegistrationTarget, ...],
+    support_reference: HoneycombSupportReference,
+    clearance_mm: float,
+) -> bool:
+    """Return whether complete axis-aligned cross marks fit the taught support."""
+
+    points = np.asarray(
+        [
+            point
+            for target in targets
+            for point in (
+                (target.machine_x - clearance_mm, target.machine_y),
+                (target.machine_x + clearance_mm, target.machine_y),
+                (target.machine_x, target.machine_y - clearance_mm),
+                (target.machine_x, target.machine_y + clearance_mm),
+            )
+        ],
+        dtype=np.float64,
+    )
+    return points_fit_support(points, support_reference)
+
+
+def points_fit_support(
+    points: np.ndarray,
+    support_reference: HoneycombSupportReference,
+) -> bool:
+    """Return whether every machine-coordinate point lies in the support polygon."""
+
+    corners = np.asarray(support_reference.support_corners_machine_mm, dtype=np.float64)
+    def cross_2d(left: np.ndarray, right: np.ndarray) -> np.ndarray:
+        return left[..., 0] * right[..., 1] - left[..., 1] * right[..., 0]
+
+    orientation = float(cross_2d(corners[1] - corners[0], corners[2] - corners[1]))
+    if abs(orientation) <= 1e-9:
+        return False
+    points = np.asarray(points, dtype=np.float64)
+    if points.ndim != 2 or points.shape[1] != 2 or not np.isfinite(points).all():
+        return False
+    for edge_index in range(4):
+        start = corners[edge_index]
+        edge = corners[(edge_index + 1) % 4] - start
+        cross = cross_2d(edge, points - start)
+        if orientation > 0.0:
+            if np.any(cross < -1e-7):
+                return False
+        elif np.any(cross > 1e-7):
+            return False
+    return True
 
 
 def accuracy_validation_targets(

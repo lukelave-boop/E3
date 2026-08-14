@@ -1408,6 +1408,15 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._camera_item.setOpacity(DEFAULT_CAMERA_OVERLAY_OPACITY)
         self._camera_item.setVisible(False)
         self.workspace_scene.addItem(self._camera_item)
+        self._camera_backing_item = QtWidgets.QGraphicsRectItem()
+        self._camera_backing_item.setPen(QtCore.Qt.PenStyle.NoPen)
+        self._camera_backing_item.setBrush(
+            QtGui.QColor(DRAFTING_COLORS["outside"])
+        )
+        self._camera_backing_item.setZValue(-501.0)
+        self._camera_backing_item.setVisible(False)
+        self.workspace_scene.addItem(self._camera_backing_item)
+        self._camera_image_area: Bounds | None = None
         self._test_frame_badge = QtWidgets.QLabel("TEST IMAGE · FROZEN", self.viewport())
         self._test_frame_badge.setObjectName("testImageBadge")
         self._test_frame_badge.setAttribute(
@@ -1428,6 +1437,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._toolpath_build_timer.timeout.connect(self._toolpath_build_slice)
         self._toolpath_build_moves: tuple[Any, ...] = ()
         self._toolpath_build_index = 0
+        self._toolpath_coordinate_frame: Any | None = None
         self._toolpath_build_paths: dict[str, QtGui.QPainterPath] = {}
         self._toolpath_build_roles: set[str] = set()
         self._toolpath_build_progress: Callable[[int, int], None] | None = None
@@ -1541,12 +1551,17 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         image: QtGui.QImage | None,
         *,
         pixels_per_mm: float | None = None,
+        image_area: Bounds | None = None,
     ) -> None:
         if image is None or image.isNull():
             self._camera_item.setVisible(False)
+            self._camera_backing_item.setVisible(False)
+            self._camera_image_area = None
             return
         pixmap = QtGui.QPixmap.fromImage(image)
-        area = self.workspace_scene.work_area
+        area = self.workspace_scene.work_area if image_area is None else image_area
+        if area.width <= 0.0 or area.height <= 0.0:
+            raise ValueError("Camera image area must have positive dimensions")
         transform = QtGui.QTransform()
         if pixels_per_mm is None:
             scale_x = area.width / pixmap.width()
@@ -1572,7 +1587,26 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._camera_item.setPixmap(pixmap)
         self._camera_item.setPos(area.x_min, -area.y_max)
         self._camera_item.setTransform(transform)
+        self._camera_backing_item.setRect(
+            QtCore.QRectF(area.x_min, -area.y_max, area.width, area.height)
+        )
+        self._camera_backing_item.setVisible(True)
         self._camera_item.setVisible(True)
+        self._camera_image_area = area
+
+    def fit_camera_image(self) -> None:
+        area = self._camera_image_area
+        if area is None or not self._camera_item.isVisible():
+            self.fit_work_area()
+            return
+        rect = QtCore.QRectF(area.x_min, -area.y_max, area.width, area.height)
+        padding = max(3.0, min(area.width, area.height) * 0.025)
+        self.fitInView(
+            rect.adjusted(-padding, -padding, padding, padding),
+            QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        )
+        self._fit_to_work_area = False
+        self.zoomChanged.emit(abs(self.transform().m11()))
 
     def set_test_frame_source(self, active: bool, label: str = "") -> None:
         """Keep the frozen-source warning visible even when inspector docks are hidden."""
@@ -1801,12 +1835,80 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         detections: list[dict[str, Any]],
         selected_ids: list[str] | set[str] | None = None,
         support_reference: dict[str, Any] | None = None,
+        output_work_area: dict[str, Any] | None = None,
+        output_polygon: list[list[float]] | None = None,
     ) -> None:
         self.clear_trace_preview()
         selected = set(selected_ids or [])
+        has_output_boundary = False
+        output = output_work_area or {}
+        if output_polygon and len(output_polygon) >= 3:
+            output_path = QtGui.QPainterPath()
+            output_path.moveTo(
+                self.workspace_scene.machine_to_scene(*output_polygon[0])
+            )
+            for point in output_polygon[1:]:
+                output_path.lineTo(self.workspace_scene.machine_to_scene(*point))
+            output_path.closeSubpath()
+            output_item = QtWidgets.QGraphicsPathItem(output_path)
+            output_pen = QtGui.QPen(QtGui.QColor("#67E05C"))
+            output_pen.setWidthF(1.4)
+            output_pen.setCosmetic(True)
+            output_pen.setStyle(QtCore.Qt.PenStyle.DashDotLine)
+            output_item.setPen(output_pen)
+            output_item.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            output_item.setZValue(258.0)
+            output_item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            output_item.setToolTip(
+                "Configured machine-output boundary in honeycomb coordinates"
+            )
+            self.workspace_scene.addItem(output_item)
+            self._trace_items.append(output_item)
+            has_output_boundary = True
+        try:
+            output_values = (
+                float(output["x_min"]),
+                float(output["x_max"]),
+                float(output["y_min"]),
+                float(output["y_max"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            output_values = ()
+        if (
+            len(output_values) == 4
+            and all(math.isfinite(value) for value in output_values)
+            and output_values[1] > output_values[0]
+            and output_values[3] > output_values[2]
+        ):
+            x_min, x_max, y_min, y_max = output_values
+            output_path = QtGui.QPainterPath()
+            output_path.moveTo(self.workspace_scene.machine_to_scene(x_min, y_min))
+            output_path.lineTo(self.workspace_scene.machine_to_scene(x_max, y_min))
+            output_path.lineTo(self.workspace_scene.machine_to_scene(x_max, y_max))
+            output_path.lineTo(self.workspace_scene.machine_to_scene(x_min, y_max))
+            output_path.closeSubpath()
+            output_item = QtWidgets.QGraphicsPathItem(output_path)
+            output_pen = QtGui.QPen(QtGui.QColor("#67E05C"))
+            output_pen.setWidthF(1.4)
+            output_pen.setCosmetic(True)
+            output_pen.setStyle(QtCore.Qt.PenStyle.DashDotLine)
+            output_item.setPen(output_pen)
+            output_item.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            output_item.setZValue(258.0)
+            output_item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            output_item.setToolTip(
+                "Guarded laser-output boundary; paths outside it remain blocked"
+            )
+            self.workspace_scene.addItem(output_item)
+            self._trace_items.append(output_item)
+            has_output_boundary = True
         has_support_boundary = False
         support = support_reference or {}
-        support_corners = support.get("corners_machine_mm") or []
+        support_corners = (
+            support.get("corners_local_mm")
+            or support.get("corners_machine_mm")
+            or []
+        )
         if bool(support.get("bed_map_current")) and len(support_corners) >= 3:
             path = QtGui.QPainterPath()
             first = self.workspace_scene.machine_to_scene(*support_corners[0])
@@ -1918,6 +2020,14 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                     "Approx. honeycomb reference (magenta)",
                     "#CD5FDC",
                     QtCore.Qt.PenStyle.DashLine,
+                )
+            )
+        if has_output_boundary:
+            trace_entries.append(
+                (
+                    "Guarded laser output (green)",
+                    "#67E05C",
+                    QtCore.Qt.PenStyle.DashDotLine,
                 )
             )
         if has_damaged:
@@ -2109,6 +2219,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._toolpath_build_finished = None
         self._toolpath_build_failed = None
         self._toolpath_build_index = 0
+        self._toolpath_coordinate_frame = None
         if active and notify and callback is not None:
             callback(False)
 
@@ -2116,6 +2227,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self,
         plan: JobPlan,
         *,
+        coordinate_frame: Any | None = None,
         on_progress: Callable[[int, int], None] | None = None,
         on_finished: Callable[[bool], None] | None = None,
         on_failed: Callable[[str], None] | None = None,
@@ -2124,6 +2236,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
         self.clear_toolpath_preview()
         self._toolpath_build_moves = tuple(plan.moves)
+        self._toolpath_coordinate_frame = coordinate_frame
         self._toolpath_build_paths = {
             "rapid": QtGui.QPainterPath(),
             "powered": QtGui.QPainterPath(),
@@ -2159,13 +2272,24 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                     else "unpowered"
                 )
                 path = self._toolpath_build_paths[role]
+                start_x, start_y = move.start_x, move.start_y
+                end_x, end_y = move.end_x, move.end_y
+                if self._toolpath_coordinate_frame is not None:
+                    start_x, start_y = self._toolpath_coordinate_frame.machine_to_local(
+                        start_x,
+                        start_y,
+                    )
+                    end_x, end_y = self._toolpath_coordinate_frame.machine_to_local(
+                        end_x,
+                        end_y,
+                    )
                 start_point = self.workspace_scene.machine_to_scene(
-                    move.start_x,
-                    move.start_y,
+                    start_x,
+                    start_y,
                 )
                 end_point = self.workspace_scene.machine_to_scene(
-                    move.end_x,
-                    move.end_y,
+                    end_x,
+                    end_y,
                 )
                 path.moveTo(start_point)
                 path.lineTo(end_point)
@@ -2194,6 +2318,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._toolpath_build_finished = None
         self._toolpath_build_failed = None
         self._toolpath_build_index = 0
+        self._toolpath_coordinate_frame = None
         try:
             self._commit_toolpath_paths(paths, roles)
         except Exception as exc:
@@ -2214,6 +2339,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._toolpath_build_finished = None
         self._toolpath_build_failed = None
         self._toolpath_build_index = 0
+        self._toolpath_coordinate_frame = None
         for item in self._toolpath_items:
             self.workspace_scene.removeItem(item)
         self._toolpath_items.clear()

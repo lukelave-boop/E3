@@ -17,6 +17,7 @@
     "autostart": true,
     "jpeg_quality": 90,
     "warmup_frames": 12,
+    "view_rotation_degrees": 0,
     "controls": {
       "focus_automatic_continuous": 0,
       "focus_auto": 0,
@@ -88,6 +89,7 @@
     "engrave_feed_mm_min": 1200.0,
     "curve_tolerance_mm": 0.15,
     "boundary_margin_mm": 0.0,
+    "guarded_output_polygon_mm": null,
     "spot_offset_x_mm": 0.0,
     "spot_offset_y_mm": 0.0,
     "arm_timeout_seconds": 60,

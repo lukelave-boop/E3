@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from laser_aligner.config import LaserSettings, MachineSettings
+from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
 from laser_aligner.errors import CameraError, MachineError, SafetyError
 from laser_aligner.machine.service import MachineService
 from laser_aligner.machine.simulator import SimulatedTransport
@@ -258,6 +258,88 @@ def test_program_validates_controller_and_physical_spot_bounds() -> None:
 
     with pytest.raises(SafetyError, match=r"physical laser spot X221\.000"):
         machine.validate_program("G21\nG90\nM5\nG0 X216 Y10 F1000\nM5\n")
+
+
+def test_support_bound_preflight_uses_explicit_polygon_only_when_requested() -> None:
+    polygon = (
+        (18.218005, 29.679375),
+        (228.217364, 30.198421),
+        (227.698319, 240.197779),
+        (17.698960, 239.678734),
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="simulator",
+            work_area=WorkArea(10.0, 210.0, 10.0, 210.0),
+        ),
+        LaserSettings(
+            boundary_margin_mm=5.0,
+            guarded_output_polygon_mm=polygon,
+        ),
+        hardware_enabled=False,
+    )
+    program = "G21\nG90\nM5\nG0 X220 Y40 F1000\nM5\n"
+
+    with pytest.raises(SafetyError, match="guarded output authority"):
+        machine.preflight_program(program)
+
+    preflight = machine.preflight_program(
+        program,
+        guarded_output_polygon_mm=polygon,
+    )
+
+    assert preflight.guarded_output_polygon_mm == polygon
+
+
+def test_support_bound_preflight_rejects_controller_and_spot_polygon_escape() -> None:
+    polygon = ((0.0, 0.0), (210.0, 0.0), (210.0, 210.0), (0.0, 210.0))
+    machine = MachineService(
+        MachineSettings(
+            backend="simulator",
+            work_area=WorkArea(0.0, 200.0, 0.0, 200.0),
+        ),
+        LaserSettings(
+            boundary_margin_mm=0.0,
+            spot_offset_x_mm=5.0,
+            guarded_output_polygon_mm=polygon,
+        ),
+        hardware_enabled=False,
+    )
+
+    with pytest.raises(SafetyError, match=r"G-code point X211\.000"):
+        machine.preflight_program(
+            "G21\nG90\nM5\nG0 X211 Y100 F1000\nM5\n",
+            guarded_output_polygon_mm=polygon,
+        )
+    with pytest.raises(SafetyError, match=r"physical laser spot X213\.000"):
+        machine.preflight_program(
+            "G21\nG90\nM5\nG0 X208 Y100 F1000\nM5\n",
+            guarded_output_polygon_mm=polygon,
+        )
+
+
+def test_support_bound_validated_program_rejects_polygon_change_before_start() -> None:
+    polygon = ((0.0, 0.0), (210.0, 0.0), (210.0, 210.0), (0.0, 210.0))
+    laser = LaserSettings(guarded_output_polygon_mm=polygon)
+    machine = MachineService(
+        MachineSettings(backend="simulator"),
+        laser,
+        hardware_enabled=False,
+    )
+    preflight = machine.preflight_program(
+        "G21\nG90\nM5\nG0 X100 Y100 F1000\nM5\n",
+        guarded_output_polygon_mm=polygon,
+    )
+
+    laser.guarded_output_polygon_mm = (
+        (0.0, 0.0),
+        (211.0, 0.0),
+        (211.0, 211.0),
+        (0.0, 211.0),
+    )
+
+    with pytest.raises(SafetyError, match="configured authority"):
+        machine.start_validated_program(preflight)
 
 
 @pytest.mark.parametrize(
@@ -1685,6 +1767,47 @@ def test_prepare_photo_position_in_simulation() -> None:
         assert machine._transport is not None
         assert machine._transport.x == pytest.approx(110)
         assert machine._transport.y == pytest.approx(105)
+    finally:
+        machine.disconnect()
+
+
+def test_prepare_job_start_homes_without_parking_in_simulation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            self.commands.append(line.strip().upper())
+            super().write_line(line)
+
+    transport = RecordingTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.SimulatedTransport",
+        lambda: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="simulator",
+            photo_x=110,
+            photo_y=105,
+            home_before_photo=True,
+        ),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    try:
+        result = machine.prepare_job_start()
+
+        assert result["position"] is None
+        assert result["homed"] is True
+        assert result["parked"] is False
+        assert transport.commands == ["M5", "$H", "G21", "G90"]
+        assert machine.status()["coordinate_reference_ready"] is True
+        assert machine.status()["jog_ready"] is False
     finally:
         machine.disconnect()
 
