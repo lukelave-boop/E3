@@ -47,6 +47,7 @@ from ..project import (
     autosave_is_newer,
     autosave_path,
     clear_autosave,
+    default_operation_layers,
     distributed_transforms,
     generate_project_gcode,
     load_project,
@@ -383,7 +384,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         # honeycomb-local job: _project_coordinate_frame() requires the newer
         # automatic four-corner evidence before toolpath preparation.
         if support is not None:
-            return ProjectDocument.new(
+            document = ProjectDocument.new(
                 work_area=Bounds(
                     0.0,
                     0.0,
@@ -392,10 +393,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 ),
                 coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
             )
-        area = self.runtime.settings.machine.work_area
-        return ProjectDocument.new(
-            work_area=Bounds(area.x_min, area.y_min, area.x_max, area.y_max)
-        )
+        else:
+            area = self.runtime.settings.machine.work_area
+            document = ProjectDocument.new(
+                work_area=Bounds(area.x_min, area.y_min, area.x_max, area.y_max)
+            )
+        document.layers = default_operation_layers()
+        return document
 
     def _create_actions(self) -> None:
         style = self.style()
@@ -984,7 +988,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.layer_panel.moveLayerRequested.connect(self.move_layer)
 
         self.object_panel.selectionRequested.connect(self.workspace.select_objects)
-        self.object_panel.objectEdited.connect(self._object_edited)
+        # Editing a tree item executes a history command, whose synchronous
+        # refresh rebuilds this same tree.  Queue the edit until Qt has returned
+        # from QTreeWidget::itemChanged so the emitting item is never deleted
+        # while its native signal frame is still active.
+        self.object_panel.objectEdited.connect(
+            self._object_edited,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
         self.transform_panel.transformEdited.connect(self._transform_edited)
         self.transform_panel.rectangleShapeEdited.connect(
             self._rectangle_shape_edited
@@ -2181,8 +2192,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     )
                 ),
             }
-            if self.last_job_coordinate_frame is not None:
-                preview_kwargs["coordinate_frame"] = self._project_coordinate_frame()
+            coordinate_frame = self._job_preview_coordinate_frame()
+            if coordinate_frame is not None:
+                preview_kwargs["coordinate_frame"] = coordinate_frame
             self.workspace.start_toolpath_preview(
                 plan,
                 **preview_kwargs,
@@ -2260,11 +2272,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             previous.close()
         area = self.document.work_area
         try:
-            coordinate_frame = (
-                self._project_coordinate_frame()
-                if self.last_job_coordinate_frame is not None
-                else None
-            )
+            coordinate_frame = self._job_preview_coordinate_frame()
             dialog = JobPreviewDialog(
                 self.last_job.plan,
                 (area.x_min, area.x_max, area.y_min, area.y_max),
@@ -2473,6 +2481,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if abs(self.document.work_area.x_min) > 1e-6 or abs(self.document.work_area.y_min) > 1e-6:
             raise ValueError("Honeycomb-local projects must start at X0 Y0")
         return support.coordinate_frame
+
+    def _job_preview_coordinate_frame(self) -> Any | None:
+        """Map every machine-space plan into the active local canvas."""
+        if self.document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL:
+            return self._project_coordinate_frame()
+        return None
 
     def _project_execution_signature(self) -> tuple[Any, ...] | None:
         if getattr(
@@ -3012,6 +3026,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
             if calibration_signature is not None:
                 run_options["honeycomb_signature"] = calibration_signature
+                run_options["guarded_output_polygon_mm"] = (
+                    self.runtime.context.calibration_job_guarded_output_polygon(
+                        self.last_job_name
+                    )
+                )
         self.controller.run_job(
             self.last_job.text,
             self.last_job_name,
@@ -4351,7 +4370,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
             job.coordinate_space = CoordinateSpace.MACHINE
             job.coordinate_frame_signature = None
             job.execution_signature = None
-            job.guarded_output_polygon_mm = None
+            job.guarded_output_polygon_mm = getattr(
+                registration_job,
+                "guarded_output_polygon_mm",
+                None,
+            )
         else:
             job = ProjectJob(
                 text=source_job.text,

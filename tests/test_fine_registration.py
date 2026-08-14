@@ -80,6 +80,61 @@ def test_dense_mesh_targets_form_complete_five_by_five_grid() -> None:
     assert len({target.machine_y for target in targets}) == 5
 
 
+def test_powered_dense_fit_spans_180mm_when_support_polygon_authorizes_it(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+                "laser": {
+                    "guarded_output_polygon_mm": [
+                        [0.0, 0.0],
+                        [210.0, 0.0],
+                        [210.0, 210.0],
+                        [0.0, 210.0],
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    context.start()
+    try:
+        _save_execution_support(context)
+        job = context.prepare_dense_calibration_job(
+            powered=True,
+            power_percent=10,
+            mark_size_mm=5,
+            speed_mm_min=1200,
+        )
+
+        xs = sorted({target.machine_x for target in job.targets})
+        ys = sorted({target.machine_y for target in job.targets})
+        assert len(xs) == len(ys) == 5
+        assert xs[-1] - xs[0] == pytest.approx(180.0)
+        assert ys[-1] - ys[0] == pytest.approx(180.0)
+        assert job.guarded_output_polygon_mm == (
+            (0.0, 0.0),
+            (210.0, 0.0),
+            (210.0, 210.0),
+            (0.0, 210.0),
+        )
+        session = json.loads(context.dense_calibration_path.read_text(encoding="utf-8"))
+        assert session["guarded_output_polygon_mm"] == [
+            [0.0, 0.0],
+            [210.0, 0.0],
+            [210.0, 210.0],
+            [0.0, 210.0],
+        ]
+    finally:
+        context.stop()
+
+
 def test_dense_fit_and_validation_sessions_do_not_overwrite_each_other(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(
@@ -675,6 +730,77 @@ def test_full_map_refinement_accepts_broad_seven_inlier_fit() -> None:
     assert result["ransac_outlier_ids"] == [6]
     assert result["rms_error_mm"] < 0.01
     assert result["coverage_ratio"] >= 0.35
+
+
+def test_full_map_refinement_accepts_support_constrained_sixty_nine_percent_span() -> None:
+    measurements = _homography_measurements(np.eye(3))
+    center = 110.0
+    scale = 0.69 / 0.75
+    for item in measurements:
+        item["machine_x"] = center + (float(item["machine_x"]) - center) * scale
+        item["machine_y"] = center + (float(item["machine_y"]) - center) * scale
+        item["image_x"] = item["machine_x"]
+        item["image_y"] = item["machine_y"]
+        item["observed_x"] = item["machine_x"]
+        item["observed_y"] = item["machine_y"]
+
+    result = analyze_homography_refinement(
+        measurements,
+        [],
+        np.eye(3),
+        WorkArea(x_min=10, x_max=210, y_min=10, y_max=210),
+    )
+
+    assert result["can_apply_full_map"] is True
+    assert result["span_x_ratio"] == pytest.approx(0.69)
+    assert result["span_y_ratio"] == pytest.approx(0.69)
+    assert result["coverage_ratio"] >= 0.35
+
+
+def test_reset_fine_registration_recovers_saved_review_after_dialog_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "camera": {"width": 800, "height": 600},
+                "machine": {"backend": "simulator"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    context = AppContext(load_settings(config_path))
+    measurements = [{"id": index} for index in range(1, 9)]
+    context.fine_registration_path.parent.mkdir(parents=True, exist_ok=True)
+    context.fine_registration_path.write_text(
+        json.dumps({"measurements": measurements, "analysis": {"excluded_ids": [8]}}),
+        encoding="utf-8",
+    )
+    reviewed = {"full_map_refinement": {"can_apply_full_map": True}}
+    review_calls: list[tuple[list[dict[str, int]], list[int]]] = []
+
+    class CalibrationResult:
+        @staticmethod
+        def to_dict() -> dict[str, object]:
+            return {"fine_registration": {"translation_x_mm": 0.0, "translation_y_mm": 0.0}}
+
+    monkeypatch.setattr(context.bed, "reset_registration_translation", CalibrationResult)
+    monkeypatch.setattr(context.honeycomb_support, "clear", lambda: None)
+
+    def review(items: list[dict[str, int]], excluded: list[int]) -> dict[str, object]:
+        review_calls.append((items, excluded))
+        return reviewed
+
+    monkeypatch.setattr(context, "review_fine_registration_measurements", review)
+
+    result = context.reset_fine_registration()
+
+    assert review_calls == [(measurements, [8])]
+    assert result["review_measurements"] == measurements
+    assert result["review_analysis"] is reviewed
 
 
 def test_full_map_refinement_rejects_six_inlier_fit() -> None:

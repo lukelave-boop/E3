@@ -30,6 +30,7 @@ from .calibration.registration import (
     AccuracyValidationJob,
     BaseBedCalibrationJob,
     FineRegistrationJob,
+    RegistrationTarget,
     accuracy_validation_targets,
     analyze_accuracy_measurements,
     analyze_dense_mesh_measurements,
@@ -67,6 +68,10 @@ from .gcode.generator import (
     generate_vector_gcode,
 )
 from .gcode.preview import parse_gcode_segments
+from .geometry.polygon import (
+    convex_polygon_contains_normalized,
+    normalize_convex_polygon,
+)
 from .geometry.svg import parse_svg
 from .imaging import encode_image, image_quality, read_image, write_image_atomic
 from .machine.service import MachineService, list_serial_ports
@@ -1177,7 +1182,7 @@ class AppContext:
                 ).shape
                 == (4, 2)
             )
-            metadata_valid = bool(
+            automatic_seed_available = bool(
                 reference_image is not None
                 and visual_metadata.get("schema_version") == 2
                 and visual_metadata.get("kind")
@@ -1186,6 +1191,13 @@ class AppContext:
                 == hashlib.sha256(
                     self.honeycomb_visual_reference_path.read_bytes()
                 ).hexdigest()
+                and np.asarray(
+                    visual_metadata.get("cutting_surface_corners_px")
+                ).shape
+                == (4, 2)
+            )
+            metadata_valid = bool(
+                automatic_seed_available
                 and visual_metadata.get("bed_mapping_digest")
                 == self.bed_mapping_digest()
                 and (
@@ -1258,6 +1270,40 @@ class AppContext:
                         frame = detect_honeycomb_frame(
                             image,
                             seed_corners=seed_frame,
+                        )
+            elif automatic_seed_available and not require_taught_reference:
+                # A newly applied camera-to-machine map intentionally makes the
+                # accepted support execution-stale, but it does not make the
+                # teaching image's pixel outline useless.  Registration is only
+                # a search hint here: four fresh edges are still fitted and then
+                # mapped and gated against the new calibration before saving.
+                assert reference_image is not None
+                try:
+                    seed_frame = register_honeycomb_reference(
+                        image,
+                        reference_image,
+                        np.asarray(
+                            visual_metadata.get("cutting_surface_corners_px")
+                        ),
+                    )
+                    frame = detect_honeycomb_frame(
+                        image,
+                        seed_corners=seed_frame,
+                    )
+                except ValueError:
+                    if accepted_support is None:
+                        frame = detect_honeycomb_frame(image)
+                    else:
+                        support_seed = np.asarray(
+                            [
+                                self.bed.mm_to_image(float(x), float(y))
+                                for x, y in accepted_support.support_corners_machine_mm
+                            ],
+                            dtype=np.float64,
+                        )
+                        frame = detect_honeycomb_frame(
+                            image,
+                            seed_corners=support_seed,
                         )
             elif legacy_seed_available and not require_taught_reference:
                 assert reference_image is not None
@@ -1708,7 +1754,18 @@ class AppContext:
         if not self._session_boolean(session, "powered", label):
             return
         expected_digest = session.get("program_digest")
-        actual_digest = self.machine.preflight_program(gcode).digest
+        recorded_polygon = session.get("guarded_output_polygon_mm")
+        actual_digest = (
+            self.machine.preflight_program(gcode).digest
+            if recorded_polygon is None
+            else self.machine.preflight_program(
+                gcode,
+                guarded_output_polygon_mm=tuple(
+                    (float(point[0]), float(point[1]))
+                    for point in recorded_polygon
+                ),
+            ).digest
+        )
         if not isinstance(expected_digest, str) or actual_digest != expected_digest:
             raise CalibrationError(
                 f"The {label} program no longer matches the support-bound prepared session"
@@ -1745,6 +1802,24 @@ class AppContext:
             raise CalibrationError(
                 f"Powered {label} motion leaves the detected honeycomb cutting surface"
             )
+
+    def calibration_job_guarded_output_polygon(
+        self,
+        filename: str,
+    ) -> tuple[tuple[float, float], ...] | None:
+        """Return the exact prepared output polygon for a setup job, if any."""
+
+        matched = self._calibration_support_session(filename)
+        if matched is None:
+            return None
+        _label, session = matched
+        polygon = session.get("guarded_output_polygon_mm")
+        if polygon is None:
+            return None
+        return normalize_convex_polygon(
+            polygon,
+            label="prepared calibration output polygon",
+        )
 
     def calibration_job_honeycomb_signature(
         self,
@@ -1960,6 +2035,75 @@ class AppContext:
             y_max=float(center[1] + (machine_area.y_max - center[1]) * lower),
         )
         return successful_targets, fitted_area
+
+    def _full_surface_dense_targets(
+        self,
+        support: HoneycombSupportReference,
+        *,
+        mark_size_mm: float,
+        requested_span_mm: float = 180.0,
+    ) -> tuple[tuple[RegistrationTarget, ...], WorkArea, tuple[tuple[float, float], ...]]:
+        """Place five machine-axis mesh nodes across nearly the full support."""
+
+        configured = self.settings.laser.guarded_output_polygon_mm
+        if configured is None:
+            raise CalibrationError(
+                "A configured honeycomb output polygon is required for the full-surface dense grid"
+            )
+        output_polygon = normalize_convex_polygon(
+            configured,
+            label="laser.guarded_output_polygon_mm",
+        )
+        center = np.mean(
+            np.asarray(support.support_corners_machine_mm, dtype=np.float64),
+            axis=0,
+        )
+        half_mark = float(mark_size_mm) * 0.5
+
+        def targets_for_span(span_mm: float) -> tuple[RegistrationTarget, ...] | None:
+            offsets = np.linspace(-span_mm * 0.5, span_mm * 0.5, 5)
+            targets = tuple(
+                RegistrationTarget(
+                    id=row * 5 + column + 1,
+                    machine_x=float(center[0] + offset_x),
+                    machine_y=float(center[1] + offset_y),
+                )
+                for row, offset_y in enumerate(offsets)
+                for column, offset_x in enumerate(offsets)
+            )
+            if not targets_fit_support(targets, support, half_mark):
+                return None
+            endpoints = (
+                point
+                for target in targets
+                for point in (
+                    (target.machine_x - half_mark, target.machine_y),
+                    (target.machine_x + half_mark, target.machine_y),
+                    (target.machine_x, target.machine_y - half_mark),
+                    (target.machine_x, target.machine_y + half_mark),
+                )
+            )
+            if not all(
+                convex_polygon_contains_normalized(point, output_polygon)
+                for point in endpoints
+            ):
+                return None
+            return targets
+
+        targets = targets_for_span(requested_span_mm)
+        if targets is None:
+            raise CalibrationError(
+                f"A {requested_span_mm:g} × {requested_span_mm:g} mm dense grid with "
+                f"{mark_size_mm:g} mm crosses does not fit the detected support and "
+                "configured output polygon"
+            )
+        area = WorkArea(
+            x_min=float(center[0] - requested_span_mm * 0.5),
+            x_max=float(center[0] + requested_span_mm * 0.5),
+            y_min=float(center[1] - requested_span_mm * 0.5),
+            y_max=float(center[1] + requested_span_mm * 0.5),
+        )
+        return targets, area, output_polygon
 
     @staticmethod
     def _dense_mesh_target_area(calibration: BedCalibration) -> WorkArea:
@@ -2585,13 +2729,20 @@ class AppContext:
             target_factory = dense_confirmation_targets
         else:
             target_factory = dense_validation_targets if validation else dense_mesh_targets
+        guarded_output_polygon: tuple[tuple[float, float], ...] | None = None
         if support_reference is not None and not validation and not confirmation:
-            targets, target_area = self._support_contained_calibration_targets(
-                target_factory,
-                support_reference,
-                mark_size_mm=mark_size_mm,
-                boundary_margin_mm=self.settings.laser.boundary_margin_mm,
-            )
+            if self.settings.laser.guarded_output_polygon_mm is None:
+                targets, target_area = self._support_contained_calibration_targets(
+                    target_factory,
+                    support_reference,
+                    mark_size_mm=mark_size_mm,
+                    boundary_margin_mm=self.settings.laser.boundary_margin_mm,
+                )
+            else:
+                targets, target_area, guarded_output_polygon = self._full_surface_dense_targets(
+                    support_reference,
+                    mark_size_mm=mark_size_mm,
+                )
         else:
             target_area = (
                 self._dense_mesh_target_area(calibration)
@@ -2628,6 +2779,7 @@ class AppContext:
             powered=powered,
             speed_mm_min=speed_mm_min,
             design_name=design_name,
+            guarded_output_polygon_mm=guarded_output_polygon,
         )
         filename, _generated_path = _publish_unique_artifact(
             self.settings.app.data_dir / "generated",
@@ -2643,7 +2795,14 @@ class AppContext:
             else self.dense_calibration_path
         )
         created_at = time.time()
-        program_digest = self.machine.preflight_program(program.text).digest
+        program_digest = (
+            self.machine.preflight_program(program.text).digest
+            if guarded_output_polygon is None
+            else self.machine.preflight_program(
+                program.text,
+                guarded_output_polygon_mm=guarded_output_polygon,
+            ).digest
+        )
         atomic_write_json(
             session_path,
             {
@@ -2658,6 +2817,11 @@ class AppContext:
                 "targets": [target.to_dict() for target in targets],
                 "image_to_machine": calibration.image_to_machine.tolist(),
                 "target_area": asdict(target_area),
+                "guarded_output_polygon_mm": (
+                    None
+                    if guarded_output_polygon is None
+                    else [list(point) for point in guarded_output_polygon]
+                ),
                 **self._calibration_support_fields(support_reference),
                 "residual_mesh_created_at": (
                     None if calibration.residual_mesh is None else calibration.residual_mesh.created_at
@@ -2678,6 +2842,7 @@ class AppContext:
                 if validation
                 else "Dense local correction"
             ),
+            guarded_output_polygon_mm=guarded_output_polygon,
         )
 
     def analyze_dense_calibration_image(
@@ -3518,7 +3683,23 @@ class AppContext:
     def reset_fine_registration(self) -> dict[str, Any]:
         calibration = self.bed.reset_registration_translation()
         self.honeycomb_support.clear()
-        return calibration.to_dict()
+        result = calibration.to_dict()
+        session = read_json(self.fine_registration_path, {})
+        measurements = session.get("measurements") if isinstance(session, dict) else None
+        prior_analysis = session.get("analysis") if isinstance(session, dict) else None
+        if isinstance(measurements, list) and measurements:
+            excluded_ids = (
+                [int(value) for value in prior_analysis.get("excluded_ids", [])]
+                if isinstance(prior_analysis, dict)
+                else []
+            )
+            analysis = self.review_fine_registration_measurements(
+                measurements,
+                excluded_ids,
+            )
+            result["review_measurements"] = measurements
+            result["review_analysis"] = analysis
+        return result
 
     def reset_fine_registration_homography(self) -> dict[str, Any]:
         calibration = self.bed.reset_registration_homography()

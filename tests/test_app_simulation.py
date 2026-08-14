@@ -1,3 +1,4 @@
+import hashlib
 import json
 import math
 from dataclasses import replace
@@ -973,6 +974,68 @@ def test_legacy_annotated_reference_seeds_automatic_schema_two_upgrade(
     assert len(calls) == 1
     assert calls[0][1] is True
     assert calls[0][0] == pytest.approx(seeded)
+    assert np.asarray(detection.frame_corners_image_px) == pytest.approx(seeded)
+
+
+def test_stale_map_automatic_reference_still_seeds_fresh_setup_edge_fit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 220.0, 0.0, 0.0),
+            BedPoint(220.0, 220.0, 220.0, 0.0),
+            BedPoint(220.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        221,
+        221,
+    )
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    reference_image = np.zeros((221, 221, 3), dtype=np.uint8)
+    write_image_atomic(context.honeycomb_visual_reference_path, reference_image)
+    seeded = np.asarray(
+        ((10.0, 200.0), (200.0, 200.0), (200.0, 10.0), (10.0, 10.0)),
+        dtype=np.float64,
+    )
+    context.honeycomb_visual_reference_metadata_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "kind": "accepted-automatic-honeycomb-teaching-reference",
+                "image_sha256": hashlib.sha256(
+                    context.honeycomb_visual_reference_path.read_bytes()
+                ).hexdigest(),
+                "bed_mapping_digest": "superseded-bed-map",
+                "support_coordinate_frame_digest": "superseded-support",
+                "cutting_surface_corners_px": seeded.tolist(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    registered: list[bool] = []
+    fitted_seeds: list[np.ndarray | None] = []
+
+    def register(*_args) -> np.ndarray:
+        registered.append(True)
+        return seeded.copy()
+
+    def detect(_image: np.ndarray, *, seed_corners=None) -> np.ndarray:
+        fitted_seeds.append(seed_corners)
+        return seeded.copy()
+
+    monkeypatch.setattr("laser_aligner.app.register_honeycomb_reference", register)
+    monkeypatch.setattr("laser_aligner.app.detect_honeycomb_frame", detect)
+
+    support, detection = context.detect_honeycomb_support_reference_automatically(
+        reference_image,
+        ruler_mark_mm=190.0,
+    )
+
+    assert registered == [True]
+    assert fitted_seeds[0] == pytest.approx(seeded)
+    assert support.is_execution_verifiable
     assert np.asarray(detection.frame_corners_image_px) == pytest.approx(seeded)
 
 

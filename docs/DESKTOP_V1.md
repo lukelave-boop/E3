@@ -116,6 +116,11 @@ stop / laser off.
 The Operations/Layers table summarizes layer color/name, mode, speed/power,
 Output, and Show state. Inline toggles, ordering controls, the quick editor,
 and operation color selection all update the existing project-layer model.
+New projects start with the E3 10 W material profiles in palette slots 00–12:
+paper, plywood, MDF, opaque black acrylic, leather, and cardboard cuts followed
+by the corresponding raster profiles supplied by the operator. These are
+editable starting points, not physically verified material guarantees; saved
+projects retain their own layers unchanged.
 Fill and raster layers generate scanline toolpaths. Their quick editor exposes
 line interval and scan angle; raster additionally exposes laser-off overscan.
 Imported PNG, JPEG, and BMP images are alpha-composited onto white,

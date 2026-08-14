@@ -15,6 +15,7 @@ from ..gcode.generator import (
     ToolpathOptions,
     generate_vector_gcode,
 )
+from ..geometry.polygon import normalize_convex_polygon
 from ..geometry.svg import Polyline, SvgGeometry
 
 if TYPE_CHECKING:
@@ -52,7 +53,11 @@ _HOMOGRAPHY_MIN_INLIERS = 7
 _HOMOGRAPHY_MAX_RMS_MM = 0.6
 _HOMOGRAPHY_MAX_ERROR_MM = 1.0
 _HOMOGRAPHY_MIN_COVERAGE_RATIO = 0.35
-_HOMOGRAPHY_MIN_AXIS_SPAN_RATIO = 0.70
+# Support-contained targets can land just below 70% of the configured machine
+# rectangle after the movable support pose, mark extents, and one permitted
+# geometric outlier are accounted for.  Keep the independent 35% hull-area
+# gate, but leave two percentage points of tolerance around that planned span.
+_HOMOGRAPHY_MIN_AXIS_SPAN_RATIO = 0.68
 _HOMOGRAPHY_MAX_CORRECTION_MM = 8.0
 _HOMOGRAPHY_MIN_LOCAL_SCALE = 0.90
 _HOMOGRAPHY_MAX_LOCAL_SCALE = 1.10
@@ -135,6 +140,7 @@ class AccuracyValidationJob:
     power_percent: float
     mark_size_mm: float
     display_name: str = "Accuracy validation"
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
 
 
 def registration_targets(
@@ -598,6 +604,7 @@ def generate_registration_program(
     speed_mm_min: float,
     design_name: str = "fine-registration-crosses",
     mark_sizes_mm: dict[int, float] | None = None,
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
 ) -> GcodeProgram:
     if len(targets) < 4:
         raise CalibrationError("Fine registration requires at least four target marks")
@@ -664,13 +671,27 @@ def generate_registration_program(
         width_mm=machine_max_x - machine_min_x,
         height_mm=machine_max_y - machine_min_y,
     )
+    output_area = work_area
+    output_margin = laser.boundary_margin_mm
+    if guarded_output_polygon_mm is not None:
+        polygon = normalize_convex_polygon(
+            guarded_output_polygon_mm,
+            label="guarded registration output polygon",
+        )
+        output_area = WorkArea(
+            x_min=min(point[0] for point in polygon),
+            x_max=max(point[0] for point in polygon),
+            y_min=min(point[1] for point in polygon),
+            y_max=max(point[1] for point in polygon),
+        )
+        output_margin = 0.0
     options = ToolpathOptions(
         power_mode=laser.power_mode,
         power=controller_power if powered else 0,
         power_max=laser.power_max,
         travel_feed_mm_min=laser.travel_feed_mm_min,
         engrave_feed_mm_min=speed_mm_min,
-        boundary_margin_mm=laser.boundary_margin_mm,
+        boundary_margin_mm=output_margin,
         spot_offset_x_mm=laser.spot_offset_x_mm,
         spot_offset_y_mm=laser.spot_offset_y_mm,
         optimize_order=True,
@@ -682,7 +703,7 @@ def generate_registration_program(
         geometry,
         placement,
         options,
-        work_area,
+        output_area,
         design_name=design_name,
     )
 

@@ -3429,11 +3429,41 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Yes:
             return
+        measurements = list(self._fine_registration_measurements)
+        excluded_ids: list[int] = []
+        for row, measurement in enumerate(measurements):
+            use = self.registration_results.item(row, 0)
+            if use is None or use.checkState() != QtCore.Qt.CheckState.Checked:
+                excluded_ids.append(int(measurement["id"]))
         result = self._message("Reset fine registration", self.context.reset_fine_registration)
         if result is not None:
-            self._fine_registration_analysis = None
-            self.apply_registration_button.setEnabled(False)
-            self.apply_registration_map_button.setEnabled(False)
+            persisted_measurements = result.get("review_measurements") if isinstance(result, dict) else None
+            if isinstance(persisted_measurements, list) and persisted_measurements:
+                measurements = persisted_measurements
+                self._fine_registration_measurements = measurements
+                analysis = result.get("review_analysis")
+                reviewed_excluded = (
+                    set(int(value) for value in analysis.get("excluded_ids", []))
+                    if isinstance(analysis, dict)
+                    else set()
+                )
+                self._populate_registration_results(measurements, reviewed_excluded)
+            else:
+                analysis = None
+            if analysis is None and measurements:
+                analysis = self._message(
+                    "Review full-bed refinement",
+                    lambda: self.context.review_fine_registration_measurements(
+                        measurements,
+                        excluded_ids,
+                    ),
+                )
+            if isinstance(analysis, dict):
+                self._show_registration_analysis(analysis)
+            else:
+                self._fine_registration_analysis = None
+                self.apply_registration_button.setEnabled(False)
+                self.apply_registration_map_button.setEnabled(False)
             self.refresh_all()
             self.calibrationChanged.emit()
 

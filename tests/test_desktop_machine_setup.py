@@ -6,6 +6,7 @@ import threading
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -1080,6 +1081,70 @@ def test_machine_setup_failed_precision_capture_discards_prior_review_state(
     finally:
         release.set()
         _wait_until(qt_application, lambda: not dialog.operation_busy)
+        dialog.close()
+        runtime.stop()
+
+
+def test_reset_fine_translation_rechecks_existing_marks_and_enables_full_map(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    measurements = [
+        {"id": index, "machine_x": 0.0, "machine_y": 0.0, "observed_x": 0.0,
+         "observed_y": 0.0, "error_x_mm": 0.0, "error_y_mm": 0.0}
+        for index in range(1, 9)
+    ]
+    analysis = {
+        "classification": "position_dependent",
+        "can_apply_translation": False,
+        "correction_x_mm": 0.0,
+        "correction_y_mm": 0.0,
+        "scatter_rms_mm": 0.4,
+        "excluded_ids": [],
+        "reason": "The errors require a full-bed refinement",
+        "full_map_refinement": {
+            "can_apply_full_map": True,
+            "inlier_count": 7,
+            "selected_count": 8,
+            "rms_error_mm": 0.08,
+            "coverage_ratio": 0.37,
+            "correction_max_mm": 0.84,
+            "ransac_outlier_ids": [8],
+            "reason": "The reviewed marks support a bounded full-bed refinement",
+        },
+    }
+    reset_calls: list[bool] = []
+    review_calls: list[tuple[list[dict[str, Any]], list[int]]] = []
+
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        runtime.context,
+        "reset_fine_registration",
+        lambda: reset_calls.append(True) or {"fine_registration": {}},
+    )
+
+    def review(items: list[dict[str, Any]], excluded: list[int]) -> dict[str, Any]:
+        review_calls.append((items, excluded))
+        return analysis
+
+    monkeypatch.setattr(runtime.context, "review_fine_registration_measurements", review)
+    dialog._fine_registration_measurements = measurements
+    dialog._populate_registration_results(measurements, {8})
+    try:
+        dialog.reset_fine_registration()
+        assert reset_calls == [True]
+        assert review_calls == [(measurements, [8])]
+        assert dialog._fine_registration_analysis is analysis
+        assert dialog.apply_registration_map_button.isEnabled()
+        assert not dialog.apply_registration_button.isEnabled()
+    finally:
         dialog.close()
         runtime.stop()
 

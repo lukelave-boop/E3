@@ -341,6 +341,11 @@ from only six accepted marks. **Reset full-bed refinement** restores the exact
 solved map retained before application. Reset an applied fine translation before
 applying or resetting a full-bed refinement.
 
+Resetting an applied fine translation retains and immediately re-reviews the
+current eight captured marks. When that capture passes the full-bed gates,
+**Apply reviewed full-bed map** enables without burning or capturing the marks
+again.
+
 If neither correction passes, check bed/workpiece restraint, camera rigidity,
 surface height, and redo the full bed mapping. **Reset fine translation** removes
 only the bounded translation. Solving or reversing the base bed map clears all
@@ -354,8 +359,17 @@ Applying or resetting a translation/full-bed refinement changes the complete
 bed-map identity and clears the support reference. Capture a new ruler overlay,
 run automatic four-edge detection, and accept the new teaching image before
 preparing another powered post-map calibration job.
+The prior accepted image may guide pixel registration during this re-teach even
+though its old map binding is no longer executable. Automatic detection must
+still refit all four current edges and pass the new map's size and closure gates.
 
 ### Dense local correction
+
+With an explicit honeycomb-output polygon, the powered 5×5 fit uses five
+machine-axis nodes across a 180 × 180 mm center span so the residual mesh samples
+near the complete cutting-surface boundary. The 5 mm crosses must fit entirely
+inside both the accepted support and that fixed output polygon. The prepared
+session binds the exact polygon through generation, Preview, and Start.
 
 If the remaining error changes by bed position after the homography and fine
 translation are stable, use **Dense local correction (5 × 5)**. Review the

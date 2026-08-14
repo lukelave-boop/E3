@@ -171,12 +171,56 @@ def test_legacy_support_selects_local_empty_workspace_but_not_execution() -> Non
         is main_window_module.CoordinateSpace.HONEYCOMB_LOCAL
     )
     assert document.work_area == main_window_module.Bounds(0.0, 0.0, 190.0, 190.0)
+    assert len(document.layers) == 13
+    assert document.layers[0].name == "Copy / Printer Paper — CUT"
+    assert document.layers[7].name == "Basswood / Poplar Ply — RASTER"
+    assert document.layers[12].name == "Copy / Printer Paper — RASTER"
 
     # The legacy support is visual placement evidence only. The execution gate
     # used before job generation must continue to require schema-2 evidence.
     harness.document = document
     with pytest.raises(ValueError, match="automatic four-corner"):
         E3MainWindow._project_coordinate_frame(harness)
+
+
+def test_machine_frame_new_project_uses_default_e3_profiles() -> None:
+    machine_area = WorkArea(10.0, 210.0, 10.0, 210.0)
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(_current_honeycomb_support=lambda: None),
+        settings=SimpleNamespace(machine=SimpleNamespace(work_area=machine_area)),
+    )
+
+    document = E3MainWindow._new_document(SimpleNamespace(runtime=runtime))
+
+    assert document.coordinate_space is main_window_module.CoordinateSpace.MACHINE
+    assert document.work_area == main_window_module.Bounds(10.0, 10.0, 210.0, 210.0)
+    assert len(document.layers) == 13
+    assert document.layers[0].name == "Copy / Printer Paper — CUT"
+    assert document.layers[12].name == "Copy / Printer Paper — RASTER"
+
+
+def test_machine_calibration_preview_uses_active_honeycomb_display_frame() -> None:
+    frame = object()
+    harness = SimpleNamespace(
+        document=ProjectDocument.new(
+            work_area=main_window_module.Bounds(0.0, 0.0, 190.0, 190.0),
+            coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+        ),
+        _project_coordinate_frame=lambda: frame,
+    )
+
+    assert E3MainWindow._job_preview_coordinate_frame(harness) is frame
+
+
+def test_machine_workspace_preview_keeps_machine_coordinates() -> None:
+    harness = SimpleNamespace(
+        document=ProjectDocument.new(),
+        _project_coordinate_frame=lambda: pytest.fail(
+            "machine-coordinate previews must not request a honeycomb frame"
+        ),
+    )
+
+    assert E3MainWindow._job_preview_coordinate_frame(harness) is None
 
 
 def test_legacy_support_empty_workspace_drives_exact_local_camera_area(
@@ -821,6 +865,37 @@ def _dispose(
     window.close()
     window.deleteLater()
     application.processEvents()
+
+
+def test_object_panel_visible_toggle_is_applied_after_item_signal_returns(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, _, _ = _window(tmp_path, monkeypatch)
+    try:
+        layer = window.document.layers[0]
+        scene_object = SceneObject(
+            name="Traced object 01",
+            kind=ObjectKind.RECTANGLE,
+            layer_id=layer.id,
+            transform=Transform(50.0, 50.0, 20.0, 10.0),
+        )
+        window.document.add_object(scene_object)
+        window._refresh_document()
+        row = window.object_panel.tree.topLevelItem(0)
+        assert row.text(0) == "Traced object 01"
+
+        row.setCheckState(2, QtCore.Qt.CheckState.Unchecked)
+
+        # The native itemChanged callback must finish before the history-driven
+        # document refresh destroys and rebuilds the tree items.
+        assert window.document.get_object(scene_object.id).visible is True
+        qt_application.processEvents()
+        assert window.document.get_object(scene_object.id).visible is False
+        assert window.object_panel.tree.topLevelItemCount() == 1
+    finally:
+        _dispose(qt_application, window)
 
 
 def test_completed_calibration_job_reopens_setup_and_starts_capture(

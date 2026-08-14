@@ -633,6 +633,140 @@ DEFAULT_LAYER_COLORS = (
 )
 
 
+DEFAULT_OPERATION_PROFILES = (
+    {
+        "name": "Copy / Printer Paper — CUT",
+        "color": "#ED23D2",
+        "mode": LayerMode.LINE,
+        "speed_mm_min": 1500.0,
+        "power_percent": 100.0,
+        "passes": 1,
+    },
+    {
+        "name": "3 mm Basswood / Poplar Ply — CUT",
+        "color": "#F02C3D",
+        "mode": LayerMode.LINE,
+        "speed_mm_min": 300.0,
+        "power_percent": 100.0,
+        "passes": 5,
+    },
+    {
+        "name": "3 mm Birch Plywood — CUT",
+        "color": "#FF8A18",
+        "mode": LayerMode.LINE,
+        "speed_mm_min": 220.0,
+        "power_percent": 100.0,
+        "passes": 7,
+    },
+    {
+        "name": "3 mm MDF — CUT",
+        "color": "#E5DA19",
+        "mode": LayerMode.LINE,
+        "speed_mm_min": 180.0,
+        "power_percent": 100.0,
+        "passes": 8,
+    },
+    {
+        "name": "2 mm Opaque Black Acrylic — CUT",
+        "color": "#2DD12D",
+        "mode": LayerMode.LINE,
+        "speed_mm_min": 180.0,
+        "power_percent": 100.0,
+        "passes": 8,
+    },
+    {
+        "name": "2 mm Vegetable-Tanned Leather — CUT",
+        "color": "#185CFF",
+        "mode": LayerMode.LINE,
+        "speed_mm_min": 450.0,
+        "power_percent": 100.0,
+        "passes": 4,
+    },
+    {
+        "name": "1.5 mm Cardboard / Chipboard — CUT",
+        "color": "#A982E3",
+        "mode": LayerMode.LINE,
+        "speed_mm_min": 900.0,
+        "power_percent": 85.0,
+        "passes": 2,
+    },
+    {
+        "name": "Basswood / Poplar Ply — RASTER",
+        "color": "#F02C3D",
+        "mode": LayerMode.RASTER,
+        "speed_mm_min": 4000.0,
+        "power_percent": 35.0,
+        "passes": 1,
+        "line_interval_mm": 0.10,
+        "scan_angle_deg": 0.0,
+        "overscan_percent": 3.0,
+    },
+    {
+        "name": "Birch Plywood — RASTER",
+        "color": "#FF8A18",
+        "mode": LayerMode.RASTER,
+        "speed_mm_min": 3500.0,
+        "power_percent": 32.0,
+        "passes": 1,
+        "line_interval_mm": 0.10,
+        "scan_angle_deg": 0.0,
+        "overscan_percent": 3.0,
+    },
+    {
+        "name": "MDF — RASTER",
+        "color": "#E5DA19",
+        "mode": LayerMode.RASTER,
+        "speed_mm_min": 4500.0,
+        "power_percent": 22.0,
+        "passes": 1,
+        "line_interval_mm": 0.10,
+        "scan_angle_deg": 0.0,
+        "overscan_percent": 3.0,
+    },
+    {
+        "name": "Opaque Black Acrylic — RASTER",
+        "color": "#2DD12D",
+        "mode": LayerMode.RASTER,
+        "speed_mm_min": 5000.0,
+        "power_percent": 25.0,
+        "passes": 1,
+        "line_interval_mm": 0.08,
+        "scan_angle_deg": 0.0,
+        "overscan_percent": 4.0,
+    },
+    {
+        "name": "Vegetable-Tanned Leather — RASTER",
+        "color": "#185CFF",
+        "mode": LayerMode.RASTER,
+        "speed_mm_min": 4500.0,
+        "power_percent": 18.0,
+        "passes": 1,
+        "line_interval_mm": 0.10,
+        "scan_angle_deg": 0.0,
+        "overscan_percent": 3.0,
+    },
+    {
+        "name": "Copy / Printer Paper — RASTER",
+        "color": "#ED23D2",
+        "mode": LayerMode.RASTER,
+        "speed_mm_min": 6000.0,
+        "power_percent": 12.0,
+        "passes": 1,
+        "line_interval_mm": 0.10,
+        "scan_angle_deg": 0.0,
+        "overscan_percent": 3.0,
+    },
+)
+
+
+def default_operation_layers() -> list[OperationLayer]:
+    """Return fresh E3 10 W starting profiles for a new project."""
+    return [
+        OperationLayer(priority=index, **profile)
+        for index, profile in enumerate(DEFAULT_OPERATION_PROFILES)
+    ]
+
+
 @dataclass(slots=True)
 class ProjectDocument:
     id: str = field(default_factory=lambda: _new_id("project"))

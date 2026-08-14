@@ -7,6 +7,53 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-13**
 
+Fine-registration reset now immediately re-evaluates the retained eight-mark
+capture against the restored base map instead of discarding the review and
+leaving **Apply reviewed full-bed map** disabled. The full-map axis-span gate
+also allows the support-contained pattern's measured 69.9% Y span (68% minimum,
+with the independent 35% hull-coverage gate retained). The saved 2026-08-14
+capture then qualifies with seven inliers, 0.084 mm RMS, 36.7% hull coverage,
+and 0.695 mm maximum modeled correction. Focused reset and homography-gate tests
+pass; applying this refinement has not yet been physically tested.
+
+After applying that full-bed map, the first automatic honeycomb re-teach fell
+back to unseeded segmentation because the accepted teaching metadata correctly
+carried the superseded bed-map digest. It selected the outer right ruler edge
+and failed the nominal-size gate by 14.38 mm. Setup re-teaching now permits the
+integrity-checked prior teaching image to seed pixel registration even when its
+map digest is stale; four fresh edges are still independently fitted and gated
+through the new map before acceptance. The exact 2026-08-14 capture now resolves
+the cutting surface with mapped side disagreement below the 2.85 mm teaching
+limit. Execution continues to reject stale map/support bindings. Focused stale-
+map and legacy-upgrade tests pass; the corrected button flow awaits live retry.
+
+The powered dense 5×5 fit now places its five machine-axis nodes across an
+exact 180 × 180 mm center span on the current support, retaining 5 mm crosses.
+Every cross endpoint must remain inside both the freshly taught support and the
+explicit configured honeycomb-output polygon. That exact polygon is stored with
+the calibration session, used for generation and MachineService preflight, and
+passed unchanged at Start. Profiles without an explicit polygon retain the
+legacy conservative support/machine-rectangle layout. Focused 180 mm generation,
+session-binding, and desktop calibration-job tests pass; the expanded pattern
+has not yet been physically run.
+
+New projects now contain the operator-supplied E3 10 W starting profiles in
+Cuts / Layers slots 00–12: seven line-cut profiles (paper, two plywood types,
+MDF, opaque black acrylic, vegetable-tanned leather, and cardboard/chipboard)
+followed by six raster profiles. Speed, power, passes, raster interval, scan
+angle, overscan, semantic colors, and zero power-correction values match the
+2026-08-14 workbook except for the operator's corrected slot-00 paper cut:
+1500 mm/min at 100% power. Existing saved projects are not rewritten. These are
+unverified starting values for a machine with no air assist, not guaranteed
+material settings; no profile has been physically acceptance-tested here.
+
+Machine Setup jobs remain absolute machine-coordinate programs, but when the
+active authoring canvas is honeycomb-local their workspace and popup previews
+now use the current rigid support transform. This corrects a display-only bug
+that drew valid fine-registration targets outside the visible support by
+treating machine coordinates as local coordinates. Generated G-code and
+machine preflight are unchanged.
+
 The desktop now models an automatically detected 190 × 190 mm honeycomb as a
 real movable job coordinate system instead of conflating it with the persisted
 X10..210, Y10..210 machine rectangle. New projects created with a current,
@@ -189,6 +236,13 @@ material, and guarded-stream tests pass. No corrected powered job has been run
 on hardware. The platform-neutral suite passes 1,596 tests with the 103
 loopback-server security tests run separately outside the socket-restricted
 sandbox; all 1,699 tests pass. Repository-wide Ruff checks also pass.
+
+On 2026-08-14, toggling an object's **Visible** checkbox exposed a native Qt
+re-entrancy crash: the synchronous history listener rebuilt the object tree
+while its `itemChanged` callback still owned the emitting row. Object edits now
+use a queued connection so the native callback returns before the undoable
+document refresh. The focused object-list, history, and workspace suites pass
+64 offscreen tests; this fix has not yet been interactively retried.
 
 On 2026-08-11, a read-only `$$` query against the connected controller reported
 `$120=500.000` and `$121=500.000` mm/s², matching the configured

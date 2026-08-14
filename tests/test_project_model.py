@@ -10,6 +10,7 @@ from laser_aligner.project import (
     ProjectFormatError,
     SceneObject,
     Transform,
+    default_operation_layers,
 )
 
 
@@ -19,6 +20,31 @@ def test_document_has_a_default_layer():
     assert len(document.layers) == 1
     assert document.active_layer_id == document.layers[0].id
     assert document.work_area.width == 190
+
+
+def test_e3_default_profiles_match_operator_workbook():
+    layers = default_operation_layers()
+
+    assert len(layers) == 13
+    assert [layer.priority for layer in layers] == list(range(13))
+    assert [layer.mode for layer in layers[:7]] == [LayerMode.LINE] * 7
+    assert [layer.mode for layer in layers[7:]] == [LayerMode.RASTER] * 6
+    assert (
+        layers[0].name,
+        layers[0].speed_mm_min,
+        layers[0].power_percent,
+        layers[0].passes,
+        layers[0].color,
+    ) == ("Copy / Printer Paper — CUT", 1500.0, 100.0, 1, "#ED23D2")
+    assert (
+        layers[10].name,
+        layers[10].speed_mm_min,
+        layers[10].power_percent,
+        layers[10].line_interval_mm,
+        layers[10].overscan_percent,
+    ) == ("Opaque Black Acrylic — RASTER", 5000.0, 25.0, 0.08, 4.0)
+    assert all(layer.vector_power_correction == 0 for layer in layers)
+    assert all(layer.raster_power_correction == 0 for layer in layers)
 
 
 def test_transform_rotated_bounds_are_correct():

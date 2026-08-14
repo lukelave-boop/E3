@@ -45,6 +45,7 @@ from .model import (
     ProjectFormatError,
     SceneObject,
     Transform,
+    default_operation_layers,
 )
 from .raster_asset import (
     MAX_RASTER_DECODED_BYTES,
@@ -119,6 +120,7 @@ __all__ = [
     "capture_raster_asset_identity",
     "decode_raster_grayscale",
     "distributed_transforms",
+    "default_operation_layers",
     "generate_project_frame",
     "generate_project_gcode",
     "load_project",

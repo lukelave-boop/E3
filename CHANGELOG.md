@@ -1,5 +1,22 @@
 # Changelog
 
+- Fixed Fine registration reset leaving the reviewed full-bed map disabled:
+  retained marks are re-reviewed after reset, and the broad-coverage gate now
+  accommodates the support-contained eight-mark layout.
+- Fixed automatic honeycomb re-teaching after a bed-map refinement: the prior
+  integrity-checked image may seed fresh edge fitting without being reused as
+  execution evidence, preventing blind selection of an outer ruler edge.
+- Expanded the support-bound dense 5×5 correction grid from the legacy 70%
+  interior span to an exact 180 × 180 mm center span, with complete 5 mm crosses
+  checked against both the taught support and configured output polygon.
+
+- New projects now populate Cuts / Layers slots 00–12 from the operator's E3
+  10 W cut/raster profile chart, including paper cut and raster starting points;
+  slot 00 uses the corrected 1500 mm/min and 100% paper-cut values, and existing
+  saved projects remain unchanged.
+- Powered Machine Setup jobs now transform their machine-coordinate paths into
+  the active honeycomb-local canvas for both workspace and popup previews.
+
 ## Unreleased — `desktop-v1` / `0.2.0.dev0`
 
 - Projects now explicitly distinguish legacy machine coordinates from a
@@ -27,6 +44,9 @@
   Home/park/capture/release/Home sequence. The prepared support, bed-map, and
   output-polygon signatures remain mandatory and stale software bindings are
   still rejected before the single job-start Home.
+- Object-list Visible and Locked edits are now applied after Qt finishes the
+  native tree-item signal. This prevents a synchronous history refresh from
+  deleting the emitting row and terminating the desktop process.
 
 - The desktop live camera overlay and Trace now display and analyze a direct
   honeycomb-local rectification containing the complete current support instead
