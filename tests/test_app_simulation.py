@@ -554,7 +554,12 @@ def test_simulation_and_legacy_grid_follow_nonzero_configured_area(
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600, "fps": 2},
-                "calibration": {"bed": {"pixels_per_mm": 2}},
+                "calibration": {
+                    "bed": {
+                        "pixels_per_mm": 2,
+                        "honeycomb_span_mm": 190.0,
+                    }
+                },
                 "machine": {
                     "backend": "simulator",
                     "work_area": {
@@ -616,7 +621,12 @@ def _settings(
                     "open_browser": False,
                 },
                 "camera": {"autostart": False},
-                "calibration": {"bed": {"pixels_per_mm": 2}},
+                "calibration": {
+                    "bed": {
+                        "pixels_per_mm": 2,
+                        "honeycomb_span_mm": 190.0,
+                    }
+                },
                 "machine": {"backend": machine_backend},
             }
         ),

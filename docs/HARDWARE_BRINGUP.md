@@ -79,7 +79,7 @@ configured guarded output range is `15..205 mm` before any laser-spot-offset
 intersection for ordinary machine-coordinate jobs. The active local hardware
 profile separately records an operator-confirmed fixed 210 × 210 mm guarded
 polygon for jobs bound to the current honeycomb pose; it maps to local
-`X-10..200, Y-10..200` and is not moved by later vision detections. The base-grid
+a fixed machine-space 210 × 210 mm polygon and is not moved by later vision detections. Its honeycomb-local bounds are pose-dependent. The base-grid
 centers are `40, 75, 110, 145, 180 mm` on
 each axis. These values are operator-reported/derived and are not physically
 verified controller limits until the direction and boundary checks are

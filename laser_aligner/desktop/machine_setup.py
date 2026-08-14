@@ -17,6 +17,7 @@ from ..config import effective_laser_output_area
 from ..core import CoreRuntime
 from ..units import parse_to_mm
 from .controls import MeasurementSpinBox
+from .coordinate_audit import CoordinateAuditPanel
 from .qt import require_qt
 from .setup_guide import show_setup_guide
 from .tasks import FunctionTask
@@ -195,6 +196,98 @@ def _work_area_reference_overlay(
             (220, 95, 205),
             border_width,
             cv2.LINE_AA,
+        )
+
+    def draw_axes(
+        origin: tuple[float, float],
+        x_end: tuple[float, float],
+        y_end: tuple[float, float],
+        *,
+        color: tuple[int, int, int],
+        prefix: str,
+    ) -> None:
+        origin_px = tuple(int(value) for value in project([origin])[0, 0])
+        x_px = tuple(int(value) for value in project([x_end])[0, 0])
+        y_px = tuple(int(value) for value in project([y_end])[0, 0])
+        cv2.arrowedLine(
+            preview,
+            origin_px,
+            x_px,
+            color,
+            border_width,
+            cv2.LINE_AA,
+            tipLength=0.22,
+        )
+        cv2.arrowedLine(
+            preview,
+            origin_px,
+            y_px,
+            color,
+            border_width,
+            cv2.LINE_AA,
+            tipLength=0.22,
+        )
+        cv2.putText(
+            preview,
+            f"{prefix} X+",
+            (x_px[0] + 4, x_px[1] - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            label_scale,
+            color,
+            label_thickness,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            preview,
+            f"{prefix} Y+",
+            (y_px[0] + 4, y_px[1] - 4),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            label_scale,
+            color,
+            label_thickness,
+            cv2.LINE_AA,
+        )
+
+    machine_axis_length = max(
+        5.0,
+        min(25.0, min(float(work_area.width), float(work_area.height)) * 0.12),
+    )
+    machine_origin = (float(work_area.x_min), float(work_area.y_min))
+    draw_axes(
+        machine_origin,
+        (machine_origin[0] + machine_axis_length, machine_origin[1]),
+        (machine_origin[0], machine_origin[1] + machine_axis_length),
+        color=(255, 195, 80),
+        prefix="M",
+    )
+    if support_reference is not None:
+        frame = support_reference.coordinate_frame
+        support_axis_length = max(
+            3.0,
+            min(
+                25.0,
+                min(
+                    float(support_reference.support_width_mm),
+                    float(support_reference.support_height_mm),
+                )
+                * 0.15,
+            ),
+        )
+        support_origin = frame.origin_machine_mm
+        support_x_end = (
+            support_origin[0] + frame.x_axis_machine[0] * support_axis_length,
+            support_origin[1] + frame.x_axis_machine[1] * support_axis_length,
+        )
+        support_y_end = (
+            support_origin[0] + frame.y_axis_machine[0] * support_axis_length,
+            support_origin[1] + frame.y_axis_machine[1] * support_axis_length,
+        )
+        draw_axes(
+            support_origin,
+            support_x_end,
+            support_y_end,
+            color=(220, 95, 205),
+            prefix="H",
         )
 
     marker_radius = max(7, int(round(short_edge / 90.0)))
@@ -475,7 +568,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._honeycomb_pick_active = False
         self._honeycomb_pick_points: list[tuple[float, float]] = []
         self._honeycomb_candidate_reference: HoneycombSupportReference | None = None
-        self._honeycomb_dimensions_initialized = False
+        self._coordinate_audit_snapshot: dict[str, Any] | None = None
+        self._coordinate_audit_point_snapshot: dict[str, Any] | None = None
         self._bed_targets: list[dict[str, Any]] = []
         self._bed_target_index = 0
         self._fine_registration_analysis: dict[str, Any] | None = None
@@ -547,6 +641,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._build_bed_tab()
         self._build_registration_tab()
         self._build_check_tab()
+        self._build_coordinate_audit_tab()
         self._restore_preferences()
         footer = QtWidgets.QHBoxLayout()
         self.operation_status = QtWidgets.QLabel(self._operation_outcome)
@@ -1263,10 +1358,22 @@ class MachineSetupDialog(QtWidgets.QDialog):
         support_geometry.setContentsMargins(0, 0, 0, 0)
         self.honeycomb_ruler_mark = MeasurementSpinBox()
         self.honeycomb_ruler_mark.setRange(10.0, 1_000.0)
-        self.honeycomb_ruler_mark.setDecimals(1)
+        self.honeycomb_ruler_mark.setDecimals(3)
         self.honeycomb_ruler_mark.setSuffix(" mm")
-        self.honeycomb_ruler_mark.setValue(190.0)
-        support_geometry.addWidget(QtWidgets.QLabel("Physical ruler span"), 0, 0)
+        self.honeycomb_ruler_mark.setValue(
+            self.context.settings.calibration.bed.honeycomb_span_mm
+        )
+        self.honeycomb_ruler_mark.setReadOnly(True)
+        self.honeycomb_ruler_mark.setButtonSymbols(
+            QtWidgets.QAbstractSpinBox.ButtonSymbols.NoButtons
+        )
+        self.honeycomb_ruler_mark.setToolTip(
+            "Physical zero-to-far-ruler span from calibration.bed.honeycomb_span_mm. "
+            "Safety insets and laser margins are configured separately."
+        )
+        support_geometry.addWidget(
+            QtWidgets.QLabel("Configured physical ruler span"), 0, 0
+        )
         support_geometry.addWidget(self.honeycomb_ruler_mark, 0, 1)
         support_geometry.setColumnStretch(1, 1)
         reference_layout.addLayout(support_geometry)
@@ -1712,6 +1819,77 @@ class MachineSetupDialog(QtWidgets.QDialog):
             tab,
             "5 · Accuracy validation",
         )
+
+    def _build_coordinate_audit_tab(self) -> None:
+        self.audit_preview = ImagePicker(
+            rotation_degrees=self._camera_view_rotation
+        )
+        self.audit_preview.setObjectName("coordinateAuditPreview")
+        self.audit_preview.setText("Capture an audit view to inspect coordinates")
+        self.audit_preview.pointPicked.connect(self.inspect_coordinate_audit_point)
+        self.audit_panel = CoordinateAuditPanel(self.audit_preview)
+        self.audit_panel.captureRequested.connect(self.capture_work_area_reference)
+        self.audit_panel.refreshRequested.connect(self._refresh_coordinate_audit)
+        self.audit_panel.copyRequested.connect(self.copy_coordinate_audit_report)
+
+        # Public aliases keep Machine Setup tests and automation readable.
+        self.audit_capture_button = self.audit_panel.capture_button
+        self.audit_refresh_button = self.audit_panel.refresh_button
+        self.audit_copy_button = self.audit_panel.copy_button
+        self.audit_overall_status = self.audit_panel.overall_status
+        self.audit_blockers = self.audit_panel.blockers
+        self.audit_next_action = self.audit_panel.next_action
+        self.audit_tree = self.audit_panel.tree
+        self.audit_point_details = self.audit_panel.point_details
+
+        self._bed_dependent_actions.append(self.audit_capture_button)
+        self.audit_scroll_area = self._add_scrollable_tab(
+            self.audit_panel,
+            "Coordinate audit",
+        )
+
+    def _refresh_coordinate_audit(self) -> None:
+        if not hasattr(self, "audit_panel"):
+            return
+        try:
+            audit = self.context.coordinate_audit_status()
+        except Exception as exc:
+            self.audit_panel.set_unavailable(str(exc))
+            self._coordinate_audit_snapshot = None
+            return
+        self._coordinate_audit_snapshot = audit
+        self.audit_panel.set_status(audit)
+
+    def inspect_coordinate_audit_point(self, image_x: float, image_y: float) -> None:
+        if self._bed_image is None:
+            self.audit_panel.set_point_error(
+                "No audit image is available. Capture an audit view first."
+            )
+            return
+        source_height, source_width = self._bed_image.shape[:2]
+        try:
+            point = self.context.inspect_coordinate_point(
+                image_x,
+                image_y,
+                source_image_size=(source_width, source_height),
+            )
+        except Exception as exc:
+            self.audit_panel.set_point_error(f"Point inspection failed: {exc}")
+            self._coordinate_audit_point_snapshot = None
+            return
+        self._coordinate_audit_point_snapshot = point
+        self.audit_panel.set_point(point)
+
+    def copy_coordinate_audit_report(self) -> None:
+        self._refresh_coordinate_audit()
+        payload = {
+            "coordinate_audit": self._coordinate_audit_snapshot,
+            "clicked_point": self._coordinate_audit_point_snapshot,
+        }
+        QtWidgets.QApplication.clipboard().setText(
+            json.dumps(payload, indent=2, sort_keys=True)
+        )
+        self.operation_status.setText("Coordinate audit report copied to clipboard")
 
     @staticmethod
     def _lens_capture_region(center: Any) -> str:
@@ -2171,6 +2349,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._refresh_axis_mapping(bed)
         self._refresh_bed_dependency_actions(bed)
         self._refresh_work_area_reference_status()
+        self._refresh_coordinate_audit()
         self.points.setRowCount(len(bed["points"]))
         for row, point in enumerate(bed["points"]):
             values = (point["label"], point["image_x"], point["image_y"], point["machine_x"], point["machine_y"])
@@ -2429,6 +2608,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
             picked_image_points=tuple(self._honeycomb_pick_points),
         )
         self.bed_preview.set_image(preview)
+        if hasattr(self, "audit_preview"):
+            self.audit_preview.set_image(preview)
 
     def _cancel_honeycomb_support_picking(self) -> None:
         self._honeycomb_pick_active = False
@@ -2453,7 +2634,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             )
             return
         image = self._bed_image.copy()
-        span = self.honeycomb_ruler_mark.value()
+        span = self.context.settings.calibration.bed.honeycomb_span_mm
         self._start_operation(
             "Automatic honeycomb detection",
             lambda: self.context.detect_honeycomb_support_reference_automatically(
@@ -2510,7 +2691,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             return
         points = tuple(self._honeycomb_pick_points)
         image = self._bed_image.copy()
-        mark = self.honeycomb_ruler_mark.value()
+        mark = self.context.settings.calibration.bed.honeycomb_span_mm
         self._cancel_honeycomb_support_picking()
         self._render_work_area_reference_preview()
         self._refresh_work_area_reference_status()
@@ -2975,9 +3156,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
             )
         )
         reference = self.context.honeycomb_support.reference
-        if reference is not None and not self._honeycomb_dimensions_initialized:
-            self.honeycomb_ruler_mark.setValue(reference.ruler_mark_mm)
-        self._honeycomb_dimensions_initialized = True
+        expected_span = self.context.settings.calibration.bed.honeycomb_span_mm
+        self.honeycomb_ruler_mark.setValue(expected_span)
+        support_validity = self.context.honeycomb_support_status()
 
         if self._honeycomb_pick_active:
             instructions = (
@@ -2999,19 +3180,18 @@ class MachineSetupDialog(QtWidgets.QDialog):
             xs = [point[0] for point in corners]
             ys = [point[1] for point in corners]
             x_span, y_span = reference.measured_ruler_span_mm
-            stale_note = ""
-            calibration = self.context.bed.calibration
-            if (
-                calibration is not None
-                and abs(
-                    calibration.created_at - reference.bed_calibration_created_at
-                )
-                > 1e-9
-            ):
-                stale_note = " Bed map changed since recording; review and re-record."
+            stale_reasons = [
+                str(reason) for reason in support_validity.get("reasons") or ()
+            ]
+            stale_note = (
+                ""
+                if not stale_reasons
+                else " STALE — " + "; ".join(stale_reasons) + "."
+            )
             support_text = (
                 f"Honeycomb-local job frame: X0..{reference.support_width_mm:g}, "
                 f"Y0..{reference.support_height_mm:g} mm; "
+                f"active physical profile {expected_span:g} × {expected_span:g} mm; "
                 "ruler 0/0 maps to "
                 f"X{reference.ruler_origin_machine_mm[0]:.1f}/"
                 f"Y{reference.ruler_origin_machine_mm[1]:.1f}. Measured "

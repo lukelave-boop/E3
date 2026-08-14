@@ -248,6 +248,7 @@ class BedCalibrationSettings:
     pixels_per_mm: float = 4.0
     ransac_threshold_mm: float = 0.8
     minimum_points: int = 4
+    honeycomb_span_mm: float = 191.0
 
 
 @dataclass(slots=True)
@@ -364,6 +365,7 @@ class Settings:
                 "bed": {
                     "pixels_per_mm": self.calibration.bed.pixels_per_mm,
                     "minimum_points": self.calibration.bed.minimum_points,
+                    "honeycomb_span_mm": self.calibration.bed.honeycomb_span_mm,
                 },
             },
             "laser": {
@@ -459,6 +461,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "pixels_per_mm": 4.0,
             "ransac_threshold_mm": 0.8,
             "minimum_points": 4,
+            "honeycomb_span_mm": 191.0,
         },
     },
     "laser": {
@@ -556,6 +559,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
         ("calibration.lens.square_size_mm", lens["square_size_mm"]),
         ("calibration.bed.pixels_per_mm", bed["pixels_per_mm"]),
         ("calibration.bed.ransac_threshold_mm", bed["ransac_threshold_mm"]),
+        ("calibration.bed.honeycomb_span_mm", bed["honeycomb_span_mm"]),
         ("laser.travel_feed_mm_min", laser["travel_feed_mm_min"]),
         ("laser.engrave_feed_mm_min", laser["engrave_feed_mm_min"]),
         ("laser.curve_tolerance_mm", laser["curve_tolerance_mm"]),
@@ -709,6 +713,8 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("bed ransac_threshold_mm must be positive")
     if int(bed["minimum_points"]) < 4:
         raise ConfigError("bed minimum_points must be at least 4")
+    if float(bed["honeycomb_span_mm"]) <= 0:
+        raise ConfigError("bed honeycomb_span_mm must be positive")
     for key in ("travel_feed_mm_min", "engrave_feed_mm_min", "curve_tolerance_mm"):
         if float(laser[key]) <= 0:
             raise ConfigError(f"laser.{key} must be positive")
@@ -874,6 +880,9 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
                 pixels_per_mm=float(raw["calibration"]["bed"]["pixels_per_mm"]),
                 ransac_threshold_mm=float(raw["calibration"]["bed"]["ransac_threshold_mm"]),
                 minimum_points=int(raw["calibration"]["bed"]["minimum_points"]),
+                honeycomb_span_mm=float(
+                    raw["calibration"]["bed"]["honeycomb_span_mm"]
+                ),
             ),
         ),
         laser=LaserSettings(

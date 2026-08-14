@@ -77,7 +77,8 @@
     "bed": {
       "pixels_per_mm": 4.0,
       "ransac_threshold_mm": 0.8,
-      "minimum_points": 4
+      "minimum_points": 4,
+      "honeycomb_span_mm": 191.0
     }
   },
   "laser": {

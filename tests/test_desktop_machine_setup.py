@@ -83,6 +83,7 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             "3 · Bed mapping",
             "4 · Fine registration",
             "5 · Accuracy validation",
+            "Coordinate audit",
         ]
         assert dialog.synthetic_scene.isEnabled()
         assert dialog.runtime.hardware_enabled is False
@@ -107,7 +108,12 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert dialog.honeycomb_support_record_button.text() == (
             "Fallback: detect with 3 hints"
         )
+        assert dialog.honeycomb_ruler_mark.value() == pytest.approx(191.0)
+        assert dialog.honeycomb_ruler_mark.isReadOnly()
         assert "not recorded" in dialog.honeycomb_support_status.text()
+        assert "191.000 × 191.000 mm" in dialog.audit_overall_status.text()
+        assert "No honeycomb support reference" in dialog.audit_blockers.text()
+        assert "Complete Lens calibration" in dialog.audit_next_action.text()
         assert dialog.points.rowCount() >= 4
         assert "Solved" in dialog.bed_status.text()
         assert dialog.registration_results.horizontalHeaderItem(0).text() == "Use"
@@ -438,11 +444,11 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
         )
         candidate = HoneycombSupportReference.from_observations(
             ruler_origin_machine_mm=(10.0, 10.0),
-            ruler_x_mark_machine_mm=(200.0, 10.0),
-            ruler_xy_mark_machine_mm=(200.0, 200.0),
-            ruler_mark_mm=190.0,
-            support_width_mm=190.0,
-            support_height_mm=190.0,
+            ruler_x_mark_machine_mm=(201.0, 10.0),
+            ruler_xy_mark_machine_mm=(201.0, 201.0),
+            ruler_mark_mm=191.0,
+            support_width_mm=191.0,
+            support_height_mm=191.0,
             bed_calibration_created_at=calibration.created_at,
         )
         received: dict[str, object] = {}
@@ -477,12 +483,12 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
         reference = runtime.context.honeycomb_support.reference
         assert reference is not None
         assert received["hints"] == rough_hints
-        assert received["mark"] == 190.0
+        assert received["mark"] == 191.0
         assert np.array_equal(received["image"], dialog._bed_image)
         assert reference.ruler_origin_machine_mm == pytest.approx((10.0, 10.0))
-        assert reference.measured_ruler_span_mm == pytest.approx((190.0, 190.0))
+        assert reference.measured_ruler_span_mm == pytest.approx((191.0, 191.0))
         assert np.asarray(reference.support_corners_machine_mm) == pytest.approx(
-            np.asarray(((10.0, 10.0), (200.0, 10.0), (200.0, 200.0), (10.0, 200.0)))
+            np.asarray(((10.0, 10.0), (201.0, 10.0), (201.0, 201.0), (10.0, 201.0)))
         )
         assert dialog.honeycomb_support_record_button.text() == (
             "Fallback: detect with 3 hints"
@@ -604,10 +610,58 @@ def test_work_area_reference_overlay_uses_large_noncolliding_origin_label(
 
     texts = [text for text, _scale in calls]
     assert "X/Y 10" in texts
+    assert "M X+" in texts
+    assert "M Y+" in texts
     assert "X10" not in texts
     assert "Y10" not in texts
     assert next(scale for text, scale in calls if text == "X/Y 10") >= 1.25
     assert min(scale for text, scale in calls if text != "X/Y 10") >= 1.6
+
+
+def test_coordinate_audit_marks_old_190_support_stale_and_inspects_points(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    calibration = runtime.context.bed.calibration
+    assert calibration is not None
+    runtime.context.honeycomb_support.save(
+        HoneycombSupportReference.from_four_corner_observations(
+            raw_corners_machine_mm=(
+                (15.0, 20.0),
+                (205.0, 20.0),
+                (205.0, 210.0),
+                (15.0, 210.0),
+            ),
+            corner_topology=(0, 1, 2, 3),
+            support_width_mm=190.0,
+            support_height_mm=190.0,
+            bed_calibration_created_at=calibration.created_at,
+        )
+    )
+    dialog = MachineSetupDialog(runtime)
+    try:
+        dialog.refresh_all()
+        assert "STALE" in dialog.honeycomb_support_status.text()
+        assert "requires 191 x 191 mm" in dialog.audit_blockers.text()
+
+        image = runtime.context.camera_frame(undistort=True)
+        dialog._bed_image = image
+        dialog._work_area_reference_calibration = calibration
+        dialog._render_work_area_reference_preview()
+        dialog.inspect_coordinate_audit_point(
+            image.shape[1] / 2.0,
+            image.shape[0] / 2.0,
+        )
+        details = dialog.audit_point_details.toPlainText()
+        assert "Displayed pixel" in details
+        assert "Machine coordinate" in details
+        assert "Honeycomb-local coordinate" in details
+        assert "STALE; diagnostic only" in details
+        assert "Carriage command for beam placement" in details
+    finally:
+        dialog.close()
+        runtime.stop()
 
 
 def test_machine_setup_guide_opens_at_the_current_numbered_step(

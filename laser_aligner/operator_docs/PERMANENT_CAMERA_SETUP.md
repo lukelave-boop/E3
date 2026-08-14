@@ -36,7 +36,8 @@ unlisted calibration step or interrupt a tab transition described here.
    restarting restores that focus's full calibration stack.
 3. Confirm the configured machine/output envelope and camera pose match dated
    physical verification. This rectangle is independent from the movable
-   190 × 190 mm honeycomb job coordinates.
+   honeycomb job coordinates. The active E3 profile's printed zero-to-far-ruler
+   span is 191 × 191 mm.
 4. Connect the camera. Connect the controller only when a step explicitly
    requires Home, park, commanded motion, or a guarded marking job.
 5. Open **Tools > Machine Setup**.
@@ -110,14 +111,15 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
    the camera-to-machine calibration evidence before repeating Step 3. Do not
    resize the machine-output envelope merely to match the movable honeycomb.
    The ruler overlay is a diagnostic, not automatic proof of laser reach.
-8. To establish the movable honeycomb's rigid job frame, set **Physical ruler
-    span** to the printed span (normally
-    `190 mm`), then click **Detect honeycomb automatically**. Vision segments the
+8. To establish the movable honeycomb's rigid job frame, confirm **Configured
+    physical ruler span** matches the printed zero-to-far-ruler distance. It is
+    read-only in Setup and comes from the machine profile; the active E3 value is
+    `191.000 mm`. Then click **Detect honeycomb automatically**. Vision segments the
     dominant rectangle, independently fits all four cutting-surface edges, and
     maps their intersections through the active bed map. It preserves their
     order as origin, +X, opposite, and +Y. **Physical ruler span** defines the
     nominal local width and height; it does not replace the four observed
-    corners or fabricate measured 190 mm edges. Printed tick recognition is not
+    corners or fabricate measured edge lengths. Printed tick recognition is not
     required. Review and accept the magenta outline and fit report. Acceptance
     stores the exact reviewed teaching image, its four corners, and the digests
     that bind it to the schema-2 support and complete bed map.
@@ -138,7 +140,8 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
     as ruler coordinates.** Only the accepted automatic four-edge result
     establishes the execution-verifiable honeycomb-local job frame: ruler zero
     is `(0,0)`, +X follows the bottom edge, and +Y follows the left edge. New
-    projects use X0..190, Y0..190; the live camera, grid, Trace, and object
+    projects use the configured physical span; the active E3 profile is
+    X0..191, Y0..191. The live camera, grid, Trace, and object
     coordinates share that frame. Green shows the independently verified
     machine-output envelope mapped into honeycomb coordinates; red observations
     outside green remain unchecked and blocked. The support frame cannot expand
@@ -165,6 +168,15 @@ check, not a hidden Step 3-to-Step 4 gate. Do not change **Reverse X mapping** o
 If detection fails after a successful burn, do not reburn or move the sheet.
 Preserve the sheet and saved capture while diagnosing the detector. A verified
 saved capture receipt can be reanalyzed after an application restart.
+
+The unnumbered **Coordinate audit** tab may be used at any point for
+configuration and transform diagnostics. It does not add a calibration step.
+Refresh, report copy, and point inspection are read-only; its capture button
+uses the same laser-off Home/park motion as **Capture view**. A clicked point
+shows the corrected camera pixel, machine coordinate, honeycomb-local
+coordinate, and spot-corrected carriage coordinate. Existing 190 mm support
+files are intentionally marked stale under the 191 mm profile; run fresh
+automatic four-edge detection rather than stretching old evidence.
 
 ## 4. Fine Registration
 

@@ -2,6 +2,16 @@
 
 ## Unreleased — `desktop-v1` / `0.2.0.dev0`
 
+- Added a read-only **Coordinate audit** tab that displays the configured
+  machine rectangle, GRBL workspace/G92 reference, photography pose, fixed
+  laser-output authority, camera rotation, lens/bed-map state, measured
+  honeycomb pose, and a clicked-point transform from corrected camera pixels
+  through machine, honeycomb-local, and spot-corrected carriage coordinates.
+- Corrected the active E3 honeycomb's physical zero-to-far-ruler span to
+  `191.000 mm`. Physical support size is now a machine-profile value separate
+  from laser margins or cutting insets. Existing 190 mm support references are
+  marked stale and cannot authorize support-bound output; they are never
+  silently stretched and must be re-detected from a fresh four-edge capture.
 - Fixed the final lower-version CI incompatibilities: cleanup failures now
   preserve the original operation error with an attached note on Python 3.10,
   and excessive JSON nesting reports one stable project-format error across
@@ -50,7 +60,8 @@
 
 - Projects now explicitly distinguish legacy machine coordinates from a
   movable honeycomb-local coordinate system. New projects use the current
-  detected cutting surface as X0..190, Y0..190; schema-1 projects migrate as
+  detected cutting surface's configured local span; the active E3 profile is
+  X0..191, Y0..191. Schema-1 projects migrate as
   machine-coordinate projects and are never silently reinterpreted.
 - Corrected camera images can now be rectified directly into the rigid
   honeycomb-local frame. This aligns camera pixels, rulers, the authoring grid,
@@ -65,9 +76,10 @@
   begins the validated program without parking at the photography pose. The
   active hardware profile can bind these jobs to an explicit
   fixed convex output polygon independent of the camera-calibration rectangle.
-  The current operator-confirmed polygon is a 210 × 210 mm square centered on
-  the accepted 190 mm support (local X/Y −10..200); it is immutable across live
-  detections and is rechecked by low-level preflight.
+  The current operator-confirmed polygon is a fixed 210 × 210 mm machine-space
+  square. Its local coordinates are derived from the current measured support
+  pose; support detection never moves or enlarges it. It is immutable across
+  live detections and is rechecked by low-level preflight.
 - Execution no longer repeats camera pose verification after the operator has
   traced, generated, reviewed, and selected Start. This removes the previous
   Home/park/capture/release/Home sequence. The prepared support, bed-map, and
@@ -85,7 +97,8 @@
 - Replacing a detected support now updates any clean, empty, unsaved
   honeycomb-local project to the replacement's exact dimensions. Trace and
   color sampling repeat that reconciliation before their strict frame check,
-  fixing a stale 192 mm project left behind after accepting a 190 mm support.
+  fixing a stale 192 mm project left behind after accepting a differently sized
+  support.
   Saved, edited, or nonempty projects are still never reinterpreted.
 - Fine-registration targets now follow the current detected honeycomb cutting
   surface instead of fixed machine-work-area fractions. Complete cross extents

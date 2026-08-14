@@ -27,9 +27,10 @@ Do not depend on the webcam, browser, operating system, USB connection, G-code s
   evidence of laser reach. The local hardware profile contains an explicit,
   fixed machine-coordinate polygon for honeycomb-bound jobs. It is not inferred
   or moved by live detection; ordinary jobs retain the guarded machine rectangle.
-- A honeycomb-local project displays the complete 190 mm cutting surface. The
-  configured green polygon is 210 × 210 mm, extending 10 mm beyond each support
-  edge in the accepted pose. Generation rejects powered or laser-off controller
+- A honeycomb-local project displays the complete configured physical cutting
+  surface; the active E3 profile is 191 × 191 mm. The separate green polygon is
+  a fixed 210 × 210 mm machine-space authority whose local margins depend on the
+  measured support pose. Detection never moves or expands it. Generation rejects powered or laser-off controller
   motion that leaves that polygon; the display never grants reach. Honeycomb-local jobs
   require an accepted automatic four-edge teaching image and bind its four
   measured corners, rigid pose, and complete bed-map digest. A legacy schema-1

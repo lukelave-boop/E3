@@ -63,6 +63,11 @@
     "max_travel_feed_mm_min": 3000.0,
     "max_work_feed_mm_min": 3000.0
   },
+  "calibration": {
+    "bed": {
+      "honeycomb_span_mm": 191.0
+    }
+  },
   "laser": {
     "power_mode": "M4",
     "power_max": 1000,

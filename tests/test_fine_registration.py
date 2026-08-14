@@ -55,7 +55,11 @@ def _save_execution_support(context: AppContext) -> HoneycombSupportReference:
     area = context.settings.machine.work_area
     margin = context.settings.laser.boundary_margin_mm
     inset = max(10.0, margin + 5.0)
-    side = min(190.0, area.width - 2.0 * inset, area.height - 2.0 * inset)
+    side = min(
+        context.settings.calibration.bed.honeycomb_span_mm,
+        area.width - 2.0 * inset,
+        area.height - 2.0 * inset,
+    )
     origin = (area.x_min + inset, area.y_min + inset)
     reference = HoneycombSupportReference.from_four_corner_observations(
         raw_corners_machine_mm=(

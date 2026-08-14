@@ -176,9 +176,10 @@ proposed vector crosses the guarded laser-output boundary. For ordinary
 machine-coordinate work, that boundary is the configured camera/work rectangle
 inset by `laser.boundary_margin_mm` and reduced for the physical spot offset.
 For a current honeycomb-bound project, it can instead be an explicit fixed
-machine-coordinate polygon. The active profile's polygon maps to local
-X/Y−10..200, a 210 × 210 mm square centered on the 190 mm support. Camera
-detection does not move or enlarge it. Red cells report the exceeded edge and
+machine-coordinate polygon. The active profile's polygon is a 210 × 210 mm
+machine-space square. Its local coordinates are derived from the current
+measured support pose and are shown by Coordinate audit. Camera detection does
+not move or enlarge it. Red cells report the exceeded edge and
 distance and remain
 unchecked. If raw observed geometry was inside but shared grid sizing caused
 the overrun, the Geometry tooltip says so explicitly.
@@ -192,7 +193,7 @@ creating output. Never treat physical support on a movable honeycomb as proof
 that the laser spot can reach the same coordinate.
 
 When Step 3 has a current automatic four-edge honeycomb reference, Trace draws
-its 190 mm support outline in magenta and uses its rigid local frame. The
+its configured support outline in magenta and uses its rigid local frame. The
 three-click fallback remains diagnostic-only and cannot authorize output. The
 magenta support and green output polygon are distinct evidence: detection never
 changes the configured polygon. Camera coverage, the selected guarded-output

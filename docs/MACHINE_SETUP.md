@@ -188,13 +188,15 @@ authorize this step.
    or collision clearance. If it exposes a discrepancy, stop and correct the
    camera/machine calibration evidence before proceeding. Do not resize the
    machine-output envelope merely to match the movable honeycomb.
-6. Set **Physical ruler span** to the printed span (normally `190 mm`)
-   and choose **Detect honeycomb automatically**. Vision segments the dominant
+6. Confirm **Configured physical ruler span** matches the printed zero-to-far
+   ruler span. The active E3 profile is `191.000 mm`; the field is read-only in
+   Setup because physical size belongs to the machine profile, not to one
+   detection attempt. Choose **Detect honeycomb automatically**. Vision segments the dominant
    rectangular honeycomb and independently fits all four cutting-surface edges.
    The active bed map maps those four measured intersections into machine
    coordinates and preserves their semantic order as origin, +X, opposite, and
-   +Y. **Physical ruler span** defines the nominal honeycomb-local width and
-   height; it does not replace the four measured corners or fabricate 190 mm
+   +Y. **Configured physical ruler span** defines the nominal honeycomb-local
+   width and height; it does not replace the four measured corners or fabricate
    observed edge lengths. Printed tick recognition is not required.
    Review and accept the detected outline. Acceptance stores a schema-2 support
    plus the exact reviewed teaching image, its four image corners, and digests
@@ -212,11 +214,13 @@ authorize this step.
    detection successfully before powered work.
 
 The execution-verifiable result defines the movable honeycomb's rigid
-honeycomb-local X0..190, Y0..190 job frame. The live camera, grid, Trace, and
-project geometry share that frame. Green maps the configured output authority
-into it. For the active hardware profile this is a fixed 210 × 210 mm machine
-polygon, locally X/Y−10..200, recorded from the operator-confirmed output area;
-automatic detection never moves or expands it. Features outside green remain
+honeycomb-local frame from zero through the configured physical span. The
+active E3 profile is X0..191, Y0..191. The live camera, grid, Trace, and project
+geometry share that frame. Green maps the configured output authority into it.
+For the active hardware profile this is a fixed 210 × 210 mm machine polygon
+recorded from the operator-confirmed output area. Its local coordinates depend
+on the current measured support pose; automatic detection never moves or
+expands it. Features outside green remain
 red, unchecked, and blocked. Ordinary machine-coordinate jobs retain their
 guarded rectangle. Preflight, arming, and execution use the same selected
 authority. The laser-burned keyed map remains the camera-to-machine
@@ -281,6 +285,29 @@ powered calibration value is never silently carried into another session.
 On a bed-slinger, rigidly restrain the calibration surface or workpiece to the
 moving bed. Motion of the surface relative to the bed invalidates both the
 mapping and any alignment comparison made from its camera image.
+
+### Coordinate audit (read-only diagnostic)
+
+The unnumbered **Coordinate audit** tab does not add a sixth calibration step.
+It collects the current machine/work rectangle, GRBL workspace and G92
+reference, photography pose, fixed laser-output polygon, display rotation,
+lens/bed-map state, and honeycomb pose in one view. It also names every reason
+support-bound work is blocked.
+
+**Home / park and capture audit view** uses the same laser-off parked capture as
+**Capture view**. The overlay adds machine and honeycomb X+/Y+ arrows. Clicking
+the corrected image reports the displayed pixel, lens-corrected source pixel,
+machine coordinate, honeycomb-local coordinate, and the carriage coordinate
+that would place the physical beam there after the configured spot offset. A
+local coordinate derived from a stale support is labeled diagnostic-only.
+
+The tab's calculations, refresh, report copy, and point inspection are
+read-only. **Home / park and capture audit view** does command the existing
+laser-off Home/park motion before capture; it does not change controller
+offsets, motion or output bounds, G-code, camera calibration, support placement,
+or laser power. Realtime GRBL MPos/WPos sampling remains a physical follow-up
+item; the first revision displays the trusted Home/park position and recorded
+workspace-offset state already owned by `MachineService`.
 
 ## 4. Fine registration
 

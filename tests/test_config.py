@@ -81,9 +81,38 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     assert settings.machine.grbl_step_idle_delay_ms == 250
     assert settings.machine.max_travel_feed_mm_min == pytest.approx(6000.0)
     assert settings.machine.max_work_feed_mm_min == pytest.approx(6000.0)
+    assert settings.calibration.bed.honeycomb_span_mm == pytest.approx(191.0)
+    assert settings.public_dict()["calibration"]["bed"]["honeycomb_span_mm"] == 191.0
     assert settings.laser.spot_offset_x_mm == 0.0
     assert settings.laser.spot_offset_y_mm == 0.0
     assert (settings.app.data_dir / "captures").is_dir()
+
+
+def test_honeycomb_span_is_profile_configurable(tmp_path: Path) -> None:
+    config = tmp_path / "honeycomb-span.json"
+    config.write_text(
+        json.dumps({"calibration": {"bed": {"honeycomb_span_mm": 191.25}}}),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.calibration.bed.honeycomb_span_mm == pytest.approx(191.25)
+
+
+@pytest.mark.parametrize("span", [0, -1, True, "191"])
+def test_honeycomb_span_rejects_nonpositive_or_non_numeric_values(
+    tmp_path: Path,
+    span: object,
+) -> None:
+    config = tmp_path / "bad-honeycomb-span.json"
+    config.write_text(
+        json.dumps({"calibration": {"bed": {"honeycomb_span_mm": span}}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="honeycomb_span_mm"):
+        load_settings(config)
 
 
 def test_guarded_output_polygon_loads_as_exact_four_point_authority(

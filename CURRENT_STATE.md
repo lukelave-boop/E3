@@ -24,9 +24,9 @@ tests now express platform-independent behavior. The first native Windows
 Python 3.13 run confirmed those identity/read fixes but exposed that Windows
 rejects `fsync` on the read-only descriptors used after migration timestamping.
 The follow-up opens completed artifacts read/write solely for that flush and
-routes material-database publication through the shared no-clobber writer. A
-native Windows rerun and the hosted matrix remain required before these paths
-count as Windows-verified.
+routes material-database publication through the shared no-clobber writer. The
+native Windows Python 3.13 rerun and the hosted Python 3.10-3.12 matrix now pass,
+so these paths count as Windows- and Linux-verified at the automated-test level.
 
 Compact desktop pages now opt into viewport-width reflow instead of retaining a
 hidden horizontal scroll range when Windows or large-text font metrics produce a
@@ -38,8 +38,8 @@ pushed Job Preview speed beyond the visible readout. The follow-up uses the
 compact **Capture view** label, preserves its descriptive tooltip through
 validity refreshes, and gives the visible move readout a priority string that
 omits redundant `pass 1/1` and coordinates while retaining the complete value in
-the tooltip and accessibility text. Linux source/runbook tests pass; native
-Windows and hosted desktop reruns remain required.
+the tooltip and accessibility text. Native Windows and hosted Ubuntu/Windows
+desktop reruns now pass.
 
 The same native Windows run completed **1,709 tests with only eight failures and
 9 expected platform skips**, down from the original 47 failures. Seven were the
@@ -59,8 +59,8 @@ compatibility cases: Python 3.10 lacks `BaseException.add_note`, and Python
 nested project JSON. Cleanup-note attachment now uses a compatibility helper
 that preserves the original operation error on every supported version, and
 JSON recursion receives one stable **nested too deeply** project-format
-message. Focused machine, project-I/O, and compatibility tests pass; a hosted
-rerun remains required before the complete matrix counts as green.
+message. Focused machine, project-I/O, and compatibility tests pass, and hosted
+CI run 38 confirms the complete six-job matrix is green.
 
 On x86-64 Linux with Python 3.13.5, the complete non-Qt suite passed `1,369`
 tests with `27` Qt-only modules skipped. The follow-up desktop source and
@@ -69,6 +69,24 @@ No controller, arming, laser-output, bounds, G-code, or physical calibration
 behavior was changed by this stabilization pass. The stale source test for job
 start was aligned with the already documented single laser-off Home/no-camera-
 park sequence.
+
+The `feature/coordinate-audit` work now makes the active machine profile's
+physical honeycomb ruler span explicit as `191.000 × 191.000 mm`, independent
+from laser margins and the fixed machine-space output polygon. A saved 190 mm
+support becomes visibly **STALE** and cannot authorize support-bound execution;
+it is never stretched to 191 mm. Machine Setup gains an unnumbered
+**Coordinate audit** tab that reports the controller/work-offset reference,
+configured motion and output envelopes, camera/lens/bed-map identities, support
+origin and rotation, measured and rigid corners, and the output polygon mapped
+into honeycomb coordinates. Its overlay labels machine and honeycomb X+/Y+
+directions, and clicking a corrected camera point traces it through display,
+camera-map, machine, honeycomb-local, and spot-corrected carriage coordinates.
+Refresh, report copy, and point inspection are read-only; the audit capture
+button uses the existing laser-off Home/park path without changing that command.
+Focused configuration, audit, support, application, and calibration tests pass
+without PySide6; the new widget and live C920/controller presentation still
+require native Windows/hosted Qt and OptiPlex interactive verification. This
+feature changes no Home command, motion bound, G-code, arming, or laser power.
 
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and
@@ -117,12 +135,12 @@ that drew valid fine-registration targets outside the visible support by
 treating machine coordinates as local coordinates. Generated G-code and
 machine preflight are unchanged.
 
-The desktop now models an automatically detected 190 × 190 mm honeycomb as a
-real movable job coordinate system instead of conflating it with the persisted
-X10..210, Y10..210 machine rectangle. New projects created with a current,
-execution-verifiable schema-2 support use explicit `honeycomb_local`
-coordinates X0..190, Y0..190; legacy schema-1 projects migrate explicitly as
-`machine`. The four independently fitted and mapped corners are reduced to a
+The desktop models an automatically detected, profile-sized honeycomb as a real
+movable job coordinate system instead of conflating it with the persisted
+X10..210, Y10..210 machine rectangle. The active E3 profile now declares
+191 × 191 mm. New projects created with a current, execution-verifiable schema-2
+support use explicit `honeycomb_local` coordinates X0..191, Y0..191; legacy
+schema-1 projects migrate explicitly as `machine`. The four independently fitted and mapped corners are reduced to a
 closest-fit right-handed rigid frame so small edge disagreement cannot shear
 project geometry. Camera rectification, the authoring grid, Trace, and toolpath
 preview can share that local frame.
@@ -145,9 +163,9 @@ powered base-map pattern is the intentional bootstrap exception because that
 map is required to express a support in machine coordinates; it remains bounded
 by the configured machine area and requires a restrained sacrificial sheet over
 the exact reviewed pattern.
-The complete 190 mm surface is available for authoring. On 2026-08-13 the
-operator explicitly confirmed that the physical output authority covers a
-210 × 210 mm square centered on the detected support. The local hardware
+The complete configured 191 mm surface is available for authoring after a fresh
+191 mm support is accepted. On 2026-08-13 the operator explicitly confirmed that
+the physical output authority covers a fixed 210 × 210 mm machine-space square. The local hardware
 configuration records that exact fixed machine-coordinate polygon, in support
 order, as `(18.218005, 29.679375)`, `(228.217364, 30.198421)`,
 `(227.698319, 240.197779)`, and `(17.698960, 239.678734)` mm. Its
@@ -169,16 +187,17 @@ configured rectangle solely to avoid cropping visible evidence. The active
 saved schema-2 support spans about machine X27.0..218.7 and Y38.7..231.1 and is
 execution-verifiable in software, but is not physically verified.
 A separate green polygon maps the explicit guarded-output square into
-honeycomb coordinates. Its local bounds are X−10..200, Y−10..200: exactly
-10 mm beyond each edge of the 190 mm support. Trace, template review, project
-generation, and `MachineService` preflight use the same polygon. Only a job
+honeycomb coordinates. Its local bounds are derived from the current support
+pose and therefore change when the support pose or configured 191 mm span
+changes; the fixed machine-space polygon itself does not. Trace, template review,
+project generation, and `MachineService` preflight use the same polygon. Only a job
 bound to the current honeycomb signature may opt into it; ordinary jobs retain
 the legacy rectangular policy, and the immutable preflight result binds the
 exact polygon so a config change invalidates it. Focused rectification, display,
 detection-boundary, color-sampling, live-overlay routing, cache-isolation, and
 authority-separation tests pass. Direct honeycomb-local live-overlay framing was
 interactively confirmed on 2026-08-13. A follow-on Trace attempt exposed a stale
-in-memory 192 × 192 mm empty project after accepting the 190 × 190 mm
+in-memory 192 × 192 mm empty project after accepting a differently sized
 support: camera framing had updated, but the project-frame callback ignored an
 already-local document. Clean, empty, unsaved projects now reconcile
 local-to-local dimensions when the support changes and again immediately before
@@ -207,9 +226,10 @@ candidate thresholds. The saved 2026-08-12 C920 capture that previously chose
 a duplicate lattice containing a false bottom-edge hardware point now resolves
 the correct keyed 25-point grid. Honeycomb-ruler periodicity now refines the
 integer autocorrelation peak to a fractional-pixel tick pitch, avoiding the
-observed 5 px quantization that reported 206.8 ticks across a physical 190 mm
-ruler. Focused synthetic detector tests pass; the honeycomb change has not yet
-been repeated with a fresh physical three-hint detection.
+observed 5 px quantization that reported 206.8 ticks across the then-assumed
+190 mm ruler span. The active profile now uses the measured 191 mm
+zero-to-far-ruler span. Focused synthetic detector tests pass; the honeycomb
+change has not yet been repeated with a fresh physical three-hint detection.
 
 Honeycomb hints no longer act as ruler endpoints. They select the X ruler,
 approximate shared zero/intersection, and Y ruler.
@@ -453,8 +473,9 @@ a named hardware/firmware configuration or a safety claim.
 Later on 2026-08-09, guarded laser-off jogging was physically exercised after
 Home / park. The operator designated controller coordinate **X245 mm** as the
 mechanical X maximum after successfully reaching it without contacting the hard
-stop; the carriage had already moved beyond the complete 190 mm honeycomb
-support. Direction was then clarified against the configured Home / park pose
+stop; the carriage had already moved beyond the complete then-modeled 190 mm
+honeycomb support. The active profile now uses 191 mm. Direction was then
+clarified against the configured Home / park pose
 `X15 Y195`: **X−10/X+230 mm** established the selected X5..245 envelope, and
 **Y−190/Y+20 mm** established the selected Y5..215 envelope. Y−200 reached the
 negative endstop near controller Y−5, while Y−190 retained the operator's 10 mm

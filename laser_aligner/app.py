@@ -18,6 +18,11 @@ import cv2
 import numpy as np
 
 from . import __version__
+from .calibration.audit import (
+    build_coordinate_audit_status,
+    honeycomb_support_validity,
+    inspect_coordinate_point,
+)
 from .calibration.bed import (
     BedCalibration,
     BedMapper,
@@ -1470,8 +1475,8 @@ class AppContext:
             ),
         )
         # The fresh four-edge fit is physical evidence. Preserve its independently
-        # observed edge lengths and angle; never fabricate a unit 190 mm square
-        # from configured dimensions. The reference model's ruler mark is the
+        # observed edge lengths and angle; never fabricate measured edges from
+        # the configured nominal square. The reference model's ruler mark is the
         # nominal physical coordinate associated with each measured far edge.
         span = float(ruler_mark_mm)
         reference = HoneycombSupportReference.from_four_corner_observations(
@@ -1506,6 +1511,16 @@ class AppContext:
         ):
             raise CalibrationError(
                 "Bed calibration changed after ruler detection; detect it again"
+            )
+        support_validity = honeycomb_support_validity(
+            reference,
+            bed_calibration_created_at=calibration.created_at,
+            expected_span_mm=self.settings.calibration.bed.honeycomb_span_mm,
+        )
+        if support_validity["state"] != "CURRENT":
+            raise CalibrationError(
+                "The reviewed honeycomb does not match the active machine profile: "
+                + "; ".join(str(reason) for reason in support_validity["reasons"])
             )
         if reference.is_execution_verifiable:
             if teaching_image is None or teaching_corners_px is None:
@@ -1545,11 +1560,80 @@ class AppContext:
 
         reference = self.honeycomb_support.reference
         calibration = self.bed.calibration
-        if reference is None or calibration is None:
-            return None
-        if abs(reference.bed_calibration_created_at - calibration.created_at) > 1e-9:
+        validity = honeycomb_support_validity(
+            reference,
+            bed_calibration_created_at=(
+                None if calibration is None else calibration.created_at
+            ),
+            expected_span_mm=self.settings.calibration.bed.honeycomb_span_mm,
+        )
+        if validity["state"] != "CURRENT":
             return None
         return reference
+
+    def honeycomb_support_status(self) -> dict[str, Any]:
+        """Return operator-readable support currency without changing state."""
+
+        calibration = self.bed.calibration
+        return honeycomb_support_validity(
+            self.honeycomb_support.reference,
+            bed_calibration_created_at=(
+                None if calibration is None else calibration.created_at
+            ),
+            expected_span_mm=self.settings.calibration.bed.honeycomb_span_mm,
+        )
+
+    def coordinate_audit_status(self) -> dict[str, Any]:
+        """Report every active coordinate frame without commanding hardware."""
+
+        camera_status = asdict(self.camera.status())
+        camera_size = (
+            int(camera_status.get("width") or 0),
+            int(camera_status.get("height") or 0),
+        )
+        lens_status = (
+            self.lens.status(image_size=camera_size)
+            if camera_size[0] > 0 and camera_size[1] > 0
+            else self.lens.status()
+        )
+        lens_model = lens_status.get("model")
+        lens_model_id = (
+            str(lens_model["model_id"])
+            if isinstance(lens_model, dict) and lens_model.get("model_id")
+            else None
+        )
+        return build_coordinate_audit_status(
+            self.settings,
+            machine_status=self.machine.status(),
+            camera_status=camera_status,
+            camera_readiness=self.camera_calibration_readiness(),
+            lens_status=lens_status,
+            bed_status=self.bed_status(lens_model_id=lens_model_id),
+            support_reference=self.honeycomb_support.reference,
+            honeycomb_execution_signature=self.honeycomb_execution_signature(),
+        )
+
+    def inspect_coordinate_point(
+        self,
+        image_x: float,
+        image_y: float,
+        *,
+        source_image_size: tuple[int, int],
+    ) -> dict[str, Any]:
+        """Trace one corrected camera pixel through the current mappings."""
+
+        self._require_valid_bed_calibration()
+        result = inspect_coordinate_point(
+            self.settings,
+            self.bed,
+            source_image_point=(float(image_x), float(image_y)),
+            source_image_size=source_image_size,
+            support_reference=self.honeycomb_support.reference,
+        )
+        result["honeycomb_reference_state"] = self.honeycomb_support_status()[
+            "state"
+        ]
+        return result
 
     def verify_honeycomb_pose_for_execution(
         self,
