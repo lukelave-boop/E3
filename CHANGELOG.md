@@ -1,5 +1,10 @@
 # Changelog
 
+- Nested closed vector contours now complete all configured passes deepest-first
+  before a containing contour begins. The geometric rule is winding-independent
+  and applies to washers, traced paths, and imported compound paths while
+  retaining pass-major behavior for unrelated contours.
+
 - Added an experimental authenticated Raspberry Pi hardware-node path for a
   Windows/Linux E3 desktop: `e3bridge://` carries the guarded controller
   transport and `e3camera://` preserves Pi-side V4L2/precision capture. Client

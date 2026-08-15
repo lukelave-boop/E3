@@ -341,7 +341,10 @@ white gaps, and lead-out remain laser-off at the engraving feed. Both desired
 motion and spot-corrected controller motion are bounds checked. Image bounds
 also participate in zero-power framing, including rotation and mixed vector projects.
 Vector nearest-path planning falls back to recorded source order above 512
-paths rather than entering an unbounded quadratic search.
+paths rather than entering an unbounded quadratic search. Closed vector paths
+are grouped by geometric containment independently of winding. Participating
+contours run deepest-first and complete all layer passes per contour before a
+parent begins; unrelated paths retain pass-major source/nearest scheduling.
 Text-to-path, selectable dither algorithms, and calibrated grayscale power
 curves remain unsupported and must never be silently dropped.
 

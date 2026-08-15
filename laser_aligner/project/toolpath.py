@@ -264,9 +264,10 @@ def _point_in_closed_path(point: np.ndarray, polygon: np.ndarray) -> bool:
     return inside
 
 
-def _containment_depths(paths: list[Polyline]) -> list[int]:
-    """Return closed-contour nesting depths; open paths remain depth zero."""
+def _containment_plan(paths: list[Polyline]) -> tuple[list[int], list[bool]]:
+    """Return nesting depths and contours participating in containment."""
     depths = [0] * len(paths)
+    nested = [False] * len(paths)
     bounds = []
     for path in paths:
         minimum = path.points.min(axis=0)
@@ -285,7 +286,14 @@ def _containment_depths(paths: list[Polyline]) -> list[int]:
                     and np.any(outer_max - outer_min > inner_max - inner_min + 1e-9)
                     and _point_in_closed_path(probe, outer.points)):
                 depths[index] += 1
-    return depths
+                nested[index] = True
+                nested[other_index] = True
+    return depths, nested
+
+
+def _containment_depths(paths: list[Polyline]) -> list[int]:
+    """Return closed-contour nesting depths; open paths remain depth zero."""
+    return _containment_plan(paths)[0]
 
 
 def _containment_aware_nearest_order(paths: list[Polyline], start: np.ndarray) -> list[Polyline]:
@@ -300,6 +308,17 @@ def _containment_aware_nearest_order(paths: list[Polyline], start: np.ndarray) -
         if selected:
             current = selected[-1].points[-1].copy()
     return ordered
+
+
+def _containment_aware_source_order(paths: list[Polyline]) -> list[Polyline]:
+    """Keep source order within each depth while always scheduling holes first."""
+    depths = _containment_depths(paths)
+    return [
+        path
+        for depth in sorted(set(depths), reverse=True)
+        for path, path_depth in zip(paths, depths, strict=True)
+        if path_depth == depth
+    ]
 
 
 def _bounds(paths: Iterable[Polyline]) -> tuple[float, float, float, float]:
@@ -1711,15 +1730,24 @@ def generate_project_gcode(
                 },
             )
         )
-        for pass_index in range(layer.passes):
-            lines.append(f"; Pass {pass_index + 1}/{layer.passes}")
-            lines.append(
-                e3_metadata_line(
-                    "pass",
-                    {"index": pass_index + 1, "count": layer.passes},
-                )
+        nested_order: list[Polyline] | None = None
+        nested_flags: list[bool] | None = None
+        if layer.mode == LayerMode.LINE and any(_containment_plan(paths)[1]):
+            nested_order = (
+                _containment_aware_nearest_order(paths, current)
+                if nearest_enabled
+                else _containment_aware_source_order(paths)
             )
+            nested_flags = _containment_plan(nested_order)[1]
+        for pass_index in range(layer.passes):
             if layer.mode == LayerMode.RASTER:
+                lines.append(f"; Pass {pass_index + 1}/{layer.passes}")
+                lines.append(
+                    e3_metadata_line(
+                        "pass",
+                        {"index": pass_index + 1, "count": layer.passes},
+                    )
+                )
                 rows = layer_plan.raster_rows
                 if pass_index % 2:
                     rows = [
@@ -1775,64 +1803,88 @@ def generate_project_gcode(
                     np.linalg.norm(source_motion[0] - comparison_position)
                 )
                 comparison_position = source_motion[-1]
-            ordered = _containment_aware_nearest_order(paths, current) if nearest_enabled else paths
-            for path in ordered:
-                points = path.points
-                if len(points) < 2:
+            if nested_order is not None:
+                ordered = nested_order
+                assert nested_flags is not None
+                nested = nested_flags
+            else:
+                ordered = _nearest_order(paths, current) if nearest_enabled else paths
+                nested = [False] * len(ordered)
+            for path, is_nested in zip(ordered, nested, strict=True):
+                if is_nested and pass_index > 0:
                     continue
-                lines.append(e3_metadata_line("path", {"name": path.source_tag}))
-                travel_target = points[0]
-                travel = float(np.linalg.norm(travel_target - current))
-                planned_order_travel += travel
-                layer_travel += travel
-                travel_length += travel
-                lines.append(
-                    f"G0 X{_fmt(travel_target[0])} Y{_fmt(travel_target[1])} "
-                    f"F{_fmt(laser.travel_feed_mm_min)}"
-                )
-                if power > 0:
-                    lines.append(f"{laser.power_mode.upper()} S{power}")
-                motions = (
-                    corrected_vector_motions(
-                        points,
-                        base_power=power,
-                        correction=layer.vector_power_correction,
-                        power_max=controller_power_max,
-                        feed_mm_min=layer.speed_mm_min,
-                        acceleration_mm_s2=laser.preview_acceleration_mm_s2,
-                    )
-                    if power > 0
-                    else []
-                )
-                commanded_power = power
-                for point in points[1:]:
-                    if power > 0:
+                path_passes = range(layer.passes) if is_nested else (pass_index,)
+                for path_pass_index in path_passes:
+                    points = path.points
+                    if len(points) < 2:
                         continue
                     lines.append(
-                        f"G1 X{_fmt(point[0])} Y{_fmt(point[1])} "
-                        f"F{_fmt(layer.speed_mm_min)}"
+                        f"; Pass {path_pass_index + 1}/{layer.passes}"
                     )
-                for motion in motions:
-                    power_word = ""
-                    if motion.power != commanded_power:
-                        power_word = f" S{motion.power}"
-                        commanded_power = motion.power
                     lines.append(
-                        f"G1 X{_fmt(motion.x)} Y{_fmt(motion.y)} "
-                        f"F{_fmt(layer.speed_mm_min)}{power_word}"
+                        e3_metadata_line(
+                            "pass",
+                            {
+                                "index": path_pass_index + 1,
+                                "count": layer.passes,
+                            },
+                        )
                     )
-                lines.append("M5")
-                distance = _length(points)
-                if power > 0:
-                    layer_cut += distance
-                    cut_length += distance
-                else:
-                    layer_travel += distance
-                    travel_length += distance
-                point_count += len(points)
-                path_count += 1
-                layer_path_count += 1
-                current = points[-1]
+                    lines.append(
+                        e3_metadata_line("path", {"name": path.source_tag})
+                    )
+                    travel_target = points[0]
+                    travel = float(np.linalg.norm(travel_target - current))
+                    planned_order_travel += travel
+                    layer_travel += travel
+                    travel_length += travel
+                    lines.append(
+                        f"G0 X{_fmt(travel_target[0])} Y{_fmt(travel_target[1])} "
+                        f"F{_fmt(laser.travel_feed_mm_min)}"
+                    )
+                    if power > 0:
+                        lines.append(f"{laser.power_mode.upper()} S{power}")
+                    motions = (
+                        corrected_vector_motions(
+                            points,
+                            base_power=power,
+                            correction=layer.vector_power_correction,
+                            power_max=controller_power_max,
+                            feed_mm_min=layer.speed_mm_min,
+                            acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                        )
+                        if power > 0
+                        else []
+                    )
+                    commanded_power = power
+                    for point in points[1:]:
+                        if power > 0:
+                            continue
+                        lines.append(
+                            f"G1 X{_fmt(point[0])} Y{_fmt(point[1])} "
+                            f"F{_fmt(layer.speed_mm_min)}"
+                        )
+                    for motion in motions:
+                        power_word = ""
+                        if motion.power != commanded_power:
+                            power_word = f" S{motion.power}"
+                            commanded_power = motion.power
+                        lines.append(
+                            f"G1 X{_fmt(motion.x)} Y{_fmt(motion.y)} "
+                            f"F{_fmt(layer.speed_mm_min)}{power_word}"
+                        )
+                    lines.append("M5")
+                    distance = _length(points)
+                    if power > 0:
+                        layer_cut += distance
+                        cut_length += distance
+                    else:
+                        layer_travel += distance
+                        travel_length += distance
+                    point_count += len(points)
+                    path_count += 1
+                    layer_path_count += 1
+                    current = points[-1]
         summaries.append(
             {
                 "layer_id": layer.id,

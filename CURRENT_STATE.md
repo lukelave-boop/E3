@@ -18,7 +18,7 @@ loopback tests and Python bytecode compilation pass in an isolated harness. The
 restored GitHub Actions matrix passes on Ubuntu with Python 3.10, 3.11, and
 3.12, and on Windows with Python 3.10 and 3.12; the Python 3.12 jobs include the
 desktop extras and offscreen Qt suite. Ruff, dependency checks, and bytecode
-compilation pass in that same run. Local Linux verification also includes 1,729
+compilation pass in that same run. Local Linux verification also includes 1,737
 repository-wide tests, 1,371 portable tests without PySide6, and the focused
 network tests. No Pi, physical Windows host, camera, controller, disconnect,
 calibration, or powered physical test has been performed. Treat the network
@@ -217,7 +217,10 @@ two-flat circle, and washer. New `shape_grid` recipes retain row-major identity
 and bounding-box spacing; legacy `rectangle_grid` version-1 templates migrate
 as rounded rectangles. Washer OD/ID is stored as one logical compound object,
 and containment-aware vector ordering cuts nested closed contours deepest-first
-before nearest-travel optimization. Template features carry semantic shape and
+before nearest-travel optimization. Every nested contour now completes all of
+its configured passes before its containing parent begins, independent of
+winding, while unrelated contours retain pass-major ordering. Template features
+carry semantic shape and
 optional hole ratio, while legacy/unknown matching retains geometric fallback.
 Direct Trace classification now recognizes high-confidence circle, ellipse,
 triangle, regular-polygon, and washer silhouettes without forcing weak
@@ -250,8 +253,9 @@ borders by about 0.02 mm in width and 0.04 mm in height. The operator's visible
 not an alignment-preserving cleanup setting. No powered recovery cut was run as
 part of this software verification.
 Automated geometry, migration, UI, matching, Trace, and toolpath tests cover
-the implementation. No generated shape or containment ordering has been run on
-physical hardware.
+the implementation, including three-pass washers, reversed contours, multiple
+washers, imported compound paths, and three nesting depths. No generated shape
+or containment ordering has been run on physical hardware.
 
 Per-operation and material-preset Power Correction is implemented as a bounded,
 material-specific commanded-power bias layered over GRBL `M4`. Vector paths use

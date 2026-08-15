@@ -166,7 +166,9 @@ A washer is one logical path object containing concentric outer and inner
 closed contours. Its grid footprint uses the outer diameter. Vector planning
 uses geometric containment—not winding direction—to cut nested contours from
 deepest to outermost before applying nearest-path optimization within a nesting
-level.
+level. Each nested contour completes every configured pass before its containing
+parent starts; the rule applies equally to template, traced, and imported closed
+contours. Unrelated contours retain pass-major scheduling.
 
 Only visible, output-enabled project objects are copied. Their positions are
 normalized around the center of their combined bounds. Original project
