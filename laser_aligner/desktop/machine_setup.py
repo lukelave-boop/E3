@@ -35,6 +35,9 @@ def _work_area_reference_overlay(
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     support_reference: HoneycombSupportReference | None = None,
     picked_image_points: tuple[tuple[float, float], ...] = (),
+    safe_carriage_area_mm: tuple[float, float, float, float] | None = None,
+    combined_usable_polygon_mm: tuple[tuple[float, float], ...] | None = None,
+    permanent_fixture: bool = False,
 ) -> np.ndarray:
     """Draw machine-coordinate and guarded-output references on a raw frame."""
 
@@ -182,6 +185,37 @@ def _work_area_reference_overlay(
             cv2.LINE_AA,
         )
 
+    if safe_carriage_area_mm is not None:
+        safe_x_min, safe_x_max, safe_y_min, safe_y_max = safe_carriage_area_mm
+        beam_reach = (
+            float(safe_x_min) + float(spot_offset_x_mm),
+            float(safe_x_max) + float(spot_offset_x_mm),
+            float(safe_y_min) + float(spot_offset_y_mm),
+            float(safe_y_max) + float(spot_offset_y_mm),
+        )
+        rectangle(beam_reach, (230, 205, 40), border_width)
+
+    if combined_usable_polygon_mm:
+        usable_points: list[tuple[int, int]] = []
+        for index, start in enumerate(combined_usable_polygon_mm):
+            end = combined_usable_polygon_mm[
+                (index + 1) % len(combined_usable_polygon_mm)
+            ]
+            segment = sampled_line(start, end)
+            usable_points.extend(tuple(point[0]) for point in segment)
+        usable_array = np.asarray(usable_points, dtype=np.int32).reshape(-1, 1, 2)
+        fill_layer = preview.copy()
+        cv2.fillPoly(fill_layer, [usable_array], (210, 105, 35), cv2.LINE_AA)
+        cv2.addWeighted(fill_layer, 0.16, preview, 0.84, 0.0, preview)
+        cv2.polylines(
+            preview,
+            [usable_array],
+            True,
+            (255, 145, 55),
+            border_width,
+            cv2.LINE_AA,
+        )
+
     if support_reference is not None:
         support_points = support_reference.support_corners_machine_mm
         segments: list[tuple[int, int]] = []
@@ -288,6 +322,19 @@ def _work_area_reference_overlay(
             support_y_end,
             color=(220, 95, 205),
             prefix="H",
+        )
+
+    if permanent_fixture and support_reference is not None:
+        origin_px = project([support_reference.coordinate_frame.origin_machine_mm])[0, 0]
+        cv2.putText(
+            preview,
+            "PERMANENT FIXTURE",
+            (int(origin_px[0]) + 8, int(origin_px[1]) - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            max(0.55, label_scale * 0.55),
+            (220, 95, 205),
+            label_thickness,
+            cv2.LINE_AA,
         )
 
     marker_radius = max(7, int(round(short_edge / 90.0)))
@@ -1290,8 +1337,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
         layout.addWidget(left_widget, 3)
 
         right_widget = QtWidgets.QWidget()
-        right_widget.setMinimumWidth(280)
-        right_widget.setMaximumWidth(430)
+        # Keep the descriptive honeycomb actions readable under Windows and
+        # large-text font metrics. The left preview can shrink substantially,
+        # while clipping these labels makes the calibration workflow ambiguous.
+        right_widget.setMinimumWidth(390)
+        right_widget.setMaximumWidth(520)
         right_widget.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -1315,6 +1365,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 ("Camera / work boundary", "rgb(255, 165, 0)"),
                 ("Guarded laser output", "rgb(90, 220, 70)"),
                 ("Detected honeycomb rulers", "rgb(205, 95, 220)"),
+                ("Measured beam reach", "rgb(40, 205, 230)"),
+                ("Combined usable fixture area", "rgb(55, 145, 255)"),
             )
         ):
             swatch = QtWidgets.QFrame()
@@ -1327,8 +1379,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         reference_note = QtWidgets.QLabel(
             "Compare both rigid honeycomb rulers to the 10 mm machine grid; large "
             "coordinate labels mark every 40 mm. This diagnoses origin, scale, and "
-            "crop discrepancies; a movable ruler does not prove laser reach and "
-            "this visual annotation never calibrates or authorizes output."
+            "crop discrepancies. A visible honeycomb edge does not prove laser "
+            "reach, and this visual annotation never calibrates or authorizes output."
         )
         reference_note.setWordWrap(True)
         reference_note.setMinimumWidth(0)
@@ -1406,6 +1458,19 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.honeycomb_support_clear_button.clicked.connect(
             self.clear_honeycomb_support_reference
         )
+        for button in (
+            self.honeycomb_support_auto_button,
+            self.honeycomb_support_record_button,
+            self.honeycomb_support_clear_button,
+        ):
+            # Preserve complete action labels under the 13-point Windows CI
+            # font as well as the OptiPlex theme. The enclosing column has a
+            # matching minimum width and the preview is the flexible pane.
+            button.setMinimumWidth(360)
+            button.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.MinimumExpanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
         support_buttons.addWidget(self.honeycomb_support_auto_button, 0, 0)
         support_buttons.addWidget(self.honeycomb_support_record_button, 1, 0)
         support_buttons.addWidget(self.honeycomb_support_clear_button, 2, 0)
@@ -1832,6 +1897,18 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.audit_panel.captureRequested.connect(self.capture_work_area_reference)
         self.audit_panel.refreshRequested.connect(self._refresh_coordinate_audit)
         self.audit_panel.copyRequested.connect(self.copy_coordinate_audit_report)
+        self.audit_panel.fixtureModeRequested.connect(
+            self.set_honeycomb_fixture_mode
+        )
+        self.audit_panel.reachAreaSaveRequested.connect(
+            self.save_honeycomb_safe_travel_area
+        )
+        self.audit_panel.reachLimitRecordRequested.connect(
+            self.record_honeycomb_safe_travel_limit
+        )
+        self.audit_panel.reachLimitsClearRequested.connect(
+            self.clear_honeycomb_safe_travel_limits
+        )
 
         # Public aliases keep Machine Setup tests and automation readable.
         self.audit_capture_button = self.audit_panel.capture_button
@@ -1891,6 +1968,111 @@ class MachineSetupDialog(QtWidgets.QDialog):
             json.dumps(payload, indent=2, sort_keys=True)
         )
         self.operation_status.setText("Coordinate audit report copied to clipboard")
+
+    def set_honeycomb_fixture_mode(self, mode: str) -> None:
+        value = str(mode)
+        labels = {
+            "unclassified": "not classified",
+            "permanent": "permanent / immovable",
+            "movable": "movable / reseatable",
+        }
+        if value not in labels:
+            self.audit_panel.set_reach_message("Invalid fixture classification.")
+            return
+        if value == "permanent":
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                "Mark honeycomb as permanent",
+                "Record this honeycomb as a permanent, immovable machine fixture?\n\n"
+                "Coordinate Audit will stop recommending that it be repositioned. "
+                "This changes guidance only; it does not change machine bounds, "
+                "GRBL settings, G-code, or laser authority.",
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.Cancel,
+                QtWidgets.QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+        result = self._message(
+            "Fixture classification",
+            lambda: self.context.set_honeycomb_fixture_mode(value),
+        )
+        if result is not None:
+            self.audit_panel.set_reach_message(
+                f"Fixture classification saved as {labels[value]}."
+            )
+            self._refresh_coordinate_audit()
+            self._render_work_area_reference_preview()
+
+    def save_honeycomb_safe_travel_area(self, payload: object) -> None:
+        if not isinstance(payload, dict):
+            self.audit_panel.set_reach_message("Safe travel limits are invalid.")
+            return
+        answer = QtWidgets.QMessageBox.warning(
+            self,
+            "Save laser-off reach evidence",
+            "Save these operator-measured safe carriage limits?\n\n"
+            "This is diagnostic evidence only. It does not change GRBL settings, "
+            "machine.work_area, G-code, arming, or laser-output authority. Do not "
+            "enter a crash point; use the largest clearly safe laser-off position.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        result = self._message(
+            "Save laser-off reach evidence",
+            lambda: self.context.save_honeycomb_safe_travel_area(
+                x_min_mm=float(payload["x_min"]),
+                x_max_mm=float(payload["x_max"]),
+                y_min_mm=float(payload["y_min"]),
+                y_max_mm=float(payload["y_max"]),
+            ),
+        )
+        if result is not None:
+            self.audit_panel.set_reach_message("Safe carriage limits recorded.")
+            self._refresh_coordinate_audit()
+            self._render_work_area_reference_preview()
+
+    def record_honeycomb_safe_travel_limit(self, key: str) -> None:
+        labels = {
+            "x_min": "X−",
+            "x_max": "X+",
+            "y_min": "Y−",
+            "y_max": "Y+",
+        }
+        result = self._message(
+            "Record laser-off reach limit",
+            lambda: self.context.record_honeycomb_safe_travel_limit(str(key)),
+        )
+        if result is not None:
+            self.audit_panel.set_reach_message(
+                f"Recorded {labels.get(str(key), str(key))} from the current trusted jog position."
+            )
+            self._refresh_coordinate_audit()
+            self._render_work_area_reference_preview()
+
+    def clear_honeycomb_safe_travel_limits(self) -> None:
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Clear reach evidence",
+            "Clear the recorded safe carriage limits? The permanent-fixture "
+            "classification will be retained.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        result = self._message(
+            "Clear reach evidence",
+            self.context.clear_honeycomb_safe_travel_limits,
+        )
+        if result is not None:
+            self.audit_panel.set_reach_message("Safe carriage limits cleared.")
+            self._refresh_coordinate_audit()
+            self._render_work_area_reference_preview()
 
     @staticmethod
     def _lens_capture_region(center: Any) -> str:
@@ -2598,6 +2780,23 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 )
             self.bed_preview.set_image(preview, preserve_view=True)
             return
+        audit = self.context.coordinate_audit_status()
+        reachability = audit.get("reachability") or {}
+        safe_area_raw = reachability.get("safe_carriage_area_mm")
+        safe_area = (
+            tuple(float(value) for value in safe_area_raw)
+            if isinstance(safe_area_raw, (list, tuple))
+            and len(safe_area_raw) == 4
+            else None
+        )
+        combined_raw = (reachability.get("combined") or {}).get(
+            "usable_polygon_machine_mm"
+        )
+        combined_polygon = (
+            tuple((float(point[0]), float(point[1])) for point in combined_raw)
+            if isinstance(combined_raw, list) and len(combined_raw) >= 3
+            else None
+        )
         preview = _work_area_reference_overlay(
             self._bed_image,
             self.context.bed,
@@ -2611,6 +2810,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 or self.context.honeycomb_support.reference
             ),
             picked_image_points=tuple(self._honeycomb_pick_points),
+            safe_carriage_area_mm=safe_area,
+            combined_usable_polygon_mm=combined_polygon,
+            permanent_fixture=bool(reachability.get("permanent_fixture")),
         )
         self.bed_preview.set_image(preview)
         if hasattr(self, "audit_preview"):

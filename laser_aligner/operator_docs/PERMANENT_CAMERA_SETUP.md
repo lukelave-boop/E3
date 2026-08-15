@@ -35,9 +35,10 @@ unlisted calibration step or interrupt a tab transition described here.
    profile needs Steps 1-5 once; returning to a previously completed focus and
    restarting restores that focus's full calibration stack.
 3. Confirm the configured machine/output envelope and camera pose match dated
-   physical verification. This rectangle is independent from the movable
+   physical verification. Those limits are independent from the permanent
    honeycomb job coordinates. The active E3 profile's printed zero-to-far-ruler
-   span is 191 × 191 mm.
+   span is 191 × 191 mm. Do not reposition the integrated honeycomb to satisfy a
+   software rectangle.
 4. Connect the camera. Connect the controller only when a step explicitly
    requires Home, park, commanded motion, or a guarded marking job.
 5. Open **Tools > Machine Setup**.
@@ -109,9 +110,10 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
    Compare the 10 mm machine grid (coordinate labels every 40 mm) to both rigid
    honeycomb rulers. If origin, scale, or an edge disagrees, stop and correct
    the camera-to-machine calibration evidence before repeating Step 3. Do not
-   resize the machine-output envelope merely to match the movable honeycomb.
-   The ruler overlay is a diagnostic, not automatic proof of laser reach.
-8. To establish the movable honeycomb's rigid job frame, confirm **Configured
+   resize the machine-output envelope merely to make it visually match the
+   permanent honeycomb. The ruler overlay is a diagnostic, not automatic proof
+   of laser reach.
+8. To establish the permanent honeycomb's rigid job frame, confirm **Configured
     physical ruler span** matches the printed zero-to-far-ruler distance. It is
     read-only in Setup and comes from the machine profile; the active E3 value is
     `191.000 mm`. Then click **Detect honeycomb automatically**. Vision segments the
@@ -146,15 +148,15 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
     machine-output envelope mapped into honeycomb coordinates; red observations
     outside green remain unchecked and blocked. The support frame cannot expand
     machine authority. The keyed 25-point map remains the sole camera-to-machine
-    calibration. Clear and automatically re-record the support frame whenever
-    the support shifts. A changed bed map also invalidates it.
+    calibration. The integrated honeycomb is not removed or reseated during
+    normal setup. Re-record its support only after service physically disturbs it
+    or after a changed bed map invalidates the binding.
 
-9. Install rigid locating stops that constrain translation and rotation without
-   bowing the honeycomb. Remove and reseat it twenty times, running automatic
-   detection after each reseat. Record the maximum four-corner displacement.
-   Do not treat the support as repeatable until every cycle meets the chosen
-   tolerance. This repeatability study is a physical acceptance test, not a
-   software calibration gate.
+9. Open **Coordinate audit**, classify the honeycomb as **Permanent /
+   immovable**, and save that classification. Repeat Home/park + audit capture
+   without moving the fixture to assess machine/camera repeatability. Do not use
+   a movable-support reseating study for this installation. Full-support laser
+   reach remains a separate pre-production physical audit.
 
 **Continue directly to Step 4 when:** the reviewed base map has been applied,
 the ruler overlay has no unexplained origin, scale, or crop discrepancy, and a
@@ -177,6 +179,14 @@ shows the corrected camera pixel, machine coordinate, honeycomb-local
 coordinate, and spot-corrected carriage coordinate. Existing 190 mm support
 files are intentionally marked stale under the 191 mm profile; run fresh
 automatic four-edge detection rather than stretching old evidence.
+
+For this machine, save **Permanent / immovable** as the fixture classification.
+Registration readiness and full-support reachability are separate. Reach limits
+may be entered from a dated laser-off audit or recorded from trusted jog
+positions only while the process is started with `--laser-lockout`. The saved
+limits do not change GRBL, machine bounds, G-code, arming, laser power, or output
+authority. Cyan shows carriage-derived beam reach and blue shows the intersection
+of measured reach with the configured work and guarded-output authorities.
 
 ## 4. Fine Registration
 
@@ -256,17 +266,21 @@ before relying on normal production output:
 
 1. Keep the laser incapable of emission. If either axis was moved by hand,
    reconnect when required and run **Home / park** before commanding motion.
-2. In the main **Machine** panel, choose a small Jog step (`0.1 mm` or `1 mm`)
-   and a conservative speed, then use **X−**, **X+**, **Y−**, and **Y+** to
-   confirm direction and measure the physical limits. Each press begins with
-   `M5` and uses the trusted Home / park position. Jogging intentionally does
-   not apply the configured work-area rectangle, because this is the control
-   used to determine whether that rectangle is correct; approach a mechanical
-   endpoint with progressively smaller steps.
+2. Start E3 with `--laser-lockout`. In the main **Machine** panel, choose a
+   small Jog step (`0.1 mm` or `1 mm`) and a conservative speed, then use **X−**,
+   **X+**, **Y−**, and **Y+** to confirm direction and measure the largest clearly
+   safe carriage positions. Each press begins with `M5` and uses the trusted
+   Home / park position. Jogging intentionally does not apply the configured
+   work-area rectangle because it is the measurement control; never seek a
+   crash point. After each endpoint, reopen Coordinate Audit and choose the
+   corresponding **Record current** action, or enter the complete dated limits.
+   Review the resulting cyan measured reach and blue combined usable fixture
+   area. Do not move the permanent honeycomb.
 3. A fresh keyed base map records normal generated-coordinate labels
    automatically. Change a Reverse toggle only when repeated physical evidence
    proves that a legacy or manually labeled map is mirrored.
-4. Back up the accepted lens, bed, registration, and validation files.
+4. Back up the accepted lens, bed, support, fixture-reach, registration, and
+   validation files.
 
 ## Capture Hold Contract
 

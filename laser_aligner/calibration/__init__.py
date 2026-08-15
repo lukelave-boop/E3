@@ -11,6 +11,11 @@ from .profiles import (
     CalibrationProfileStore,
     signature_from_camera_settings,
 )
+from .reach import (
+    FixtureReachEvidence,
+    FixtureReachStore,
+    build_fixture_reachability,
+)
 from .support import HoneycombSupportReference, HoneycombSupportStore
 
 __all__ = [
@@ -18,8 +23,11 @@ __all__ = [
     "BedMapper",
     "BedPoint",
     "build_coordinate_audit_status",
+    "build_fixture_reachability",
     "CalibrationProfileSignature",
     "CalibrationProfileStore",
+    "FixtureReachEvidence",
+    "FixtureReachStore",
     "HoneycombSupportReference",
     "HoneycombSupportStore",
     "honeycomb_support_validity",

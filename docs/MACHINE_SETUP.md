@@ -187,7 +187,8 @@ authorize this step.
    it never changes configuration automatically and does not prove laser reach
    or collision clearance. If it exposes a discrepancy, stop and correct the
    camera/machine calibration evidence before proceeding. Do not resize the
-   machine-output envelope merely to match the movable honeycomb.
+   machine-output envelope merely to make it visually match the honeycomb. A
+   permanent fixture stays where it is; reachability must be measured around it.
 6. Confirm **Configured physical ruler span** matches the printed zero-to-far
    ruler span. The active E3 profile is `191.000 mm`; the field is read-only in
    Setup because physical size belongs to the machine profile, not to one
@@ -213,8 +214,10 @@ authorize this step.
    honeycomb-local job or any powered post-map Machine Setup job. Run automatic
    detection successfully before powered work.
 
-The execution-verifiable result defines the movable honeycomb's rigid
-honeycomb-local frame from zero through the configured physical span. The
+The execution-verifiable result defines the honeycomb's rigid local frame from
+zero through the configured physical span. Coordinate Audit separately classifies
+the support as permanent or movable; classification does not alter this camera
+registration. The
 active E3 profile is X0..191, Y0..191. The live camera, grid, Trace, and project
 geometry share that frame. Green maps the configured output authority into it.
 For the active hardware profile this is a fixed 210 × 210 mm machine polygon
@@ -224,8 +227,8 @@ expands it. Features outside green remain
 red, unchecked, and blocked. Ordinary machine-coordinate jobs retain their
 guarded rectangle. Preflight, arming, and execution use the same selected
 authority. The laser-burned keyed map remains the camera-to-machine
-calibration. Use **Clear visual reference** or re-detect automatically after the
-honeycomb moves.
+calibration. Use **Clear visual reference** or re-detect automatically after a
+movable support shifts, or after service physically disturbs a permanent fixture.
 
 The generated pattern contains 23 regular crosses plus a larger and a medium
 interior cross. Those two keys let the detector resolve rotation and reflection
@@ -286,7 +289,7 @@ On a bed-slinger, rigidly restrain the calibration surface or workpiece to the
 moving bed. Motion of the surface relative to the bed invalidates both the
 mapping and any alignment comparison made from its camera image.
 
-### Coordinate audit (read-only diagnostic)
+### Coordinate audit and physical-reach evidence
 
 The unnumbered **Coordinate audit** tab does not add a sixth calibration step.
 It collects the current machine/work rectangle, GRBL workspace and G92
@@ -317,6 +320,39 @@ offsets, motion or output bounds, G-code, camera calibration, support placement,
 or laser power. Realtime status sampling sends only GRBL's read-only `?` byte;
 failure to receive a usable status frame makes the audit capture untrusted but
 does not cancel the camera capture or change controller state.
+
+#### Permanent fixture and reach evidence
+
+Fixture classification and reach evidence are separate from the lens model, bed
+map, and accepted four-edge teaching image. Mark an integrated honeycomb
+**Permanent / immovable**; Coordinate Audit then stops recommending that it be
+repositioned. The classification is guidance and provenance only.
+
+With E3 started using `--laser-lockout`, laser-off safe carriage limits may be
+entered from a dated physical audit or recorded one endpoint at a time from the
+current trusted Home/park + jog position. Close Machine Setup to jog in the main
+Machine panel, reopen Coordinate Audit, and choose **Record current** for the
+corresponding X−, X+, Y−, or Y+ limit. Never record a crash point; use the largest
+clearly safe position. A serial-machine record also requires zero G54/G92 XY
+offsets.
+
+The saved limits are diagnostic evidence in `fixture_reach.json`. They never
+change `$130/$131`, `machine.work_area`, the guarded-output polygon, G-code,
+arming, or laser power. The audit reports three different questions:
+
+- **Registration readiness:** are the camera, lens, bed map, capture pose, and
+  accepted honeycomb frame current?
+- **Measured reach:** what beam region follows from the recorded safe carriage
+  limits and current laser-spot offset?
+- **Combined usable fixed-fixture area:** what portion of the honeycomb lies in
+  measured reach *and* the configured work and guarded-output authorities?
+
+GRBL `$20`, `$21`, `$130`, and `$131` are displayed as controller diagnostics,
+not as proof of physical reach. Cyan shows the beam reach derived from measured
+carriage limits; blue shows the combined usable fixed-fixture area. A partial or
+stale reach result does not move the fixture and does not silently expand output
+authority. Keep the unreachable portion blocked until configuration is revised
+from physical evidence and separately reviewed.
 
 ## 4. Fine registration
 

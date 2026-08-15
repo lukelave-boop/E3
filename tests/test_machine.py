@@ -2251,6 +2251,36 @@ def test_grbl_step_idle_delay_parser_accepts_report_variants_only(
     assert MachineService._reported_grbl_step_idle_delay(responses) == expected
 
 
+def test_grbl_settings_parser_exposes_travel_and_limit_configuration() -> None:
+    settings = MachineService._reported_grbl_settings(
+        [
+            "$20=0",
+            "$21=1",
+            "$130=220.000",
+            "$131 = 215 (Y max travel, mm)",
+            "ok",
+        ]
+    )
+
+    assert settings == {
+        "20": 0.0,
+        "21": 1.0,
+        "130": 220.0,
+        "131": 215.0,
+    }
+
+
+def test_machine_status_reports_last_grbl_settings_snapshot() -> None:
+    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings())
+    machine._last_grbl_settings = {"20": 0.0, "130": 220.0}
+
+    status = machine.status()
+
+    assert status["grbl_settings"] == {"20": 0.0, "130": 220.0}
+    status["grbl_settings"]["130"] = 999.0
+    assert machine.status()["grbl_settings"]["130"] == 220.0
+
+
 def test_home_park_waits_for_serial_connection_initialization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

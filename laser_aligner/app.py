@@ -31,6 +31,7 @@ from .calibration.bed import (
 )
 from .calibration.lens import LensCalibrator
 from .calibration.profiles import CalibrationProfileStore, signature_from_camera_settings
+from .calibration.reach import FixtureReachStore
 from .calibration.registration import (
     AccuracyValidationJob,
     BaseBedCalibrationJob,
@@ -66,7 +67,7 @@ from .camera.service import (
     list_video_devices,
 )
 from .config import Settings, WorkArea
-from .errors import CalibrationError
+from .errors import CalibrationError, SafetyError
 from .gcode.generator import (
     DesignPlacement,
     ToolpathOptions,
@@ -260,6 +261,7 @@ class AppContext:
         self.lens = LensCalibrator(calibration_dir, settings.calibration.lens)
         self.bed = BedMapper(calibration_dir, settings.calibration.bed, settings.machine.work_area)
         self.honeycomb_support = HoneycombSupportStore(calibration_dir)
+        self.fixture_reach = FixtureReachStore(settings.app.data_dir)
         self.machine = MachineService(
             settings.machine,
             settings.laser,
@@ -1768,6 +1770,104 @@ class AppContext:
             expected_span_mm=self.settings.calibration.bed.honeycomb_span_mm,
         )
 
+    def set_honeycomb_fixture_mode(self, mode: str) -> dict[str, Any]:
+        """Classify the support without changing calibration or machine settings."""
+
+        evidence = self.fixture_reach.set_fixture_mode(str(mode))
+        return evidence.to_dict()
+
+    def save_honeycomb_safe_travel_area(
+        self,
+        *,
+        x_min_mm: float,
+        x_max_mm: float,
+        y_min_mm: float,
+        y_max_mm: float,
+    ) -> dict[str, Any]:
+        """Persist operator-measured carriage limits as diagnostic evidence."""
+
+        status = self.machine.status()
+        if status.get("laser_lockout") is not True:
+            raise SafetyError(
+                "Start E3 with --laser-lockout before recording safe travel evidence"
+            )
+        if self.fixture_reach.evidence.fixture_mode != "permanent":
+            raise CalibrationError(
+                "Mark the honeycomb as a permanent fixture before recording reach evidence"
+            )
+        evidence = self.fixture_reach.set_safe_travel_area(
+            x_min_mm=float(x_min_mm),
+            x_max_mm=float(x_max_mm),
+            y_min_mm=float(y_min_mm),
+            y_max_mm=float(y_max_mm),
+            source="operator_entry",
+            machine_port=str(status.get("port") or self.settings.machine.port),
+            protocol=str(status.get("protocol") or self.settings.machine.protocol),
+        )
+        return evidence.to_dict()
+
+    @staticmethod
+    def _zero_xy_coordinate_state(state: object) -> bool:
+        if not isinstance(state, Mapping):
+            return False
+        for key in ("active_offset_mm", "g92_offset_mm"):
+            value = state.get(key)
+            if not isinstance(value, (list, tuple)) or len(value) < 2:
+                return False
+            if any(
+                type(component) not in {int, float}
+                or not math.isfinite(float(component))
+                or abs(float(component)) > 0.001
+                for component in value[:2]
+            ):
+                return False
+        return True
+
+    def record_honeycomb_safe_travel_limit(self, key: str) -> dict[str, Any]:
+        """Record one limit from the current trusted laser-off jog position."""
+
+        status = self.machine.status()
+        if status.get("laser_lockout") is not True:
+            raise SafetyError(
+                "Start E3 with --laser-lockout before recording safe travel evidence"
+            )
+        if self.fixture_reach.evidence.fixture_mode != "permanent":
+            raise CalibrationError(
+                "Mark the honeycomb as a permanent fixture before recording reach evidence"
+            )
+        if status.get("jog_ready") is not True:
+            raise SafetyError(
+                "Home / park and complete the laser-off jog before recording this limit"
+            )
+        if (
+            self.settings.machine.backend == "serial"
+            and not self._zero_xy_coordinate_state(
+                status.get("coordinate_state_reference")
+            )
+        ):
+            raise SafetyError(
+                "Reach evidence requires zero G54/G92 XY offsets; run Home / park again"
+            )
+        position = status.get("jog_position_mm")
+        if not isinstance(position, Mapping):
+            raise SafetyError("The current trusted jog position is unavailable")
+        x = float(position["x"])
+        y = float(position["y"])
+        coordinate = x if str(key).startswith("x_") else y
+        evidence = self.fixture_reach.record_limit(
+            str(key),
+            value_mm=coordinate,
+            position_mm=(x, y),
+            machine_port=str(status.get("port") or self.settings.machine.port),
+            protocol=str(status.get("protocol") or self.settings.machine.protocol),
+        )
+        return evidence.to_dict()
+
+    def clear_honeycomb_safe_travel_limits(self) -> dict[str, Any]:
+        """Clear only reach evidence; fixture classification is retained."""
+
+        return self.fixture_reach.clear_limits().to_dict()
+
     def coordinate_audit_status(self) -> dict[str, Any]:
         """Report every active coordinate frame without commanding hardware."""
 
@@ -1799,6 +1899,8 @@ class AppContext:
             bed_status=self.bed_status(lens_model_id=lens_model_id),
             support_reference=self.honeycomb_support.reference,
             honeycomb_execution_signature=self.honeycomb_execution_signature(),
+            fixture_reach_evidence=self.fixture_reach.evidence,
+            fixture_reach_load_error=self.fixture_reach.load_error,
         )
 
     def inspect_coordinate_point(
@@ -1817,6 +1919,7 @@ class AppContext:
             source_image_point=(float(image_x), float(image_y)),
             source_image_size=source_image_size,
             support_reference=self.honeycomb_support.reference,
+            fixture_reach_evidence=self.fixture_reach.evidence,
         )
         result["honeycomb_reference_state"] = self.honeycomb_support_status()[
             "state"

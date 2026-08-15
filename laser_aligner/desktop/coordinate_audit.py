@@ -5,15 +5,19 @@ from typing import Any
 
 from .qt import require_qt
 
-QtCore, _QtGui, QtWidgets = require_qt()
+QtCore, QtGui, QtWidgets = require_qt()
 
 
 class CoordinateAuditPanel(QtWidgets.QWidget):
-    """Read-only presentation for the active camera and machine coordinate frames."""
+    """Present coordinate truth and separately recorded physical-reach evidence."""
 
     captureRequested = QtCore.Signal()
     refreshRequested = QtCore.Signal()
     copyRequested = QtCore.Signal()
+    fixtureModeRequested = QtCore.Signal(str)
+    reachAreaSaveRequested = QtCore.Signal(object)
+    reachLimitRecordRequested = QtCore.Signal(str)
+    reachLimitsClearRequested = QtCore.Signal()
 
     def __init__(
         self,
@@ -91,6 +95,106 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         )
         right.addWidget(self.next_action)
 
+        self.reach_group = QtWidgets.QGroupBox(
+            "Permanent fixture and laser-off reach evidence"
+        )
+        self.reach_group.setObjectName("coordinateAuditReachGroup")
+        reach_layout = QtWidgets.QVBoxLayout(self.reach_group)
+        reach_note = QtWidgets.QLabel(
+            "Classify the honeycomb independently from camera calibration. Safe "
+            "carriage limits are operator evidence only: saving them never changes "
+            "GRBL, machine.work_area, G-code, or laser-output authority. To measure "
+            "a limit, close Setup, use the main Machine panel to Home / park and jog "
+            "with laser lockout active, then reopen this tab and record the trusted "
+            "current position."
+        )
+        reach_note.setWordWrap(True)
+        reach_note.setObjectName("mutedLabel")
+        reach_layout.addWidget(reach_note)
+
+        mode_row = QtWidgets.QHBoxLayout()
+        mode_row.addWidget(QtWidgets.QLabel("Fixture classification"))
+        self.fixture_mode = QtWidgets.QComboBox()
+        self.fixture_mode.setObjectName("coordinateAuditFixtureMode")
+        self.fixture_mode.addItem("Not classified", "unclassified")
+        self.fixture_mode.addItem("Permanent / immovable", "permanent")
+        self.fixture_mode.addItem("Movable / reseatable", "movable")
+        self.fixture_mode_save = QtWidgets.QPushButton("Save classification")
+        self.fixture_mode_save.setObjectName("coordinateAuditFixtureModeSave")
+        self.fixture_mode_save.clicked.connect(
+            lambda: self.fixtureModeRequested.emit(
+                str(self.fixture_mode.currentData())
+            )
+        )
+        mode_row.addWidget(self.fixture_mode, 1)
+        mode_row.addWidget(self.fixture_mode_save)
+        reach_layout.addLayout(mode_row)
+
+        self.reach_status = QtWidgets.QLabel()
+        self.reach_status.setObjectName("coordinateAuditReachStatus")
+        self.reach_status.setWordWrap(True)
+        self.reach_status.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        reach_layout.addWidget(self.reach_status)
+        self.reach_current_position = QtWidgets.QLabel(
+            "Current trusted jog position: unavailable"
+        )
+        self.reach_current_position.setObjectName(
+            "coordinateAuditReachCurrentPosition"
+        )
+        self.reach_current_position.setWordWrap(True)
+        reach_layout.addWidget(self.reach_current_position)
+
+        validator = QtGui.QDoubleValidator(-10000.0, 10000.0, 3, self)
+        validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
+        limits_grid = QtWidgets.QGridLayout()
+        self.reach_limit_edits: dict[str, QtWidgets.QLineEdit] = {}
+        self.reach_record_buttons: dict[str, QtWidgets.QPushButton] = {}
+        labels = (
+            ("x_min", "X− safe carriage limit"),
+            ("x_max", "X+ safe carriage limit"),
+            ("y_min", "Y− safe carriage limit"),
+            ("y_max", "Y+ safe carriage limit"),
+        )
+        for row, (key, label) in enumerate(labels):
+            edit = QtWidgets.QLineEdit()
+            edit.setObjectName(f"coordinateAuditReach_{key}")
+            edit.setPlaceholderText("Not recorded")
+            edit.setValidator(validator)
+            edit.setMaximumWidth(145)
+            button = QtWidgets.QPushButton("Record current")
+            button.setObjectName(f"coordinateAuditRecord_{key}")
+            button.clicked.connect(
+                lambda _checked=False, key=key: (
+                    self.reachLimitRecordRequested.emit(key)
+                )
+            )
+            limits_grid.addWidget(QtWidgets.QLabel(label), row, 0)
+            limits_grid.addWidget(edit, row, 1)
+            limits_grid.addWidget(QtWidgets.QLabel("mm"), row, 2)
+            limits_grid.addWidget(button, row, 3)
+            self.reach_limit_edits[key] = edit
+            self.reach_record_buttons[key] = button
+        limits_grid.setColumnStretch(0, 1)
+        reach_layout.addLayout(limits_grid)
+
+        reach_actions = QtWidgets.QHBoxLayout()
+        self.reach_save_button = QtWidgets.QPushButton(
+            "Save entered safe limits"
+        )
+        self.reach_save_button.setObjectName("coordinateAuditReachSave")
+        self.reach_save_button.clicked.connect(self._emit_reach_area)
+        self.reach_clear_button = QtWidgets.QPushButton("Clear reach evidence")
+        self.reach_clear_button.setObjectName("coordinateAuditReachClear")
+        self.reach_clear_button.clicked.connect(
+            self.reachLimitsClearRequested.emit
+        )
+        reach_actions.addWidget(self.reach_save_button, 1)
+        reach_actions.addWidget(self.reach_clear_button)
+        reach_layout.addLayout(reach_actions)
+        right.addWidget(self.reach_group)
+
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setObjectName("coordinateAuditTree")
         self.tree.setColumnCount(2)
@@ -129,7 +233,10 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         right.addWidget(self.point_group)
         legend = QtWidgets.QLabel(
             "Orange = configured machine/work rectangle · Green = guarded laser-output "
-            "authority · Magenta = measured honeycomb · X+/Y+ arrows show frame directions."
+            "authority · Magenta = measured honeycomb · Cyan = beam reach derived from "
+            "measured carriage limits · Blue fill = combined usable fixed-fixture area · "
+            "X+/Y+ arrows "
+            "show frame directions."
         )
         legend.setWordWrap(True)
         legend.setObjectName("mutedLabel")
@@ -138,6 +245,43 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         self.splitter.setStretchFactor(0, 3)
         self.splitter.setStretchFactor(1, 2)
         self.splitter.setSizes([430, 430])
+
+    def _emit_reach_area(self) -> None:
+        values: dict[str, float] = {}
+        for key, edit in self.reach_limit_edits.items():
+            text = edit.text().strip()
+            if not text:
+                self.reach_status.setText(
+                    "All four safe carriage limits are required before saving."
+                )
+                return
+            try:
+                values[key] = float(text)
+            except ValueError:
+                self.reach_status.setText(
+                    f"{key.replace('_', ' ')} is not a valid number."
+                )
+                return
+        if values["x_max"] <= values["x_min"]:
+            self.reach_status.setText("X+ must be greater than X−.")
+            return
+        if values["y_max"] <= values["y_min"]:
+            self.reach_status.setText("Y+ must be greater than Y−.")
+            return
+        self.reachAreaSaveRequested.emit(values)
+
+    @staticmethod
+    def _set_line_if_idle(edit: QtWidgets.QLineEdit, value: Any) -> None:
+        if edit.hasFocus():
+            return
+        edit.setText(
+            ""
+            if value is None
+            else f"{float(value):.3f}"
+        )
+
+    def set_reach_message(self, message: str) -> None:
+        self.reach_status.setText(str(message))
 
     def _update_splitter_orientation(self) -> None:
         wide = self.width() >= 1080
@@ -198,18 +342,31 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
 
     def set_status(self, audit: dict[str, Any]) -> None:
         state = str(audit.get("overall_state") or "BLOCKED")
+        registration_state = str(audit.get("registration_state") or state)
+        reachability_state = str(
+            audit.get("reachability_state") or "UNCLASSIFIED"
+        )
         honeycomb = audit.get("honeycomb") or {}
         expected_span = float(honeycomb.get("expected_span_mm") or 0.0)
         self.overall_status.setText(
-            f"{state} · configured physical honeycomb span "
+            f"{state} · registration {registration_state} · full-support reach "
+            f"{reachability_state} · physical honeycomb "
             f"{expected_span:.3f} × {expected_span:.3f} mm"
         )
         blockers = [str(item) for item in audit.get("blockers") or ()]
-        self.blockers.setText(
-            "No coordinate dependency is blocking support-bound work."
-            if not blockers
-            else "BLOCKED because:\n• " + "\n• ".join(blockers)
-        )
+        if blockers:
+            blocker_text = "REGISTRATION BLOCKED because:\n• " + "\n• ".join(blockers)
+        elif reachability_state == "FULL":
+            blocker_text = (
+                "Registration is ready and the complete support is inside the "
+                "recorded travel and configured output authorities."
+            )
+        else:
+            blocker_text = (
+                "Registration is ready. Full-support reachability is a separate "
+                f"{reachability_state} diagnostic and never expands output authority."
+            )
+        self.blockers.setText(blocker_text)
         next_action = str(audit.get("required_next_action") or "").strip()
         self.next_action.setText(
             "Next action: " + next_action if next_action else "Next action unavailable"
@@ -231,6 +388,60 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
             and type(trusted.get("x")) in {int, float}
             and type(trusted.get("y")) in {int, float}
             else "Not trusted after motor release or before Home / park"
+        )
+
+        reach = audit.get("reachability") or {}
+        mode = str(reach.get("fixture_mode") or "unclassified")
+        mode_index = self.fixture_mode.findData(mode)
+        if mode_index >= 0 and not self.fixture_mode.hasFocus():
+            self.fixture_mode.blockSignals(True)
+            self.fixture_mode.setCurrentIndex(mode_index)
+            self.fixture_mode.blockSignals(False)
+        limits = reach.get("safe_carriage_limits_mm") or {}
+        for key, edit in self.reach_limit_edits.items():
+            self._set_line_if_idle(edit, limits.get(key))
+        reach_reasons = [str(item) for item in reach.get("reasons") or ()]
+        combined = reach.get("combined") or {}
+        coverage = combined.get("coverage_percent")
+        reach_summary = (
+            f"Reach state: {str(reach.get('state') or 'UNCLASSIFIED')}"
+        )
+        if type(coverage) in {int, float}:
+            reach_summary += f" · combined usable fixture area {float(coverage):.1f}%"
+        if reach_reasons:
+            reach_summary += "\n• " + "\n• ".join(reach_reasons)
+        self.reach_status.setText(reach_summary)
+        self.reach_current_position.setText(
+            "Current trusted jog position: "
+            + (
+                self.format_xy([trusted["x"], trusted["y"]]) + " mm"
+                if isinstance(trusted, dict)
+                and type(trusted.get("x")) in {int, float}
+                and type(trusted.get("y")) in {int, float}
+                else "unavailable — run Home / park, then jog laser-off"
+            )
+        )
+        permanent = mode == "permanent"
+        record_ready = bool(
+            permanent
+            and machine.get("laser_lockout") is True
+            and machine.get("jog_ready") is True
+        )
+        for button in self.reach_record_buttons.values():
+            button.setEnabled(record_ready)
+            button.setToolTip(
+                "Record this limit from the current trusted laser-off jog position."
+                if record_ready
+                else (
+                    "Requires Permanent / immovable classification, process laser "
+                    "lockout, and a current trusted Home / park + jog position."
+                )
+            )
+        self.reach_save_button.setEnabled(
+            permanent and machine.get("laser_lockout") is True
+        )
+        self.reach_clear_button.setEnabled(
+            str(reach.get("evidence_state") or "MISSING") != "MISSING"
         )
 
         capture = machine.get("capture_pose") or {}
@@ -275,7 +486,9 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
             if type(command_error) in {int, float}:
                 command_error_text += f" · radial {float(command_error):.4f} mm"
         motor_text = (
-            "Released after capture; current XY is intentionally untrusted"
+            "Not applicable — no audit capture yet"
+            if capture_state == "MISSING"
+            else "Released after capture; current XY is intentionally untrusted"
             if capture.get("motors_released_after_capture") is True
             else "Not released by the capture cleanup"
         )
@@ -427,6 +640,121 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
                 ),
             ),
         )
+        configured_work_reach = reach.get("configured_work") or {}
+        guarded_reach = reach.get("guarded_output") or {}
+        measured_reach = reach.get("measured_travel") or {}
+        combined_reach = reach.get("combined") or {}
+        controller_reach = reach.get("controller_settings") or {}
+        output_check = reach.get("output_authority_within_measured_travel") or {}
+        self._add_group(
+            "Permanent fixture / reachability",
+            (
+                ("Fixture classification", mode.upper()),
+                ("Reach evidence", str(reach.get("evidence_state") or "MISSING")),
+                (
+                    "Recorded safe carriage area",
+                    (
+                        self.format_xy(
+                            [
+                                limits.get("x_min"),
+                                limits.get("x_max"),
+                                limits.get("y_min"),
+                                limits.get("y_max"),
+                            ],
+                            axes=("X−", "X+", "Y−", "Y+"),
+                        )
+                        + " mm"
+                        if reach.get("safe_carriage_area_mm") is not None
+                        else "Not fully recorded"
+                    ),
+                ),
+                (
+                    "Support inside configured work rectangle",
+                    (
+                        f"{float(configured_work_reach.get('coverage_percent') or 0.0):.1f}%"
+                        f" · max corner escape {float(configured_work_reach.get('maximum_corner_escape_mm') or 0.0):.3f} mm"
+                    ),
+                ),
+                (
+                    "Support inside guarded output authority",
+                    (
+                        f"{float(guarded_reach.get('coverage_percent') or 0.0):.1f}%"
+                        f" · max corner escape {float(guarded_reach.get('maximum_corner_escape_mm') or 0.0):.3f} mm"
+                    ),
+                ),
+                (
+                    "Support inside carriage-derived beam reach",
+                    (
+                        "Not measured"
+                        if not measured_reach
+                        else f"{float(measured_reach.get('coverage_percent') or 0.0):.1f}%"
+                    ),
+                ),
+                (
+                    "Combined usable fixed-fixture area",
+                    (
+                        "Not verified"
+                        if not combined_reach
+                        else f"{float(combined_reach.get('coverage_percent') or 0.0):.1f}%"
+                    ),
+                ),
+                (
+                    "Configured output within measured reach",
+                    (
+                        "Not measured"
+                        if not output_check
+                        else "YES"
+                        if output_check.get("within") is True
+                        else (
+                            "NO · extends by up to "
+                            f"{float(output_check.get('maximum_escape_mm') or 0.0):.3f} mm"
+                        )
+                    ),
+                ),
+                (
+                    "GRBL $130/$131 diagnostic rectangle",
+                    (
+                        "Unavailable"
+                        if not controller_reach
+                        else self.format_xy(
+                            controller_reach.get("configured_area_mm"),
+                            axes=("X−", "X+", "Y−", "Y+"),
+                        )
+                        + " mm · soft limits "
+                        + ("ON" if controller_reach.get("soft_limits_enabled") else "OFF")
+                        + " · hard limits "
+                        + ("ON" if controller_reach.get("hard_limits_enabled") else "OFF")
+                    ),
+                ),
+                (
+                    "Reach evidence controller identity",
+                    (
+                        "Not recorded"
+                        if not reach.get("measurement_machine_ports")
+                        and not reach.get("measurement_protocols")
+                        else (
+                            "ports "
+                            + ", ".join(reach.get("measurement_machine_ports") or ())
+                            + " · protocols "
+                            + ", ".join(reach.get("measurement_protocols") or ())
+                            + " · current machine "
+                            + (
+                                "MATCH"
+                                if reach.get("evidence_matches_current_machine") is True
+                                else "MISMATCH"
+                            )
+                        )
+                    ),
+                ),
+                (
+                    "Combined usable polygon in honeycomb coordinates",
+                    self.format_polygon(
+                        combined_reach.get("usable_polygon_local_mm")
+                    ),
+                ),
+            ),
+        )
+
         self._add_group(
             "Camera / lens",
             (
@@ -570,6 +898,24 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
                 if point.get("inside_honeycomb") is None
                 else "YES"
                 if point.get("inside_honeycomb")
+                else "NO"
+            ),
+            "Fixture classification: "
+            + str(point.get("fixture_mode") or "unclassified").upper(),
+            "Carriage inside recorded safe reach: "
+            + (
+                "UNKNOWN"
+                if point.get("inside_recorded_safe_carriage_reach") is None
+                else "YES"
+                if point.get("inside_recorded_safe_carriage_reach")
+                else "NO"
+            ),
+            "Point satisfies combined fixed-fixture output evidence: "
+            + (
+                "UNKNOWN"
+                if point.get("inside_combined_fixture_output") is None
+                else "YES"
+                if point.get("inside_combined_fixture_output")
                 else "NO"
             ),
         )

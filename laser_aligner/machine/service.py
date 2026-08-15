@@ -50,6 +50,12 @@ _GRBL_STEP_IDLE_PATTERN = re.compile(
     r"^\s*\$1\s*=\s*(\d+)(?:\.0*)?(?:\s+\([^)]*\))?\s*$",
     re.IGNORECASE,
 )
+_GRBL_SETTING_PATTERN = re.compile(
+    r"^\s*\$(\d+)\s*=\s*"
+    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))"
+    r"(?:\s+\([^)]*\))?\s*$",
+    re.IGNORECASE,
+)
 _PROGRAM_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -127,6 +133,7 @@ class MachineService:
         self._coordinate_reference_ready = settings.backend == "simulator"
         self._coordinate_state_reference: dict[str, Any] | None = None
         self._last_grbl_wco_mm: list[float | None] | None = None
+        self._last_grbl_settings: dict[str, float] = {}
         # Incremental UI jogging is translated to absolute moves.  This
         # position is published only by Home / park or a completed jog and is
         # invalidated whenever another operation can change machine position.
@@ -401,6 +408,7 @@ class MachineService:
             self._coordinate_reference_ready = False
             self._coordinate_state_reference = None
             self._last_grbl_wco_mm = None
+            self._last_grbl_settings = {}
             self._jog_position_mm = None
             self._clear_arm_authorization()
             self._job_laser_authorized = False
@@ -768,6 +776,15 @@ class MachineService:
         return self.send_command(command, timeout=3.0)
 
     @staticmethod
+    def _reported_grbl_settings(responses: list[str]) -> dict[str, float]:
+        settings: dict[str, float] = {}
+        for response in responses:
+            match = _GRBL_SETTING_PATTERN.match(response.strip())
+            if match:
+                settings[match.group(1)] = float(match.group(2))
+        return settings
+
+    @staticmethod
     def _reported_grbl_step_idle_delay(responses: list[str]) -> int | None:
         for response in responses:
             match = _GRBL_STEP_IDLE_PATTERN.match(response.strip())
@@ -783,6 +800,7 @@ class MachineService:
         settings_error: Exception | None = None
         try:
             responses = self.send_command("$$", timeout=timeout)
+            self._last_grbl_settings = self._reported_grbl_settings(responses)
             current = self._reported_grbl_step_idle_delay(responses)
             if current is None:
                 settings_error = MachineError("GRBL $$ did not report the $1 step-idle delay")
@@ -910,6 +928,7 @@ class MachineService:
             yield
             return
         responses = self.send_command("$$", timeout=max(6.0, self.settings.read_timeout))
+        self._last_grbl_settings = self._reported_grbl_settings(responses)
         original = self._reported_grbl_step_idle_delay(responses)
         if original is None:
             raise MachineError("GRBL did not report $1, so temporary stepper holding was not started")
@@ -2616,6 +2635,7 @@ class MachineService:
                 and not self._job.running
             ),
             "max_travel_feed_mm_min": self.settings.max_travel_feed_mm_min,
+            "grbl_settings": dict(self._last_grbl_settings),
             "controller_reconnect_required": self._controller_reconnect_required,
             "armed": self.armed,
             "armed_until": self._armed_until if self.armed else None,

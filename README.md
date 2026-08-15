@@ -85,11 +85,13 @@ Native desktop workflow:
   holdout accuracy validation. Registration and validation can use precision
   multi-frame capture and can be repeated without another home cycle to
   separate camera variation from homing variation
-- Read-only Coordinate Audit in Machine Setup, showing the configured motion and
-  laser-output envelopes, camera/lens/bed-map currency, the profile-sized
-  honeycomb origin/rotation/corners, frame-direction arrows, and a clicked-point
-  transform from corrected camera pixels through machine, honeycomb-local, and
-  spot-corrected carriage coordinates
+- Coordinate Audit in Machine Setup, showing the configured motion and
+  laser-output envelopes, camera/lens/bed-map currency, profile-sized honeycomb
+  origin/rotation/corners, frame-direction arrows, and a clicked-point transform
+  from corrected camera pixels through machine, honeycomb-local, and
+  spot-corrected carriage coordinates. It separately classifies permanent versus
+  movable fixtures and records laser-off carriage-reach evidence without changing
+  GRBL, machine bounds, G-code, arming, laser power, or output authority
 - Versioned `.e3template` cutting-template library with manual selection,
   geometry-based automatic matching, role-labeled camera/cut overlays, rigid
   alignment review, and one-step undo when aligned cut objects are created

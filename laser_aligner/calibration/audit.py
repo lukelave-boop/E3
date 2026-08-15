@@ -6,6 +6,7 @@ from typing import Any
 
 from ..config import Settings, effective_laser_output_area
 from ..geometry.polygon import convex_polygon_contains, normalize_convex_polygon
+from .reach import FixtureReachEvidence, build_fixture_reachability
 from .support import HoneycombSupportReference
 
 _SUPPORT_SPAN_EPSILON_MM = 1e-6
@@ -138,6 +139,7 @@ def inspect_coordinate_point(
     source_image_point: tuple[float, float],
     source_image_size: tuple[int, int],
     support_reference: HoneycombSupportReference | None,
+    fixture_reach_evidence: FixtureReachEvidence | None = None,
 ) -> dict[str, Any]:
     """Trace one clicked corrected pixel through the active coordinate frames."""
 
@@ -194,24 +196,33 @@ def inspect_coordinate_point(
             <= float(support_reference.support_height_mm) + 1e-6
         )
     )
+    beam_inside_work_area = bool(
+        float(work.x_min) - 1e-6 <= machine_point[0] <= float(work.x_max) + 1e-6
+        and float(work.y_min) - 1e-6 <= machine_point[1] <= float(work.y_max) + 1e-6
+    )
+    carriage_inside_work_area = bool(
+        float(work.x_min) - 1e-6 <= carriage_point[0] <= float(work.x_max) + 1e-6
+        and float(work.y_min) - 1e-6 <= carriage_point[1] <= float(work.y_max) + 1e-6
+    )
+    reach_evidence = fixture_reach_evidence or FixtureReachEvidence()
+    safe_area = reach_evidence.safe_travel_area_mm
+    inside_measured_reach = (
+        None
+        if safe_area is None
+        else bool(
+            safe_area[0] - 1e-6 <= carriage_point[0] <= safe_area[1] + 1e-6
+            and safe_area[2] - 1e-6 <= carriage_point[1] <= safe_area[3] + 1e-6
+        )
+    )
+
     return {
         "display_pixel": [display_x, display_y],
         "lens_corrected_source_pixel": [image_x, image_y],
         "machine_mm": list(machine_point),
         "honeycomb_local_mm": None if local_point is None else list(local_point),
         "spot_corrected_carriage_mm": list(carriage_point),
-        "inside_machine_work_area": bool(
-            float(work.x_min) - 1e-6 <= machine_point[0] <= float(work.x_max) + 1e-6
-            and float(work.y_min) - 1e-6
-            <= machine_point[1]
-            <= float(work.y_max) + 1e-6
-        ),
-        "carriage_inside_machine_work_area": bool(
-            float(work.x_min) - 1e-6 <= carriage_point[0] <= float(work.x_max) + 1e-6
-            and float(work.y_min) - 1e-6
-            <= carriage_point[1]
-            <= float(work.y_max) + 1e-6
-        ),
+        "inside_machine_work_area": beam_inside_work_area,
+        "carriage_inside_machine_work_area": carriage_inside_work_area,
         "inside_guarded_beam_authority": beam_inside_base_authority,
         "inside_guarded_carriage_authority": carriage_inside_base_authority,
         "inside_guarded_laser_output": bool(
@@ -220,6 +231,20 @@ def inspect_coordinate_point(
             and carriage_inside_base_authority
         ),
         "inside_honeycomb": inside_support,
+        "fixture_mode": reach_evidence.fixture_mode,
+        "inside_recorded_safe_carriage_reach": inside_measured_reach,
+        "inside_combined_fixture_output": (
+            None
+            if inside_measured_reach is None
+            else bool(
+                inside_measured_reach
+                and beam_inside_work_area
+                and carriage_inside_work_area
+                and convex_polygon_contains(machine_point, output_polygon)
+                and beam_inside_base_authority
+                and carriage_inside_base_authority
+            )
+        ),
     }
 
 
@@ -233,6 +258,8 @@ def build_coordinate_audit_status(
     bed_status: Mapping[str, Any],
     support_reference: HoneycombSupportReference | None,
     honeycomb_execution_signature: tuple[Any, ...] | None,
+    fixture_reach_evidence: FixtureReachEvidence | None = None,
+    fixture_reach_load_error: str | None = None,
     capture_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one JSON-safe, read-only view of every active coordinate frame."""
@@ -287,6 +314,22 @@ def build_coordinate_audit_status(
                 ],
             }
         )
+
+    reachability = build_fixture_reachability(
+        settings,
+        support_reference=(
+            support_reference
+            if support_validity["state"] == "CURRENT"
+            else None
+        ),
+        evidence=fixture_reach_evidence or FixtureReachEvidence(),
+        grbl_settings=(
+            machine_status.get("grbl_settings")
+            if isinstance(machine_status.get("grbl_settings"), Mapping)
+            else None
+        ),
+        load_error=fixture_reach_load_error,
+    )
 
     coordinate_state_raw = machine_status.get("coordinate_state_reference")
     coordinate_state = (
@@ -393,6 +436,39 @@ def build_coordinate_audit_status(
             "Capture view and accept a fresh automatic four-edge teaching image "
             "bound to the current bed map."
         )
+    elif reachability["fixture_mode"] == "unclassified":
+        required_next_action = (
+            "Classify the honeycomb as permanent or movable. If it is built into "
+            "the machine, mark it permanent; do not reposition it to match software bounds."
+        )
+    elif reachability["state"] == "STALE":
+        required_next_action = (
+            "The saved reach evidence does not match the active controller. With "
+            "process laser lockout active, re-measure the laser-off safe carriage "
+            "limits without moving the fixture."
+        )
+    elif (
+        reachability["fixture_mode"] == "permanent"
+        and reachability["state"] == "NOT_MEASURED"
+    ):
+        required_next_action = (
+            "The honeycomb is permanent. With process laser lockout active, record "
+            "the laser-off safe carriage limits; do not move the fixture."
+        )
+    elif reachability["state"] == "NOT_MEASURED":
+        required_next_action = (
+            "Record the laser-off safe carriage limits before relying on full-support "
+            "reachability."
+        )
+    elif reachability["state"] == "PARTIAL":
+        required_next_action = (
+            "Keep the unreachable portion of the permanent fixture blocked. Review "
+            "the measured limits and revise machine/output authority only from physical evidence."
+        )
+    elif reachability["state"] == "FULL":
+        required_next_action = (
+            "The complete fixture is inside the recorded travel and configured output authorities."
+        )
     else:
         required_next_action = (
             "No coordinate dependency is currently blocking support-bound work."
@@ -405,14 +481,30 @@ def build_coordinate_audit_status(
         if isinstance(trusted_position_raw, Mapping)
         else None
     )
+    registration_state = "READY" if not blockers else "BLOCKED"
+    reachability_state = str(reachability.get("state") or "UNCLASSIFIED")
+    overall_state = (
+        "BLOCKED"
+        if blockers
+        else "READY"
+        if reachability_state in {"FULL", "NOT_APPLICABLE"}
+        else "LIMITED"
+    )
     return {
-        "overall_state": "READY" if not blockers else "BLOCKED",
+        "overall_state": overall_state,
+        "registration_state": registration_state,
+        "reachability_state": reachability_state,
         "blockers": blockers,
+        "reachability_reasons": list(reachability.get("reasons") or ()),
         "required_next_action": required_next_action,
         "machine": {
             "connected": bool(machine_status.get("connected")),
             "backend": str(machine_status.get("backend") or settings.machine.backend),
             "protocol": str(machine_status.get("protocol") or ""),
+            "port": str(machine_status.get("port") or settings.machine.port),
+            "laser_lockout": bool(machine_status.get("laser_lockout")),
+            "jog_ready": bool(machine_status.get("jog_ready")),
+            "grbl_settings": dict(machine_status.get("grbl_settings") or {}),
             "coordinate_reference_ready": bool(
                 machine_status.get("coordinate_reference_ready")
             ),
@@ -480,6 +572,7 @@ def build_coordinate_audit_status(
             "axis_mapping": bed_status.get("axis_mapping"),
         },
         "honeycomb": support_payload,
+        "reachability": reachability,
     }
 
 

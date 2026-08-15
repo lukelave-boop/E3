@@ -98,10 +98,13 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         label_text = {
             label.text() for label in dialog.findChildren(QtWidgets.QLabel)
         }
-        assert {"Camera / work boundary", "Guarded laser output"}.issubset(
-            label_text
-        )
-        assert "Detected honeycomb rulers" in label_text
+        assert {
+            "Camera / work boundary",
+            "Guarded laser output",
+            "Detected honeycomb rulers",
+            "Measured beam reach",
+            "Combined usable fixture area",
+        }.issubset(label_text)
         assert dialog.honeycomb_support_auto_button.text() == (
             "Detect honeycomb automatically"
         )
@@ -117,6 +120,16 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert dialog.audit_panel.splitter.objectName() == "coordinateAuditSplitter"
         assert dialog.audit_panel.point_group.isHidden()
         assert dialog.audit_panel.tree.header().sectionSize(0) >= 120
+        assert dialog.audit_panel.reach_group.objectName() == (
+            "coordinateAuditReachGroup"
+        )
+        assert dialog.audit_panel.fixture_mode.currentData() == "unclassified"
+        assert not dialog.audit_panel.reach_save_button.isEnabled()
+        assert not any(
+            button.isEnabled()
+            for button in dialog.audit_panel.reach_record_buttons.values()
+        )
+        assert "REGISTRATION BLOCKED" in dialog.audit_blockers.text()
         dialog.tabs.setCurrentIndex(2)
         dialog.show()
         qt_application.processEvents()
@@ -229,6 +242,36 @@ def test_work_area_reference_overlay_draws_support_and_picked_points() -> None:
 
     assert tuple(int(value) for value in preview[132, 68]) == (220, 95, 205)
     assert tuple(int(value) for value in preview[120, 120]) == (0, 225, 255)
+
+
+def test_work_area_reference_overlay_draws_measured_reach_and_combined_area() -> None:
+    image = np.zeros((240, 240, 3), dtype=np.uint8)
+
+    class IdentityBed:
+        @staticmethod
+        def mm_to_image(machine_x: float, machine_y: float) -> tuple[float, float]:
+            return machine_x * 4.0 + 20.0, 220.0 - machine_y * 4.0
+
+    preview = _work_area_reference_overlay(
+        image,
+        IdentityBed(),
+        WorkArea(10.0, 40.0, 10.0, 40.0),
+        0.0,
+        safe_carriage_area_mm=(15.0, 35.0, 15.0, 35.0),
+        combined_usable_polygon_mm=(
+            (20.0, 20.0),
+            (30.0, 20.0),
+            (30.0, 30.0),
+            (20.0, 30.0),
+        ),
+        permanent_fixture=True,
+    )
+
+    # The measured carriage-derived beam boundary is cyan.
+    assert tuple(int(value) for value in preview[120, 80]) == (230, 205, 40)
+    # The combined usable boundary is blue and its interior is visibly shaded.
+    assert tuple(int(value) for value in preview[120, 100]) == (255, 145, 55)
+    assert np.any(preview[100:140, 100:140] != image[100:140, 100:140])
 
 
 def test_image_picker_zoom_keeps_source_pixel_mapping(

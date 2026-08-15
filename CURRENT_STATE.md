@@ -93,11 +93,31 @@ immutable evidence after current position trust is intentionally cleared. The
 same follow-up stacks the clipped Bed Mapping support buttons, improves audit
 table/window reflow, collapses the empty point inspector, prioritizes missing
 capture evidence ahead of honeycomb re-teaching, and preserves the original
-GRBL settings-query error during failed connection cleanup. Focused machine,
-coordinate-audit, application, and calibration tests pass without PySide6; the
-updated widget still requires the native Windows/hosted Qt rerun and a second
-OptiPlex capture. This feature changes no Home command, motion bound, G-code,
-arming, or laser power.
+GRBL settings-query error during failed connection cleanup. Native OptiPlex
+hardware capture then verified Home pull-off at machine X3/Y3, zero G54 and G92
+XY offsets, an exact X15/Y195 photography pose, and zero measured movement during
+the camera burst. A fresh automatic four-edge review accepted the permanent
+191 × 191 mm cutting surface at approximately machine X27.42/Y38.86 with only
+0.064° rotation.
+
+The next Coordinate Audit revision treats the honeycomb as an explicit permanent
+fixture rather than recommending repositioning. It records operator-measured
+laser-off carriage limits only while process laser lockout is active, keeps that
+evidence outside camera calibration, and reports registration readiness separately
+from full-support reachability. The overlay adds carriage-derived beam reach and
+the intersection of measured reach, configured work bounds, and guarded output
+authority. GRBL `$20`, `$21`, `$130`, and `$131` remain diagnostics rather than
+physical proof. Saved reach evidence never mutates controller settings, machine
+bounds, G-code, arming, laser power, or output authority. With the accepted
+191 mm support and the previously documented X5..245/Y5..215 laser-off carriage
+evidence, the measured carriage-derived beam region covers about 92.2% of the
+fixed support, while the current X10..210/Y10..210 configured work authority
+reduces the combined usable area to about 85.6%. The existing explicit output
+polygon extends as much as 25.2 mm beyond that recorded carriage reach and must
+not be treated as physically verified. Those values are diagnostic calculations,
+not an automatic configuration change. Focused reach, machine, coordinate-audit,
+and application tests pass without PySide6; the new widget and physical reach
+workflow still require OptiPlex review.
 
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and

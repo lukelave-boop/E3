@@ -15,6 +15,7 @@ from laser_aligner.calibration.audit import (
     source_to_display_pixel,
 )
 from laser_aligner.calibration.bed import BedPoint
+from laser_aligner.calibration.reach import FixtureReachEvidence
 from laser_aligner.calibration.support import HoneycombSupportReference
 from laser_aligner.config import load_settings
 
@@ -168,6 +169,49 @@ def test_point_inspector_requires_beam_and_carriage_inside_explicit_authority(
     assert not point["inside_guarded_laser_output"]
     assert point["machine_mm"] == pytest.approx([12.0, 20.0])
     assert point["spot_corrected_carriage_mm"] == pytest.approx([7.0, 20.0])
+
+
+def test_point_inspector_combined_reach_keeps_configured_work_authority(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        laser={
+            "guarded_output_polygon_mm": [
+                [0.0, 0.0],
+                [250.0, 0.0],
+                [250.0, 250.0],
+                [0.0, 250.0],
+            ],
+            "spot_offset_x_mm": 0.0,
+            "spot_offset_y_mm": 0.0,
+        },
+    )
+
+    class IdentityBed:
+        @staticmethod
+        def image_to_mm(image_x: float, image_y: float) -> tuple[float, float]:
+            return image_x, image_y
+
+    point = inspect_coordinate_point(
+        settings,
+        IdentityBed(),
+        source_image_point=(225.0, 100.0),
+        source_image_size=(300, 300),
+        support_reference=None,
+        fixture_reach_evidence=FixtureReachEvidence(
+            fixture_mode="permanent",
+            x_min_mm=0.0,
+            x_max_mm=250.0,
+            y_min_mm=0.0,
+            y_max_mm=250.0,
+        ),
+    )
+
+    assert point["inside_recorded_safe_carriage_reach"] is True
+    assert point["inside_guarded_laser_output"] is True
+    assert point["inside_machine_work_area"] is False
+    assert point["inside_combined_fixture_output"] is False
 
 
 def test_context_coordinate_audit_refresh_is_read_only(
@@ -396,7 +440,7 @@ def test_coordinate_audit_status_exposes_independent_frames_and_stale_reason(
     assert status["honeycomb"]["origin_machine_mm"] == pytest.approx([20.0, 30.0])
 
 
-def test_coordinate_audit_status_ready_has_no_blockers_and_no_reteach_action(
+def test_coordinate_audit_separates_registration_ready_from_unclassified_reach(
     tmp_path: Path,
 ) -> None:
     settings = _settings(tmp_path)
@@ -433,9 +477,84 @@ def test_coordinate_audit_status_ready_has_no_blockers_and_no_reteach_action(
         honeycomb_execution_signature=("honeycomb", 2, "frame", "map"),
     )
 
-    assert status["overall_state"] == "READY"
+    assert status["overall_state"] == "LIMITED"
+    assert status["registration_state"] == "READY"
+    assert status["reachability_state"] == "UNCLASSIFIED"
     assert status["blockers"] == []
-    assert status["required_next_action"].startswith("No coordinate dependency")
+    assert "Classify the honeycomb" in status["required_next_action"]
+
+
+def test_coordinate_audit_reports_ready_only_after_full_reach_evidence(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(
+        tmp_path,
+        machine={
+            "backend": "simulator",
+            "work_area": {
+                "x_min": 0.0,
+                "x_max": 250.0,
+                "y_min": 0.0,
+                "y_max": 250.0,
+            },
+        },
+        laser={
+            "boundary_margin_mm": 0.0,
+            "guarded_output_polygon_mm": [
+                [0.0, 0.0],
+                [250.0, 0.0],
+                [250.0, 250.0],
+                [0.0, 250.0],
+            ],
+            "spot_offset_x_mm": 0.0,
+            "spot_offset_y_mm": 0.0,
+        },
+    )
+    status = build_coordinate_audit_status(
+        settings,
+        machine_status={
+            "connected": True,
+            "backend": "simulator",
+            "protocol": "grbl",
+            "coordinate_reference_ready": True,
+            "coordinate_state_reference": {
+                "active_workspace": "G54",
+                "active_offset_mm": [0.0, 0.0, 0.0],
+                "g92_offset_mm": [0.0, 0.0, 0.0],
+            },
+            "jog_position_mm": {"x": 110.0, "y": 110.0},
+        },
+        camera_status={"connected": True, "width": 1920, "height": 1080},
+        camera_readiness={"state": "READY", "reasons": []},
+        lens_status={"model": {"model_id": "lens-1", "image_size": [1920, 1080]}},
+        bed_status={
+            "calibration": {
+                "created_at": 7.0,
+                "rms_error_mm": 0.1,
+                "max_error_mm": 0.3,
+                "point_count": 25,
+                "inlier_count": 25,
+            },
+            "validity": {"state": "VALID", "reasons": []},
+            "axis_mapping": {"x_reversed": False, "y_reversed": False},
+        },
+        support_reference=_support(span=191.0),
+        honeycomb_execution_signature=("honeycomb", 2, "frame", "map"),
+        fixture_reach_evidence=FixtureReachEvidence(
+            fixture_mode="permanent",
+            x_min_mm=0.0,
+            x_max_mm=250.0,
+            y_min_mm=0.0,
+            y_max_mm=250.0,
+        ),
+    )
+
+    assert status["overall_state"] == "READY"
+    assert status["registration_state"] == "READY"
+    assert status["reachability_state"] == "FULL"
+    assert status["required_next_action"].startswith(
+        "The complete fixture is inside"
+    )
 
 
 def _ready_coordinate_audit_inputs() -> dict[str, object]:

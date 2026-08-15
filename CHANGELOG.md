@@ -15,6 +15,17 @@
   resizable splitter, a wider wrapping value table, a collapsed empty point
   inspector, and a larger first-open Machine Setup geometry; narrow Bed Mapping
   support actions stack vertically instead of clipping their labels.
+- Coordinate Audit now classifies a honeycomb as unclassified, permanent, or
+  movable and stores laser-off safe carriage-limit evidence separately from
+  camera calibration. Permanent fixtures are never advised to move. Registration
+  readiness and full-support reachability are reported independently, with
+  measured carriage-derived beam reach in cyan and the intersection of measured
+  reach, configured work bounds, and guarded output authority in blue.
+- Reach evidence can be entered from a documented physical audit or recorded one
+  endpoint at a time from a trusted Home/park + jog position while process laser
+  lockout is active. It reports GRBL `$20`, `$21`, `$130`, and `$131` only as
+  diagnostics and never changes controller settings, machine bounds, G-code,
+  arming, laser power, or the configured output polygon.
 - A failed or incomplete GRBL `$$` exchange during connection now preserves the
   original settings-query error. The best-effort raw `M5` and serial close still
   run, but the later reconnect-only guard no longer hides the cause behind a
