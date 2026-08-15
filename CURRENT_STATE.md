@@ -5,7 +5,7 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-tab sequence.
 
-Snapshot: **2026-08-13**
+Snapshot: **2026-08-15**
 
 A Windows-to-Raspberry-Pi hardware-node candidate now places authenticated
 controller and camera transports underneath the existing guarded services. The
@@ -15,10 +15,14 @@ keeps V4L2 ownership and precision acquisition on the Pi, transfers retained
 frames to the desktop, preserves sequence/generation/control diagnostics, and
 rejects mismatched Pi/desktop capture profiles before startup. Twelve focused
 loopback tests and Python bytecode compilation pass in an isolated harness. The
-repository-wide pytest/Ruff matrix has not yet been run for this candidate, and
-no Pi, Windows, camera, controller, disconnect, calibration, or powered physical
-test has been performed. Treat the entire network path as implemented but
-unverified.
+restored GitHub Actions matrix passes on Ubuntu with Python 3.10, 3.11, and
+3.12, and on Windows with Python 3.10 and 3.12; the Python 3.12 jobs include the
+desktop extras and offscreen Qt suite. Ruff, dependency checks, and bytecode
+compilation pass in that same run. Local Linux verification also includes 1,729
+repository-wide tests, 1,371 portable tests without PySide6, and the focused
+network tests. No Pi, physical Windows host, camera, controller, disconnect,
+calibration, or powered physical test has been performed. Treat the network
+path as automated-test verified but physically unverified.
 
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and
