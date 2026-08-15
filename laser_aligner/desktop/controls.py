@@ -85,9 +85,10 @@ class PanelScrollArea(QtWidgets.QScrollArea):
         panel.setObjectName("inspectorPage")
         panel.setAttribute(QtCore.Qt.WidgetAttribute.WA_StyledBackground, True)
         panel.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Preferred,
+            QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
+        panel.setMinimumWidth(0)
         if panel.layout() is not None:
             panel.layout().setSizeConstraint(
                 QtWidgets.QLayout.SizeConstraint.SetMinAndMaxSize

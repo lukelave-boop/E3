@@ -370,7 +370,8 @@ def test_default_autosave_migrates_legacy_recovery_without_deleting_it(
     legacy.parent.mkdir(parents=True)
     payload = b'{"legacy":true}\n'
     legacy.write_bytes(payload)
-    timestamp_ns = 1_700_000_000_123_456_789
+    # Windows exposes file times at 100 ns precision.
+    timestamp_ns = 1_700_000_000_123_456_700
     os.utime(legacy, ns=(timestamp_ns, timestamp_ns))
 
     migrated = autosave_path(document)

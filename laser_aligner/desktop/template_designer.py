@@ -394,6 +394,11 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
         form_scroll.setWidgetResizable(True)
         form_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         form_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        form_page.setMinimumWidth(0)
+        form_page.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
         form_scroll.setWidget(form_page)
         splitter.addWidget(form_scroll)
 

@@ -1048,9 +1048,10 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     + coordinate_text
                 )
             self.move_label.set_full_text(
-                f"Move {move.index + 1}/{len(self.plan.moves)} · {move.layer_name} · "
-                f"pass {move.pass_index}/{move.pass_count} · {role} · "
-                f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} "
+                f"{move.layer_name} · {role} · "
+                f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} · "
+                f"Move {move.index + 1}/{len(self.plan.moves)} · "
+                f"pass {move.pass_index}/{move.pass_count} "
                 f"· {coordinate_text}"
             )
         self.start_here_button.setEnabled(self._current_move_index is not None)

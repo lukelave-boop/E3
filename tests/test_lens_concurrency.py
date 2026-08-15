@@ -243,6 +243,10 @@ def test_bounded_index_rejects_same_stat_content_change_without_commit(
     assert not calibrator.image_index_path.exists()
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows file timestamps cannot reveal a fully restored in-place ABA write",
+)
 def test_bounded_index_rejects_decode_aba_without_stale_commit(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -773,6 +777,10 @@ def test_same_stat_content_change_aborts_solve_without_replacing_model(
     assert persisted.model_id == old_model.model_id
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="Windows file timestamps cannot reveal a fully restored in-place ABA write",
+)
 def test_full_solve_rejects_decode_aba_without_replacing_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
