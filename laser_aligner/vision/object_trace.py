@@ -1482,6 +1482,18 @@ def _to_detection(
             "grid_width_error_ratio": float(item.get("grid_width_error_ratio", 0.0)),
             "grid_height_error_ratio": float(item.get("grid_height_error_ratio", 0.0)),
             "likely_open_cell": likely_open_cell,
+            "open_cell_evidence": str(
+                item.get("open_cell_evidence", "none")
+            ),
+            "background_match_available": bool(
+                item.get("background_match_available", False)
+            ),
+            "background_lab_median_delta": float(
+                item.get("background_lab_median_delta", 0.0)
+            ),
+            "background_match_fraction": float(
+                item.get("background_match_fraction", 0.0)
+            ),
             "cell_texture_score": float(item.get("cell_texture_score", 0.0)),
             "cell_texture_baseline": float(item.get("cell_texture_baseline", 0.0)),
             "cell_texture_threshold": float(item.get("cell_texture_threshold", 0.0)),
@@ -1700,6 +1712,7 @@ def _grid_cell_review_evidence(
     image: np.ndarray,
     candidates: list[dict[str, Any]],
     grid: Mapping[str, Any] | None,
+    background_image: np.ndarray | None = None,
 ) -> None:
     """Annotate suspicious geometry and likely exposed-bed grid cells.
 
@@ -1709,6 +1722,19 @@ def _grid_cell_review_evidence(
     if not grid or len(candidates) < 3:
         return
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    background_lab: np.ndarray | None = None
+    current_lab: np.ndarray | None = None
+    if background_image is not None:
+        _require_bgr_image(background_image, "Honeycomb background image")
+        if background_image.shape != image.shape:
+            raise ValueError(
+                "Honeycomb background image must match the rectified camera image"
+            )
+        current_lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB).astype(np.float32)
+        background_lab = cv2.cvtColor(
+            background_image,
+            cv2.COLOR_BGR2LAB,
+        ).astype(np.float32)
     gradient_x = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
     gradient_y = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
     gradient_image = cv2.magnitude(gradient_x, gradient_y)
@@ -1719,7 +1745,9 @@ def _grid_cell_review_evidence(
     canonical_height = float(
         grid.get("observed_cell_height_mm", grid.get("cell_height_mm", 0.0))
     )
-    texture_rows: list[tuple[dict[str, Any], float, float, float]] = []
+    texture_rows: list[
+        tuple[dict[str, Any], float, float, float, bool]
+    ] = []
     for item in candidates:
         if item.get("grid_row") is None or item.get("grid_column") is None:
             continue
@@ -1759,7 +1787,29 @@ def _grid_cell_review_evidence(
         deviation = float(np.std(pixels))
         edge_density = float(np.mean(gradient > 80.0))
         texture_score = deviation + 35.0 * edge_density
-        texture_rows.append((item, texture_score, deviation, edge_density))
+        background_match = False
+        if current_lab is not None and background_lab is not None:
+            difference = np.linalg.norm(
+                current_lab[mask > 0] - background_lab[mask > 0],
+                axis=1,
+            )
+            median_delta = float(np.median(difference))
+            match_fraction = float(np.mean(difference <= 15.0))
+            # The accepted empty-honeycomb photograph is bound to this exact
+            # bed map and support pose. A strong per-pixel match therefore
+            # means this grid position is already open, even when its exposed
+            # honeycomb is darker or less textured than the printed labels.
+            background_match = bool(
+                median_delta <= 24.0 and match_fraction >= 0.55
+            )
+            item["background_match_available"] = True
+            item["background_lab_median_delta"] = median_delta
+            item["background_match_fraction"] = match_fraction
+        else:
+            item["background_match_available"] = False
+        texture_rows.append(
+            (item, texture_score, deviation, edge_density, background_match)
+        )
 
     if len(texture_rows) < 3:
         return
@@ -1768,9 +1818,19 @@ def _grid_cell_review_evidence(
     baseline = float(np.median(lower)) if len(lower) else float(np.median(scores))
     spread = float(np.median(np.abs(lower - baseline))) if len(lower) else 0.0
     threshold = max(baseline + max(12.0, 5.0 * spread), baseline * 1.65)
-    for item, score, deviation, edge_density in texture_rows:
-        likely_open = score > threshold and deviation > 18.0 and edge_density > 0.08
+    for item, score, deviation, edge_density, background_match in texture_rows:
+        likely_open = bool(
+            background_match
+            or (score > threshold and deviation > 18.0 and edge_density > 0.08)
+        )
         item["likely_open_cell"] = likely_open
+        item["open_cell_evidence"] = (
+            "accepted_honeycomb_background"
+            if background_match
+            else "texture"
+            if likely_open
+            else "none"
+        )
         item["cell_texture_score"] = score
         item["cell_texture_baseline"] = baseline
         item["cell_texture_threshold"] = threshold
@@ -1785,6 +1845,7 @@ def detect_objects(
     pixels_per_mm: float,
     *,
     output_work_area: WorkArea | None = None,
+    background_image: np.ndarray | None = None,
 ) -> TraceResult:
     options = (
         options
@@ -1996,7 +2057,12 @@ def detect_objects(
     _, mode_used, chosen_hue, candidates, inferred, grid = best
     if chosen_hue is not None:
         target_hue = chosen_hue
-    _grid_cell_review_evidence(image, candidates, grid)
+    _grid_cell_review_evidence(
+        image,
+        candidates,
+        grid,
+        background_image,
+    )
     detections = [
         *[_to_detection(item, "direct", options) for item in candidates],
         *[_to_detection(item, "inferred", options) for item in inferred],

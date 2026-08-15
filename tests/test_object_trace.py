@@ -58,6 +58,52 @@ def test_grid_review_flags_damage_and_textured_open_cells_conservatively() -> No
     ]
 
 
+def test_grid_review_uses_bound_honeycomb_background_to_reject_open_cells() -> None:
+    background = np.full((240, 360, 3), 45, dtype=np.uint8)
+    current = np.full_like(background, 225)
+    centers = [(70, 70), (180, 70), (290, 70), (70, 170), (180, 170), (290, 170)]
+    candidates = []
+    for index, center in enumerate(centers):
+        candidates.append(
+            {
+                "grid_row": index // 3,
+                "grid_column": index % 3,
+                "center_px": np.asarray(center, dtype=np.float64),
+                "width_px": 80.0,
+                "height_px": 42.0,
+                "angle_image_deg": 0.0,
+                "observed_width_mm": 20.0,
+                "observed_height_mm": 10.5,
+                "observed_rotation_deg": 0.0,
+                "repaired_center_axes": [],
+            }
+        )
+    for index in (0, 5):
+        x, y = centers[index]
+        current[y - 25 : y + 25, x - 44 : x + 44] = background[
+            y - 25 : y + 25,
+            x - 44 : x + 44,
+        ]
+
+    _grid_cell_review_evidence(
+        current,
+        candidates,
+        {"rotation_deg": 0.0, "cell_width_mm": 20.0, "cell_height_mm": 10.5},
+        background,
+    )
+
+    assert [item["likely_open_cell"] for item in candidates] == [
+        True,
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
+    assert candidates[0]["open_cell_evidence"] == "accepted_honeycomb_background"
+    assert candidates[1]["background_match_fraction"] == pytest.approx(0.0)
+
+
 def _label_scene(*, obscure: bool = True) -> np.ndarray:
     height = width = 760
     x_gradient = np.linspace(0, 28, width, dtype=np.float32)[None, :]

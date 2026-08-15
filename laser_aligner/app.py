@@ -73,7 +73,14 @@ from .geometry.polygon import (
     normalize_convex_polygon,
 )
 from .geometry.svg import parse_svg
-from .imaging import encode_image, image_quality, read_image, write_image_atomic
+from .imaging import (
+    decode_image_payload,
+    encode_image,
+    image_quality,
+    read_encoded_image_payload,
+    read_image,
+    write_image_atomic,
+)
 from .machine.service import MachineService, list_serial_ports
 from .storage import (
     atomic_write_bytes,
@@ -1697,6 +1704,59 @@ class AppContext:
 
         reference = self._current_honeycomb_support()
         return None if reference is None else reference.coordinate_frame
+
+    def honeycomb_trace_background(
+        self,
+        *,
+        work_area: WorkArea,
+        coordinate_frame: HoneycombCoordinateFrame,
+    ) -> np.ndarray | None:
+        """Return the accepted empty honeycomb in the current Trace coordinates.
+
+        This is optional review evidence only. It is returned solely when the
+        teaching image, complete bed map, and support pose all match the active
+        execution-grade reference; stale or legacy evidence is ignored.
+        """
+
+        reference = self._current_honeycomb_support()
+        if reference is None or not reference.is_execution_verifiable:
+            return None
+        if coordinate_frame != reference.coordinate_frame:
+            return None
+        metadata = read_json(self.honeycomb_visual_reference_metadata_path, {})
+        if not isinstance(metadata, dict):
+            return None
+        try:
+            image_payload = read_encoded_image_payload(
+                self.honeycomb_visual_reference_path
+            )
+        except ValueError:
+            return None
+        image_digest = image_payload.content_sha256
+        if (
+            metadata.get("schema_version") != 2
+            or metadata.get("kind")
+            != "accepted-automatic-honeycomb-teaching-reference"
+            or metadata.get("image_sha256") != image_digest
+            or metadata.get("bed_mapping_digest") != self.bed_mapping_digest()
+            or metadata.get("support_coordinate_frame_digest")
+            != reference.coordinate_frame_digest
+        ):
+            return None
+        try:
+            image = decode_image_payload(image_payload).image
+        except ValueError:
+            return None
+        # Accepted teaching images come from
+        # capture_parked_work_area_reference(), which lens-corrects them before
+        # persistence.  BedMapper consumes that corrected coordinate domain
+        # directly; _rectify_camera_image() is reserved for raw camera frames
+        # and would apply the inverse lens map a second time here.
+        return self.bed.rectify(
+            image,
+            work_area=work_area,
+            coordinate_frame=coordinate_frame,
+        )
 
     def trace_camera_work_area(self) -> WorkArea:
         """Return a display/detection area containing the work area and honeycomb.

@@ -35,13 +35,14 @@ def test_controller_matches_templates_off_thread_and_ignores_stale_results() -> 
     assert "image_to_qimage(image)" in controller
 
 
-def test_hardware_job_start_homes_and_parks_before_arming() -> None:
+def test_hardware_job_start_homes_once_without_camera_parking_before_arming() -> None:
     controller = source("controller.py")
     operation = controller[controller.index("    def run_job(") : controller.index("    def pause_resume(")]
 
     assert 'machine.settings.backend == "serial"' in operation
-    assert operation.index("machine.preflight_program(gcode)") < operation.index("machine.prepare_photo_position()")
-    assert operation.index("machine.prepare_photo_position()") < operation.index("machine.arm_program(arm_phrase, program)")
+    assert "machine.prepare_photo_position()" not in operation
+    assert operation.index("machine.preflight_program(gcode)") < operation.index("machine.prepare_job_start()")
+    assert operation.index("machine.prepare_job_start()") < operation.index("machine.arm_program(arm_phrase, program)")
     assert operation.index("machine.arm_program(arm_phrase, program)") < operation.index("machine.start_validated_program(program, name)")
     assert "machine.disarm()" in operation
 

@@ -720,6 +720,106 @@ def _save_execution_support(context: AppContext) -> HoneycombSupportReference:
     return reference
 
 
+def test_trace_background_requires_current_bound_teaching_reference(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context = AppContext(_settings(tmp_path))
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    calibration = context.bed.calibration
+    assert calibration is not None
+    reference = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=(
+            (10.0, 10.0),
+            (200.0, 10.0),
+            (200.0, 200.0),
+            (10.0, 200.0),
+        ),
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=190.0,
+        support_height_mm=190.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    teaching = np.full((440, 440, 3), 37, dtype=np.uint8)
+    corners = tuple(
+        context.bed.mm_to_image(*point)
+        for point in reference.raw_corners_machine_mm
+    )
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    context.save_honeycomb_support_reference(
+        reference,
+        teaching_image=teaching,
+        teaching_corners_px=corners,
+    )
+    expected = np.full((760, 760, 3), 91, dtype=np.uint8)
+    calls: list[tuple[WorkArea, HoneycombCoordinateFrame]] = []
+
+    def rectify(
+        image: np.ndarray,
+        pixels_per_mm: float | None = None,
+        *,
+        work_area: WorkArea,
+        coordinate_frame: HoneycombCoordinateFrame,
+    ) -> np.ndarray:
+        assert np.array_equal(image, teaching)
+        assert pixels_per_mm is None
+        calls.append((work_area, coordinate_frame))
+        return expected.copy()
+
+    monkeypatch.setattr(context.bed, "rectify", rectify)
+    area = WorkArea(0.0, 190.0, 0.0, 190.0)
+    frame = reference.coordinate_frame
+
+    result = context.honeycomb_trace_background(
+        work_area=area,
+        coordinate_frame=frame,
+    )
+
+    assert np.array_equal(result, expected)
+    assert calls == [(area, frame)]
+
+    wrong_frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(11.0, 10.0),
+        x_axis_machine=frame.x_axis_machine,
+        y_axis_machine=frame.y_axis_machine,
+        width_mm=frame.width_mm,
+        height_mm=frame.height_mm,
+        provenance_digest=frame.provenance_digest,
+    )
+    assert (
+        context.honeycomb_trace_background(
+            work_area=area,
+            coordinate_frame=wrong_frame,
+        )
+        is None
+    )
+
+    metadata = json.loads(
+        context.honeycomb_visual_reference_metadata_path.read_text(encoding="utf-8")
+    )
+    metadata["bed_mapping_digest"] = "stale"
+    context.honeycomb_visual_reference_metadata_path.write_text(
+        json.dumps(metadata),
+        encoding="utf-8",
+    )
+    assert (
+        context.honeycomb_trace_background(
+            work_area=area,
+            coordinate_frame=frame,
+        )
+        is None
+    )
+
+
 def test_execution_pose_measurement_uses_broad_taught_registration_without_refitting_edges(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

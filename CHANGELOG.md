@@ -1,5 +1,12 @@
 # Changelog
 
+- Trace can now compare repeated-grid interiors with the integrity-bound empty
+  honeycomb teaching photograph. Already-open cells are labeled and left
+  unchecked even when exposed honeycomb is darker or less textured than intact
+  labels; stale image, bed-map, or support evidence is ignored.
+- Documented that a negative Trace border offset deliberately trims every edge.
+  The latest saved recovery frame aligns at a zero offset, while its prior
+  `-0.20 mm` setting necessarily produced an inset cleanup path.
 - Fixed Fine registration reset leaving the reviewed full-bed map disabled:
   retained marks are re-reviewed after reset, and the broad-coverage gate now
   accommodates the support-contained eight-mark layout.

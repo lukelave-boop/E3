@@ -1479,6 +1479,17 @@ class DesktopController(QtCore.QObject):
             if coordinate_frame is not None:
                 capture_options["coordinate_frame"] = coordinate_frame
             image = context.capture_parked_trace_frame(**capture_options)
+            background_image = None
+            background_provider = getattr(
+                context,
+                "honeycomb_trace_background",
+                None,
+            )
+            if coordinate_frame is not None and callable(background_provider):
+                background_image = background_provider(
+                    work_area=camera_area,
+                    coordinate_frame=coordinate_frame,
+                )
             options = TraceOptions.from_mapping(raw_options)
             guarded_output = _guarded_output_work_area(self.runtime)
             guarded_polygon = _configured_guarded_output_polygon(self.runtime)
@@ -1492,6 +1503,7 @@ class DesktopController(QtCore.QObject):
                     if coordinate_frame is None
                     else camera_area
                 ),
+                background_image=background_image,
             )
             output_polygon = None
             if coordinate_frame is not None:

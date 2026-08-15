@@ -216,9 +216,22 @@ or repaired center disagree materially with the shared family as **damaged?**.
 It also compares shrunken-interior intensity variation and edge density across
 the current grid, marks strong exposed-bed outliers **likely cut/open**, and
 leaves both categories unchecked while retaining their proposed traces. This
-is a conservative current-sheet texture comparison, not a persistent learned
-honeycomb appearance model, and has synthetic/offscreen rather than real-C920
-verification.
+texture fallback remains conservative. When the current schema-2 support has
+an integrity-checked accepted empty-honeycomb photograph, Trace additionally
+rectifies that image through the same support-local frame and marks cells whose
+interiors strongly match the exposed honeycomb. Image hash, complete bed-map,
+and support-frame digests must all match; stale evidence is ignored. Synthetic,
+application, and controller wiring tests cover both paths.
+
+The saved 2026-08-14 07:37 C920 recovery frame was replayed read-only through
+the current post-mesh map. Trace finds 14 direct rounded rectangles as a coherent
+2 x 7 grid at 100% confidence. The accepted honeycomb background leaves the four
+already-open cells unchecked and selects the ten remaining labels. At zero
+border offset, its shared 83.24 x 22.45 mm fit differs from the intact printed
+borders by about 0.02 mm in width and 0.04 mm in height. The operator's visible
+`-0.20 mm` uniform offset instead trims every proposed edge by 0.20 mm, so it is
+not an alignment-preserving cleanup setting. No powered recovery cut was run as
+part of this software verification.
 Automated geometry, migration, UI, matching, Trace, and toolpath tests cover
 the implementation. No generated shape or containment ordering has been run on
 physical hardware.

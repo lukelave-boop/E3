@@ -501,6 +501,83 @@ def test_trace_color_sampling_uses_the_expanded_review_frame(
     assert results[0]["machine_y"] == 18.0
 
 
+def test_local_trace_passes_current_honeycomb_teaching_background_to_detector(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(20.0, 30.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=190.0,
+        height_mm=190.0,
+        provenance_digest="3" * 64,
+    )
+    image = np.full((380, 380, 3), 220, dtype=np.uint8)
+    background = np.full_like(image, 45)
+    background_calls: list[tuple[WorkArea, HoneycombCoordinateFrame]] = []
+    context = SimpleNamespace(
+        bed=SimpleNamespace(calibration=object()),
+        bed_mapping_digest=lambda: "current-map",
+        current_honeycomb_coordinate_frame=lambda: frame,
+        capture_parked_trace_frame=lambda **_kwargs: image.copy(),
+        honeycomb_trace_background=lambda *, work_area, coordinate_frame: (
+            background_calls.append((work_area, coordinate_frame))
+            or background.copy()
+        ),
+    )
+    runtime = SimpleNamespace(
+        context=context,
+        running=False,
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(
+                work_area=WorkArea(0.0, 190.0, 0.0, 190.0)
+            ),
+            laser=SimpleNamespace(
+                boundary_margin_mm=0.0,
+                spot_offset_x_mm=0.0,
+                spot_offset_y_mm=0.0,
+                guarded_output_polygon_mm=None,
+            ),
+            calibration=SimpleNamespace(bed=SimpleNamespace(pixels_per_mm=2.0)),
+        ),
+    )
+    received: list[np.ndarray | None] = []
+
+    def detect(
+        _image: np.ndarray,
+        _options: TraceOptions,
+        _camera_area: WorkArea,
+        _pixels_per_mm: float,
+        *,
+        output_work_area: WorkArea,
+        background_image: np.ndarray | None,
+    ) -> SimpleNamespace:
+        del output_work_area
+        received.append(background_image)
+        return SimpleNamespace(
+            detections=[],
+            message="ready",
+            to_dict=lambda: {"detections": [], "message": "ready"},
+        )
+
+    monkeypatch.setattr("laser_aligner.desktop.controller.detect_objects", detect)
+    controller = DesktopController(runtime)
+    controller.set_workspace_coordinate_space("honeycomb_local")
+    controller._run = (  # type: ignore[method-assign]
+        lambda callback, **kwargs: kwargs["on_success"](callback())
+    )
+
+    controller.detect_trace_objects({"detection_mode": "auto"})
+
+    expected_area = WorkArea(0.0, 190.0, 0.0, 190.0)
+    assert background_calls == [(expected_area, frame)]
+    assert len(received) == 1
+    assert np.array_equal(received[0], background)
+    controller.deleteLater()
+    qt_application.processEvents()
+
+
 def test_local_trace_review_returns_rotated_machine_output_polygon_and_rejects_escape() -> None:
     frame = HoneycombCoordinateFrame(
         origin_machine_mm=(20.0, 30.0),

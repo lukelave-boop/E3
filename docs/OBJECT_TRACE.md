@@ -11,7 +11,9 @@ objects.
 > saved frame now replays as 14 observed full label bodies plus the two genuinely
 > occluded cells in a 2 x 8 grid, at about 80.54 x 21.52 mm. That repaired result
 > has been inspected read-only in the desktop overlay but has not yet been
-> physically cut. See
+> physically cut. A later 2026-08-14 C920 recovery frame replays as a direct
+> 2 x 7 grid: the accepted empty-honeycomb teaching image leaves its four
+> already-open cells unchecked and selects the ten remaining labels. See
 > [../CURRENT_STATE.md](../CURRENT_STATE.md).
 
 ## Recommended label workflow
@@ -31,13 +33,18 @@ objects.
    identical** enabled. Enable **Infer gaps** only when you want suggested
    positions for missing or obscured cells.
 6. Choose the vector output described below and set either a uniform **Border
-   offset** or the rounded rectangle's individual edge offsets.
+   offset** or the rounded rectangle's individual edge offsets. Start a
+   line-following cleanup pass at `0.00 mm`: a negative uniform value trims that
+   amount from every edge and therefore cannot follow the detected border.
 7. Press **Detect objects**.
 8. Review the numbered overlay and the **Geometry** column:
    - green: selected proposed vector output;
    - gray: unselected direct detection;
    - yellow or orange dashed: inferred grid position;
    - red dash-dot: an outline that crosses the configured work area.
+   When a current automatic honeycomb teaching reference is available, direct
+   grid cells that closely match its exposed honeycomb pixels are marked
+   **likely cut/open** and left unchecked.
 9. Check only outlines that are correct. Inferred cells are intentionally
    unchecked by default. When the fitted grid is correct, **Select complete
    C × R grid** selects direct and inferred cells together for explicit review.
@@ -128,6 +135,16 @@ Grid inference is conservative and intended for repeated objects of similar
 size. It first chooses the dominant mutually similar shape family, fits regular
 row and column spacing, keeps only the best candidate in each cell, and rejects
 unrelated or duplicate contours.
+
+For an execution-grade honeycomb reference, Trace also rectifies the accepted
+empty cutting-surface photograph into the exact same local frame. A strong
+interior Lab-color match provides deterministic evidence that a detected grid
+cell is already open. The comparison is used only when the image hash, complete
+bed-map digest, and support-frame digest all remain current; otherwise Trace
+cannot use the photograph. Its conservative within-sheet texture comparison
+remains active in parallel and is the only open-cell signal when trusted
+background evidence is unavailable. Both forms of review evidence change
+default selection only. They do not expand output authority or authorize a cut.
 
 With **Fitted rounded rectangles** and **Make grid cells identical**, every
 accepted direct cell and inferred gap uses one robust shared width, height, and
