@@ -7,6 +7,8 @@ from pathlib import Path
 
 import pytest
 
+pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from laser_aligner.desktop import workspace as workspace_module

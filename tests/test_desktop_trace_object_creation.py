@@ -3,6 +3,8 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
+
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.project import (
     CommandStack,

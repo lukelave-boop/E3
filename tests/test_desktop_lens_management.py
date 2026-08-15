@@ -12,6 +12,8 @@ import cv2
 import numpy as np
 import pytest
 
+pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
+
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from laser_aligner.calibration.lens import LensModel
