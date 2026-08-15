@@ -33,6 +33,7 @@ def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
 
 def _read_project_bytes(source: Path) -> bytes:
     try:
+        path_before = source.stat()
         with source.open("rb") as handle:
             before = os.fstat(handle.fileno())
             if before.st_size > MAX_PROJECT_BYTES:
@@ -53,13 +54,14 @@ def _read_project_bytes(source: Path) -> bytes:
     identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
     before_identity = tuple(getattr(before, field, None) for field in identity_fields)
     after_identity = tuple(getattr(after, field, None) for field in identity_fields)
-    # On Windows, path ``stat`` and handle ``fstat`` can use different file
-    # identity representations. The handle must remain stable across the read,
-    # and the path must still agree on the portable content metadata afterward.
-    path_content_fields = ("st_size", "st_mtime_ns", "st_ctime_ns")
-    current_content = tuple(getattr(current, field, None) for field in path_content_fields)
-    after_content = tuple(getattr(after, field, None) for field in path_content_fields)
-    if before_identity != after_identity or after_content != current_content:
+    path_before_identity = tuple(
+        getattr(path_before, field, None) for field in identity_fields
+    )
+    current_identity = tuple(getattr(current, field, None) for field in identity_fields)
+    # Windows can represent path-stat and handle-fstat identities differently.
+    # Each route must remain stable across the read, without comparing unlike
+    # representations to one another.
+    if before_identity != after_identity or path_before_identity != current_identity:
         raise ProjectFormatError(f"Project changed while it was being read: {source}")
     return data
 

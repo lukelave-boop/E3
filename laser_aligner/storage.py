@@ -134,7 +134,7 @@ def atomic_write_bytes_if_absent(
             os.fsync(handle.fileno())
         if timestamps_ns is not None:
             os.utime(temp_path, ns=timestamps_ns)
-            with temp_path.open("rb") as handle:
+            with temp_path.open("r+b") as handle:
                 os.fsync(handle.fileno())
         try:
             if os.name == "nt":

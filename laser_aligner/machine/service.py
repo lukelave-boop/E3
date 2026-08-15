@@ -51,6 +51,18 @@ _GRBL_STEP_IDLE_PATTERN = re.compile(
 _PROGRAM_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
+def _add_exception_note(error: BaseException, note: str) -> None:
+    """Attach cleanup context on Python 3.10 as well as newer runtimes."""
+
+    add_note = getattr(error, "add_note", None)
+    if callable(add_note):
+        add_note(note)
+        return
+    notes = list(getattr(error, "__notes__", ()))
+    notes.append(note)
+    error.__notes__ = notes
+
+
 class _ControllerCommandRejected(MachineError):
     """A complete controller rejection whose response has been consumed."""
 
@@ -925,7 +937,8 @@ class MachineService:
                     )
                     if operation_error is None:
                         raise
-                    operation_error.add_note(
+                    _add_exception_note(
+                        operation_error,
                         f"Temporary camera motor-release cleanup also failed: {cleanup_error}"
                     )
                 else:
@@ -2122,7 +2135,8 @@ class MachineService:
         self._jog_position_mm = None
         if positioning_error is not None:
             if release_error is not None:
-                positioning_error.add_note(
+                _add_exception_note(
+                    positioning_error,
                     f"Post-job motor release also failed: {release_error}"
                 )
             raise positioning_error

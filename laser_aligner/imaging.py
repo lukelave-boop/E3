@@ -391,6 +391,18 @@ def assert_image_payload_current(payload: EncodedImagePayload) -> None:
         raise ImageEvidenceChangedError(
             f"Image evidence changed during analysis: {payload.source}"
         )
+    # Identity and timestamps can be preserved during an in-place rewrite or
+    # ABA replacement. Re-read the bounded path and compare its exact bytes to
+    # the frozen payload before committing analysis derived from those bytes.
+    current_payload = read_encoded_image_payload(
+        payload.source,
+        max_encoded_bytes=max(MAX_STABLE_IMAGE_BYTES, len(payload.encoded)),
+        allow_invalid=True,
+    )
+    if current_payload.content_sha256 != payload.content_sha256:
+        raise ImageEvidenceChangedError(
+            f"Image evidence changed during analysis: {payload.source}"
+        )
 
 
 def decode_image_payload(

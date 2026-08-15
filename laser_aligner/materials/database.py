@@ -51,10 +51,13 @@ def _migrate_database(source: Path, destination: Path) -> bool:
             with closing(sqlite3.connect(temporary)) as migrated:
                 legacy.backup(migrated)
                 migrated.commit()
-        with temporary.open("rb") as handle:
+        with temporary.open("r+b") as handle:
             os.fsync(handle.fileno())
         try:
-            os.link(temporary, destination)
+            if os.name == "nt":
+                os.rename(temporary, destination)
+            else:
+                os.link(temporary, destination)
         except FileExistsError:
             # A native-path database created during migration wins. Never
             # replace operator data with the legacy snapshot.
