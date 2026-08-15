@@ -130,6 +130,38 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             for button in dialog.audit_panel.reach_record_buttons.values()
         )
         assert "REGISTRATION BLOCKED" in dialog.audit_blockers.text()
+
+        # At the real OptiPlex-sized horizontal split, reach fields and actions
+        # must stack instead of colliding in the narrow details pane.
+        dialog.tabs.setCurrentIndex(5)
+        dialog.resize(1280, 760)
+        dialog.show()
+        qt_application.processEvents()
+        dialog.audit_panel.splitter.setSizes([820, 360])
+        qt_application.processEvents()
+
+        def audit_rect(widget: QtWidgets.QWidget) -> QtCore.QRect:
+            return QtCore.QRect(
+                widget.mapTo(dialog.audit_panel, QtCore.QPoint(0, 0)),
+                widget.size(),
+            )
+
+        for key, edit in dialog.audit_panel.reach_limit_edits.items():
+            row_widget = dialog.audit_panel.reach_limit_rows[key]
+            button = dialog.audit_panel.reach_record_buttons[key]
+            assert edit.parentWidget() is row_widget
+            assert button.parentWidget() is row_widget
+            edit_rect = audit_rect(edit)
+            button_rect = audit_rect(button)
+            assert edit_rect.bottom() < button_rect.top()
+            assert not edit_rect.intersects(button_rect)
+        assert audit_rect(dialog.audit_panel.reach_save_button).bottom() < (
+            audit_rect(dialog.audit_panel.reach_clear_button).top()
+        )
+        assert audit_rect(dialog.audit_panel.fixture_mode).bottom() < (
+            audit_rect(dialog.audit_panel.fixture_mode_save).top()
+        )
+
         dialog.tabs.setCurrentIndex(2)
         dialog.show()
         qt_application.processEvents()

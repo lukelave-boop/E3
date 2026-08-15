@@ -112,23 +112,32 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         reach_note.setObjectName("mutedLabel")
         reach_layout.addWidget(reach_note)
 
-        mode_row = QtWidgets.QHBoxLayout()
-        mode_row.addWidget(QtWidgets.QLabel("Fixture classification"))
+        mode_layout = QtWidgets.QVBoxLayout()
+        mode_layout.setSpacing(4)
+        mode_layout.addWidget(QtWidgets.QLabel("Fixture classification"))
         self.fixture_mode = QtWidgets.QComboBox()
         self.fixture_mode.setObjectName("coordinateAuditFixtureMode")
         self.fixture_mode.addItem("Not classified", "unclassified")
         self.fixture_mode.addItem("Permanent / immovable", "permanent")
         self.fixture_mode.addItem("Movable / reseatable", "movable")
+        self.fixture_mode.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        mode_layout.addWidget(self.fixture_mode)
         self.fixture_mode_save = QtWidgets.QPushButton("Save classification")
         self.fixture_mode_save.setObjectName("coordinateAuditFixtureModeSave")
+        self.fixture_mode_save.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.fixture_mode_save.clicked.connect(
             lambda: self.fixtureModeRequested.emit(
                 str(self.fixture_mode.currentData())
             )
         )
-        mode_row.addWidget(self.fixture_mode, 1)
-        mode_row.addWidget(self.fixture_mode_save)
-        reach_layout.addLayout(mode_row)
+        mode_layout.addWidget(self.fixture_mode_save)
+        reach_layout.addLayout(mode_layout)
 
         self.reach_status = QtWidgets.QLabel()
         self.reach_status.setObjectName("coordinateAuditReachStatus")
@@ -148,49 +157,85 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
 
         validator = QtGui.QDoubleValidator(-10000.0, 10000.0, 3, self)
         validator.setNotation(QtGui.QDoubleValidator.Notation.StandardNotation)
-        limits_grid = QtWidgets.QGridLayout()
+        limits_layout = QtWidgets.QVBoxLayout()
+        limits_layout.setSpacing(8)
         self.reach_limit_edits: dict[str, QtWidgets.QLineEdit] = {}
         self.reach_record_buttons: dict[str, QtWidgets.QPushButton] = {}
+        self.reach_limit_rows: dict[str, QtWidgets.QWidget] = {}
         labels = (
-            ("x_min", "X− safe carriage limit"),
-            ("x_max", "X+ safe carriage limit"),
-            ("y_min", "Y− safe carriage limit"),
-            ("y_max", "Y+ safe carriage limit"),
+            ("x_min", "X− safe carriage limit", "X−"),
+            ("x_max", "X+ safe carriage limit", "X+"),
+            ("y_min", "Y− safe carriage limit", "Y−"),
+            ("y_max", "Y+ safe carriage limit", "Y+"),
         )
-        for row, (key, label) in enumerate(labels):
+        for key, label, axis_label in labels:
+            field_widget = QtWidgets.QWidget()
+            field_widget.setObjectName(f"coordinateAuditReachField_{key}")
+            field_layout = QtWidgets.QGridLayout(field_widget)
+            field_layout.setContentsMargins(0, 0, 0, 0)
+            field_layout.setHorizontalSpacing(6)
+            field_layout.setVerticalSpacing(3)
+
+            field_label = QtWidgets.QLabel(label)
+            field_label.setObjectName(f"coordinateAuditReachLabel_{key}")
+            field_label.setWordWrap(True)
+            field_layout.addWidget(field_label, 0, 0, 1, 2)
+
             edit = QtWidgets.QLineEdit()
             edit.setObjectName(f"coordinateAuditReach_{key}")
             edit.setPlaceholderText("Not recorded")
             edit.setValidator(validator)
-            edit.setMaximumWidth(145)
-            button = QtWidgets.QPushButton("Record current")
+            edit.setMinimumWidth(90)
+            edit.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
+            field_layout.addWidget(edit, 1, 0)
+            unit_label = QtWidgets.QLabel("mm")
+            unit_label.setObjectName(f"coordinateAuditReachUnit_{key}")
+            field_layout.addWidget(unit_label, 1, 1)
+            field_layout.setColumnStretch(0, 1)
+
+            button = QtWidgets.QPushButton(f"Record current as {axis_label}")
             button.setObjectName(f"coordinateAuditRecord_{key}")
+            button.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Expanding,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
             button.clicked.connect(
                 lambda _checked=False, key=key: (
                     self.reachLimitRecordRequested.emit(key)
                 )
             )
-            limits_grid.addWidget(QtWidgets.QLabel(label), row, 0)
-            limits_grid.addWidget(edit, row, 1)
-            limits_grid.addWidget(QtWidgets.QLabel("mm"), row, 2)
-            limits_grid.addWidget(button, row, 3)
+            field_layout.addWidget(button, 2, 0, 1, 2)
+
+            limits_layout.addWidget(field_widget)
             self.reach_limit_edits[key] = edit
             self.reach_record_buttons[key] = button
-        limits_grid.setColumnStretch(0, 1)
-        reach_layout.addLayout(limits_grid)
+            self.reach_limit_rows[key] = field_widget
+        reach_layout.addLayout(limits_layout)
 
-        reach_actions = QtWidgets.QHBoxLayout()
+        reach_actions = QtWidgets.QVBoxLayout()
+        reach_actions.setSpacing(4)
         self.reach_save_button = QtWidgets.QPushButton(
             "Save entered safe limits"
         )
         self.reach_save_button.setObjectName("coordinateAuditReachSave")
+        self.reach_save_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.reach_save_button.clicked.connect(self._emit_reach_area)
         self.reach_clear_button = QtWidgets.QPushButton("Clear reach evidence")
         self.reach_clear_button.setObjectName("coordinateAuditReachClear")
+        self.reach_clear_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
         self.reach_clear_button.clicked.connect(
             self.reachLimitsClearRequested.emit
         )
-        reach_actions.addWidget(self.reach_save_button, 1)
+        reach_actions.addWidget(self.reach_save_button)
         reach_actions.addWidget(self.reach_clear_button)
         reach_layout.addLayout(reach_actions)
         right.addWidget(self.reach_group)
