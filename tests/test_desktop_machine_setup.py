@@ -114,6 +114,17 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert "191.000 × 191.000 mm" in dialog.audit_overall_status.text()
         assert "No honeycomb support reference" in dialog.audit_blockers.text()
         assert "Complete Lens calibration" in dialog.audit_next_action.text()
+        assert dialog.audit_panel.splitter.objectName() == "coordinateAuditSplitter"
+        assert dialog.audit_panel.point_group.isHidden()
+        assert dialog.audit_panel.tree.header().sectionSize(0) >= 120
+        dialog.tabs.setCurrentIndex(2)
+        dialog.show()
+        qt_application.processEvents()
+        assert (
+            dialog.honeycomb_support_auto_button.geometry().top()
+            < dialog.honeycomb_support_record_button.geometry().top()
+            < dialog.honeycomb_support_clear_button.geometry().top()
+        )
         assert dialog.points.rowCount() >= 4
         assert "Solved" in dialog.bed_status.text()
         assert dialog.registration_results.horizontalHeaderItem(0).text() == "Use"
@@ -654,11 +665,90 @@ def test_coordinate_audit_marks_old_190_support_stale_and_inspects_points(
             image.shape[0] / 2.0,
         )
         details = dialog.audit_point_details.toPlainText()
+        assert not dialog.audit_panel.point_group.isHidden()
         assert "Displayed pixel" in details
         assert "Machine coordinate" in details
         assert "Honeycomb-local coordinate" in details
         assert "STALE; diagnostic only" in details
         assert "Carriage command for beam placement" in details
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_coordinate_audit_distinguishes_capture_pose_from_released_current_state(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    calibration = runtime.context.bed.calibration
+    assert calibration is not None
+    runtime.context.machine._coordinate_reference_ready = False
+    runtime.context.machine._jog_position_mm = None
+    runtime.context._coordinate_audit_capture_snapshot = {
+        "available": True,
+        "trusted_at_capture": True,
+        "home_completed": True,
+        "parked": True,
+        "bed_calibration_created_at": calibration.created_at,
+        "position_immediately_after_home": {
+            "available": True,
+            "state": "Idle",
+            "mpos_mm": [0.0, 0.0, 0.0],
+            "wpos_mm": [0.0, 0.0, 0.0],
+            "wco_mm": [0.0, 0.0, 0.0],
+            "wco_source": "reported",
+        },
+        "position_before_capture": {
+            "available": True,
+            "state": "Idle",
+            "mpos_mm": [15.0, 195.0, 0.0],
+            "wpos_mm": [15.0, 195.0, 0.0],
+            "wco_mm": [0.0, 0.0, 0.0],
+            "wco_source": "reported",
+        },
+        "position_after_capture": {
+            "available": True,
+            "state": "Idle",
+            "mpos_mm": [15.0, 195.0, 0.0],
+            "wpos_mm": [15.0, 195.0, 0.0],
+            "wco_mm": [0.0, 0.0, 0.0],
+            "wco_source": "reported",
+        },
+        "position_stable_during_capture": True,
+        "maximum_position_delta_mm": 0.0,
+        "commanded_photo_position_mm": [15.0, 195.0, None],
+        "commanded_position_error_xy_mm": [0.0, 0.0],
+        "commanded_position_error_mm": 0.0,
+        "coordinate_state": {
+            "active_workspace": "G54",
+            "active_offset_mm": [0.0, 0.0, 0.0],
+            "g92_offset_mm": [0.0, 0.0, 0.0],
+        },
+        "motors_released_after_capture": True,
+        "current_position_trusted_after_cleanup": False,
+        "sampling_errors": [],
+    }
+    dialog = MachineSetupDialog(runtime)
+
+    def tree_value(label: str) -> str:
+        iterator = QtWidgets.QTreeWidgetItemIterator(dialog.audit_tree)
+        while iterator.value() is not None:
+            item = iterator.value()
+            if item.text(0) == label:
+                return item.text(1)
+            iterator += 1
+        raise AssertionError(f"Coordinate Audit row not found: {label}")
+
+    try:
+        dialog.refresh_all()
+        assert tree_value("Audit capture") == "TRUSTED AT CAPTURE"
+        assert tree_value("MPos immediately after Home").startswith("X0.000")
+        assert tree_value("MPos at capture").startswith("X15.000  Y195.000")
+        assert tree_value("Current Home / park reference") == (
+            "NOT CURRENTLY TRUSTED"
+        )
+        assert "intentionally untrusted" in tree_value("After capture")
     finally:
         dialog.close()
         runtime.stop()
@@ -1033,6 +1123,27 @@ def test_machine_setup_all_tabs_keep_shared_chrome_inside_compact_screenshot(
                 assert page.horizontalScrollBar().maximum() == 0
                 assert dialog.work_area_reference_button.width() >= (
                     dialog.work_area_reference_button.sizeHint().width()
+                )
+                support_buttons = (
+                    dialog.honeycomb_support_auto_button,
+                    dialog.honeycomb_support_record_button,
+                    dialog.honeycomb_support_clear_button,
+                )
+                assert all(
+                    button.width() >= button.sizeHint().width()
+                    for button in support_buttons
+                )
+                assert all(
+                    upper.geometry().bottom() < lower.geometry().top()
+                    for upper, lower in zip(
+                        support_buttons,
+                        support_buttons[1:],
+                        strict=False,
+                    )
+                )
+            if tab_index == 5 and width == 900:
+                assert dialog.audit_panel.splitter.orientation() == (
+                    QtCore.Qt.Orientation.Vertical
                 )
 
             screenshot = dialog.grab()

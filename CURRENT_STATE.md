@@ -83,10 +83,21 @@ directions, and clicking a corrected camera point traces it through display,
 camera-map, machine, honeycomb-local, and spot-corrected carriage coordinates.
 Refresh, report copy, and point inspection are read-only; the audit capture
 button uses the existing laser-off Home/park path without changing that command.
-Focused configuration, audit, support, application, and calibration tests pass
-without PySide6; the new widget and live C920/controller presentation still
-require native Windows/hosted Qt and OptiPlex interactive verification. This
-feature changes no Home command, motion bound, G-code, arming, or laser power.
+An OptiPlex hardware review confirmed the C920 overlay, 191 mm stale-reference
+gate, and controller connection. It also exposed that normal post-capture motor
+release erased the live trusted-position display even though Home/park and the
+camera burst had succeeded. The follow-up now samples GRBL `MPos`, `WPos`, and
+`WCO` before and after that burst, records the active workspace and G92 state,
+reports commanded-photo-pose error and capture stability, and retains that
+immutable evidence after current position trust is intentionally cleared. The
+same follow-up stacks the clipped Bed Mapping support buttons, improves audit
+table/window reflow, collapses the empty point inspector, prioritizes missing
+capture evidence ahead of honeycomb re-teaching, and preserves the original
+GRBL settings-query error during failed connection cleanup. Focused machine,
+coordinate-audit, application, and calibration tests pass without PySide6; the
+updated widget still requires the native Windows/hosted Qt rerun and a second
+OptiPlex capture. This feature changes no Home command, motion bound, G-code,
+arming, or laser power.
 
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and

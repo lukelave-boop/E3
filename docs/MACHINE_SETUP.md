@@ -295,19 +295,28 @@ lens/bed-map state, and honeycomb pose in one view. It also names every reason
 support-bound work is blocked.
 
 **Home / park and capture audit view** uses the same laser-off parked capture as
-**Capture view**. The overlay adds machine and honeycomb X+/Y+ arrows. Clicking
-the corrected image reports the displayed pixel, lens-corrected source pixel,
-machine coordinate, honeycomb-local coordinate, and the carriage coordinate
-that would place the physical beam there after the configured spot offset. A
-local coordinate derived from a stale support is labeled diagnostic-only.
+**Capture view**. While the steppers remain held for that capture, the audit
+samples GRBL `MPos`, `WPos`, and `WCO` immediately before and after the camera
+burst and retains the active workspace/G92 state established by Home/park. It
+reports the commanded-versus-observed photography-pose error and the largest
+before/after XY change. After capture the normal motor-release cleanup still
+clears current live position trust; the tab therefore distinguishes **trusted
+at capture** from **currently trusted** instead of implying that the successful
+capture never established a reference.
+
+The overlay adds machine and honeycomb X+/Y+ arrows. Clicking the corrected
+image reports the displayed pixel, lens-corrected source pixel, machine
+coordinate, honeycomb-local coordinate, and the carriage coordinate that would
+place the physical beam there after the configured spot offset. A local
+coordinate derived from a stale support is labeled diagnostic-only.
 
 The tab's calculations, refresh, report copy, and point inspection are
 read-only. **Home / park and capture audit view** does command the existing
 laser-off Home/park motion before capture; it does not change controller
 offsets, motion or output bounds, G-code, camera calibration, support placement,
-or laser power. Realtime GRBL MPos/WPos sampling remains a physical follow-up
-item; the first revision displays the trusted Home/park position and recorded
-workspace-offset state already owned by `MachineService`.
+or laser power. Realtime status sampling sends only GRBL's read-only `?` byte;
+failure to receive a usable status frame makes the audit capture untrusted but
+does not cancel the camera capture or change controller state.
 
 ## 4. Fine registration
 

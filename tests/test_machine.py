@@ -1762,11 +1762,16 @@ def test_prepare_photo_position_in_simulation() -> None:
     machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
     machine.connect()
     try:
-        result = machine.prepare_photo_position()
+        result = machine.prepare_photo_position(capture_home_position=True)
         assert result["position"] == {"x": 110.0, "y": 105.0, "z": None}
         assert machine._transport is not None
         assert machine._transport.x == pytest.approx(110)
         assert machine._transport.y == pytest.approx(105)
+        home = result["home_position_snapshot"]
+        assert home["available"] is True
+        assert home["mpos_mm"] == pytest.approx([0.0, 0.0, 0.0])
+        assert home["wpos_mm"] == pytest.approx([0.0, 0.0, 0.0])
+        assert home["wco_mm"] == pytest.approx([0.0, 0.0, 0.0])
     finally:
         machine.disconnect()
 
@@ -1805,6 +1810,7 @@ def test_prepare_job_start_homes_without_parking_in_simulation(
         assert result["position"] is None
         assert result["homed"] is True
         assert result["parked"] is False
+        assert result["home_position_snapshot"] is None
         assert transport.commands == ["M5", "$H", "G21", "G90"]
         assert machine.status()["coordinate_reference_ready"] is True
         assert machine.status()["jog_ready"] is False
@@ -2428,6 +2434,52 @@ def test_serial_connect_forces_finite_idle_delay_when_grbl_omits_setting(
     assert not transport.is_open
 
 
+def test_uncertain_grbl_settings_timeout_preserves_original_connection_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class SettingsTimeoutTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            self.commands.append(command)
+            if command == "$$":
+                return
+            super().write_line(line)
+
+    transport = SettingsTimeoutTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda port, baudrate: transport,
+    )
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._PHOTO_COMMAND_ACK_TIMEOUT_SECONDS",
+        0.05,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            controller_startup_delay=0.0,
+            read_timeout=0.01,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    with pytest.raises(
+        MachineError,
+        match=r"GRBL settings could not be read during connection:.*\$\$.*No motion",
+    ):
+        machine.connect()
+
+    assert transport.commands == ["$$", "M5"]
+    assert not machine.connected
+    assert not transport.is_open
+
+
 def test_explicit_grbl_connect_waits_for_controller_startup_before_querying(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2864,7 +2916,7 @@ def test_grbl_home_park_uses_planner_barrier_not_realtime_idle_polling(
         lambda timeout: pytest.fail("Home / park must not depend on realtime status"),
     )
     try:
-        result = machine.prepare_photo_position()
+        result = machine.prepare_photo_position(capture_home_position=True)
     finally:
         machine.disconnect()
 
@@ -2882,6 +2934,88 @@ def test_grbl_home_park_uses_planner_barrier_not_realtime_idle_polling(
         "active_offset_mm": [0.0, 0.0, 0.0],
         "g92_offset_mm": [0.0, 0.0, 0.0],
     }
+    assert result["home_position_snapshot"]["mpos_mm"] == pytest.approx(
+        [0.0, 0.0, 0.0]
+    )
+
+
+def test_grbl_realtime_status_derives_work_position_from_reported_wco() -> None:
+    snapshot = MachineService._parse_grbl_realtime_status(
+        "<Idle|MPos:15.000,195.000,0.000|WCO:0.000,0.000,0.000|FS:0,0>"
+    )
+
+    assert snapshot["state"] == "Idle"
+    assert snapshot["mpos_mm"] == pytest.approx([15.0, 195.0, 0.0])
+    assert snapshot["wpos_mm"] == pytest.approx([15.0, 195.0, 0.0])
+    assert snapshot["wco_mm"] == pytest.approx([0.0, 0.0, 0.0])
+    assert snapshot["wco_source"] == "reported"
+    assert snapshot["derived_fields"] == ["WPos"]
+    assert snapshot["xy_complete"] is True
+
+
+def test_grbl_realtime_status_derives_xy_wco_from_coordinate_state() -> None:
+    snapshot = MachineService._parse_grbl_realtime_status(
+        "<Idle|MPos:17.500,194.000,0.000|FS:0,0>",
+        coordinate_state={
+            "active_workspace": "G54",
+            "active_offset_mm": [2.5, 0.0, 0.0],
+            "g92_offset_mm": [0.0, -1.0, 0.0],
+        },
+    )
+
+    assert snapshot["mpos_mm"] == pytest.approx([17.5, 194.0, 0.0])
+    assert snapshot["wco_mm"][:2] == pytest.approx([2.5, -1.0])
+    assert snapshot["wco_mm"][2] is None
+    assert snapshot["wpos_mm"][:2] == pytest.approx([15.0, 195.0])
+    assert snapshot["wpos_mm"][2] is None
+    assert snapshot["wco_source"] == "derived X/Y from active workspace and G92"
+    assert snapshot["xy_complete"] is True
+
+
+def test_grbl_realtime_status_prefers_fresh_coordinate_state_over_cached_wco() -> None:
+    snapshot = MachineService._parse_grbl_realtime_status(
+        "<Idle|MPos:15.000,195.000,0.000|FS:0,0>",
+        coordinate_state={
+            "active_workspace": "G54",
+            "active_offset_mm": [0.0, 0.0, 0.0],
+            "g92_offset_mm": [0.0, 0.0, 0.0],
+        },
+        cached_wco_mm=[99.0, 88.0, 0.0],
+    )
+
+    assert snapshot["wco_mm"][:2] == pytest.approx([0.0, 0.0])
+    assert snapshot["wpos_mm"][:2] == pytest.approx([15.0, 195.0])
+    assert snapshot["wco_source"] == (
+        "derived X/Y from active workspace and G92"
+    )
+
+
+def test_realtime_position_snapshot_is_read_only_and_reports_photo_pose() -> None:
+    machine = MachineService(
+        MachineSettings(
+            backend="simulator",
+            photo_x=15.0,
+            photo_y=195.0,
+        ),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    try:
+        result = machine.prepare_photo_position(capture_home_position=True)
+        snapshot = machine.sample_realtime_position()
+    finally:
+        machine.disconnect()
+
+    home = result["home_position_snapshot"]
+    assert home["available"] is True
+    assert home["mpos_mm"] == pytest.approx([0.0, 0.0, 0.0])
+    assert home["wpos_mm"] == pytest.approx([0.0, 0.0, 0.0])
+    assert snapshot["state"] == "Idle"
+    assert snapshot["mpos_mm"] == pytest.approx([15.0, 195.0, 0.0])
+    assert snapshot["wpos_mm"] == pytest.approx([15.0, 195.0, 0.0])
+    assert snapshot["wco_mm"] == pytest.approx([0.0, 0.0, 0.0])
+    assert snapshot["xy_complete"] is True
 
 
 def test_serial_job_rejects_work_offset_changed_after_home_park(

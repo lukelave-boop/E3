@@ -21,7 +21,12 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        layout = QtWidgets.QHBoxLayout(self)
+        layout = QtWidgets.QVBoxLayout(self)
+        self.splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
+        self.splitter.setObjectName("coordinateAuditSplitter")
+        self.splitter.setChildrenCollapsible(False)
+        self._splitter_wide = False
+        layout.addWidget(self.splitter, 1)
 
         left_widget = QtWidgets.QWidget()
         left = QtWidgets.QVBoxLayout(left_widget)
@@ -52,14 +57,17 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         buttons.addWidget(self.refresh_button)
         buttons.addWidget(self.copy_button)
         left.addLayout(buttons)
-        layout.addWidget(left_widget, 3)
+        self.splitter.addWidget(left_widget)
 
         right_widget = QtWidgets.QWidget()
         right = QtWidgets.QVBoxLayout(right_widget)
         intro = QtWidgets.QLabel(
-            "Coordinate calculations, refresh, copy, and point inspection are read-only. "
-            "The capture button uses the existing laser-off Home / park motion; it does "
-            "not change bounds, G-code, calibration, honeycomb placement, or laser power."
+            "Numbers and point inspection are read-only. Capture uses the existing "
+            "laser-off Home / park path and records the controller pose at camera time."
+        )
+        intro.setToolTip(
+            "Capture does not change bounds, G-code, calibration, honeycomb placement, "
+            "or laser power."
         )
         intro.setWordWrap(True)
         intro.setObjectName("mutedLabel")
@@ -90,18 +98,24 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         self.tree.setRootIsDecorated(True)
         self.tree.setAlternatingRowColors(True)
         self.tree.setMinimumHeight(300)
-        self.tree.header().setSectionResizeMode(
+        self.tree.setWordWrap(True)
+        self.tree.setUniformRowHeights(False)
+        self.tree.setTextElideMode(QtCore.Qt.TextElideMode.ElideMiddle)
+        header = self.tree.header()
+        header.setMinimumSectionSize(120)
+        header.setSectionResizeMode(
             0,
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
+            QtWidgets.QHeaderView.ResizeMode.Interactive,
         )
-        self.tree.header().setSectionResizeMode(
+        header.setSectionResizeMode(
             1,
             QtWidgets.QHeaderView.ResizeMode.Stretch,
         )
+        header.resizeSection(0, 250)
         right.addWidget(self.tree, 1)
 
-        point_group = QtWidgets.QGroupBox("Clicked-point transform")
-        point_layout = QtWidgets.QVBoxLayout(point_group)
+        self.point_group = QtWidgets.QGroupBox("Clicked-point transform")
+        point_layout = QtWidgets.QVBoxLayout(self.point_group)
         self.point_details = QtWidgets.QPlainTextEdit()
         self.point_details.setObjectName("coordinateAuditPointDetails")
         self.point_details.setReadOnly(True)
@@ -111,7 +125,8 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
             "mark or boundary."
         )
         point_layout.addWidget(self.point_details)
-        right.addWidget(point_group)
+        self.point_group.hide()
+        right.addWidget(self.point_group)
         legend = QtWidgets.QLabel(
             "Orange = configured machine/work rectangle · Green = guarded laser-output "
             "authority · Magenta = measured honeycomb · X+/Y+ arrows show frame directions."
@@ -119,7 +134,26 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         legend.setWordWrap(True)
         legend.setObjectName("mutedLabel")
         right.addWidget(legend)
-        layout.addWidget(right_widget, 2)
+        self.splitter.addWidget(right_widget)
+        self.splitter.setStretchFactor(0, 3)
+        self.splitter.setStretchFactor(1, 2)
+        self.splitter.setSizes([430, 430])
+
+    def _update_splitter_orientation(self) -> None:
+        wide = self.width() >= 1080
+        if wide == self._splitter_wide:
+            return
+        self._splitter_wide = wide
+        self.splitter.setOrientation(
+            QtCore.Qt.Orientation.Horizontal
+            if wide
+            else QtCore.Qt.Orientation.Vertical
+        )
+        self.splitter.setSizes([760, 620] if wide else [430, 430])
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self._update_splitter_orientation()
 
     @staticmethod
     def format_xy(value: Any, *, axes: tuple[str, ...] = ("X", "Y")) -> str:
@@ -156,7 +190,10 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         group.setFont(0, font)
         self.tree.addTopLevelItem(group)
         for label, value in rows:
-            group.addChild(QtWidgets.QTreeWidgetItem((label, value)))
+            item = QtWidgets.QTreeWidgetItem((label, value))
+            item.setToolTip(0, label)
+            item.setToolTip(1, value)
+            group.addChild(item)
         group.setExpanded(True)
 
     def set_status(self, audit: dict[str, Any]) -> None:
@@ -179,10 +216,7 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         )
 
         machine = audit.get("machine") or {}
-        coordinate_state = machine.get("coordinate_state_reference") or {}
-        active_workspace = str(coordinate_state.get("active_workspace") or "Unknown")
-        active_offset = coordinate_state.get("active_offset_mm")
-        g92_offset = coordinate_state.get("g92_offset_mm")
+        current_coordinate_state = machine.get("coordinate_state_reference") or {}
         work = machine.get("work_area_mm") or ()
         work_text = (
             f"X{float(work[0]):.3f}…{float(work[1]):.3f}  "
@@ -196,8 +230,57 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
             if isinstance(trusted, dict)
             and type(trusted.get("x")) in {int, float}
             and type(trusted.get("y")) in {int, float}
-            else "Unavailable until Home / park establishes a trusted reference"
+            else "Not trusted after motor release or before Home / park"
         )
+
+        capture = machine.get("capture_pose") or {}
+        home_position = capture.get("position_immediately_after_home") or {}
+        before = capture.get("position_before_capture") or {}
+        after = capture.get("position_after_capture") or {}
+        position = after if after.get("available") is True else before
+        capture_coordinate_state = capture.get("coordinate_state") or {}
+        capture_state = str(capture.get("state") or "MISSING")
+        capture_status = {
+            "CURRENT": "TRUSTED AT CAPTURE",
+            "STALE": "STALE — bed map changed after capture",
+            "UNTRUSTED": "UNTRUSTED — position could not be verified",
+            "MISSING": "NOT CAPTURED",
+        }.get(capture_state, capture_state)
+        home_state = (
+            str(home_position.get("state") or "Unavailable")
+            if home_position.get("available") is True
+            else "Unavailable: " + str(home_position.get("error") or "not sampled")
+        )
+        delta = capture.get("maximum_position_delta_mm")
+        stable_text = (
+            "PASS"
+            if capture.get("position_stable_during_capture") is True
+            else "UNVERIFIED"
+        )
+        if type(delta) in {int, float}:
+            stable_text += f" · maximum before/after Δ {float(delta):.4f} mm"
+        command_error_xy = capture.get("commanded_position_error_xy_mm")
+        command_error = capture.get("commanded_position_error_mm")
+        command_error_text = "Unavailable"
+        if (
+            isinstance(command_error_xy, (list, tuple))
+            and len(command_error_xy) >= 2
+            and type(command_error_xy[0]) in {int, float}
+            and type(command_error_xy[1]) in {int, float}
+        ):
+            command_error_text = (
+                f"ΔX{float(command_error_xy[0]):+.4f}  "
+                f"ΔY{float(command_error_xy[1]):+.4f} mm"
+            )
+            if type(command_error) in {int, float}:
+                command_error_text += f" · radial {float(command_error):.4f} mm"
+        motor_text = (
+            "Released after capture; current XY is intentionally untrusted"
+            if capture.get("motors_released_after_capture") is True
+            else "Not released by the capture cleanup"
+        )
+        sampling_errors = [str(item) for item in capture.get("sampling_errors") or ()]
+        sampling_text = "None" if not sampling_errors else "; ".join(sampling_errors)
 
         laser = audit.get("laser") or {}
         camera = audit.get("camera") or {}
@@ -209,7 +292,94 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
 
         self.tree.clear()
         self._add_group(
-            "Controller / machine",
+            "Capture-time controller pose",
+            (
+                ("Audit capture", capture_status),
+                (
+                    "Home / park completed",
+                    "YES" if capture.get("home_completed") else "NO",
+                ),
+                ("Controller state immediately after Home", home_state),
+                (
+                    "MPos immediately after Home",
+                    self.format_xy(
+                        home_position.get("mpos_mm"),
+                        axes=("X", "Y", "Z"),
+                    )
+                    + " mm",
+                ),
+                (
+                    "WPos immediately after Home",
+                    self.format_xy(
+                        home_position.get("wpos_mm"),
+                        axes=("X", "Y", "Z"),
+                    )
+                    + " mm",
+                ),
+                (
+                    "WCO immediately after Home",
+                    self.format_xy(
+                        home_position.get("wco_mm"),
+                        axes=("X", "Y", "Z"),
+                    )
+                    + " mm · "
+                    + str(home_position.get("wco_source") or "source unavailable"),
+                ),
+                (
+                    "Commanded photography pose",
+                    self.format_xy(
+                        capture.get("commanded_photo_position_mm")
+                        or machine.get("photo_position_mm"),
+                        axes=("X", "Y", "Z"),
+                    )
+                    + " mm",
+                ),
+                (
+                    "Controller state at capture",
+                    str(position.get("state") or "Unavailable"),
+                ),
+                (
+                    "MPos at capture",
+                    self.format_xy(position.get("mpos_mm"), axes=("X", "Y", "Z"))
+                    + " mm",
+                ),
+                (
+                    "WPos at capture",
+                    self.format_xy(position.get("wpos_mm"), axes=("X", "Y", "Z"))
+                    + " mm",
+                ),
+                (
+                    "WCO at capture",
+                    self.format_xy(position.get("wco_mm"), axes=("X", "Y", "Z"))
+                    + " mm · "
+                    + str(position.get("wco_source") or "source unavailable"),
+                ),
+                (
+                    "Active workspace at capture",
+                    str(capture_coordinate_state.get("active_workspace") or "Unavailable"),
+                ),
+                (
+                    "Workspace offset at capture",
+                    self.format_xy(
+                        capture_coordinate_state.get("active_offset_mm"),
+                        axes=("X", "Y", "Z"),
+                    ),
+                ),
+                (
+                    "G92 offset at capture",
+                    self.format_xy(
+                        capture_coordinate_state.get("g92_offset_mm"),
+                        axes=("X", "Y", "Z"),
+                    ),
+                ),
+                ("Pose stability during camera burst", stable_text),
+                ("Commanded-vs-reported photo pose", command_error_text),
+                ("Sampling errors", sampling_text),
+                ("After capture", motor_text),
+            ),
+        )
+        self._add_group(
+            "Current controller / machine state",
             (
                 ("Connection", "Connected" if machine.get("connected") else "Offline"),
                 (
@@ -218,18 +388,16 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
                     f"{machine.get('protocol') or 'unknown'}",
                 ),
                 (
-                    "Home / park reference",
+                    "Current Home / park reference",
                     "READY"
                     if machine.get("coordinate_reference_ready")
-                    else "NOT ESTABLISHED",
+                    else "NOT CURRENTLY TRUSTED",
                 ),
-                ("Trusted position", trusted_text),
-                ("Active GRBL workspace", active_workspace),
+                ("Current trusted position", trusted_text),
                 (
-                    "Active workspace offset",
-                    self.format_xy(active_offset, axes=("X", "Y", "Z")),
+                    "Current active GRBL workspace",
+                    str(current_coordinate_state.get("active_workspace") or "Unavailable"),
                 ),
-                ("G92 offset", self.format_xy(g92_offset, axes=("X", "Y", "Z"))),
                 ("Configured motion/work rectangle", work_text),
                 (
                     "Configured photography pose",
@@ -238,11 +406,6 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
                         axes=("X", "Y", "Z"),
                     )
                     + " mm",
-                ),
-                (
-                    "Realtime MPos / WPos",
-                    "Not sampled by this read-only revision; use the controller status "
-                    "audit during the physical follow-up",
                 ),
             ),
         )
@@ -362,7 +525,15 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         self.next_action.setText("Next action unavailable")
         self.tree.clear()
 
+    def clear_point(self) -> None:
+        self.point_details.setPlainText(
+            "No point selected. Capture an audit view, then click a physical ruler "
+            "mark or boundary."
+        )
+        self.point_group.hide()
+
     def set_point(self, point: dict[str, Any]) -> None:
+        self.point_group.show()
         local = point.get("honeycomb_local_mm")
         local_text = "Unavailable" if local is None else self.format_xy(local) + " mm"
         reference_state = str(point.get("honeycomb_reference_state") or "MISSING")
@@ -405,6 +576,7 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         self.point_details.setPlainText("\n".join(lines))
 
     def set_point_error(self, message: str) -> None:
+        self.point_group.show()
         self.point_details.setPlainText(message)
 
 

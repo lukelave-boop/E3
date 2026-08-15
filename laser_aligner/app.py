@@ -297,6 +297,8 @@ class AppContext:
         self._workspace_lock = threading.RLock()
         self._workspace_image: np.ndarray | None = None
         self._workspace_revision: tuple[Any, ...] | None = None
+        self._coordinate_audit_lock = threading.RLock()
+        self._coordinate_audit_capture_snapshot: dict[str, Any] | None = None
         self._composed_map_cache: dict[
             tuple[Any, ...],
             tuple[object, object, tuple[np.ndarray, np.ndarray]],
@@ -1074,15 +1076,190 @@ class AppContext:
             self._persist_workspace(rectified)
         return rectified
 
+    @staticmethod
+    def _position_snapshot_xy(
+        snapshot: Mapping[str, Any] | None,
+        key: str,
+    ) -> tuple[float, float] | None:
+        if not isinstance(snapshot, Mapping):
+            return None
+        value = snapshot.get(key)
+        if not isinstance(value, (list, tuple)) or len(value) < 2:
+            return None
+        if any(type(component) not in {int, float} for component in value[:2]):
+            return None
+        x = float(value[0])
+        y = float(value[1])
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        return x, y
+
+    @classmethod
+    def _coordinate_capture_delta_mm(
+        cls,
+        before: Mapping[str, Any] | None,
+        after: Mapping[str, Any] | None,
+    ) -> float | None:
+        deltas: list[float] = []
+        for key in ("mpos_mm", "wpos_mm", "wco_mm"):
+            first = cls._position_snapshot_xy(before, key)
+            second = cls._position_snapshot_xy(after, key)
+            if first is None or second is None:
+                continue
+            deltas.append(math.hypot(second[0] - first[0], second[1] - first[1]))
+        return max(deltas) if deltas else None
+
+    def _sample_coordinate_audit_position(self) -> dict[str, Any]:
+        try:
+            machine_status = self.machine.status()
+        except Exception as exc:
+            return {"available": False, "error": f"Machine status unavailable: {exc}"}
+        if machine_status.get("protocol") != "grbl":
+            return {
+                "available": False,
+                "error": (
+                    "Realtime MPos/WPos/WCO sampling is currently available only "
+                    "for GRBL"
+                ),
+            }
+        try:
+            snapshot = self.machine.sample_realtime_position()
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+        return {"available": True, **snapshot}
+
+    def _record_coordinate_audit_capture(
+        self,
+        *,
+        park_result: Mapping[str, Any],
+        before_position: Mapping[str, Any],
+        after_position: Mapping[str, Any],
+        capture_started_at: float,
+        capture_finished_at: float,
+        bed_calibration_created_at: float | None,
+    ) -> None:
+        delta = self._coordinate_capture_delta_mm(before_position, after_position)
+        reported_position = (
+            after_position
+            if after_position.get("available") is True
+            else before_position
+        )
+        reported_wpos = self._position_snapshot_xy(reported_position, "wpos_mm")
+        commanded = (
+            float(self.settings.machine.photo_x),
+            float(self.settings.machine.photo_y),
+        )
+        command_error_xy = (
+            None
+            if reported_wpos is None
+            else [
+                reported_wpos[0] - commanded[0],
+                reported_wpos[1] - commanded[1],
+            ]
+        )
+        command_error = (
+            None
+            if command_error_xy is None
+            else math.hypot(command_error_xy[0], command_error_xy[1])
+        )
+        before_available = before_position.get("available") is True
+        after_available = after_position.get("available") is True
+        state_before = str(before_position.get("state") or "")
+        state_after = str(after_position.get("state") or "")
+        stable = bool(
+            before_available
+            and after_available
+            and delta is not None
+            and delta <= 0.010
+            and state_before.lower().startswith("idle")
+            and state_after.lower().startswith("idle")
+        )
+        coordinate_state = park_result.get("coordinate_state")
+        home_position_raw = park_result.get("home_position_snapshot")
+        home_position = (
+            copy.deepcopy(dict(home_position_raw))
+            if isinstance(home_position_raw, Mapping)
+            else None
+        )
+        try:
+            current_machine_status = self.machine.status()
+        except Exception:
+            # The capture and its two position samples remain useful even if a
+            # later UI status refresh fails. Coordinate Audit must never turn a
+            # completed camera capture into an operation failure merely because
+            # post-cleanup state could not be summarized.
+            current_machine_status = {}
+        snapshot = {
+            "available": bool(before_available or after_available),
+            "trusted_at_capture": stable,
+            "home_completed": bool(park_result.get("homed")),
+            "parked": bool(park_result.get("parked")),
+            "commanded_photo_position_mm": [
+                commanded[0],
+                commanded[1],
+                self.settings.machine.photo_z,
+            ],
+            "coordinate_state": (
+                copy.deepcopy(coordinate_state)
+                if isinstance(coordinate_state, Mapping)
+                else None
+            ),
+            "position_immediately_after_home": home_position,
+            "position_before_capture": copy.deepcopy(dict(before_position)),
+            "position_after_capture": copy.deepcopy(dict(after_position)),
+            "position_stable_during_capture": stable,
+            "maximum_position_delta_mm": delta,
+            "commanded_position_error_xy_mm": command_error_xy,
+            "commanded_position_error_mm": command_error,
+            "capture_started_at": float(capture_started_at),
+            "capture_finished_at": float(capture_finished_at),
+            "capture_duration_seconds": max(
+                0.0,
+                float(capture_finished_at) - float(capture_started_at),
+            ),
+            "bed_calibration_created_at": bed_calibration_created_at,
+            "motors_released_after_capture": bool(
+                self.settings.machine.backend == "serial"
+                and str(current_machine_status.get("protocol") or "") == "grbl"
+            ),
+            "current_position_trusted_after_cleanup": bool(
+                current_machine_status.get("coordinate_reference_ready")
+            ),
+        }
+        position_samples = [before_position, after_position]
+        if isinstance(home_position, Mapping):
+            position_samples.insert(0, home_position)
+        errors = [
+            str(item.get("error"))
+            for item in position_samples
+            if item.get("available") is not True and item.get("error")
+        ]
+        snapshot["sampling_errors"] = errors
+        with self._coordinate_audit_lock:
+            self._coordinate_audit_capture_snapshot = snapshot
+
     def capture_parked_work_area_reference(self) -> np.ndarray:
-        """Capture a lens-corrected raw view for a machine-coordinate overlay."""
+        """Capture a lens-corrected raw view and its controller pose audit."""
 
         self._require_camera_calibration_ready()
         self._require_valid_bed_calibration()
         calibration = self.bed.calibration
+        if calibration is None:
+            raise CalibrationError("Bed calibration is unavailable")
+        with self._coordinate_audit_lock:
+            self._coordinate_audit_capture_snapshot = None
+        park_result: Mapping[str, Any]
+        before_position: Mapping[str, Any]
+        after_position: Mapping[str, Any]
         with self.machine.temporary_stepper_hold():
-            self.machine.prepare_photo_position()
+            park_result = self.machine.prepare_photo_position(
+                capture_home_position=True
+            )
+            before_position = self._sample_coordinate_audit_position()
+            capture_started_at = time.time()
             burst = self._stable_camera_burst()
+            capture_finished_at = time.time()
+            after_position = self._sample_coordinate_audit_position()
         burst = self._prepare_camera_burst(burst, undistort=True)
         if self.bed.calibration is not calibration:
             raise CalibrationError(
@@ -1093,6 +1270,14 @@ class AppContext:
             self.honeycomb_detection_input_path,
             image,
             [cv2.IMWRITE_PNG_COMPRESSION, 3],
+        )
+        self._record_coordinate_audit_capture(
+            park_result=park_result,
+            before_position=before_position,
+            after_position=after_position,
+            capture_started_at=capture_started_at,
+            capture_finished_at=capture_finished_at,
+            bed_calibration_created_at=float(calibration.created_at),
         )
         return image
 
@@ -1602,9 +1787,12 @@ class AppContext:
             if isinstance(lens_model, dict) and lens_model.get("model_id")
             else None
         )
+        with self._coordinate_audit_lock:
+            capture_snapshot = copy.deepcopy(self._coordinate_audit_capture_snapshot)
         return build_coordinate_audit_status(
             self.settings,
             machine_status=self.machine.status(),
+            capture_snapshot=capture_snapshot,
             camera_status=camera_status,
             camera_readiness=self.camera_calibration_readiness(),
             lens_status=lens_status,

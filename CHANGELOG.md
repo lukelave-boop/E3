@@ -7,6 +7,18 @@
   laser-output authority, camera rotation, lens/bed-map state, measured
   honeycomb pose, and a clicked-point transform from corrected camera pixels
   through machine, honeycomb-local, and spot-corrected carriage coordinates.
+- Coordinate Audit now records GRBL `MPos`, `WPos`, and `WCO` immediately before
+  and after the parked camera burst, together with the active workspace, G92
+  offset, commanded-photo-pose error, and measured capture stability. It keeps
+  that capture-time evidence after the normal motor-release cleanup while
+  labeling the current live position untrusted. The audit layout now uses a
+  resizable splitter, a wider wrapping value table, a collapsed empty point
+  inspector, and a larger first-open Machine Setup geometry; narrow Bed Mapping
+  support actions stack vertically instead of clipping their labels.
+- A failed or incomplete GRBL `$$` exchange during connection now preserves the
+  original settings-query error. The best-effort raw `M5` and serial close still
+  run, but the later reconnect-only guard no longer hides the cause behind a
+  generic untrusted-command-state message.
 - Corrected the active E3 honeycomb's physical zero-to-far-ruler span to
   `191.000 mm`. Physical support size is now a machine-profile value separate
   from laser margins or cutting insets. Existing 190 mm support references are

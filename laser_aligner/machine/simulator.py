@@ -27,7 +27,10 @@ class SimulatedTransport:
     def write_raw(self, data: bytes) -> None:
         if b"?" in data:
             state = "Run" if self.laser_on else "Idle"
-            self._queue.put(f"<{state}|MPos:{self.x:.3f},{self.y:.3f},0.000|FS:0,{self.power:.0f}>")
+            self._queue.put(
+                f"<{state}|MPos:{self.x:.3f},{self.y:.3f},0.000|"
+                f"WCO:0.000,0.000,0.000|FS:0,{self.power:.0f}>"
+            )
         if b"\x18" in data:
             self.laser_on = False
             self.power = 0.0

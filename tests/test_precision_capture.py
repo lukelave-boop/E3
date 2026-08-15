@@ -448,7 +448,7 @@ def test_work_area_reference_holds_only_through_raw_frame_capture(
         sharpness_scores=(),
         controls=ControlResult({}, {}, {}),
     )
-    calibration = object()
+    calibration = SimpleNamespace(created_at=7.0)
 
     @contextmanager
     def temporary_hold():
@@ -472,16 +472,53 @@ def test_work_area_reference_holds_only_through_raw_frame_capture(
         calls.append("score:released")
         return 4.0
 
+    sample_count = 0
+
+    def sample_position() -> dict[str, object]:
+        nonlocal sample_count
+        assert holding
+        sample_count += 1
+        calls.append(f"position:{sample_count}")
+        return {
+            "state": "Idle",
+            "mpos_mm": [110.0, 110.0, 0.0],
+            "wpos_mm": [110.0, 110.0, 0.0],
+            "wco_mm": [0.0, 0.0, 0.0],
+            "wco_source": "reported",
+            "derived_fields": [],
+            "xy_complete": True,
+            "raw_status": "<Idle|MPos:110.000,110.000,0.000|WCO:0.000,0.000,0.000>",
+            "sampled_at": 1.0 + sample_count,
+        }
+
     harness = SimpleNamespace(
         _require_camera_calibration_ready=lambda: calls.append("camera:ready"),
         _require_valid_bed_calibration=lambda: calls.append("bed:ready"),
         bed=SimpleNamespace(calibration=calibration),
         machine=SimpleNamespace(
             temporary_stepper_hold=temporary_hold,
-            prepare_photo_position=lambda: calls.append("home"),
+            prepare_photo_position=lambda **_kwargs: (
+                calls.append("home")
+                or {
+                    "homed": True,
+                    "parked": True,
+                    "coordinate_state": None,
+                }
+            ),
+            status=lambda: {
+                "protocol": "grbl",
+                "coordinate_reference_ready": False,
+            },
+            sample_realtime_position=sample_position,
         ),
         settings=SimpleNamespace(
-            camera=SimpleNamespace(precision_capture=PrecisionCaptureSettings())
+            machine=SimpleNamespace(
+                backend="simulator",
+                photo_x=110.0,
+                photo_y=110.0,
+                photo_z=None,
+            ),
+            camera=SimpleNamespace(precision_capture=PrecisionCaptureSettings()),
         ),
         camera=SimpleNamespace(
             capture_burst=capture,
@@ -489,6 +526,18 @@ def test_work_area_reference_holds_only_through_raw_frame_capture(
         ),
         lens=SimpleNamespace(model=None),
         honeycomb_detection_input_path=tmp_path / "honeycomb-detection-test.png",
+        _coordinate_audit_lock=threading.RLock(),
+        _coordinate_audit_capture_snapshot=None,
+    )
+    harness._position_snapshot_xy = AppContext._position_snapshot_xy
+    harness._coordinate_capture_delta_mm = lambda before, after: (
+        AppContext._coordinate_capture_delta_mm(before, after)
+    )
+    harness._sample_coordinate_audit_position = lambda: (
+        AppContext._sample_coordinate_audit_position(harness)
+    )
+    harness._record_coordinate_audit_capture = lambda **kwargs: (
+        AppContext._record_coordinate_audit_capture(harness, **kwargs)
     )
     harness._stable_camera_burst = lambda: AppContext._stable_camera_burst(harness)
     harness._prepare_camera_burst = lambda value, *, undistort: (
@@ -502,12 +551,104 @@ def test_work_area_reference_holds_only_through_raw_frame_capture(
         "bed:ready",
         "hold:start",
         "home",
+        "position:1",
         "capture:raw",
+        "position:2",
         "hold:end",
         "score:released",
     ]
     assert np.array_equal(result, frame)
     assert result is not frame
+    snapshot = harness._coordinate_audit_capture_snapshot
+    assert snapshot["trusted_at_capture"] is True
+    assert snapshot["position_stable_during_capture"] is True
+    assert snapshot["maximum_position_delta_mm"] == pytest.approx(0.0)
+    assert snapshot["commanded_position_error_mm"] == pytest.approx(0.0)
+    assert snapshot["position_after_capture"]["wpos_mm"] == pytest.approx(
+        [110.0, 110.0, 0.0]
+    )
+    assert snapshot["motors_released_after_capture"] is False
+    assert snapshot["current_position_trusted_after_cleanup"] is False
+
+
+def test_coordinate_audit_capture_snapshot_preserves_home_and_camera_pose_after_cleanup() -> None:
+    harness = SimpleNamespace(
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(
+                backend="serial",
+                photo_x=15.0,
+                photo_y=195.0,
+                photo_z=None,
+            )
+        ),
+        machine=SimpleNamespace(
+            status=lambda: {
+                "protocol": "grbl",
+                "coordinate_reference_ready": False,
+            }
+        ),
+        _coordinate_audit_lock=threading.RLock(),
+        _coordinate_audit_capture_snapshot=None,
+    )
+    harness._position_snapshot_xy = AppContext._position_snapshot_xy
+    harness._coordinate_capture_delta_mm = lambda before, after: (
+        AppContext._coordinate_capture_delta_mm(before, after)
+    )
+    before = {
+        "available": True,
+        "state": "Idle",
+        "mpos_mm": [15.0, 195.0, 0.0],
+        "wpos_mm": [15.0, 195.0, None],
+        "wco_mm": [0.0, 0.0, None],
+        "wco_source": "derived X/Y from active workspace and G92",
+    }
+    after = {
+        **before,
+        "mpos_mm": [15.001, 194.999, 0.0],
+        "wpos_mm": [15.001, 194.999, None],
+    }
+    AppContext._record_coordinate_audit_capture(
+        harness,
+        park_result={
+            "homed": True,
+            "parked": True,
+            "coordinate_state": {
+                "active_workspace": "G54",
+                "active_offset_mm": [0.0, 0.0, 0.0],
+                "g92_offset_mm": [0.0, 0.0, 0.0],
+            },
+            "home_position_snapshot": {
+                "available": True,
+                "state": "Idle",
+                "mpos_mm": [0.0, 0.0, 0.0],
+                "wpos_mm": [0.0, 0.0, None],
+                "wco_mm": [0.0, 0.0, None],
+                "wco_source": "derived X/Y from active workspace and G92",
+            },
+        },
+        before_position=before,
+        after_position=after,
+        capture_started_at=100.0,
+        capture_finished_at=102.5,
+        bed_calibration_created_at=7.0,
+    )
+
+    snapshot = harness._coordinate_audit_capture_snapshot
+    assert snapshot["trusted_at_capture"] is True
+    assert snapshot["position_stable_during_capture"] is True
+    assert snapshot["maximum_position_delta_mm"] == pytest.approx(2**0.5 / 1000)
+    assert snapshot["position_immediately_after_home"]["mpos_mm"] == pytest.approx(
+        [0.0, 0.0, 0.0]
+    )
+    assert snapshot["position_after_capture"]["mpos_mm"] == pytest.approx(
+        [15.001, 194.999, 0.0]
+    )
+    assert snapshot["commanded_position_error_xy_mm"] == pytest.approx(
+        [0.001, -0.001]
+    )
+    assert snapshot["motors_released_after_capture"] is True
+    assert snapshot["current_position_trusted_after_cleanup"] is False
+    assert snapshot["sampling_errors"] == []
 
 
 def test_crosshair_burst_rejects_one_spatial_outlier(

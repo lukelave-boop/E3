@@ -6,6 +6,7 @@ on:
       - main
       - desktop-v1
       - "cleanup/**"
+      - "feature/**"
   pull_request:
   workflow_dispatch:
 

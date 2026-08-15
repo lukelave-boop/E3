@@ -595,7 +595,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._lens_mutation_blocked = False
         self.setWindowTitle("Machine Setup")
         self.setMinimumSize(900, 680)
-        self.resize(1080, 780)
+        self.resize(1180, 820)
         self._settings = QtCore.QSettings(
             str(self.context.settings.app.data_dir / "desktop-settings.ini"),
             QtCore.QSettings.Format.IniFormat,
@@ -1386,7 +1386,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         reference_layout.addWidget(self.honeycomb_support_status)
-        support_buttons = QtWidgets.QHBoxLayout()
+        support_buttons = QtWidgets.QGridLayout()
+        support_buttons.setContentsMargins(0, 0, 0, 0)
         self.honeycomb_support_auto_button = QtWidgets.QPushButton(
             "Detect honeycomb automatically"
         )
@@ -1405,9 +1406,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.honeycomb_support_clear_button.clicked.connect(
             self.clear_honeycomb_support_reference
         )
-        support_buttons.addWidget(self.honeycomb_support_auto_button, 1)
-        support_buttons.addWidget(self.honeycomb_support_record_button)
-        support_buttons.addWidget(self.honeycomb_support_clear_button)
+        support_buttons.addWidget(self.honeycomb_support_auto_button, 0, 0)
+        support_buttons.addWidget(self.honeycomb_support_record_button, 1, 0)
+        support_buttons.addWidget(self.honeycomb_support_clear_button, 2, 0)
         reference_layout.addLayout(support_buttons)
         right.addWidget(reference)
         self._bed_dependent_actions.append(self.work_area_reference_button)
@@ -2274,6 +2275,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     def _invalidate_for_home_park(self) -> None:
         self._set_photo_pose_confirmed(False)
+        self._coordinate_audit_point_snapshot = None
+        if hasattr(self, "audit_panel"):
+            self.audit_panel.clear_point()
         self._invalidate_registration_review(
             "Prior registration review invalidated by Home / park."
         )
@@ -2560,6 +2564,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self._work_area_reference_calibration = calibration
             self._render_work_area_reference_preview()
             self._refresh_work_area_reference_status()
+            self._refresh_coordinate_audit()
 
         self._start_operation(
             "Work-area ruler reference",
@@ -3013,10 +3018,25 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self.refresh_all()
             self.calibrationChanged.emit()
 
+    def _apply_default_geometry(self) -> None:
+        screen = self.screen() or QtGui.QGuiApplication.primaryScreen()
+        if screen is None:
+            self.resize(1180, 820)
+            return
+        available = screen.availableGeometry()
+        width = min(1440, max(1180, round(available.width() * 0.88)))
+        height = min(960, max(780, round(available.height() * 0.88)))
+        self.resize(min(width, available.width()), min(height, available.height()))
+        frame = self.frameGeometry()
+        frame.moveCenter(available.center())
+        self.move(frame.topLeft())
+
     def _restore_preferences(self) -> None:
-        geometry = self._settings.value("machineSetup/geometry-v1")
+        geometry = self._settings.value("machineSetup/geometry-v2")
         if geometry:
             self.restoreGeometry(geometry)
+        else:
+            self._apply_default_geometry()
         self.tabs.setCurrentIndex(max(0, min(self.tabs.count() - 1, int(self._settings.value("machineSetup/tab", 0)))))
         scene = str(self._settings.value("machineSetup/syntheticScene", "bed"))
         scene_index = self.synthetic_scene.findData(scene)
@@ -3035,7 +3055,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 widget.setValue(float(value))
 
     def _save_preferences(self) -> None:
-        self._settings.setValue("machineSetup/geometry-v1", self.saveGeometry())
+        self._settings.setValue("machineSetup/geometry-v2", self.saveGeometry())
         self._settings.setValue("machineSetup/tab", self.tabs.currentIndex())
         self._settings.setValue("machineSetup/syntheticScene", self.synthetic_scene.currentData())
         for key, widget in (

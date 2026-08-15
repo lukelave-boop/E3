@@ -233,6 +233,7 @@ def build_coordinate_audit_status(
     bed_status: Mapping[str, Any],
     support_reference: HoneycombSupportReference | None,
     honeycomb_execution_signature: tuple[Any, ...] | None,
+    capture_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build one JSON-safe, read-only view of every active coordinate frame."""
 
@@ -298,6 +299,33 @@ def build_coordinate_audit_status(
     model_id = None if lens_model is None else lens_model.get("model_id")
     camera_state = str(camera_readiness.get("state") or "UNKNOWN")
     bed_state = str(bed_validity_mapping.get("state") or "MISSING")
+    capture_payload = dict(capture_snapshot) if isinstance(capture_snapshot, Mapping) else {}
+    capture_bed_created_at = capture_payload.get("bed_calibration_created_at")
+    capture_bed_current = bool(
+        capture_payload
+        and bed_created_at is not None
+        and type(capture_bed_created_at) in {int, float}
+        and math.isfinite(float(capture_bed_created_at))
+        and abs(float(capture_bed_created_at) - bed_created_at) <= 1e-9
+    )
+    capture_trusted = bool(
+        capture_payload.get("trusted_at_capture") is True and capture_bed_current
+    )
+    if not capture_payload:
+        capture_state = "MISSING"
+    elif not capture_bed_current:
+        capture_state = "STALE"
+    elif capture_trusted:
+        capture_state = "CURRENT"
+    else:
+        capture_state = "UNTRUSTED"
+    capture_payload.update(
+        {
+            "state": capture_state,
+            "bed_map_current": capture_bed_current,
+            "trusted_at_capture": capture_trusted,
+        }
+    )
 
     blockers: list[str] = []
 
@@ -338,6 +366,16 @@ def build_coordinate_audit_status(
         required_next_action = (
             "Complete a fresh keyed 5 × 5 camera-to-machine base map, then capture "
             "the machine-grid overlay."
+        )
+    elif settings.machine.backend == "serial" and not machine_status.get("connected"):
+        required_next_action = (
+            "Connect the controller, then run Home / park and capture audit view with "
+            "the laser physically disabled or process laser lockout active."
+        )
+    elif settings.machine.backend == "serial" and not capture_trusted:
+        required_next_action = (
+            "Run Home / park and capture audit view so MPos, WPos, WCO, workspace, "
+            "and G92 are recorded at the exact camera pose."
         )
     elif support_validity["state"] != "CURRENT":
         required_next_action = (
@@ -393,6 +431,7 @@ def build_coordinate_audit_status(
                 if settings.machine.photo_z is None
                 else float(settings.machine.photo_z),
             ],
+            "capture_pose": capture_payload,
         },
         "laser": {
             "output_authority_kind": (
