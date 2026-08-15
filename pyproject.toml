@@ -31,6 +31,7 @@ desktop = [
 [project.scripts]
 laser-camera-aligner = "laser_aligner.__main__:main"
 e3-positioning-system = "laser_aligner.desktop.main:main"
+e3-hardware-node = "laser_aligner.remote_node:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

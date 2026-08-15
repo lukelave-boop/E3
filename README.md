@@ -14,6 +14,12 @@ stationary overhead **Logitech C920**.
 > `CURRENT_STATE.md`, but the controller/profile and final physical accuracy
 > are not yet verified configurations.
 
+> The network-hardware candidate also allows a Windows desktop to keep the guarded
+> `MachineService` locally while using an authenticated Raspberry Pi hardware node
+> for the controller and camera. Direct USB hardware remains Linux-only. The
+> Windows-to-Pi path is software-tested but is not physically verified; see
+> [docs/NETWORK_MACHINE.md](docs/NETWORK_MACHINE.md).
+
 Read [CURRENT_STATE.md](CURRENT_STATE.md) for the active branch and verification
 boundary. [PROJECT_STATUS.md](PROJECT_STATUS.md) is the dated 2026-08-06 Windows
 portability snapshot retained as historical evidence. Read [SAFETY.md](SAFETY.md)

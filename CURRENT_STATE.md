@@ -7,6 +7,19 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-13**
 
+A Windows-to-Raspberry-Pi hardware-node candidate now places authenticated
+controller and camera transports underneath the existing guarded services. The
+controller path preserves `MachineService` as the only normal command path and
+uses a Pi-local realtime stop/reset plus `M5` after client loss. The camera path
+keeps V4L2 ownership and precision acquisition on the Pi, transfers retained
+frames to the desktop, preserves sequence/generation/control diagnostics, and
+rejects mismatched Pi/desktop capture profiles before startup. Twelve focused
+loopback tests and Python bytecode compilation pass in an isolated harness. The
+repository-wide pytest/Ruff matrix has not yet been run for this candidate, and
+no Pi, Windows, camera, controller, disconnect, calibration, or powered physical
+test has been performed. Treat the entire network path as implemented but
+unverified.
+
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and
 leaving **Apply reviewed full-bed map** disabled. The full-map axis-span gate

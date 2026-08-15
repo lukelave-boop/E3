@@ -37,6 +37,14 @@ The browser uses `AppContext` directly. The desktop uses `CoreRuntime` as a
 UI-neutral lifecycle wrapper around the same context and performs blocking
 camera/controller work through `DesktopController` worker tasks.
 
+For a network-attached machine, `MachineService` remains on the desktop and
+selects `NetworkSerialTransport` when `machine.port` uses `e3bridge://`. The Pi
+node terminates that authenticated connection and opens the local POSIX serial
+device. A configured `e3camera://` device selects `RemoteCameraService`; the Pi
+retains sole ownership of the real `CameraService`, `VideoCapture`, and V4L2
+controls. Neither network service bypasses the desktop's project or machine
+safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
+
 ## Module ownership
 
 | Module | Responsibility |

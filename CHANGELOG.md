@@ -1,5 +1,11 @@
 # Changelog
 
+- Added an experimental authenticated Raspberry Pi hardware-node path for a
+  Windows/Linux E3 desktop: `e3bridge://` carries the guarded controller
+  transport and `e3camera://` preserves Pi-side V4L2/precision capture. Client
+  loss triggers best-effort controller stop/reset plus laser-off cleanup and
+  never auto-resumes. The network path remains physically unverified.
+
 - Trace can now compare repeated-grid interiors with the integrity-bound empty
   honeycomb teaching photograph. Already-open cells are labeled and left
   unchecked even when exposed honeycomb is darker or less textured than intact

@@ -6,6 +6,14 @@ This file defines safety boundaries and does not replace that operator sequence.
 
 This repository controls equipment capable of causing permanent eye injury, fire, toxic smoke exposure, and mechanical injury. It is experimental software and is not a safety-rated control system.
 
+A Raspberry Pi network hardware node does not change that boundary. Wi-Fi, the
+Pi, TCP, and the USB links can fail independently. On loss of its authenticated
+controller client the node makes a best-effort controller-specific realtime stop
+and `M5`, but that software cleanup is not a substitute for a physical emergency
+stop, interlock, or removal of hazardous energy. Never expose the bridge directly
+to the public Internet, and never rely on reconnection or software status as proof
+that motion or laser energy has stopped.
+
 ## Required physical safeguards
 
 Use a fully enclosed laser area designed for the laser wavelength and power. The enclosure should include a hardware door interlock that removes laser-enable power, a readily accessible hardware emergency stop that removes hazardous energy, appropriate extraction exhausting safely outdoors, a nonflammable spoil surface, and a suitable fire extinguisher within reach.

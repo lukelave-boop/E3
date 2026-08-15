@@ -253,7 +253,12 @@ class AppContext:
         if settings.app.simulation:
             self.camera: CameraService = SyntheticCameraService(settings.camera, settings.machine.work_area)
         else:
-            self.camera = CameraService(settings.camera)
+            if settings.camera.device.lower().startswith("e3camera://"):
+                from .camera.remote import RemoteCameraService
+
+                self.camera = RemoteCameraService(settings.camera)
+            else:
+                self.camera = CameraService(settings.camera)
         self.calibration_profiles = CalibrationProfileStore(
             settings.app.data_dir,
             signature_from_camera_settings(settings.camera),

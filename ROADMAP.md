@@ -70,6 +70,10 @@ These features have different verification levels; see `CURRENT_STATE.md`.
 - Keep the Windows/Linux CI matrix and package-import coverage green.
 - Add PowerShell setup/launch scripts and platform-appropriate CLI messages.
 - Separate portable OpenCV capture from Linux V4L2 discovery/control.
+- Validate the new Windows-to-Pi hardware-node path on the real Pi 3 B+,
+  including controller disconnect behavior, camera controls, precision-burst
+  repeatability, and fresh calibration before declaring Windows network
+  hardware support verified. Direct Windows USB serial remains out of scope.
 
 Windows hardware control is not required to complete the portable simulator
 milestone. If added later, it needs its own serial transport and tests.

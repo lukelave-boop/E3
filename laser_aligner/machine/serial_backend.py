@@ -27,12 +27,18 @@ def posix_serial_supported() -> bool:
 
 
 def create_serial_transport(path: str, baudrate: int) -> MachineTransport:
-    """Create the platform serial transport without importing it in simulation."""
+    """Create a local or network serial transport without eager platform imports."""
 
+    from .network_transport import is_bridge_uri
+
+    if is_bridge_uri(path):
+        from .network_transport import NetworkSerialTransport
+
+        return NetworkSerialTransport(path, baudrate)
     if not posix_serial_supported():
         raise MachineError(
             "POSIX serial hardware is unavailable on this platform. "
-            "Use machine.backend='simulator'; Windows hardware control is not implemented."
+            "Use machine.backend='simulator' or an e3bridge:// machine endpoint."
         )
     from .serial_posix import PosixSerial
 
@@ -40,7 +46,7 @@ def create_serial_transport(path: str, baudrate: int) -> MachineTransport:
 
 
 def list_serial_ports() -> list[dict[str, str]]:
-    """List serial ports when the supported POSIX backend is available."""
+    """List local serial ports when the supported POSIX backend is available."""
 
     if not posix_serial_supported():
         return []
