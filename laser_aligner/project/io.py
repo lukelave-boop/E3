@@ -53,8 +53,13 @@ def _read_project_bytes(source: Path) -> bytes:
     identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
     before_identity = tuple(getattr(before, field, None) for field in identity_fields)
     after_identity = tuple(getattr(after, field, None) for field in identity_fields)
-    current_identity = tuple(getattr(current, field, None) for field in identity_fields)
-    if before_identity != after_identity or after_identity != current_identity:
+    # On Windows, path ``stat`` and handle ``fstat`` can use different file
+    # identity representations. The handle must remain stable across the read,
+    # and the path must still agree on the portable content metadata afterward.
+    path_content_fields = ("st_size", "st_mtime_ns", "st_ctime_ns")
+    current_content = tuple(getattr(current, field, None) for field in path_content_fields)
+    after_content = tuple(getattr(after, field, None) for field in path_content_fields)
+    if before_identity != after_identity or after_content != current_content:
         raise ProjectFormatError(f"Project changed while it was being read: {source}")
     return data
 
@@ -160,7 +165,11 @@ def load_project(path: str | Path) -> ProjectDocument:
             parse_constant=_reject_json_constant,
             object_pairs_hook=_strict_json_object,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+    except RecursionError as exc:
+        raise ProjectFormatError(
+            f"Project structure is nested too deeply in {source}"
+        ) from exc
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ProjectFormatError(f"Invalid JSON in {source}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ProjectFormatError("Project root must be a JSON object")

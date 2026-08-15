@@ -137,7 +137,12 @@ def atomic_write_bytes_if_absent(
             with temp_path.open("rb") as handle:
                 os.fsync(handle.fileno())
         try:
-            os.link(temp_path, path)
+            if os.name == "nt":
+                # Windows rename is an atomic no-clobber publication: unlike
+                # POSIX rename it fails when the destination already exists.
+                os.rename(temp_path, path)
+            else:
+                os.link(temp_path, path)
         except FileExistsError:
             return False
         _fsync_parent_directory(path)

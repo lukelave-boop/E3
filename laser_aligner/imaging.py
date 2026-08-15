@@ -347,9 +347,14 @@ def read_encoded_image_payload(
         path_after = ImageFileIdentity.from_stat(source.stat())
     except OSError as exc:
         raise ValueError(f"Image payload could not be read: {source}: {exc}") from exc
+    # Windows can report different device/inode values for ``stat(path)`` and
+    # ``fstat(open_handle)`` even when both name the same file. Compare each
+    # observation route with itself while the handle is open; crossing the two
+    # routes makes every stable Windows read look like a replacement.
     if not (
-        path_before == descriptor_before == descriptor_after == path_after
-        and total == path_before.size
+        path_before == path_after
+        and descriptor_before == descriptor_after
+        and total == path_before.size == descriptor_before.size
     ):
         raise ImageEvidenceChangedError(
             f"Image evidence changed while its encoded bytes were being read: {source}"

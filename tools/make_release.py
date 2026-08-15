@@ -96,7 +96,7 @@ def release_files(root: Path, tracked_paths: Iterable[Path]) -> tuple[tuple[Path
         raise RuntimeError(f"Release checkout is unavailable: {root}") from exc
     files: list[tuple[Path, Path]] = []
     for relative in sorted(tracked_paths, key=lambda item: item.as_posix()):
-        if relative.is_absolute() or ".." in relative.parts:
+        if relative.anchor or ".." in relative.parts:
             raise RuntimeError(f"Invalid tracked release path: {relative}")
         if is_excluded(relative):
             continue

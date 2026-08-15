@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import math
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 
 from ..project import ObjectKind, SceneObject
 
 
-class ShapeKind(StrEnum):
+class ShapeKind(str, Enum):
     RECTANGLE = "rectangle"
     ROUNDED_RECTANGLE = "rounded_rectangle"
     CIRCLE = "circle"
@@ -21,6 +21,9 @@ class ShapeKind(StrEnum):
     CIRCLE_TWO_FLATS = "circle_two_flats"
     WASHER = "washer"
     FREEFORM_CONTOUR = "freeform_contour"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 SHAPE_METADATA_KEY = "shape_kind"

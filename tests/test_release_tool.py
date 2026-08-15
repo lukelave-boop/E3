@@ -37,8 +37,8 @@ def test_release_archive_contains_only_explicit_tracked_regular_files(
             "laser-camera-aligner/laser_aligner/__init__.py",
         ]
         assert archive.read("laser-camera-aligner/README.md") == (
-            b"tracked working-tree content\n"
-        )
+            root / "README.md"
+        ).read_bytes()
         assert all(".env" not in name for name in archive.namelist())
     assert release_version(root) == "1.2.3"
 

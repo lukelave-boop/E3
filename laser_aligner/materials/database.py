@@ -6,6 +6,7 @@ import os
 import sqlite3
 import tempfile
 from collections.abc import Iterable
+from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -44,8 +45,10 @@ def _migrate_database(source: Path, destination: Path) -> bool:
         os.close(descriptor)
         temporary = Path(temporary_name)
         temporary.unlink(missing_ok=True)
-        with sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True) as legacy:
-            with sqlite3.connect(temporary) as migrated:
+        with closing(
+            sqlite3.connect(f"{source.as_uri()}?mode=ro", uri=True)
+        ) as legacy:
+            with closing(sqlite3.connect(temporary)) as migrated:
                 legacy.backup(migrated)
                 migrated.commit()
         with temporary.open("rb") as handle:
