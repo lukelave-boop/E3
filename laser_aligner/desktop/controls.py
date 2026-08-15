@@ -91,7 +91,7 @@ class PanelScrollArea(QtWidgets.QScrollArea):
         panel.setMinimumWidth(0)
         if panel.layout() is not None:
             panel.layout().setSizeConstraint(
-                QtWidgets.QLayout.SizeConstraint.SetMinAndMaxSize
+                QtWidgets.QLayout.SizeConstraint.SetNoConstraint
             )
         self.setWidget(panel)
 

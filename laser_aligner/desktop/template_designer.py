@@ -399,6 +399,9 @@ class GridTemplateDesignerDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
+        form_layout.setSizeConstraint(
+            QtWidgets.QLayout.SizeConstraint.SetNoConstraint
+        )
         form_scroll.setWidget(form_page)
         splitter.addWidget(form_scroll)
 

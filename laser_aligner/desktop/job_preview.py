@@ -166,7 +166,7 @@ class _ElidedLabel(QtWidgets.QLabel):
         width = max(0, self.contentsRect().width())
         rendered = self.fontMetrics().elidedText(
             self._full_text,
-            QtCore.Qt.TextElideMode.ElideMiddle,
+            QtCore.Qt.TextElideMode.ElideRight,
             width,
         )
         super().setText(rendered)
