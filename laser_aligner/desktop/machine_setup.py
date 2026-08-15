@@ -1243,7 +1243,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         reference_layout.addWidget(reference_note)
         self.work_area_reference_button = QtWidgets.QPushButton(
-            "Home / park, capture ruler overlay"
+            "Capture ruler"
+        )
+        self.work_area_reference_button.setToolTip(
+            "Home / park, then capture the ruler overlay."
         )
         self.work_area_reference_button.clicked.connect(
             self.capture_work_area_reference
@@ -2026,7 +2029,12 @@ class MachineSetupDialog(QtWidgets.QDialog):
         unavailable = f"Requires a VALID bed map{': ' + reasons if reasons else ''}"
         for action in self._bed_dependent_actions:
             action.setEnabled(valid)
-            action.setToolTip("" if valid else unavailable)
+            ready_tooltip = (
+                "Home / park, then capture the ruler overlay."
+                if action is self.work_area_reference_button
+                else ""
+            )
+            action.setToolTip(ready_tooltip if valid else unavailable)
         self.rough_grid_detect_button.setEnabled(valid)
         self.rough_grid_detect_button.setToolTip("" if valid else unavailable)
         if not valid:

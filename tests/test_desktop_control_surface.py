@@ -27,7 +27,7 @@ def test_inspector_pages_are_opaque_and_scrollable():
     controls = source("controls.py")
     theme = source("theme.py")
     assert "class PanelScrollArea" in controls
-    assert "SetMinAndMaxSize" in controls
+    assert "SetNoConstraint" in controls
     assert "wheelScrollContainer" in controls
     assert "QWidget#inspectorPage" in theme
     assert "QTabWidget#inspectorTabs::pane" in theme

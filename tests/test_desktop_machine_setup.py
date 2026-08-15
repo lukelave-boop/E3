@@ -84,9 +84,8 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         ]
         assert dialog.synthetic_scene.isEnabled()
         assert dialog.runtime.hardware_enabled is False
-        assert dialog.work_area_reference_button.text() == (
-            "Home / park, capture ruler overlay"
-        )
+        assert dialog.work_area_reference_button.text() == "Capture ruler"
+        assert "Home / park" in dialog.work_area_reference_button.toolTip()
         assert "Camera/work: X0..220, Y0..220 mm" in (
             dialog.work_area_reference_status.text()
         )
