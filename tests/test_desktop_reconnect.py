@@ -30,16 +30,20 @@ class _Machine:
         self.connected = True
         self.reconnect_required = True
         self.coordinate_reference_ready = False
+        self.generation = 7
+        self.scoped_generations: list[int] = []
 
     def operation_generation(self) -> int:
-        return 0
+        return self.generation
 
     @contextmanager
-    def operation_scope(self, _generation: int):
+    def operation_scope(self, generation: int):
+        self.scoped_generations.append(generation)
         yield
 
     def disconnect(self) -> None:
         self.calls.append("disconnect")
+        self.generation += 1
         self.connected = False
         self.reconnect_required = False
         self.coordinate_reference_ready = False
@@ -50,6 +54,19 @@ class _Machine:
             raise RuntimeError("controller unavailable")
         self.connected = True
         self.coordinate_reference_ready = False
+
+    def replace_connection(self) -> None:
+        requested_generation = self.scoped_generations[-1]
+        self.disconnect()
+        replacement_generation = self.operation_generation()
+        if replacement_generation != requested_generation + 1:
+            raise RuntimeError("Controller reconnection was cancelled by software STOP")
+        try:
+            with self.operation_scope(replacement_generation):
+                self.connect()
+        except Exception:
+            self.disconnect()
+            raise
 
     def request_stop(self, *, emergency: bool = False) -> None:
         del emergency
@@ -99,6 +116,7 @@ def test_explicit_reconnect_disconnects_then_connects_without_motion_or_home(
     _wait_for_tasks(qt_application, controller)
 
     assert machine.calls == ["disconnect", "connect"]
+    assert machine.scoped_generations == [7, 8]
     assert machine.connected
     assert not machine.coordinate_reference_ready
     assert machine.status()["jog_ready"] is False

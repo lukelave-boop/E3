@@ -2179,12 +2179,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
         def change_connection() -> Any:
             if connected and reconnect_required:
-                self.context.machine.disconnect()
-                try:
-                    return self.context.machine.connect()
-                except Exception:
-                    self.context.machine.disconnect()
-                    raise
+                return self.context.machine.replace_connection()
             if connected:
                 return self.context.machine.disconnect()
             return self.context.machine.connect()

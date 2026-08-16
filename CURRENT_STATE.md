@@ -18,6 +18,17 @@ capture, camera lifecycle, and offscreen desktop tests pass. Pi 3 B+ CPU,
 memory, throughput, latency, controller responsiveness, and go2rtc service
 impact remain physically unmeasured and must not be inferred from desktop CI.
 
+Explicit controller replacement now performs disconnect/laser-off cleanup
+under the UI action's original STOP generation, then captures and binds the
+post-cleanup generation for the replacement connection. The single generation
+advance caused by disconnect is required; an additional concurrent STOP before
+connect or a STOP during connect still cancels replacement. Both the native
+Machine panel and Machine Setup use this shared service operation. Successful
+replacement remains HOME REQUIRED with coordinate and jog references invalid;
+there is no automatic Home, motion, job resume, arming, or laser authority.
+This correction is automated-test verified and awaits physical STOP/reconnect
+validation.
+
 The desktop now presents an explicit **Reconnect** action when an established
 controller session is marked RECONNECT REQUIRED. This operator action performs
 one disconnect followed by the ordinary connection path; it never retries in

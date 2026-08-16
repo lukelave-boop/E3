@@ -679,6 +679,37 @@ def test_machine_setup_can_disconnect_and_reconnect_machine(
         runtime.stop()
 
 
+def test_machine_setup_reconnect_uses_safe_connection_replacement(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    replacement_calls: list[bool] = []
+
+    def replace_connection() -> dict[str, object]:
+        replacement_calls.append(True)
+        runtime.context.machine._controller_reconnect_required = False
+        runtime.context.machine._coordinate_reference_ready = False
+        runtime.context.machine._coordinate_state_reference = None
+        runtime.context.machine._jog_position_mm = None
+        return runtime.context.machine.status()
+
+    monkeypatch.setattr(runtime.context.machine, "replace_connection", replace_connection)
+    try:
+        runtime.context.machine._controller_reconnect_required = True
+        dialog.refresh_all()
+        dialog.toggle_machine_connection()
+
+        assert replacement_calls == [True]
+        assert runtime.context.machine.status()["connected"] is True
+        assert runtime.context.machine.status()["coordinate_reference_ready"] is False
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
 def test_machine_setup_home_park_keeps_stop_live_and_blocks_close_until_cleanup(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Fixed explicit controller replacement after Software STOP so disconnect
+  cleanup is followed by a freshly scoped connection attempt. Concurrent STOP
+  requests still cancel replacement, and successful replacement remains HOME
+  REQUIRED without restoring coordinate, motion, or laser authority.
+
 - Added an authenticated persistent raw Live Monitor for Raspberry Pi camera
   sources with bounded latest-frame delivery, 5/10/15 fps selection, and no
   calibration or machine-control authority.

@@ -1302,6 +1302,86 @@ def test_simulator_stop_requires_reconnect_before_new_controller_commands() -> N
     machine.disconnect()
 
 
+def test_explicit_replacement_uses_post_disconnect_generation_and_stays_untrusted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine.connect()
+    machine.request_stop()
+    requested_generation = machine.operation_generation()
+    connect_generations: list[int] = []
+    original_connect = machine.connect
+
+    def record_connect(*args: object, **kwargs: object) -> dict[str, object]:
+        connect_generations.append(machine._operation_stop_epoch())
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(machine, "connect", record_connect)
+    with machine.operation_scope(requested_generation):
+        result = machine.replace_connection()
+
+    assert connect_generations == [requested_generation + 1]
+    assert result["connected"] is True
+    assert result["controller_reconnect_required"] is False
+    assert result["coordinate_reference_ready"] is False
+    assert result["jog_ready"] is False
+    assert result["armed"] is False
+    assert result["job"]["running"] is False
+    machine.disconnect()
+
+
+def test_stop_during_replacement_connect_still_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine.connect()
+    machine.request_stop()
+    requested_generation = machine.operation_generation()
+    original_connect = machine.connect
+
+    def stop_then_connect(*args: object, **kwargs: object) -> dict[str, object]:
+        machine.request_stop()
+        return original_connect(*args, **kwargs)
+
+    monkeypatch.setattr(machine, "connect", stop_then_connect)
+    with machine.operation_scope(requested_generation):
+        with pytest.raises(MachineError, match="cancelled by software STOP"):
+            machine.replace_connection()
+
+    assert machine.status()["connected"] is False
+    assert machine.status()["coordinate_reference_ready"] is False
+    assert machine.status()["jog_ready"] is False
+
+
+def test_stop_racing_between_disconnect_and_connect_is_not_absorbed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine.connect()
+    machine.request_stop()
+    requested_generation = machine.operation_generation()
+    original_disconnect = machine.disconnect
+    connect_called = False
+
+    def disconnect_then_stop() -> None:
+        original_disconnect()
+        machine.request_stop()
+
+    def unexpected_connect(*args: object, **kwargs: object) -> dict[str, object]:
+        nonlocal connect_called
+        connect_called = True
+        return {}
+
+    monkeypatch.setattr(machine, "disconnect", disconnect_then_stop)
+    monkeypatch.setattr(machine, "connect", unexpected_connect)
+    with machine.operation_scope(requested_generation):
+        with pytest.raises(MachineError, match="cancelled by software STOP"):
+            machine.replace_connection()
+
+    assert not connect_called
+    assert machine.status()["connected"] is False
+
+
 def test_request_time_generation_cancels_composite_job_after_stop() -> None:
     machine = MachineService(
         MachineSettings(backend="simulator"),

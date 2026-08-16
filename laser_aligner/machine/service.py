@@ -439,6 +439,39 @@ class MachineService:
             self._clear_arm_authorization()
             self._job_laser_authorized = False
 
+    def replace_connection(self) -> dict[str, Any]:
+        """Explicitly replace an untrusted session under a fresh STOP generation.
+
+        ``disconnect()`` intentionally advances the STOP generation as part of
+        its laser-off cleanup.  A reconnect worker is normally still bound to
+        the generation captured when the UI action was queued, so the new
+        ``connect()`` must receive a scope captured after that cleanup.  Exactly
+        one generation advance belongs to disconnect itself; any additional
+        advance proves that a concurrent STOP raced with replacement and must
+        cancel the attempt.
+        """
+
+        requested_generation = self._operation_stop_epoch()
+        self.disconnect()
+        replacement_generation = self.operation_generation()
+        if replacement_generation != requested_generation + 1:
+            raise MachineError("Controller reconnection was cancelled by software STOP")
+        try:
+            with self.operation_scope(replacement_generation):
+                self.connect()
+                with self._lock:
+                    self._coordinate_reference_ready = False
+                    self._coordinate_state_reference = None
+                    self._jog_position_mm = None
+                    self._clear_arm_authorization()
+                    self._job_laser_authorized = False
+                return self.status()
+        except Exception:
+            # connect() performs its own cleanup, but retain an unambiguous
+            # disconnected result for unusual transport or protocol failures.
+            self.disconnect()
+            raise
+
     def arm(
         self,
         phrase: str,
