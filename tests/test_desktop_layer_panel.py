@@ -96,15 +96,19 @@ def test_bottom_palette_scrolls_many_layers_without_widening_compact_window(
 
     palette.set_layers(layers, layers[0].id)
     host.show()
-    qt_application.processEvents()
+    scroll_bar = palette._scroll.horizontalScrollBar()
+    for _ in range(10):
+        qt_application.sendPostedEvents(None, QtCore.QEvent.Type.LayoutRequest)
+        qt_application.processEvents()
+        if scroll_bar.maximum() > 0:
+            break
 
     assert host.width() == 900
     assert palette.minimumSizeHint().width() < 500
-    assert palette._scroll.horizontalScrollBar().maximum() > 0
+    assert scroll_bar.maximum() > 0
     assert palette.add_button.isVisibleTo(palette)
     assert palette.add_button.geometry().right() < palette.width()
 
-    scroll_bar = palette._scroll.horizontalScrollBar()
     scroll_bar.setValue(scroll_bar.maximum())
     qt_application.processEvents()
     final_button = palette._buttons[layers[-1].id]
