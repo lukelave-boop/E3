@@ -100,15 +100,14 @@ sequence. Burst diagnostics include negotiated and observed FPS plus skipped
 sequence counts; negotiated FPS is evidence reported by the backend, not proof
 of sustained delivery.
 
-On Linux V4L2 MJPG sources, startup optionally probes OpenCV undecoded mode
-(`CAP_PROP_FORMAT=-1`). A probe is accepted only when the negotiated FOURCC is
-MJPG/JPEG and a bounded SOI/EOI-framed packet decodes to the configured camera
-dimensions. The reader then publishes that immutable source JPEG and its decoded
-BGR image under one sequence, generation, and timestamp. The remote monitor may
-forward the compressed representation at native size; snapshots and precision
-capture continue to consume the decoded representation. Failed probes reopen
-the device in ordinary decoded mode after releasing the probe capture, so there
-is never more than one camera owner.
+On Linux V4L2 MJPG sources with persistent device paths, startup first attempts
+a small native V4L2 MMAP backend. It negotiates the configured profile and
+publishes each bounded SOI/EOI-framed source JPEG together with one decoded BGR
+image under the same sequence, generation, and timestamp. The remote monitor
+may forward the compressed representation at native size; snapshots and
+precision capture continue to consume the decoded representation. Unsupported
+devices or initialization failures close the native descriptor and mappings
+before ordinary decoded OpenCV capture is opened, preserving one camera owner.
 
 Parked hardware workflows request an unscored raw burst while the temporary
 stepper hold is active. The hold ends immediately after the last frame has been

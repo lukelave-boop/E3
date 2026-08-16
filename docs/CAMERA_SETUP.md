@@ -21,6 +21,12 @@ Put the stable path in `config/local.json`.
 
 The default requests MJPEG at 1920 × 1080 and 15 frames/s. Positioning uses still images, so a high live-frame rate is unnecessary. MJPEG normally reduces USB bandwidth compared with uncompressed 1080p video.
 
+On supported Linux persistent device paths, E3 uses a native V4L2 MMAP reader
+so the sole camera stream can retain the original MJPEG packet for the remote
+Live Monitor and decode it once for normal camera consumers. OpenCV's
+`CAP_PROP_FORMAT=-1` raw mode is not used; physical C920 testing showed that it
+still returned decoded BGR frames on the target Pi.
+
 Inspect formats actually exposed by the camera:
 
 ```bash

@@ -85,6 +85,8 @@ def _monitor_frame(
             captured_monotonic = compressed.captured_monotonic
             source_mode = "direct_mjpeg"
     if source_mode == "transcoded":
+        if native_size:
+            width, height = 1280, 720
         frame = camera.snapshot_after(sequence, timeout=timeout)
         sequence = camera.frame_sequence()
         source_height, source_width = frame.shape[:2]

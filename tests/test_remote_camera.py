@@ -316,6 +316,22 @@ def test_non_native_monitor_resolution_uses_transcoded_fallback() -> None:
     assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
 
 
+def test_native_monitor_request_uses_720p_transcoded_fallback() -> None:
+    camera = FakeCamera()
+    camera.settings.width = 1920
+    camera.settings.height = 1080
+    camera.frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    camera.started = True
+
+    metadata, jpeg = camera_bridge._monitor_frame(
+        camera, sequence=10, width=1920, height=1080, quality=78, timeout=1.0
+    )
+
+    assert metadata["source_mode"] == "transcoded"
+    assert (metadata["width"], metadata["height"]) == (1280, 720)
+    assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
+
+
 def test_raw_monitor_rejects_bad_authentication_and_invalid_profiles(monkeypatch) -> None:
     token = "camera-monitor-token-with-plenty-entropy"
     camera = FakeCamera()

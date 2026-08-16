@@ -560,6 +560,114 @@ def test_direct_mjpeg_validation_accepts_only_bounded_expected_jpeg() -> None:
     assert CameraService(CameraSettings(width=9, height=6))._decode_direct_mjpeg(encoded) is None
 
 
+def test_native_v4l2_is_sole_owner_and_publishes_exact_decoded_packet(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from laser_aligner.camera import v4l2_mjpeg
+
+    source = np.full((6, 8, 3), 73, dtype=np.uint8)
+    ok, encoded = camera_service_module.cv2.imencode(".jpg", source)
+    assert ok
+    jpeg = encoded.tobytes()
+    instances: list[object] = []
+
+    class NativeCapture:
+        negotiated_fps = 30.0
+
+        def __init__(self, device: str, width: int, height: int, fps: float) -> None:
+            assert (device, width, height, fps) == ("/dev/v4l/by-id/camera", 8, 6, 30)
+            self.released = False
+            instances.append(self)
+
+        def read(self) -> tuple[bool, bytes]:
+            return True, jpeg
+
+        def release(self) -> None:
+            self.released = True
+
+    monkeypatch.setattr(v4l2_mjpeg, "NativeV4L2MjpegCapture", NativeCapture)
+    monkeypatch.setattr(
+        camera_service_module.cv2,
+        "VideoCapture",
+        lambda *_args: pytest.fail("OpenCV opened while native V4L2 was active"),
+    )
+    camera = CameraService(
+        CameraSettings(
+            device="/dev/v4l/by-id/camera",
+            width=8,
+            height=6,
+            fps=30,
+            warmup_frames=1,
+            controls={},
+        )
+    )
+
+    capture, frame, compressed, count, _controls, fps, direct = camera._open_session(
+        camera._generation, threading.Event()
+    )
+
+    assert capture is instances[0]
+    assert compressed is jpeg
+    assert np.array_equal(frame, camera_service_module.cv2.imdecode(encoded, 1))
+    assert (count, fps, direct) == (1, 30.0, True)
+    capture.release()
+
+
+def test_native_v4l2_initialization_failure_uses_decoded_opencv_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from laser_aligner.camera import v4l2_mjpeg
+
+    events: list[str] = []
+
+    class FailedNative:
+        def __init__(self, *_args: object) -> None:
+            events.append("native")
+            raise OSError("unsupported test device")
+
+    class DecodedCapture:
+        def isOpened(self) -> bool:
+            return True
+
+        def set(self, _property: int, _value: float) -> bool:
+            return True
+
+        def get(self, property_id: int) -> float:
+            return 15.0 if property_id == camera_service_module.cv2.CAP_PROP_FPS else 0.0
+
+        def read(self) -> tuple[bool, np.ndarray]:
+            return True, np.full((6, 8, 3), 29, dtype=np.uint8)
+
+        def release(self) -> None:
+            events.append("opencv-release")
+
+    monkeypatch.setattr(v4l2_mjpeg, "NativeV4L2MjpegCapture", FailedNative)
+    monkeypatch.setattr(
+        camera_service_module.cv2,
+        "VideoCapture",
+        lambda *_args: events.append("opencv") or DecodedCapture(),
+    )
+    camera = CameraService(
+        CameraSettings(
+            device="/dev/v4l/by-id/camera",
+            width=8,
+            height=6,
+            warmup_frames=1,
+            controls={},
+        )
+    )
+
+    capture, frame, compressed, count, _controls, fps, direct = camera._open_session(
+        camera._generation, threading.Event()
+    )
+
+    assert events[:2] == ["native", "opencv"]
+    assert frame is not None and frame.shape == (6, 8, 3)
+    assert compressed is None
+    assert (count, fps, direct) == (1, 15.0, False)
+    capture.release()
+
+
 def test_direct_mjpeg_publication_shares_decoded_frame_identity_and_generation() -> None:
     camera = CameraService(CameraSettings())
     frame = np.full((4, 5, 3), 37, dtype=np.uint8)

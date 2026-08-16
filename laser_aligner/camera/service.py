@@ -10,6 +10,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -140,7 +141,7 @@ class CameraService:
 
     def __init__(self, settings: CameraSettings):
         self.settings = settings
-        self._capture: cv2.VideoCapture | None = None
+        self._capture: Any | None = None
         self._frame: np.ndarray | None = None
         self._frame_time = 0.0
         self._frame_monotonic = 0.0
@@ -228,7 +229,7 @@ class CameraService:
 
     def _start_owned(self, generation: int) -> None:
         session_stop = threading.Event()
-        capture: cv2.VideoCapture | None = None
+        capture: Any | None = None
         try:
             (
                 capture,
@@ -309,7 +310,7 @@ class CameraService:
         generation: int,
         stop_event: threading.Event,
     ) -> tuple[
-        cv2.VideoCapture,
+        Any,
         np.ndarray | None,
         bytes | None,
         int,
@@ -317,6 +318,10 @@ class CameraService:
         float,
         bool,
     ]:
+        native = self._open_native_session(generation, stop_event)
+        if native is not None:
+            return native
+
         source: str | int = self.settings.device
         if self.settings.device.isdigit():
             source = int(self.settings.device)
@@ -331,35 +336,84 @@ class CameraService:
             capture.release()
             raise CameraError(f"Could not open camera {self.settings.device}")
         try:
-            initialized = self._initialize_open_capture(
-                capture, generation, stop_event, probe_direct_mjpeg=True
-            )
-            if initialized is not None:
-                return (capture, *initialized)
-            capture.release()
-            capture = cv2.VideoCapture(source, cv2.CAP_V4L2)
-            if not capture.isOpened():
-                capture.release()
-                capture = cv2.VideoCapture(source)
-            if not capture.isOpened():
-                raise CameraError(f"Could not reopen camera {self.settings.device}")
-            initialized = self._initialize_open_capture(
-                capture, generation, stop_event, probe_direct_mjpeg=False
-            )
-            if initialized is None:  # pragma: no cover - decoded mode cannot decline itself
-                raise CameraError("Could not initialize decoded camera fallback")
+            initialized = self._initialize_open_capture(capture, generation, stop_event)
             return (capture, *initialized)
         except Exception:
             capture.release()
             raise
+
+    def _open_native_session(
+        self,
+        generation: int,
+        stop_event: threading.Event,
+    ) -> tuple[Any, np.ndarray | None, bytes | None, int, ControlResult, float, bool] | None:
+        if (
+            not sys.platform.startswith("linux")
+            or self.settings.fourcc.upper() not in {"MJPG", "MJPEG"}
+            or self.settings.device.isdigit()
+            or not self.settings.device.startswith("/dev/v4l/by-id/")
+        ):
+            return None
+        from .v4l2_mjpeg import NativeV4L2MjpegCapture
+
+        capture: NativeV4L2MjpegCapture | None = None
+        try:
+            capture = NativeV4L2MjpegCapture(
+                self.settings.device,
+                self.settings.width,
+                self.settings.height,
+                self.settings.fps,
+            )
+            controls = self._apply_controls_to_device(
+                self.settings.controls,
+                timeout_seconds=5.0,
+                cancelled=lambda: self._is_cancelled(generation, stop_event),
+            )
+            self._log_control_result(controls)
+            if self._is_cancelled(generation, stop_event):
+                raise CameraError("Camera start was cancelled")
+            frame: np.ndarray | None = None
+            compressed: bytes | None = None
+            warmup_count = 0
+            for _ in range(max(1, self.settings.warmup_frames)):
+                if self._is_cancelled(generation, stop_event):
+                    raise CameraError("Camera start was cancelled during warmup")
+                ok, candidate = capture.read()
+                if not ok:
+                    continue
+                decoded = self._decode_direct_mjpeg(candidate)
+                if decoded is None:
+                    raise CameraError("Native V4L2 returned invalid MJPEG data")
+                compressed, frame = decoded
+                warmup_count += 1
+            if frame is None or compressed is None:
+                raise CameraError("Native V4L2 produced no valid MJPEG warmup frame")
+            return (
+                capture,
+                frame,
+                compressed,
+                warmup_count,
+                controls,
+                capture.negotiated_fps,
+                True,
+            )
+        except Exception as exc:
+            if capture is not None:
+                capture.release()
+            if self._is_cancelled(generation, stop_event):
+                raise CameraError("Camera start was cancelled") from exc
+            LOGGER.warning(
+                "Native V4L2 MJPEG unavailable for %s; using decoded OpenCV fallback: %s",
+                self.settings.device,
+                exc,
+            )
+            return None
 
     def _initialize_open_capture(
         self,
         capture: cv2.VideoCapture,
         generation: int,
         stop_event: threading.Event,
-        *,
-        probe_direct_mjpeg: bool,
     ) -> tuple[
         np.ndarray | None,
         bytes | None,
@@ -367,7 +421,7 @@ class CameraService:
         ControlResult,
         float,
         bool,
-    ] | None:
+    ]:
         if len(self.settings.fourcc) == 4:
             capture.set(
                 cv2.CAP_PROP_FOURCC,
@@ -390,17 +444,9 @@ class CameraService:
         if self._is_cancelled(generation, stop_event):
             raise CameraError("Camera start was cancelled")
 
-        direct_mjpeg = probe_direct_mjpeg and self._enable_direct_mjpeg(capture)
-        if probe_direct_mjpeg and not direct_mjpeg and self._direct_probe_candidate(capture):
-            return None
-
         frame: np.ndarray | None = None
-        compressed: bytes | None = None
         warmup_count = 0
-        warmup_reads = max(1, self.settings.warmup_frames) if direct_mjpeg else max(
-            0, self.settings.warmup_frames
-        )
-        for _ in range(warmup_reads):
+        for _ in range(max(0, self.settings.warmup_frames)):
             if self._is_cancelled(generation, stop_event):
                 raise CameraError("Camera start was cancelled during warmup")
             try:
@@ -408,12 +454,7 @@ class CameraService:
             except Exception as exc:
                 raise CameraError(f"Camera warmup read failed: {exc}") from exc
             if ok:
-                if direct_mjpeg:
-                    validated = self._decode_direct_mjpeg(candidate)
-                    if validated is None:
-                        return None
-                    compressed, frame = validated
-                elif self._valid_frame(candidate):
+                if self._valid_frame(candidate):
                     frame = candidate
                 else:
                     continue
@@ -425,37 +466,17 @@ class CameraService:
             negotiated_fps = 0.0
         if not np.isfinite(negotiated_fps) or negotiated_fps < 0:
             negotiated_fps = 0.0
-        return frame, compressed, warmup_count, controls, negotiated_fps, direct_mjpeg
-
-    def _direct_probe_candidate(self, capture: cv2.VideoCapture) -> bool:
-        if not sys.platform.startswith("linux") or self.settings.fourcc.upper() not in {
-            "MJPG",
-            "MJPEG",
-        }:
-            return False
-        try:
-            return capture.getBackendName().upper() == "V4L2"
-        except (AttributeError, cv2.error):
-            return False
-
-    def _enable_direct_mjpeg(self, capture: cv2.VideoCapture) -> bool:
-        if not self._direct_probe_candidate(capture):
-            return False
-        try:
-            negotiated = int(round(capture.get(cv2.CAP_PROP_FOURCC)))
-            fourcc = "".join(chr((negotiated >> (8 * index)) & 0xFF) for index in range(4))
-            return fourcc.upper() in {"MJPG", "JPEG"} and bool(
-                capture.set(cv2.CAP_PROP_FORMAT, -1)
-            )
-        except (AttributeError, TypeError, ValueError, cv2.error):
-            return False
+        return frame, None, warmup_count, controls, negotiated_fps, False
 
     def _decode_direct_mjpeg(
         self, candidate: object
     ) -> tuple[bytes, np.ndarray] | None:
-        if not isinstance(candidate, np.ndarray) or candidate.dtype != np.uint8:
+        if isinstance(candidate, bytes):
+            jpeg = candidate
+        elif isinstance(candidate, np.ndarray) and candidate.dtype == np.uint8:
+            jpeg = candidate.reshape(-1).tobytes()
+        else:
             return None
-        jpeg = candidate.reshape(-1).tobytes()
         if (
             not 4 <= len(jpeg) <= _MAX_DIRECT_MJPEG_BYTES
             or not jpeg.startswith(b"\xff\xd8")
@@ -489,7 +510,7 @@ class CameraService:
 
     def _reader_loop(
         self,
-        capture: cv2.VideoCapture,
+        capture: Any,
         stop_event: threading.Event,
         generation: int,
     ) -> None:
@@ -645,9 +666,10 @@ class CameraService:
             generation = self._generation
             while True:
                 compressed = self._compressed_frame
+                if not self._direct_mjpeg:
+                    raise CameraError("Native direct MJPEG capture is unavailable")
                 if (
-                    self._direct_mjpeg
-                    and compressed is not None
+                    compressed is not None
                     and compressed.sequence > sequence
                     and compressed.generation == generation
                 ):

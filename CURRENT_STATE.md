@@ -7,21 +7,24 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
-The Raspberry Pi camera bridge now has an optional direct-MJPEG Live Monitor
-path. On a local Linux V4L2 source configured and negotiated as MJPG, the sole
-OpenCV capture is capability-probed with `CAP_PROP_FORMAT=-1`; only bounded,
-SOI/EOI-framed JPEG packets that decode to the configured native dimensions
-enable the path. Each accepted camera packet is retained as immutable bytes and
-decoded once for the ordinary `CameraService` frame with the same sequence,
-generation, and timestamp. Native-size monitor requests forward those exact
-bytes without resize or JPEG encoding. Unsupported probes, synthetic/non-MJPEG
-sources, invalid packets, and non-native monitor resolutions use the existing
-transcoded path. Protocol metadata and the desktop identify `DIRECT MJPEG` or
-`TRANSCODED`. This behavior is automated-test verified only. Actual C920/V4L2
-raw-mode support and performance remain pending physical Pi validation. The
-physically measured prior transcoded 720p/10 fps baseline on this Pi was about
-18.11 Mbps TX, 2.2–2.4 CPU cores of active work, and 146 MB RSS; it is a single
-baseline, not a universal expectation.
+Physical Pi 3 B+/C920 validation showed that OpenCV raw mode is not viable:
+V4L2 negotiated MJPG at 1920×1080/30 fps, but `CAP_PROP_FORMAT=-1` was rejected
+and `VideoCapture.read()` returned decoded 6,220,800-byte BGR frames. The
+OpenCV raw-mode probe has therefore been removed. `CameraService` now first
+attempts a narrow Linux V4L2 MMAP backend for persistent device paths. It
+negotiates MJPG and the configured dimensions/rate, retains each bounded JPEG
+packet unchanged, and decodes that same packet once for all ordinary camera and
+precision consumers. Both representations share sequence, generation, and
+capture timestamp. Native-size monitor requests forward the exact packet with
+no resize or encode; unavailable native capture closes fully before the normal
+decoded OpenCV fallback opens. That fallback is 1280×720/10 fps/quality 78,
+while direct mode may deliver 1920×1080/10 fps. The V4L2 ABI abstraction,
+buffer lifecycle, exact-byte path, fallback, camera lifecycle, precision, and
+monitor behavior are automated-test verified without hardware. The new native
+backend and its performance still require physical Pi/C920 validation. The
+physically measured prior transcoded 720p/10 fps baseline was about 18.11 Mbps
+TX, 2.2–2.4 CPU cores of active work, and 146 MB RSS; it is a single baseline,
+not a universal expectation.
 
 The Raspberry Pi camera bridge now offers a bounded authenticated raw-monitor
 mode on its existing `e3camera://` socket. One persistent connection carries
