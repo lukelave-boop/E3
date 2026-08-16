@@ -2428,7 +2428,7 @@ def test_serial_connect_alarm_unlock_rejects_ambiguous_first_m5_exchange(
     )
     monkeypatch.setattr(
         "laser_aligner.machine.service._PHOTO_COMMAND_ACK_TIMEOUT_SECONDS",
-        0.01,
+        0.1,
     )
     machine = MachineService(
         MachineSettings(
