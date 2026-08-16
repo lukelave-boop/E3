@@ -55,6 +55,63 @@ def _encode_monitor_frame(frame: np.ndarray, quality: int) -> bytes:
     return jpeg
 
 
+def _monitor_frame(
+    camera: CameraService,
+    *,
+    sequence: int,
+    width: int,
+    height: int,
+    quality: int,
+    timeout: float,
+) -> tuple[dict[str, Any], bytes]:
+    source_mode = "transcoded"
+    source_width = 0
+    source_height = 0
+    captured_monotonic = time.monotonic()
+    direct = getattr(camera, "direct_mjpeg_after", None)
+    native_size = width == int(camera.settings.width) and height == int(
+        camera.settings.height
+    )
+    if callable(direct) and native_size:
+        try:
+            compressed = direct(sequence, timeout=timeout)
+        except CameraError:
+            compressed = None
+        if compressed is not None:
+            jpeg = compressed.jpeg
+            sequence = compressed.sequence
+            source_width = compressed.width
+            source_height = compressed.height
+            captured_monotonic = compressed.captured_monotonic
+            source_mode = "direct_mjpeg"
+    if source_mode == "transcoded":
+        frame = camera.snapshot_after(sequence, timeout=timeout)
+        sequence = camera.frame_sequence()
+        source_height, source_width = frame.shape[:2]
+        status_age = camera.status().frame_age_seconds
+        captured_monotonic = time.monotonic() - max(0.0, float(status_age or 0.0))
+        if source_width != width or source_height != height:
+            frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+        jpeg = _encode_monitor_frame(frame, quality)
+    if len(jpeg) > _MAX_MONITOR_JPEG_BYTES:
+        raise CameraError("Monitor JPEG exceeds the bounded frame limit")
+    return (
+        {
+            "ok": True,
+            "sequence": sequence,
+            "captured_monotonic": captured_monotonic,
+            "width": width,
+            "height": height,
+            "source_mode": source_mode,
+            "source_width": source_width,
+            "source_height": source_height,
+            "jpeg_bytes": len(jpeg),
+            "frame_age_seconds": max(0.0, time.monotonic() - captured_monotonic),
+        },
+        jpeg,
+    )
+
+
 def _control_dict(result: Any) -> dict[str, Any]:
     return {
         "requested": dict(result.requested),
@@ -284,21 +341,19 @@ class CameraBridgeServer:
                 if now < next_frame and self._stop.wait(next_frame - now):
                     break
                 next_frame = max(next_frame + interval, time.monotonic())
-                frame = self.camera.snapshot_after(sequence, timeout=max(1.0, 3.0 * interval))
-                sequence = self.camera.frame_sequence()
-                if frame.shape[1] != width or frame.shape[0] != height:
-                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
-                jpeg = _encode_monitor_frame(frame, quality)
+                metadata, jpeg = _monitor_frame(
+                    self.camera,
+                    sequence=sequence,
+                    width=width,
+                    height=height,
+                    quality=quality,
+                    timeout=max(1.0, 3.0 * interval),
+                )
+                sequence = int(metadata["sequence"])
+                metadata["monitor_fps"] = fps
                 send_packet(
                     conn,
-                    {
-                        "ok": True,
-                        "sequence": sequence,
-                        "captured_monotonic": time.monotonic(),
-                        "width": width,
-                        "height": height,
-                        "frame_age_seconds": self.camera.status().frame_age_seconds,
-                    },
+                    metadata,
                     (jpeg,),
                 )
         except Exception as exc:

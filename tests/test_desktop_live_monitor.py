@@ -38,6 +38,7 @@ class _Camera:
                 "sequence": sequence,
                 "width": width,
                 "height": height,
+                "source_mode": "direct_mjpeg",
             }
 
 
@@ -77,6 +78,7 @@ def test_live_monitor_defaults_starts_stops_and_has_no_machine_dependency(
         assert camera.calls == [(10, 1280, 720)]
         assert "1280×720" in window.status_label.text()
         assert "raw" in window.status_label.text().lower()
+        assert "DIRECT MJPEG" in window.status_label.text()
         assert not window.start_button.isEnabled()
         window.stop_button.click()
         deadline = time.monotonic() + 2

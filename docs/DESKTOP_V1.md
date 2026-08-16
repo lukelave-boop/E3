@@ -179,7 +179,8 @@ rejected consistently because its Qt decode plugin is not portable.
 - Existing camera and controller status in native dock panels
 - A separate raw Live Monitor window for authenticated `e3camera://` sources,
   with Start/Stop, 5/10/15 fps selection, observed FPS, resolution, connection
-  state, and latest-frame display independent of calibration and controller state
+  state, direct-MJPEG/transcoded source diagnostics, and latest-frame display
+  independent of calibration and controller state
 - Guarded controller connect, diagnostics, software stop and job run; hardware
   Start automatically performs one laser-off Home before arming and execution, while a
   successful powered job drains queued motion, homes, and parks again before

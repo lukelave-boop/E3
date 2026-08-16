@@ -146,6 +146,7 @@ class LiveMonitorWindow(QtWidgets.QWidget):
         age_text = f" · source age {float(age) * 1000:.0f} ms" if age is not None else ""
         self.status_label.setText(
             f"ONLINE · {payload['width']}×{payload['height']} · {observed:.1f} fps"
+            f" · Source: {str(payload.get('source_mode', 'transcoded')).upper().replace('_', ' ')}"
             f" · raw{age_text}"
         )
 

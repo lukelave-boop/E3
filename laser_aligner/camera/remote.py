@@ -335,8 +335,8 @@ class RemoteCameraService(CameraService):
         self,
         *,
         fps: int = 10,
-        width: int = 1280,
-        height: int = 720,
+        width: int = 1920,
+        height: int = 1080,
         quality: int = 78,
         stop_event: threading.Event | None = None,
     ) -> Iterator[dict[str, Any]]:
@@ -386,6 +386,10 @@ class RemoteCameraService(CameraService):
                             "width": width,
                             "height": height,
                             "jpeg_bytes": len(blobs[0]),
+                            "source_mode": header.get("source_mode", "transcoded"),
+                            "source_width": int(header.get("source_width", width)),
+                            "source_height": int(header.get("source_height", height)),
+                            "monitor_fps": int(header.get("monitor_fps", fps)),
                             "frame_age_seconds": header.get("frame_age_seconds"),
                             "received_monotonic": time.monotonic(),
                         }

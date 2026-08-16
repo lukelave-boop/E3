@@ -23,6 +23,18 @@ LOGGER = logging.getLogger(__name__)
 _OPERATION_WAIT_SECONDS = 0.75
 _RESTART_WAIT_SECONDS = 2.0
 _READER_JOIN_SECONDS = 2.0
+_MAX_DIRECT_MJPEG_BYTES = 4 * 1024 * 1024
+
+
+@dataclass(frozen=True, slots=True)
+class CompressedCameraFrame:
+    jpeg: bytes
+    frame: np.ndarray
+    sequence: int
+    generation: int
+    captured_monotonic: float
+    width: int
+    height: int
 
 
 def list_video_devices() -> list[dict[str, str]]:
@@ -50,6 +62,7 @@ class CameraStatus:
     controls_critical_unverified: dict[str, str] = field(default_factory=dict)
     negotiated_fps: float = 0.0
     operation: str | None = None
+    monitor_source_mode: str = "transcoded"
 
 
 @dataclass(slots=True)
@@ -147,6 +160,8 @@ class CameraService:
         self._control_result = ControlResult({}, {}, {})
         self._generation = 0
         self._operation: str | None = None
+        self._direct_mjpeg = False
+        self._compressed_frame: CompressedCameraFrame | None = None
 
     def _current_generation(self) -> int:
         with self._lock:
@@ -215,7 +230,15 @@ class CameraService:
         session_stop = threading.Event()
         capture: cv2.VideoCapture | None = None
         try:
-            capture, frame, warmup_count, controls, negotiated_fps = self._open_session(
+            (
+                capture,
+                frame,
+                compressed,
+                warmup_count,
+                controls,
+                negotiated_fps,
+                direct_mjpeg,
+            ) = self._open_session(
                 generation,
                 session_stop,
             )
@@ -239,6 +262,19 @@ class CameraService:
                 self._frame_time = now_wall if frame is not None else 0.0
                 self._frame_monotonic = now_monotonic if frame is not None else 0.0
                 self._frames_read += warmup_count
+                if compressed is not None and frame is not None:
+                    self._compressed_frame = CompressedCameraFrame(
+                        jpeg=compressed,
+                        frame=frame,
+                        sequence=self._frames_read,
+                        generation=generation,
+                        captured_monotonic=now_monotonic,
+                        width=int(frame.shape[1]),
+                        height=int(frame.shape[0]),
+                    )
+                else:
+                    self._compressed_frame = None
+                self._direct_mjpeg = direct_mjpeg
                 self._connected = True
                 self._actual_fps = 0.0
                 self._negotiated_fps = negotiated_fps
@@ -260,6 +296,8 @@ class CameraService:
                     self._thread = None
                     self._connected = False
                     self._frame = None
+                    self._compressed_frame = None
+                    self._direct_mjpeg = False
                     self._frame_time = 0.0
                     self._frame_monotonic = 0.0
                     self._last_error = str(exc)
@@ -270,7 +308,15 @@ class CameraService:
         self,
         generation: int,
         stop_event: threading.Event,
-    ) -> tuple[cv2.VideoCapture, np.ndarray | None, int, ControlResult, float]:
+    ) -> tuple[
+        cv2.VideoCapture,
+        np.ndarray | None,
+        bytes | None,
+        int,
+        ControlResult,
+        float,
+        bool,
+    ]:
         source: str | int = self.settings.device
         if self.settings.device.isdigit():
             source = int(self.settings.device)
@@ -285,7 +331,24 @@ class CameraService:
             capture.release()
             raise CameraError(f"Could not open camera {self.settings.device}")
         try:
-            return self._initialize_open_capture(capture, generation, stop_event)
+            initialized = self._initialize_open_capture(
+                capture, generation, stop_event, probe_direct_mjpeg=True
+            )
+            if initialized is not None:
+                return (capture, *initialized)
+            capture.release()
+            capture = cv2.VideoCapture(source, cv2.CAP_V4L2)
+            if not capture.isOpened():
+                capture.release()
+                capture = cv2.VideoCapture(source)
+            if not capture.isOpened():
+                raise CameraError(f"Could not reopen camera {self.settings.device}")
+            initialized = self._initialize_open_capture(
+                capture, generation, stop_event, probe_direct_mjpeg=False
+            )
+            if initialized is None:  # pragma: no cover - decoded mode cannot decline itself
+                raise CameraError("Could not initialize decoded camera fallback")
+            return (capture, *initialized)
         except Exception:
             capture.release()
             raise
@@ -295,7 +358,16 @@ class CameraService:
         capture: cv2.VideoCapture,
         generation: int,
         stop_event: threading.Event,
-    ) -> tuple[cv2.VideoCapture, np.ndarray | None, int, ControlResult, float]:
+        *,
+        probe_direct_mjpeg: bool,
+    ) -> tuple[
+        np.ndarray | None,
+        bytes | None,
+        int,
+        ControlResult,
+        float,
+        bool,
+    ] | None:
         if len(self.settings.fourcc) == 4:
             capture.set(
                 cv2.CAP_PROP_FOURCC,
@@ -318,17 +390,33 @@ class CameraService:
         if self._is_cancelled(generation, stop_event):
             raise CameraError("Camera start was cancelled")
 
+        direct_mjpeg = probe_direct_mjpeg and self._enable_direct_mjpeg(capture)
+        if probe_direct_mjpeg and not direct_mjpeg and self._direct_probe_candidate(capture):
+            return None
+
         frame: np.ndarray | None = None
+        compressed: bytes | None = None
         warmup_count = 0
-        for _ in range(max(0, self.settings.warmup_frames)):
+        warmup_reads = max(1, self.settings.warmup_frames) if direct_mjpeg else max(
+            0, self.settings.warmup_frames
+        )
+        for _ in range(warmup_reads):
             if self._is_cancelled(generation, stop_event):
                 raise CameraError("Camera start was cancelled during warmup")
             try:
                 ok, candidate = capture.read()
             except Exception as exc:
                 raise CameraError(f"Camera warmup read failed: {exc}") from exc
-            if ok and self._valid_frame(candidate):
-                frame = candidate
+            if ok:
+                if direct_mjpeg:
+                    validated = self._decode_direct_mjpeg(candidate)
+                    if validated is None:
+                        return None
+                    compressed, frame = validated
+                elif self._valid_frame(candidate):
+                    frame = candidate
+                else:
+                    continue
                 warmup_count += 1
 
         try:
@@ -337,7 +425,50 @@ class CameraService:
             negotiated_fps = 0.0
         if not np.isfinite(negotiated_fps) or negotiated_fps < 0:
             negotiated_fps = 0.0
-        return capture, frame, warmup_count, controls, negotiated_fps
+        return frame, compressed, warmup_count, controls, negotiated_fps, direct_mjpeg
+
+    def _direct_probe_candidate(self, capture: cv2.VideoCapture) -> bool:
+        if not sys.platform.startswith("linux") or self.settings.fourcc.upper() not in {
+            "MJPG",
+            "MJPEG",
+        }:
+            return False
+        try:
+            return capture.getBackendName().upper() == "V4L2"
+        except (AttributeError, cv2.error):
+            return False
+
+    def _enable_direct_mjpeg(self, capture: cv2.VideoCapture) -> bool:
+        if not self._direct_probe_candidate(capture):
+            return False
+        try:
+            negotiated = int(round(capture.get(cv2.CAP_PROP_FOURCC)))
+            fourcc = "".join(chr((negotiated >> (8 * index)) & 0xFF) for index in range(4))
+            return fourcc.upper() in {"MJPG", "JPEG"} and bool(
+                capture.set(cv2.CAP_PROP_FORMAT, -1)
+            )
+        except (AttributeError, TypeError, ValueError, cv2.error):
+            return False
+
+    def _decode_direct_mjpeg(
+        self, candidate: object
+    ) -> tuple[bytes, np.ndarray] | None:
+        if not isinstance(candidate, np.ndarray) or candidate.dtype != np.uint8:
+            return None
+        jpeg = candidate.reshape(-1).tobytes()
+        if (
+            not 4 <= len(jpeg) <= _MAX_DIRECT_MJPEG_BYTES
+            or not jpeg.startswith(b"\xff\xd8")
+            or not jpeg.endswith(b"\xff\xd9")
+        ):
+            return None
+        frame = cv2.imdecode(np.frombuffer(jpeg, dtype=np.uint8), cv2.IMREAD_COLOR)
+        if not self._valid_frame(frame):
+            return None
+        assert isinstance(frame, np.ndarray)
+        if frame.shape[:2] != (self.settings.height, self.settings.width):
+            return None
+        return jpeg, frame
 
     @staticmethod
     def _log_control_result(result: ControlResult) -> None:
@@ -375,6 +506,14 @@ class CameraService:
             now = time.monotonic()
             if stop_event.is_set():
                 break
+            compressed: bytes | None = None
+            if ok and self._direct_mjpeg:
+                decoded = self._decode_direct_mjpeg(frame)
+                if decoded is None:
+                    ok = False
+                    error = "Camera returned invalid direct MJPEG data"
+                else:
+                    compressed, frame = decoded
             if not ok or not self._valid_frame(frame):
                 if ok and frame is not None:
                     error = "Camera returned a malformed frame"
@@ -400,6 +539,16 @@ class CameraService:
                 self._frame_time = time.time()
                 self._frame_monotonic = now
                 self._frames_read += 1
+                if compressed is not None:
+                    self._compressed_frame = CompressedCameraFrame(
+                        jpeg=compressed,
+                        frame=frame,
+                        sequence=self._frames_read,
+                        generation=generation,
+                        captured_monotonic=now,
+                        width=int(frame.shape[1]),
+                        height=int(frame.shape[0]),
+                    )
                 self._actual_fps = smoothed_fps
                 self._last_error = None
                 self._frame_condition.notify_all()
@@ -417,6 +566,8 @@ class CameraService:
                 self._thread = None
                 self._connected = False
                 self._frame = None
+                self._compressed_frame = None
+                self._direct_mjpeg = False
                 self._frame_time = 0.0
                 self._frame_monotonic = 0.0
                 self._actual_fps = 0.0
@@ -484,6 +635,29 @@ class CameraService:
         """Return the monotonically increasing count of captured live frames."""
         with self._lock:
             return self._frames_read
+
+    def direct_mjpeg_after(
+        self, sequence: int, *, timeout: float = 6.0
+    ) -> CompressedCameraFrame:
+        """Return the newest validated source JPEG without copying or encoding it."""
+        deadline = time.monotonic() + float(timeout)
+        with self._frame_condition:
+            generation = self._generation
+            while True:
+                compressed = self._compressed_frame
+                if (
+                    self._direct_mjpeg
+                    and compressed is not None
+                    and compressed.sequence > sequence
+                    and compressed.generation == generation
+                ):
+                    return compressed
+                if generation != self._generation or not self._connected:
+                    raise CameraError("Camera stopped while waiting for direct MJPEG")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise CameraError("Timed out waiting for a fresh direct MJPEG frame")
+                self._frame_condition.wait(timeout=remaining)
 
     def ensure_burst_current(self, burst: FrameBurst) -> None:
         """Reject deferred work after the source was stopped or reopened."""
@@ -817,6 +991,9 @@ class CameraService:
                 ),
                 negotiated_fps=round(self._negotiated_fps, 1),
                 operation=self._operation,
+                monitor_source_mode=(
+                    "direct_mjpeg" if self._direct_mjpeg else "transcoded"
+                ),
             )
 
     def _apply_controls_to_device(

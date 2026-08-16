@@ -13,7 +13,7 @@ from laser_aligner.camera import bridge as camera_bridge
 from laser_aligner.camera.bridge import CameraBridgeServer
 from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.remote import RemoteCameraService
-from laser_aligner.camera.service import CameraStatus, FrameBurst
+from laser_aligner.camera.service import CameraStatus, CompressedCameraFrame, FrameBurst
 from laser_aligner.config import CameraSettings, PrecisionCaptureSettings
 from laser_aligner.errors import CameraError
 
@@ -229,7 +229,7 @@ def test_persistent_raw_monitor_authenticates_frames_and_drops_stale_sequences(
     try:
         stream = remote.monitor_frames(fps=15, stop_event=stop)
         frames = [next(stream) for _ in range(3)]
-        assert all(item["image"].shape == (720, 1280, 3) for item in frames)
+        assert all(item["image"].shape == (1080, 1920, 3) for item in frames)
         sequences = [item["sequence"] for item in frames]
         assert sequences == sorted(sequences)
         assert all(
@@ -260,6 +260,60 @@ def test_raw_monitor_enforces_its_stricter_per_frame_bound(monkeypatch) -> None:
     )
     with pytest.raises(CameraError, match="bounded frame limit"):
         camera_bridge._encode_monitor_frame(np.zeros((1, 1, 3), dtype=np.uint8), 78)
+
+
+def test_direct_monitor_forwards_source_bytes_without_resize_or_encode(monkeypatch) -> None:
+    camera = FakeCamera()
+    camera.settings.width = 1920
+    camera.settings.height = 1080
+    source_jpeg = b"\xff\xd8exact-camera-packet\xff\xd9"
+
+    def direct(sequence: int, *, timeout: float) -> CompressedCameraFrame:
+        del sequence, timeout
+        return CompressedCameraFrame(
+            jpeg=source_jpeg,
+            frame=camera.frame,
+            sequence=44,
+            generation=camera.generation,
+            captured_monotonic=time.monotonic(),
+            width=1920,
+            height=1080,
+        )
+
+    camera.direct_mjpeg_after = direct  # type: ignore[attr-defined]
+    monkeypatch.setattr(camera_bridge.cv2, "resize", lambda *_a, **_k: pytest.fail("resize called"))
+    monkeypatch.setattr(camera_bridge, "_encode_monitor_frame", lambda *_a, **_k: pytest.fail("encode called"))
+
+    metadata, jpeg = camera_bridge._monitor_frame(
+        camera, sequence=10, width=1920, height=1080, quality=78, timeout=1.0
+    )
+
+    assert jpeg is source_jpeg
+    assert metadata["source_mode"] == "direct_mjpeg"
+    assert metadata["sequence"] == 44
+    assert metadata["jpeg_bytes"] == len(source_jpeg)
+
+
+def test_non_native_monitor_resolution_uses_transcoded_fallback() -> None:
+    camera = FakeCamera()
+    camera.settings.width = 1920
+    camera.settings.height = 1080
+    camera.started = True
+    direct_calls: list[int] = []
+
+    def direct(sequence: int, *, timeout: float) -> CompressedCameraFrame:
+        del timeout
+        direct_calls.append(sequence)
+        raise AssertionError("non-native request must not try direct passthrough")
+
+    camera.direct_mjpeg_after = direct  # type: ignore[attr-defined]
+    metadata, jpeg = camera_bridge._monitor_frame(
+        camera, sequence=10, width=1280, height=720, quality=78, timeout=1.0
+    )
+
+    assert direct_calls == []
+    assert metadata["source_mode"] == "transcoded"
+    assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
 
 
 def test_raw_monitor_rejects_bad_authentication_and_invalid_profiles(monkeypatch) -> None:
@@ -308,7 +362,7 @@ def test_precision_capture_remains_authoritative_during_raw_monitor(monkeypatch)
     stop = threading.Event()
     stream = remote.monitor_frames(fps=10, stop_event=stop)
     try:
-        assert next(stream)["image"].shape == (720, 1280, 3)
+        assert next(stream)["image"].shape == (1080, 1920, 3)
         burst = remote.capture_burst(
             PrecisionCaptureSettings(
                 sample_frames=2,
@@ -318,7 +372,7 @@ def test_precision_capture_remains_authoritative_during_raw_monitor(monkeypatch)
             )
         )
         assert len(burst.frames) == 2
-        assert next(stream)["image"].shape == (720, 1280, 3)
+        assert next(stream)["image"].shape == (1080, 1920, 3)
         assert camera.controls.requested == {}
     finally:
         stop.set()

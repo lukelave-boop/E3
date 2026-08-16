@@ -7,16 +7,33 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
+The Raspberry Pi camera bridge now has an optional direct-MJPEG Live Monitor
+path. On a local Linux V4L2 source configured and negotiated as MJPG, the sole
+OpenCV capture is capability-probed with `CAP_PROP_FORMAT=-1`; only bounded,
+SOI/EOI-framed JPEG packets that decode to the configured native dimensions
+enable the path. Each accepted camera packet is retained as immutable bytes and
+decoded once for the ordinary `CameraService` frame with the same sequence,
+generation, and timestamp. Native-size monitor requests forward those exact
+bytes without resize or JPEG encoding. Unsupported probes, synthetic/non-MJPEG
+sources, invalid packets, and non-native monitor resolutions use the existing
+transcoded path. Protocol metadata and the desktop identify `DIRECT MJPEG` or
+`TRANSCODED`. This behavior is automated-test verified only. Actual C920/V4L2
+raw-mode support and performance remain pending physical Pi validation. The
+physically measured prior transcoded 720p/10 fps baseline on this Pi was about
+18.11 Mbps TX, 2.2–2.4 CPU cores of active work, and 146 MB RSS; it is a single
+baseline, not a universal expectation.
+
 The Raspberry Pi camera bridge now offers a bounded authenticated raw-monitor
 mode on its existing `e3camera://` socket. One persistent connection carries
 JPEG frames from the sole Pi-owned `CameraService`; the server and desktop both
 use latest-frame replacement semantics, with two monitor clients maximum and a
-4 MiB per-frame ceiling. The native monitor defaults to 1280×720 at 10 fps,
+4 MiB per-frame ceiling. The desktop now prefers 1920×1080 at 10 fps,
 offers 5/10/15 fps, reports observed FPS/source age, and remains independent of
 machine connection and calibration authority. Focused loopback, precision-
-capture, camera lifecycle, and offscreen desktop tests pass. Pi 3 B+ CPU,
-memory, throughput, latency, controller responsiveness, and go2rtc service
-impact remain physically unmeasured and must not be inferred from desktop CI.
+capture, camera lifecycle, and offscreen desktop tests pass. Direct-path Pi 3
+B+ CPU, memory, throughput, latency, controller responsiveness, precision-
+capture coexistence, and go2rtc service impact remain physically unmeasured and
+must not be inferred from desktop CI.
 
 Explicit controller replacement now performs disconnect/laser-off cleanup
 under the UI action's original STOP generation, then captures and binds the

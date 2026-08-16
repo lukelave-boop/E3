@@ -537,3 +537,55 @@ def test_camera_frame_validation_rejects_malformed_driver_frames(
     valid: bool,
 ) -> None:
     assert CameraService._valid_frame(frame) is valid
+
+
+def test_direct_mjpeg_validation_accepts_only_bounded_expected_jpeg() -> None:
+    camera = CameraService(CameraSettings(width=8, height=6))
+    source = np.full((6, 8, 3), 91, dtype=np.uint8)
+    ok, encoded = camera_service_module.cv2.imencode(".jpg", source)
+    assert ok
+
+    decoded = camera._decode_direct_mjpeg(encoded)
+
+    assert decoded is not None
+    jpeg, frame = decoded
+    assert jpeg == encoded.tobytes()
+    assert frame.shape == source.shape
+    assert camera._decode_direct_mjpeg(encoded[:-1]) is None
+    assert camera._decode_direct_mjpeg(np.array([0xFF, 0xD8, 0xFF, 0xD9], dtype=np.uint8)) is None
+    oversized = np.zeros(camera_service_module._MAX_DIRECT_MJPEG_BYTES + 1, dtype=np.uint8)
+    oversized[:2] = (0xFF, 0xD8)
+    oversized[-2:] = (0xFF, 0xD9)
+    assert camera._decode_direct_mjpeg(oversized) is None
+    assert CameraService(CameraSettings(width=9, height=6))._decode_direct_mjpeg(encoded) is None
+
+
+def test_direct_mjpeg_publication_shares_decoded_frame_identity_and_generation() -> None:
+    camera = CameraService(CameraSettings())
+    frame = np.full((4, 5, 3), 37, dtype=np.uint8)
+    jpeg = b"\xff\xd8source-bytes\xff\xd9"
+    with camera._frame_condition:
+        camera._connected = True
+        camera._direct_mjpeg = True
+        camera._frame = frame
+        camera._frame_monotonic = time.monotonic()
+        camera._frames_read = 12
+        camera._compressed_frame = camera_service_module.CompressedCameraFrame(
+            jpeg=jpeg,
+            frame=frame,
+            sequence=12,
+            generation=camera._generation,
+            captured_monotonic=time.monotonic(),
+            width=5,
+            height=4,
+        )
+
+    compressed = camera.direct_mjpeg_after(11, timeout=0.1)
+
+    assert compressed.jpeg is jpeg
+    assert compressed.frame is frame
+    assert compressed.sequence == camera.frame_sequence()
+    assert compressed.generation == camera._current_generation()
+    assert np.array_equal(camera.snapshot(), frame)
+    camera.stop()
+    assert camera._compressed_frame is None

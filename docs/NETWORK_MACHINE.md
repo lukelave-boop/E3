@@ -163,8 +163,18 @@ physical C920 is used.
 The native desktop can open a low-latency **Raw Live Monitor** over the existing
 authenticated `e3camera://` port. It uses one persistent HMAC-authenticated
 socket and the same Pi-owned `CameraService`; it never opens a second
-`VideoCapture` or creates a public HTTP camera endpoint. The default is
-1280×720 at 10 fps and JPEG quality 78, with 5, 10, and 15 fps choices.
+`VideoCapture` or creates a public HTTP camera endpoint. The desktop prefers
+the native 1920×1080 size at 10 fps, with 5, 10, and 15 fps choices.
+
+For a local Linux V4L2 MJPG camera, `CameraService` capability-probes OpenCV raw
+mode and validates the original compressed packet before enabling direct
+passthrough. Native-size monitor requests then receive the exact source JPEG
+without Pi-side resize or JPEG encoding. The same packet is decoded once for
+snapshots and precision consumers, with both representations sharing sequence,
+generation, and capture time. Unsupported backends or formats, failed packet
+validation, synthetic cameras, and non-native resolution requests retain the
+existing snapshot/resize/encode path. Stream metadata and the desktop visibly
+report `DIRECT MJPEG` or `TRANSCODED`.
 
 Monitor images are explicitly raw and uncorrected. They do not require or apply
 lens correction, bed mapping, overlays, detection, Trace, or calibration, and

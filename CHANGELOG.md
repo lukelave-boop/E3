@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added optional single-owner direct MJPEG passthrough for the authenticated
+  Live Monitor. Validated native V4L2 MJPG packets are forwarded unchanged at
+  native resolution while the same packet is decoded for ordinary camera and
+  precision consumers; unsupported or non-native requests remain transcoded and
+  the desktop reports the active source mode.
+
 - Fixed explicit controller replacement after Software STOP so disconnect
   cleanup is followed by a freshly scoped connection attempt. Concurrent STOP
   requests still cancel replacement, and successful replacement remains HOME
