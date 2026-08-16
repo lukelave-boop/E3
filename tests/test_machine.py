@@ -3308,6 +3308,337 @@ def test_serial_motion_and_arming_require_home_park_in_each_connection(
         machine.disconnect()
 
 
+class PostJobHomingTransport(SimulatedTransport):
+    def __init__(
+        self,
+        *,
+        homing_ack: str | None = None,
+        statuses: list[str] | None = None,
+        hold_statuses: bool = False,
+    ) -> None:
+        super().__init__()
+        self.homing_ack = homing_ack
+        self.statuses = list(statuses or [])
+        self.commands: list[str] = []
+        self.raw_writes: list[bytes] = []
+        self.homing_started = threading.Event()
+        self.status_queried = threading.Event()
+        self.allow_statuses = threading.Event()
+        if not hold_statuses:
+            self.allow_statuses.set()
+
+    def write_line(self, line: str) -> None:
+        command = line.strip().upper()
+        self.commands.append(command)
+        if command == "$H":
+            self.x = 0.0
+            self.y = 0.0
+            self.laser_on = False
+            self.power = 0.0
+            self.homing_started.set()
+            if self.homing_ack is not None:
+                self._queue.put(self.homing_ack)
+            return
+        super().write_line(line)
+
+    def write_raw(self, data: bytes) -> None:
+        self.raw_writes.append(data)
+        if b"?" in data and self.homing_started.is_set():
+            self.status_queried.set()
+            if self.allow_statuses.is_set() and self.statuses:
+                self._queue.put(self.statuses.pop(0))
+            return
+        super().write_raw(data)
+
+
+def _powered_completion_machine(transport: SimulatedTransport) -> MachineService:
+    transport.open()
+    transport.drain()
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            read_timeout=0.01,
+            allow_motion=True,
+            home_before_photo=True,
+            home_and_release_after_powered_job=True,
+            photo_x=15,
+            photo_y=195,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine._transport = transport
+    machine._connected = True
+    machine._protocol = "grbl"
+    machine._coordinate_reference_ready = True
+    machine._coordinate_state_reference = {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+    machine._verify_grbl_coordinate_state = lambda: None  # type: ignore[method-assign]
+    return machine
+
+
+def _start_powered_completion_job(machine: MachineService) -> str:
+    program = machine.preflight_program(
+        "G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S5\nG1 X20 Y20 F500\nM5\n"
+    )
+    machine.arm_program(machine.ARM_PHRASE, program)
+    machine.start_validated_program(program, "powered-completion.gcode")
+    return program.digest
+
+
+def test_powered_post_job_grbl_homing_accepts_normal_ok() -> None:
+    transport = PostJobHomingTransport(homing_ack="ok")
+    machine = _powered_completion_machine(transport)
+    try:
+        digest = _start_powered_completion_job(machine)
+        wait_for_job(machine)
+
+        status = machine.status()
+        assert status["job"]["phase"] == "complete"
+        assert status["job"]["error"] is None
+        assert status["job"]["finished_at"] is not None
+        assert status["last_successful_job"]["program_digest"] == digest
+        assert transport.commands.index("$H") < transport.commands.index(
+            "G0 X15.000 Y195.000 F3000.000"
+        )
+        assert transport.commands.index("G0 X15.000 Y195.000 F3000.000") < transport.commands.index(
+            "$MD"
+        )
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize("active_state", ["Run", "Home", "Homing"])
+def test_powered_post_job_grbl_homing_accepts_active_then_idle_without_ok(
+    monkeypatch: pytest.MonkeyPatch,
+    active_state: str,
+) -> None:
+    transport = PostJobHomingTransport(
+        statuses=[
+            f"<{active_state}|MPos:1,1,0|FS:0,0>",
+            "<Idle|MPos:0,0,0|FS:0,0>",
+        ],
+        hold_statuses=True,
+    )
+    machine = _powered_completion_machine(transport)
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS",
+        0.0,
+    )
+    try:
+        digest = _start_powered_completion_job(machine)
+        assert transport.homing_started.wait(timeout=1.0)
+        assert transport.status_queried.wait(timeout=1.0)
+
+        assert machine.status()["job"]["running"] is True
+        assert machine.status()["job"]["phase"] == "homing"
+        assert "G0 X15.000 Y195.000 F3000.000" not in transport.commands
+        assert "$MD" not in transport.commands
+
+        transport.allow_statuses.set()
+        wait_for_job(machine)
+
+        status = machine.status()
+        assert status["job"]["running"] is False
+        assert status["job"]["phase"] == "complete"
+        assert status["job"]["error"] is None
+        assert status["last_successful_job"]["program_digest"] == digest
+        assert transport.x == pytest.approx(15)
+        assert transport.y == pytest.approx(195)
+        assert transport.commands.index("$H") < transport.commands.index(
+            "G0 X15.000 Y195.000 F3000.000"
+        )
+        assert transport.commands.index("G4 P0.01", transport.commands.index("$H")) < (
+            transport.commands.index("$MD")
+        )
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize(
+    "statuses",
+    [
+        ["<Idle|MPos:0,0,0>"] * 3,
+        ["<Run|MPos:1,1,0", "<Idle|MPos:0,0,0>"],
+        [],
+    ],
+    ids=["idle-only", "malformed-active", "timeout"],
+)
+def test_powered_post_job_grbl_homing_ambiguous_or_timed_out_evidence_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: list[str],
+) -> None:
+    transport = PostJobHomingTransport(statuses=statuses)
+    machine = _powered_completion_machine(transport)
+    monkeypatch.setattr("laser_aligner.machine.service._GRBL_HOMING_TIMEOUT_SECONDS", 0.03)
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS",
+        0.0,
+    )
+    try:
+        _start_powered_completion_job(machine)
+        wait_for_job(machine)
+
+        status = machine.status()
+        assert status["job"]["running"] is False
+        assert status["job"]["phase"] == "failed"
+        assert "active-to-idle" in status["job"]["error"]
+        assert status["last_successful_job"] is None
+        assert status["controller_reconnect_required"] is True
+        assert "G0 X15.000 Y195.000 F3000.000" not in transport.commands
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["error:9", "ALARM:1", "<Alarm|MPos:0,0,0>"],
+    ids=["error", "alarm", "alarm-status"],
+)
+def test_powered_post_job_grbl_homing_rejection_never_parks_or_publishes_success(
+    monkeypatch: pytest.MonkeyPatch,
+    response: str,
+) -> None:
+    transport = PostJobHomingTransport(statuses=[response])
+    machine = _powered_completion_machine(transport)
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS",
+        0.0,
+    )
+    try:
+        _start_powered_completion_job(machine)
+        wait_for_job(machine)
+
+        status = machine.status()
+        assert status["job"]["phase"] == "failed"
+        assert response.lower().split("|", 1)[0].lstrip("<") in status["job"]["error"].lower()
+        assert status["last_successful_job"] is None
+        assert "G0 X15.000 Y195.000 F3000.000" not in transport.commands
+    finally:
+        machine.disconnect()
+
+
+def test_powered_post_job_grbl_homing_disconnect_fails_closed() -> None:
+    class DisconnectingPostJobTransport(PostJobHomingTransport):
+        def read_line(self, timeout: float = 1.0) -> str | None:
+            if self.homing_started.is_set():
+                raise MachineError("E3 bridge connection closed")
+            return super().read_line(timeout)
+
+    transport = DisconnectingPostJobTransport()
+    machine = _powered_completion_machine(transport)
+    try:
+        _start_powered_completion_job(machine)
+        wait_for_job(machine)
+
+        status = machine.status()
+        assert status["job"]["phase"] == "failed"
+        assert "connection closed" in status["job"]["error"]
+        assert status["last_successful_job"] is None
+        assert status["controller_reconnect_required"] is True
+        assert "G0 X15.000 Y195.000 F3000.000" not in transport.commands
+    finally:
+        machine.disconnect()
+
+
+def test_stop_during_powered_post_job_missing_ack_homing_cancels_without_success(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = PostJobHomingTransport(hold_statuses=True)
+    machine = _powered_completion_machine(transport)
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS",
+        0.0,
+    )
+    try:
+        _start_powered_completion_job(machine)
+        assert transport.homing_started.wait(timeout=1.0)
+        assert transport.status_queried.wait(timeout=1.0)
+
+        with pytest.raises(MachineError, match="while a job is running"):
+            machine.prepare_photo_position()
+
+        machine.stop_job()
+        wait_for_job(machine)
+
+        status = machine.status()
+        assert status["job"]["running"] is False
+        assert status["job"]["phase"] == "failed"
+        assert status["job"]["error"] == "Job stopped"
+        assert status["last_successful_job"] is None
+        assert "G0 X15.000 Y195.000 F3000.000" not in transport.commands
+    finally:
+        machine.disconnect()
+
+
+class CompletionPhaseGateTransport(SimulatedTransport):
+    def __init__(self) -> None:
+        super().__init__()
+        self.commands: list[str] = []
+        self.enabled = False
+        self.barrier_count = 0
+        self.entered = {
+            phase: threading.Event()
+            for phase in ("draining", "homing", "parking", "releasing")
+        }
+
+    def write_line(self, line: str) -> None:
+        command = line.strip().upper()
+        self.commands.append(command)
+        phase: str | None = None
+        if self.enabled and command == "G4 P0.01":
+            self.barrier_count += 1
+            phase = "draining" if self.barrier_count == 1 else "parking"
+        elif self.enabled and command == "$H":
+            self.x = 0.0
+            self.y = 0.0
+            phase = "homing"
+        elif self.enabled and command == "$MD":
+            phase = "releasing"
+        if phase is not None:
+            self.entered[phase].set()
+            return
+        super().write_line(line)
+
+    def release(self, phase: str) -> None:
+        assert self.entered[phase].is_set()
+        self._queue.put("ok")
+
+
+def test_powered_job_owns_machine_through_drain_home_park_and_release() -> None:
+    transport = CompletionPhaseGateTransport()
+    machine = _powered_completion_machine(transport)
+    transport.enabled = True
+    try:
+        digest = _start_powered_completion_job(machine)
+        for phase in ("draining", "homing", "parking", "releasing"):
+            assert transport.entered[phase].wait(timeout=1.0)
+            status = machine.status()
+            assert status["job"]["running"] is True
+            assert status["job"]["phase"] == phase
+            assert status["job"]["finished_at"] is None
+            assert status["last_successful_job"] is None
+            if phase == "parking":
+                assert "$MD" not in transport.commands
+            transport.release(phase)
+
+        wait_for_job(machine)
+        status = machine.status()
+        assert status["job"]["running"] is False
+        assert status["job"]["phase"] == "complete"
+        assert status["job"]["finished_at"] is not None
+        assert status["last_successful_job"]["program_digest"] == digest
+        park_index = transport.commands.index("G0 X15.000 Y195.000 F3000.000")
+        park_barrier_index = transport.commands.index("G4 P0.01", park_index)
+        assert park_index < park_barrier_index < transport.commands.index("$MD")
+    finally:
+        machine.disconnect()
+
+
 def test_successful_powered_serial_job_homes_parks_and_releases_motors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

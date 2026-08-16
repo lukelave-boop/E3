@@ -1099,41 +1099,36 @@ class MachineService:
             _expected_stop_epoch=expected_stop_epoch,
         )
 
-    def _execute_grbl_homing_locked(
+    def _execute_grbl_homing_exchange(
         self,
         *,
         timeout: float,
-        expected_stop_epoch: int,
+        write_homing_command: Callable[[], None],
+        is_cancelled: Callable[[], bool],
+        cancellation_message: str,
     ) -> list[str]:
-        """Run ``$H`` with a status-transition fallback for missing ``ok``.
+        """Complete a written ``$H`` with one shared GRBL acceptance policy.
 
         A normal terminal acknowledgement remains authoritative.  Otherwise,
         fallback success requires a controller-reported active homing state
         followed by Idle.  Idle alone is deliberately ambiguous.
         """
 
+        if is_cancelled():
+            raise MachineError(cancellation_message)
         transport = self._require_connection()
         responses: list[str] = []
         saw_active_homing = False
         deadline = time.monotonic() + timeout
-        next_status_query = time.monotonic()
-        with self._transport_write_lock:
-            with self._stop_epoch_lock:
-                if self._stop_epoch != expected_stop_epoch:
-                    raise MachineError("Home / park was cancelled by software STOP")
-            self._check_line_safety("$H")
-            try:
-                transport.write_line("$H")
-                self._append_log("TX", "$H")
-            except Exception as exc:
-                self._mark_controller_command_state_untrusted()
-                raise MachineError(f"Command '$H' failed while writing: {exc}") from exc
+        next_status_query = (
+            time.monotonic() + _GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS
+        )
 
         try:
+            write_homing_command()
             while time.monotonic() < deadline:
-                with self._stop_epoch_lock:
-                    if self._stop_epoch != expected_stop_epoch:
-                        raise MachineError("Home / park was cancelled by software STOP")
+                if is_cancelled():
+                    raise MachineError(cancellation_message)
                 now = time.monotonic()
                 if now >= next_status_query:
                     transport.write_raw(b"?")
@@ -1144,9 +1139,8 @@ class MachineService:
                 )
                 if not line:
                     continue
-                with self._stop_epoch_lock:
-                    if self._stop_epoch != expected_stop_epoch:
-                        raise MachineError("Home / park was cancelled by software STOP")
+                if is_cancelled():
+                    raise MachineError(cancellation_message)
                 responses.append(line)
                 self._append_log("RX", line)
                 lower = line.strip().lower()
@@ -1154,7 +1148,7 @@ class MachineService:
                     return responses
                 if lower.startswith("error") or lower.startswith("alarm") or lower.startswith("<alarm"):
                     raise _ControllerCommandRejected(line)
-                if lower.startswith("<"):
+                if lower.startswith("<") and lower.endswith(">"):
                     state = lower[1:].split("|", 1)[0].split(":", 1)[0]
                     if state in {"home", "homing", "run"}:
                         saw_active_homing = True
@@ -1169,17 +1163,57 @@ class MachineService:
                 f"within {timeout:g} seconds"
             )
         except Exception as exc:
-            with self._stop_epoch_lock:
-                stopped = self._stop_epoch != expected_stop_epoch
+            stopped = is_cancelled()
             if not isinstance(exc, _ControllerCommandRejected):
                 self._mark_controller_command_state_untrusted()
             if stopped:
-                raise MachineError("Home / park was cancelled by software STOP") from exc
+                raise MachineError(cancellation_message) from exc
             if isinstance(exc, _ControllerCommandRejected):
                 raise MachineError(f"Command '$H' failed: {exc}") from exc
             if isinstance(exc, MachineError) and str(exc).startswith("Command '$H'"):
                 raise
             raise MachineError(f"Command '$H' failed: {exc}") from exc
+
+    def _execute_grbl_homing_locked(
+        self,
+        *,
+        timeout: float,
+        expected_stop_epoch: int,
+    ) -> list[str]:
+        """Run ``$H`` while an ordinary operation owns the command lock."""
+
+        def is_cancelled() -> bool:
+            with self._stop_epoch_lock:
+                return self._stop_epoch != expected_stop_epoch
+
+        def write_homing_command() -> None:
+            with self._transport_write_lock:
+                if is_cancelled():
+                    raise MachineError("Home / park was cancelled by software STOP")
+                self._check_line_safety("$H")
+                transport = self._require_connection()
+                try:
+                    transport.write_line("$H")
+                    self._append_log("TX", "$H")
+                except Exception as exc:
+                    raise MachineError(f"Command '$H' failed while writing: {exc}") from exc
+
+        return self._execute_grbl_homing_exchange(
+            timeout=timeout,
+            write_homing_command=write_homing_command,
+            is_cancelled=is_cancelled,
+            cancellation_message="Home / park was cancelled by software STOP",
+        )
+
+    def _execute_running_job_grbl_homing(self, *, timeout: float) -> list[str]:
+        """Run ``$H`` while the active job owns transport access."""
+
+        return self._execute_grbl_homing_exchange(
+            timeout=timeout,
+            write_homing_command=lambda: self._write_running_job_line("$H"),
+            is_cancelled=self._job_stop.is_set,
+            cancellation_message="Job stopped",
+        )
 
     @staticmethod
     def _parse_grbl_coordinate_state(
@@ -2251,10 +2285,15 @@ class MachineService:
             )
             with self._lock:
                 self._job.phase = "homing"
-            self._execute_running_job_command(
-                "$H" if self._protocol == "grbl" else "G28",
-                timeout=max(120.0, self.settings.read_timeout),
-            )
+            if self._protocol == "grbl":
+                self._execute_running_job_grbl_homing(
+                    timeout=max(_GRBL_HOMING_TIMEOUT_SECONDS, self.settings.read_timeout),
+                )
+            else:
+                self._execute_running_job_command(
+                    "G28",
+                    timeout=max(120.0, self.settings.read_timeout),
+                )
             with self._lock:
                 self._job.phase = "parking"
             self._execute_running_job_command("G21", timeout=setup_timeout)

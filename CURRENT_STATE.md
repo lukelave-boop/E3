@@ -26,6 +26,23 @@ verified with a controller or laser. Focused verification passed 333 tests:
 15 exact-Preview tests, 57 desktop job tests, 49 compact-panel/layout/template/
 runbook tests, 44 Machine Setup tests, and 168 core machine safety tests.
 
+On 2026-08-16, a real powered job completed its streamed cutting G-code, but
+automatic post-job Home / park did not finish and E3 remained in the running
+state. A subsequent manual Home / park request was correctly rejected with
+`Cannot move to the photography position while a job is running` because the
+completion worker still owned the machine. Ordinary Home / park already handled
+this controller's missing terminal `$H` acknowledgement by requiring realtime
+evidence of active `Home`, `Homing`, or the observed `Run` state followed by
+`Idle`; automatic completion was still using the generic acknowledgement-only
+running-job command path. Both paths now share the same fail-closed GRBL homing
+acceptance state machine while retaining their distinct command-lock and
+running-job/STOP ownership. Focused tests verify normal `ok`, each accepted
+active-to-Idle transition, idle-only and malformed evidence, alarm/error,
+disconnect, timeout, STOP cancellation, park/release ordering, and terminal job
+publication. The correction is automated-test verified but **PHYSICALLY
+UNVERIFIED** until another real powered job completes Home, park, motion drain,
+and motor release.
+
 Physical Pi 3 B+/C920 validation showed that OpenCV raw mode is not viable:
 V4L2 negotiated MJPG at 1920×1080/30 fps, but `CAP_PROP_FORMAT=-1` was rejected
 and `VideoCapture.read()` returned decoded 6,220,800-byte BGR frames. The
