@@ -23,6 +23,7 @@ class _MonitorThread(QtCore.QThread):
         self._latest_lock = threading.Lock()
         self._latest: dict[str, Any] | None = None
         self._notification_pending = False
+        self._receive_times: deque[float] = deque(maxlen=60)
 
     def run(self) -> None:
         monitor = getattr(self.camera, "monitor_frames", None)
@@ -33,6 +34,25 @@ class _MonitorThread(QtCore.QThread):
             for payload in monitor(fps=self.fps, stop_event=self.stop_event):
                 if self.stop_event.is_set():
                     return
+                received = payload.get("received_monotonic")
+                received_monotonic = (
+                    float(received) if received is not None else time.monotonic()
+                )
+                self._receive_times.append(received_monotonic)
+                while (
+                    self._receive_times
+                    and received_monotonic - self._receive_times[0] > 2.0
+                ):
+                    self._receive_times.popleft()
+                network_fps = (
+                    (len(self._receive_times) - 1)
+                    / (self._receive_times[-1] - self._receive_times[0])
+                    if len(self._receive_times) > 1
+                    and self._receive_times[-1] > self._receive_times[0]
+                    else 0.0
+                )
+                payload = dict(payload)
+                payload["network_fps"] = network_fps
                 notify = False
                 with self._latest_lock:
                     self._latest = payload
@@ -137,17 +157,21 @@ class LiveMonitorWindow(QtWidgets.QWidget):
         self._frame_times.append(now)
         while self._frame_times and now - self._frame_times[0] > 2.0:
             self._frame_times.popleft()
-        observed = (
+        display_fps = (
             (len(self._frame_times) - 1) / (self._frame_times[-1] - self._frame_times[0])
             if len(self._frame_times) > 1 and self._frame_times[-1] > self._frame_times[0]
             else 0.0
         )
         age = payload.get("frame_age_seconds")
-        age_text = f" · source age {float(age) * 1000:.0f} ms" if age is not None else ""
+        age_text = f"{float(age) * 1000:.0f} ms" if age is not None else "—"
+        capture = payload.get("capture_fps")
+        capture_text = f"{float(capture):.1f}" if capture is not None else "—"
+        network_fps = float(payload.get("network_fps") or 0.0)
+        source_mode = str(payload.get("source_mode", "transcoded")).upper().replace("_", " ")
         self.status_label.setText(
-            f"ONLINE · {payload['width']}×{payload['height']} · {observed:.1f} fps"
-            f" · Source: {str(payload.get('source_mode', 'transcoded')).upper().replace('_', ' ')}"
-            f" · raw{age_text}"
+            f"ONLINE · {payload['width']}×{payload['height']} · {source_mode} · raw"
+            f" · Capture {capture_text} fps · Network {network_fps:.1f} fps"
+            f" · Display {display_fps:.1f} fps · Age {age_text}"
         )
 
     @QtCore.Slot(str)

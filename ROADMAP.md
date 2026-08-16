@@ -36,6 +36,9 @@ Desktop foundation:
 
 Current branch feature:
 
+- Raw Live Monitor diagnostics distinguish Pi usable-frame Capture FPS,
+  desktop socket Network FPS, Qt presentation Display FPS, and source Age while
+  retaining bounded latest-frame replacement.
 - Multi-object camera tracing with color/contrast modes, grid inference,
   reviewed selection, and conversion to project vectors.
 - Versioned label-sheet cutting templates with manual selection, synthetic

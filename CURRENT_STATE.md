@@ -20,23 +20,34 @@ no resize or encode; unavailable native capture closes fully before the normal
 decoded OpenCV fallback opens. That fallback is 1280×720/10 fps/quality 78,
 while direct mode may deliver 1920×1080/10 fps. The V4L2 ABI abstraction,
 buffer lifecycle, exact-byte path, fallback, camera lifecycle, precision, and
-monitor behavior are automated-test verified without hardware. The new native
-backend and its performance still require physical Pi/C920 validation. The
-physically measured prior transcoded 720p/10 fps baseline was about 18.11 Mbps
-TX, 2.2–2.4 CPU cores of active work, and 146 MB RSS; it is a single baseline,
-not a universal expectation.
+monitor behavior are automated-test verified without hardware. Physical native
+V4L2 operation on the Pi 3 B+/C920 measured approximately 28.6% total CPU busy
+(70.5% idle), roughly 116 MB RSS, and about 47.11 Mbps TX while the Raw Live
+Monitor reported `DIRECT MJPEG` at 1920×1080 with a 10 fps monitor target. The
+earlier approximately 1088 fps camera status was an accounting defect: the
+sample was taken after V4L2 dequeue but before source-JPEG validation and decode,
+so it did not represent a physical camera rate. Publication FPS now includes
+validation and decode time; that correction is automated-test verified but has
+not yet been physically rechecked. The physically measured prior transcoded
+720p/10 fps baseline was about 18.11 Mbps TX, 2.2–2.4 CPU cores of active work,
+and 146 MB RSS; each result is one observed configuration, not a universal
+expectation.
 
 The Raspberry Pi camera bridge now offers a bounded authenticated raw-monitor
 mode on its existing `e3camera://` socket. One persistent connection carries
 JPEG frames from the sole Pi-owned `CameraService`; the server and desktop both
 use latest-frame replacement semantics, with two monitor clients maximum and a
-4 MiB per-frame ceiling. The desktop now prefers 1920×1080 at 10 fps,
-offers 5/10/15 fps, reports observed FPS/source age, and remains independent of
-machine connection and calibration authority. Focused loopback, precision-
-capture, camera lifecycle, and offscreen desktop tests pass. Direct-path Pi 3
-B+ CPU, memory, throughput, latency, controller responsiveness, precision-
-capture coexistence, and go2rtc service impact remain physically unmeasured and
-must not be inferred from desktop CI.
+4 MiB per-frame ceiling. The desktop now prefers 1920×1080 at 10 fps, offers
+5/10/15 fps, and separately reports Pi-side usable-frame **Capture** FPS,
+desktop socket **Network** receive FPS, Qt **Display** FPS after latest-frame
+replacement, and source-frame **Age**, alongside the direct/transcoded mode.
+It remains independent of machine connection and calibration authority. Focused
+loopback, camera lifecycle, transport-timestamp, receive-accounting, and
+offscreen desktop tests pass. The performance observation above is physical;
+the corrected Capture / Network / Display / Age values are automated-test
+verified only. Direct-path latency, controller responsiveness, precision-capture
+coexistence, and go2rtc service impact remain physically unmeasured and must not
+be inferred from desktop CI.
 
 Explicit controller replacement now performs disconnect/laser-off cleanup
 under the UI action's original STOP generation, then captures and binds the

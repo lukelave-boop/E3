@@ -85,7 +85,8 @@ Native desktop workflow:
 - SQLite material presets and camera focus/sharpness controls
 - Authenticated raw Live Monitor for Pi-hosted cameras, preferring exact source
   JPEG passthrough from the single-owner native Linux V4L2 backend and visibly
-  falling back to 1280×720/10 fps transcoded JPEG when native capture is unavailable
+  falling back to 1280×720/10 fps transcoded JPEG when native capture is
+  unavailable, with distinct Capture, Network, Display, and source Age diagnostics
 - Native Machine Setup for camera controls and preview, checkerboard lens
   calibration, a fresh keyed 5×5 base-map job with automatic orientation and
   transactional installation, manual/CSV fallback mapping, eight-point fine registration,

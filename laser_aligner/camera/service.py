@@ -524,7 +524,6 @@ class CameraService:
                 error = f"Camera read failed: {exc}"
             else:
                 error = "Camera read failed"
-            now = time.monotonic()
             if stop_event.is_set():
                 break
             compressed: bytes | None = None
@@ -545,6 +544,7 @@ class CameraService:
                     self._frame_condition.notify_all()
                 stop_event.wait(0.05)
                 continue
+            now = time.monotonic()
             delta = max(now - previous, 1e-6)
             instant_fps = 1.0 / delta
             smoothed_fps = (

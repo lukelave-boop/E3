@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 import threading
 import time
 
@@ -560,6 +561,46 @@ def test_direct_mjpeg_validation_accepts_only_bounded_expected_jpeg() -> None:
     assert CameraService(CameraSettings(width=9, height=6))._decode_direct_mjpeg(encoded) is None
 
 
+def test_direct_mjpeg_fps_includes_decode_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Clock:
+        value = 0.0
+
+        def monotonic(self) -> float:
+            return self.value
+
+    clock = Clock()
+    stop_event = threading.Event()
+
+    class Capture:
+        reads = 0
+
+        def read(self) -> tuple[bool, bytes | None]:
+            self.reads += 1
+            if self.reads > 2:
+                stop_event.set()
+                return False, None
+            clock.value += 0.001
+            return True, b"source-jpeg"
+
+    capture = Capture()
+    camera = CameraService(CameraSettings())
+    camera._capture = capture
+    camera._direct_mjpeg = True
+
+    def decode(_encoded: object) -> tuple[bytes, np.ndarray]:
+        clock.value += 0.099
+        return b"source-jpeg", np.zeros((4, 5, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(camera_service_module.time, "monotonic", clock.monotonic)
+    monkeypatch.setattr(camera, "_decode_direct_mjpeg", decode)
+
+    camera._reader_loop(capture, stop_event, camera._generation)
+
+    assert camera.status().frames_read == 2
+    assert camera.status().fps == pytest.approx(10.0)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Native V4L2 requires Linux")
 def test_native_v4l2_is_sole_owner_and_publishes_exact_decoded_packet(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -613,6 +654,7 @@ def test_native_v4l2_is_sole_owner_and_publishes_exact_decoded_packet(
     capture.release()
 
 
+@pytest.mark.skipif(sys.platform != "linux", reason="Native V4L2 requires Linux")
 def test_native_v4l2_initialization_failure_uses_decoded_opencv_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

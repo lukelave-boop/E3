@@ -90,11 +90,14 @@ def _monitor_frame(
         frame = camera.snapshot_after(sequence, timeout=timeout)
         sequence = camera.frame_sequence()
         source_height, source_width = frame.shape[:2]
-        status_age = camera.status().frame_age_seconds
+        status = camera.status()
+        status_age = status.frame_age_seconds
         captured_monotonic = time.monotonic() - max(0.0, float(status_age or 0.0))
         if source_width != width or source_height != height:
             frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
         jpeg = _encode_monitor_frame(frame, quality)
+    else:
+        status = camera.status()
     if len(jpeg) > _MAX_MONITOR_JPEG_BYTES:
         raise CameraError("Monitor JPEG exceeds the bounded frame limit")
     return (
@@ -109,6 +112,8 @@ def _monitor_frame(
             "source_height": source_height,
             "jpeg_bytes": len(jpeg),
             "frame_age_seconds": max(0.0, time.monotonic() - captured_monotonic),
+            "capture_fps": status.fps,
+            "negotiated_fps": status.negotiated_fps,
         },
         jpeg,
     )

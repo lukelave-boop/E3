@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Corrected native-V4L2 camera FPS accounting to include source-JPEG validation
+  and decode, and split Raw Live Monitor diagnostics into Pi Capture FPS,
+  desktop Network receive FPS, Qt Display FPS, and source-frame Age.
+
 - Replaced the physically unsuccessful OpenCV raw-MJPEG probe with a narrow
   single-owner Linux V4L2 MMAP backend. Validated source JPEG packets are
   forwarded unchanged at native resolution and decoded once for ordinary

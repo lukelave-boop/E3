@@ -176,6 +176,14 @@ opened. That transcoded monitor fallback uses 1280×720, 10 fps, and JPEG qualit
 78; direct mode may use 1920×1080 at 10 fps. Stream metadata and the desktop
 visibly report `DIRECT MJPEG` or `TRANSCODED`.
 
+The monitor keeps four rates/latencies distinct: **Capture** is the Pi
+`CameraService` rate for successfully published usable decoded frames,
+**Network** counts complete monitor packets received by the desktop socket,
+**Display** counts frames Qt actually presents after latest-frame replacement,
+and **Age** is the source-frame age carried by the protocol. The camera's
+separate negotiated FPS remains diagnostic backend evidence, not a measured
+capture rate.
+
 Monitor images are explicitly raw and uncorrected. They do not require or apply
 lens correction, bed mapping, overlays, detection, Trace, or calibration, and
 they grant no machine-control authority. The server permits at most two monitor

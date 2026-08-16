@@ -373,6 +373,7 @@ class RemoteCameraService(CameraService):
                     established = True
                     while not stopping.is_set():
                         header, blobs = receive_packet(sock)
+                        received_monotonic = time.monotonic()
                         if header.get("ok") is not True:
                             raise CameraError(str(header.get("error") or "Monitor stream failed"))
                         if len(blobs) != 1 or len(blobs[0]) > _MAX_MONITOR_JPEG_BYTES:
@@ -391,7 +392,9 @@ class RemoteCameraService(CameraService):
                             "source_height": int(header.get("source_height", height)),
                             "monitor_fps": int(header.get("monitor_fps", fps)),
                             "frame_age_seconds": header.get("frame_age_seconds"),
-                            "received_monotonic": time.monotonic(),
+                            "capture_fps": header.get("capture_fps"),
+                            "negotiated_fps": header.get("negotiated_fps"),
+                            "received_monotonic": received_monotonic,
                         }
             except CameraError:
                 if not established:

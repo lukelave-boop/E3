@@ -96,9 +96,10 @@ reference under the state lock and copy its pixels after releasing the lock.
 Sharpness and downstream vision analysis likewise run after camera ownership is
 released. This keeps large frame copies and CPU work from delaying new source
 frames while preventing two precision workflows from consuming the same capture
-sequence. Burst diagnostics include negotiated and observed FPS plus skipped
-sequence counts; negotiated FPS is evidence reported by the backend, not proof
-of sustained delivery.
+sequence. `CameraStatus.fps` measures completed usable-frame publication after
+validation and any direct-MJPEG decode; `negotiated_fps` remains the separate
+backend-reported mode and is not proof of sustained delivery. Burst diagnostics
+include observed and negotiated FPS plus skipped sequence counts.
 
 On Linux V4L2 MJPG sources with persistent device paths, startup first attempts
 a small native V4L2 MMAP backend. It negotiates the configured profile and
@@ -108,6 +109,10 @@ may forward the compressed representation at native size; snapshots and
 precision capture continue to consume the decoded representation. Unsupported
 devices or initialization failures close the native descriptor and mappings
 before ordinary decoded OpenCV capture is opened, preserving one camera owner.
+Raw-monitor metadata carries that Pi-side publication rate as Capture FPS. The
+desktop timestamps each complete socket packet before JPEG decode, calculates
+Network FPS from every worker-thread receipt, and calculates Display FPS only
+from frames Qt presents after latest-frame replacement.
 
 Parked hardware workflows request an unscored raw burst while the temporary
 stepper hold is active. The hold ends immediately after the last frame has been

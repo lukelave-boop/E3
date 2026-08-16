@@ -12,7 +12,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from PySide6 import QtWidgets
 
-from laser_aligner.desktop.live_monitor import LiveMonitorWindow
+from laser_aligner.desktop.live_monitor import LiveMonitorWindow, _MonitorThread
 from laser_aligner.desktop.panels import CameraPanel
 
 
@@ -39,6 +39,22 @@ class _Camera:
                 "width": width,
                 "height": height,
                 "source_mode": "direct_mjpeg",
+                "capture_fps": 17.9,
+                "received_monotonic": time.monotonic(),
+                "frame_age_seconds": 0.106,
+            }
+
+
+class _BurstCamera:
+    def monitor_frames(self, *, fps, stop_event):
+        del fps, stop_event
+        for sequence, received in enumerate((1.0, 1.1, 1.2), start=1):
+            yield {
+                "image": np.zeros((2, 2, 3), dtype=np.uint8),
+                "sequence": sequence,
+                "width": 2,
+                "height": 2,
+                "received_monotonic": received,
             }
 
 
@@ -79,6 +95,10 @@ def test_live_monitor_defaults_starts_stops_and_has_no_machine_dependency(
         assert "1280×720" in window.status_label.text()
         assert "raw" in window.status_label.text().lower()
         assert "DIRECT MJPEG" in window.status_label.text()
+        assert "Capture 17.9 fps" in window.status_label.text()
+        assert "Network" in window.status_label.text()
+        assert "Display" in window.status_label.text()
+        assert "Age 106 ms" in window.status_label.text()
         assert not window.start_button.isEnabled()
         window.stop_button.click()
         deadline = time.monotonic() + 2
@@ -91,3 +111,14 @@ def test_live_monitor_defaults_starts_stops_and_has_no_machine_dependency(
         assert not hasattr(window, "machine")
     finally:
         window.close()
+
+
+def test_monitor_worker_receive_fps_counts_replaced_payloads() -> None:
+    worker = _MonitorThread(_BurstCamera(), 10)
+
+    worker.run()
+    latest = worker.take_latest()
+
+    assert latest is not None
+    assert latest["sequence"] == 3
+    assert latest["network_fps"] == pytest.approx(10.0)

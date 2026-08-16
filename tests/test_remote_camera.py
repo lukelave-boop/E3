@@ -4,12 +4,14 @@ import socket
 import threading
 import time
 from collections.abc import Mapping
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
 import pytest
 
 from laser_aligner.camera import bridge as camera_bridge
+from laser_aligner.camera import remote as camera_remote
 from laser_aligner.camera.bridge import CameraBridgeServer
 from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.remote import RemoteCameraService
@@ -53,6 +55,7 @@ class FakeCamera:
             frames_read=self.sequence,
             last_error=None,
             frame_age_seconds=0.01,
+            negotiated_fps=30.0,
         )
 
     def frame_sequence(self) -> int:
@@ -292,6 +295,8 @@ def test_direct_monitor_forwards_source_bytes_without_resize_or_encode(monkeypat
     assert metadata["source_mode"] == "direct_mjpeg"
     assert metadata["sequence"] == 44
     assert metadata["jpeg_bytes"] == len(source_jpeg)
+    assert metadata["capture_fps"] == 15.0
+    assert metadata["negotiated_fps"] == 30.0
 
 
 def test_non_native_monitor_resolution_uses_transcoded_fallback() -> None:
@@ -330,6 +335,48 @@ def test_native_monitor_request_uses_720p_transcoded_fallback() -> None:
     assert metadata["source_mode"] == "transcoded"
     assert (metadata["width"], metadata["height"]) == (1280, 720)
     assert jpeg.startswith(b"\xff\xd8") and jpeg.endswith(b"\xff\xd9")
+
+
+def test_remote_monitor_timestamps_receipt_before_jpeg_decode(monkeypatch) -> None:
+    token = "camera-monitor-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    camera = FakeCamera()
+    camera.started = True
+    port = free_port()
+    server = CameraBridgeServer(camera, host="127.0.0.1", port=port, token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.time() + 1
+    while server._listener is None and time.time() < deadline:
+        time.sleep(0.01)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{port}")
+    )
+    decode_started = False
+    original_decode = camera_remote._decode_frame
+
+    def decode_after_receipt(jpeg: bytes) -> np.ndarray:
+        nonlocal decode_started
+        decode_started = True
+        return original_decode(jpeg)
+
+    def monotonic() -> float:
+        return 20.0 if decode_started else 10.0
+
+    monkeypatch.setattr(camera_remote, "time", SimpleNamespace(monotonic=monotonic))
+    monkeypatch.setattr(camera_remote, "_decode_frame", decode_after_receipt)
+    stop = threading.Event()
+    stream = remote.monitor_frames(fps=10, stop_event=stop)
+    try:
+        payload = next(stream)
+        assert payload["received_monotonic"] == 10.0
+        assert payload["capture_fps"] == 15.0
+        assert payload["negotiated_fps"] == 30.0
+    finally:
+        stop.set()
+        stream.close()
+        server.stop()
+        thread.join(timeout=1)
 
 
 def test_raw_monitor_rejects_bad_authentication_and_invalid_profiles(monkeypatch) -> None:
