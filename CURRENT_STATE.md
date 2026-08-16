@@ -21,14 +21,17 @@ than executes a program, and the replacement must complete its own exact
 Preview. Focused offscreen Qt acceptance and rejection tests verify modality,
 blocked parent interaction, guarded handoff, Preview dismissal, STOP access,
 stale rejection, bypass removal, Start Here non-execution, deferred rendering,
-and unfinished-close invalidation. This workflow has not been physically
-verified with a controller or laser. Focused verification passed 333 tests:
+and unfinished-close invalidation. The mandatory exact-Preview execution gate
+and its **START JOB** handoff were physically verified on 2026-08-16 through the
+real Windows-laptop -> Raspberry-Pi -> controller/laser path described below.
+Focused verification passed 333 tests:
 15 exact-Preview tests, 57 desktop job tests, 49 compact-panel/layout/template/
 runbook tests, 44 Machine Setup tests, and 168 core machine safety tests.
 
-On 2026-08-16, a real powered job completed its streamed cutting G-code, but
-automatic post-job Home / park did not finish and E3 remained in the running
-state. A subsequent manual Home / park request was correctly rejected with
+Earlier on 2026-08-16, a real powered job completed its streamed cutting
+G-code, but automatic post-job Home / park did not finish and E3 remained in
+the running state. A subsequent manual Home / park request was correctly
+rejected with
 `Cannot move to the photography position while a job is running` because the
 completion worker still owned the machine. Ordinary Home / park already handled
 this controller's missing terminal `$H` acknowledgement by requiring realtime
@@ -39,9 +42,16 @@ acceptance state machine while retaining their distinct command-lock and
 running-job/STOP ownership. Focused tests verify normal `ok`, each accepted
 active-to-Idle transition, idle-only and malformed evidence, alarm/error,
 disconnect, timeout, STOP cancellation, park/release ordering, and terminal job
-publication. The correction is automated-test verified but **PHYSICALLY
-UNVERIFIED** until another real powered job completes Home, park, motion drain,
-and motor release.
+publication. After that correction, the operator completed a physical acceptance
+run on the same Windows-laptop -> Raspberry-Pi -> real-controller/laser rig:
+**Generate -> modal exact Preview -> START JOB -> powered cut -> automatic Home
+-> configured photography-position park -> motor release -> E3 Complete**. The
+previous stuck `job.running=True` result did not recur. This physically verifies
+the mandatory exact-Preview execution gate, the post-job GRBL homing correction,
+and successful powered-job progression through Home, park, motor release, and
+terminal Complete on this rig. It is not a safety certification and does not
+physically verify STOP, alarm, error, timeout, disconnect, or other failure
+paths; those remain automated-test evidence unless separately recorded.
 
 Physical Pi 3 B+/C920 validation showed that OpenCV raw mode is not viable:
 V4L2 negotiated MJPG at 1920×1080/30 fps, but `CAP_PROP_FORMAT=-1` was rejected
@@ -159,8 +169,9 @@ closed and requires reconnect. The bridge source and loopback coverage show
 that complete serial lines, including `ok`, are forwarded without filtering,
 but the physical session did not capture Pi-side raw serial traffic. Therefore
 the available evidence cannot distinguish a controller-omitted acknowledgement
-from a lower-level serial/bridge loss. Home / park and the configured park pose
-still require a new physical acceptance run with this correction.
+from a lower-level serial/bridge loss. The later 2026-08-16 powered-job
+acceptance run described above physically verified the corrected shared homing
+exchange and configured park pose in that successful completion path.
 
 Initial transport opening now receives one bounded retry only before this
 `MachineService` instance has established any trusted controller session.
@@ -183,8 +194,10 @@ compilation pass in that same run. Local Linux verification also includes 1,758
 repository-wide tests, 1,371 portable tests without PySide6, and the focused
 network tests. The camera mode, bridge authentication, and controller command
 delivery are now physically bring-up verified as described above. Network-loss
-cleanup, corrected homing completion, parking, calibration repeatability, and
-powered operation remain physically unverified.
+cleanup and calibration repeatability remain physically unverified. Corrected
+post-job homing, photography parking, motor release, and powered completion were
+physically exercised in the specific successful 2026-08-16 acceptance run; the
+unexercised failure paths retain automated-test evidence only.
 
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and
@@ -848,9 +861,10 @@ and the generated `M4 S100` job rule out the previously suspected stale process
 or disabled completion setting. The prior 3-second job acknowledgement timeout
 could expire while a synchronized final `M5` drained motion, and `$H` had no
 explicit pre-home planner barrier; test doubles reproduce both paths and their
-fixes. The exact physical controller error was not captured, so post-job
-homing, parking, and explicit release still require a no-power hardware recheck
-before being recorded as physically verified.
+fixes. The exact 2026-08-08 controller error was not captured. The later
+2026-08-16 end-to-end powered acceptance run physically verified post-job
+homing, photography parking, explicit release, and terminal Complete on this
+rig, while failure-path behavior remains automated-test evidence only.
 
 The final MachineService boundary now rejects non-exact backend and boolean
 hardware/motion gates, non-finite or excessive feeds, persistent normal
@@ -1172,8 +1186,10 @@ machine program preflight.
   large-vector planner fallback,
   guarded Start Here rebuilding, PNG rendering, and separation of prepared
   maximum power from controller progress. The complete dialog was also rendered
-  and visually inspected offscreen at 1120 × 760. Interactive desktop use and
-  real-hardware execution of this Preview revision remain unverified.
+  and visually inspected offscreen at 1120 × 760. The mandatory exact-Preview
+  -> **START JOB** execution gate was physically verified on the real hardware
+  path on 2026-08-16; broader interactive Preview controls and rejection paths
+  retain their existing automated or offscreen evidence unless separately noted.
 - The icon-only Job toolbar now renders Preview as an original monitor/toolpath
   glyph rather than falling back to the action text. The glyph was rendered and
   visually inspected at high resolution in addition to its Qt mapping test.
