@@ -1504,7 +1504,7 @@ class MachineService:
                 # From this point the controller may accept motion.  Do not
                 # expose the old position during the command/ACK window.
                 self._jog_position_mm = None
-            execute(f"G0 X{target_x:.3f} Y{target_y:.3f} F{feed:.3f}")
+            execute(f"G1 X{target_x:.3f} Y{target_y:.3f} F{feed:.3f}")
             idle_responses = self._wait_for_motion_complete(
                 timeout=120.0,
                 expected_stop_epoch=operation_stop_epoch,

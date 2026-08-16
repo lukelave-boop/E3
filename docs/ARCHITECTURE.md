@@ -454,8 +454,9 @@ execution authority.
 - restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset;
 - validates every destination against the guarded machine rectangle, or the
   exact configured convex polygon carried by a support-bound preflight;
-- exposes incremental desktop jogging only as absolute, laser-off moves from a
-  Home / park-established position; jogs deliberately bypass project/work-area
+- exposes incremental desktop jogging only as absolute, feed-controlled `G1`
+  laser-off moves from a Home / park-established position; jogs deliberately
+  bypass project/work-area
   geometry for physical limit measurement and invalidate their tracked position
   after STOP, disconnect, jobs, or motor release;
 - validates offset-corrected controller destinations as well as uncorrected

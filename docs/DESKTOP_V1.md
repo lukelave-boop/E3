@@ -310,10 +310,11 @@ The desktop shell does not relax the existing machine controls:
 The Machine panel provides separately tested laser-off incremental jogging.
 Home / park must first establish the current XY position; every button press is
 converted to an absolute move, begins with `M5`, uses an explicit bounded travel
-feed, and intentionally does not apply the configured work-area rectangle so
-the operator can measure the actual travel limits. STOP, disconnect, jobs, and
-motor release invalidate the jog position. Pause/resume remains disabled until
-the Falcon controller's realtime behavior has been physically verified.
+feed on `G1` motion, and intentionally does not apply the configured work-area
+rectangle so the operator can measure the actual travel limits. STOP,
+disconnect, jobs, and motor release invalidate the jog position. Pause/resume
+remains disabled until the Falcon controller's realtime behavior has been
+physically verified.
 
 ## Validation performed for this milestone
 

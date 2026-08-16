@@ -1,5 +1,9 @@
 # Changelog
 
+- Desktop jog moves now use feed-controlled, laser-off `G1` motion so the Jog
+  panel speed governs physical GRBL movement; absolute targeting, feed ceilings,
+  Home / park trust, STOP handling, and M5-before-motion remain unchanged.
+
 - Controller bring-up now retries one transient initial transport-open failure,
   while deterministic authentication/configuration failures and all uncertain
   established sessions remain manual-reconnect-only. GRBL Home / park can

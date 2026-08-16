@@ -1839,17 +1839,70 @@ def test_jog_uses_bounded_absolute_laser_off_moves(
             "M5",
             "G21",
             "G90",
-            "G0 X115.000 Y104.000 F700.000",
+            "G1 X115.000 Y104.000 F700.000",
             "G4 P0.01",
             "M5",
             "G21",
             "G90",
-            "G0 X114.900 Y104.200 F600.000",
+            "G1 X114.900 Y104.200 F600.000",
             "G4 P0.01",
         ]
         assert not any(command.startswith(("M3", "M4")) for command in transport.commands)
         assert transport.laser_on is False
         assert machine.status()["jog_position_mm"] == {"x": 114.9, "y": 104.2}
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize("feed", [20.0, 2000.0])
+def test_jog_uses_requested_feed_on_feed_controlled_motion(
+    monkeypatch: pytest.MonkeyPatch,
+    feed: float,
+) -> None:
+    class RecordingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            self.commands.append(line.strip().upper())
+            super().write_line(line)
+
+    transport = RecordingTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.SimulatedTransport",
+        lambda: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="simulator",
+            allow_motion=True,
+            photo_x=110.0,
+            photo_y=105.0,
+            max_travel_feed_mm_min=3000.0,
+        ),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    try:
+        machine.prepare_photo_position()
+        transport.commands.clear()
+
+        result = machine.jog(5.0, -2.0, feed)
+
+        assert transport.commands[:4] == [
+            "M5",
+            "G21",
+            "G90",
+            f"G1 X115.000 Y103.000 F{feed:.3f}",
+        ]
+        assert not any(command.startswith("G0 ") for command in transport.commands)
+        assert not any(command.startswith(("M3", "M4")) for command in transport.commands)
+        assert transport.laser_on is False
+        assert result["position"] == {"x": 115.0, "y": 103.0}
+        assert result["feed_mm_min"] == feed
+        assert machine.status()["jog_position_mm"] == {"x": 115.0, "y": 103.0}
     finally:
         machine.disconnect()
 
@@ -1896,7 +1949,7 @@ def test_serial_grbl_jog_rechecks_homed_coordinate_state(
             "M5",
             "G21",
             "G90",
-            "G0 X111.000 Y105.000 F500.000",
+            "G1 X111.000 Y105.000 F500.000",
             "G4 P0.01",
         ]
         assert machine.status()["jog_position_mm"] == {"x": 111.0, "y": 105.0}
@@ -1979,7 +2032,7 @@ def test_stop_during_jog_invalidates_position_and_prevents_completion(
         def write_line(self, line: str) -> None:
             command = line.strip().upper()
             self.commands.append(command)
-            if command == "G0 X111.000 Y105.000 F500.000":
+            if command == "G1 X111.000 Y105.000 F500.000":
                 self.jog_written.set()
                 return
             super().write_line(line)
@@ -2023,7 +2076,7 @@ def test_stop_during_jog_invalidates_position_and_prevents_completion(
         "M5",
         "G21",
         "G90",
-        "G0 X111.000 Y105.000 F500.000",
+        "G1 X111.000 Y105.000 F500.000",
         "M5",
     ]
     status = machine.status()
@@ -2483,7 +2536,7 @@ def test_arm_waits_for_an_inflight_jog_command() -> None:
     release_jog_write = threading.Event()
 
     def blocked_write_line(line: str) -> None:
-        expected = f"G0 X{target_x:.3f} Y{target_y:.3f}"
+        expected = f"G1 X{target_x:.3f} Y{target_y:.3f}"
         if line.strip().upper().startswith(expected):
             jog_write_entered.set()
             assert release_jog_write.wait(timeout=2.0)
