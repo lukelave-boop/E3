@@ -67,7 +67,7 @@ jobs:
         env:
           GITHUB_SHA: ${{ github.sha }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: ./packaging/build_linux_appimage.sh
+        run: bash ./packaging/build_linux_appimage.sh
       - uses: actions/upload-artifact@v7
         with:
           name: e3-linux-update
