@@ -7,6 +7,17 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
+Physical reconnect after the software STOP test found the controller alive but
+alarm-locked: settings queries succeeded while connection normalization's `M5`
+was rejected with GRBL `error:9`. Connect now shares Home / park's narrow
+pre-home recovery: only this exact consumed rejection, and only with mandatory
+Home / park configured, permits `$X` followed by a second acknowledged `M5`.
+The connection remains HOME REQUIRED with no coordinate or jog reference, and
+Connect never homes or moves automatically. Other errors, alarms, unlock or
+second-`M5` failures, disconnects, and timeouts fail closed. This correction is
+automated-test verified but awaits physical reconnect and Home / park
+validation on the controller.
+
 Physical jog validation found that the requested feed was emitted on `G0`, so
 GRBL used its configured rapid positioning rate and the Jog panel's speed field
 did not control the observed motion. Guarded jogging now retains its trusted
@@ -49,7 +60,7 @@ loopback tests and Python bytecode compilation pass in an isolated harness. The
 restored GitHub Actions matrix passes on Ubuntu with Python 3.10, 3.11, and
 3.12, and on Windows with Python 3.10 and 3.12; the Python 3.12 jobs include the
 desktop extras and offscreen Qt suite. Ruff, dependency checks, and bytecode
-compilation pass in that same run. Local Linux verification also includes 1,749
+compilation pass in that same run. Local Linux verification also includes 1,758
 repository-wide tests, 1,371 portable tests without PySide6, and the focused
 network tests. The camera mode, bridge authentication, and controller command
 delivery are now physically bring-up verified as described above. Network-loss

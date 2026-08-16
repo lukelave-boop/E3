@@ -34,6 +34,13 @@ transport reports the failure to `MachineService`; the existing reconnect-only
 state invalidates the coordinate reference and requires the normal connection
 and Home / park sequence before later motion or arming.
 
+After a STOP/reset, a GRBL-derived controller can remain alarm-locked while the
+bridge and settings queries are healthy. During connection normalization only,
+an exact terminal `error:9` rejection of `M5` may be recovered with `$X` and a
+second acknowledged `M5`, and only when mandatory Home / park is configured.
+Connect does not home or move and remains HOME REQUIRED. Any other rejection,
+alarm, timeout, disconnect, failed unlock, or failed second `M5` fails closed.
+
 Before a `MachineService` instance has ever established a trusted controller
 session, a transient transport-open failure is retried exactly once after the
 failed transport is closed and a short delay. Invalid settings, unsupported

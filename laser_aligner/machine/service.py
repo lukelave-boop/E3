@@ -7,6 +7,7 @@ import re
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
@@ -807,6 +808,42 @@ class MachineService:
                 return int(match.group(1))
         return None
 
+    @staticmethod
+    def _is_exact_grbl_locked_error(error: BaseException) -> bool:
+        """Return whether a consumed terminal response was exactly GRBL error:9."""
+
+        current: BaseException | None = error
+        while current is not None:
+            if isinstance(current, _ControllerCommandRejected):
+                return str(current).strip().lower() == "error:9"
+            current = current.__cause__
+        return False
+
+    def _laser_off_with_pre_home_grbl_unlock(
+        self,
+        execute: Callable[[str], list[str]],
+        *,
+        context: str,
+    ) -> None:
+        """Require M5, narrowly unlocking an exact GRBL pre-home alarm lock."""
+
+        try:
+            execute("M5")
+        except MachineError as exc:
+            if not (
+                self._protocol == "grbl"
+                and self.settings.home_before_photo
+                and self._is_exact_grbl_locked_error(exc)
+            ):
+                raise
+            self._append_log(
+                "INFO",
+                f"M5 was blocked by the GRBL alarm lock during {context}; "
+                "unlocking before mandatory Home / park",
+            )
+            execute("$X")
+            execute("M5")
+
     def _normalize_and_release_grbl_after_connect(self) -> None:
         """Normalize a newly connected controller without resetting it."""
 
@@ -826,7 +863,13 @@ class MachineService:
         # Some controllers audibly announce that reset. M5 plus restoration of
         # the configured finite idle delay is sufficient to clear laser and
         # stale $1=255 state without disturbing the controller session.
-        self.send_command("M5", timeout=timeout, _internal_motion=True)
+        def execute(command: str) -> list[str]:
+            return self.send_command(command, timeout=timeout, _internal_motion=True)
+
+        self._laser_off_with_pre_home_grbl_unlock(
+            execute,
+            context="connection normalization",
+        )
         if current == 255 or settings_error is not None:
             self.send_command(
                 f"$1={normal}",
@@ -1284,7 +1327,7 @@ class MachineService:
                 if self._stop_epoch != operation_stop_epoch:
                     raise MachineError("Home / park was cancelled by software STOP")
 
-        def execute(command: str, timeout: float | None = None) -> None:
+        def execute(command: str, timeout: float | None = None) -> list[str]:
             acknowledgement_timeout = (
                 max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout)
                 if timeout is None
@@ -1297,29 +1340,16 @@ class MachineService:
                 _expected_stop_epoch=operation_stop_epoch,
             )
             transcript.append({"command": command, "responses": responses})
+            return responses
 
         self._coordinate_reference_ready = self.settings.backend == "simulator"
         self._coordinate_state_reference = None
         self._jog_position_mm = None
         try:
-            try:
-                execute("M5")
-            except MachineError as exc:
-                # Standard GRBL wakes from $SLP/reset in alarm state and rejects
-                # even M5 with error:9. Unlock only this exact pre-home case;
-                # position remains invalid and the mandatory $H follows.
-                if not (
-                    self._protocol == "grbl"
-                    and self.settings.home_before_photo
-                    and "error:9" in str(exc).lower()
-                ):
-                    raise
-                self._append_log(
-                    "INFO",
-                    "M5 was blocked by the post-sleep alarm; unlocking before mandatory homing",
-                )
-                execute("$X")
-                execute("M5")
+            self._laser_off_with_pre_home_grbl_unlock(
+                execute,
+                context="Home / park",
+            )
             if self.settings.home_before_photo:
                 if self._protocol == "grbl":
                     homing_responses = self._execute_grbl_homing_locked(

@@ -480,8 +480,13 @@ Zero-power jobs and stop, failure, emergency, or disconnect paths do not request
 completion motion. Controller reset, reconnect, emergency stop, motor release,
 or job failure invalidates the session reference. Simulation does not require a
 hardware homing preflight. Connection status remains non-ready throughout
-protocol detection and GRBL startup cleanup. Emergency stop intentionally
-bypasses ordinary operation serialization.
+protocol detection and GRBL startup cleanup. GRBL startup cleanup ordinarily
+requires an acknowledged `M5`; only the exact consumed alarm-lock rejection
+`error:9`, with mandatory Home / park configured, permits `$X` followed by a
+second required `M5`. Connect performs no homing or motion and leaves coordinate
+state untrusted. Every other rejection or ambiguous exchange fails the
+connection. Emergency stop intentionally bypasses ordinary operation
+serialization.
 
 This is an accidental-command boundary, not functional safety.
 

@@ -12,7 +12,7 @@ from laser_aligner.errors import (
     SafetyError,
     TransientConnectionError,
 )
-from laser_aligner.machine.service import MachineService
+from laser_aligner.machine.service import MachineService, _ControllerCommandRejected
 from laser_aligner.machine.simulator import SimulatedTransport
 
 
@@ -2269,6 +2269,188 @@ def test_serial_connect_explicitly_releases_motors_with_normal_idle_delay(
         machine.disconnect()
 
 
+def test_serial_connect_recovers_exact_grbl_alarm_lock_but_still_requires_home(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class AlarmLockedTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+            self.m5_count = 0
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            self.commands.append(command)
+            if command == "M5":
+                self.m5_count += 1
+                if self.m5_count == 1:
+                    self._queue.put("error:9")
+                    return
+            if command == "$X":
+                self._queue.put("ok")
+                return
+            super().write_line(line)
+
+    transport = AlarmLockedTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda _port, _baudrate: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=True,
+            controller_startup_delay=0.0,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    status = machine.connect()
+
+    assert transport.commands[:4] == ["$$", "M5", "$X", "M5"]
+    assert not any(
+        command == "$H" or command.startswith(("G0 ", "G1 ", "G28"))
+        for command in transport.commands
+    )
+    assert status["connected"] is True
+    assert status["coordinate_reference_ready"] is False
+    assert status["jog_position_mm"] is None
+    assert status["jog_ready"] is False
+    with pytest.raises(SafetyError, match="Home / park"):
+        machine.jog(1.0, 0.0, 100.0)
+    with pytest.raises(SafetyError, match="Home / park"):
+        machine.arm(machine.ARM_PHRASE)
+    motion = machine.preflight_program("G21\nG90\nM5\nG1 X1 Y1 F100\nM5\n")
+    with pytest.raises(SafetyError, match="Home / park"):
+        machine.start_validated_program(motion, "home-required.gcode")
+    machine.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("first_m5", "unlock", "second_m5", "home_before_photo", "message"),
+    [
+        ("error:9", "error:2", "ok", True, r"\$X.*error:2"),
+        ("error:9", "ok", "error:8", True, "M5.*error:8"),
+        ("error:8", "ok", "ok", True, "M5.*error:8"),
+        ("error:90", "ok", "ok", True, "M5.*error:90"),
+        ("ALARM:1", "ok", "ok", True, "ALARM:1"),
+        ("error:9", "ok", "ok", False, "M5.*error:9"),
+    ],
+)
+def test_serial_connect_alarm_unlock_rejects_every_non_exact_or_failed_exchange(
+    monkeypatch: pytest.MonkeyPatch,
+    first_m5: str,
+    unlock: str,
+    second_m5: str,
+    home_before_photo: bool,
+    message: str,
+) -> None:
+    class RejectedNormalizationTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+            self.m5_count = 0
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            self.commands.append(command)
+            if command == "M5":
+                self.m5_count += 1
+                self._queue.put(first_m5 if self.m5_count == 1 else second_m5)
+                return
+            if command == "$X":
+                self._queue.put(unlock)
+                return
+            super().write_line(line)
+
+    transport = RejectedNormalizationTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda _port, _baudrate: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            home_before_photo=home_before_photo,
+            controller_startup_delay=0.0,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    with pytest.raises(MachineError, match=message):
+        machine.connect()
+
+    assert not machine.status()["connected"]
+    assert not machine.status()["coordinate_reference_ready"]
+    assert machine.status()["jog_position_mm"] is None
+    assert "$H" not in transport.commands
+    assert not any(command.startswith(("G0 ", "G1 ", "G28")) for command in transport.commands)
+    if first_m5.lower() == "error:9" and home_before_photo:
+        assert transport.commands[:3] == ["$$", "M5", "$X"]
+    else:
+        assert "$X" not in transport.commands
+
+
+@pytest.mark.parametrize("failure", ["timeout", "disconnect"])
+def test_serial_connect_alarm_unlock_rejects_ambiguous_first_m5_exchange(
+    monkeypatch: pytest.MonkeyPatch,
+    failure: str,
+) -> None:
+    class AmbiguousNormalizationTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+            self.fail_read = False
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            self.commands.append(command)
+            if command == "M5" and self.commands.count("M5") == 1:
+                self.fail_read = failure == "disconnect"
+                return
+            super().write_line(line)
+
+        def read_line(self, timeout: float = 1.0) -> str | None:
+            if self.fail_read:
+                self.fail_read = False
+                raise OSError("controller disconnected")
+            return super().read_line(timeout)
+
+    transport = AmbiguousNormalizationTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda _port, _baudrate: transport,
+    )
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._PHOTO_COMMAND_ACK_TIMEOUT_SECONDS",
+        0.01,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            home_before_photo=True,
+            controller_startup_delay=0.0,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    with pytest.raises(MachineError, match="M5"):
+        machine.connect()
+
+    assert not machine.status()["connected"]
+    assert not machine.status()["coordinate_reference_ready"]
+    assert machine.status()["jog_position_mm"] is None
+    assert "$X" not in transport.commands
+    assert "$H" not in transport.commands
+
+
 @pytest.mark.parametrize(
     ("responses", "expected"),
     [
@@ -2820,7 +3002,8 @@ def test_home_park_recovers_only_post_sleep_m5_alarm(
         commands.append(command)
         if command == "M5" and first_m5:
             first_m5 = False
-            raise MachineError("Command 'M5' failed: error:9")
+            rejection = _ControllerCommandRejected("error:9")
+            raise MachineError("Command 'M5' failed: error:9") from rejection
         return ["ok"]
 
     monkeypatch.setattr(machine, "send_command", record_command)

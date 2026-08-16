@@ -1,5 +1,11 @@
 # Changelog
 
+- GRBL connection normalization can now recover the exact post-reset alarm-lock
+  rejection `error:9` with `$X` followed by an acknowledged `M5`, but only when
+  mandatory Home / park is configured. Connect performs no motion and leaves
+  coordinates untrusted until Home / park succeeds; every other rejection or
+  ambiguous exchange still fails the connection.
+
 - Desktop jog moves now use feed-controlled, laser-off `G1` motion so the Jog
   panel speed governs physical GRBL movement; absolute targeting, feed ceilings,
   Home / park trust, STOP handling, and M5-before-motion remain unchanged.

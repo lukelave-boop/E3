@@ -138,9 +138,12 @@ rejected before controller output, and rejection does not suppress cleanup
 Ordinary serial operations own their complete command/ack exchange, and
 multi-command Home / park and camera-hold sequences cannot interleave with
 another ordinary controller operation. Connect is not reported ready until its
-controller cleanup finishes. Software stop remains outside this serialization
-so it can still request interruption immediately. These are protocol-integrity
-guards, not emergency-stop or functional-safety mechanisms.
+controller cleanup finishes. A GRBL Connect may unlock only an exact consumed
+`error:9` rejection of its laser-off command, only when Home / park is mandatory,
+and must then receive acknowledgement for a second `M5`. It performs no motion
+and does not establish coordinate trust. Software stop remains outside this
+serialization so it can still request interruption immediately. These are
+protocol-integrity guards, not emergency-stop or functional-safety mechanisms.
 
 Fine registration may apply only a reviewed, multi-point global camera-map
 translation no larger than 5 mm. Low-confidence, excessive, or
