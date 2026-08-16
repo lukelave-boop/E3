@@ -75,6 +75,7 @@ def main(argv: list[str] | None = None) -> int:
     from .dialogs import install_modal_dialog_first_paint_fix
     from .main_window import E3MainWindow
     from .theme import apply_dark_theme
+    from .update_ui import install_update_menu
 
     application = QtWidgets.QApplication([sys.argv[0]])
     configure_application_identity(application)
@@ -100,6 +101,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     window = E3MainWindow(runtime)
+    install_update_menu(window)
     application.aboutToQuit.connect(window.controller.stop)
     window.show()
     return int(application.exec())

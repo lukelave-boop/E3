@@ -1,0 +1,113 @@
+name: Publish E3 development update
+
+on:
+  push:
+    branches:
+      - fix/live-monitor-display-throughput
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: e3-development-update
+  cancel-in-progress: true
+
+env:
+  E3_UPDATE_CHANNEL: development
+  E3_RELEASE_TAG: e3-development
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install E3 desktop dependencies
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\python.exe -m pip install -e ".[desktop]"
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+      - name: Build Windows update installer
+        shell: pwsh
+        run: |
+          .\packaging\build_windows.ps1 `
+            -Revision "${{ github.sha }}" `
+            -Channel "$env:E3_UPDATE_CHANNEL" `
+            -Repository "${{ github.repository }}" `
+            -ReleaseTag "$env:E3_RELEASE_TAG" `
+            -OutputBaseFilename "E3-Setup"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e3-windows-update
+          path: installer-dist/E3-Setup.exe
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install E3 desktop dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e ".[desktop]"
+      - name: Build Linux AppImage
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: ./packaging/build_linux_appimage.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: e3-linux-update
+          path: E3-x86_64.AppImage
+          if-no-files-found: error
+
+  publish:
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install package metadata
+        run: python -m pip install -e .
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+      - name: Create update manifest
+        run: |
+          python packaging/make_update_manifest.py \
+            --output release/update-manifest.json \
+            --revision "${{ github.sha }}" \
+            --channel "$E3_UPDATE_CHANNEL" \
+            --repository "${{ github.repository }}" \
+            --release-tag "$E3_RELEASE_TAG" \
+            --windows release/E3-Setup.exe \
+            --linux release/E3-x86_64.AppImage
+      - name: Replace development release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete "$E3_RELEASE_TAG" --cleanup-tag --yes || true
+          gh release create "$E3_RELEASE_TAG" \
+            release/E3-Setup.exe \
+            release/E3-x86_64.AppImage \
+            release/update-manifest.json \
+            --target "${{ github.sha }}" \
+            --title "E3 Development ${{ github.sha }}" \
+            --notes "Automated build from ${{ github.ref_name }} at ${{ github.sha }}." \
+            --prerelease

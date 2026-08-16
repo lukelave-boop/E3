@@ -30,3 +30,12 @@ pip-wheel-metadata/
 /label-sheet-test.png
 /trace-preview.png
 /trace-result.json
+config/network-local.json
+installer-dist/
+build-info.json
+AppDir/
+E3-x86_64.AppImage
+appimagetool-*.AppImage
+packaging/machine-seed/
+packaging/machine-bridge-token.txt
+packaging/*_generated.py
