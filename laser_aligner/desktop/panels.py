@@ -2062,6 +2062,7 @@ class TracePanel(QtWidgets.QWidget):
 
 class MachinePanel(QtWidgets.QWidget):
     connectRequested = QtCore.Signal()
+    reconnectRequested = QtCore.Signal()
     disconnectRequested = QtCore.Signal()
     parkRequested = QtCore.Signal()
     stopRequested = QtCore.Signal()
@@ -2145,7 +2146,7 @@ class MachinePanel(QtWidgets.QWidget):
         layout.addLayout(safety_row)
         layout.addStretch(1)
 
-        self.connect_button.clicked.connect(self.connectRequested)
+        self.connect_button.clicked.connect(self._connect_clicked)
         self.disconnect_button.clicked.connect(self.disconnectRequested)
         self.park_button.clicked.connect(self.parkRequested)
         self.stop_button.clicked.connect(self.stopRequested)
@@ -2167,6 +2168,12 @@ class MachinePanel(QtWidgets.QWidget):
             y_direction * step,
             self.jog_speed.value(),
         )
+
+    def _connect_clicked(self) -> None:
+        if self._connected and self._reconnect_required:
+            self.reconnectRequested.emit()
+        else:
+            self.connectRequested.emit()
 
     def set_status(self, status: dict[str, Any] | None) -> None:
         if not status:
@@ -2224,7 +2231,16 @@ class MachinePanel(QtWidgets.QWidget):
         self._sync_action_buttons()
 
     def _sync_action_buttons(self) -> None:
-        self.connect_button.setEnabled(not self._busy and not self._connected)
+        reconnect_available = self._connected and self._reconnect_required
+        self.connect_button.setText("Reconnect" if reconnect_available else "Connect")
+        self.connect_button.setEnabled(
+            not self._busy and (not self._connected or reconnect_available)
+        )
+        self.connect_button.setToolTip(
+            "Explicitly disconnect this untrusted session and connect again; Home / park will still be required"
+            if reconnect_available
+            else "Connect to the configured controller"
+        )
         self.disconnect_button.setEnabled(not self._busy and self._connected)
         self.park_button.setEnabled(
             not self._busy

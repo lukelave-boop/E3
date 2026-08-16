@@ -186,6 +186,14 @@ rejected consistently because its Qt decode plugin is not portable.
   program when **Start** submits it; the desktop does not show a confirmation
   or typed-phrase dialog
 
+After software STOP or another uncertain established-session failure, the
+Machine panel changes its normal Connect control to an explicit **Reconnect**
+action. It performs one operator-requested disconnect/connect sequence and then
+leaves the machine HOME REQUIRED. It does not automatically reconnect, Home,
+move, resume, or arm. Desktop modal message boxes use a shared queued first-show
+polish and repaint so Linux compositors receive complete dark-theme contents on
+the initial exposure without blocking the GUI event loop.
+
 Native Machine Setup exposes raw camera preview and controls, synthetic scenes,
 checkerboard capture/solve, a no-prior-map keyed 5×5 base job with automatic
 rotation/reflection resolution and transactional application, manual and

@@ -292,10 +292,17 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
         }
     )
     assert "RECONNECT REQUIRED" in panel.state_label.text()
+    assert panel.connect_button.text() == "Reconnect"
+    assert panel.connect_button.isEnabled()
     assert panel.disconnect_button.isEnabled()
     assert not panel.park_button.isEnabled()
     assert not jog_group.isEnabled()
     assert "disconnect and reconnect" in panel.park_button.toolTip().lower()
+
+    reconnect_requests: list[bool] = []
+    panel.reconnectRequested.connect(lambda: reconnect_requests.append(True))
+    panel.connect_button.click()
+    assert reconnect_requests == [True]
 
     panel.set_status(
         {
@@ -306,6 +313,8 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
             "job": {},
         }
     )
+    assert panel.connect_button.text() == "Connect"
+    assert not panel.connect_button.isEnabled()
 
     panel.set_busy(True)
     assert not panel.connect_button.isEnabled()

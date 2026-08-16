@@ -2226,6 +2226,28 @@ class DesktopController(QtCore.QObject):
             label="Controller connection",
         )
 
+    def reconnect_machine(self) -> None:
+        """Explicitly replace an untrusted session without restoring motion trust."""
+
+        def reconnect() -> None:
+            machine = self.runtime.context.machine
+            machine.disconnect()
+            try:
+                machine.connect()
+            except Exception:
+                # connect() already performs cleanup, but make the final UI state
+                # unambiguously disconnected even for unusual transport failures.
+                machine.disconnect()
+                raise
+
+        self._run(
+            reconnect,
+            on_success=lambda _: self._machine_changed(
+                "Controller reconnected; Home / park required"
+            ),
+            label="Controller reconnection",
+        )
+
     def disconnect_machine(self) -> None:
         self._run(
             self.runtime.context.machine.disconnect,

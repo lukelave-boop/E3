@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Added an explicit Reconnect action for untrusted controller sessions; the
+  replacement connection remains HOME REQUIRED and never recovers motion or
+  laser authority automatically.
+- Added one centralized, queued first-show repaint for modal message boxes to
+  avoid black client areas on affected Linux Qt compositor/backing-store paths.
+
 - GitHub Actions now separates fast development feedback from final compatibility
   validation. Development branches run one complete Linux Python 3.12 desktop
   suite with four bounded workers alongside parallel Ruff and dependency/

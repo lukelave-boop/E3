@@ -7,6 +7,19 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
+The desktop now presents an explicit **Reconnect** action when an established
+controller session is marked RECONNECT REQUIRED. This operator action performs
+one disconnect followed by the ordinary connection path; it never retries in
+the background, homes, moves, resumes, or arms. A successful replacement
+session remains HOME REQUIRED with coordinate and jog references invalid. A
+failed replacement remains safely disconnected. Native modal message boxes
+also receive one queued polish/update/repaint immediately after their first
+show event. This application-wide, non-blocking workaround addresses the
+observed Linux compositor/backing-store first-exposure failure without changing
+modality or the dark theme; focused offscreen Qt coverage verifies visible
+content, queued repaint execution, modal results, and parent usability. Both UI
+corrections are automated-test verified and await physical Linux validation.
+
 CI now has two validation tiers. Development pushes under `fix/**`,
 `feature/**`, `agent/**`, and `cleanup/**` run Ruff, dependency/bytecode checks,
 and one complete desktop-enabled Ubuntu Python 3.12 suite in parallel. The test

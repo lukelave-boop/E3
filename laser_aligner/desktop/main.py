@@ -72,6 +72,7 @@ def main(argv: list[str] | None = None) -> int:
 
     QtCore, QtGui, QtWidgets = require_qt()
     from ..core import CoreRuntime
+    from .dialogs import install_modal_dialog_first_paint_fix
     from .main_window import E3MainWindow
     from .theme import apply_dark_theme
 
@@ -80,6 +81,7 @@ def main(argv: list[str] | None = None) -> int:
     application.setOrganizationName("E3")
     application.setOrganizationDomain("local.e3-positioning-system")
     apply_dark_theme(application)
+    install_modal_dialog_first_paint_fix(application)
 
     config = arguments.config or _default_config()
     hardware_enabled = bool(arguments.hardware and not arguments.safe)

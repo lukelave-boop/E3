@@ -1078,6 +1078,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
         self.machine_panel.connectRequested.connect(self.controller.connect_machine)
+        self.machine_panel.reconnectRequested.connect(self.controller.reconnect_machine)
         self.machine_panel.disconnectRequested.connect(self.controller.disconnect_machine)
         self.machine_panel.parkRequested.connect(self.controller.park_at_camera_pose)
         self.machine_panel.stopRequested.connect(self.controller.emergency_stop)

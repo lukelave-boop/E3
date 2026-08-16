@@ -655,7 +655,7 @@ def test_machine_setup_surfaces_controller_reconnect_requirement(
             "RECONNECT REQUIRED"
         )
         assert "untrusted" in dialog.machine_connection_status.text().lower()
-        assert dialog.machine_connection_button.text() == "Disconnect machine"
+        assert dialog.machine_connection_button.text() == "Reconnect machine"
     finally:
         dialog.close()
         runtime.stop()

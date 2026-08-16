@@ -2112,7 +2112,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
         else:
             machine_status = f"Machine offline · {port or 'no active connection'}"
         self.machine_connection_status.setText(machine_status)
-        self.machine_connection_button.setText("Disconnect machine" if connected else "Connect machine")
+        self.machine_connection_button.setText(
+            "Reconnect machine"
+            if connected and reconnect_required
+            else "Disconnect machine" if connected else "Connect machine"
+        )
         camera = asdict(self.context.camera.status())
         observed_fps = float(camera.get("fps") or 0.0)
         negotiated_fps = float(camera.get("negotiated_fps") or 0.0)
@@ -2169,10 +2173,25 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 self.points.setItem(row, column, QtWidgets.QTableWidgetItem(str(value)))
 
     def toggle_machine_connection(self) -> None:
-        connected = bool(self.context.machine.status().get("connected"))
+        status = self.context.machine.status()
+        connected = bool(status.get("connected"))
+        reconnect_required = bool(status.get("controller_reconnect_required"))
+
+        def change_connection() -> Any:
+            if connected and reconnect_required:
+                self.context.machine.disconnect()
+                try:
+                    return self.context.machine.connect()
+                except Exception:
+                    self.context.machine.disconnect()
+                    raise
+            if connected:
+                return self.context.machine.disconnect()
+            return self.context.machine.connect()
+
         result = self._message(
             "Machine connection",
-            self.context.machine.disconnect if connected else self.context.machine.connect,
+            change_connection,
         )
         if result is not None or connected:
             self.refresh_all()
