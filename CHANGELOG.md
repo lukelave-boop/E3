@@ -1,5 +1,12 @@
 # Changelog
 
+- GitHub Actions now separates fast development feedback from final compatibility
+  validation. Development branches run one complete Linux Python 3.12 desktop
+  suite with four bounded workers alongside parallel Ruff and dependency/
+  bytecode jobs; `main`, `desktop-v1`, their pull requests, and manual dispatch
+  retain the serial five-environment Ubuntu/Windows matrix. Major phases publish
+  elapsed timing summaries.
+
 - GRBL connection normalization can now recover the exact post-reset alarm-lock
   rejection `error:9` with `$X` followed by an acknowledged `M5`, but only when
   mandatory Home / park is configured. Connect performs no motion and leaves

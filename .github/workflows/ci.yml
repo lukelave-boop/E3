@@ -1,14 +1,14 @@
-name: CI
+name: Full Compatibility CI
 
 on:
   push:
     branches:
       - main
       - desktop-v1
-      - "cleanup/**"
-      - "feature/**"
-      - "agent/**"
   pull_request:
+    branches:
+      - main
+      - desktop-v1
   workflow_dispatch:
 
 permissions:
@@ -66,15 +66,21 @@ jobs:
       - if: runner.os == 'Linux' && matrix.desktop
         run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
 
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -e . -r requirements-dev.txt
+      - name: Upgrade pip
+        run: python tools/ci_timed.py "Upgrade pip" -- python -m pip install --upgrade pip
+      - name: Install base and test dependencies
+        run: python tools/ci_timed.py "Install base and test dependencies" -- python -m pip install -e . -r requirements-dev.txt
 
       - if: matrix.desktop
-        run: python -m pip install -e ".[desktop]"
+        name: Install desktop dependencies
+        run: python tools/ci_timed.py "Install desktop dependencies" -- python -m pip install -e ".[desktop]"
 
-      - run: python -m pip check
-      - run: python -m compileall -q laser_aligner
-      - run: python -m pytest -q
+      - name: Validate dependencies
+        run: python tools/ci_timed.py "Dependency validation" -- python -m pip check
+      - name: Compile Python sources
+        run: python tools/ci_timed.py "compileall" -- python -m compileall -q laser_aligner
+      - name: Run full compatibility tests
+        run: python tools/ci_timed.py "Full pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})" -- python -m pytest -q
 
   lint:
     runs-on: ubuntu-latest
@@ -95,6 +101,9 @@ jobs:
           cache: pip
           cache-dependency-path: requirements-dev.txt
 
-      - run: python -m pip install --upgrade pip
-      - run: python -m pip install -r requirements-dev.txt
-      - run: python -m ruff check .
+      - name: Upgrade pip
+        run: python tools/ci_timed.py "Upgrade pip (lint)" -- python -m pip install --upgrade pip
+      - name: Install lint dependencies
+        run: python tools/ci_timed.py "Install lint dependencies" -- python -m pip install -r requirements-dev.txt
+      - name: Run Ruff
+        run: python tools/ci_timed.py "Ruff" -- python -m ruff check .

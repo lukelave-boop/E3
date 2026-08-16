@@ -523,7 +523,12 @@ is currently Linux-only:
   with a clear simulator-only message.
 - Camera enumeration and controls use `/dev/video*`, V4L2, and `v4l2-ctl`.
 - Launch/install scripts and desktop integration are Linux shell assets.
-- CI currently runs Ubuntu only.
+- Fast Development CI runs the complete desktop-enabled suite on Ubuntu Python
+  3.12 with four bounded workers, in parallel with Ruff and dependency/bytecode
+  validation. Full Compatibility CI retains serial full-suite coverage on
+  Ubuntu Python 3.10/3.11/3.12 and Windows Python 3.10/3.12; it runs only for
+  `main`, `desktop-v1`, pull requests targeting those branches, or manual
+  dispatch.
 
 Platform implementations must remain lazy so unavailable hardware backends do
 not prevent the simulator or portable libraries from importing. See

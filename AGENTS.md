@@ -76,18 +76,38 @@ The current platform boundary and known blockers are recorded in
 1. Inspect the working tree and `CURRENT_STATE.md`.
 2. Make the smallest coherent change.
 3. Add or update focused tests.
-4. Run the platform-neutral suite on the active OS.
-5. Run platform-specific tests where that platform is available.
+4. For an ordinary localized change, run the directly affected focused tests,
+   Ruff on the affected code or repository as appropriate, and `compileall`.
+5. Push development branches and rely on Fast Development CI for the complete
+   representative Linux 3.12 desktop suite.
 6. Update `CURRENT_STATE.md` when verification, supported behavior, known gaps,
    platform status, or active working-tree work changes.
 7. Update the README, architecture, roadmap, and changelog when user-visible
    behavior changes.
+
+Do not run the complete local suite after every small iterative fix unless the
+change is broad or cross-cutting, focused tests expose unexpected regressions,
+the user explicitly requests it, or the branch is being prepared for a merge or
+release. Before merge or release, run the Full Compatibility CI tier. That tier
+retains the supported Windows/Linux and Python-version matrix.
 
 Do not commit captures, calibration photographs, logs, generated G-code, trace
 previews, or local configuration unless a task explicitly makes them curated
 fixtures.
 
 ## Verification commands
+
+For ordinary localized work, select the directly affected test files or test
+expression instead of defaulting to the complete suite:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_relevant_module.py
+.venv/bin/python -m ruff check .
+.venv/bin/python -m compileall -q laser_aligner
+```
+
+The complete local commands below are for broad changes, unexpected focused
+regressions, explicit user requests, and merge/release preparation.
 
 Linux:
 

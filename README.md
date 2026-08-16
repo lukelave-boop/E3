@@ -210,6 +210,15 @@ serial backend is selected; Windows serial hardware, V4L2 camera controls, and
 install/launch scripts are not implemented. Autosaves and material presets use
 a writable OS-native per-user data root.
 
+GitHub Actions has two validation tiers. Pushes to `fix/**`, `feature/**`,
+`agent/**`, and `cleanup/**` run Fast Development CI: Ruff, dependency and
+bytecode validation, and the complete Linux Python 3.12 desktop suite with four
+bounded pytest workers. Pushes to `main` or `desktop-v1`, pull requests targeting
+either branch, and manual dispatch run Full Compatibility CI across Ubuntu
+Python 3.10/3.11/3.12 and Windows Python 3.10/3.12, including desktop coverage
+on Python 3.12. The full compatibility jobs intentionally run pytest serially.
+Each major CI phase records its duration in the job summary.
+
 From an existing desktop-enabled virtual environment, launch the native UI in
 safe simulation mode:
 
@@ -299,7 +308,7 @@ tests/           unit and integration tests
 Linux:
 
 ```bash
-# Run all tests
+# Run all tests for broad changes or merge/release preparation
 .venv/bin/python -m pytest
 
 # Generate calibration targets

@@ -7,6 +7,17 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
+CI now has two validation tiers. Development pushes under `fix/**`,
+`feature/**`, `agent/**`, and `cleanup/**` run Ruff, dependency/bytecode checks,
+and one complete desktop-enabled Ubuntu Python 3.12 suite in parallel. The test
+job uses four bounded xdist workers; a local full-suite benchmark passed 1,758
+tests in 217.65 seconds wall-clock (pytest 212.71 seconds), versus the recent
+serial full-suite result of 422.43 seconds. Full Compatibility CI retains the
+serial five-environment Ubuntu/Windows and Python 3.10–3.12 matrix for pushes to
+`main`/`desktop-v1`, pull requests targeting either, and manual dispatch. Major
+phases publish timing summaries. Fast-CI and Full-CI workflow durations for
+this change remain to be measured on GitHub Actions.
+
 Physical reconnect after the software STOP test found the controller alive but
 alarm-locked: settings queries succeeded while connection normalization's `M5`
 was rejected with GRBL `error:9`. Connect now shares Home / park's narrow
