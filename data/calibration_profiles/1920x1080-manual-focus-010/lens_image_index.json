@@ -1,0 +1,576 @@
+{
+  "detector": {
+    "max_height": 360,
+    "max_width": 640,
+    "method": "bounded-checkerboard-preview",
+    "version": 2
+  },
+  "images": {
+    "lens-20260812-061228-011.png": {
+      "board_center": [
+        0.48315101861953735,
+        0.5167551040649414
+      ],
+      "board_coverage_percent": 22.88482747482605,
+      "content_sha256": "fee90cc89ea295f498b2b28f68735d828df413836738472a2c44005334ad7274",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536747582859428,
+      "name": "lens-20260812-061228-011.png",
+      "quality": {
+        "contrast_span": 224.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 143.50241319444444,
+        "luminance_p01": 7.0,
+        "luminance_p99": 231.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 964.9209981958071,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1576493,
+      "width": 1920
+    },
+    "lens-20260812-061237-969.png": {
+      "board_center": [
+        0.44366884231567383,
+        0.4999302625656128
+      ],
+      "board_coverage_percent": 22.992693696508244,
+      "content_sha256": "16eea1d1f6e425024133d889164e3a4db909db8073354ae6f97a575490e13208",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536757743516102,
+      "name": "lens-20260812-061237-969.png",
+      "quality": {
+        "contrast_span": 225.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 130.41489583333333,
+        "luminance_p01": 6.0,
+        "luminance_p99": 231.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1549.3102363826317,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1953363,
+      "width": 1920
+    },
+    "lens-20260812-061245-685.png": {
+      "board_center": [
+        0.44472599029541016,
+        0.6401090621948242
+      ],
+      "board_coverage_percent": 22.844777027067114,
+      "content_sha256": "a7634e8159bfe5b2aa88c79064365cd90ec0dd4932b8ed06dd98c8cc1f9ed837",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536765467767454,
+      "name": "lens-20260812-061245-685.png",
+      "quality": {
+        "contrast_span": 225.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 132.42700520833333,
+        "luminance_p01": 6.0,
+        "luminance_p99": 231.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 884.1698989599114,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1638088,
+      "width": 1920
+    },
+    "lens-20260812-061258-046.png": {
+      "board_center": [
+        0.4452466070652008,
+        0.34381788969039917
+      ],
+      "board_coverage_percent": 23.148199215599195,
+      "content_sha256": "dd07b714560e111427a3e8d70cdda8a1efaf97d476678d2cdb129079712244a0",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536777795774596,
+      "name": "lens-20260812-061258-046.png",
+      "quality": {
+        "contrast_span": 225.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 128.64657118055555,
+        "luminance_p01": 6.0,
+        "luminance_p99": 231.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 948.8448372350799,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1775980,
+      "width": 1920
+    },
+    "lens-20260812-061305-887.png": {
+      "board_center": [
+        0.577862024307251,
+        0.4992496371269226
+      ],
+      "board_coverage_percent": 22.799211828114974,
+      "content_sha256": "c83aa33f9bbcef3fdf3975702141242e9cca597d8af7a0c266b823ae095bbe8f",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536785663046194,
+      "name": "lens-20260812-061305-887.png",
+      "quality": {
+        "contrast_span": 225.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 113.138359375,
+        "luminance_p01": 5.0,
+        "luminance_p99": 230.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1102.3012056902144,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1649611,
+      "width": 1920
+    },
+    "lens-20260812-061353-424.png": {
+      "board_center": [
+        0.5640338659286499,
+        0.4738224148750305
+      ],
+      "board_coverage_percent": 29.384425947968566,
+      "content_sha256": "680f04e15cfc756c789565ea5f38312532df61bacc1b69f1491320909d6407d8",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536833195853142,
+      "name": "lens-20260812-061353-424.png",
+      "quality": {
+        "contrast_span": 230.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 140.59873697916666,
+        "luminance_p01": 6.0,
+        "luminance_p99": 236.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1000.1614610563366,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1430649,
+      "width": 1920
+    },
+    "lens-20260812-061410-838.png": {
+      "board_center": [
+        0.5377599596977234,
+        0.49777495861053467
+      ],
+      "board_coverage_percent": 25.361164023821857,
+      "content_sha256": "c104db806d1d599aaf2fa16043f21844357c1ba0da157c8695eaba637b82c420",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536850613201079,
+      "name": "lens-20260812-061410-838.png",
+      "quality": {
+        "contrast_span": 231.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 143.84673177083334,
+        "luminance_p01": 6.0,
+        "luminance_p99": 237.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1022.7033483076518,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1312357,
+      "width": 1920
+    },
+    "lens-20260812-061422-277.png": {
+      "board_center": [
+        0.5148791670799255,
+        0.4946492612361908
+      ],
+      "board_coverage_percent": 26.335435376002632,
+      "content_sha256": "0ac4ff7b1c0efa978b8f34b86c318004de75b911e3f7867c29462ba61e092c9d",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536862037446928,
+      "name": "lens-20260812-061422-277.png",
+      "quality": {
+        "contrast_span": 227.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 148.66118055555555,
+        "luminance_p01": 6.0,
+        "luminance_p99": 233.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1026.748733897268,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1352898,
+      "width": 1920
+    },
+    "lens-20260812-061438-519.png": {
+      "board_center": [
+        0.5244134664535522,
+        0.49452823400497437
+      ],
+      "board_coverage_percent": 25.192660234889726,
+      "content_sha256": "09e6fcd1c311dfd9ff40dc30db7fc18568ecf290a73824d3ee9a0a2e28030f19",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536878304124614,
+      "name": "lens-20260812-061438-519.png",
+      "quality": {
+        "contrast_span": 228.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 147.14719184027777,
+        "luminance_p01": 8.0,
+        "luminance_p99": 236.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 926.8564775137254,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1365990,
+      "width": 1920
+    },
+    "lens-20260812-061452-146.png": {
+      "board_center": [
+        0.4091920256614685,
+        0.464895635843277
+      ],
+      "board_coverage_percent": 26.25823233385429,
+      "content_sha256": "096f602f22ad00febc000a87a000f0bfa549a12cfe22af1d87ea014e496ec2dd",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536891918548897,
+      "name": "lens-20260812-061452-146.png",
+      "quality": {
+        "contrast_span": 221.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 141.96293836805555,
+        "luminance_p01": 14.0,
+        "luminance_p99": 235.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 974.9426281878518,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1519546,
+      "width": 1920
+    },
+    "lens-20260812-061509-141.png": {
+      "board_center": null,
+      "board_coverage_percent": 0.0,
+      "content_sha256": "89db539a5ede723ce8f6f508b0deeadd07f3e2e90d6e17b07e80e70913c617f2",
+      "corner_count": 0,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": false,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536908798809685,
+      "name": "lens-20260812-061509-141.png",
+      "quality": {
+        "contrast_span": 227.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 131.59438368055555,
+        "luminance_p01": 5.0,
+        "luminance_p99": 232.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1373.1233458562674,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1872466,
+      "width": 1920
+    },
+    "lens-20260812-061529-788.png": {
+      "board_center": [
+        0.4839158058166504,
+        0.5258952379226685
+      ],
+      "board_coverage_percent": 22.857065515036084,
+      "content_sha256": "fded50b5c1a4fa6885ef649fc28a0c637ad1f9885e4f09cc6d7c1d1e93de745d",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536929587234702,
+      "name": "lens-20260812-061529-788.png",
+      "quality": {
+        "contrast_span": 222.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 134.42543402777778,
+        "luminance_p01": 6.0,
+        "luminance_p99": 228.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1351.8028372238723,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1896373,
+      "width": 1920
+    },
+    "lens-20260812-061619-275.png": {
+      "board_center": [
+        0.37341001629829407,
+        0.5110050439834595
+      ],
+      "board_coverage_percent": 23.11102028037752,
+      "content_sha256": "a709ecd43b2593d4e1f19e8be25c22b2d88d55a5f0b92ccf3817feb28a8a6d22",
+      "corner_count": 54,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": true,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536978988060223,
+      "name": "lens-20260812-061619-275.png",
+      "quality": {
+        "contrast_span": 221.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 120.03817708333334,
+        "luminance_p01": 6.0,
+        "luminance_p99": 227.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1163.6788682065169,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1874542,
+      "width": 1920
+    },
+    "lens-20260812-061636-305.png": {
+      "board_center": null,
+      "board_coverage_percent": 0.0,
+      "content_sha256": "c0047c460a4f97cb77e999fc91d050ec56b568f7ccc8a15ecf37248740452611",
+      "corner_count": 0,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": false,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786536995856259232,
+      "name": "lens-20260812-061636-305.png",
+      "quality": {
+        "contrast_span": 222.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0720486111111111,
+        "luminance_mean": 102.43950954861111,
+        "luminance_p01": 5.0,
+        "luminance_p99": 227.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 1715.9269831566442,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 2106171,
+      "width": 1920
+    },
+    "lens-20260812-061816-251.png": {
+      "board_center": null,
+      "board_coverage_percent": 0.0,
+      "content_sha256": "476aa02a2fb9bc5f2cec35b8b2baa6c5779ec2a0c675c477b6574191605b07f4",
+      "corner_count": 0,
+      "detector": {
+        "max_height": 360,
+        "max_width": 640,
+        "method": "bounded-checkerboard-preview",
+        "version": 2,
+        "working_height": 360,
+        "working_width": 640
+      },
+      "found": false,
+      "height": 1080,
+      "index_error": null,
+      "index_state": "ready",
+      "mtime_ns": 1786537095952842221,
+      "name": "lens-20260812-061816-251.png",
+      "quality": {
+        "contrast_span": 236.0,
+        "height": 360,
+        "highlight_clip_percent": 0.0,
+        "luminance_mean": 140.13001302083333,
+        "luminance_p01": 7.0,
+        "luminance_p99": 243.0,
+        "measurement_source": "exact-encoded-byte-bounded-preview",
+        "shadow_clip_percent": 0.0,
+        "sharpness": 678.7233173582289,
+        "sharpness_method": "variance-of-laplacian-gray-central-80pct",
+        "width": 640
+      },
+      "size": 1419801,
+      "width": 1920
+    }
+  },
+  "pattern": {
+    "columns": 9,
+    "rows": 6
+  },
+  "schema_version": 4
+}
