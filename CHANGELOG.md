@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Made the desktop exact Preview the mandatory final execution gate. It is
+  window-modal, owns the sole visible **START JOB** control, dismisses before
+  delegating to the unchanged guarded run path, and leaves software STOP
+  accessible. Main-window job controls now open Preview instead of starting a
+  prepared program directly; Start Here remains a non-executing replacement
+  workflow that produces another exact Preview.
+
 - Corrected native-V4L2 camera FPS accounting to include source-JPEG validation
   and decode, and split Raw Live Monitor diagnostics into Pi Capture FPS,
   desktop Network receive FPS, Qt Display FPS, and source-frame Age.
@@ -100,7 +107,7 @@
   machine coordinates only at generation. Local geometry, transformed beam
   geometry, laser-spot-corrected controller motion, and the independent machine
   envelope are each validated. Jobs bind the exact support and complete bed-map
-  digest and are rejected after either changes. Start rechecks that immutable
+  digest and are rejected after either changes. **START JOB** rechecks that immutable
   binding without another camera capture, then performs one laser-off Home and
   begins the validated program without parking at the photography pose. The
   active hardware profile can bind these jobs to an explicit
@@ -196,9 +203,9 @@
   can be disabled when multiple captured batches should accumulate. The
   temporary-clear action is now explicitly labeled **Clear detection preview**.
 - Removed the desktop powered-job warning and typed arming-phrase dialogs.
-  **Start** now submits the already reviewed prepared job immediately while
-  retaining an internal one-use, time-limited authorization bound to that exact
-  program.
+  Preview's **START JOB** submits the already reviewed prepared job immediately
+  through the guarded path while retaining an internal one-use, time-limited
+  authorization bound to that exact program.
 - Automatically reopen the matching Machine Setup step and run its Home / park
   precision capture and scoring operation after a powered base-map,
   registration, dense-correction, or validation job completes successfully.
@@ -263,8 +270,8 @@
 - Added one packaged, versioned **Permanent Camera Setup Guide** as the
   canonical five-tab operator sequence. It is available modelessly from the
   Machine Setup footer and the main Help menu, follows the current tab when
-  opened, and spells out the calibration-job handoff: Preview Play is animation
-  only; close Preview and use the main Laser **Start** without clicking
+  opened, and spells out the calibration-job handoff: timeline Preview controls
+  are animation only; use the exact Preview's **START JOB** without clicking
   **Generate**, which would replace the prepared calibration program.
   Automated contracts bind the runbook to the current tab and button
   labels and verify that it is included in installed packages.

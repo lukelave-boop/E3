@@ -79,9 +79,9 @@ Native desktop workflow:
 - Material-specific, acceleration-aware Vector and Raster Power Correction
   layered over GRBL `M4`, with bounded corner/image-edge ramps and exact Preview
   diagnostics
-- Dedicated exact-job Preview with a time scrubber, animated playback up to
-  40×, cut/travel visibility, power shading, live move coordinates, timing and
-  distance statistics, and PNG export
+- Mandatory window-modal exact-job Preview with a distinct **START JOB** gate,
+  time scrubber, animated playback up to 40×, cut/travel visibility, power
+  shading, live move coordinates, timing and distance statistics, and PNG export
 - SQLite material presets and camera focus/sharpness controls
 - Authenticated raw Live Monitor for Pi-hosted cameras, preferring exact source
   JPEG passthrough from the single-owner native Linux V4L2 backend and visibly
@@ -167,7 +167,7 @@ The shipped configuration uses a synthetic camera and controller. In a real-hard
 - Serial access requires the `--hardware` command-line flag.
 - Motion remains blocked until `machine.allow_motion` is explicitly changed.
 - Positive laser commands receive a one-use, time-limited authorization for the
-  exact prepared program when the desktop **Start** action submits it.
+  exact prepared program when Preview's **START JOB** enters the guarded run path.
 - A zero-power program contains no `M3`/`M4` laser-enable command; positive
   output is never used merely to outline a job.
 - Laser-head mounting offsets default to zero. Real-hardware profiles can set

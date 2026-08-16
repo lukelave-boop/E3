@@ -46,7 +46,7 @@ emission has stopped or that the area is safe to enter.
   motion that leaves that polygon; the display never grants reach. Honeycomb-local jobs
   require an accepted automatic four-edge teaching image and bind its four
   measured corners, rigid pose, and complete bed-map digest. A legacy schema-1
-  or three-hint visual reference is not execution evidence. Start rechecks the
+  or three-hint visual reference is not execution evidence. **START JOB** rechecks the
   prepared support/map/output-polygon identity but does not capture another
   camera image. Do not move the honeycomb or workpiece after tracing or job
   generation; if either moves, recapture, re-detect, and regenerate. Camera
@@ -92,7 +92,7 @@ emission has stopped or that the area is safe to enter.
   confirmation—requires a current accepted automatic four-corner support. Its
   powered segments are generated inside that support and its complete program
   remains inside the configured machine area. The prepared session binds the
-  exact program, support, and bed map; Start rechecks containment and the
+  exact program, support, and bed map; **START JOB** rechecks containment and the
   immutable prepared binding before arming. These are software guardrails,
   not proof of physical containment or a substitute for zero-power review.
 - The powered keyed base-map job is the sole setup bootstrap exception because
@@ -174,6 +174,9 @@ The desktop graphical Preview is constructed from the exact finalized G-code
 text and is invalidated when the project changes. Its display and playback
 controls cannot edit that text or bypass generation, homing, motion, arming,
 bounds, streamed-command, rapid-with-laser, stop, or disconnect checks. A
+window-modal Preview is the only normal desktop location for **START JOB**; that
+control closes Preview and enters the same guarded run path so software STOP is
+available during execution. This workflow is not safety-rated, and a
 correct-looking Preview is not proof that the controller, calibration, focus,
 workpiece, or physical beam path is correct.
 

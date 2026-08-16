@@ -470,7 +470,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("optimize_paths", "Optimize path ordering")
         action("preview_job", "Preview generated job", "Alt+P")
         action("export_gcode", "Export generated G-code…", "Ctrl+Shift+E")
-        action("run", "Run current job", "Ctrl+Enter")
         action("stop", "Software stop / laser off", "Esc")
         action("minimize_window", "Minimize window", "Ctrl+M")
         action("maximize_window", "Maximize / restore window", "Ctrl+Shift+M")
@@ -549,7 +548,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["generate"].triggered.connect(self.generate_toolpath)
         self.actions["preview_job"].triggered.connect(self.show_job_preview)
         self.actions["export_gcode"].triggered.connect(self.export_gcode)
-        self.actions["run"].triggered.connect(self.run_current_job)
         self.actions["stop"].triggered.connect(self.controller.emergency_stop)
         self.actions["minimize_window"].triggered.connect(self.showMinimized)
         self.actions["maximize_window"].triggered.connect(self._toggle_maximized)
@@ -615,7 +613,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "optimize_paths",
             "preview_job",
             "export_gcode",
-            "run",
             "stop",
         ):
             laser_menu.addAction(self.actions[key])
@@ -752,7 +749,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         job_toolbar.setToolButtonStyle(QtCore.Qt.ToolButtonStyle.ToolButtonIconOnly)
         job_toolbar.addAction(self.actions["refresh_camera"])
         job_toolbar.addSeparator()
-        for key in ("generate", "preview_job", "run"):
+        for key in ("generate", "preview_job"):
             job_toolbar.addAction(self.actions[key])
 
         self.safety_toolbar = QtWidgets.QToolBar("Runtime and safety", self)
@@ -1090,7 +1087,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.material_panel.error.connect(self.show_error)
 
         self.job_panel.generateRequested.connect(self.generate_toolpath)
-        self.job_panel.startRequested.connect(self.run_current_job)
+        self.job_panel.previewRequested.connect(self.show_job_preview)
         self.job_panel.pauseRequested.connect(self.controller.pause_resume)
         self.job_panel.stopRequested.connect(self.controller.emergency_stop)
         self.runtime_strip.stopRequested.connect(self.controller.emergency_stop)
@@ -1247,8 +1244,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.actions["export_gcode"].setEnabled(False)
             if "preview_job" in self.actions:
                 self.actions["preview_job"].setEnabled(False)
-            if "run" in self.actions:
-                self.actions["run"].setEnabled(False)
 
     def _document_center(self) -> tuple[float, float]:
         return self.document.work_area.center
@@ -2303,6 +2298,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
         )
         dialog.startHereRequested.connect(self._prepare_start_here)
+        dialog.runRequested.connect(
+            lambda target=dialog: self._run_from_job_preview(target)
+        )
         if deferred:
             dialog.renderProgress.connect(
                 lambda completed, total, request_id=request_id: (
@@ -2791,6 +2789,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if getattr(self, "_job_preview_dialog", None) is dialog:
             self._job_preview_dialog = None
 
+    def _run_from_job_preview(self, dialog: JobPreviewDialog) -> None:
+        if getattr(self, "_job_preview_dialog", None) is not dialog:
+            return
+        dialog.close()
+        self.run_current_job()
+
     def _prepare_start_here(self, move_index: int) -> None:
         plan = self._current_job_plan()
         if plan is None or self.last_job_revision != self.document.revision:
@@ -2804,8 +2808,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "regenerate before using Start Here"
             )
             return
+        preview = getattr(self, "_job_preview_dialog", None)
+        message_parent = (
+            preview
+            if preview is not None and preview.isVisible()
+            else self
+        )
         answer = QtWidgets.QMessageBox.warning(
-            self,
+            message_parent,
             "Prepare Start Here job",
             f"This will replace the prepared job with a guarded program beginning "
             f"at preview move {move_index + 1}. Earlier moves will not run.\n\n"
@@ -4226,7 +4236,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["generate"].setEnabled(not busy)
         ready = self.last_job is not None and not busy
         self.actions["preview_job"].setEnabled(ready)
-        self.actions["run"].setEnabled(ready)
         self.actions["export_gcode"].setEnabled(ready)
         self._sync_busy_indicators()
 

@@ -14,7 +14,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.calibration.support import HoneycombSupportReference
 from laser_aligner.config import WorkArea
@@ -1228,7 +1228,7 @@ def test_queued_generation_cancelled_by_stop_skips_project_clone(
         assert operation() is None
         assert clone_calls == 0
         assert window.last_job is None
-        assert not window.actions["run"].isEnabled()
+        assert not window.actions["preview_job"].isEnabled()
         assert not list((tmp_path / "data").rglob("*.gcode"))
         assert errors == []
     finally:
@@ -1298,6 +1298,221 @@ def test_large_job_text_workspace_and_dialog_render_in_event_loop_slices(
         assert errors == []
     finally:
         timer.stop()
+        _dispose(qt_application, window)
+
+
+def test_preview_start_job_uses_guarded_run_path_and_releases_modal_stop(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    job = _job()
+    calls: list[tuple[str, str, str | None]] = []
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        lambda *args, **kwargs: job,
+    )
+    try:
+        window.runtime.settings.machine.allow_motion = True
+        window.controller.run_job = (  # type: ignore[method-assign]
+            lambda text, name, *, arm_phrase=None: calls.append(
+                (text, name, arm_phrase)
+            )
+        )
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and not window._job_preparation_busy,
+        )
+        dialog = window._job_preview_dialog
+        assert dialog is not None
+        assert qt_application.activeModalWidget() is dialog
+
+        dialog.run_button.click()
+
+        assert calls == [(job.text, window.last_job_name, None)]
+        assert not dialog.isVisible()
+        assert qt_application.activeModalWidget() is not dialog
+        assert window.runtime_strip.stop_button.isEnabled()
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_preview_start_job_still_rejects_stale_revision(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    job = _job()
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        lambda *args, **kwargs: job,
+    )
+    window.controller.run_job = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: pytest.fail("stale job reached controller")
+    )
+    try:
+        window.runtime.settings.machine.allow_motion = True
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and not window._job_preparation_busy,
+        )
+        dialog = window._job_preview_dialog
+        assert dialog is not None
+        window.last_job_revision = window.document.revision - 1
+
+        dialog.run_button.click()
+
+        assert not dialog.isVisible()
+        assert window.last_job is None
+        assert errors == [
+            "The project changed; regenerate the toolpath before running"
+        ]
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_main_job_panel_reopens_preview_instead_of_running(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    job = _job()
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        lambda *args, **kwargs: job,
+    )
+    window.controller.run_job = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: pytest.fail("main panel bypassed Preview")
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and not window._job_preparation_busy,
+        )
+        first = window._job_preview_dialog
+        assert first is not None
+        first.close()
+        qt_application.processEvents()
+
+        assert "run" not in window.actions
+        assert window.job_panel.preview_button.isEnabled()
+        window.job_panel.preview_button.click()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and window._job_preview_dialog is not first
+            and not window._job_preparation_busy,
+        )
+
+        assert window._job_preview_dialog is not None
+        assert window._job_preview_dialog.isVisible()
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_modal_preview_blocks_actual_main_window_project_edit(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        lambda *args, **kwargs: _job(),
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and not window._job_preparation_busy,
+        )
+        dialog = window._job_preview_dialog
+        assert dialog is not None
+        assert qt_application.activeModalWidget() is dialog
+        initial_layer_count = len(window.document.layers)
+        add_layer = window.layer_panel.add_button
+        click_position = add_layer.mapTo(window, add_layer.rect().center())
+
+        QtTest.QTest.mouseClick(
+            window.windowHandle(),
+            QtCore.Qt.MouseButton.LeftButton,
+            QtCore.Qt.KeyboardModifier.NoModifier,
+            click_position,
+        )
+        qt_application.processEvents()
+        assert len(window.document.layers) == initial_layer_count
+
+        dialog.close()
+        qt_application.processEvents()
+        QtTest.QTest.mouseClick(
+            window.windowHandle(),
+            QtCore.Qt.MouseButton.LeftButton,
+            QtCore.Qt.KeyboardModifier.NoModifier,
+            click_position,
+        )
+        qt_application.processEvents()
+        assert len(window.document.layers) == initial_layer_count + 1
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_start_here_confirmation_is_owned_by_preview_and_never_runs_job(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    job = _job()
+    parents: list[QtWidgets.QWidget] = []
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        lambda *args, **kwargs: job,
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda parent, *_args, **_kwargs: parents.append(parent)
+        or QtWidgets.QMessageBox.StandardButton.Cancel,
+    )
+    window.controller.run_job = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: pytest.fail("Start Here executed the job")
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and not window._job_preparation_busy,
+        )
+        dialog = window._job_preview_dialog
+        assert dialog is not None
+        dialog.set_elapsed(job.plan.moves[0].start_seconds + 0.01)
+
+        dialog.start_here_button.click()
+
+        assert parents == [dialog]
+        assert dialog.isVisible()
+        assert window.last_job is job
+        assert errors == []
+    finally:
         _dispose(qt_application, window)
 
 
@@ -1412,7 +1627,7 @@ def test_closing_unfinished_preview_invalidates_exact_job(
             and window.last_job is None,
         )
 
-        assert not window.actions["run"].isEnabled()
+        assert not window.actions["preview_job"].isEnabled()
         assert not window.actions["export_gcode"].isEnabled()
         assert not window.actions["preview_job"].isEnabled()
         assert not any("ready for review" in notice for notice in notices)
@@ -1518,7 +1733,7 @@ def test_registration_render_owns_busy_state_against_late_worker(
         assert window.last_job is registration
         assert window._job_preparation_owner == ("render", current_request)
         assert window._job_preparation_busy
-        assert not window.actions["run"].isEnabled()
+        assert not window.actions["preview_job"].isEnabled()
         finished = callbacks["finished"]
         assert callable(finished)
         finished(True)
@@ -1527,7 +1742,7 @@ def test_registration_render_owns_busy_state_against_late_worker(
             lambda: window._job_preparation_owner is None,
         )
         assert window.last_job is registration
-        assert window.actions["run"].isEnabled()
+        assert window.actions["preview_job"].isEnabled()
         assert errors == []
     finally:
         release.set()
@@ -1582,7 +1797,7 @@ def test_render_construction_errors_fail_closed(
 
         assert window.last_job is None
         assert not window._job_preparation_busy
-        assert not window.actions["run"].isEnabled()
+        assert not window.actions["preview_job"].isEnabled()
         assert len(errors) == 1
         assert "failed" in errors[0]
         assert "deterministic" in errors[0]
@@ -1813,7 +2028,7 @@ def test_software_stop_cancels_start_here_worker(
         )
 
         assert window.last_job is None
-        assert not window.actions["run"].isEnabled()
+        assert not window.actions["preview_job"].isEnabled()
         assert errors == []
     finally:
         release.set()
@@ -1857,7 +2072,7 @@ def test_changed_raster_asset_blocks_prepared_job_actions(
             window.run_current_job()
 
         assert window.last_job is None
-        assert not window.actions["run"].isEnabled()
+        assert not window.actions["preview_job"].isEnabled()
         assert len(errors) == 1
         assert "changed on disk" in errors[0]
     finally:
@@ -1911,7 +2126,7 @@ def test_same_path_raster_change_refreshes_canvas_and_rejects_first_generation(
         )
         assert displayed_after.raster_preview_identity != identity_before
         assert window.last_job is None
-        assert not window.actions["run"].isEnabled()
+        assert not window.actions["preview_job"].isEnabled()
         assert not window.actions["export_gcode"].isEnabled()
         assert errors and "canvas has been refreshed" in errors[-1]
 
@@ -1923,7 +2138,7 @@ def test_same_path_raster_change_refreshes_canvas_and_rejects_first_generation(
             and not window._job_preparation_busy,
         )
 
-        assert window.actions["run"].isEnabled()
+        assert window.actions["preview_job"].isEnabled()
         assert window.actions["export_gcode"].isEnabled()
         assert errors == []
     finally:

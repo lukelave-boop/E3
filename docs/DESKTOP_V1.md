@@ -35,9 +35,10 @@ geometry, G-code, safety and controller services.
   groups and `preserveAspectRatio` mapping. Imports remain centered at the
   requested project placement. CSS stylesheets, clipping, masks, and any lossy
   parser warning stop the import before a project object is created.
-- Dedicated exact-job Preview distinguishing rapid, powered and unpowered
-  moves, with time scrubbing, animated playback, move coordinates, power,
-  timing/distance statistics, display controls, and PNG export
+- Mandatory window-modal exact-job Preview distinguishing rapid, powered and
+  unpowered moves, with a distinct **START JOB** gate, time scrubbing, animated
+  playback, move coordinates, power, timing/distance statistics, display
+  controls, and PNG export
 
 ### Current control-surface layout
 
@@ -188,8 +189,8 @@ rejected consistently because its Qt decode plugin is not portable.
   motor release and finish. Drain/home/park/release phases remain visibly
   running, and an asynchronous completion failure raises a one-time error
 - Powered output receives a one-use authorization for the exact prepared
-  program when **Start** submits it; the desktop does not show a confirmation
-  or typed-phrase dialog
+  program when Preview's **START JOB** delegates to the guarded run path; the
+  desktop does not show a confirmation or typed-phrase dialog
 
 After software STOP or another uncertain established-session failure, the
 Machine panel changes its normal Connect control to an explicit **Reconnect**
@@ -228,15 +229,19 @@ G-code documents, workspace paths, dedicated Preview paths, and backward
 timeline rebuilds are constructed in short GUI-thread slices with visible
 progress; Qt objects never cross into workers. Conflicting job actions remain
 unavailable until every required exact view finishes, while software STOP stays
-live. Closing an unfinished Preview fails closed, and application close retains
-workers through completion before runtime teardown. Generated programs remain
-in memory until the explicit export action writes one.
+live. Preview is window-modal, and the main Job controls can only open it rather
+than execute directly. **START JOB** dismisses Preview before synchronously
+entering the existing guarded run path. Closing an unfinished Preview fails
+closed, and application close retains workers through completion before runtime
+teardown. Generated programs remain in memory until the explicit export action
+writes one.
 
 Start Here planning snapshots the configured controller photography pose and
 records it in the replacement program. Its exact Preview includes the
 laser-off approach from that Home/park pose to the reviewed boundary, with the
 configured physical laser-spot offset applied, before normal execution
-preflight and arming.
+preflight and arming. Preparing Start Here never executes; its replacement must
+complete and pass through another exact Preview.
 
 ## Installation
 
@@ -307,7 +312,7 @@ The desktop shell does not relax the existing machine controls:
 - serial access still requires a hardware-enabled process;
 - motion must still be enabled in the local configuration;
 - powered G-code still requires exact-program, one-use authorization, created
-  internally when the desktop **Start** action submits it;
+  internally when Preview's **START JOB** submits it through the guarded path;
 - machine-coordinate programs remain validated against the configured guarded
   machine rectangle. Honeycomb-local geometry is first validated against the
   complete support, then its placed beam and spot-corrected controller paths are

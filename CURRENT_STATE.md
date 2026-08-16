@@ -7,6 +7,25 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
+The native desktop now requires the final execution sequence **Generate -> exact
+Preview -> START JOB** for both project programs and prepared Machine Setup
+programs. The Preview is window-modal while it is open, so project authoring and
+other main-window controls cannot mutate the reviewed source. Its distinct
+bottom-right **START JOB** control closes the Preview and synchronously delegates
+to the unchanged guarded `run_current_job()` path, leaving software STOP
+accessible while preserving every stale-revision, support/map binding, raster
+identity, connection, Home, motion, arming, bounds, and streamed-program check.
+The main Job panel and Laser Tools menu can only open Preview; they no longer
+offer a direct execution bypass. **Prepare Start Here…** still replaces rather
+than executes a program, and the replacement must complete its own exact
+Preview. Focused offscreen Qt acceptance and rejection tests verify modality,
+blocked parent interaction, guarded handoff, Preview dismissal, STOP access,
+stale rejection, bypass removal, Start Here non-execution, deferred rendering,
+and unfinished-close invalidation. This workflow has not been physically
+verified with a controller or laser. Focused verification passed 333 tests:
+15 exact-Preview tests, 57 desktop job tests, 49 compact-panel/layout/template/
+runbook tests, 44 Machine Setup tests, and 168 core machine safety tests.
+
 Physical Pi 3 B+/C920 validation showed that OpenCV raw mode is not viable:
 V4L2 negotiated MJPG at 1920×1080/30 fps, but `CAP_PROP_FORMAT=-1` was rejected
 and `VideoCapture.read()` returned decoded 6,220,800-byte BGR frames. The
@@ -432,9 +451,9 @@ Powered Machine Setup calibration jobs now hand off automatically to their
 matching Home / park precision capture and scoring operation after successful
 completion. The handoff is bound to the exact prepared filename and is cleared
 when a job fails, stops, or is replaced; ordinary project jobs are unchanged.
-Desktop **Start** no longer shows a powered-job warning or typed arming phrase;
-it creates the exact program's one-use temporary authorization internally and
-submits the prepared job immediately.
+Preview's **START JOB** does not show a powered-job warning or typed arming
+phrase; the guarded run path creates the exact program's one-use temporary
+authorization internally and submits the prepared job immediately.
 
 Trace review uses fixed-screen-size, high-contrast numbered badges so object
 IDs remain readable over detailed camera imagery. A tri-state **Select /
@@ -578,8 +597,9 @@ alone does not grant motion authority.
 One packaged, versioned Permanent Camera Setup Guide is now the canonical
 operator sequence. It is available from the Machine Setup footer and the main
 Help menu, opens modelessly at the current numbered tab, and explicitly covers
-the Preview-to-main-Start handoff. It warns that Preview Play only animates and
-that main **Generate** replaces a prepared calibration job.
+the exact-Preview **START JOB** handoff. It warns that timeline Play and
+**⏮ Start** only animate and that main **Generate** replaces a prepared
+calibration job.
 Automated UI/content/package tests keep its five tab headings and exact action
 labels synchronized with the application.
 
@@ -692,11 +712,12 @@ the physical Connect-then-Home / park sequence still needs rechecking.
 Controller-required actions now attempt connection themselves when the
 controller is offline. This covers desktop jobs, Home / park, jogging,
 diagnostics, all parked Machine Setup captures, and the equivalent HTTP command,
-positioning, arming, and run routes. A prepared job therefore keeps **Start**
-available. Connection failure is reported as the operation failure and prevents
-the requested action; STOP generation invalidation prevents queued work from
-reconnecting and continuing. An untrusted connection after STOP or an uncertain
-acknowledgement remains blocked until the explicit reconnect path replaces it.
+positioning, arming, and run routes. A prepared job therefore keeps **START JOB**
+available inside its exact Preview. Connection failure is reported as the
+operation failure and prevents the requested action; STOP generation
+invalidation prevents queued work from reconnecting and continuing. An
+untrusted connection after STOP or an uncertain acknowledgement remains blocked
+until the explicit reconnect path replaces it.
 
 `tools/live_desktop_driver.py` provides a narrow live Qt diagnostic driver for
 named status, Connect, Home / park, and camera-frame operations. It always starts

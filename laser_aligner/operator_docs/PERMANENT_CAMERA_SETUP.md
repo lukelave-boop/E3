@@ -16,12 +16,12 @@ unlisted calibration step or interrupt a tab transition described here.
 - Rigidly restrain every sheet to the moving bed.
 - Never move the camera, change focus or resolution, or move a calibration
   sheet between marking and its capture.
-- A prepared calibration job is already generated. After reviewing its Job
-  Preview, close the Preview and use **Start**. Do not click the main
+- A prepared calibration job is already generated. Review its exact Job Preview
+  and use the distinct **START JOB** control there. Do not click the main
   **Generate** button; it generates from the project canvas and replaces the
-  prepared calibration job. Preview's
-  **Start/Play** controls animate the preview only; they do not run hardware.
-- **Start** attempts to connect automatically while the controller is offline.
+  prepared calibration job. Preview's timeline **⏮ Start** and **Play** controls
+  animate only; they do not run hardware.
+- **START JOB** attempts to connect automatically while the controller is offline.
   A failed attempt leaves the prepared job available; do not click **Generate**.
 - After a powered calibration job completes successfully, the application
   automatically reopens its Setup tab, runs the Home / park precision capture,
@@ -89,9 +89,9 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
 1. Secure a clean sacrificial sheet at the final calibration surface height.
 2. Enter a previously tested visible-marking power
    and click **Prepare powered base-map job**.
-3. Review the exact 25-cross Preview, close it, then use **Start**. The desktop
-   submits the prepared powered job immediately and creates its one-use
-   authorization internally. Do not click **Generate**.
+3. Review the exact 25-cross Preview, then use its **START JOB** control. The
+   desktop submits the prepared powered job through the guarded path and creates
+   its one-use authorization internally. Do not click **Generate**.
 4. Wait for every completion phase to finish. After the burn, do not move the
    sheet, restart the app, prepare another job, or click **Generate**. Setup
    reopens automatically, homes/parks, captures, and detects the base grid.
@@ -181,8 +181,8 @@ laser-off Home, and starts without another camera capture or camera-position par
    sacrificial sheet at the same calibrated surface height.
 2. Enter a previously tested marking power,
    and click **Prepare powered mark job**.
-3. Review, close Preview, and run the guarded powered job. Do not click
-   **Generate**.
+3. Review the exact Preview and use its **START JOB** control. Do not click
+   **Generate**; Start Here also only prepares a replacement for another review.
 4. Do not move the marked sheet. Setup reopens automatically, homes/parks,
    captures, and scores the eight marks. Use **Home / park, precision capture**
    only to retry.
@@ -215,15 +215,15 @@ to fit it.
 
 The powered five-cross session requires the current accepted automatic
 four-corner support. Its powered segments must fit that polygon, its complete
-program remains machine-bounded, and Start rechecks the exact support/map
+program remains machine-bounded, and **START JOB** rechecks the exact support/map
 binding before the single laser-off Home and arming sequence.
 
 1. Confirm the accepted automatic support is current, then secure a clean
    sacrificial sheet at the calibrated surface height.
 2. Enter a previously tested marking power,
    and click **Prepare powered validation job**.
-3. Review, close Preview, and run the guarded powered job. Do not click
-   **Generate**.
+3. Review the exact Preview and use its **START JOB** control. Do not click
+   **Generate**; Start Here also only prepares a replacement for another review.
 4. Do not move the sheet. Setup reopens automatically, homes/parks, captures,
    and scores the five marks. Use **Home / park, precision capture** only to
    retry.
@@ -269,7 +269,7 @@ not depend on a machine pose and do not request this hold.
 
 | Symptom | Correct action |
 | --- | --- |
-| Prepared calibration job is visible but **Start** is disabled | Wait for active preparation to finish. **Start** attempts an offline connection automatically; do not click **Generate**. |
+| Prepared calibration job is visible but **START JOB** is disabled | Wait for exact Preview preparation to finish. **START JOB** attempts an offline connection automatically; do not click **Generate**. |
 | **Generate** says the project has no enabled output paths | Return to the numbered Setup tab and prepare that calibration job again. |
 | A powered grid was burned but detection failed | Do not move or reburn the sheet; diagnose or reanalyze the saved capture. |
 | Trace says a label is outside even though it sits on the honeycomb | Compare the Step 3 ruler overlay. The visible honeycomb and mapped guarded machine-output polygon are separate limits; visibility does not grant output authority. |

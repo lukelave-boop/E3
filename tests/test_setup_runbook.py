@@ -39,10 +39,11 @@ def test_runbook_tracks_exact_setup_and_job_handoff_labels() -> None:
         "**Prepare powered mark job**",
         "**Home / park, precision capture**",
         "**Prepare powered validation job**",
+        "**START JOB**",
     )
     for label in required_labels:
         assert label in RUNBOOK
-    assert "Preview's **Start/Play** controls animate the preview only" in normalized
+    assert "timeline **⏮ Start** and **Play** controls animate only" in normalized
     assert "Do not click the main **Generate** button" in normalized
     assert "dry run" not in RUNBOOK.lower()
     assert "dry frame" not in RUNBOOK.lower()

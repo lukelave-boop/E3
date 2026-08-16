@@ -13,7 +13,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for preview tests")
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.desktop.job_preview import JobPreviewDialog
 from laser_aligner.desktop.panels import JobPanel
@@ -86,6 +86,78 @@ def _variable_power_plan(
         power_max=1000,
         start_position=(0.0, 0.0),
     )
+
+
+def test_preview_is_window_modal_and_blocks_parent_project_action(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    parent = QtWidgets.QWidget()
+    parent.resize(240, 120)
+    edit_button = QtWidgets.QPushButton("Edit project", parent)
+    edit_button.move(20, 20)
+    mutations: list[bool] = []
+    edit_button.clicked.connect(lambda: mutations.append(True))
+    dialog = JobPreviewDialog(
+        _plan(),
+        (0.0, 100.0, 0.0, 100.0),
+        "modal.gcode",
+        parent,
+    )
+    parent.show()
+    dialog.show()
+    qt_application.processEvents()
+
+    assert dialog.isModal()
+    assert dialog.windowModality() == QtCore.Qt.WindowModality.WindowModal
+    assert qt_application.activeModalWidget() is dialog
+
+    click_position = edit_button.mapTo(parent, edit_button.rect().center())
+    QtTest.QTest.mouseClick(
+        parent.windowHandle(),
+        QtCore.Qt.MouseButton.LeftButton,
+        QtCore.Qt.KeyboardModifier.NoModifier,
+        click_position,
+    )
+    qt_application.processEvents()
+    assert mutations == []
+
+    dialog.close()
+    qt_application.processEvents()
+    QtTest.QTest.mouseClick(
+        parent.windowHandle(),
+        QtCore.Qt.MouseButton.LeftButton,
+        QtCore.Qt.KeyboardModifier.NoModifier,
+        click_position,
+    )
+    qt_application.processEvents()
+    assert mutations == [True]
+    parent.close()
+    parent.deleteLater()
+
+
+def test_preview_start_job_is_distinct_from_timeline_start(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    dialog = JobPreviewDialog(
+        _plan(),
+        (0.0, 100.0, 0.0, 100.0),
+        "start.gcode",
+    )
+    requests: list[bool] = []
+    dialog.runRequested.connect(lambda: requests.append(True))
+    dialog.show()
+    qt_application.processEvents()
+
+    assert dialog.run_button.text() == "START JOB"
+    assert dialog.run_button.objectName() == "dangerButton"
+    assert dialog.reset_button.text() == "⏮ Start"
+    assert dialog.run_button is not dialog.reset_button
+    dialog.run_button.click()
+    assert requests == [True]
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
 
 
 def test_preview_scrubber_reports_explicit_power_and_coordinates(
@@ -190,12 +262,14 @@ def test_honeycomb_deferred_preview_keeps_start_here_move_identity(
     )
     requested: list[int] = []
     dialog.startHereRequested.connect(requested.append)
+    assert not dialog.run_button.isEnabled()
 
     # Drive the deferred slice directly so this exercises its separate path
     # builder without depending on event-loop timing.
     dialog.canvas.start_deferred_render()
     while dialog.canvas._building:
         dialog.canvas._build_slice()
+    assert dialog.run_button.isEnabled()
 
     powered_path = next(
         item.path()
@@ -523,7 +597,9 @@ def test_preview_start_here_emits_reviewed_move_only(
     plan = _plan()
     dialog = JobPreviewDialog(plan, (0.0, 100.0, 0.0, 100.0), "test.gcode")
     requested: list[int] = []
+    run_requests: list[bool] = []
     dialog.startHereRequested.connect(requested.append)
+    dialog.runRequested.connect(lambda: run_requests.append(True))
     dialog.show()
     qt_application.processEvents()
 
@@ -531,6 +607,7 @@ def test_preview_start_here_emits_reviewed_move_only(
     dialog.start_here_button.click()
 
     assert requested == [1]
+    assert run_requests == []
     dialog.close()
     dialog.deleteLater()
     qt_application.processEvents()

@@ -200,7 +200,7 @@ def test_compact_default_docks_stay_disjoint_and_controls_remain_reachable(
         assert runtime_scroll.horizontalScrollBar().maximum() == 0
         for button in (
             window.job_panel.generate_button,
-            window.job_panel.start_button,
+            window.job_panel.preview_button,
             window.job_panel.stop_button,
         ):
             runtime_scroll.ensureWidgetVisible(button)

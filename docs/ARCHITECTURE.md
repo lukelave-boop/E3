@@ -302,7 +302,9 @@ native shapes / imported SVG / traced outlines
   -> finalized multi-layer vector G-code + controller-ignored E3 metadata
   -> gcode.job_plan.build_job_plan()
   -> immutable JobPlan used by the dedicated desktop Preview
-  -> the same finalized G-code text is exported or submitted to MachineService
+  -> window-modal exact review and distinct START JOB signal
+  -> unchanged guarded main-window run path
+  -> the same finalized G-code text is submitted to MachineService
 ```
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
@@ -329,6 +331,12 @@ program. Project revision changes invalidate both the program and its Preview.
 Start Here replacement programs carry the configured photography pose in job
 metadata, so their rebuilt plan includes the actual laser-off approach from the
 controller's Home/park position to the reviewed move boundary.
+
+The Preview is a window-modal UI gate, not a machine-authority layer. Its
+**START JOB** signal closes the dialog synchronously so STOP is available, then
+calls the existing guarded main-window run path. Main-window controls can reopen
+Preview but cannot submit a job directly. Start Here remains a non-executing
+replacement operation and the replacement enters the same exact-preview gate.
 
 The desktop supports line, fill, and raster operation layers. Fill and binary
 vector raster convert closed silhouettes into angled scanlines. Imported images

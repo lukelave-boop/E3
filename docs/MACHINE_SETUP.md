@@ -168,8 +168,8 @@ authorize this step.
 1. Rigidly restrain a clean sacrificial sheet that covers every displayed grid
    coordinate.
 2. Enter a previously established visible-marking power,
-   and choose **Prepare powered base-map job**. Review it, close Preview, and
-   press **Start** to submit it through the normal guarded job path.
+   and choose **Prepare powered base-map job**. Review the exact Preview and use
+   its **START JOB** control to submit it through the normal guarded job path.
 3. On successful completion, Setup reopens automatically and starts
    **Home / park, capture and detect base grid**. The machine holds through
    Home / park and the precision burst, then restores normal idle behavior and
@@ -305,8 +305,8 @@ must be prepared and run.
 
 1. Set the cross size and marking speed, then enter a visible-marking power that
    has already been verified
-   for the material, and choose **Prepare powered mark job**. Review it, close
-   Preview, and press **Start**; the one-use authorization is internal.
+   for the material, and choose **Prepare powered mark job**. Review the exact
+   Preview and use **START JOB**; the one-use authorization is internal.
 2. On successful completion, Setup reopens automatically and starts
    **Home / park, precision capture**. Use the button manually only to retry.
 3. Review every commanded coordinate, observed coordinate, and X/Y residual.
@@ -419,14 +419,14 @@ does not fit or change calibration.
 Powered validation requires the current accepted automatic four-corner support.
 Its powered segments fit both that polygon and the configured machine area. The
 session is bound to the exact active homography, residual-mesh revision, support,
-and G-code; Start rejects a changed binding before its single laser-off Home and
+and G-code; **START JOB** rejects a changed binding before its single laser-off Home and
 arming sequence.
 
 1. Put a clean sacrificial surface at the calibrated height and rigidly restrain
    it to the moving bed.
 2. Enter a previously verified visible-marking power, choose
-   **Prepare powered validation job**, review it, close Preview, and press
-   **Start**; the one-use authorization is internal.
+   **Prepare powered validation job**, review the exact Preview, and use its
+   **START JOB** control; the one-use authorization is internal.
 3. On successful completion, Setup reopens automatically and starts
    **Home / park, precision capture**. Use the button manually only to retry.
 
@@ -459,11 +459,11 @@ Connect, Disconnect, and Home / park unavailable until the settings check and
 motor-release cleanup finish. Software Stop remains available. Do not interpret
 an open serial port as a ready controller before this state completes.
 
-For serial-hardware jobs, desktop **Start** performs `M5`, Home, camera-pose
-parking, and an idle wait before arming and streaming the job. A failed
-preflight blocks the run. This removes the need to press **Home / park**
-manually before every job; it does not replace the operator's laser-off
-origin/direction checks.
+For serial-hardware jobs, Preview's **START JOB** enters a guarded run path that
+performs `M5`, Home, camera-pose parking, and an idle wait before arming and
+streaming the job. A failed preflight blocks the run. This removes the need to
+press **Home / park** manually before every job; it does not replace the
+operator's laser-off origin/direction checks.
 
 After a successful powered job, `machine.home_and_release_after_powered_job`
 keeps the job in its running state while the controller acknowledges `M5`,

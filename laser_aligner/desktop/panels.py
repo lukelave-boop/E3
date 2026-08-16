@@ -2337,7 +2337,7 @@ class ConsolePanel(QtWidgets.QWidget):
 
 class JobPanel(QtWidgets.QWidget):
     generateRequested = QtCore.Signal()
-    startRequested = QtCore.Signal()
+    previewRequested = QtCore.Signal()
     pauseRequested = QtCore.Signal()
     stopRequested = QtCore.Signal()
 
@@ -2374,9 +2374,11 @@ class JobPanel(QtWidgets.QWidget):
 
         run_row = QtWidgets.QHBoxLayout()
         run_row.setSpacing(4)
-        run_row.addWidget(QtWidgets.QLabel("Run"))
-        self.start_button = QtWidgets.QPushButton("Start")
-        self.start_button.setToolTip("Start the currently generated job")
+        run_row.addWidget(QtWidgets.QLabel("Review"))
+        self.preview_button = QtWidgets.QPushButton("Preview Job…")
+        self.preview_button.setToolTip(
+            "Open the exact Preview; START JOB is available only inside it"
+        )
         self.pause_button = QtWidgets.QPushButton("Pause")
         self.pause_button.setEnabled(False)
         self.pause_button.setToolTip(
@@ -2384,25 +2386,22 @@ class JobPanel(QtWidgets.QWidget):
         )
         self.stop_button = QtWidgets.QPushButton("Stop")
         self.stop_button.setObjectName("dangerButton")
-        run_row.addWidget(self.start_button, 1)
+        run_row.addWidget(self.preview_button, 1)
         run_row.addWidget(self.pause_button, 1)
         run_row.addWidget(self.stop_button, 1)
         layout.addLayout(run_row)
         layout.addStretch(1)
 
         self.generate_button.clicked.connect(self.generateRequested)
-        self.start_button.clicked.connect(self.startRequested)
+        self.preview_button.clicked.connect(self.previewRequested)
         self.pause_button.clicked.connect(self.pauseRequested)
         self.stop_button.clicked.connect(self.stopRequested)
         self._preparing = False
-        self._machine_runnable = False
         self._job_prepared = False
         self._sync_start_enabled()
 
     def _sync_start_enabled(self) -> None:
-        self.start_button.setEnabled(
-            self._job_prepared and self._machine_runnable and not self._preparing
-        )
+        self.preview_button.setEnabled(self._job_prepared and not self._preparing)
 
     def set_preparing(
         self,
@@ -2488,32 +2487,11 @@ class JobPanel(QtWidgets.QWidget):
         self._sync_start_enabled()
 
     def set_machine_status(self, machine: dict[str, Any] | None) -> None:
-        machine = machine or {}
-        connected = bool(machine.get("connected", False))
-        reference_ready = bool(
-            machine.get(
-                "coordinate_reference_ready",
-                machine.get("backend") == "simulator",
-            )
-        )
-        reconnect_required = bool(
-            machine.get("controller_reconnect_required", False)
-        )
-        runnable = (
-            bool(machine.get("allow_motion", False))
-            and not reconnect_required
-        )
-        self._machine_runnable = runnable
+        del machine
         self._sync_start_enabled()
-        if reconnect_required:
-            tooltip = "Disconnect and reconnect before starting a job"
-        elif not connected:
-            tooltip = "Connect automatically, then start the currently generated job"
-        elif connected and not reference_ready:
-            tooltip = "Start the current job; hardware will home and park first"
-        else:
-            tooltip = "Start the currently generated job"
-        self.start_button.setToolTip(tooltip)
+        self.preview_button.setToolTip(
+            "Open the exact Preview; START JOB is available only inside it"
+        )
 
 
 class ObjectPanel(QtWidgets.QWidget):

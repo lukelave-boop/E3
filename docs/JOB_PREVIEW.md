@@ -1,8 +1,8 @@
 # Generated-job Preview
 
 The native desktop opens a dedicated graphical Preview after **Generate** and
-after calibration-job preparation. It answers two separate questions before
-execution:
+after calibration-job preparation. This window-modal review is the mandatory
+final gate before execution and answers two separate questions:
 
 1. What exact motion and controller power did generation produce?
 2. In what order and at approximately what time will each move occur?
@@ -26,7 +26,8 @@ motor-release phases after the previewed stream reaches 100%.
 
 ## Controls and readouts
 
-- Drag the time slider or use **Start** and **Play/Pause** to inspect order.
+- Drag the time slider or use timeline **⏮ Start** and **Play/Pause** to inspect
+  order. These controls animate only and never execute hardware.
 - Use Space to play/pause, Home/End to jump to the timeline boundaries, and
   Left/Right to step by one second.
 - Playback speeds range from 0.1× to 40× and affect only the animation.
@@ -39,6 +40,9 @@ motor-release phases after the previewed stream reaches 100%.
   legend without changing the job. Power shading retains distinct `S` values
   within one operation instead of assigning one shade to the complete layer.
 - Pan, zoom, fit the bed, and save the current view as a PNG.
+- Use the distinct bottom-right **START JOB** only after reviewing this exact
+  program. It dismisses Preview before the guarded run attempt so software STOP
+  is accessible.
 - Statistics separate cut and travel distance/time and report total estimated
   time and maximum planned power. With nearest-path planning they also report
   rapid-travel distance saved relative to source order.
@@ -58,7 +62,7 @@ the workspace overlay, and the dedicated Preview painter paths are populated in
 bounded GUI-thread slices; no Qt object is created or mutated by a worker.
 
 The Laser inspector shows preparation progress and blocks overlapping Generate,
-Frame, Preview, Run, and export commands until all exact views are complete.
+Frame, Preview, Start, and export commands until all exact views are complete.
 Closing an unfinished Preview, software STOP, project replacement, or a project
 revision invalidates the whole unfinished result. Application close requests
 cancellation and keeps task ownership until every worker has returned before
@@ -81,11 +85,19 @@ support pose, camera-to-machine map, and configured output polygon. Preview
 construction, reopening, export, Start Here, and Start reject the job if any of
 those bindings changed.
 
-The existing guarded run path remains authoritative. Preview cannot connect,
-home, enable motion, arm the laser, or submit commands, and it does not relax
+The existing guarded `run_current_job()` path remains authoritative. Preview's
+**START JOB** signal dismisses the modal dialog and delegates synchronously to
+that path; Preview itself cannot connect, home, enable motion, arm the laser, or
+submit commands. The handoff does not relax revision and bound-source checks,
 bounds checking, the conservative command allowlist, rapid-with-laser rejection,
-or stop/disarm behavior. It is not a safety-rated beam-location guarantee; zero-power
-frame every real job and keep the operator present.
+or stop/disarm behavior. The main Job panel and menu action only reopen Preview,
+so they cannot bypass review. Preview is not a safety-rated beam-location
+guarantee; zero-power frame every real job and keep the operator present.
+
+**Prepare Start Here…** never runs hardware. It asks for confirmation owned by
+the modal Preview, replaces the prepared program, and requires the replacement
+to finish and be reviewed in its own exact Preview before **START JOB** is
+available.
 
 Preview includes an operation table with independent display visibility and
 generated speed shown in mm/s plus percentage of the configured work-feed

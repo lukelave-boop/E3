@@ -36,6 +36,8 @@ Desktop foundation:
 
 Current branch feature:
 
+- Mandatory window-modal exact Preview as the only visible path to
+  **START JOB**, shared by project and prepared Machine Setup programs.
 - Raw Live Monitor diagnostics distinguish Pi usable-frame Capture FPS,
   desktop socket Network FPS, Qt presentation Display FPS, and source Age while
   retaining bounded latest-frame replacement.

@@ -585,6 +585,7 @@ class JobPreviewCanvas(QtWidgets.QGraphicsView):
 
 
 class JobPreviewDialog(QtWidgets.QDialog):
+    runRequested = QtCore.Signal()
     startHereRequested = QtCore.Signal(int)
     renderProgress = QtCore.Signal(int, int)
     renderFinished = QtCore.Signal()
@@ -613,7 +614,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self._deferred_render = bool(defer_render)
         self._render_completed = not self._deferred_render
         self.setWindowTitle(f"Job Preview — {job_name}")
-        self.setModal(False)
+        self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         minimum_size, initial_size = self._screen_limited_sizes()
         self.setMinimumSize(minimum_size)
         self.resize(initial_size)
@@ -846,11 +847,21 @@ class JobPreviewDialog(QtWidgets.QDialog):
             "Prepare Start Here…",
             QtWidgets.QDialogButtonBox.ButtonRole.ActionRole,
         )
+        self.run_button = buttons.addButton(
+            "START JOB",
+            QtWidgets.QDialogButtonBox.ButtonRole.DestructiveRole,
+        )
+        self.run_button.setObjectName("dangerButton")
+        self.run_button.setMinimumWidth(120)
+        self.run_button.setToolTip(
+            "Submit this exact reviewed job through the existing guarded execution checks"
+        )
         self.start_here_button.setToolTip(
             "Prepare a new guarded job beginning at the currently reviewed move; "
             "this does not start the machine"
         )
         self.start_here_button.clicked.connect(self._request_start_here)
+        self.run_button.clicked.connect(self._request_run)
         self.save_button.clicked.connect(self._save_image)
         buttons.rejected.connect(self.close)
         layout.addWidget(buttons)
@@ -865,6 +876,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 self.play_button,
                 self.speed_combo,
                 self.start_here_button,
+                self.run_button,
             ):
                 control.setEnabled(False)
             self.time_label.setText("Building exact preview…")
@@ -1077,6 +1089,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
             self.reset_button,
             self.play_button,
             self.speed_combo,
+            self.run_button,
         ):
             control.setEnabled(True)
         self.set_elapsed(self.plan.total_seconds)
@@ -1126,6 +1139,10 @@ class JobPreviewDialog(QtWidgets.QDialog):
     def _request_start_here(self) -> None:
         if self._current_move_index is not None:
             self.startHereRequested.emit(self._current_move_index)
+
+    def _request_run(self) -> None:
+        if self._render_completed:
+            self.runRequested.emit()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self._timer.stop()

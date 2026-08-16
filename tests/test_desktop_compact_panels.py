@@ -86,25 +86,25 @@ def test_job_panel_uses_compact_rows_and_preserves_action_states(
     panel = JobPanel()
     _show_compact(panel, qt_application, 220)
     generated: list[bool] = []
-    started: list[bool] = []
+    previewed: list[bool] = []
     stopped: list[bool] = []
     panel.generateRequested.connect(lambda: generated.append(True))
-    panel.startRequested.connect(lambda: started.append(True))
+    panel.previewRequested.connect(lambda: previewed.append(True))
     panel.stopRequested.connect(lambda: stopped.append(True))
 
     assert not hasattr(panel, "frame_button")
-    assert panel.start_button.geometry().top() == panel.stop_button.geometry().top()
+    assert panel.preview_button.geometry().top() == panel.stop_button.geometry().top()
     assert not panel.pause_button.isEnabled()
     for button in (
         panel.generate_button,
-        panel.start_button,
+        panel.preview_button,
         panel.pause_button,
         panel.stop_button,
     ):
         _assert_inside_panel(button, panel)
 
     panel.generate_button.click()
-    assert not panel.start_button.isEnabled()
+    assert not panel.preview_button.isEnabled()
     panel.set_machine_status(
         {
             "connected": True,
@@ -112,24 +112,25 @@ def test_job_panel_uses_compact_rows_and_preserves_action_states(
             "coordinate_reference_ready": True,
         }
     )
-    assert not panel.start_button.isEnabled()
+    assert not panel.preview_button.isEnabled()
     panel.set_prepared_job(
         "1 path · estimated 1 s",
         power_percent=0.0,
         controller_power=0.0,
     )
-    assert panel.start_button.isEnabled()
-    panel.start_button.click()
+    assert panel.preview_button.isEnabled()
+    assert panel.preview_button.text() == "Preview Job…"
+    panel.preview_button.click()
     panel.stop_button.click()
     assert generated == [True]
-    assert started == [True]
+    assert previewed == [True]
     assert stopped == [True]
 
     panel.close()
     panel.deleteLater()
 
 
-def test_job_panel_blocks_start_until_untrusted_controller_is_reconnected(
+def test_job_panel_keeps_preview_available_during_reconnect_requirement(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     panel = JobPanel()
@@ -149,8 +150,8 @@ def test_job_panel_blocks_start_until_untrusted_controller_is_reconnected(
         }
     )
 
-    assert not panel.start_button.isEnabled()
-    assert "disconnect and reconnect" in panel.start_button.toolTip().lower()
+    assert panel.preview_button.isEnabled()
+    assert "start job" in panel.preview_button.toolTip().lower()
     assert panel.stop_button.isEnabled()
 
     panel.set_machine_status(
@@ -161,14 +162,14 @@ def test_job_panel_blocks_start_until_untrusted_controller_is_reconnected(
             "controller_reconnect_required": False,
         }
     )
-    assert panel.start_button.isEnabled()
+    assert panel.preview_button.isEnabled()
     panel.clear_prepared_job()
-    assert not panel.start_button.isEnabled()
+    assert not panel.preview_button.isEnabled()
     panel.close()
     panel.deleteLater()
 
 
-def test_prepared_job_can_start_offline_and_attempt_connection(
+def test_prepared_job_can_be_previewed_while_controller_is_offline(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     panel = JobPanel()
@@ -181,8 +182,8 @@ def test_prepared_job_can_start_offline_and_attempt_connection(
 
     panel.set_machine_status({"connected": False, "allow_motion": True})
 
-    assert panel.start_button.isEnabled()
-    assert "connect automatically" in panel.start_button.toolTip().lower()
+    assert panel.preview_button.isEnabled()
+    assert "start job" in panel.preview_button.toolTip().lower()
     panel.close()
     panel.deleteLater()
 

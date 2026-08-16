@@ -3167,8 +3167,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "Prepare powered registration marks",
                 "This prepares eight powered crosses. Use only a previously verified "
                 "visible-marking power on a restrained sacrificial surface inside the "
-                "required enclosure. After reviewing and closing Preview, the main "
-                "window's Start button submits this prepared powered job immediately."
+                "required enclosure. After reviewing the exact Preview, use its "
+                "START JOB button to submit this prepared powered job immediately."
                 "\n\nContinue?",
                 QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
@@ -3680,8 +3680,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "Prepare powered accuracy validation",
                 "This prepares five powered holdout crosses. Use a clean, restrained "
                 "sacrificial surface at the calibrated height and only a previously "
-                "verified visible-marking power. After reviewing and closing Preview, "
-                "the main window's Start button submits this prepared powered job "
+                "verified visible-marking power. After reviewing the exact Preview, "
+                "its START JOB button submits this prepared powered job "
                 "immediately.\n\nContinue?",
                 QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.Cancel,
                 QtWidgets.QMessageBox.StandardButton.Cancel,
