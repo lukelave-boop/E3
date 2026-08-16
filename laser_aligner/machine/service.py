@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..config import LaserSettings, MachineSettings
-from ..errors import MachineError, SafetyError
+from ..errors import MachineError, SafetyError, TransientConnectionError
 from ..gcode.preview import contains_motion, parse_words, strip_comment
 from ..geometry.polygon import (
     ConvexPolygon,
@@ -32,6 +32,9 @@ _STREAM_G_CODES = {0, 1, 21, 90}
 _STREAM_M_CODES = {3, 4, 5}
 _STREAM_LETTERS = {"G", "M", "X", "Y", "F", "S"}
 _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS = 6.0
+_INITIAL_CONNECT_RETRY_DELAY_SECONDS = 0.2
+_GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS = 0.2
+_GRBL_HOMING_TIMEOUT_SECONDS = 120.0
 _JOB_COMMAND_ACK_TIMEOUT_SECONDS = 120.0
 _GRBL_COORDINATE_EPSILON_MM = 0.001
 _REALTIME_STOP_WRITE_DEADLINE_SECONDS = 0.35
@@ -133,6 +136,7 @@ class MachineService:
         self._active_baudrate = settings.baudrate
         self._connected = False
         self._connecting = False
+        self._trusted_controller_session_established = False
         self._controller_reconnect_required = False
         self._coordinate_reference_ready = settings.backend == "simulator"
         self._coordinate_state_reference: dict[str, Any] | None = None
@@ -251,13 +255,29 @@ class MachineService:
             active_baudrate = self.settings.baudrate if baudrate is None else baudrate
             if type(active_baudrate) is not int or active_baudrate <= 0:
                 raise MachineError("Controller baud rate must be a positive integer")
-            if self.settings.backend == "simulator":
-                transport: MachineTransport = SimulatedTransport()
-            else:
-                transport = create_serial_transport(active_port, active_baudrate)
             self._connecting = True
             try:
-                transport.open()
+                attempts = 2 if not self._trusted_controller_session_established else 1
+                transport: MachineTransport | None = None
+                for attempt in range(attempts):
+                    transport = (
+                        SimulatedTransport()
+                        if self.settings.backend == "simulator"
+                        else create_serial_transport(active_port, active_baudrate)
+                    )
+                    try:
+                        transport.open()
+                        break
+                    except TransientConnectionError:
+                        transport.close()
+                        if attempt + 1 >= attempts:
+                            raise
+                        self._append_log(
+                            "INFO",
+                            "Initial controller connection failed transiently; retrying once",
+                        )
+                        time.sleep(_INITIAL_CONNECT_RETRY_DELAY_SECONDS)
+                assert transport is not None
                 with self._stop_epoch_lock:
                     if self._stop_epoch != connect_stop_epoch:
                         raise MachineError(
@@ -302,17 +322,20 @@ class MachineService:
                         raise MachineError(
                             "Controller connection was cancelled by software STOP"
                         )
+                    self._trusted_controller_session_established = True
             except Exception:
                 with self._transport_write_lock:
                     # The transport may have physically opened just as STOP
                     # cancelled publication. It is not yet visible to
                     # request_stop(), so this cleanup owns the best-effort M5.
                     try:
-                        transport.write_line("M5")
+                        if transport is not None:
+                            transport.write_line("M5")
                         self._append_log("TX", "M5 (connection cleanup)")
                     except Exception:
                         pass
-                    transport.close()
+                    if transport is not None:
+                        transport.close()
                 self._transport = None
                 self._connected = False
                 self._controller_reconnect_required = False
@@ -328,6 +351,10 @@ class MachineService:
     def ensure_connected(self) -> dict[str, Any]:
         """Return a trusted connection, reconnecting when necessary."""
 
+        requested_stop_epoch = self._operation_stop_epoch()
+        with self._stop_epoch_lock:
+            if self._stop_epoch != requested_stop_epoch:
+                raise MachineError("Controller connection was cancelled by software STOP")
         # Keep the observe-disconnect-connect sequence under the same ownership
         # used by controller operations. Otherwise two queued operations can
         # both observe one untrusted connection and the later caller can tear
@@ -338,8 +365,10 @@ class MachineService:
                 reconnect_required = self._controller_reconnect_required
             if connected and not reconnect_required:
                 return self.status()
-            if connected:
-                self.disconnect()
+            if reconnect_required:
+                raise MachineError(
+                    "Controller state is uncertain; disconnect and reconnect manually, then Home before motion"
+                )
             return self.connect()
 
     def _wait_for_controller_startup(
@@ -994,6 +1023,88 @@ class MachineService:
             _expected_stop_epoch=expected_stop_epoch,
         )
 
+    def _execute_grbl_homing_locked(
+        self,
+        *,
+        timeout: float,
+        expected_stop_epoch: int,
+    ) -> list[str]:
+        """Run ``$H`` with a status-transition fallback for missing ``ok``.
+
+        A normal terminal acknowledgement remains authoritative.  Otherwise,
+        fallback success requires a controller-reported active homing state
+        followed by Idle.  Idle alone is deliberately ambiguous.
+        """
+
+        transport = self._require_connection()
+        responses: list[str] = []
+        saw_active_homing = False
+        deadline = time.monotonic() + timeout
+        next_status_query = time.monotonic()
+        with self._transport_write_lock:
+            with self._stop_epoch_lock:
+                if self._stop_epoch != expected_stop_epoch:
+                    raise MachineError("Home / park was cancelled by software STOP")
+            self._check_line_safety("$H")
+            try:
+                transport.write_line("$H")
+                self._append_log("TX", "$H")
+            except Exception as exc:
+                self._mark_controller_command_state_untrusted()
+                raise MachineError(f"Command '$H' failed while writing: {exc}") from exc
+
+        try:
+            while time.monotonic() < deadline:
+                with self._stop_epoch_lock:
+                    if self._stop_epoch != expected_stop_epoch:
+                        raise MachineError("Home / park was cancelled by software STOP")
+                now = time.monotonic()
+                if now >= next_status_query:
+                    transport.write_raw(b"?")
+                    self._append_log("TX", "?")
+                    next_status_query = now + _GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS
+                line = transport.read_line(
+                    timeout=min(0.1, max(0.0, deadline - time.monotonic()))
+                )
+                if not line:
+                    continue
+                with self._stop_epoch_lock:
+                    if self._stop_epoch != expected_stop_epoch:
+                        raise MachineError("Home / park was cancelled by software STOP")
+                responses.append(line)
+                self._append_log("RX", line)
+                lower = line.strip().lower()
+                if lower == "ok" or lower.startswith("ok "):
+                    return responses
+                if lower.startswith("error") or lower.startswith("alarm") or lower.startswith("<alarm"):
+                    raise _ControllerCommandRejected(line)
+                if lower.startswith("<"):
+                    state = lower[1:].split("|", 1)[0].split(":", 1)[0]
+                    if state in {"home", "homing", "run"}:
+                        saw_active_homing = True
+                    elif state == "idle" and saw_active_homing:
+                        self._append_log(
+                            "INFO",
+                            "GRBL homing completed from active-to-idle realtime status evidence without a terminal ok",
+                        )
+                        return responses
+            raise MachineError(
+                "Controller did not provide an acknowledgement or a verified active-to-idle homing transition "
+                f"within {timeout:g} seconds"
+            )
+        except Exception as exc:
+            with self._stop_epoch_lock:
+                stopped = self._stop_epoch != expected_stop_epoch
+            if not isinstance(exc, _ControllerCommandRejected):
+                self._mark_controller_command_state_untrusted()
+            if stopped:
+                raise MachineError("Home / park was cancelled by software STOP") from exc
+            if isinstance(exc, _ControllerCommandRejected):
+                raise MachineError(f"Command '$H' failed: {exc}") from exc
+            if isinstance(exc, MachineError) and str(exc).startswith("Command '$H'"):
+                raise
+            raise MachineError(f"Command '$H' failed: {exc}") from exc
+
     @staticmethod
     def _parse_grbl_coordinate_state(
         modal_responses: list[str],
@@ -1210,13 +1321,16 @@ class MachineService:
                 execute("$X")
                 execute("M5")
             if self.settings.home_before_photo:
-                execute(
-                    "$H" if self._protocol == "grbl" else "G28",
-                    timeout=max(120.0, self.settings.read_timeout),
-                )
-                # A successful homing acknowledgement is the completion
-                # barrier. Some GRBL-derived controllers do not emit standard
-                # realtime <Idle...> reports after homing.
+                if self._protocol == "grbl":
+                    homing_responses = self._execute_grbl_homing_locked(
+                        timeout=max(_GRBL_HOMING_TIMEOUT_SECONDS, self.settings.read_timeout),
+                        expected_stop_epoch=operation_stop_epoch,
+                    )
+                    transcript.append(
+                        {"command": "$H", "responses": homing_responses}
+                    )
+                else:
+                    execute("G28", timeout=max(120.0, self.settings.read_timeout))
             coordinate_state = (
                 self._read_grbl_coordinate_state()
                 if self.settings.backend == "serial" and self._protocol == "grbl"

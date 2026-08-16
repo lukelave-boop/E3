@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import queue
+
 from laser_aligner.machine.bridge import _fail_safe_disconnect
 
 
@@ -71,3 +73,53 @@ def test_authenticated_client_loss_stops_grbl_before_serial_close() -> None:
     assert serial.lines[0] == "M5"
     assert serial.raw[-1] == b"!\x18"
     assert serial.lines[-1] == "M5"
+
+
+def test_authenticated_bridge_forwards_controller_ack_without_filtering() -> None:
+    import socket
+    import threading
+    import time
+
+    from laser_aligner.machine.bridge import _serve_authenticated_client
+
+    class ReplyingSerial(FakeSerial):
+        def __init__(self) -> None:
+            super().__init__()
+            self.responses: queue.Queue[str] = queue.Queue()
+
+        def write_raw(self, data: bytes) -> None:
+            super().write_raw(data)
+            if data == b"$H\n":
+                self.responses.put("ok")
+
+        def read_line(self, timeout: float = 1.0) -> str | None:
+            try:
+                return self.responses.get(timeout=timeout)
+            except queue.Empty:
+                return None
+
+    client, server = socket.socketpair()
+    serial = ReplyingSerial()
+    thread = threading.Thread(
+        target=_serve_authenticated_client,
+        kwargs={
+            "conn": server,
+            "serial_path": "/dev/test",
+            "baudrate": 115200,
+            "protocol": "grbl",
+            "serial_factory": lambda _path, _baud: serial,
+        },
+    )
+    thread.start()
+    try:
+        assert client.recv(1024) == b"E3BRIDGE/1 READY 115200\n"
+        client.sendall(b"$H\n")
+        client.settimeout(1.0)
+        assert client.recv(1024) == b"ok\n"
+        assert b"$H\n" in serial.raw
+    finally:
+        client.close()
+        thread.join(timeout=1.0)
+        server.close()
+        time.sleep(0.01)
+    assert not thread.is_alive()

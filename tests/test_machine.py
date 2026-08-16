@@ -6,7 +6,12 @@ from dataclasses import replace
 import pytest
 
 from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
-from laser_aligner.errors import CameraError, MachineError, SafetyError
+from laser_aligner.errors import (
+    CameraError,
+    MachineError,
+    SafetyError,
+    TransientConnectionError,
+)
 from laser_aligner.machine.service import MachineService
 from laser_aligner.machine.simulator import SimulatedTransport
 
@@ -90,7 +95,7 @@ def test_ensure_connected_opens_a_disconnected_machine() -> None:
     machine.disconnect()
 
 
-def test_concurrent_ensure_connected_calls_share_one_reconnect_sequence(
+def test_ensure_connected_never_reconnects_an_uncertain_established_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
@@ -100,53 +105,23 @@ def test_concurrent_ensure_connected_calls_share_one_reconnect_sequence(
     )
     machine.connect()
     machine.request_stop()
-    original_disconnect = machine.disconnect
-    disconnect_entered = threading.Event()
-    release_disconnect = threading.Event()
-    disconnect_calls = 0
-    calls_lock = threading.Lock()
+    monkeypatch.setattr(
+        machine,
+        "disconnect",
+        lambda: pytest.fail("uncertain sessions must not be automatically disconnected"),
+    )
+    monkeypatch.setattr(
+        machine,
+        "connect",
+        lambda: pytest.fail("uncertain sessions must not be automatically reconnected"),
+    )
 
-    def paused_disconnect() -> None:
-        nonlocal disconnect_calls
-        with calls_lock:
-            disconnect_calls += 1
-            call_number = disconnect_calls
-        if call_number == 1:
-            disconnect_entered.set()
-            assert release_disconnect.wait(timeout=2.0)
-        original_disconnect()
+    with pytest.raises(MachineError, match="disconnect and reconnect manually"):
+        machine.ensure_connected()
 
-    monkeypatch.setattr(machine, "disconnect", paused_disconnect)
-    results: list[dict[str, object]] = []
-    errors: list[Exception] = []
-
-    def reconnect() -> None:
-        try:
-            results.append(machine.ensure_connected())
-        except Exception as exc:
-            errors.append(exc)
-
-    first = threading.Thread(target=reconnect, daemon=True)
-    second = threading.Thread(target=reconnect, daemon=True)
-    first.start()
-    assert disconnect_entered.wait(timeout=1.0)
-    second.start()
-    time.sleep(0.05)
-
-    with calls_lock:
-        assert disconnect_calls == 1
-
-    release_disconnect.set()
-    first.join(timeout=2.0)
-    second.join(timeout=2.0)
-
-    assert not first.is_alive()
-    assert not second.is_alive()
-    assert errors == []
-    assert len(results) == 2
-    assert all(result["connected"] is True for result in results)
     assert machine.status()["connected"] is True
-    assert machine.status()["controller_reconnect_required"] is False
+    assert machine.status()["controller_reconnect_required"] is True
+    monkeypatch.undo()
     machine.disconnect()
 
 
@@ -1579,6 +1554,11 @@ def test_home_park_rejects_grbl_offsets_before_issuing_park_move(
     )
     monkeypatch.setattr(
         machine,
+        "_execute_grbl_homing_locked",
+        lambda **_kwargs: commands.append("$H") or ["ok"],
+    )
+    monkeypatch.setattr(
+        machine,
         "_read_grbl_coordinate_state",
         lambda: {
             "active_workspace": "G54",
@@ -2102,6 +2082,14 @@ def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
         return ["ok"]
 
     monkeypatch.setattr(machine, "send_command", record_command)
+    monkeypatch.setattr(
+        machine,
+        "_execute_grbl_homing_locked",
+        lambda *, timeout, expected_stop_epoch: recorded.append(
+            ("$H", timeout, True)
+        )
+        or ["ok"],
+    )
     try:
         machine.prepare_photo_position()
     finally:
@@ -2783,6 +2771,11 @@ def test_home_park_recovers_only_post_sleep_m5_alarm(
         return ["ok"]
 
     monkeypatch.setattr(machine, "send_command", record_command)
+    monkeypatch.setattr(
+        machine,
+        "_execute_grbl_homing_locked",
+        lambda **_kwargs: commands.append("$H") or ["ok"],
+    )
     monkeypatch.setattr(
         machine,
         "_wait_for_motion_complete",
@@ -3815,3 +3808,269 @@ def test_disarm_stops_an_active_laser_job() -> None:
         assert status["job"]["error"] == "Job stopped"
     finally:
         machine.disconnect()
+
+
+class HomingStatusTransport(SimulatedTransport):
+    def __init__(self, statuses: list[str]) -> None:
+        super().__init__()
+        self.statuses = list(statuses)
+        self.commands: list[str] = []
+
+    def write_line(self, line: str) -> None:
+        command = line.strip().upper()
+        self.commands.append(command)
+        if command == "$H":
+            return
+        super().write_line(line)
+
+    def write_raw(self, data: bytes) -> None:
+        if b"?" in data and self.statuses:
+            self._queue.put(self.statuses.pop(0))
+            return
+        super().write_raw(data)
+
+
+def _connected_homing_machine(transport: SimulatedTransport) -> MachineService:
+    transport.open()
+    transport.drain()
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=True,
+            photo_x=110,
+            photo_y=105,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine._transport = transport
+    machine._connected = True
+    machine._protocol = "grbl"
+    return machine
+
+
+def test_grbl_homing_without_ok_requires_active_then_idle_before_park(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = HomingStatusTransport(
+        ["<Home|MPos:1,1,0|FS:0,0>", "<Idle|MPos:0,0,0|FS:0,0>"]
+    )
+    machine = _connected_homing_machine(transport)
+    monkeypatch.setattr(
+        machine,
+        "_read_grbl_coordinate_state",
+        lambda: {
+            "active_workspace": "G54",
+            "active_offset_mm": [0.0, 0.0, 0.0],
+            "g92_offset_mm": [0.0, 0.0, 0.0],
+        },
+    )
+    monkeypatch.setattr(machine, "_wait_for_motion_complete", lambda **_kwargs: ["ok"])
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS",
+        0.0,
+    )
+
+    result = machine.prepare_photo_position()
+
+    assert result["position"] == {"x": 110.0, "y": 105.0, "z": None}
+    assert transport.commands[:4] == ["M5", "$H", "G21", "G90"]
+    assert transport.commands[4].startswith("G0 X110.000 Y105.000")
+    assert not any(command.startswith(("M3", "M4")) for command in transport.commands)
+    assert machine.status()["coordinate_reference_ready"]
+    assert machine._jog_position_mm == (110.0, 105.0)
+
+
+@pytest.mark.parametrize(
+    ("statuses", "message"),
+    [
+        (["error:9"], "error:9"),
+        (["<Home|MPos:1,1,0>", "<Alarm|MPos:0,0,0>"], "Alarm"),
+    ],
+)
+def test_grbl_homing_rejection_or_alarm_never_parks(
+    monkeypatch: pytest.MonkeyPatch,
+    statuses: list[str],
+    message: str,
+) -> None:
+    transport = HomingStatusTransport(statuses)
+    machine = _connected_homing_machine(transport)
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS",
+        0.0,
+    )
+
+    with pytest.raises(MachineError, match=message):
+        machine.prepare_photo_position()
+
+    assert not any(command.startswith("G0 ") for command in transport.commands)
+    assert not machine.status()["coordinate_reference_ready"]
+
+
+def test_grbl_homing_immediate_idle_is_ambiguous_and_requires_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = HomingStatusTransport(["<Idle|MPos:0,0,0>"] * 10)
+    machine = _connected_homing_machine(transport)
+    monkeypatch.setattr("laser_aligner.machine.service._GRBL_HOMING_TIMEOUT_SECONDS", 0.03)
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS",
+        0.0,
+    )
+
+    with pytest.raises(MachineError, match="active-to-idle"):
+        machine.prepare_photo_position()
+
+    assert not any(command.startswith("G0 ") for command in transport.commands)
+    assert machine.status()["controller_reconnect_required"]
+    assert not machine.status()["coordinate_reference_ready"]
+
+
+def test_grbl_homing_disconnect_never_parks_and_requires_reconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DisconnectingHomingTransport(HomingStatusTransport):
+        def read_line(self, timeout: float = 1.0) -> str | None:
+            if self.commands and self.commands[-1] == "$H":
+                raise MachineError("E3 bridge connection closed")
+            return super().read_line(timeout)
+
+    transport = DisconnectingHomingTransport([])
+    machine = _connected_homing_machine(transport)
+
+    with pytest.raises(MachineError, match="connection closed"):
+        machine.prepare_photo_position()
+
+    assert not any(command.startswith("G0 ") for command in transport.commands)
+    assert machine.status()["controller_reconnect_required"]
+    assert not machine.status()["coordinate_reference_ready"]
+
+
+def test_initial_transient_connect_failure_retries_once(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first = SimulatedTransport()
+    second = SimulatedTransport()
+    close_calls = 0
+
+    def fail_open() -> None:
+        raise TransientConnectionError("temporary network failure")
+
+    def record_close() -> None:
+        nonlocal close_calls
+        close_calls += 1
+
+    first.open = fail_open  # type: ignore[method-assign]
+    first.close = record_close  # type: ignore[method-assign]
+    transports = iter([first, second])
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda *_args: next(transports),
+    )
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._INITIAL_CONNECT_RETRY_DELAY_SECONDS", 0.0
+    )
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl", controller_startup_delay=0.0),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    machine.connect()
+
+    assert close_calls >= 1
+    assert machine.connected
+
+
+def test_initial_connection_retries_at_most_once_and_not_validation_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    class FailingTransport(SimulatedTransport):
+        def open(self) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise TransientConnectionError("temporary network failure")
+
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda *_args: FailingTransport(),
+    )
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._INITIAL_CONNECT_RETRY_DELAY_SECONDS", 0.0
+    )
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl", controller_startup_delay=0.0),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    with pytest.raises(TransientConnectionError):
+        machine.connect()
+    assert attempts == 2
+
+    attempts = 0
+    with pytest.raises(MachineError, match="Protocol"):
+        machine.connect(protocol="invalid")
+    assert attempts == 0
+
+
+def test_initial_bridge_authentication_failure_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempts = 0
+
+    class AuthenticationFailureTransport(SimulatedTransport):
+        def open(self) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise MachineError("E3 bridge rejected the connection: authentication_failed")
+
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda *_args: AuthenticationFailureTransport(),
+    )
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl", controller_startup_delay=0.0),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    with pytest.raises(MachineError, match="authentication_failed"):
+        machine.connect()
+
+    assert attempts == 1
+
+
+def test_later_manual_reconnect_does_not_receive_initial_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    successful = SimulatedTransport()
+    failing = SimulatedTransport()
+    failure_attempts = 0
+
+    def fail_open() -> None:
+        nonlocal failure_attempts
+        failure_attempts += 1
+        raise TransientConnectionError("later connection lost")
+
+    failing.open = fail_open  # type: ignore[method-assign]
+    transports = iter([successful, failing])
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_serial_transport",
+        lambda *_args: next(transports),
+    )
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl", controller_startup_delay=0.0),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    machine.disconnect()
+
+    with pytest.raises(TransientConnectionError):
+        machine.connect()
+
+    assert failure_attempts == 1

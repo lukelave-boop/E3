@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
-from ..errors import MachineError
+from ..errors import MachineError, TransientConnectionError
 
 _BRIDGE_SCHEME = "e3bridge"
 _BRIDGE_VERSION = "E3BRIDGE/1"
@@ -151,13 +151,22 @@ class NetworkSerialTransport:
             sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             _authenticate(sock, token, self.baudrate)
             sock.setblocking(False)
-        except (OSError, UnicodeError) as exc:
+        except socket.gaierror as exc:
             if sock is not None:
                 try:
                     sock.close()
                 except Exception:
                     pass
             raise MachineError(
+                f"Could not resolve E3 bridge host {target.host}: {exc}"
+            ) from exc
+        except OSError as exc:
+            if sock is not None:
+                try:
+                    sock.close()
+                except Exception:
+                    pass
+            raise TransientConnectionError(
                 f"Could not connect to E3 bridge at {target.host}:{target.port}: {exc}"
             ) from exc
         except Exception:

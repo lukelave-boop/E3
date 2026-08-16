@@ -34,6 +34,21 @@ transport reports the failure to `MachineService`; the existing reconnect-only
 state invalidates the coordinate reference and requires the normal connection
 and Home / park sequence before later motion or arming.
 
+Before a `MachineService` instance has ever established a trusted controller
+session, a transient transport-open failure is retried exactly once after the
+failed transport is closed and a short delay. Invalid settings, unsupported
+protocol/backend choices, and missing or rejected bridge authentication are not
+retried. This startup accommodation never applies after a trusted session has
+been established; later loss or an uncertain exchange requires explicit
+disconnect/reconnect and Home / park.
+
+GRBL Home / park normally relies on `$H`'s terminal `ok`. For compatible
+GRBL-derived controllers that omit that reply, E3 also accepts positive
+realtime evidence of an active homing state followed by `Idle`. `Idle` without
+an observed active transition is not proof of homing. Alarm, error, STOP,
+disconnect, or timeout prevents the park move and invalidates the coordinate
+reference.
+
 The first physical bring-up must use `--laser-lockout` on the Windows desktop
 and should also physically disable laser output when practical. Validate
 identity, disconnect behavior, homing, jogging, camera capture, and calibration

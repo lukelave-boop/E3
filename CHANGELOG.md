@@ -1,5 +1,12 @@
 # Changelog
 
+- Controller bring-up now retries one transient initial transport-open failure,
+  while deterministic authentication/configuration failures and all uncertain
+  established sessions remain manual-reconnect-only. GRBL Home / park can
+  safely complete when `$H` omits `ok` only after controller-reported active
+  homing followed by `Idle`; ambiguous, alarmed, stopped, or disconnected
+  sequences never proceed to the park move.
+
 - Nested closed vector contours now complete all configured passes deepest-first
   before a containing contour begins. The geometric rule is winding-independent
   and applies to washers, traced paths, and imported compound paths while

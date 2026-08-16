@@ -7,6 +7,29 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-15**
 
+On 2026-08-15 the Raspberry Pi hardware-node candidate was physically exercised
+with the installed controller and camera. The remote camera delivered the
+configured 1920 x 1080 MJPG stream at 30 fps, and the authenticated controller
+bridge connected and delivered commands to the physical GRBL-derived
+controller. A `$H` command completed the physical double-touch homing motion,
+but no terminal `ok` reached E3, so the prior acknowledgement-only Home / park
+path timed out and correctly refused to issue the park move. The application
+now prefers the normal `$H` acknowledgement but can verify this controller from
+a realtime active-homing (`Home`/`Run`) to `Idle` transition; an immediately
+idle, alarmed, disconnected, stopped, or otherwise ambiguous exchange fails
+closed and requires reconnect. The bridge source and loopback coverage show
+that complete serial lines, including `ok`, are forwarded without filtering,
+but the physical session did not capture Pi-side raw serial traffic. Therefore
+the available evidence cannot distinguish a controller-omitted acknowledgement
+from a lower-level serial/bridge loss. Home / park and the configured park pose
+still require a new physical acceptance run with this correction.
+
+Initial transport opening now receives one bounded retry only before this
+`MachineService` instance has established any trusted controller session.
+Configuration, protocol, and bridge-authentication errors are not retried, and
+an established session that becomes uncertain is never automatically
+reconnected or resumed.
+
 A Windows-to-Raspberry-Pi hardware-node candidate now places authenticated
 controller and camera transports underneath the existing guarded services. The
 controller path preserves `MachineService` as the only normal command path and
@@ -20,9 +43,10 @@ restored GitHub Actions matrix passes on Ubuntu with Python 3.10, 3.11, and
 desktop extras and offscreen Qt suite. Ruff, dependency checks, and bytecode
 compilation pass in that same run. Local Linux verification also includes 1,737
 repository-wide tests, 1,371 portable tests without PySide6, and the focused
-network tests. No Pi, physical Windows host, camera, controller, disconnect,
-calibration, or powered physical test has been performed. Treat the network
-path as automated-test verified but physically unverified.
+network tests. The camera mode, bridge authentication, and controller command
+delivery are now physically bring-up verified as described above. Network-loss
+cleanup, corrected homing completion, parking, calibration repeatability, and
+powered operation remain physically unverified.
 
 Fine-registration reset now immediately re-evaluates the retained eight-mark
 capture against the restored base map instead of discarding the review and

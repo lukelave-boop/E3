@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import glob
 import os
 import queue
@@ -9,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..errors import MachineError
+from ..errors import MachineError, TransientConnectionError
 
 _BAUD_RATES = {
     9600: termios.B9600,
@@ -67,7 +68,13 @@ class PosixSerial:
         try:
             fd = os.open(self.path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         except OSError as exc:
-            raise MachineError(f"Could not open serial port {self.path}: {exc}") from exc
+            if exc.errno in {errno.EACCES, errno.ENOENT, errno.ENOTDIR}:
+                raise MachineError(
+                    f"Could not open serial port {self.path}: {exc}"
+                ) from exc
+            raise TransientConnectionError(
+                f"Could not open serial port {self.path}: {exc}"
+            ) from exc
         try:
             attrs = termios.tcgetattr(fd)
             attrs[0] = 0
