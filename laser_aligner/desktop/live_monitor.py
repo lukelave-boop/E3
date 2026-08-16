@@ -11,6 +11,64 @@ from .qt import require_qt
 QtCore, QtGui, QtWidgets = require_qt()
 
 
+def _scaled_size(width: int, height: int, target: tuple[int, int]) -> QtCore.QSize:
+    source = QtCore.QSize(width, height)
+    target_size = QtCore.QSize(max(1, target[0]), max(1, target[1]))
+    scaled = source.scaled(
+        target_size,
+        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+    )
+    if scaled.width() > source.width() or scaled.height() > source.height():
+        return source
+    return scaled
+
+
+def _prepare_monitor_payload(
+    payload: dict[str, Any],
+    target: tuple[int, int],
+) -> dict[str, Any]:
+    """Decode and scale one latest frame without constructing a QPixmap."""
+
+    prepared = dict(payload)
+    expected_width = int(payload["width"])
+    expected_height = int(payload["height"])
+    presentation_size = _scaled_size(expected_width, expected_height, target)
+    jpeg = payload.get("jpeg")
+    if jpeg is not None:
+        encoded = QtCore.QByteArray(bytes(jpeg))
+        buffer = QtCore.QBuffer()
+        buffer.setData(encoded)
+        if not buffer.open(QtCore.QIODevice.OpenModeFlag.ReadOnly):
+            raise ValueError("Raw monitor JPEG buffer could not be opened")
+        reader = QtGui.QImageReader(buffer, b"jpeg")
+        source_size = reader.size()
+        if source_size != QtCore.QSize(expected_width, expected_height):
+            raise ValueError(
+                "Raw monitor JPEG dimensions did not match the received metadata"
+            )
+        if presentation_size != source_size:
+            reader.setScaledSize(presentation_size)
+        image = reader.read()
+        if image.isNull():
+            raise ValueError(
+                f"Raw monitor JPEG could not be decoded: {reader.errorString()}"
+            )
+    else:
+        image = image_to_qimage(payload["image"])
+        if image.isNull():
+            raise ValueError("Raw monitor frame could not be converted for display")
+        if image.size() != presentation_size:
+            image = image.scaled(
+                presentation_size,
+                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                QtCore.Qt.TransformationMode.SmoothTransformation,
+            )
+    prepared.pop("jpeg", None)
+    prepared.pop("image", None)
+    prepared["prepared_image"] = image
+    return prepared
+
+
 class _MonitorThread(QtCore.QThread):
     frameAvailable = QtCore.Signal()
     failed = QtCore.Signal(str)
@@ -20,20 +78,32 @@ class _MonitorThread(QtCore.QThread):
         self.camera = camera
         self.fps = fps
         self.stop_event = threading.Event()
+        self._incoming_event = threading.Event()
+        self._incoming_lock = threading.Lock()
+        self._latest_incoming: dict[str, Any] | None = None
+        self._receiver_done = threading.Event()
+        self._receiver_error: str | None = None
+        self._target_lock = threading.Lock()
+        self._target_size = (960, 540)
         self._latest_lock = threading.Lock()
         self._latest: dict[str, Any] | None = None
         self._notification_pending = False
         self._receive_times: deque[float] = deque(maxlen=60)
 
-    def run(self) -> None:
-        monitor = getattr(self.camera, "monitor_frames", None)
+    def _receive(self) -> None:
+        monitor = getattr(self.camera, "monitor_jpeg_frames", None)
         if not callable(monitor):
-            self.failed.emit("Raw Live Monitor requires an e3camera:// camera")
+            monitor = getattr(self.camera, "monitor_frames", None)
+        if not callable(monitor):
+            self._receiver_error = "Raw Live Monitor requires an e3camera:// camera"
+            self._receiver_done.set()
+            self._incoming_event.set()
             return
         try:
-            for payload in monitor(fps=self.fps, stop_event=self.stop_event):
+            for original in monitor(fps=self.fps, stop_event=self.stop_event):
                 if self.stop_event.is_set():
                     return
+                payload = dict(original)
                 received = payload.get("received_monotonic")
                 received_monotonic = (
                     float(received) if received is not None else time.monotonic()
@@ -44,29 +114,72 @@ class _MonitorThread(QtCore.QThread):
                     and received_monotonic - self._receive_times[0] > 2.0
                 ):
                     self._receive_times.popleft()
-                network_fps = (
+                payload["network_fps"] = (
                     (len(self._receive_times) - 1)
                     / (self._receive_times[-1] - self._receive_times[0])
                     if len(self._receive_times) > 1
                     and self._receive_times[-1] > self._receive_times[0]
                     else 0.0
                 )
-                payload = dict(payload)
-                payload["network_fps"] = network_fps
-                notify = False
-                with self._latest_lock:
-                    self._latest = payload
-                    if not self._notification_pending:
-                        self._notification_pending = True
-                        notify = True
-                if notify:
-                    self.frameAvailable.emit()
+                with self._incoming_lock:
+                    self._latest_incoming = payload
+                self._incoming_event.set()
         except Exception as exc:
             if not self.stop_event.is_set():
-                self.failed.emit(str(exc))
+                self._receiver_error = str(exc)
+        finally:
+            self._receiver_done.set()
+            self._incoming_event.set()
+
+    def run(self) -> None:
+        receiver = threading.Thread(
+            target=self._receive,
+            name="raw-monitor-receiver",
+            daemon=True,
+        )
+        receiver.start()
+        try:
+            while not self.stop_event.is_set():
+                self._incoming_event.wait()
+                self._incoming_event.clear()
+                if self.stop_event.is_set():
+                    break
+                with self._incoming_lock:
+                    payload = self._latest_incoming
+                    self._latest_incoming = None
+                if payload is not None:
+                    with self._target_lock:
+                        target = self._target_size
+                    prepared = _prepare_monitor_payload(payload, target)
+                    notify = False
+                    with self._latest_lock:
+                        self._latest = prepared
+                        if not self._notification_pending:
+                            self._notification_pending = True
+                            notify = True
+                    if notify:
+                        self.frameAvailable.emit()
+                if self._receiver_done.is_set():
+                    with self._incoming_lock:
+                        if self._latest_incoming is None:
+                            break
+        except Exception as exc:
+            if not self.stop_event.is_set():
+                self._receiver_error = str(exc)
+            self.stop_event.set()
+        finally:
+            self.stop_event.set()
+            receiver.join(timeout=2.25)
+        if self._receiver_error is not None:
+            self.failed.emit(self._receiver_error)
 
     def stop(self) -> None:
         self.stop_event.set()
+        self._incoming_event.set()
+
+    def set_target_size(self, width: int, height: int) -> None:
+        with self._target_lock:
+            self._target_size = (max(1, width), max(1, height))
 
     def take_latest(self) -> dict[str, Any] | None:
         with self._latest_lock:
@@ -106,6 +219,7 @@ class LiveMonitorWindow(QtWidgets.QWidget):
         self.image_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         self.image_label.setMinimumSize(320, 180)
         self.image_label.setStyleSheet("background: #101010; color: #dddddd;")
+        self.image_label.installEventFilter(self)
         layout.addWidget(self.image_label, 1)
         note = QtWidgets.QLabel(
             "RAW / UNCORRECTED camera pixels. This view grants no controller, motion, "
@@ -117,11 +231,21 @@ class LiveMonitorWindow(QtWidgets.QWidget):
         self.start_button.clicked.connect(self.start_monitor)
         self.stop_button.clicked.connect(self.stop_monitor)
 
+    def eventFilter(self, watched: QtCore.QObject, event: QtCore.QEvent) -> bool:  # noqa: N802
+        if watched is self.image_label and event.type() == QtCore.QEvent.Type.Resize:
+            worker = self._worker
+            if worker is not None:
+                size = self.image_label.size()
+                worker.set_target_size(size.width(), size.height())
+        return super().eventFilter(watched, event)
+
     def start_monitor(self) -> None:
         if self._worker is not None:
             return
         self._frame_times.clear()
         worker = _MonitorThread(self.camera, int(self.rate.currentData()), self)
+        size = self.image_label.size()
+        worker.set_target_size(size.width(), size.height())
         worker.frameAvailable.connect(self._frame_available)
         worker.failed.connect(self._failed)
         worker.finished.connect(self._finished)
@@ -144,15 +268,8 @@ class LiveMonitorWindow(QtWidgets.QWidget):
         payload = None if worker is None else worker.take_latest()
         if payload is None:
             return
-        image = image_to_qimage(payload["image"])
-        pixmap = QtGui.QPixmap.fromImage(image)
-        self.image_label.setPixmap(
-            pixmap.scaled(
-                self.image_label.size(),
-                QtCore.Qt.AspectRatioMode.KeepAspectRatio,
-                QtCore.Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        pixmap = QtGui.QPixmap.fromImage(payload["prepared_image"])
+        self.image_label.setPixmap(pixmap)
         now = time.monotonic()
         self._frame_times.append(now)
         while self._frame_times and now - self._frame_times[0] > 2.0:

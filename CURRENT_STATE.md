@@ -95,6 +95,28 @@ verified only. Direct-path latency, controller responsiveness, precision-capture
 coexistence, and go2rtc service impact remain physically unmeasured and must not
 be inferred from desktop CI.
 
+On 2026-08-16, physical Windows-laptop monitoring at 1920×1080 `DIRECT MJPEG`
+measured Capture 17.4 fps, Network 10.1 fps, Display 7.7 fps, and source Age
+7 ms with a 10 fps target. With a 15 fps target it measured Capture 17.2 fps,
+Network 14.9 fps, Display 8.3 fps, and source Age 29 ms. The nearly proportional
+increase in Network delivery without a corresponding Display increase localized
+an approximately 8 fps ceiling to the Windows desktop presentation path while
+Pi capture and socket delivery remained faster. The Raw Live Monitor now takes
+the same bounded encoded JPEG packets through a narrow remote-camera API, keeps
+only the latest received packet while a separate presentation worker is busy,
+and uses Qt JPEG decoder-assisted scaling toward a thread-safe snapshot of the
+current display size. The GUI thread now only constructs the `QPixmap`, presents
+it, and updates diagnostics; ordinary decoded `monitor_frames()` callers remain
+compatible. A repeatable local synthetic 1920×1080-to-899×506 comparison reduced
+measured GUI-thread conversion/presentation work from 4.07 ms to 0.15 ms per
+frame and total decode/preparation plus presentation from 8.49 ms to 4.82 ms;
+the new 4.66 ms preparation occurs off the GUI thread and avoids full-resolution
+BGR and QImage intermediates in this monitor path. The architecture, bounds,
+dimensions, two-stage latest-frame replacement, resize behavior, diagnostics,
+and lifecycle are automated-test and local-benchmark verified. The improvement
+is **PHYSICALLY UNVERIFIED** until the real Windows-laptop 15 fps monitor test is
+repeated; no 15 fps Display-performance conclusion may yet be inferred.
+
 Explicit controller replacement now performs disconnect/laser-off cleanup
 under the UI action's original STOP generation, then captures and binds the
 post-cleanup generation for the replacement connection. The single generation

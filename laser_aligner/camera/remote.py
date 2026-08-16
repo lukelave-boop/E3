@@ -14,6 +14,7 @@ import numpy as np
 
 from ..config import CameraSettings, PrecisionCaptureSettings
 from ..errors import CameraError
+from ..imaging import probe_encoded_image_dimensions
 from .controls import ControlResult, validate_control_request
 from .remote_protocol import (
     authenticate_camera_client,
@@ -85,6 +86,61 @@ def _decode_frame(blob: bytes) -> np.ndarray:
     if frame is None or frame.size == 0 or frame.dtype != np.uint8:
         raise CameraError("Remote camera returned an invalid encoded frame")
     return frame
+
+
+def _validated_monitor_payload(
+    header: dict[str, Any],
+    blobs: list[bytes],
+    *,
+    requested_width: int,
+    requested_height: int,
+    requested_fps: int,
+    received_monotonic: float,
+) -> dict[str, Any]:
+    if len(blobs) != 1 or len(blobs[0]) > _MAX_MONITOR_JPEG_BYTES:
+        raise CameraError("Remote monitor returned an invalid bounded frame")
+    jpeg = blobs[0]
+    raw_width = header.get("width", requested_width)
+    raw_height = header.get("height", requested_height)
+    if (
+        type(raw_width) is not int
+        or type(raw_height) is not int
+        or (raw_width, raw_height) not in _MONITOR_SIZES
+    ):
+        raise CameraError("Remote monitor returned an invalid frame resolution")
+    source_mode = header.get("source_mode", "transcoded")
+    actual_size = (raw_width, raw_height)
+    allowed_fallback = (
+        (requested_width, requested_height) == (1920, 1080)
+        and actual_size == (1280, 720)
+        and source_mode == "transcoded"
+    )
+    if actual_size != (requested_width, requested_height) and not allowed_fallback:
+        raise CameraError("Remote monitor frame resolution did not match its profile")
+    try:
+        jpeg_size = probe_encoded_image_dimensions(
+            jpeg,
+            source="remote monitor frame",
+        )
+    except ValueError as exc:
+        raise CameraError(str(exc)) from exc
+    if jpeg_size != actual_size:
+        raise CameraError("Remote monitor JPEG dimensions did not match its metadata")
+    return {
+        "jpeg": jpeg,
+        "sequence": int(header.get("sequence", 0)),
+        "width": raw_width,
+        "height": raw_height,
+        "jpeg_bytes": len(jpeg),
+        "source_mode": source_mode,
+        "source_width": int(header.get("source_width", requested_width)),
+        "source_height": int(header.get("source_height", requested_height)),
+        "monitor_fps": int(header.get("monitor_fps", requested_fps)),
+        "frame_age_seconds": header.get("frame_age_seconds"),
+        "capture_fps": header.get("capture_fps"),
+        "negotiated_fps": header.get("negotiated_fps"),
+        "received_monotonic": received_monotonic,
+    }
 
 
 class RemoteCameraService(CameraService):
@@ -331,7 +387,7 @@ class RemoteCameraService(CameraService):
             )
             time.sleep(delay)
 
-    def monitor_frames(
+    def monitor_jpeg_frames(
         self,
         *,
         fps: int = 10,
@@ -340,7 +396,7 @@ class RemoteCameraService(CameraService):
         quality: int = 78,
         stop_event: threading.Event | None = None,
     ) -> Iterator[dict[str, Any]]:
-        """Yield raw frames over one authenticated socket, reconnecting after loss."""
+        """Yield bounded monitor JPEGs without eagerly decoding their pixels."""
 
         if type(fps) is not int or fps not in _MONITOR_FPS:
             raise CameraError("Monitor FPS must be 5, 10, or 15")
@@ -376,31 +432,47 @@ class RemoteCameraService(CameraService):
                         received_monotonic = time.monotonic()
                         if header.get("ok") is not True:
                             raise CameraError(str(header.get("error") or "Monitor stream failed"))
-                        if len(blobs) != 1 or len(blobs[0]) > _MAX_MONITOR_JPEG_BYTES:
-                            raise CameraError("Remote monitor returned an invalid bounded frame")
-                        frame = _decode_frame(blobs[0])
-                        if frame.shape[:2] != (height, width):
-                            raise CameraError("Remote monitor frame resolution did not match its profile")
-                        yield {
-                            "image": frame,
-                            "sequence": int(header.get("sequence", 0)),
-                            "width": width,
-                            "height": height,
-                            "jpeg_bytes": len(blobs[0]),
-                            "source_mode": header.get("source_mode", "transcoded"),
-                            "source_width": int(header.get("source_width", width)),
-                            "source_height": int(header.get("source_height", height)),
-                            "monitor_fps": int(header.get("monitor_fps", fps)),
-                            "frame_age_seconds": header.get("frame_age_seconds"),
-                            "capture_fps": header.get("capture_fps"),
-                            "negotiated_fps": header.get("negotiated_fps"),
-                            "received_monotonic": received_monotonic,
-                        }
+                        yield _validated_monitor_payload(
+                            header,
+                            blobs,
+                            requested_width=width,
+                            requested_height=height,
+                            requested_fps=fps,
+                            received_monotonic=received_monotonic,
+                        )
             except CameraError:
                 if not established:
                     raise
                 if stopping.wait(0.25):
                     return
+
+    def monitor_frames(
+        self,
+        *,
+        fps: int = 10,
+        width: int = 1920,
+        height: int = 1080,
+        quality: int = 78,
+        stop_event: threading.Event | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield decoded raw monitor frames, preserving the existing API."""
+
+        for encoded in self.monitor_jpeg_frames(
+            fps=fps,
+            width=width,
+            height=height,
+            quality=quality,
+            stop_event=stop_event,
+        ):
+            payload = dict(encoded)
+            jpeg = payload.pop("jpeg")
+            frame = _decode_frame(jpeg)
+            if frame.shape[:2] != (payload["height"], payload["width"]):
+                raise CameraError(
+                    "Remote monitor decoded frame resolution did not match its metadata"
+                )
+            payload["image"] = frame
+            yield payload
 
     def status(self) -> CameraStatus:
         try:

@@ -379,6 +379,85 @@ def test_remote_monitor_timestamps_receipt_before_jpeg_decode(monkeypatch) -> No
         thread.join(timeout=1)
 
 
+def test_encoded_monitor_path_does_not_eagerly_decode_with_opencv(monkeypatch) -> None:
+    token = "camera-monitor-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    monkeypatch.setattr(
+        camera_remote,
+        "_decode_frame",
+        lambda _jpeg: pytest.fail("encoded monitor eagerly decoded with OpenCV"),
+    )
+    camera = FakeCamera()
+    camera.started = True
+    port = free_port()
+    server = CameraBridgeServer(camera, host="127.0.0.1", port=port, token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.time() + 1
+    while server._listener is None and time.time() < deadline:
+        time.sleep(0.01)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{port}")
+    )
+    stop = threading.Event()
+    stream = remote.monitor_jpeg_frames(fps=15, stop_event=stop)
+    try:
+        payload = next(stream)
+        assert payload["jpeg"].startswith(b"\xff\xd8")
+        assert (payload["width"], payload["height"]) == (1920, 1080)
+        assert payload["jpeg_bytes"] == len(payload["jpeg"])
+        assert payload["received_monotonic"] is not None
+    finally:
+        stop.set()
+        stream.close()
+        server.stop()
+        thread.join(timeout=1)
+
+
+def test_encoded_monitor_payload_rejects_bounds_and_dimension_mismatch() -> None:
+    with pytest.raises(CameraError, match="bounded"):
+        camera_remote._validated_monitor_payload(
+            {"width": 1920, "height": 1080},
+            [b"x" * (4 * 1024 * 1024 + 1)],
+            requested_width=1920,
+            requested_height=1080,
+            requested_fps=15,
+            received_monotonic=1.0,
+        )
+
+    ok, encoded = cv2.imencode(
+        ".jpg", np.zeros((720, 1280, 3), dtype=np.uint8)
+    )
+    assert ok
+    with pytest.raises(CameraError, match="JPEG dimensions"):
+        camera_remote._validated_monitor_payload(
+            {"width": 1920, "height": 1080, "source_mode": "direct_mjpeg"},
+            [encoded.tobytes()],
+            requested_width=1920,
+            requested_height=1080,
+            requested_fps=15,
+            received_monotonic=1.0,
+        )
+
+
+def test_encoded_monitor_accepts_reported_720p_transcoded_fallback() -> None:
+    ok, encoded = cv2.imencode(
+        ".jpg", np.zeros((720, 1280, 3), dtype=np.uint8)
+    )
+    assert ok
+    payload = camera_remote._validated_monitor_payload(
+        {"width": 1280, "height": 720, "source_mode": "transcoded"},
+        [encoded.tobytes()],
+        requested_width=1920,
+        requested_height=1080,
+        requested_fps=15,
+        received_monotonic=1.0,
+    )
+
+    assert (payload["width"], payload["height"]) == (1280, 720)
+    assert payload["source_mode"] == "transcoded"
+
+
 def test_raw_monitor_rejects_bad_authentication_and_invalid_profiles(monkeypatch) -> None:
     token = "camera-monitor-token-with-plenty-entropy"
     camera = FakeCamera()
