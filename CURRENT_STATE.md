@@ -15,13 +15,14 @@ tests in 217.65 seconds wall-clock (pytest 212.71 seconds), versus the recent
 serial full-suite result of 422.43 seconds. Full Compatibility CI retains the
 serial five-environment Ubuntu/Windows and Python 3.10–3.12 matrix for pushes to
 `main`/`desktop-v1`, pull requests targeting either, and manual dispatch. Major
-phases publish timing summaries. The first GitHub Fast-CI measurement completed
-its critical full-suite job in 2 minutes 26 seconds, with Ruff at 14 seconds and
-dependency/bytecode validation at 30 seconds. The corresponding full matrix
-reached its Windows desktop critical path in 6 minutes 16 seconds; that first
-measurement also exposed a Windows scheduler-sensitive 0.01-second timeout in a
-new GRBL connection test, which is retained as useful compatibility-gate
-evidence rather than attributed to the CI split.
+phases publish timing summaries. On final implementation commit `2508abd`, Fast
+CI passed 1,760 tests in a 2-minute-34-second workflow wall clock; its critical
+test job took 2 minutes 30 seconds (112.90 seconds for pytest), while Ruff took
+9 seconds and dependency/bytecode validation took 42 seconds. Full Compatibility
+CI passed in a 5-minute-32-second workflow wall clock, with Windows desktop 3.12
+as the 5-minute-28-second critical job. An earlier full run usefully exposed a
+Windows scheduler-sensitive 0.01-second timeout in a new GRBL connection test;
+the corrected compatibility run is green.
 
 Physical reconnect after the software STOP test found the controller alive but
 alarm-locked: settings queries succeeded while connection normalization's `M5`
