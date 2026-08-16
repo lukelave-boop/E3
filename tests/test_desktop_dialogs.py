@@ -11,13 +11,11 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 from PySide6 import QtCore, QtWidgets
 
 from laser_aligner.desktop.dialogs import install_modal_dialog_first_paint_fix
-from laser_aligner.desktop.theme import apply_dark_theme
 
 
 @pytest.fixture
 def qt_application() -> Iterator[QtWidgets.QApplication]:
     application = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    apply_dark_theme(application)
     yield application
     application.processEvents()
 
