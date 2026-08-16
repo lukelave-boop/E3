@@ -20,11 +20,17 @@ def _menu_title(menu: Any) -> str:
 
 
 def _help_menu(window: QtWidgets.QMainWindow) -> QtWidgets.QMenu:
+    retained = getattr(window, "help_menu", None)
+    if isinstance(retained, QtWidgets.QMenu):
+        return retained
     for menu_action in window.menuBar().actions():
         menu = menu_action.menu()
         if menu is not None and _menu_title(menu) == "help":
+            window.help_menu = menu
             return menu
-    return window.menuBar().addMenu("&Help")
+    menu = window.menuBar().addMenu("&Help")
+    window.help_menu = menu
+    return menu
 
 
 def install_update_menu(window: QtWidgets.QMainWindow) -> QtGui.QAction:

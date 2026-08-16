@@ -627,10 +627,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.window_menu.addAction(self.actions[key])
         self.window_menu.addSeparator()
 
-        help_menu = self.menuBar().addMenu("&Help")
-        help_menu.addAction(self.actions["setup_guide"])
-        help_menu.addSeparator()
-        help_menu.addAction(self.actions["about"])
+        self.help_menu = self.menuBar().addMenu("&Help")
+        self.help_menu.addAction(self.actions["setup_guide"])
+        self.help_menu.addSeparator()
+        self.help_menu.addAction(self.actions["about"])
 
     def _create_toolbars(self) -> None:
         file_toolbar = self.addToolBar("File")
