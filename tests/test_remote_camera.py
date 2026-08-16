@@ -9,11 +9,13 @@ import cv2
 import numpy as np
 import pytest
 
+from laser_aligner.camera import bridge as camera_bridge
 from laser_aligner.camera.bridge import CameraBridgeServer
 from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.remote import RemoteCameraService
 from laser_aligner.camera.service import CameraStatus, FrameBurst
 from laser_aligner.config import CameraSettings, PrecisionCaptureSettings
+from laser_aligner.errors import CameraError
 
 
 class FakeCamera:
@@ -25,6 +27,7 @@ class FakeCamera:
         self.frame = np.zeros((48, 64, 3), dtype=np.uint8)
         cv2.circle(self.frame, (32, 24), 10, (255, 255, 255), -1)
         self.controls = ControlResult({}, {}, {})
+        self.snapshot_after_requests: list[int] = []
 
     def _current_generation(self) -> int:
         return self.generation
@@ -60,7 +63,10 @@ class FakeCamera:
 
     def snapshot_after(self, sequence: int, timeout: float = 6.0) -> np.ndarray:
         del timeout
-        self.sequence = max(self.sequence + 1, sequence + 1)
+        if not self.started:
+            raise CameraError("Camera is not connected")
+        self.snapshot_after_requests.append(sequence)
+        self.sequence = max(self.sequence + 5, sequence + 1)
         return self.frame.copy()
 
     def jpeg(self, quality: int = 90) -> bytes:
@@ -198,5 +204,157 @@ def test_remote_camera_rejects_mismatched_capture_profile(monkeypatch) -> None:
             remote.start()
     finally:
         remote.stop()
+        server.stop()
+        thread.join(timeout=1)
+
+
+def test_persistent_raw_monitor_authenticates_frames_and_drops_stale_sequences(
+    monkeypatch,
+) -> None:
+    token = "camera-monitor-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    camera = FakeCamera()
+    camera.started = True
+    port = free_port()
+    server = CameraBridgeServer(camera, host="127.0.0.1", port=port, token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.time() + 1
+    while server._listener is None and time.time() < deadline:
+        time.sleep(0.01)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{port}")
+    )
+    stop = threading.Event()
+    try:
+        stream = remote.monitor_frames(fps=15, stop_event=stop)
+        frames = [next(stream) for _ in range(3)]
+        assert all(item["image"].shape == (720, 1280, 3) for item in frames)
+        sequences = [item["sequence"] for item in frames]
+        assert sequences == sorted(sequences)
+        assert all(
+            b - a >= 5 for a, b in zip(sequences, sequences[1:], strict=False)
+        )
+        assert len(camera.snapshot_after_requests) == 3
+        # The persistent stream authenticates once rather than creating one
+        # request connection per delivered frame.
+        assert server._slots._value == 7
+        stop.set()
+        stream.close()
+        deadline = time.time() + 1
+        while server._monitor_slots._value != 2 and time.time() < deadline:
+            time.sleep(0.01)
+        assert server._monitor_slots._value == 2
+        assert server._slots._value == 8
+    finally:
+        stop.set()
+        server.stop()
+        thread.join(timeout=1)
+
+
+def test_raw_monitor_enforces_its_stricter_per_frame_bound(monkeypatch) -> None:
+    monkeypatch.setattr(
+        camera_bridge,
+        "_encode_frame",
+        lambda _frame, _quality: b"x" * (4 * 1024 * 1024 + 1),
+    )
+    with pytest.raises(CameraError, match="bounded frame limit"):
+        camera_bridge._encode_monitor_frame(np.zeros((1, 1, 3), dtype=np.uint8), 78)
+
+
+def test_raw_monitor_rejects_bad_authentication_and_invalid_profiles(monkeypatch) -> None:
+    token = "camera-monitor-token-with-plenty-entropy"
+    camera = FakeCamera()
+    camera.started = True
+    port = free_port()
+    server = CameraBridgeServer(camera, host="127.0.0.1", port=port, token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.time() + 1
+    while server._listener is None and time.time() < deadline:
+        time.sleep(0.01)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{port}")
+    )
+    try:
+        monkeypatch.setenv("E3_BRIDGE_TOKEN", "wrong-monitor-token-still-long-enough")
+        with pytest.raises(Exception, match="rejected|closed"):
+            next(remote.monitor_frames())
+        monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+        with pytest.raises(Exception, match="FPS"):
+            next(remote.monitor_frames(fps=12))
+        with pytest.raises(Exception, match="resolution"):
+            next(remote.monitor_frames(width=640, height=480))
+    finally:
+        server.stop()
+        thread.join(timeout=1)
+
+
+def test_precision_capture_remains_authoritative_during_raw_monitor(monkeypatch) -> None:
+    token = "camera-monitor-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    camera = FakeCamera()
+    camera.started = True
+    port = free_port()
+    server = CameraBridgeServer(camera, host="127.0.0.1", port=port, token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.time() + 1
+    while server._listener is None and time.time() < deadline:
+        time.sleep(0.01)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{port}")
+    )
+    stop = threading.Event()
+    stream = remote.monitor_frames(fps=10, stop_event=stop)
+    try:
+        assert next(stream)["image"].shape == (720, 1280, 3)
+        burst = remote.capture_burst(
+            PrecisionCaptureSettings(
+                sample_frames=2,
+                discard_frames=0,
+                minimum_valid_frames=1,
+                consensus_frames=1,
+            )
+        )
+        assert len(burst.frames) == 2
+        assert next(stream)["image"].shape == (720, 1280, 3)
+        assert camera.controls.requested == {}
+    finally:
+        stop.set()
+        stream.close()
+        server.stop()
+        thread.join(timeout=1)
+
+
+def test_raw_monitor_recovers_after_camera_stop_and_restart(monkeypatch) -> None:
+    token = "camera-monitor-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    camera = FakeCamera()
+    camera.started = True
+    port = free_port()
+    server = CameraBridgeServer(camera, host="127.0.0.1", port=port, token=token)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    deadline = time.time() + 1
+    while server._listener is None and time.time() < deadline:
+        time.sleep(0.01)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{port}")
+    )
+    stop = threading.Event()
+    stream = remote.monitor_frames(fps=15, stop_event=stop)
+    try:
+        first = next(stream)
+        camera.stop()
+        restart = threading.Timer(0.4, camera.restart)
+        restart.start()
+        recovered = next(stream)
+        restart.join(timeout=1)
+        assert recovered["sequence"] > first["sequence"]
+        assert camera.started
+    finally:
+        stop.set()
+        stream.close()
         server.stop()
         thread.join(timeout=1)

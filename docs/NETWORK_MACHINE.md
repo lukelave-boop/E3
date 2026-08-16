@@ -158,6 +158,22 @@ physical repeatability comparison shows it is acceptable. Do not assume an
 existing direct-USB camera calibration remains verified merely because the same
 physical C920 is used.
 
+### Raw Live Monitor
+
+The native desktop can open a low-latency **Raw Live Monitor** over the existing
+authenticated `e3camera://` port. It uses one persistent HMAC-authenticated
+socket and the same Pi-owned `CameraService`; it never opens a second
+`VideoCapture` or creates a public HTTP camera endpoint. The default is
+1280×720 at 10 fps and JPEG quality 78, with 5, 10, and 15 fps choices.
+
+Monitor images are explicitly raw and uncorrected. They do not require or apply
+lens correction, bed mapping, overlays, detection, Trace, or calibration, and
+they grant no machine-control authority. The server permits at most two monitor
+clients, bounds each JPEG to 4 MiB, and samples the newest camera sequence after
+every send. The desktop retains one decoded latest frame; slow rendering
+replaces it rather than growing a queue. Precision capture remains authoritative
+and an established monitor reconnects after interruption.
+
 The Pi and Windows camera profiles should use the same resolution, FPS, FOURCC,
 control values, and precision-capture settings; only `camera.device` differs.
 

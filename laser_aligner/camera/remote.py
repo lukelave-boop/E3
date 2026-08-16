@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import socket
+import threading
 import time
 from collections.abc import Iterator, Mapping
 from dataclasses import asdict
@@ -27,6 +28,9 @@ _DEFAULT_CAMERA_PORT = 8766
 _CONNECT_TIMEOUT_SECONDS = 5.0
 _TRANSFER_MARGIN_SECONDS = 30.0
 _STILL_TRANSFER_QUALITY = 95
+_MONITOR_FPS = frozenset({5, 10, 15})
+_MONITOR_SIZES = frozenset({(1280, 720), (1920, 1080)})
+_MAX_MONITOR_JPEG_BYTES = 4 * 1024 * 1024
 
 
 def is_remote_camera_uri(value: str) -> bool:
@@ -326,6 +330,70 @@ class RemoteCameraService(CameraService):
                 + b"\r\n"
             )
             time.sleep(delay)
+
+    def monitor_frames(
+        self,
+        *,
+        fps: int = 10,
+        width: int = 1280,
+        height: int = 720,
+        quality: int = 78,
+        stop_event: threading.Event | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield raw frames over one authenticated socket, reconnecting after loss."""
+
+        if type(fps) is not int or fps not in _MONITOR_FPS:
+            raise CameraError("Monitor FPS must be 5, 10, or 15")
+        if type(width) is not int or type(height) is not int or (width, height) not in _MONITOR_SIZES:
+            raise CameraError("Monitor resolution must be 1280x720 or 1920x1080")
+        if type(quality) is not int or not 70 <= quality <= 85:
+            raise CameraError("Monitor JPEG quality must be between 70 and 85")
+        stopping = stop_event or threading.Event()
+        token = camera_token_from_environment()
+        established = False
+        while not stopping.is_set():
+            try:
+                sock = socket.create_connection((self._host, self._port), timeout=_CONNECT_TIMEOUT_SECONDS)
+                with sock:
+                    sock.settimeout(2.0)
+                    authenticate_camera_client(sock, token)
+                    send_packet(
+                        sock,
+                        {
+                            "action": "monitor_stream",
+                            "fps": fps,
+                            "width": width,
+                            "height": height,
+                            "quality": quality,
+                        },
+                    )
+                    header, blobs = receive_packet(sock)
+                    if header.get("ok") is not True or blobs:
+                        raise CameraError(str(header.get("error") or "Monitor start failed"))
+                    established = True
+                    while not stopping.is_set():
+                        header, blobs = receive_packet(sock)
+                        if header.get("ok") is not True:
+                            raise CameraError(str(header.get("error") or "Monitor stream failed"))
+                        if len(blobs) != 1 or len(blobs[0]) > _MAX_MONITOR_JPEG_BYTES:
+                            raise CameraError("Remote monitor returned an invalid bounded frame")
+                        frame = _decode_frame(blobs[0])
+                        if frame.shape[:2] != (height, width):
+                            raise CameraError("Remote monitor frame resolution did not match its profile")
+                        yield {
+                            "image": frame,
+                            "sequence": int(header.get("sequence", 0)),
+                            "width": width,
+                            "height": height,
+                            "jpeg_bytes": len(blobs[0]),
+                            "frame_age_seconds": header.get("frame_age_seconds"),
+                            "received_monotonic": time.monotonic(),
+                        }
+            except CameraError:
+                if not established:
+                    raise
+                if stopping.wait(0.25):
+                    return
 
     def status(self) -> CameraStatus:
         try:

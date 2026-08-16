@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added an authenticated persistent raw Live Monitor for Raspberry Pi camera
+  sources with bounded latest-frame delivery, 5/10/15 fps selection, and no
+  calibration or machine-control authority.
+
 - Added an explicit Reconnect action for untrusted controller sessions; the
   replacement connection remains HOME REQUIRED and never recovers motion or
   laser authority automatically.

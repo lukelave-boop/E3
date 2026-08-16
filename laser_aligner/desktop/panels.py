@@ -787,6 +787,7 @@ class TransformPanel(QtWidgets.QWidget):
 
 
 class CameraPanel(QtWidgets.QWidget):
+    monitorRequested = QtCore.Signal()
     refreshRequested = QtCore.Signal()
     captureRequested = QtCore.Signal()
     lensCalibrationRequested = QtCore.Signal()
@@ -816,6 +817,12 @@ class CameraPanel(QtWidgets.QWidget):
         self.state_label.setObjectName("statusCard")
         self.state_label.setWordWrap(True)
         layout.addWidget(self.state_label)
+
+        self.monitor_button = QtWidgets.QPushButton("Open Raw Live Monitor…")
+        self.monitor_button.setToolTip(
+            "Watch the Pi camera without calibration or machine-control authority"
+        )
+        layout.addWidget(self.monitor_button)
 
         overlay_group = QtWidgets.QGroupBox("Camera overlay")
         overlay_group.setToolTip("Corrected bed overlay controls")
@@ -950,6 +957,7 @@ class CameraPanel(QtWidgets.QWidget):
         layout.addStretch(1)
 
         self.refresh_button.clicked.connect(self.refreshRequested)
+        self.monitor_button.clicked.connect(self.monitorRequested)
         self.capture_button.clicked.connect(self.captureRequested)
         self.lens_button.clicked.connect(self.lensCalibrationRequested)
         self.bed_button.clicked.connect(self.bedCalibrationRequested)

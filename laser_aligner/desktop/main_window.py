@@ -1052,6 +1052,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
         self.camera_panel.refreshRequested.connect(self.controller.retry_camera_image)
+        self.camera_panel.monitorRequested.connect(self.open_live_monitor)
         self.camera_panel.liveChanged.connect(self.controller.set_live_camera)
         self.camera_panel.refreshIntervalChanged.connect(
             self.controller.set_live_camera_interval
@@ -4447,6 +4448,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def show_notice(self, message: str) -> None:
         self.statusBar().showMessage(message, 7000)
+
+    def open_live_monitor(self) -> None:
+        from .live_monitor import LiveMonitorWindow
+
+        monitor = getattr(self, "_live_monitor_window", None)
+        if monitor is None:
+            monitor = LiveMonitorWindow(self.runtime.context.camera, self)
+            monitor.destroyed.connect(
+                lambda: setattr(self, "_live_monitor_window", None)
+            )
+            self._live_monitor_window = monitor
+        monitor.show()
+        monitor.raise_()
+        monitor.activateWindow()
 
     def show_error(self, message: str) -> None:
         self.statusBar().showMessage(message, 10000)

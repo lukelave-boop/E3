@@ -20,6 +20,11 @@ Use a fully enclosed laser area designed for the laser wavelength and power. The
 
 Do not depend on the webcam, browser, operating system, USB connection, G-code sender, or a software `M5` command for personnel protection. Any of them can freeze, disconnect, reset, or behave unexpectedly.
 
+The raw Live Monitor is observational only. Its image may be stale, delayed,
+cropped, disconnected, or misleading and grants no motion, laser, calibration,
+interlock, or safety authority. Never use it as proof that motion or laser
+emission has stopped or that the area is safe to enter.
+
 ## Before every real job
 
 - Confirm that the intended material is appropriate for blue-diode laser processing and does not produce prohibited or highly hazardous fumes.

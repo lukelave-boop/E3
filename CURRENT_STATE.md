@@ -7,6 +7,17 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
+The Raspberry Pi camera bridge now offers a bounded authenticated raw-monitor
+mode on its existing `e3camera://` socket. One persistent connection carries
+JPEG frames from the sole Pi-owned `CameraService`; the server and desktop both
+use latest-frame replacement semantics, with two monitor clients maximum and a
+4 MiB per-frame ceiling. The native monitor defaults to 1280×720 at 10 fps,
+offers 5/10/15 fps, reports observed FPS/source age, and remains independent of
+machine connection and calibration authority. Focused loopback, precision-
+capture, camera lifecycle, and offscreen desktop tests pass. Pi 3 B+ CPU,
+memory, throughput, latency, controller responsiveness, and go2rtc service
+impact remain physically unmeasured and must not be inferred from desktop CI.
+
 The desktop now presents an explicit **Reconnect** action when an established
 controller session is marked RECONNECT REQUIRED. This operator action performs
 one disconnect followed by the ordinary connection path; it never retries in

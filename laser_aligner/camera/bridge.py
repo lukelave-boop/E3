@@ -5,6 +5,7 @@ import logging
 import math
 import socket
 import threading
+import time
 from dataclasses import asdict
 from typing import Any
 
@@ -26,6 +27,12 @@ _DEFAULT_PORT = 8766
 _MAX_CLIENTS = 8
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
 _STILL_TRANSFER_QUALITY = 95
+_MONITOR_FPS = frozenset({5, 10, 15})
+_MONITOR_SIZES = frozenset({(1280, 720), (1920, 1080)})
+_MONITOR_QUALITY_MIN = 70
+_MONITOR_QUALITY_MAX = 85
+_MAX_MONITOR_JPEG_BYTES = 4 * 1024 * 1024
+_MAX_MONITOR_CLIENTS = 2
 
 
 def _encode_frame(frame: np.ndarray, quality: int) -> bytes:
@@ -39,6 +46,13 @@ def _encode_frame(frame: np.ndarray, quality: int) -> bytes:
     if not ok:
         raise CameraError("Could not encode remote camera frame")
     return encoded.tobytes()
+
+
+def _encode_monitor_frame(frame: np.ndarray, quality: int) -> bytes:
+    jpeg = _encode_frame(frame, quality)
+    if len(jpeg) > _MAX_MONITOR_JPEG_BYTES:
+        raise CameraError("Monitor JPEG exceeds the bounded frame limit")
+    return jpeg
 
 
 def _control_dict(result: Any) -> dict[str, Any]:
@@ -97,6 +111,7 @@ class CameraBridgeServer:
         self.port = port
         self.token = token
         self._slots = threading.BoundedSemaphore(_MAX_CLIENTS)
+        self._monitor_slots = threading.BoundedSemaphore(_MAX_MONITOR_CLIENTS)
         self._stop = threading.Event()
         self._listener: socket.socket | None = None
 
@@ -223,6 +238,9 @@ class CameraBridgeServer:
                 request, request_blobs = receive_packet(conn)
                 if request_blobs:
                     raise CameraError("Remote camera requests may not contain binary payloads")
+                if request.get("action") == "monitor_stream":
+                    self._monitor_stream(conn, request)
+                    return
                 try:
                     header, blobs = self._dispatch(request)
                 except Exception as exc:
@@ -234,6 +252,62 @@ class CameraBridgeServer:
                 LOGGER.warning("Remote camera client session ended: %s", exc)
             finally:
                 self._slots.release()
+
+    def _monitor_stream(self, conn: socket.socket, request: dict[str, Any]) -> None:
+        if not self._monitor_slots.acquire(blocking=False):
+            send_packet(conn, {"ok": False, "error": "Remote camera monitor limit reached"})
+            return
+        try:
+            fps = request.get("fps", 10)
+            width = request.get("width", 1280)
+            height = request.get("height", 720)
+            quality = request.get("quality", 78)
+            if type(fps) is not int or fps not in _MONITOR_FPS:
+                raise CameraError("Monitor FPS must be 5, 10, or 15")
+            if type(width) is not int or type(height) is not int or (width, height) not in _MONITOR_SIZES:
+                raise CameraError("Monitor resolution must be 1280x720 or 1920x1080")
+            if type(quality) is not int or not _MONITOR_QUALITY_MIN <= quality <= _MONITOR_QUALITY_MAX:
+                raise CameraError("Monitor JPEG quality must be between 70 and 85")
+            # Keep the kernel backlog small. If send blocks, the next iteration
+            # samples the newest camera sequence instead of accumulating frames.
+            conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 512 * 1024)
+            conn.settimeout(3.0)
+            send_packet(
+                conn,
+                {"ok": True, "stream": "raw", "fps": fps, "width": width, "height": height},
+            )
+            sequence = max(0, self.camera.frame_sequence() - 1)
+            interval = 1.0 / float(fps)
+            next_frame = time.monotonic()
+            while not self._stop.is_set():
+                now = time.monotonic()
+                if now < next_frame and self._stop.wait(next_frame - now):
+                    break
+                next_frame = max(next_frame + interval, time.monotonic())
+                frame = self.camera.snapshot_after(sequence, timeout=max(1.0, 3.0 * interval))
+                sequence = self.camera.frame_sequence()
+                if frame.shape[1] != width or frame.shape[0] != height:
+                    frame = cv2.resize(frame, (width, height), interpolation=cv2.INTER_AREA)
+                jpeg = _encode_monitor_frame(frame, quality)
+                send_packet(
+                    conn,
+                    {
+                        "ok": True,
+                        "sequence": sequence,
+                        "captured_monotonic": time.monotonic(),
+                        "width": width,
+                        "height": height,
+                        "frame_age_seconds": self.camera.status().frame_age_seconds,
+                    },
+                    (jpeg,),
+                )
+        except Exception as exc:
+            try:
+                send_packet(conn, {"ok": False, "error": str(exc)})
+            except Exception:
+                pass
+        finally:
+            self._monitor_slots.release()
 
     def serve_forever(self) -> None:
         if not 1 <= self.port <= 65535:
