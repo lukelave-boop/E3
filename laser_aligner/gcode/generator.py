@@ -10,6 +10,11 @@ import numpy as np
 from ..config import WorkArea
 from ..errors import SafetyError, SvgError
 from ..geometry.svg import Polyline, SvgGeometry
+from .job_plan import e3_metadata_line
+
+_PATH_BOUNDS_TOLERANCE_MM = 1e-6
+_MAX_NEAREST_ORDER_PATHS = 512
+_MAX_STREAM_COMMANDS = 250_000
 
 
 @dataclass(slots=True)
@@ -31,10 +36,14 @@ class ToolpathOptions:
     travel_feed_mm_min: float = 3000.0
     engrave_feed_mm_min: float = 1200.0
     boundary_margin_mm: float = 0.0
+    spot_offset_x_mm: float = 0.0
+    spot_offset_y_mm: float = 0.0
     optimize_order: bool = True
     include_return_move: bool = False
     return_x_mm: float = 0.0
     return_y_mm: float = 0.0
+    start_x_mm: float | None = None
+    start_y_mm: float | None = None
 
 
 @dataclass(slots=True)
@@ -68,7 +77,46 @@ def _safe_comment(value: str) -> str:
     return value.replace("\n", " ").replace("\r", " ").replace(";", ",")[:160]
 
 
+def _validate_toolpath_options(options: ToolpathOptions) -> None:
+    if type(options.power_mode) is not str or options.power_mode.upper() not in {
+        "M3",
+        "M4",
+    }:
+        raise ValueError("power_mode must be M3 or M4")
+    if type(options.power) is not int or type(options.power_max) is not int:
+        raise ValueError("power and power_max must be integers")
+    if options.power_max <= 0:
+        raise ValueError("power_max must be positive")
+    if not 0 <= options.power <= options.power_max:
+        raise ValueError("power must be between zero and power_max")
+    for name, value in (
+        ("travel_feed_mm_min", options.travel_feed_mm_min),
+        ("engrave_feed_mm_min", options.engrave_feed_mm_min),
+    ):
+        if type(value) not in {int, float} or not math.isfinite(float(value)):
+            raise ValueError(f"{name} must be a finite positive number")
+        if float(value) <= 0:
+            raise ValueError(f"{name} must be a finite positive number")
+    if (
+        type(options.boundary_margin_mm) not in {int, float}
+        or not math.isfinite(float(options.boundary_margin_mm))
+        or float(options.boundary_margin_mm) < 0
+    ):
+        raise ValueError("boundary_margin_mm must be a finite nonnegative number")
+    if type(options.optimize_order) is not bool:
+        raise ValueError("optimize_order must be a boolean")
+    if type(options.include_return_move) is not bool:
+        raise ValueError("include_return_move must be a boolean")
+
+
 def place_geometry(geometry: SvgGeometry, placement: DesignPlacement) -> list[Polyline]:
+    if type(placement.mirror_x) is not bool or type(placement.mirror_y) is not bool:
+        raise SvgError("Placement mirror flags must be booleans")
+    if not geometry.polylines or any(
+        len(path.points) == 0 or not np.isfinite(path.points).all()
+        for path in geometry.polylines
+    ):
+        raise ValueError("Path coordinates must be finite and nonempty")
     if not all(
         math.isfinite(value)
         for value in (
@@ -129,19 +177,87 @@ def _program_bounds(paths: list[Polyline]) -> tuple[float, float, float, float]:
     return float(minimum[0]), float(minimum[1]), float(maximum[0]), float(maximum[1])
 
 
-def validate_paths(paths: list[Polyline], work_area: WorkArea, margin_mm: float = 0.0) -> None:
-    minimum_x, minimum_y, maximum_x, maximum_y = _program_bounds(paths)
+def _controller_paths(
+    paths: list[Polyline],
+    options: ToolpathOptions,
+) -> list[Polyline]:
+    offset = np.array(
+        [options.spot_offset_x_mm, options.spot_offset_y_mm],
+        dtype=np.float64,
+    )
+    if not np.isfinite(offset).all():
+        raise ValueError("laser spot offsets must be finite")
+    return [
+        Polyline(
+            path.points.astype(np.float64, copy=True) - offset,
+            closed=path.closed,
+            source_tag=path.source_tag,
+        )
+        for path in paths
+    ]
+
+
+def _spot_offset_comment(options: ToolpathOptions) -> str | None:
     if (
-        minimum_x < work_area.x_min + margin_mm
-        or maximum_x > work_area.x_max - margin_mm
-        or minimum_y < work_area.y_min + margin_mm
-        or maximum_y > work_area.y_max - margin_mm
+        abs(options.spot_offset_x_mm) < 1e-12
+        and abs(options.spot_offset_y_mm) < 1e-12
+    ):
+        return None
+    return (
+        "; Laser spot offset (spot = controller + offset): "
+        f"X{_fmt(options.spot_offset_x_mm)} Y{_fmt(options.spot_offset_y_mm)}"
+    )
+
+
+def _validate_work_area(work_area: WorkArea) -> None:
+    values: dict[str, float] = {}
+    for name in ("x_min", "x_max", "y_min", "y_max"):
+        value = getattr(work_area, name, None)
+        if type(value) not in {int, float} or not math.isfinite(float(value)):
+            raise ValueError(f"work_area.{name} must be a finite number")
+        values[name] = float(value)
+    if values["x_max"] <= values["x_min"]:
+        raise ValueError("work_area.x_max must be greater than x_min")
+    if values["y_max"] <= values["y_min"]:
+        raise ValueError("work_area.y_max must be greater than y_min")
+
+
+def validate_paths(
+    paths: list[Polyline],
+    work_area: WorkArea,
+    margin_mm: float = 0.0,
+    *,
+    coordinate_label: str = "design",
+) -> None:
+    _validate_work_area(work_area)
+    if (
+        type(margin_mm) not in {int, float}
+        or not math.isfinite(float(margin_mm))
+        or float(margin_mm) < 0
+    ):
+        raise ValueError("Path boundary margin must be a finite nonnegative number")
+    if not paths or any(
+        len(path.points) == 0 or not np.isfinite(path.points).all()
+        for path in paths
+    ):
+        raise ValueError("Path coordinates must be finite and nonempty")
+    minimum_x, minimum_y, maximum_x, maximum_y = _program_bounds(paths)
+    safe_minimum_x = work_area.x_min + margin_mm
+    safe_maximum_x = work_area.x_max - margin_mm
+    safe_minimum_y = work_area.y_min + margin_mm
+    safe_maximum_y = work_area.y_max - margin_mm
+    if (
+        minimum_x < safe_minimum_x - _PATH_BOUNDS_TOLERANCE_MM
+        or maximum_x > safe_maximum_x + _PATH_BOUNDS_TOLERANCE_MM
+        or minimum_y < safe_minimum_y - _PATH_BOUNDS_TOLERANCE_MM
+        or maximum_y > safe_maximum_y + _PATH_BOUNDS_TOLERANCE_MM
     ):
         raise SafetyError(
-            "Placed design exceeds the configured safe work area: "
-            f"design X={minimum_x:.2f}..{maximum_x:.2f}, Y={minimum_y:.2f}..{maximum_y:.2f}; "
-            f"safe X={work_area.x_min + margin_mm:.2f}..{work_area.x_max - margin_mm:.2f}, "
-            f"Y={work_area.y_min + margin_mm:.2f}..{work_area.y_max - margin_mm:.2f}"
+            "Path exceeds the configured safe work area: "
+            f"{coordinate_label} X={minimum_x:.2f}..{maximum_x:.2f}, "
+            f"Y={minimum_y:.2f}..{maximum_y:.2f}; "
+            f"safe X={safe_minimum_x:.2f}..{safe_maximum_x:.2f}, "
+            f"Y={safe_minimum_y:.2f}..{safe_maximum_y:.2f}"
         )
 
 
@@ -183,6 +299,38 @@ def _nearest_order(paths: list[Polyline], start: np.ndarray) -> list[Polyline]:
     return ordered
 
 
+def _vector_stream_command_count(
+    paths: list[Polyline],
+    *,
+    powered: bool,
+    include_return_move: bool,
+) -> int:
+    usable = (path for path in paths if len(path.points) >= 2)
+    per_path_overhead = 2 if powered else 1
+    return (
+        4
+        + int(include_return_move)
+        + sum(len(path.points) + per_path_overhead for path in usable)
+    )
+
+
+def _program_start(options: ToolpathOptions, work_area: WorkArea) -> np.ndarray:
+    if (options.start_x_mm is None) != (options.start_y_mm is None):
+        raise ValueError("start_x_mm and start_y_mm must be provided together")
+    if options.start_x_mm is None:
+        start = np.array([work_area.x_min, work_area.y_min], dtype=np.float64)
+    else:
+        start = np.array(
+            [float(options.start_x_mm), float(options.start_y_mm)],
+            dtype=np.float64,
+        )
+    if not np.isfinite(start).all():
+        raise ValueError("planned controller start position must be finite")
+    if not work_area.contains(float(start[0]), float(start[1])):
+        raise SafetyError("Planned controller start position lies outside the work area")
+    return start
+
+
 def generate_vector_gcode(
     geometry: SvgGeometry,
     placement: DesignPlacement,
@@ -190,27 +338,60 @@ def generate_vector_gcode(
     work_area: WorkArea,
     design_name: str = "design.svg",
 ) -> GcodeProgram:
-    if options.power_mode.upper() not in {"M3", "M4"}:
-        raise ValueError("power_mode must be M3 or M4")
-    if not 0 <= options.power <= options.power_max:
-        raise ValueError("power must be between zero and power_max")
-    paths = place_geometry(geometry, placement)
-    validate_paths(paths, work_area, options.boundary_margin_mm)
-    start = np.array([work_area.x_min, work_area.y_min], dtype=np.float64)
-    if options.optimize_order:
+    _validate_toolpath_options(options)
+    controller_power = options.power
+    estimated_commands = _vector_stream_command_count(
+        geometry.polylines,
+        powered=controller_power > 0,
+        include_return_move=options.include_return_move,
+    )
+    if estimated_commands > _MAX_STREAM_COMMANDS:
+        raise ValueError(
+            f"Vector output requires {estimated_commands:,} streamed commands, exceeding "
+            f"the {_MAX_STREAM_COMMANDS:,}-command limit; simplify the source geometry"
+        )
+    design_paths = place_geometry(geometry, placement)
+    validate_paths(design_paths, work_area, options.boundary_margin_mm)
+    bounds = _program_bounds(design_paths)
+    paths = _controller_paths(design_paths, options)
+    validate_paths(
+        paths,
+        work_area,
+        options.boundary_margin_mm,
+        coordinate_label="controller path after laser spot correction",
+    )
+    start = _program_start(options, work_area)
+    warnings = list(geometry.warnings)
+    if options.optimize_order and len(paths) <= _MAX_NEAREST_ORDER_PATHS:
         paths = _nearest_order(paths, start)
+    elif options.optimize_order:
+        warnings.append(
+            "Nearest-path optimization was skipped for "
+            f"{len(paths):,} paths to keep planning responsive; source order was retained."
+        )
 
-    bounds = _program_bounds(paths)
+    controller_bounds = _program_bounds(paths)
     lines = [
         "; Laser Camera Aligner vector job",
         f"; Source: {_safe_comment(design_name)}",
         f"; Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"; Bounds: X{_fmt(bounds[0])}..{_fmt(bounds[2])} Y{_fmt(bounds[1])}..{_fmt(bounds[3])}",
-        f"; Power: {options.power}/{options.power_max}; feed: {_fmt(options.engrave_feed_mm_min)} mm/min",
+        f"; Power: {controller_power}/{options.power_max}; feed: {_fmt(options.engrave_feed_mm_min)} mm/min",
+        e3_metadata_line(
+            "job",
+            {"start_x": float(start[0]), "start_y": float(start[1])},
+        ),
         "G21 ; millimetres",
         "G90 ; absolute positioning",
         "M5 ; laser off before motion",
     ]
+    offset_comment = _spot_offset_comment(options)
+    if offset_comment is not None:
+        lines[4:4] = [
+            offset_comment,
+            f"; Controller bounds: X{_fmt(controller_bounds[0])}..{_fmt(controller_bounds[2])} "
+            f"Y{_fmt(controller_bounds[1])}..{_fmt(controller_bounds[3])}",
+        ]
     current = start.copy()
     travel_length = 0.0
     cut_length = 0.0
@@ -223,8 +404,8 @@ def generate_vector_gcode(
         travel_length += float(np.linalg.norm(points[0] - current))
         lines.append(f"; Path {index}: {path.source_tag or 'vector'}")
         lines.append(f"G0 X{_fmt(points[0, 0])} Y{_fmt(points[0, 1])} F{_fmt(options.travel_feed_mm_min)}")
-        if options.power > 0:
-            lines.append(f"{options.power_mode.upper()} S{int(options.power)}")
+        if controller_power > 0:
+            lines.append(f"{options.power_mode.upper()} S{controller_power}")
         else:
             lines.append("; Laser output disabled for this path")
         for point in points[1:]:
@@ -232,7 +413,11 @@ def generate_vector_gcode(
                 f"G1 X{_fmt(point[0])} Y{_fmt(point[1])} F{_fmt(options.engrave_feed_mm_min)}"
             )
         lines.append("M5")
-        cut_length += _path_length(points)
+        path_length = _path_length(points)
+        if controller_power > 0:
+            cut_length += path_length
+        else:
+            travel_length += path_length
         point_count += len(points)
         current = points[-1]
 
@@ -252,7 +437,7 @@ def generate_vector_gcode(
         travel_length_mm=travel_length,
         path_count=len(paths),
         point_count=point_count,
-        warnings=list(geometry.warnings),
+        warnings=warnings,
     )
 
 
@@ -267,27 +452,91 @@ def generate_frame_gcode(
         [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y], [min_x, min_y]],
         dtype=np.float64,
     )
-    paths = [Polyline(rectangle, closed=True, source_tag="frame")]
+    return generate_frame_path_gcode(
+        Polyline(rectangle, closed=True, source_tag="frame"),
+        options,
+        work_area,
+        laser_enabled=laser_enabled,
+    )
+
+
+def generate_frame_path_gcode(
+    path: Polyline,
+    options: ToolpathOptions,
+    work_area: WorkArea,
+    laser_enabled: bool = False,
+) -> GcodeProgram:
+    """Generate a guarded framing pass around one exact closed polygon."""
+
+    _validate_toolpath_options(options)
+    if (
+        not isinstance(path, Polyline)
+        or not path.closed
+        or len(path.points) < 4
+        or not np.isfinite(path.points).all()
+        or float(np.linalg.norm(path.points[0] - path.points[-1])) > 1e-9
+    ):
+        raise ValueError("Frame path must be one finite closed polygon")
+    paths = [path]
     validate_paths(paths, work_area, options.boundary_margin_mm)
+    controller_paths = _controller_paths(paths, options)
+    validate_paths(
+        controller_paths,
+        work_area,
+        options.boundary_margin_mm,
+        coordinate_label="controller path after laser spot correction",
+    )
+    controller_rectangle = controller_paths[0].points
+    start = _program_start(options, work_area)
     effective_power = options.power if laser_enabled else 0
+    frame_length = _path_length(path.points)
+    approach_length = float(
+        np.linalg.norm(
+            controller_rectangle[0]
+            - start
+        )
+    )
     lines = [
         "; Laser Camera Aligner framing pass",
-        "; DRY MOTION ONLY" if effective_power == 0 else "; LOW-POWER LASER FRAME — verify configured power",
+        (
+            "; LASER POWER 0%"
+            if effective_power == 0
+            else "; LOW-POWER LASER FRAME — verify configured power"
+        ),
+        e3_metadata_line(
+            "job",
+            {"start_x": float(start[0]), "start_y": float(start[1])},
+        ),
         "G21",
         "G90",
         "M5",
-        f"G0 X{_fmt(min_x)} Y{_fmt(min_y)} F{_fmt(options.travel_feed_mm_min)}",
     ]
+    offset_comment = _spot_offset_comment(options)
+    if offset_comment is not None:
+        controller_bounds = _program_bounds(controller_paths)
+        lines.extend(
+            [
+                offset_comment,
+                f"; Controller bounds: X{_fmt(controller_bounds[0])}..{_fmt(controller_bounds[2])} "
+                f"Y{_fmt(controller_bounds[1])}..{_fmt(controller_bounds[3])}",
+            ]
+        )
+    lines.append(
+        f"G0 X{_fmt(controller_rectangle[0, 0])} "
+        f"Y{_fmt(controller_rectangle[0, 1])} F{_fmt(options.travel_feed_mm_min)}"
+    )
     if effective_power > 0:
         lines.append(f"{options.power_mode.upper()} S{effective_power}")
-    for point in rectangle[1:]:
+    for point in controller_rectangle[1:]:
         lines.append(f"G1 X{_fmt(point[0])} Y{_fmt(point[1])} F{_fmt(options.travel_feed_mm_min)}")
     lines.extend(["M5", ""])
     return GcodeProgram(
         text="\n".join(lines),
-        bounds_mm=bounds_mm,
-        cut_length_mm=_path_length(rectangle),
-        travel_length_mm=float(np.linalg.norm(rectangle[0] - np.array([work_area.x_min, work_area.y_min]))),
+        bounds_mm=_program_bounds(paths),
+        cut_length_mm=frame_length if effective_power > 0 else 0.0,
+        travel_length_mm=(
+            approach_length if effective_power > 0 else approach_length + frame_length
+        ),
         path_count=1,
-        point_count=len(rectangle),
+        point_count=len(path.points),
     )

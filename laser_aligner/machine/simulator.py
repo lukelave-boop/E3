@@ -15,6 +15,7 @@ class SimulatedTransport:
         self.absolute = True
         self.laser_on = False
         self.power = 0.0
+        self.step_idle_delay_ms = 250
 
     def open(self) -> None:
         self.is_open = True
@@ -42,12 +43,27 @@ class SimulatedTransport:
             self._queue.put("ok")
             return
         if cleaned == "$$":
+            self._queue.put(f"$1={self.step_idle_delay_ms}")
             self._queue.put("$30=1000")
             self._queue.put("$32=1")
             self._queue.put("ok")
             return
-        if cleaned in {"$G", "$#"}:
+        if cleaned.startswith("$1="):
+            try:
+                self.step_idle_delay_ms = int(cleaned.split("=", 1)[1])
+            except ValueError:
+                self._queue.put("error:3")
+                return
+            self._queue.put("ok")
+            return
+        if cleaned == "$G":
             self._queue.put("[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]")
+            self._queue.put("ok")
+            return
+        if cleaned == "$#":
+            for code in range(54, 60):
+                self._queue.put(f"[G{code}:0.000,0.000,0.000]")
+            self._queue.put("[G92:0.000,0.000,0.000]")
             self._queue.put("ok")
             return
         if cleaned in {"$H", "G28"}:

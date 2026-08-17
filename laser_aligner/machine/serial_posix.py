@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import glob
 import os
 import queue
@@ -9,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 
-from ..errors import MachineError
+from ..errors import MachineError, TransientConnectionError
 
 _BAUD_RATES = {
     9600: termios.B9600,
@@ -17,8 +18,12 @@ _BAUD_RATES = {
     38400: termios.B38400,
     57600: termios.B57600,
     115200: termios.B115200,
-    230400: getattr(termios, "B230400", termios.B115200),
 }
+if hasattr(termios, "B230400"):
+    _BAUD_RATES[230400] = termios.B230400
+_SERIAL_WRITE_TIMEOUT_SECONDS = 0.25
+_MAX_SERIAL_LINE_BYTES = 8192
+_MAX_QUEUED_SERIAL_LINES = 4096
 
 
 def list_serial_ports() -> list[dict[str, str]]:
@@ -42,7 +47,9 @@ class PosixSerial:
         self.path = path
         self.baudrate = baudrate
         self._fd: int | None = None
-        self._queue: queue.Queue[str] = queue.Queue()
+        self._queue: queue.Queue[str | MachineError] = queue.Queue(
+            maxsize=_MAX_QUEUED_SERIAL_LINES
+        )
         self._buffer = bytearray()
         self._stop = threading.Event()
         self._reader: threading.Thread | None = None
@@ -61,7 +68,13 @@ class PosixSerial:
         try:
             fd = os.open(self.path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         except OSError as exc:
-            raise MachineError(f"Could not open serial port {self.path}: {exc}") from exc
+            if exc.errno in {errno.EACCES, errno.ENOENT, errno.ENOTDIR}:
+                raise MachineError(
+                    f"Could not open serial port {self.path}: {exc}"
+                ) from exc
+            raise TransientConnectionError(
+                f"Could not open serial port {self.path}: {exc}"
+            ) from exc
         try:
             attrs = termios.tcgetattr(fd)
             attrs[0] = 0
@@ -77,6 +90,11 @@ class PosixSerial:
         except OSError as exc:
             os.close(fd)
             raise MachineError(f"Could not configure serial port {self.path}: {exc}") from exc
+        # A transport instance may be reopened after a controller reset or
+        # disconnect. Replies and partial bytes belong to the old descriptor
+        # and must never acknowledge commands in the new serial session.
+        self._queue = queue.Queue(maxsize=_MAX_QUEUED_SERIAL_LINES)
+        self._buffer.clear()
         self._fd = fd
         self._stop.clear()
         self._reader = threading.Thread(target=self._reader_loop, name="serial-reader", daemon=True)
@@ -106,29 +124,67 @@ class PosixSerial:
                 while b"\n" in self._buffer or b"\r" in self._buffer:
                     newline_positions = [position for position in (self._buffer.find(b"\n"), self._buffer.find(b"\r")) if position >= 0]
                     index = min(newline_positions)
+                    if index > _MAX_SERIAL_LINE_BYTES:
+                        self._fail_reader(
+                            f"Serial response line exceeded {_MAX_SERIAL_LINE_BYTES} bytes"
+                        )
+                        return
                     raw = bytes(self._buffer[:index])
                     del self._buffer[: index + 1]
                     while self._buffer and self._buffer[0] in (10, 13):
                         del self._buffer[:1]
                     text = raw.decode("utf-8", errors="replace").strip()
-                    if text:
-                        self._queue.put(text)
+                    if text and not self._publish_line(text):
+                        return
+                if len(self._buffer) > _MAX_SERIAL_LINE_BYTES:
+                    self._fail_reader(
+                        f"Serial response line exceeded {_MAX_SERIAL_LINE_BYTES} bytes"
+                    )
+                    return
             except (OSError, ValueError):
                 if not self._stop.is_set():
-                    self._queue.put("[serial read error]")
+                    self._fail_reader("Serial read failed")
                 return
+
+    def _publish_line(self, line: str) -> bool:
+        try:
+            self._queue.put_nowait(line)
+            return True
+        except queue.Full:
+            self._fail_reader(
+                f"Serial receive queue exceeded {_MAX_QUEUED_SERIAL_LINES} lines"
+            )
+            return False
+
+    def _fail_reader(self, message: str) -> None:
+        self._stop.set()
+        self._buffer.clear()
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+        self._queue.put_nowait(MachineError(message))
 
     def write_raw(self, data: bytes) -> None:
         if self._fd is None:
             raise MachineError("Serial port is not open")
         with self._write_lock:
             view = memoryview(data)
+            deadline = time.monotonic() + _SERIAL_WRITE_TIMEOUT_SECONDS
             while view:
                 try:
                     written = os.write(self._fd, view)
+                    if written <= 0:
+                        raise BlockingIOError
                     view = view[written:]
                 except BlockingIOError:
-                    time.sleep(0.01)
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise MachineError(
+                            "Serial write timed out while the controller was not accepting data"
+                        ) from None
+                    select.select([], [self._fd], [], min(0.02, remaining))
                 except OSError as exc:
                     raise MachineError(f"Serial write failed: {exc}") from exc
 
@@ -137,14 +193,20 @@ class PosixSerial:
 
     def read_line(self, timeout: float = 1.0) -> str | None:
         try:
-            return self._queue.get(timeout=max(0.0, timeout))
+            response = self._queue.get(timeout=max(0.0, timeout))
         except queue.Empty:
             return None
+        if isinstance(response, MachineError):
+            raise response
+        return response
 
     def drain(self) -> list[str]:
         lines: list[str] = []
         while True:
             try:
-                lines.append(self._queue.get_nowait())
+                response = self._queue.get_nowait()
             except queue.Empty:
                 return lines
+            if isinstance(response, MachineError):
+                raise response
+            lines.append(response)

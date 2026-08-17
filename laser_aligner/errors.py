@@ -14,6 +14,10 @@ class MachineError(LaserAlignerError):
     """Motion controller operation failed."""
 
 
+class TransientConnectionError(MachineError):
+    """A transport failed before a controller session was established."""
+
+
 class SafetyError(MachineError):
     """Operation was blocked by a software safety gate."""
 

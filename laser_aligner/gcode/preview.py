@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -8,6 +9,12 @@ from dataclasses import dataclass
 # ("G1X10"). The parser intentionally handles both forms because many
 # controllers and CAM programs emit compact lines.
 _WORD_RE = re.compile(r"([A-Za-z])\s*([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)")
+_SPOT_OFFSET_RE = re.compile(
+    r"^\s*;\s*Laser spot offset .*?X\s*"
+    r"([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)\s+Y\s*"
+    r"([-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?)",
+    re.IGNORECASE,
+)
 
 
 @dataclass(slots=True, frozen=True)
@@ -36,6 +43,33 @@ def strip_comment(line: str) -> str:
             break
         line = line[:start] + line[end + 1 :]
     return line.strip()
+
+
+def parse_spot_offset_comment(line: str) -> tuple[float, float] | None:
+    """Return the physical laser-spot offset recorded in a generated program."""
+
+    match = _SPOT_OFFSET_RE.match(line)
+    if match is None:
+        return None
+    return float(match.group(1)), float(match.group(2))
+
+
+def parse_e3_metadata_comment(line: str) -> tuple[str, dict[str, object]] | None:
+    """Parse one controller-ignored E3 metadata comment."""
+
+    stripped = line.strip()
+    if not stripped.startswith("; @E3_"):
+        return None
+    marker, separator, payload = stripped[2:].partition(" ")
+    if not separator or not marker.startswith("@E3_") or not payload:
+        return None
+    try:
+        parsed = json.loads(payload)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return marker[4:].lower(), parsed
 
 
 def parse_words(line: str, *, require_full_match: bool = False) -> list[GcodeWord]:
@@ -92,8 +126,24 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
     absolute = True
     laser_on = False
     power = 0.0
+    spot_offset_x = spot_offset_y = 0.0
     segments: list[GcodeSegment] = []
     for raw_line in text.splitlines():
+        metadata = parse_e3_metadata_comment(raw_line)
+        if metadata is not None and metadata[0] == "job" and not segments:
+            try:
+                start_x = float(metadata[1]["start_x"])
+                start_y = float(metadata[1]["start_y"])
+            except (KeyError, TypeError, ValueError):
+                pass
+            else:
+                if math.isfinite(start_x) and math.isfinite(start_y):
+                    x, y = start_x, start_y
+            continue
+        spot_offset = parse_spot_offset_comment(raw_line)
+        if spot_offset is not None:
+            spot_offset_x, spot_offset_y = spot_offset
+            continue
         line = strip_comment(raw_line)
         if not line:
             continue
@@ -133,10 +183,10 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
             if new_x != x or new_y != y:
                 segments.append(
                     GcodeSegment(
-                        start_x=x,
-                        start_y=y,
-                        end_x=new_x,
-                        end_y=new_y,
+                        start_x=x + spot_offset_x,
+                        start_y=y + spot_offset_y,
+                        end_x=new_x + spot_offset_x,
+                        end_y=new_y + spot_offset_y,
                         rapid=movement == 0,
                         laser_on=laser_on,
                         power=power,

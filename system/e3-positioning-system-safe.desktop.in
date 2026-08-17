@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=E3 Positioning System (Safe)
+Comment=Open the E3 desktop workspace with serial hardware locked
+Exec=@ROOT@/run-desktop.sh
+Icon=@ROOT@/laser_aligner/desktop/assets/e3-positioning-system.svg
+Terminal=false
+Categories=Graphics;Engineering;
+StartupNotify=true
+StartupWMClass=E3 Positioning System

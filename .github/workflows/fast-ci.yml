@@ -1,0 +1,105 @@
+name: Fast Development CI
+
+on:
+  push:
+    branches:
+      - "fix/**"
+      - "feature/**"
+      - "agent/**"
+      - "cleanup/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fast-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONUTF8: "1"
+  QT_QPA_PLATFORM: offscreen
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+
+      - name: Upgrade pip
+        run: python tools/ci_timed.py "Upgrade pip (fast lint)" -- python -m pip install --upgrade pip
+      - name: Install lint dependencies
+        run: python tools/ci_timed.py "Install fast lint dependencies" -- python -m pip install -r requirements-dev.txt
+      - name: Run Ruff
+        run: python tools/ci_timed.py "Fast Ruff" -- python -m ruff check .
+
+  validate:
+    name: Dependency and bytecode validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+            requirements-dev.txt
+            requirements-desktop.txt
+
+      - name: Install Linux desktop runtime libraries
+        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
+      - name: Upgrade pip
+        run: python tools/ci_timed.py "Upgrade pip (fast validation)" -- python -m pip install --upgrade pip
+      - name: Install desktop and validation dependencies
+        run: python tools/ci_timed.py "Install fast validation dependencies" -- python -m pip install -e ".[desktop]" -r requirements-dev.txt
+      - name: Validate dependencies
+        run: python tools/ci_timed.py "Fast dependency validation" -- python -m pip check
+      - name: Compile Python sources
+        run: python tools/ci_timed.py "Fast compileall" -- python -m compileall -q laser_aligner
+
+  test:
+    name: Full Linux desktop suite (Python 3.12, 4 workers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+            requirements-dev.txt
+            requirements-desktop.txt
+
+      - name: Install Linux desktop runtime libraries
+        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
+      - name: Upgrade pip
+        run: python tools/ci_timed.py "Upgrade pip (fast tests)" -- python -m pip install --upgrade pip
+      - name: Install desktop and test dependencies
+        run: python tools/ci_timed.py "Install fast test dependencies" -- python -m pip install -e ".[desktop]" -r requirements-dev.txt
+      - name: Run complete representative suite
+        run: python tools/ci_timed.py "Fast pytest (4 workers)" -- python -m pytest -q -n 4

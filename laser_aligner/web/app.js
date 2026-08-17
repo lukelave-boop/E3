@@ -20,14 +20,36 @@ const state = {
 };
 
 const TEMPORARY_BED_MAPPING_KEY = 'laser-aligner-temporary-bed-mapping';
+const REQUEST_TOKEN = document.querySelector('meta[name="e3-request-token"]')?.content || '';
 const $ = (id) => document.getElementById(id);
 const fmt = (value, digits = 2) => Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : '—';
 
+function parseMeasurementMm(text) {
+  const match = String(text).trim().match(/^([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?)\s*(mm(?:\/min)?|millimeters?(?:\/min)?|millimetres?(?:\/min)?|in(?:\/min)?|inches?(?:\/min)?|\")?$/i);
+  if (!match) throw new Error(`Enter a measurement such as "25.4 mm" or "1 in".`);
+  const value = Number(match[1]);
+  if (!Number.isFinite(value)) throw new Error('Measurement must be finite.');
+  const unit = (match[2] || 'mm').toLowerCase();
+  return value * (unit.startsWith('in') || unit === '"' ? 25.4 : 1);
+}
+
+function measurementMm(id) {
+  return parseMeasurementMm($(id).value);
+}
+
+function csvMeasurementMm(value, defaultUnit) {
+  const text = String(value).trim();
+  return parseMeasurementMm(/[a-z\"]/i.test(text) ? text : `${text} ${defaultUnit}`);
+}
+
 async function api(path, method = 'GET', payload = null) {
-  const options = { method, headers: {} };
-  if (payload !== null) {
+  const normalizedMethod = method.toUpperCase();
+  const options = { method: normalizedMethod, headers: {}, credentials: 'same-origin' };
+  if (normalizedMethod !== 'GET' && normalizedMethod !== 'HEAD') {
+    if (!REQUEST_TOKEN) throw new Error('The browser request token is unavailable; reload the application.');
+    options.headers['X-E3-Request-Token'] = REQUEST_TOKEN;
     options.headers['Content-Type'] = 'application/json';
-    options.body = JSON.stringify(payload);
+    options.body = JSON.stringify(payload ?? {});
   }
   const response = await fetch(path, options);
   let data;
@@ -215,14 +237,15 @@ function parseBedCoordinateCsv(text) {
   const headers = parseSimpleCsvLine(lines[0]).map((header) => header.toLowerCase());
   const findColumn = (...names) => names.map((name) => headers.indexOf(name)).find((index) => index >= 0);
   const idColumn = findColumn('fiducial', 'index', 'id', 'label');
-  const xColumn = findColumn('x_mm', 'machine_x', 'x');
-  const yColumn = findColumn('y_mm', 'machine_y', 'y');
-  if (xColumn === undefined || yColumn === undefined) throw new Error('CSV headers must include x_mm and y_mm.');
+  const xColumn = findColumn('x_mm', 'x_in', 'machine_x', 'x');
+  const yColumn = findColumn('y_mm', 'y_in', 'machine_y', 'y');
+  if (xColumn === undefined || yColumn === undefined) throw new Error('CSV headers must include x_mm/y_mm or x_in/y_in.');
+  const xDefaultUnit = headers[xColumn] === 'x_in' ? 'in' : 'mm';
+  const yDefaultUnit = headers[yColumn] === 'y_in' ? 'in' : 'mm';
   const points = lines.slice(1).map((line, rowIndex) => {
     const values = parseSimpleCsvLine(line);
-    const x = Number(values[xColumn]);
-    const y = Number(values[yColumn]);
-    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`Invalid coordinate on CSV row ${rowIndex + 2}.`);
+    const x = csvMeasurementMm(values[xColumn], xDefaultUnit);
+    const y = csvMeasurementMm(values[yColumn], yDefaultUnit);
     const identifier = idColumn === undefined || !values[idColumn] ? rowIndex + 1 : values[idColumn];
     return { identifier: String(identifier), label: `Fiducial ${identifier}`, machine_x: x, machine_y: y };
   });
@@ -404,10 +427,18 @@ function renderDesignOverlay() {
     return;
   }
   const area = workArea();
-  const x = Number($('designX').value);
-  const y = Number($('designY').value);
-  const width = Number($('designWidth').value);
-  const height = Number($('designHeight').value);
+  let x;
+  let y;
+  let width;
+  let height;
+  try {
+    x = measurementMm('designX');
+    y = measurementMm('designY');
+    width = measurementMm('designWidth');
+    height = measurementMm('designHeight');
+  } catch {
+    return;
+  }
   const rotation = Number($('designRotation').value);
   const xPercent = (x - area.x_min) / (area.x_max - area.x_min) * 100;
   const yPercent = (area.y_max - y) / (area.y_max - area.y_min) * 100;
@@ -470,8 +501,8 @@ $('designOverlay').addEventListener('pointerdown', (event) => {
     pointerId: event.pointerId,
     startClientX: event.clientX,
     startClientY: event.clientY,
-    startX: Number($('designX').value),
-    startY: Number($('designY').value),
+    startX: measurementMm('designX'),
+    startY: measurementMm('designY'),
   };
 });
 
@@ -508,8 +539,8 @@ $('designRotationHandle').addEventListener('pointerdown', (event) => {
     pointerId: event.pointerId,
     centerClientX: overlayRect.left + overlayRect.width / 2,
     centerClientY: overlayRect.top + overlayRect.height / 2,
-    baseAngle: Math.atan2(-Number($('designHeight').value) / (workArea().y_max - workArea().y_min) * stageRect.height,
-                          Number($('designWidth').value) / (workArea().x_max - workArea().x_min) * stageRect.width),
+    baseAngle: Math.atan2(-measurementMm('designHeight') / (workArea().y_max - workArea().y_min) * stageRect.height,
+                          measurementMm('designWidth') / (workArea().x_max - workArea().x_min) * stageRect.width),
   };
 });
 
@@ -536,17 +567,27 @@ window.addEventListener('resize', renderDesignOverlay);
 let aspectUpdate = false;
 $('designWidth').addEventListener('input', () => {
   if ($('lockAspect').checked && !aspectUpdate && state.svgAspect > 0) {
-    aspectUpdate = true;
-    $('designHeight').value = (Number($('designWidth').value) / state.svgAspect).toFixed(2);
-    aspectUpdate = false;
+    try {
+      aspectUpdate = true;
+      $('designHeight').value = (measurementMm('designWidth') / state.svgAspect).toFixed(2);
+    } catch {
+      // Partial input such as "1 i" is allowed while the user is typing.
+    } finally {
+      aspectUpdate = false;
+    }
   }
   renderDesignOverlay();
 });
 $('designHeight').addEventListener('input', () => {
   if ($('lockAspect').checked && !aspectUpdate && state.svgAspect > 0) {
-    aspectUpdate = true;
-    $('designWidth').value = (Number($('designHeight').value) * state.svgAspect).toFixed(2);
-    aspectUpdate = false;
+    try {
+      aspectUpdate = true;
+      $('designWidth').value = (measurementMm('designHeight') * state.svgAspect).toFixed(2);
+    } catch {
+      // Partial input such as "1 i" is allowed while the user is typing.
+    } finally {
+      aspectUpdate = false;
+    }
   }
   renderDesignOverlay();
 });
@@ -579,10 +620,10 @@ $('svgFileInput').addEventListener('change', async (event) => {
 
 function placementPayload() {
   return {
-    center_x_mm: Number($('designX').value),
-    center_y_mm: Number($('designY').value),
-    width_mm: Number($('designWidth').value),
-    height_mm: Number($('designHeight').value),
+    center_x_mm: measurementMm('designX'),
+    center_y_mm: measurementMm('designY'),
+    width_mm: measurementMm('designWidth'),
+    height_mm: measurementMm('designHeight'),
     rotation_deg: Number($('designRotation').value),
   };
 }
@@ -590,8 +631,8 @@ function placementPayload() {
 function toolpathPayload() {
   return {
     power: Number($('designPower').value),
-    engrave_feed_mm_min: Number($('designFeed').value),
-    travel_feed_mm_min: Number($('travelFeed').value),
+    engrave_feed_mm_min: measurementMm('designFeed'),
+    travel_feed_mm_min: measurementMm('travelFeed'),
     optimize_order: true,
   };
 }
@@ -618,21 +659,6 @@ $('generateGcodeButton').addEventListener('click', async () => {
     });
     showGenerated(result);
     toast('G-code generated and checked against the configured work area.');
-  } catch (error) {
-    toast(error.message, true);
-  }
-});
-
-$('generateFrameButton').addEventListener('click', async () => {
-  if (!state.lastBounds) return toast('Generate the design G-code first so its bounds are known.', true);
-  try {
-    const result = await api('/api/design/frame', 'POST', {
-      bounds_mm: state.lastBounds,
-      laser_enabled: false,
-      feed_mm_min: Number($('travelFeed').value),
-    });
-    showGenerated(result);
-    toast('Dry-motion framing program generated with no laser-enable command.');
   } catch (error) {
     toast(error.message, true);
   }
@@ -716,8 +742,8 @@ $('addBedPointButton').addEventListener('click', async () => {
     await api('/api/calibration/bed/point', 'POST', {
       image_x: state.pendingBedPixel.x,
       image_y: state.pendingBedPixel.y,
-      machine_x: Number($('bedMachineX').value),
-      machine_y: Number($('bedMachineY').value),
+      machine_x: measurementMm('bedMachineX'),
+      machine_y: measurementMm('bedMachineY'),
       label: $('bedPointLabel').value,
     });
     state.pendingBedPixel = null;
@@ -818,7 +844,15 @@ $('sendCommandButton').addEventListener('click', async () => {
   } catch (error) { toast(error.message, true); }
 });
 $('armMachineButton').addEventListener('click', async () => {
-  try { await api('/api/machine/arm', 'POST', { phrase: $('armPhrase').value }); await refreshStatus(); toast('Laser control armed temporarily.'); }
+  if (!state.lastGcode) return toast('Generate or load G-code before arming.', true);
+  try {
+    await api('/api/machine/arm', 'POST', {
+      phrase: $('armPhrase').value,
+      gcode: state.lastGcode,
+    });
+    await refreshStatus();
+    toast('Laser control armed temporarily for this program.');
+  }
   catch (error) { toast(error.message, true); }
 });
 $('disarmMachineButton').addEventListener('click', async () => {

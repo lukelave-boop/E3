@@ -2,6 +2,11 @@
 
 The supported starting point is a normal graphical Linux Mint, Ubuntu, or Debian installation on a 64-bit Intel/AMD computer.
 
+Linux is currently the only intended hardware platform. Safe application
+simulation also runs on Windows; the remaining platform boundary is recorded in
+[../CURRENT_STATE.md](../CURRENT_STATE.md). It does not change these Linux
+installation instructions.
+
 ## 1. Test the old computer before erasing it
 
 Boot the Linux installer USB in live mode and confirm that display, keyboard, mouse, Ethernet/Wi-Fi, the C920, and the internal drive are visible. The project itself does not require a dedicated GPU.

@@ -17,15 +17,29 @@
     "autostart": true,
     "jpeg_quality": 90,
     "warmup_frames": 12,
+    "view_rotation_degrees": 0,
     "controls": {
       "focus_automatic_continuous": 0,
       "focus_auto": 0,
       "focus_absolute": 40,
       "exposure_auto": 1,
+      "auto_exposure": 1,
       "exposure_time_absolute": 250,
       "white_balance_automatic": 0,
       "white_balance_temperature": 4500,
       "gain": 0
+    },
+    "precision_capture": {
+      "settle_seconds": 1.5,
+      "discard_frames": 8,
+      "sample_frames": 45,
+      "timeout_seconds": 8.0,
+      "minimum_valid_frames": 15,
+      "mad_multiplier": 3.5,
+      "outlier_floor_px": 0.25,
+      "max_jitter_rms_px": 0.75,
+      "coordinate_strategy": "stable_clarity_consensus",
+      "consensus_frames": 15
     }
   },
   "machine": {
@@ -46,8 +60,12 @@
       "z": null
     },
     "home_before_photo": true,
+    "home_and_release_after_powered_job": true,
+    "grbl_step_idle_delay_ms": 250,
     "allow_motion": false,
-    "controller_startup_delay": 2.0
+    "controller_startup_delay": 2.0,
+    "max_travel_feed_mm_min": 6000.0,
+    "max_work_feed_mm_min": 6000.0
   },
   "calibration": {
     "lens": {
@@ -71,9 +89,14 @@
     "engrave_feed_mm_min": 1200.0,
     "curve_tolerance_mm": 0.15,
     "boundary_margin_mm": 0.0,
+    "guarded_output_polygon_mm": null,
+    "spot_offset_x_mm": 0.0,
+    "spot_offset_y_mm": 0.0,
     "arm_timeout_seconds": 60,
     "allow_low_power_frame": false,
-    "return_to_photo_position": false
+    "return_to_photo_position": false,
+    "preview_acceleration_mm_s2": 500.0,
+    "preview_command_delay_ms": 0.0
   },
   "vision": {
     "workpiece_min_area_ratio": 0.03,

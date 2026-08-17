@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any
 
@@ -42,8 +43,26 @@ def detect_workpiece(
     This is deliberately traditional computer vision, not a neural network. It
     performs best when the workpiece edge contrasts with the spoil board.
     """
-    if image is None or image.size == 0:
+    if image is None or not isinstance(image, np.ndarray) or image.size == 0:
         return None
+    if (
+        image.dtype != np.uint8
+        or image.ndim not in (2, 3)
+        or (image.ndim == 3 and image.shape[2] != 3)
+    ):
+        raise ValueError("Workpiece image must be a non-empty uint8 grayscale or BGR array")
+    if (
+        type(min_area_ratio) is bool
+        or not math.isfinite(float(min_area_ratio))
+        or not 0.0 < float(min_area_ratio) < 0.92
+    ):
+        raise ValueError("Minimum workpiece area ratio must be finite and between 0 and 0.92")
+    if (
+        type(canny_low) is not int
+        or type(canny_high) is not int
+        or not 0 <= canny_low < canny_high <= 255
+    ):
+        raise ValueError("Canny thresholds must be integers with 0 <= low < high <= 255")
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
     gray = cv2.GaussianBlur(gray, (7, 7), 0)
     edges = cv2.Canny(gray, canny_low, canny_high)

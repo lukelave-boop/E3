@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="e3-request-token" content="__E3_REQUEST_TOKEN__">
   <title>Laser Camera Aligner</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
@@ -68,7 +69,7 @@
               <li>Calibrate lens distortion with at least ten varied checkerboard photos.</li>
               <li>Park the bed at the fixed photography pose and map known XY points.</li>
               <li>Place an SVG over the rectified photograph and export G-code.</li>
-              <li>Validate dry motion before enabling any laser power.</li>
+              <li>Review the generated path and selected power before execution.</li>
             </ol>
           </article>
           <article class="panel">
@@ -185,8 +186,8 @@
             <div class="form-grid two">
               <label>Image X (px)<input id="bedImageX" type="number" step="0.01" readonly></label>
               <label>Image Y (px)<input id="bedImageY" type="number" step="0.01" readonly></label>
-              <label>Machine X (mm)<input id="bedMachineX" type="number" step="0.01"></label>
-              <label>Machine Y (mm)<input id="bedMachineY" type="number" step="0.01"></label>
+              <label>Machine X (mm or in)<input id="bedMachineX" type="text" inputmode="decimal" placeholder="25.4 mm or 1 in"></label>
+              <label>Machine Y (mm or in)<input id="bedMachineY" type="text" inputmode="decimal" placeholder="25.4 mm or 1 in"></label>
             </div>
             <label>Label<input id="bedPointLabel" type="text" maxlength="80" placeholder="Example: upper-left mark"></label>
             <button class="full" id="addBedPointButton">Add point</button>
@@ -234,19 +235,18 @@
             <label class="file-picker">Import SVG<input id="svgFileInput" type="file" accept="image/svg+xml,.svg"></label>
             <div id="svgSummary" class="small-summary">No SVG loaded.</div>
             <div class="form-grid two">
-              <label>Center X (mm)<input id="designX" type="number" step="0.1"></label>
-              <label>Center Y (mm)<input id="designY" type="number" step="0.1"></label>
-              <label>Width (mm)<input id="designWidth" type="number" min="0.1" step="0.1"></label>
-              <label>Height (mm)<input id="designHeight" type="number" min="0.1" step="0.1"></label>
+              <label>Center X (mm or in)<input id="designX" type="text" inputmode="decimal" placeholder="25.4 mm or 1 in"></label>
+              <label>Center Y (mm or in)<input id="designY" type="text" inputmode="decimal" placeholder="25.4 mm or 1 in"></label>
+              <label>Width (mm or in)<input id="designWidth" type="text" inputmode="decimal" placeholder="25.4 mm or 1 in"></label>
+              <label>Height (mm or in)<input id="designHeight" type="text" inputmode="decimal" placeholder="25.4 mm or 1 in"></label>
               <label>Rotation (°)<input id="designRotation" type="number" step="0.1" value="0"></label>
               <label>Laser power<input id="designPower" type="number" min="0" step="1"></label>
-              <label>Engrave feed<input id="designFeed" type="number" min="1" step="10"></label>
-              <label>Travel feed<input id="travelFeed" type="number" min="1" step="10"></label>
+              <label>Engrave feed (mm/min or in/min)<input id="designFeed" type="text" inputmode="decimal" placeholder="1000 mm/min or 40 in/min"></label>
+              <label>Travel feed (mm/min or in/min)<input id="travelFeed" type="text" inputmode="decimal" placeholder="3000 mm/min or 120 in/min"></label>
             </div>
             <label class="checkbox"><input id="lockAspect" type="checkbox" checked> Keep SVG aspect ratio</label>
             <div class="button-row stack-on-small">
               <button id="generateGcodeButton">Generate G-code</button>
-              <button class="secondary" id="generateFrameButton">Generate dry frame</button>
             </div>
             <a id="downloadGcodeLink" class="download-link hidden" href="#">Download generated file</a>
           </aside>
@@ -293,7 +293,7 @@
               <button class="warning-button" id="armMachineButton">Arm temporarily</button>
               <button class="secondary" id="disarmMachineButton">Disarm</button>
             </div>
-            <label class="checkbox"><input id="runConfirmation" type="checkbox"> I have completed a dry-motion check and the enclosure is secured.</label>
+            <label class="checkbox"><input id="runConfirmation" type="checkbox"> I reviewed this program and the machine is ready for attended operation.</label>
             <button class="full danger" id="runGeneratedButton">Run current generated G-code</button>
           </article>
         </div>
