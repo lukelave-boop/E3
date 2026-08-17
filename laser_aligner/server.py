@@ -105,6 +105,8 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             "script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'",
         )
         self.send_header("Cache-Control", "public, max-age=300" if cache else "no-store")
+        if self.close_connection:
+            self.send_header("Connection", "close")
 
     def _send_bytes(
         self,
@@ -165,10 +167,46 @@ class AppRequestHandler(BaseHTTPRequestHandler):
             return False
 
     def _reject_request(self, status: HTTPStatus, message: str) -> None:
-        # Rejected POST bodies are intentionally not consumed. Close this HTTP/1.1
-        # connection so those bytes cannot be parsed as a subsequent request.
+        # Close this HTTP/1.1 connection so rejected body bytes can never be
+        # parsed as a subsequent request. Drain only one bounded,
+        # unambiguously framed body first so Windows does not reset the socket
+        # before the generated error response reaches the client.
         self.close_connection = True
+        self._discard_rejected_body()
         self._error(status, message)
+        try:
+            self.wfile.flush()
+        except OSError:
+            pass
+
+    def _discard_rejected_body(self) -> None:
+        if self.headers.get_all("Transfer-Encoding", failobj=[]):
+            return
+        lengths = self.headers.get_all("Content-Length", failobj=[])
+        if len(lengths) != 1:
+            return
+        raw_length = lengths[0].strip()
+        if re.fullmatch(r"[0-9]+", raw_length) is None:
+            return
+        remaining = int(raw_length)
+        if remaining <= 0 or remaining > self.context.settings.app.max_request_bytes:
+            return
+
+        previous_timeout = self.connection.gettimeout()
+        try:
+            self.connection.settimeout(0.25)
+            while remaining:
+                chunk = self.rfile.read(min(remaining, 64 * 1024))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
+        except OSError:
+            pass
+        finally:
+            try:
+                self.connection.settimeout(previous_timeout)
+            except OSError:
+                pass
 
     def _validated_authority(self) -> str | None:
         values = self.headers.get_all("Host", failobj=[])
