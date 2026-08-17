@@ -179,6 +179,49 @@ def _begin_download(
     )
 
 
+def _handoff_downloaded_update(
+    window: QtWidgets.QMainWindow,
+    path: Path,
+) -> bool:
+    """Close E3 safely, launch the verified package, then terminate E3."""
+
+    application = QtWidgets.QApplication.instance()
+    if application is None:
+        raise RuntimeError("E3 application instance is unavailable")
+
+    previous_quit_on_last_window = application.quitOnLastWindowClosed()
+    application.setQuitOnLastWindowClosed(False)
+    closed = False
+
+    try:
+        # Keep the process alive while close() performs the normal unsaved-
+        # project checks. Closing the last Qt window must not terminate E3
+        # before the verified installer has actually been spawned.
+        if not window.close():
+            return False
+        closed = True
+
+        try:
+            launch_downloaded_update(path)
+        except Exception:
+            # A launch failure should leave E3 usable instead of silently
+            # disappearing after the user already approved the update.
+            window.show()
+            window.raise_()
+            window.activateWindow()
+            raise
+
+        application.quit()
+        return True
+    finally:
+        # Restore the application's normal behavior for both rejected closes
+        # and installer-launch failures.
+        if not closed or window.isVisible():
+            application.setQuitOnLastWindowClosed(
+                previous_quit_on_last_window
+            )
+
+
 def _download_complete(
     window: QtWidgets.QMainWindow,
     action: QtGui.QAction,
@@ -198,13 +241,11 @@ def _download_complete(
     )
     if answer != QtWidgets.QMessageBox.StandardButton.Yes:
         return
-    if not window.close():
-        return
     try:
-        launch_downloaded_update(path)
+        _handoff_downloaded_update(window, path)
     except Exception as exc:
         QtWidgets.QMessageBox.critical(
-            None,
+            window if window.isVisible() else None,
             "E3 Update",
             "The verified package was downloaded, but could not be started.\n\n"
             f"{exc}",
