@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 import pytest
 
 pytest.importorskip("PySide6")
 
-from laser_aligner.desktop.qt import QtWidgets
+from laser_aligner.desktop.qt import QtGui, QtWidgets
 from laser_aligner.desktop.text_geometry import (
     TextVectorOptions,
     automatic_bridge_width,
@@ -21,6 +24,31 @@ def application():
     yield app
 
 
+def _usable_test_font() -> str:
+    """Return a real outline font even under Qt's Windows offscreen backend."""
+    resolved = QtGui.QFontInfo(QtGui.QFont("Arial")).family().strip()
+    if resolved:
+        return resolved
+
+    windows = Path(os.environ.get("WINDIR", r"C:\Windows"))
+    font_dir = windows / "Fonts"
+
+    for filename in ("arial.ttf", "segoeui.ttf", "calibri.ttf"):
+        path = font_dir / filename
+        if not path.is_file():
+            continue
+
+        font_id = QtGui.QFontDatabase.addApplicationFont(str(path))
+        if font_id < 0:
+            continue
+
+        families = QtGui.QFontDatabase.applicationFontFamilies(font_id)
+        if families:
+            return families[0]
+
+    pytest.skip("No real outline font is available to Qt for stencil geometry testing")
+
+
 def test_auto_bridge_width_scales_with_text_height() -> None:
     assert automatic_bridge_width(5.0) == pytest.approx(0.8)
     assert automatic_bridge_width(25.0) == pytest.approx(2.0)
@@ -30,7 +58,7 @@ def test_auto_bridge_width_scales_with_text_height() -> None:
 def test_stencil_text_bridges_enclosed_letter_counters() -> None:
     options = TextVectorOptions(
         text="OAR8",
-        font_family="Arial",
+        font_family=_usable_test_font(),
         height_mm=25.0,
         mode="stencil",
     )
@@ -48,7 +76,7 @@ def test_created_stencil_text_is_normal_output_path_geometry() -> None:
         "layer-1",
         TextVectorOptions(
             text="OPEN",
-            font_family="Arial",
+            font_family=_usable_test_font(),
             height_mm=20.0,
             mode="stencil",
         ),

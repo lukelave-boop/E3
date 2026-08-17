@@ -305,6 +305,7 @@ def test_trace_create_payload_can_keep_earlier_trace_batches(
         {
             "selected_ids": ["trace-new"],
             "output_mode": "rounded",
+            "purpose": "cut",
             "replace_previous": False,
         }
     ]
