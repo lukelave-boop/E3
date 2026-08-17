@@ -7,6 +7,15 @@ for the current five-tab sequence.
 
 Snapshot: **2026-08-16**
 
+The native desktop now has a bounded foreign G-code design importer for `.gc`,
+`.gcode`, `.nc`, and `.tap`. It translates supported 2-D G0/G1/G2/G3 motion into
+ordinary E3 path objects and reconstructs Line layers from modal feed/power
+combinations. Imported layers are always output-disabled and foreign programs
+are never streamed directly; subsequent execution still requires E3 generation,
+exact Preview, and the guarded START JOB path. Unsupported coordinate-changing
+or non-2-D commands fail import instead of being guessed. Focused parser and
+offscreen desktop tests are included; this importer is not physically verified.
+
 The native desktop now requires the final execution sequence **Generate -> exact
 Preview -> START JOB** for both project programs and prepared Machine Setup
 programs. The Preview is window-modal while it is open, so project authoring and

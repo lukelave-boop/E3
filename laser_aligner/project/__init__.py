@@ -1,6 +1,15 @@
 """Transparent project/document model used by the E3 desktop application."""
 
 from .alignment import Alignment, aligned_transforms, distributed_transforms
+from .gcode_import import (
+    GCODE_FILE_DIALOG_FILTER,
+    MAX_GCODE_FILE_BYTES,
+    SUPPORTED_GCODE_SUFFIXES,
+    GcodeImportError,
+    GcodeImportResult,
+    load_gcode_project,
+    parse_gcode_project,
+)
 from .history import (
     AddLayerCommand,
     AddObjectCommand,
@@ -109,12 +118,16 @@ __all__ = [
     "DEFAULT_LAYER_COLORS",
     "DuplicateObjectsCommand",
     "FunctionalCommand",
+    "GCODE_FILE_DIALOG_FILTER",
+    "GcodeImportError",
+    "GcodeImportResult",
     "GroupObjectsCommand",
     "LayerMode",
     "LightBurnImportError",
     "LightBurnImportResult",
     "LIGHTBURN_FILE_DIALOG_FILTER",
     "MAX_RASTER_DECODED_BYTES",
+    "MAX_GCODE_FILE_BYTES",
     "MAX_LIGHTBURN_FILE_BYTES",
     "MAX_RASTER_DIMENSION",
     "MAX_RASTER_ENCODED_BYTES",
@@ -162,6 +175,7 @@ __all__ = [
     "is_output_geometry",
     "is_stock_boundary",
     "load_project",
+    "load_gcode_project",
     "load_lightburn_project",
     "mark_stock_boundary",
     "meaningful_stock_edges",
@@ -170,6 +184,7 @@ __all__ = [
     "primary_stock_polygon",
     "probe_raster_asset",
     "parse_lightburn_project",
+    "parse_gcode_project",
     "read_raster_asset_payload",
     "save_autosave",
     "save_project",
@@ -177,6 +192,7 @@ __all__ = [
     "stock_boundaries",
     "stock_polygons",
     "SUPPORTED_RASTER_SUFFIXES",
+    "SUPPORTED_GCODE_SUFFIXES",
     "verify_project_job_assets",
     "verify_raster_asset_identities",
     "verify_raster_asset_identity",
