@@ -35,12 +35,12 @@ from .io import (
 )
 from .model import (
     DEFAULT_LAYER_COLORS,
+    OBJECT_ROLE_KEY,
     PROJECT_SCHEMA_VERSION,
+    STOCK_BOUNDARY_ROLE,
     Bounds,
     CoordinateSpace,
     LayerMode,
-    OBJECT_ROLE_KEY,
-    STOCK_BOUNDARY_ROLE,
     ObjectKind,
     OperationLayer,
     ProjectDocument,
