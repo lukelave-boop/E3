@@ -95,6 +95,19 @@
 
 ## Unreleased — `desktop-v1` / `0.2.0.dev0`
 
+- Trace can now create a locked **Stock boundary** instead of laser-output
+  geometry. Stock boundaries remain visible in the camera-aligned project, are
+  persisted through `.e3laser` save/load, and are explicitly excluded from
+  vector, fill, raster, preview-frame, and generated-job output.
+- Added a contextual **Stock layout** toolbar with one-click horizontal and
+  vertical centering, meaningful-edge rotation snapping, and conservative
+  fit-to-stock scaling with preset or custom uncut margins. The edge selector
+  includes nearest, top, bottom, left, and right stock edges.
+- Replaced the one-line display-only text prompt with vector text creation.
+  **Outline cut** produces ordinary font contours; **Stencil-safe cut** detects
+  enclosed counters and removes scaled material bridges so centers such as O,
+  A, R, B, and 8 remain connected to the parent sheet.
+
 - Projects now explicitly distinguish legacy machine coordinates from a
   movable honeycomb-local coordinate system. New projects use the current
   detected cutting surface as X0..190, Y0..190; schema-1 projects migrate as

@@ -11,6 +11,8 @@ from numbers import Real
 from typing import Any
 
 PROJECT_SCHEMA_VERSION = 2
+OBJECT_ROLE_KEY = "e3_role"
+STOCK_BOUNDARY_ROLE = "stock_boundary"
 
 
 class ProjectFormatError(ValueError):
@@ -398,6 +400,14 @@ class SceneObject:
         self.locked = _boolean(self.locked, "object.locked")
         self.group_id = None if self.group_id in {None, ""} else str(self.group_id)
         self.validate_geometry()
+
+    @property
+    def is_stock_boundary(self) -> bool:
+        return self.metadata.get(OBJECT_ROLE_KEY) == STOCK_BOUNDARY_ROLE
+
+    @property
+    def is_output_geometry(self) -> bool:
+        return not self.is_stock_boundary
 
     def validate_geometry(self) -> None:
         if self.kind == ObjectKind.RECTANGLE:
@@ -970,6 +980,7 @@ class ProjectDocument:
             item
             for item in self.objects
             if item.visible
+            and item.is_output_geometry
             and layer_by_id[item.layer_id].visible
             and layer_by_id[item.layer_id].output_enabled
         ]

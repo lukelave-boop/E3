@@ -29,7 +29,8 @@ geometry, G-code, safety and controller services.
   size/position/rotation, mirror, duplicate, delete, group/ungroup, alignment,
   distribution and z-order controls
 - Persistent press-drag-release rectangle drawing plus basic rounded rectangle,
-  ellipse, line and text creation
+  ellipse and line creation, and vector text creation in ordinary outline or
+  automatically bridged stencil-safe mode
 - Physical-size SVG import for absolute `mm`, `cm`, `in`, and `px` root
   dimensions plus viewBox-only files (`96 CSS px = 1 in`), including transformed
   groups and `preserveAspectRatio` mapping. Imports remain centered at the
@@ -69,20 +70,25 @@ without copying LightBurn branding or changing the E3 machine-control model:
    explicit `mm` or `in` entry in dimensional fields,
    mirroring, and contextual rectangle radius. Controls disable when the
    selection cannot be edited instead of making the toolbar collapse.
-5. A compact left rail holds selection, creation, trace/template, fit, zoom,
+5. A contextual **Stock layout** toolbar appears when a non-stock object is
+   selected and a traced Stock boundary exists. Its immediate controls center
+   horizontally or vertically, snap rotation to a meaningful stock edge, and
+   fit the selection inside the stock with a retained margin; a compact dropdown
+   holds the expanded command list.
+6. A compact left rail holds selection, creation, trace/template, fit, zoom,
    and snap tools.
-6. The central workspace uses the active project's physical coordinate space,
+7. The central workspace uses the active project's physical coordinate space,
    a near-white adaptive grid, thin light rulers, no permanent scroll-bar
    chrome, auto-fit until the user zooms or pans, and a 70% corrected-camera
    overlay by default. A dynamic
    key identifies transient Trace, camera-detection, template-cut, and toolpath
    lines by both role and line style. The key stays in the upper-left viewport
    corner during canvas interaction unless the operator drags the key itself.
-7. Cuts/Layers, Cameras, Objects, Shape Properties, Templates, and Trace share
+8. Cuts/Layers, Cameras, Objects, Shape Properties, Templates, and Trace share
    one full-height tabbed inspector on the right.
-8. A short dock row beneath the canvas keeps raw G-code in a narrow left panel
+9. A short dock row beneath the canvas keeps raw G-code in a narrow left panel
    and Laser, Machine, and Material Library in a wider tabbed panel beside it.
-9. A fixed 30-color bottom palette assigns selected objects to existing
+10. A fixed 30-color bottom palette assigns selected objects to existing
    operations; clicking an unused color creates a matching operation. The
    status bar reports direct-edit affordances and live workspace feedback.
 
@@ -102,6 +108,22 @@ every design/runtime inspector fits its horizontal viewport; compact panels
 use vertical scrolling where needed. Operation speed, power, pass, interval,
 angle, and overscan editors now update the project on edit completion rather
 than creating an undo entry and rebuilding the inspector for every typed digit.
+
+Trace can now create a locked, teal dashed **Stock boundary (layout only)**
+instead of cut geometry. The construction outline survives project save/load
+but is excluded from line, fill, raster, generated-job, and zero-power framing
+entry points. Selecting ordinary artwork reveals the contextual Stock layout
+toolbar for horizontal/vertical centering, rigid rotation parallel to a nearest
+or named outward-facing edge, and conservative fit-to-stock scaling with preset
+or custom uncut margins. The original irregular polygon controls containment;
+its simplified edges are used only for rotation choices.
+
+The Text action now opens a vector-text dialog rather than creating a display-
+only TEXT object. **Outline cut** emits ordinary font contours. **Stencil-safe
+cut** detects enclosed counters and opens scaled bridges through the glyph so
+centers such as O, A, R, B, and 8 remain connected to the parent sheet. Source
+text, font, mode, size, bridge width, and bridge count remain in object metadata;
+existing vector text is not yet reopened for editable regeneration.
 
 Direct resize/rotation handles appear only for one visible, unlocked object on
 a visible layer. Resizing keeps the opposite corner fixed; holding Shift while
@@ -142,7 +164,7 @@ rejected consistently because its Qt decode plugin is not portable.
 | Project file, import, undo/redo, and object commands | Menus, global toolbars, left rail, and context bar | Existing `ProjectDocument` commands and history stack remain authoritative |
 | Machine authority, arming, execution, and stop | Persistent runtime strip plus Machine and Job inspectors | `DesktopController` and `MachineService` gates are unchanged; the strip is status/presentation only |
 | Camera overlay, focus, and corrected test sources | Camera inspector and workspace | Existing camera/controller lifecycle is unchanged |
-| Object tracing | Trace tool and inspector | Existing frozen-frame review and object-creation path is unchanged |
+| Object tracing and stock layout | Trace tool, inspector, contextual Stock layout toolbar, and workspace | Existing frozen-frame review remains authoritative; Stock boundaries are role-tagged construction objects that persist but are filtered from every output path |
 | Cutting templates and alignment | Templates tool, inspector, and grid designer | Existing rigid placement, review, and one-command apply path is unchanged |
 | Operation layers and materials | Operations/Layers table, bottom palette, and Materials inspector | Existing layer schema, ordering, presets, and explicit unsupported-mode checks are retained |
 | Toolpath generation, framing, preview, and run | Job toolbar, Job inspector, dedicated graphical Preview, and on-demand raw G-code | Preview parses the exact finalized stream; existing revision invalidation, validation, arming, and execution gates are unchanged |
@@ -151,7 +173,8 @@ rejected consistently because its Qt decode plugin is not portable.
 ### Project and operations model
 
 - Framework-independent undo/redo command stack
-- Undoable object, transform, layer, grouping, alignment and ordering edits
+- Undoable object, transform, layer, grouping, alignment, stock-relative
+  layout, and ordering edits
 - Transparent `.e3laser` JSON project format
 - Atomic project saves, `.bak` files, periodic autosaves and recovery prompts
 - Colored operation layers with line/fill/raster mode, speed, power, passes,
@@ -178,7 +201,8 @@ rejected consistently because its Qt decode plugin is not portable.
   controller execution progress
 - Closed-vector fill, binary vector raster, and area-prefiltered ordered-dither
   grayscale raster output with bounds-checked laser-off overscan
-- Unsupported text output, open fill geometry, missing/changed raster assets,
+- Legacy display-only TEXT objects, open fill geometry, missing/changed raster
+  assets,
   unsupported raster metadata, and empty dither results are rejected explicitly
   rather than silently omitted
 - Zero-effective-power vector, fill, and raster layers never emit `M3` or `M4`;
@@ -282,6 +306,8 @@ Direct launch commands:
 - operation layers;
 - vector objects and their z-order;
 - object transforms, visibility, lock and group membership;
+- role metadata for construction-only Stock boundaries and source metadata for
+  generated vector text;
 - embedded original SVG text when available;
 - project metadata and timestamps.
 
@@ -344,6 +370,8 @@ physically verified.
 
 - Core project, history, save/recovery, material and toolpath tests
 - Desktop source parsing without requiring PySide6 in headless CI
+- Stock-boundary persistence/output exclusion, stock-relative center/rotation/
+  fit behavior, and vector-text source wiring tests
 - Python bytecode compilation
 - Shell-script syntax checks
 - Editable package installation without desktop dependencies
@@ -367,7 +395,7 @@ test. POSIX serial is selected lazily; Linux remains the only hardware platform.
    editing, and smart snap guides. Single-object resize/rotation and transient
    cutting-template drag/rotation are already implemented.
 4. Guarded jog API and tested controller-specific realtime pause/resume.
-5. DXF import and text-to-outline conversion.
+5. DXF import and editable regeneration of existing vector text.
 6. Managed or embedded portable raster assets, selectable dithers, and
    calibrated grayscale power curves.
 7. Job history and calibration profiles by material height.

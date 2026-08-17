@@ -16,6 +16,7 @@ from ..project import (
     ProjectDocument,
     SceneObject,
     Transform,
+    is_stock_boundary,
     read_raster_asset_payload,
 )
 from .qt import require_qt
@@ -469,12 +470,24 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 self._raster_source_size = None
                 self._raster_asset_reference = None
             self.setPath(self._path_for_object(scene_object, transform))
-            color = QtGui.QColor(layer.color)
+            stock_boundary = is_stock_boundary(scene_object)
+            color = (
+                QtGui.QColor("#39D6C4")
+                if stock_boundary
+                else QtGui.QColor(layer.color)
+            )
             pen = QtGui.QPen(color)
-            pen.setWidthF(0.35)
+            pen.setWidthF(0.55 if stock_boundary else 0.35)
             pen.setCosmetic(True)
+            if stock_boundary:
+                pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+                pen.setDashPattern([7.0, 3.0])
             self.setPen(pen)
-            if scene_object.kind == ObjectKind.IMAGE:
+            if stock_boundary:
+                fill = QtGui.QColor(color)
+                fill.setAlpha(18)
+                self.setBrush(fill)
+            elif scene_object.kind == ObjectKind.IMAGE:
                 self.setBrush(QtCore.Qt.BrushStyle.NoBrush)
             elif layer.mode in {LayerMode.FILL, LayerMode.RASTER}:
                 fill = QtGui.QColor(color)
@@ -495,7 +508,9 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
                 f"X {transform.x_mm:.2f}  Y {transform.y_mm:.2f}\n"
                 f"{transform.width_mm:.2f} × {transform.height_mm:.2f} mm"
                 + (
-                    f"\n{self._raster_source}"
+                    "\nLocked construction boundary — never sent to the laser"
+                    if stock_boundary
+                    else f"\n{self._raster_source}"
                     if self._raster_image is not None
                     else "\nRaster source is missing or unreadable"
                     if scene_object.kind == ObjectKind.IMAGE
