@@ -1627,7 +1627,6 @@ class TracePanel(QtWidgets.QWidget):
             else:
                 widget.valueChanged.connect(self._mark_stale)
                 widget.valueChanged.connect(self._save_preferences)
-        self.replace_previous.toggled.connect(self._save_preferences)
         self._sync_output_controls()
 
     @staticmethod
@@ -1712,13 +1711,6 @@ class TracePanel(QtWidgets.QWidget):
             self.smoothing.setValue(
                 float(settings.value("smoothing_mm", self.smoothing.value()))
             )
-            self.replace_previous.setChecked(
-                self._settings_bool(
-                    settings.value("replace_previous", self.replace_previous.isChecked()),
-                    self.replace_previous.isChecked(),
-                )
-            )
-
             sampled_hue = settings.value("sampled_hue")
             sampled_bgr = str(settings.value("sampled_bgr", "")).strip()
             if sampled_hue is not None and sampled_bgr:
@@ -1763,7 +1755,6 @@ class TracePanel(QtWidgets.QWidget):
             for edge, field in self.edge_offset_fields.items():
                 settings.setValue(f"border_offset_{edge}_mm", field.value())
             settings.setValue("smoothing_mm", self.smoothing.value())
-            settings.setValue("replace_previous", self.replace_previous.isChecked())
             if self._sampled_hue is not None and self._sampled_bgr is not None:
                 settings.setValue("sampled_hue", self._sampled_hue)
                 settings.setValue(
