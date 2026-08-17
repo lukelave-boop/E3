@@ -233,6 +233,39 @@ def _payload_string(payload: Mapping[str, Any], key: str, default: str) -> str:
     return value
 
 
+def _camera_provenance_matches(
+    saved: object,
+    current: object,
+    configured_device: str,
+) -> bool:
+    if saved == current:
+        return True
+    if not str(configured_device).lower().startswith("e3camera://"):
+        return False
+    if not isinstance(saved, Mapping) or not isinstance(current, Mapping):
+        return False
+
+    # Older remote-camera bed maps recorded the Pi's live /dev/video* name.
+    # Current provenance records the stable desktop e3camera:// endpoint.
+    # The calibration profile is already scoped by configured camera settings,
+    # so a legacy remote device-name difference alone does not invalidate it.
+    saved_device = saved.get("device")
+    if not isinstance(saved_device, str):
+        return False
+
+    # Only forgive the historical Pi-local camera identifier. A change from
+    # one e3camera:// endpoint to another is a real configuration change and
+    # must still invalidate the bed map.
+    legacy_pi_device = saved_device.startswith("/dev/") or saved_device.isdigit()
+    if not legacy_pi_device:
+        return False
+
+    saved_camera = dict(saved)
+    current_camera = dict(current)
+    saved_camera["device"] = current_camera.get("device")
+    return saved_camera == current_camera
+
+
 class AppContext:
     def __init__(
         self,
@@ -328,10 +361,10 @@ class AppContext:
         *,
         lens_model_id: str | None | object = _CURRENT_LENS_MODEL,
     ) -> dict[str, Any]:
-        camera_status = self.camera.status()
+        camera_settings = self.settings.camera
         area = self.settings.machine.work_area
-        width = int(camera_status.width or self.settings.camera.width)
-        height = int(camera_status.height or self.settings.camera.height)
+        width = int(camera_settings.width)
+        height = int(camera_settings.height)
         if lens_model_id is _CURRENT_LENS_MODEL:
             lens = self.lens.model
             current_lens_model_id = None if lens is None else lens.model_id
@@ -341,8 +374,8 @@ class AppContext:
             "schema_version": 1,
             "lens_model_id": current_lens_model_id,
             "camera": {
-                "device": str(camera_status.device),
-                "synthetic": bool(camera_status.synthetic),
+                "device": str(camera_settings.device),
+                "synthetic": bool(self.settings.app.simulation),
                 "width": width,
                 "height": height,
                 "fourcc": str(self.settings.camera.fourcc),
@@ -377,7 +410,16 @@ class AppContext:
                 ],
             }
         current = self._bed_provenance(lens_model_id=lens_model_id)
-        changed = [key for key in current if saved.get(key) != current[key]]
+        changed: list[str] = []
+        for key, value in current.items():
+            if key == "camera" and _camera_provenance_matches(
+                saved.get(key),
+                value,
+                self.settings.camera.device,
+            ):
+                continue
+            if saved.get(key) != value:
+                changed.append(key)
         if changed:
             return {
                 "state": "STALE",

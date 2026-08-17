@@ -1734,3 +1734,35 @@ def test_simulation_workspace_frame_rejects_wrong_corrected_dimensions(
             np.zeros((480, 640, 3), dtype=np.uint8),
             source_name="wrong size",
         )
+
+def test_remote_bed_provenance_accepts_legacy_pi_device_name() -> None:
+    from laser_aligner.app import _camera_provenance_matches
+
+    current = {
+        "device": "e3camera://192.168.4.50:8766",
+        "synthetic": False,
+        "width": 1920,
+        "height": 1080,
+        "fourcc": "MJPG",
+        "controls": {"focus_absolute": 40},
+    }
+    saved = dict(current)
+    saved["device"] = "/dev/v4l/by-id/usb-camera"
+
+    assert _camera_provenance_matches(
+        saved,
+        current,
+        "e3camera://192.168.4.50:8766",
+    )
+    assert not _camera_provenance_matches(
+        saved,
+        current,
+        "/dev/video0",
+    )
+
+    saved["device"] = "e3camera://192.168.4.99:8766"
+    assert not _camera_provenance_matches(
+        saved,
+        current,
+        "e3camera://192.168.4.50:8766",
+    )

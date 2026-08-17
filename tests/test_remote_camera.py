@@ -14,7 +14,10 @@ from laser_aligner.camera import bridge as camera_bridge
 from laser_aligner.camera import remote as camera_remote
 from laser_aligner.camera.bridge import CameraBridgeServer
 from laser_aligner.camera.controls import ControlResult
-from laser_aligner.camera.remote import RemoteCameraService
+from laser_aligner.camera.remote import (
+    RemoteCameraService,
+    _status_probe_delay,
+)
 from laser_aligner.camera.service import CameraStatus, CompressedCameraFrame, FrameBurst
 from laser_aligner.config import CameraSettings, PrecisionCaptureSettings
 from laser_aligner.errors import CameraError
@@ -554,3 +557,34 @@ def test_raw_monitor_recovers_after_camera_stop_and_restart(monkeypatch) -> None
         stream.close()
         server.stop()
         thread.join(timeout=1)
+
+def test_remote_status_is_cached_and_does_not_touch_network(monkeypatch) -> None:
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://127.0.0.1:65534")
+    )
+
+    monkeypatch.setattr(
+        remote,
+        "_request",
+        lambda *_args, **_kwargs: pytest.fail(
+            "status() attempted synchronous network I/O"
+        ),
+    )
+
+    status = remote.status()
+
+    assert not status.connected
+    assert status.device == "e3camera://127.0.0.1:65534"
+    assert status.frames_read == 0
+
+
+def test_remote_status_probe_uses_bounded_exponential_backoff() -> None:
+    assert [_status_probe_delay(value) for value in range(1, 8)] == [
+        2.0,
+        4.0,
+        8.0,
+        16.0,
+        30.0,
+        30.0,
+        30.0,
+    ]
