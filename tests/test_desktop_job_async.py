@@ -1459,13 +1459,13 @@ def test_modal_preview_blocks_actual_main_window_project_edit(
         assert len(window.document.layers) == initial_layer_count
 
         dialog.close()
-        qt_application.processEvents()
-        QtTest.QTest.mouseClick(
-            window.windowHandle(),
-            QtCore.Qt.MouseButton.LeftButton,
-            QtCore.Qt.KeyboardModifier.NoModifier,
-            click_position,
+        _wait_until(
+            qt_application,
+            lambda: qt_application.activeModalWidget() is not dialog
+            and not dialog.isVisible(),
         )
+        assert add_layer.isEnabled()
+        add_layer.click()
         qt_application.processEvents()
         assert len(window.document.layers) == initial_layer_count + 1
         assert errors == []
