@@ -14,6 +14,7 @@ from ..geometry.svg import parse_svg
 from ..identity import application_identity, application_window_title
 from ..materials import MaterialDatabase, MaterialPreset
 from ..project import (
+    LIGHTBURN_FILE_DIALOG_FILTER,
     RASTER_FILE_DIALOG_FILTER,
     AddLayerCommand,
     AddObjectCommand,
@@ -24,6 +25,7 @@ from ..project import (
     CommandStack,
     CoordinateSpace,
     DuplicateObjectsCommand,
+    FunctionalCommand,
     GroupObjectsCommand,
     LayerMode,
     ObjectKind,
@@ -50,6 +52,7 @@ from ..project import (
     default_operation_layers,
     distributed_transforms,
     generate_project_gcode,
+    load_lightburn_project,
     load_project,
     probe_raster_asset,
     save_autosave,
@@ -104,6 +107,7 @@ _AUTHORING_ACTION_KEYS = (
     "save_as",
     "save_template",
     "import_svg",
+    "import_lightburn",
     "import_image",
     "undo",
     "redo",
@@ -429,6 +433,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("save_as", "Save project as…", "Ctrl+Shift+S")
         action("save_template", "Save project as cutting template…")
         action("import_svg", "Import SVG…", "Ctrl+I")
+        action("import_lightburn", "Import LightBurn project…")
         action("import_image", "Import raster image…", "Ctrl+Shift+I")
         action("quit", "Quit", "Ctrl+Q")
         action("undo", "Undo", "Ctrl+Z", QtWidgets.QStyle.StandardPixmap.SP_ArrowBack)
@@ -498,6 +503,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["save_as"].triggered.connect(lambda: self.save_project(save_as=True))
         self.actions["save_template"].triggered.connect(self.save_current_as_template)
         self.actions["import_svg"].triggered.connect(self.import_svg)
+        self.actions["import_lightburn"].triggered.connect(self.import_lightburn)
         self.actions["import_image"].triggered.connect(self.import_image)
         self.actions["quit"].triggered.connect(self.close)
         self.actions["undo"].triggered.connect(self.history.undo)
@@ -566,6 +572,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "save_as",
             "save_template",
             "import_svg",
+            "import_lightburn",
             "import_image",
         ):
             file_menu.addAction(self.actions[key])
@@ -1713,6 +1720,82 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._add_object(item, "Import SVG")
         except Exception as exc:
             self.show_error(f"Could not import SVG: {exc}")
+
+    def import_lightburn(self) -> None:
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import LightBurn project",
+            str(Path.home()),
+            LIGHTBURN_FILE_DIALOG_FILTER,
+        )
+        if not filename:
+            return
+        self._activate_selection_tool(show_message=False)
+        try:
+            result = load_lightburn_project(
+                filename,
+                center=self._document_center(),
+            )
+            layer_start = len(self.document.layers)
+            for offset, layer in enumerate(result.layers):
+                layer.priority = layer_start + offset
+            layer_commands = [
+                AddLayerCommand(
+                    self.document,
+                    layer,
+                    index=layer_start + offset,
+                    description="Import LightBurn layer",
+                )
+                for offset, layer in enumerate(result.layers)
+            ]
+            object_command = AddObjectsCommand(
+                self.document,
+                result.objects,
+                description="Import LightBurn objects",
+            )
+            previous_active_layer_id = self.active_layer_id
+            imported_layer_id = result.layers[0].id
+
+            def redo_import() -> None:
+                for command in layer_commands:
+                    command.redo()
+                object_command.redo()
+                self.active_layer_id = imported_layer_id
+
+            def undo_import() -> None:
+                object_command.undo()
+                for command in reversed(layer_commands):
+                    command.undo()
+                self.active_layer_id = previous_active_layer_id
+
+            self.history.execute(
+                FunctionalCommand(
+                    "Import LightBurn project",
+                    redo_import,
+                    undo_import,
+                )
+            )
+        except Exception as exc:
+            self.show_error(f"Could not import LightBurn project: {exc}")
+            return
+
+        object_ids = [item.id for item in result.objects]
+        self.workspace.select_objects(object_ids)
+        if result.warnings:
+            details = "\n".join(f"• {warning}" for warning in result.warnings[:12])
+            if len(result.warnings) > 12:
+                details += f"\n• …and {len(result.warnings) - 12} more warning(s)"
+            QtWidgets.QMessageBox.warning(
+                self,
+                "LightBurn import review required",
+                "The project was imported, but these items need review:\n\n" + details,
+            )
+        self.show_notice(
+            f"Imported {len(result.objects)} LightBurn object"
+            f"{'s' if len(result.objects) != 1 else ''} on {len(result.layers)} "
+            f"output-disabled layer{'s' if len(result.layers) != 1 else ''}; "
+            "review every setting before enabling output"
+        )
 
     def import_image(self) -> None:
         filename, _ = QtWidgets.QFileDialog.getOpenFileName(
