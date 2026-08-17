@@ -10,9 +10,10 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any
 
 from .deployment import BuildInfo, runtime_platform_key, update_cache_dir
 from .storage import strict_json_loads

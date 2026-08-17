@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 from laser_aligner import __version__
 from laser_aligner.identity import (
@@ -38,5 +38,6 @@ def test_application_identity_and_window_title_are_build_first() -> None:
     identity = application_identity()
     title = application_window_title("fixture.e3laser", dirty=True)
 
-    assert identity.startswith(f"{APPLICATION_NAME} {__version__} · rev ")
+    assert identity.startswith(f"{APPLICATION_NAME} {__version__} · build ")
     assert title == f"{identity} — fixture.e3laser *"
+

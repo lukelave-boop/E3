@@ -3,9 +3,10 @@ from __future__ import annotations
 import os
 import platform
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from . import __version__
 from .storage import default_user_data_dir, strict_json_loads

@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from .. import __version__
 from ..identity import APPLICATION_NAME, application_version
 from .qt import PYSIDE6_IMPORT_ERROR, require_qt
 

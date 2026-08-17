@@ -2,6 +2,12 @@ from __future__ import annotations
 
 import ctypes
 import os
+import sys
+
+import pytest
+
+if not sys.platform.startswith("linux"):
+    pytest.skip("native V4L2 tests require Linux", allow_module_level=True)
 
 from laser_aligner.camera import v4l2_mjpeg
 
