@@ -28,7 +28,8 @@ manifest, selects the current platform, and verifies exact size and SHA-256
 before launching the package.
 
 The development workflow publishes fixed prerelease tag `e3-development` when
-`fix/live-monitor-display-throughput` changes. It contains:
+the canonical `main` branch changes. Manual publication is also restricted to
+`main`, so the in-app updater cannot be repointed at a feature branch. It contains:
 
 - `E3-Setup.exe`
 - `E3-x86_64.AppImage`

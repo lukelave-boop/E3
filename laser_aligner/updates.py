@@ -148,6 +148,26 @@ def fetch_manifest(url: str, *, timeout: float = 15.0) -> UpdateManifest:
     return parse_manifest(payload)
 
 
+def _numeric_version(value: str) -> tuple[int, int, int] | None:
+    match = re.fullmatch(r"\s*(\d+)\.(\d+)\.(\d+)(?:[.+-].*)?\s*", value)
+    if match is None:
+        return None
+    return tuple(int(part) for part in match.groups())
+
+
+def _update_available(build: BuildInfo, manifest: UpdateManifest) -> bool:
+    current_version = _numeric_version(build.version)
+    published_version = _numeric_version(manifest.version)
+
+    if current_version is not None and published_version is not None:
+        if published_version < current_version:
+            return False
+        if published_version > current_version:
+            return True
+
+    return not _same_revision(build.revision, manifest.revision)
+
+
 def _same_revision(left: str, right: str) -> bool:
     left_normalized = left.strip().lower()
     right_normalized = right.strip().lower()
@@ -182,7 +202,7 @@ def check_for_update(build: BuildInfo) -> UpdateCheckResult:
         current=build,
         manifest=manifest,
         asset=asset,
-        available=not _same_revision(build.revision, manifest.revision),
+        available=_update_available(build, manifest),
     )
 
 

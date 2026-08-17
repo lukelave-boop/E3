@@ -3,7 +3,7 @@ name: Publish E3 development update
 on:
   push:
     branches:
-      - fix/live-monitor-display-throughput
+      - main
   workflow_dispatch:
 
 permissions:
@@ -19,6 +19,7 @@ env:
 
 jobs:
   windows:
+    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
@@ -53,6 +54,7 @@ jobs:
           if-no-files-found: error
 
   linux:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v7
@@ -79,6 +81,7 @@ jobs:
           if-no-files-found: error
 
   publish:
+    if: github.ref == 'refs/heads/main'
     needs: [windows, linux]
     runs-on: ubuntu-latest
     steps:
