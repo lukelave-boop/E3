@@ -4,7 +4,6 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from laser_aligner.project import ObjectKind
 from laser_aligner.desktop.qt import QtWidgets
 from laser_aligner.desktop.text_geometry import (
     TextVectorOptions,
@@ -13,6 +12,7 @@ from laser_aligner.desktop.text_geometry import (
     create_vector_text_object,
     painter_path_polylines,
 )
+from laser_aligner.project import ObjectKind
 
 
 @pytest.fixture(scope="module", autouse=True)
