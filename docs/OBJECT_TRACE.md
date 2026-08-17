@@ -1,8 +1,8 @@
 # Camera object detection and tracing
 
-The desktop **Trace** inspector detects multiple physical objects in the
-corrected camera image and converts reviewed outlines into normal E3 vector
-objects.
+The desktop **Trace** inspector detects physical objects in the corrected
+camera image and converts reviewed outlines into either normal E3 vector objects
+or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 
 > **Verification status:** the detector, proposed-vector preview, frozen-frame
 > review lifecycle, object placement, and batch undo behavior pass synthetic
@@ -14,49 +14,83 @@ objects.
 > physically cut. See
 > [../CURRENT_STATE.md](../CURRENT_STATE.md).
 
-## Recommended label workflow
+## Recommended Trace workflow
 
 1. On the real machine, home and park at the saved camera pose. Keep the sheet
-   flat and use even lighting. In safe simulation, load or generate a frozen
-   test image instead.
+   or stock flat and use even lighting. In safe simulation, load or generate a
+   frozen test image instead.
 2. Open **Trace** in the Inspector.
-3. Choose **Auto detect**, **By color**, or **By contrast**. To sample an
+3. Choose **Purpose**:
+   - **Cut geometry** creates ordinary project objects that may be assigned to
+     output layers;
+   - **Stock boundary (layout only)** creates exactly one locked construction
+     outline and never sends that outline to the laser.
+4. Choose **Auto detect**, **By color**, or **By contrast**. To sample an
    object, press **Pick color**, wait for the button to read **Cancel color
    pick**, then click the center of the object in the corrected camera image.
    The button reads **Sampling…** while the frame is read and the swatch updates
    when sampling succeeds. A failure is shown directly in the Trace inspector.
-4. Set the minimum/maximum area and minimum dimensions so dust, sheet edges,
+5. Set the minimum/maximum area and minimum dimensions so dust, sheet edges,
    and unrelated artwork are excluded.
-5. For a repeated label sheet, leave **Use grid** and **Make grid cells
+6. For a repeated label sheet, leave **Use grid** and **Make grid cells
    identical** enabled. Enable **Infer gaps** only when you want suggested
-   positions for missing or obscured cells.
-6. Choose the vector output described below and set either a uniform **Border
+   positions for missing or obscured cells. Disable grid inference when tracing
+   one parent-stock outline.
+7. Choose the vector output described below and set either a uniform **Border
    offset** or the rounded rectangle's individual edge offsets.
-7. Press **Detect objects**.
-8. Review the numbered overlay and the **Geometry** column:
+8. Press **Detect objects**.
+9. Review the numbered overlay and the **Geometry** column:
    - green: selected proposed vector output;
    - gray: unselected direct detection;
    - yellow or orange dashed: inferred grid position;
    - red dash-dot: an outline that crosses the configured work area.
-9. Check only outlines that are correct. Inferred cells are intentionally
-   unchecked by default. When the fitted grid is correct, **Select complete
-   C × R grid** selects direct and inferred cells together for explicit review.
-   Red cells are also unchecked by default. Reposition the sheet fully inside
-   the work area and detect again before creating or cutting them.
-10. Leave **Replace earlier Trace objects** checked for the normal one-workpiece-
-    at-a-time workflow, then press **Create objects**. The selected set replaces
-    only objects created by earlier Trace captures as one undoable operation.
-    Uncheck it when you intentionally want to accumulate multiple Trace batches
-    in the same project.
+10. Check only outlines that are correct. Inferred cells are intentionally
+    unchecked by default. When the fitted grid is correct, **Select complete
+    C × R grid** selects direct and inferred cells together for explicit review.
+    Red cells are also unchecked by default. A Stock boundary requires exactly
+    one selected outline.
+11. Leave the replacement option checked for the usual one-workpiece-at-a-time
+    workflow, then press **Create objects** or **Create stock boundary**. Cut
+    geometry replaces only earlier Trace cut objects. A Stock boundary replaces
+    only the earlier Stock boundary, so it cannot delete imported artwork.
 
 Changing a detection or output setting marks the result stale. Run **Detect
-objects** again before creating objects.
+objects** again before creating geometry.
 
-Created shapes are ordinary project objects. They can be assigned to layers,
-moved, resized, grouped, framed, and included in generated G-code.
-**Clear detection preview** removes only the temporary camera overlay; it never
-deletes those created project objects. Existing drawings, imports, and other
-non-Trace project objects are never removed by Trace replacement.
+### Stock-boundary layout workflow
+
+After a Stock boundary is created, it appears as a locked teal dashed outline
+over the corrected camera image. It is persisted in `.e3laser` projects but is
+explicitly excluded from vector, fill, raster, generated-job, and zero-power
+frame output.
+
+Select imported SVG artwork, vector text, or other unlocked vector objects to
+show the contextual **Stock layout** toolbar above the workspace:
+
+- **Center horizontally** and **Center vertically** move the selection relative
+  to the nearest Stock boundary.
+- **Snap rotation to stock edge** rotates the selection parallel to the nearest
+  meaningful straight edge. Its dropdown can target the top, bottom, left, or
+  right outward-facing edge instead. Multi-object selections rotate as one
+  rigid layout, preserving their spacing and relative angles.
+- **Fit to stock** scales and centers the selection to the largest conservative
+  bounding footprint that fits inside the traced outline. Its dropdown offers
+  0, 2, 3, 5, and 10 mm uncut margins plus a custom value.
+- **Align** provides the same commands in a compact dropdown so later stock-
+  relative actions can be added without crowding the main toolbar.
+
+The original traced contour remains authoritative for fit checks; edge
+simplification is used only to identify useful rotation lines. Always inspect
+the exact Preview before running a job. Camera calibration, parallax, material
+height, and physical stock movement remain independent sources of placement
+error.
+
+For **Cut geometry**, created shapes are ordinary project objects. They can be
+assigned to layers, moved, resized, grouped, framed, and included in generated
+G-code. **Clear detection preview** removes only the temporary camera overlay;
+it never deletes created project objects. Existing drawings, imports, Stock
+boundaries, and other non-Trace project objects are never removed by Cut
+geometry replacement.
 
 ## Classification and vector output choices
 

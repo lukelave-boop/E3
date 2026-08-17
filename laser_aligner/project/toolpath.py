@@ -576,7 +576,11 @@ def _raster_row_command_count(
 def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyline]:
     paths: list[Polyline] = []
     for item in document.objects:
-        if item.layer_id == layer.id and item.visible:
+        if (
+            item.layer_id == layer.id
+            and item.visible
+            and item.is_output_geometry
+        ):
             paths.extend(object_polylines(item))
     return paths
 
@@ -788,6 +792,7 @@ def _preflight_raster_budget(
             and layer.visible
             and layer.output_enabled
             and item.visible
+            and item.is_output_geometry
             and item.kind == ObjectKind.IMAGE
         )
     ]
@@ -800,6 +805,7 @@ def _preflight_raster_budget(
             or not layer.visible
             or not layer.output_enabled
             or not item.visible
+            or not item.is_output_geometry
         ):
             continue
         powered = layer.controller_power(controller_power_max) > 0
@@ -1439,7 +1445,11 @@ def generate_project_gcode(
         layer_objects = [
             item
             for item in document.objects
-            if item.layer_id == layer.id and item.visible
+            if (
+                item.layer_id == layer.id
+                and item.visible
+                and item.is_output_geometry
+            )
         ]
         if not layer_objects:
             continue

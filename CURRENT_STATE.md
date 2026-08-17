@@ -986,6 +986,10 @@ machine program preflight.
   and arming before homing, successful home/park acceptance, emergency-reset
   invalidation, desktop preflight ordering, X/Y mapping reversal, and the
   hardware/simulation status presentation.
+- Stock-layout verification covers schema-preserving Stock boundary
+  persistence, exclusion from generated G-code and zero-power frame bounds,
+  horizontal/vertical centering, jagged-edge simplification, rotation snapping,
+  and fit-with-margin on rectangular and concave stock outlines.
 - Focused Trace verification covers the complete button-to-canvas picker state,
   sampled neutral-color acceptance, configured maximum-area rejection, and
   contrast recovery of filled rounded rectangles on noisy wood-like images.
@@ -1358,7 +1362,8 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   numeric properties, a full-height design inspector, compact bottom G-code and
   runtime/material docks, and a fixed 30-color operation palette.
 - Multiple objects and operation layers.
-- Rectangle, rounded rectangle, ellipse, line, text, and SVG-path objects.
+- Rectangle, rounded rectangle, ellipse, line, vector outline text,
+  stencil-safe bridged text, and SVG-path objects.
   Desktop SVG import applies parsed physical dimensions through transformed
   groups, preserves the requested placement center, and stops before object
   creation on any lossy parser warning. Absolute-unit and viewBox-only sizing,
@@ -1407,6 +1412,13 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
 - One captured corrected frame held across detection review, with monotonic
   request cancellation and stale-result rejection.
 - One-step undo for a created detection set.
+- A **Stock boundary (layout only)** Trace purpose that creates one locked,
+  camera-aligned construction outline. The boundary persists in the normal
+  project model but is excluded from all laser-output and framing paths.
+- A contextual Stock layout toolbar for horizontal/vertical centering, rotation
+  parallel to the nearest or named meaningful stock edge, and fit-to-stock with
+  an uncut margin. Irregular traced contours are simplified only for edge
+  selection; the original stock outline remains authoritative for fit checks.
 
 The trace algorithms and native review lifecycle pass synthetic and offscreen
 behavioral tests. The workflow has not been exercised end to end with the real
@@ -1487,7 +1499,10 @@ physical placement. No marker detector is implemented. See
   controller/firmware identity and physical STOP/reconnect response were not
   recorded.
 - No tested pause/resume behavior.
-- No text-to-outline conversion.
+- New text is converted immediately to PATH geometry for output. The source
+  text, font, mode, height, bridge width, and bridge count are retained as
+  metadata, but reopening the text-creation dialog to edit an existing vector
+  text object is not implemented yet.
 - No DXF import. Raster image import currently stores an external absolute
   asset path; managed or embedded portable assets, selectable dither methods,
   and calibrated grayscale power modulation are not implemented. PNG, JPEG,
