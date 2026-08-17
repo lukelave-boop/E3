@@ -4,7 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
-from laser_aligner import __version__
+from version_for_build import build_version
 
 
 def parser() -> argparse.ArgumentParser:
@@ -26,7 +26,7 @@ def main() -> int:
     )
     payload = {
         "schema_version": 1,
-        "version": __version__,
+        "version": build_version(),
         "revision": arguments.revision.strip().lower(),
         "channel": arguments.channel,
         "repository": arguments.repository,

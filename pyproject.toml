@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "laser-camera-aligner"
-version = "0.2.0.dev0"
+version = "0.6.0"
 description = "Stationary-camera alignment, SVG placement, and guarded G-code generation for a laser-converted 3D printer"
 readme = "README.md"
 requires-python = ">=3.10"

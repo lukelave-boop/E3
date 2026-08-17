@@ -10,6 +10,7 @@ from . import __version__
 
 APPLICATION_NAME = "E3 Positioning System"
 REVISION_ENVIRONMENT_VARIABLE = "E3_POSITIONING_SYSTEM_REVISION"
+VERSION_ENVIRONMENT_VARIABLE = "E3_POSITIONING_SYSTEM_VERSION"
 
 _REVISION_LENGTH = 8
 _SOURCE_SUFFIXES = frozenset({".css", ".html", ".js", ".json", ".py", ".svg"})
@@ -61,8 +62,13 @@ def build_revision() -> str:
     return _source_revision(Path(__file__).resolve().parent)
 
 
+def application_version() -> str:
+    value = os.environ.get(VERSION_ENVIRONMENT_VARIABLE, "").strip()
+    return value or __version__
+
+
 def application_identity() -> str:
-    return f"{APPLICATION_NAME} {__version__} · rev {build_revision()}"
+    return f"{APPLICATION_NAME} {application_version()} · build {build_revision()[:8]}"
 
 
 def application_window_title(project_name: str, *, dirty: bool = False) -> str:

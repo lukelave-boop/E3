@@ -31,8 +31,11 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $version = (
-    & $python -c "from laser_aligner import __version__; print(__version__)"
+    & $python .\packaging\version_for_build.py
 ).Trim()
+if ([string]::IsNullOrWhiteSpace($version)) {
+    throw "Could not determine the E3 application version"
+}
 $buildInfo = Join-Path $repoRoot "build-info.json"
 & $python .\packaging\write_build_info.py `
     --output $buildInfo `
