@@ -15,8 +15,8 @@ from laser_aligner.identity import (
 
 def run() -> int:
     build = load_build_info()
-    os.environ.setdefault(REVISION_ENVIRONMENT_VARIABLE, build.revision)
-    os.environ.setdefault(VERSION_ENVIRONMENT_VARIABLE, build.version)
+    os.environ[REVISION_ENVIRONMENT_VARIABLE] = build.revision
+    os.environ[VERSION_ENVIRONMENT_VARIABLE] = build.version
     token = read_bridge_token()
     if token:
         os.environ.setdefault("E3_BRIDGE_TOKEN", token)
