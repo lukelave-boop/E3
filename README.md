@@ -67,8 +67,10 @@ Native desktop workflow:
   draggable viewport-fixed overlay key
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
-- Rectangle, rounded rectangle, ellipse, line, imported SVG-path, vector
-  outline text, and automatically bridged stencil-safe text objects, with
+- Rectangle, rounded rectangle, ellipse, line, imported SVG-path, imported
+  2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
+  output-disabled speed/power layers, vector outline text, and automatically
+  bridged stencil-safe text objects, with
   numeric width/height and corner-radius editing for rectangles
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
@@ -116,6 +118,8 @@ Follow the [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANEN
 for the native calibration workflow. See [docs/MACHINE_SETUP.md](docs/MACHINE_SETUP.md)
 for technical detail and browser parity, and [docs/JOB_PREVIEW.md](docs/JOB_PREVIEW.md)
 for the generated-job review workflow.
+See [G-code project import](docs/GCODE_IMPORT.md) for the supported foreign
+program subset, layer reconstruction, and review boundary.
 See [Power Correction](docs/POWER_CORRECTION.md) for its mapping, motion model,
 overscan interaction, limitations, and tuning guidance.
 

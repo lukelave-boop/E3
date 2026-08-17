@@ -14,6 +14,7 @@ from ..geometry.svg import parse_svg
 from ..identity import application_identity, application_window_title
 from ..materials import MaterialDatabase, MaterialPreset
 from ..project import (
+    GCODE_FILE_DIALOG_FILTER,
     LIGHTBURN_FILE_DIALOG_FILTER,
     RASTER_FILE_DIALOG_FILTER,
     AddLayerCommand,
@@ -55,6 +56,7 @@ from ..project import (
     fit_selection_to_stock,
     generate_project_gcode,
     is_stock_boundary,
+    load_gcode_project,
     load_lightburn_project,
     load_project,
     mark_stock_boundary,
@@ -116,6 +118,7 @@ _AUTHORING_ACTION_KEYS = (
     "save_as",
     "save_template",
     "import_svg",
+    "import_gcode",
     "import_lightburn",
     "import_image",
     "undo",
@@ -442,6 +445,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("save_as", "Save project as…", "Ctrl+Shift+S")
         action("save_template", "Save project as cutting template…")
         action("import_svg", "Import SVG…", "Ctrl+I")
+        action("import_gcode", "Import G-code…")
         action("import_lightburn", "Import LightBurn project…")
         action("import_image", "Import raster image…", "Ctrl+Shift+I")
         action("quit", "Quit", "Ctrl+Q")
@@ -512,6 +516,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["save_as"].triggered.connect(lambda: self.save_project(save_as=True))
         self.actions["save_template"].triggered.connect(self.save_current_as_template)
         self.actions["import_svg"].triggered.connect(self.import_svg)
+        self.actions["import_gcode"].triggered.connect(self.import_gcode)
         self.actions["import_lightburn"].triggered.connect(self.import_lightburn)
         self.actions["import_image"].triggered.connect(self.import_image)
         self.actions["quit"].triggered.connect(self.close)
@@ -581,6 +586,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "save_as",
             "save_template",
             "import_svg",
+            "import_gcode",
             "import_lightburn",
             "import_image",
         ):
@@ -1001,7 +1007,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.palette.addLayerRequested.connect(self.add_layer)
         self.palette.presetLayerRequested.connect(self.add_palette_layer)
         self.layer_panel.activeLayerChanged.connect(self.set_active_layer)
-        self.layer_panel.layerEdited.connect(self._layer_edited)
+        # Layer table checkbox edits originate inside QTreeWidget::itemChanged.
+        # Updating the project synchronously rebuilds that same tree, so defer
+        # the edit until Qt has returned from the native itemChanged signal.
+        self.layer_panel.layerEdited.connect(
+            self._layer_edited,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
         self.layer_panel.addLayerRequested.connect(self.add_layer)
         self.layer_panel.removeLayerRequested.connect(self.remove_layer)
         self.layer_panel.moveLayerRequested.connect(self.move_layer)
@@ -1860,6 +1872,82 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._add_object(item, "Import SVG")
         except Exception as exc:
             self.show_error(f"Could not import SVG: {exc}")
+
+    def import_gcode(self) -> None:
+        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Import G-code",
+            str(Path.home()),
+            GCODE_FILE_DIALOG_FILTER,
+        )
+        if not filename:
+            return
+        self._activate_selection_tool(show_message=False)
+        try:
+            result = load_gcode_project(
+                filename,
+                center=self._document_center(),
+            )
+            layer_start = len(self.document.layers)
+            for offset, layer in enumerate(result.layers):
+                layer.priority = layer_start + offset
+            layer_commands = [
+                AddLayerCommand(
+                    self.document,
+                    layer,
+                    index=layer_start + offset,
+                    description="Import G-code layer",
+                )
+                for offset, layer in enumerate(result.layers)
+            ]
+            object_command = AddObjectsCommand(
+                self.document,
+                result.objects,
+                description="Import G-code objects",
+            )
+            previous_active_layer_id = self.active_layer_id
+            imported_layer_id = result.layers[0].id
+
+            def redo_import() -> None:
+                for command in layer_commands:
+                    command.redo()
+                object_command.redo()
+                self.active_layer_id = imported_layer_id
+
+            def undo_import() -> None:
+                object_command.undo()
+                for command in reversed(layer_commands):
+                    command.undo()
+                self.active_layer_id = previous_active_layer_id
+
+            self.history.execute(
+                FunctionalCommand(
+                    "Import G-code",
+                    redo_import,
+                    undo_import,
+                )
+            )
+        except Exception as exc:
+            self.show_error(f"Could not import G-code: {exc}")
+            return
+
+        object_ids = [item.id for item in result.objects]
+        self.workspace.select_objects(object_ids)
+        if result.warnings:
+            details = "\n".join(f"• {warning}" for warning in result.warnings[:12])
+            if len(result.warnings) > 12:
+                details += f"\n• …and {len(result.warnings) - 12} more warning(s)"
+            QtWidgets.QMessageBox.warning(
+                self,
+                "G-code import review required",
+                "The design was imported, but these items need review:\n\n" + details,
+            )
+        self.show_notice(
+            f"Imported {len(result.objects)} G-code operation object"
+            f"{'s' if len(result.objects) != 1 else ''} on {len(result.layers)} "
+            f"output-disabled layer{'s' if len(result.layers) != 1 else ''}; "
+            "review every speed and power value before enabling output"
+        )
 
     def import_lightburn(self) -> None:
         filename, _ = QtWidgets.QFileDialog.getOpenFileName(
