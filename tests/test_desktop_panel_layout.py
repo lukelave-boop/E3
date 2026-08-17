@@ -93,6 +93,8 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert not panel.edge_offsets.isVisibleTo(panel)
     assert not panel.smoothing.isEnabled()
     assert not panel.smoothing_label.isEnabled()
+    assert panel.repair_grid_edges.isEnabled()
+    assert panel.repair_grid_edges.isChecked()
     assert panel.normalize_grid.isEnabled()
     assert panel.snap_grid_cells.isEnabled()
     assert "does not apply" in panel.smoothing.toolTip()
@@ -104,6 +106,7 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert panel.smoothing_label.isEnabled()
     assert not panel.normalize_grid.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
+    assert not panel.repair_grid_edges.isEnabled()
     assert not panel.border_offset_mode.isEnabled()
 
     panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
@@ -126,18 +129,22 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert not panel.smoothing_label.isEnabled()
     assert not panel.normalize_grid.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
+    assert not panel.repair_grid_edges.isEnabled()
 
     panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
     panel.regular_grid.setChecked(False)
     qt_application.processEvents()
     assert not panel.infer_missing.isEnabled()
+    assert not panel.repair_grid_edges.isEnabled()
     assert not panel.normalize_grid.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
 
     panel.regular_grid.setChecked(True)
     panel.normalize_grid.setChecked(False)
     qt_application.processEvents()
+    assert panel.repair_grid_edges.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
+    assert panel.options()["repair_grid_edges"] is True
 
     legend_text = " ".join(
         label.text() for label in panel.findChildren(QtWidgets.QLabel)

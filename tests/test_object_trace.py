@@ -14,6 +14,8 @@ from laser_aligner.vision.object_trace import (
     _machine_geometry,
     _rounded_fit,
     _rounded_mask,
+    _straight_edge_angle,
+    _straight_edge_center,
     auto_target_hue,
     detect_objects,
     sample_color,
@@ -1206,6 +1208,182 @@ def test_repeated_grid_repairs_one_malformed_direct_cell() -> None:
     assert max(observed_widths) - min(observed_widths) >= 5.0
 
 
+def test_repeated_grid_repairs_one_weak_bottom_edge_without_normalizing_cells() -> None:
+    image = _label_scene(obscure=False)
+    # Remove only the lower edge of one label. Its top, left, and right edges
+    # remain valid, so repeated-cell consensus may restore only the bottom.
+    x = 42
+    y = 18 + 7 * 91
+    image[y + 60 : y + 74, x - 2 : x + 303] = image[
+        y + 74 : y + 88,
+        x - 2 : x + 303,
+    ]
+    common = dict(
+        detection_mode="color",
+        target_hue=0,
+        min_saturation=35,
+        min_area_mm2=20,
+        min_width_mm=20,
+        min_height_mm=8,
+        regular_grid=True,
+        infer_missing=False,
+        normalize_grid=False,
+        snap_grid_cells=False,
+        output_mode="rounded",
+    )
+
+    unrepaired = detect_objects(
+        image,
+        TraceOptions(**common, repair_grid_edges=False),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+    repaired = detect_objects(
+        image,
+        TraceOptions(**common, repair_grid_edges=True),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+
+    def target(result):
+        return next(
+            item
+            for item in result.detections
+            if item.diagnostics.get("grid_row") == 7
+            and item.diagnostics.get("grid_column") == 0
+        )
+
+    before = target(unrepaired)
+    after = target(repaired)
+    assert repaired.grid is not None
+    assert repaired.grid["repaired_edges"] == 1
+    assert repaired.grid["repaired_cells"] == 1
+    assert after.diagnostics["grid_edge_repairs"] == ["bottom"]
+    assert any(
+        "weak bottom edge repaired" in reason
+        for reason in after.diagnostics["damage_reasons"]
+    )
+    assert not after.selected_default
+    assert before.height_mm == pytest.approx(
+        before.diagnostics["observed_height_mm"]
+    )
+    assert after.diagnostics["observed_height_mm"] == pytest.approx(
+        before.height_mm
+    )
+    assert after.height_mm >= before.height_mm + 1.5
+    assert after.height_mm == pytest.approx(
+        repaired.grid["observed_cell_height_mm"],
+        abs=0.6,
+    )
+    assert "repaired 1 weak grid edge" in repaired.message
+
+
+@pytest.mark.parametrize("edge", ("left", "right", "top", "bottom"))
+def test_repeated_grid_edge_consensus_handles_each_side(edge: str) -> None:
+    image = _label_scene(obscure=False)
+    x = 42
+    y = 18 + 7 * 91
+    if edge == "left":
+        image[y - 2 : y + 73, x : x + 12] = image[
+            y - 2 : y + 73,
+            x - 16 : x - 4,
+        ]
+    elif edge == "right":
+        image[y - 2 : y + 73, x + 289 : x + 303] = image[
+            y - 2 : y + 73,
+            x + 305 : x + 319,
+        ]
+    elif edge == "top":
+        image[y : y + 11, x - 2 : x + 303] = image[
+            y - 14 : y - 3,
+            x - 2 : x + 303,
+        ]
+    else:
+        image[y + 60 : y + 74, x - 2 : x + 303] = image[
+            y + 74 : y + 88,
+            x - 2 : x + 303,
+        ]
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            min_saturation=35,
+            min_area_mm2=20,
+            min_width_mm=20,
+            min_height_mm=8,
+            regular_grid=True,
+            infer_missing=False,
+            normalize_grid=False,
+            snap_grid_cells=False,
+            repair_grid_edges=True,
+            output_mode="rounded",
+        ),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert result.grid["repaired_edges"] == 1
+    target = next(
+        item
+        for item in result.detections
+        if item.diagnostics.get("grid_row") == 7
+        and item.diagnostics.get("grid_column") == 0
+    )
+    assert target.diagnostics["grid_edge_repairs"] == [edge]
+
+
+def test_grid_edge_repair_does_not_force_a_centered_smaller_cell() -> None:
+    image = _label_scene(obscure=False)
+    x = 42
+    y = 18 + 7 * 91
+    # Remove equal material from top and bottom. This represents a genuinely
+    # shorter centered cell, not one missing boundary, so neither side is
+    # eligible for one-sided repair.
+    image[y : y + 6, x - 2 : x + 303] = image[
+        y - 14 : y - 8,
+        x - 2 : x + 303,
+    ]
+    image[y + 64 : y + 72, x - 2 : x + 303] = image[
+        y + 74 : y + 82,
+        x - 2 : x + 303,
+    ]
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0,
+            min_saturation=35,
+            min_area_mm2=20,
+            min_width_mm=20,
+            min_height_mm=8,
+            regular_grid=True,
+            infer_missing=False,
+            normalize_grid=False,
+            snap_grid_cells=False,
+            repair_grid_edges=True,
+            output_mode="rounded",
+        ),
+        WorkArea(0.0, 190.0, 0.0, 190.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert result.grid["repaired_edges"] == 0
+    target = next(
+        item
+        for item in result.detections
+        if item.diagnostics.get("grid_row") == 7
+        and item.diagnostics.get("grid_column") == 0
+    )
+    assert target.diagnostics["grid_edge_repairs"] == []
+    assert target.height_mm == pytest.approx(
+        target.diagnostics["observed_height_mm"]
+    )
+
+
 def test_loose_grid_repairs_center_on_only_the_truncated_size_axis() -> None:
     image = _label_scene(obscure=False)
     # Remove the left edge of one cell. Its fitted width and center are both
@@ -1322,6 +1500,11 @@ def test_loose_normalized_grid_can_preserve_each_detected_top_edge() -> None:
 def test_trace_options_reject_unknown_identical_cell_anchor() -> None:
     with pytest.raises(ValueError, match="identical-cell anchor"):
         TraceOptions(normalize_anchor="bottom")
+
+
+def test_trace_options_require_boolean_grid_edge_repair() -> None:
+    with pytest.raises(ValueError, match="repair_grid_edges must be a JSON boolean"):
+        TraceOptions(repair_grid_edges="yes")
 
 
 def test_border_offset_expands_fitted_output():
@@ -1568,3 +1751,135 @@ def test_trace_rejects_nonfinite_scale_and_malformed_images() -> None:
         detect_objects(np.zeros((20, 20), dtype=np.uint8), TraceOptions(), area, 1.0)
     with pytest.raises(ValueError, match="finite"):
         sample_color(image, float("nan"), 5.0)
+
+
+
+def test_straight_edge_rotation_improves_corner_biased_label_angle() -> None:
+    target_angle = 5.0
+    local = np.asarray(
+        [
+            (-180.0, -55.0),
+            (135.0, -55.0),
+            (155.0, -67.0),  # damaged/protruding corner biases the hull
+            (180.0, -55.0),
+            (180.0, 55.0),
+            (-180.0, 55.0),
+        ],
+        dtype=np.float64,
+    )
+    angle = math.radians(target_angle)
+    rotation = np.asarray(
+        [
+            [math.cos(angle), -math.sin(angle)],
+            [math.sin(angle), math.cos(angle)],
+        ],
+        dtype=np.float64,
+    )
+    polygon = np.round(
+        local @ rotation.T + np.asarray((350.0, 210.0))
+    ).astype(np.int32)
+    mask = np.zeros((450, 750), dtype=np.uint8)
+    cv2.fillPoly(mask, [polygon], 255)
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+    )
+    contour = max(contours, key=cv2.contourArea)
+    rectangle = _long_axis_rect(contour)
+    assert rectangle is not None
+
+    refined, diagnostics = _straight_edge_angle(contour, rectangle)
+
+    assert refined is not None
+    assert diagnostics["source"] == "long_edges_crosschecked"
+    assert abs(refined - target_angle) < abs(
+        float(rectangle["angle_image_deg"]) - target_angle
+    )
+    assert refined == pytest.approx(target_angle, abs=0.15)
+
+
+def test_straight_edge_rotation_rejects_nearly_square_geometry() -> None:
+    mask = np.zeros((160, 160), dtype=np.uint8)
+    cv2.rectangle(mask, (20, 25), (120, 115), 255, -1)
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+    )
+    contour = contours[0]
+    rectangle = _long_axis_rect(contour)
+    assert rectangle is not None
+
+    refined, diagnostics = _straight_edge_angle(contour, rectangle)
+
+    assert refined is None
+    assert diagnostics["reason"] == "shape_not_elongated"
+
+
+
+def _corner_biased_rotated_rectangle(extra_px: float) -> np.ndarray:
+    center = np.asarray((350.0, 210.0), dtype=np.float64)
+    width = 360.0
+    height = 110.0
+    angle_deg = 5.0
+    mask = np.zeros((500, 800), dtype=np.uint8)
+    box = np.round(
+        cv2.boxPoints(((float(center[0]), float(center[1])), (width, height), angle_deg))
+    ).astype(np.int32)
+    cv2.fillPoly(mask, [box], 255)
+    angle = math.radians(angle_deg)
+    u = np.asarray((math.cos(angle), math.sin(angle)), dtype=np.float64)
+    v = np.asarray((-u[1], u[0]), dtype=np.float64)
+    protrusion_center = center + u * (width * 0.42) + v * (-height * 0.5 - extra_px)
+    cv2.circle(
+        mask,
+        tuple(np.round(protrusion_center).astype(int)),
+        max(2, int(round(extra_px))),
+        255,
+        -1,
+    )
+    contours, _ = cv2.findContours(
+        mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE
+    )
+    return max(contours, key=cv2.contourArea)
+
+
+def test_straight_edge_center_corrects_small_corner_biased_label_center() -> None:
+    expected = np.asarray((350.0, 210.0), dtype=np.float64)
+    contour = _corner_biased_rotated_rectangle(4.0)
+    rectangle = _long_axis_rect(contour)
+    assert rectangle is not None
+    initial = np.asarray(rectangle["center"], dtype=np.float64).copy()
+    initial_error = float(np.linalg.norm(initial - expected))
+    assert initial_error > 2.0
+
+    refined_angle, _ = _straight_edge_angle(contour, rectangle)
+    assert refined_angle is not None
+    rectangle["angle_image_deg"] = refined_angle
+    refined, diagnostics = _straight_edge_center(contour, rectangle)
+
+    assert refined is not None
+    assert diagnostics["accepted"] is True
+    assert diagnostics["offset_v_px"] is not None
+    assert float(np.linalg.norm(refined - expected)) < 0.20
+    assert float(np.linalg.norm(refined - expected)) < initial_error * 0.10
+
+
+def test_straight_edge_center_rejects_large_one_sided_vertical_damage() -> None:
+    contour = _corner_biased_rotated_rectangle(8.0)
+    rectangle = _long_axis_rect(contour)
+    assert rectangle is not None
+    initial = np.asarray(rectangle["center"], dtype=np.float64).copy()
+
+    refined_angle, _ = _straight_edge_angle(contour, rectangle)
+    assert refined_angle is not None
+    rectangle["angle_image_deg"] = refined_angle
+    refined, diagnostics = _straight_edge_center(contour, rectangle)
+
+    # X can still use its independent left/right evidence, but the damaged
+    # top/bottom pair must not be allowed to drag the Y center.
+    assert refined is not None
+    assert diagnostics["offset_v_px"] is None
+    assert diagnostics["y_rejection_reason"] in {
+        "edge_separation_mismatch",
+        "center_shift_too_large",
+        "edge_fit_unavailable",
+    }
+    assert abs(float(refined[1] - initial[1])) < 0.10
