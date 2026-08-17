@@ -48,15 +48,21 @@ from ..project import (
     aligned_transforms,
     autosave_is_newer,
     autosave_path,
+    center_selection_on_stock,
     clear_autosave,
     default_operation_layers,
     distributed_transforms,
+    fit_selection_to_stock,
     generate_project_gcode,
+    is_stock_boundary,
     load_lightburn_project,
     load_project,
+    mark_stock_boundary,
     probe_raster_asset,
     save_autosave,
     save_project,
+    snap_selection_rotation_to_stock,
+    stock_boundaries,
     verify_project_job_assets,
 )
 from ..storage import atomic_write_text
@@ -89,9 +95,12 @@ from .panels import (
 from .qt import require_qt
 from .runtime_strip import RuntimeSafetyStrip
 from .setup_guide import show_setup_guide
+from .stock_layout_bar import StockLayoutToolBar
 from .template_designer import WORK_AREA_TOLERANCE_MM, GridTemplateDesignerDialog
 from .template_panel import TemplatePanel
 from .template_test_image import TemplateTestImageDialog
+from .text_dialog import VectorTextDialog
+from .text_geometry import create_vector_text_object
 from .workspace import WorkspaceFrame, WorkspaceView
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -788,6 +797,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         context_toolbar.addWidget(self.context_bar)
         self.addToolBar(QtCore.Qt.ToolBarArea.TopToolBarArea, context_toolbar)
 
+        self.stock_layout_toolbar = StockLayoutToolBar(self)
+        self.addToolBar(
+            QtCore.Qt.ToolBarArea.TopToolBarArea,
+            self.stock_layout_toolbar,
+        )
+
         self.palette = LayerPaletteBar()
         palette_toolbar = QtWidgets.QToolBar("Layer palette", self)
         palette_toolbar.setObjectName("layerPaletteToolbar")
@@ -1009,6 +1024,27 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.context_bar.rectangleShapeEdited.connect(
             self._rectangle_shape_edited
         )
+        self.stock_layout_toolbar.centerHorizontalRequested.connect(
+            lambda: self._center_selection_in_stock(horizontal=True)
+        )
+        self.stock_layout_toolbar.centerVerticalRequested.connect(
+            lambda: self._center_selection_in_stock(vertical=True)
+        )
+        self.stock_layout_toolbar.centerBothRequested.connect(
+            lambda: self._center_selection_in_stock(
+                horizontal=True,
+                vertical=True,
+            )
+        )
+        self.stock_layout_toolbar.snapRotationRequested.connect(
+            self._snap_selection_rotation_to_stock
+        )
+        self.stock_layout_toolbar.fitRequested.connect(
+            self._fit_selection_to_stock
+        )
+        self.stock_layout_toolbar.customMarginRequested.connect(
+            self._set_custom_stock_margin
+        )
 
         self.trace_panel.detectRequested.connect(self._detect_trace_objects)
         self.trace_panel.pickColorRequested.connect(
@@ -1197,6 +1233,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel.set_selection(object_ids)
         self.transform_panel.set_selection(objects, self.document)
         self.context_bar.set_selection(objects, self.document)
+        layout_selection_count = sum(
+            1
+            for item in objects
+            if not is_stock_boundary(item) and not item.locked
+        )
+        self.stock_layout_toolbar.set_context(
+            has_stock=bool(stock_boundaries(self.document)),
+            selection_count=layout_selection_count,
+        )
 
     def _history_changed(self, stack: CommandStack) -> None:
         if getattr(self, "_job_preparation_busy", False):
@@ -1459,27 +1504,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def add_text(self) -> None:
         self._activate_selection_tool(show_message=False)
-        text, accepted = QtWidgets.QInputDialog.getText(
-            self,
-            "Create text",
-            "Text:",
-            text="E3",
-        )
-        if not accepted or not text:
+        dialog = VectorTextDialog(self)
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
-        item = SceneObject(
-            name="Text",
-            kind="text",
-            layer_id=self.active_layer_id,
-            transform=Transform(
-                self._document_center()[0],
-                self._document_center()[1],
-                max(15.0, len(text) * 6.0),
-                10.0,
-            ),
-            geometry={"text": text, "font_family": "Sans Serif"},
-        )
-        self._add_object(item, "Add text")
+        try:
+            item = create_vector_text_object(
+                self.active_layer_id,
+                dialog.options(),
+                center=self._document_center(),
+            )
+        except Exception as exc:
+            self.show_error(f"Could not create vector text: {exc}")
+            return
+        self._add_object(item, "Add vector text")
+        if item.metadata.get("text_vector_mode") == "stencil":
+            self.show_notice(
+                "Created stencil-safe vector text with "
+                f"{int(item.metadata.get('text_bridge_count', 0))} material "
+                "bridge"
+                f"{'s' if int(item.metadata.get('text_bridge_count', 0)) != 1 else ''}"
+            )
 
     def delete_selection(self) -> None:
         selected = self.workspace.selected_object_ids()
@@ -1625,6 +1669,102 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
         )
         self.workspace.select_objects(selected)
+
+    def _center_selection_in_stock(
+        self,
+        *,
+        horizontal: bool = False,
+        vertical: bool = False,
+    ) -> None:
+        selected = self.workspace.selected_object_ids()
+        try:
+            transforms = center_selection_on_stock(
+                self.document,
+                selected,
+                horizontal=horizontal,
+                vertical=vertical,
+            )
+        except ValueError as exc:
+            self.show_notice(str(exc))
+            return
+        description = (
+            "Center selection in stock"
+            if horizontal and vertical
+            else "Center selection horizontally in stock"
+            if horizontal
+            else "Center selection vertically in stock"
+        )
+        self.history.execute(
+            UpdateTransformsCommand(
+                self.document,
+                transforms,
+                description=description,
+            )
+        )
+        self.workspace.select_objects(selected)
+        self.show_notice(description)
+
+    def _snap_selection_rotation_to_stock(self, edge_mode: str) -> None:
+        selected = self.workspace.selected_object_ids()
+        try:
+            transforms, edge = snap_selection_rotation_to_stock(
+                self.document,
+                selected,
+                edge_mode=edge_mode,
+            )
+        except ValueError as exc:
+            self.show_notice(str(exc))
+            return
+        self.history.execute(
+            UpdateTransformsCommand(
+                self.document,
+                transforms,
+                description="Snap rotation to stock edge",
+            )
+        )
+        self.workspace.select_objects(selected)
+        self.show_notice(
+            f"Rotated selection parallel to the {edge_mode} stock edge "
+            f"({edge.angle_deg:.2f}°)"
+        )
+
+    def _fit_selection_to_stock(self, margin_mm: float) -> None:
+        selected = self.workspace.selected_object_ids()
+        try:
+            transforms = fit_selection_to_stock(
+                self.document,
+                selected,
+                margin_mm=margin_mm,
+            )
+        except ValueError as exc:
+            self.show_notice(str(exc))
+            return
+        self.history.execute(
+            UpdateTransformsCommand(
+                self.document,
+                transforms,
+                description=f"Fit selection to stock with {margin_mm:g} mm margin",
+            )
+        )
+        self.workspace.select_objects(selected)
+        self.show_notice(
+            f"Fit selection inside the stock boundary with a {margin_mm:g} mm margin"
+        )
+
+    def _set_custom_stock_margin(self) -> None:
+        margin, accepted = QtWidgets.QInputDialog.getDouble(
+            self,
+            "Fit to stock margin",
+            "Uncut edge margin:",
+            self.stock_layout_toolbar.fit_margin_mm,
+            0.0,
+            1000.0,
+            2,
+        )
+        if not accepted:
+            return
+        self.stock_layout_toolbar.set_fit_margin(margin)
+        self._fit_selection_to_stock(margin)
 
     def distribute_selection(self, *, horizontal: bool) -> None:
         selected = self.workspace.selected_object_ids()
@@ -4005,33 +4145,51 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.show_notice("Select at least one detected outline")
             return
         output_mode = str(payload.get("output_mode", "rounded"))
+        purpose = str(payload.get("purpose", "cut"))
+        if purpose == "stock" and len(detections) != 1:
+            self.show_notice("Select exactly one outline for the Stock boundary")
+            return
         replaced_count = 0
         try:
             objects = [
                 self._trace_detection_to_object(item, output_mode)
                 for item in detections
             ]
+            if purpose == "stock":
+                objects = [mark_stock_boundary(objects[0])]
             replace_previous = bool(payload.get("replace_previous", True))
             previous_trace_ids = [
                 item.id
                 for item in self.document.objects
-                if "trace_source" in item.metadata
+                if (
+                    is_stock_boundary(item)
+                    if purpose == "stock"
+                    else "trace_source" in item.metadata
+                    and not is_stock_boundary(item)
+                )
             ]
+            if purpose == "stock":
+                create_description = "Create Stock boundary"
+                replace_description = "Replace previous Stock boundary"
+            else:
+                suffix = "" if len(objects) == 1 else "s"
+                create_description = f"Create {len(objects)} traced object{suffix}"
+                replace_description = (
+                    f"Replace previous Trace objects with {len(objects)} object{suffix}"
+                )
             if replace_previous and previous_trace_ids:
                 replaced_count = len(previous_trace_ids)
                 command = ReplaceObjectsCommand(
                     self.document,
                     previous_trace_ids,
                     objects,
-                    description=(
-                        f"Replace previous trace with {len(objects)} objects"
-                    ),
+                    description=replace_description,
                 )
             else:
                 command = AddObjectsCommand(
                     self.document,
                     objects,
-                    description=f"Create {len(objects)} traced objects",
+                    description=create_description,
                 )
             self.history.execute(command)
         except Exception as exc:
@@ -4039,7 +4197,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self._clear_trace_preview()
         self.workspace.select_objects([item.id for item in objects])
-        if replaced_count:
+        if purpose == "stock":
+            self.show_notice(
+                "Created a locked Stock boundary. It is visible for layout, "
+                "never included in laser output, and enables the Stock layout "
+                "toolbar when artwork is selected."
+            )
+        elif replaced_count:
             self.show_notice(
                 f"Replaced {replaced_count} earlier Trace object"
                 f"{'s' if replaced_count != 1 else ''} with {len(objects)} new "
@@ -4274,6 +4438,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 self.workspace,
                 self.inspector_tabs,
                 self.context_bar,
+                self.stock_layout_toolbar,
                 self.palette,
             ):
                 widget.setEnabled(False)
@@ -4293,6 +4458,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.workspace,
             self.inspector_tabs,
             self.context_bar,
+            self.stock_layout_toolbar,
             self.palette,
         ):
             widget.setEnabled(True)

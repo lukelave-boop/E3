@@ -67,12 +67,16 @@ Native desktop workflow:
   draggable viewport-fixed overlay key
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
-- Rectangle, rounded rectangle, ellipse, line, text, and imported SVG-path
-  objects, with numeric width/height and corner-radius editing for rectangles
+- Rectangle, rounded rectangle, ellipse, line, imported SVG-path, vector
+  outline text, and automatically bridged stencil-safe text objects, with
+  numeric width/height and corner-radius editing for rectangles
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
   fixed-size handles, Shift-to-snap rotation, and undo/redo-backed commits
+- Camera-traced, locked Stock boundaries plus a contextual layout toolbar for
+  horizontal/vertical centering, rotation parallel to meaningful stock edges,
+  and fit-to-stock scaling with preset or custom uncut margins
 - Per-layer line, fill, vector-raster, and grayscale-image speed, power, pass
   count, ordering, exact scan interval/absolute machine angle, laser-off raster
   overscan, estimates, and image-aware zero-power framing
@@ -117,8 +121,11 @@ overscan interaction, limitations, and tuning guidance.
 
 The desktop branch also contains a synthetically and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable
-project objects. Rounded-label output previews the same fitted vector that will
-be created. Repeated rounded-label grids can share one fitted cell geometry and
+project objects or one construction-only Stock boundary. Rounded-label output
+previews the same fitted vector that will be created. A Stock boundary persists
+in the project and drives center, edge-rotation, and fit-to-stock commands while
+remaining excluded from all laser output and framing. Repeated rounded-label
+grids can share one fitted cell geometry and
 lattice so damaged observations and inferred gaps produce corresponding
 identical row/column objects, while pixel contours remain available for
 irregular objects. The
@@ -349,9 +356,10 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 
 - Linux is the only current hardware platform. Windows is limited to the
   synthetic camera and simulated controller.
-- Line vectors, closed-vector fills, binary vector rasters, and imported
-  grayscale images with deterministic ordered dithering are supported.
-  Text-to-path, selectable dither algorithms, and calibrated grayscale power
+- Line vectors, generated vector text, closed-vector fills, binary vector
+  rasters, and imported grayscale images with deterministic ordered dithering
+  are supported. Existing generated text cannot yet be reopened for editable
+  regeneration; selectable dither algorithms and calibrated grayscale power
   curves are not implemented.
 - SVG text and embedded images are not converted. Native desktop import stops
   before creating an object when either is present; convert them to paths in

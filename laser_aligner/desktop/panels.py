@@ -1372,6 +1372,14 @@ class TracePanel(QtWidgets.QWidget):
         output_group = QtWidgets.QGroupBox("Vector output")
         output_form = _form_layout()
         output_group.setLayout(output_form)
+        self.trace_purpose = QtWidgets.QComboBox()
+        self.trace_purpose.addItem("Cut geometry", "cut")
+        self.trace_purpose.addItem("Stock boundary (layout only)", "stock")
+        self.trace_purpose.setToolTip(
+            "Cut geometry creates normal laser-output objects. Stock boundary "
+            "creates one locked, camera-aligned construction outline that is "
+            "never included in a toolpath and enables Stock layout controls."
+        )
         self.output_mode = QtWidgets.QComboBox()
         self.output_mode.addItem("Best-fit analytic shapes", "rounded")
         self.output_mode.addItem("Simplified contours", "smoothed")
@@ -1441,6 +1449,7 @@ class TracePanel(QtWidgets.QWidget):
         self.smoothing.setToolTip(smoothing_tip)
         self.smoothing_label = QtWidgets.QLabel("Simplify tolerance")
         self.smoothing_label.setToolTip(smoothing_tip)
+        _form_row(output_form, "Purpose", self.trace_purpose)
         _form_row(output_form, "Geometry output", self.output_mode)
         _form_row(output_form, "Offset mode", self.border_offset_mode)
         output_form.addRow(self.border_offset_label, self.border_offset)
@@ -1566,6 +1575,7 @@ class TracePanel(QtWidgets.QWidget):
         self.select_none_button.clicked.connect(
             lambda: self._set_all_checked(False, include_inferred=True)
         )
+        self.trace_purpose.currentIndexChanged.connect(self._sync_output_controls)
         self.output_mode.currentIndexChanged.connect(self._sync_output_controls)
         self.border_offset_mode.currentIndexChanged.connect(
             self._sync_output_controls
@@ -1938,6 +1948,17 @@ class TracePanel(QtWidgets.QWidget):
 
     def _sync_output_controls(self, *args: Any) -> None:
         del args
+        stock_mode = self.trace_purpose.currentData() == "stock"
+        self.replace_previous.setText(
+            "Replace earlier Stock boundary"
+            if stock_mode
+            else "Replace earlier Trace objects"
+        )
+        self.create_button.setToolTip(
+            "Create one locked, non-cutting Stock boundary from the selected outline."
+            if stock_mode
+            else "Create vector objects from the selected detected outlines."
+        )
         rounded_output = self.output_mode.currentData() == "rounded"
         if not rounded_output and self.border_offset_mode.currentData() == "custom":
             self.border_offset_mode.setCurrentIndex(
@@ -1966,6 +1987,7 @@ class TracePanel(QtWidgets.QWidget):
             self.snap_grid_cells.isEnabled()
             and not self.snap_grid_cells.isChecked()
         )
+        self._update_create_button()
 
     def _result_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         del item, column
@@ -2005,10 +2027,20 @@ class TracePanel(QtWidgets.QWidget):
 
     def _update_create_button(self) -> None:
         count = len(self.selected_ids())
-        self.create_button.setText(
-            f"Create {count} object{'s' if count != 1 else ''}"
-        )
-        self.create_button.setEnabled(self._result_is_current and count > 0)
+        stock_mode = self.trace_purpose.currentData() == "stock"
+        if stock_mode:
+            self.create_button.setText(
+                "Create stock boundary"
+                if count == 1
+                else "Select one stock outline"
+            )
+            enabled = self._result_is_current and count == 1
+        else:
+            self.create_button.setText(
+                f"Create {count} object{'s' if count != 1 else ''}"
+            )
+            enabled = self._result_is_current and count > 0
+        self.create_button.setEnabled(enabled)
 
     def _set_all_checked(self, checked: bool, include_inferred: bool) -> None:
         self._updating = True
@@ -2064,6 +2096,7 @@ class TracePanel(QtWidgets.QWidget):
             {
                 "selected_ids": self.selected_ids(),
                 "output_mode": str(self.output_mode.currentData()),
+                "purpose": str(self.trace_purpose.currentData()),
                 "replace_previous": self.replace_previous.isChecked(),
             }
         )
