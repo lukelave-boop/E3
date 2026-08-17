@@ -995,12 +995,114 @@ def _rounded_polyline(
     return [[float(x), float(y)] for x, y in world]
 
 
+def _partial_grid_recovery(
+    image: np.ndarray,
+    *,
+    predicted_center_px: np.ndarray,
+    width_px: float,
+    height_px: float,
+    angle_deg: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Look only for boundary evidence near an otherwise inferred grid cell.
+
+    The grid is the geometry prior.  This deliberately never changes its size
+    or angle, and requires support on both local axes before an image-derived
+    center is used.  Long expected-edge samples make internal text and small
+    texture insufficient evidence.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gray = cv2.GaussianBlur(gray, (0, 0), 1.0)
+    radians = math.radians(angle_deg)
+    u = np.array([math.cos(radians), math.sin(radians)])
+    v = np.array([-u[1], u[0]])
+    probe_px = max(1.5, min(4.0, min(width_px, height_px) * 0.045))
+    sample_count = max(17, min(41, int(max(width_px, height_px) / 7.0)))
+
+    def sample_values(points: np.ndarray) -> np.ndarray:
+        return cv2.remap(
+            gray,
+            points[:, 0].astype(np.float32).reshape(-1, 1),
+            points[:, 1].astype(np.float32).reshape(-1, 1),
+            cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        ).reshape(-1)
+
+    def side_measurements(center: np.ndarray) -> dict[str, tuple[float, float]]:
+        sides = {
+            "left": (-u * width_px / 2.0, v, u, height_px),
+            "right": (u * width_px / 2.0, v, -u, height_px),
+            "top": (-v * height_px / 2.0, u, v, width_px),
+            "bottom": (v * height_px / 2.0, u, -v, width_px),
+        }
+        result = {}
+        # Avoid the rounded corners: a straight side must supply the evidence.
+        values = np.linspace(-0.31, 0.31, sample_count)
+        for name, (offset, tangent, inward, extent) in sides.items():
+            points = center + offset + np.outer(values * extent, tangent)
+            inside = sample_values(points + inward * probe_px)
+            outside = sample_values(points - inward * probe_px)
+            contrast = np.abs(inside - outside)
+            support = float(np.mean(contrast >= 20.0))
+            result[name] = (support, float(np.median(contrast)))
+        return result
+
+    # Keep the correction small enough that interior print/noise cannot move a
+    # lattice cell across a meaningful fraction of its known physical size.
+    x_offsets = np.linspace(-width_px * 0.12, width_px * 0.12, 9)
+    y_offsets = np.linspace(-height_px * 0.18, height_px * 0.18, 9)
+
+    def axis_offset(offsets: np.ndarray, axis: np.ndarray, names: tuple[str, str]) -> float:
+        scored = []
+        for offset in offsets:
+            measures = side_measurements(predicted_center_px + axis * offset)
+            score = sum(measures[name][0] * min(1.0, measures[name][1] / 45.0) for name in names)
+            scored.append((score, abs(float(offset)), float(offset)))
+        return max(scored, key=lambda value: (value[0], -value[1]))[2]
+
+    shift_u = axis_offset(x_offsets, u, ("left", "right"))
+    shift_v = axis_offset(y_offsets, v, ("top", "bottom"))
+    recovered_center = predicted_center_px + u * shift_u + v * shift_v
+    measurements = side_measurements(recovered_center)
+    supported = [
+        name for name, (fraction, contrast) in measurements.items()
+        if fraction >= 0.42 and contrast >= 20.0
+    ]
+    has_horizontal = bool({"left", "right"} & set(supported))
+    has_vertical = bool({"top", "bottom"} & set(supported))
+    evidence_supported = len(supported) >= 2 and has_horizontal and has_vertical
+    if not evidence_supported:
+        # Legacy blind gap inference remains available, but no image evidence
+        # is claimed and it cannot nudge the predicted center.
+        recovered_center = predicted_center_px.copy()
+        shift_u = shift_v = 0.0
+        measurements = side_measurements(recovered_center)
+        supported = []
+    evidence_score = float(np.mean([
+        fraction * min(1.0, contrast / 45.0)
+        for fraction, contrast in measurements.values()
+    ]))
+    return recovered_center, {
+        "predicted_center_px": [float(value) for value in predicted_center_px],
+        "recovered_center_px": [float(value) for value in recovered_center],
+        "edge_support": {
+            name: {"fraction": round(fraction, 4), "contrast": round(contrast, 3)}
+            for name, (fraction, contrast) in measurements.items()
+        },
+        "supported_sides": supported,
+        "supported_side_count": len(supported),
+        "evidence_score": round(evidence_score, 4),
+        "evidence_supported": evidence_supported,
+        "recovery_shift_px": [float(shift_u * u[0] + shift_v * v[0]), float(shift_u * u[1] + shift_v * v[1])],
+    }
+
+
 def _infer_grid(
     candidates: list[dict[str, Any]],
     options: TraceOptions,
     work_area: WorkArea,
     output_work_area: WorkArea,
     pixels_per_mm: float,
+    image: np.ndarray,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -1268,8 +1370,64 @@ def _infer_grid(
         )
         work_area_overrun_mm = max(work_area_overruns_mm.values())
         if inferred:
+            center_px, recovery_diagnostics = _partial_grid_recovery(
+                image,
+                predicted_center_px=lattice_center_px,
+                width_px=median_width,
+                height_px=median_height,
+                angle_deg=common_angle,
+            )
+            rectangle["center"] = center_px
+            geometry = _machine_geometry(
+                rectangle,
+                work_area,
+                pixels_per_mm,
+                options.border_offset_mm,
+                edge_offsets_mm=_custom_edge_offsets(options),
+            )
+            rounded_contour = _rounded_polyline(
+                geometry["center_mm"],
+                geometry["width_mm"],
+                geometry["height_mm"],
+                geometry["rotation_deg"],
+                geometry["corner_radius_mm"],
+            )
+            camera_work_area_overruns_mm = _work_area_overruns_mm(
+                rounded_contour,
+                work_area,
+            )
+            work_area_overruns_mm = _work_area_overruns_mm(
+                rounded_contour,
+                output_work_area,
+            )
+            camera_work_area_overrun_mm = max(
+                camera_work_area_overruns_mm.values()
+            )
+            work_area_overrun_mm = max(work_area_overruns_mm.values())
+
+            predicted_geometry = _machine_geometry(
+                {**rectangle, "center": lattice_center_px},
+                work_area,
+                pixels_per_mm,
+                0.0,
+            )
+            recovery_diagnostics["predicted_center_mm"] = list(
+                predicted_geometry["center_mm"]
+            )
+            recovery_diagnostics["recovered_center_mm"] = list(
+                geometry["center_mm"]
+            )
+            recovery_diagnostics["recovery_shift_mm"] = [
+                geometry["center_mm"][0]
+                - recovery_diagnostics["predicted_center_mm"][0],
+                geometry["center_mm"][1]
+                - recovery_diagnostics["predicted_center_mm"][1],
+            ]
+
             median_score = float(
-                np.median([value[1]["score"] for value in cell_members.values()])
+                np.median(
+                    [value[1]["score"] for value in cell_members.values()]
+                )
             )
             return {
                 "center_px": center_px,
@@ -1288,7 +1446,9 @@ def _infer_grid(
                 "shape": "rounded_rectangle",
                 "touches_image_edge": False,
                 "image_edge_sides": [],
-                "within_camera_work_area": camera_work_area_overrun_mm <= 1e-9,
+                "within_camera_work_area": (
+                    camera_work_area_overrun_mm <= 1e-9
+                ),
                 "camera_work_area_overrun_mm": camera_work_area_overrun_mm,
                 "camera_work_area_overruns_mm": camera_work_area_overruns_mm,
                 "within_work_area": work_area_overrun_mm <= 1e-9,
@@ -1299,6 +1459,7 @@ def _infer_grid(
                 "grid_row": row,
                 "grid_column": column,
                 "grid_normalized": True,
+                **recovery_diagnostics,
                 **geometry,
             }
 
@@ -1554,6 +1715,23 @@ def _to_detection(
                     ),
                 }
                 if "observed_center_mm" in item
+                else {}
+            ),
+            **(
+                {
+                    "predicted_center_px": list(item["predicted_center_px"]),
+                    "recovered_center_px": list(item["recovered_center_px"]),
+                    "predicted_center_mm": list(item["predicted_center_mm"]),
+                    "recovered_center_mm": list(item["recovered_center_mm"]),
+                    "edge_support": dict(item["edge_support"]),
+                    "supported_sides": list(item["supported_sides"]),
+                    "supported_side_count": int(item["supported_side_count"]),
+                    "evidence_score": float(item["evidence_score"]),
+                    "evidence_supported": bool(item["evidence_supported"]),
+                    "recovery_shift_px": list(item["recovery_shift_px"]),
+                    "recovery_shift_mm": list(item["recovery_shift_mm"]),
+                }
+                if "evidence_supported" in item
                 else {}
             ),
         },
@@ -1846,6 +2024,7 @@ def detect_objects(
     *,
     output_work_area: WorkArea | None = None,
     background_image: np.ndarray | None = None,
+    mask_override: np.ndarray | None = None,
 ) -> TraceResult:
     options = (
         options
@@ -1901,7 +2080,24 @@ def detect_objects(
 
     target_hue = options.target_hue
     masks: list[tuple[str, str, np.ndarray, float | None]] = []
-    if options.detection_mode in {"auto", "color"}:
+    if mask_override is not None:
+        if (
+            not isinstance(mask_override, np.ndarray)
+            or mask_override.ndim != 2
+            or mask_override.shape != image.shape[:2]
+        ):
+            raise ValueError(
+                "mask_override must be a 2-D mask matching the image"
+            )
+        masks.append(
+            (
+                "mask",
+                "exact_mask",
+                (mask_override > 0).astype(np.uint8) * 255,
+                None,
+            )
+        )
+    elif options.detection_mode in {"auto", "color"}:
         if target_hue is None:
             target_hue = auto_target_hue(image, options.min_saturation)
         if target_hue is not None:
@@ -1913,7 +2109,7 @@ def detect_objects(
                     target_hue,
                 )
             )
-    if options.detection_mode in {"auto", "contrast"}:
+    if mask_override is None and options.detection_mode in {"auto", "contrast"}:
         masks.append(
             (
                 "contrast",
@@ -2019,6 +2215,7 @@ def detect_objects(
                 work_area,
                 output_work_area,
                 pixels_per_mm,
+                image,
             )
         family = direct if grid is not None else candidates
         family_area = sum(float(item["area_mm2"]) for item in family)

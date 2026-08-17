@@ -150,6 +150,55 @@ def _label_scene(*, obscure: bool = True) -> np.ndarray:
     return image
 
 
+def _partial_grid_scene(
+    *,
+    evidence: bool = True,
+    distracting_text: bool = False,
+) -> tuple[np.ndarray, np.ndarray, tuple[float, float]]:
+    """A 2 × 4 label grid with one deliberately absent color-mask cell."""
+    image = np.full((520, 760, 3), 225, dtype=np.uint8)
+    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    centers = [
+        (160 + column * 390, 95 + row * 115)
+        for row in range(4)
+        for column in range(2)
+    ]
+    missing = (1, 1)
+    for index, center in enumerate(centers):
+        row, column = divmod(index, 2)
+        label_mask = np.zeros_like(mask)
+        cv2.rectangle(
+            label_mask,
+            (center[0] - 66, center[1] - 35),
+            (center[0] + 66, center[1] + 35),
+            255,
+            -1,
+        )
+        cv2.rectangle(
+            label_mask,
+            (center[0] - 78, center[1] - 23),
+            (center[0] + 78, center[1] + 23),
+            255,
+            -1,
+        )
+        for corner in ((-66, -23), (66, -23), (66, 23), (-66, 23)):
+            cv2.circle(label_mask, (center[0] + corner[0], center[1] + corner[1]), 12, 255, -1)
+        if (row, column) != missing:
+            image[label_mask > 0] = (42, 42, 165)
+            mask[label_mask > 0] = 255
+        elif evidence:
+            image[label_mask > 0] = (42, 42, 165)
+            # Simulated glare removes the upper half, but leaves both lower
+            # side runs, the lower corners, and the bottom edge visible.
+            image[center[1] - 38:center[1] - 2, center[0] - 92:center[0] + 93] = 225
+        elif distracting_text:
+            cv2.putText(
+                image, "TEXT", (center[0] - 42, center[1] + 6),
+                cv2.FONT_HERSHEY_SIMPLEX, .8, (45, 45, 45), 2, cv2.LINE_AA,
+            )
+    return image, mask, centers[3]
+
+
 def _neutral_dark_label_seam_scene(
     *,
     missing: set[tuple[int, int]] | None = None,
@@ -1042,6 +1091,83 @@ def test_repeated_label_grid_detects_and_infers_occluded_objects():
     assert 72.0 <= median_width <= 78.0
     assert 16.0 <= median_height <= 20.0
     assert max(abs(item.rotation_deg) for item in direct) < 2.0
+
+
+def test_grid_gap_partial_boundary_evidence_refines_inferred_cell() -> None:
+    image, mask, expected_center = _partial_grid_scene(evidence=True)
+    options = TraceOptions(
+        detection_mode="color", min_area_mm2=30, min_width_mm=20,
+        min_height_mm=8, regular_grid=True, infer_missing=True,
+        output_mode="rounded",
+    )
+    result = detect_objects(
+        image,
+        options,
+        WorkArea(0.0, 190.0, 0.0, 130.0), 4.0, mask_override=mask,
+    )
+
+    assert result.grid is not None
+    assert result.direct_count == 7
+    recovered = next(item for item in result.detections if item.source == "inferred")
+    assert recovered.selected_default is False
+    assert recovered.diagnostics["evidence_supported"] is True
+    assert {"left", "right", "bottom"} <= set(recovered.diagnostics["supported_sides"])
+    assert recovered.diagnostics["supported_side_count"] >= 3
+    assert recovered.diagnostics["evidence_score"] > 0.45
+    expected_mm = (expected_center[0] / 4.0, 130.0 - expected_center[1] / 4.0)
+    assert recovered.center_mm == pytest.approx(expected_mm, abs=0.55)
+    direct = [item for item in result.detections if item.source == "direct"]
+    assert len({item.width_mm for item in direct}) == 1
+    assert len({item.height_mm for item in direct}) == 1
+    assert len({item.rotation_deg for item in result.detections}) == 1
+    baseline = detect_objects(
+        image,
+        TraceOptions(**{**options.to_dict(), "infer_missing": False}),
+        WorkArea(0.0, 190.0, 0.0, 130.0), 4.0, mask_override=mask,
+    )
+    assert [item.center_mm for item in direct] == pytest.approx(
+        [item.center_mm for item in baseline.detections]
+    )
+
+
+def test_grid_gap_without_boundary_evidence_stays_blind_inference() -> None:
+    image, mask, _ = _partial_grid_scene(evidence=False)
+    result = detect_objects(
+        image,
+        TraceOptions(detection_mode="color", min_area_mm2=30, min_width_mm=20,
+                     min_height_mm=8, regular_grid=True, infer_missing=True),
+        WorkArea(0.0, 190.0, 0.0, 130.0), 4.0, mask_override=mask,
+    )
+    inferred = next(item for item in result.detections if item.source == "inferred")
+    assert inferred.diagnostics["evidence_supported"] is False
+    assert inferred.diagnostics["supported_side_count"] == 0
+    assert inferred.diagnostics["recovery_shift_mm"] == pytest.approx([0.0, 0.0])
+
+
+def test_grid_gap_internal_text_cannot_make_large_center_correction() -> None:
+    image, mask, _ = _partial_grid_scene(evidence=False, distracting_text=True)
+    result = detect_objects(
+        image,
+        TraceOptions(detection_mode="color", min_area_mm2=30, min_width_mm=20,
+                     min_height_mm=8, regular_grid=True, infer_missing=True),
+        WorkArea(0.0, 190.0, 0.0, 130.0), 4.0, mask_override=mask,
+    )
+    inferred = next(item for item in result.detections if item.source == "inferred")
+    assert inferred.diagnostics["evidence_supported"] is False
+    assert np.linalg.norm(inferred.diagnostics["recovery_shift_mm"]) < 0.25
+
+
+def test_grid_gap_partial_recovery_is_not_run_when_gap_inference_is_off() -> None:
+    image, mask, _ = _partial_grid_scene(evidence=True)
+    result = detect_objects(
+        image,
+        TraceOptions(detection_mode="color", min_area_mm2=30, min_width_mm=20,
+                     min_height_mm=8, regular_grid=True, infer_missing=False),
+        WorkArea(0.0, 190.0, 0.0, 130.0), 4.0, mask_override=mask,
+    )
+    assert result.direct_count == 7
+    assert result.inferred_count == 0
+    assert all("evidence_supported" not in item.diagnostics for item in result.detections)
 
 
 def test_repeated_grid_repairs_one_malformed_direct_cell() -> None:
