@@ -26,6 +26,30 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
     application.processEvents()
 
 
+@pytest.fixture(autouse=True)
+def isolated_trace_preferences() -> Iterator[None]:
+    """Prevent persistent Trace settings from leaking between tests.
+
+    Preserve any real developer/user settings that existed before the test.
+    """
+    settings = QtCore.QSettings("E3", "PositioningSystem")
+    settings.beginGroup("trace")
+    previous = {key: settings.value(key) for key in settings.allKeys()}
+    settings.remove("")
+    settings.endGroup()
+    settings.sync()
+
+    try:
+        yield
+    finally:
+        settings.beginGroup("trace")
+        settings.remove("")
+        for key, value in previous.items():
+            settings.setValue(key, value)
+        settings.endGroup()
+        settings.sync()
+
+
 def _show_in_narrow_inspector(
     panel: QtWidgets.QWidget,
     application: QtWidgets.QApplication,
@@ -93,6 +117,8 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert not panel.edge_offsets.isVisibleTo(panel)
     assert not panel.smoothing.isEnabled()
     assert not panel.smoothing_label.isEnabled()
+    assert panel.repair_grid_edges.isEnabled()
+    assert panel.repair_grid_edges.isChecked()
     assert panel.normalize_grid.isEnabled()
     assert panel.snap_grid_cells.isEnabled()
     assert "does not apply" in panel.smoothing.toolTip()
@@ -104,6 +130,7 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert panel.smoothing_label.isEnabled()
     assert not panel.normalize_grid.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
+    assert not panel.repair_grid_edges.isEnabled()
     assert not panel.border_offset_mode.isEnabled()
 
     panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
@@ -126,18 +153,22 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert not panel.smoothing_label.isEnabled()
     assert not panel.normalize_grid.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
+    assert not panel.repair_grid_edges.isEnabled()
 
     panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
     panel.regular_grid.setChecked(False)
     qt_application.processEvents()
     assert not panel.infer_missing.isEnabled()
+    assert not panel.repair_grid_edges.isEnabled()
     assert not panel.normalize_grid.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
 
     panel.regular_grid.setChecked(True)
     panel.normalize_grid.setChecked(False)
     qt_application.processEvents()
+    assert panel.repair_grid_edges.isEnabled()
     assert not panel.snap_grid_cells.isEnabled()
+    assert panel.options()["repair_grid_edges"] is True
 
     legend_text = " ".join(
         label.text() for label in panel.findChildren(QtWidgets.QLabel)
@@ -267,6 +298,27 @@ def test_trace_result_labels_damaged_and_already_open_cells(
 
     panel.close()
     panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_preferences_persist_but_replace_previous_resets(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    first = TracePanel()
+    first.snap_grid_cells.setChecked(False)
+    first.replace_previous.setChecked(False)
+    qt_application.processEvents()
+    first.close()
+    first.deleteLater()
+    qt_application.processEvents()
+
+    second = TracePanel()
+
+    assert not second.snap_grid_cells.isChecked()
+    assert second.replace_previous.isChecked()
+
+    second.close()
+    second.deleteLater()
     qt_application.processEvents()
 
 

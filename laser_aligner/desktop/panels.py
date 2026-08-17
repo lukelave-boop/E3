@@ -1228,6 +1228,7 @@ class TracePanel(QtWidgets.QWidget):
         self._sampled_hue: float | None = None
         self._color_pick_active = False
         self._calibration_ready = False
+        self._trace_settings = QtCore.QSettings("E3", "PositioningSystem")
         layout = _panel_layout(self)
 
         heading = QtWidgets.QLabel("Trace objects")
@@ -1329,6 +1330,14 @@ class TracePanel(QtWidgets.QWidget):
             "Show grid positions inferred behind missing or obscured objects."
         )
         self.infer_missing.setChecked(True)
+        self.repair_grid_edges = QtWidgets.QCheckBox("Repair weak repeated edges")
+        self.repair_grid_edges.setToolTip(
+            "When one side of a repeated rounded rectangle is obscured or has "
+            "weak contrast, borrow only that side from the fitted grid and the "
+            "other detected cells. Legitimately shifted or differently sized "
+            "cells are not forced to match."
+        )
+        self.repair_grid_edges.setChecked(True)
         self.normalize_grid = QtWidgets.QCheckBox("Make grid cells identical")
         self.normalize_grid.setToolTip(
             "Fit one repeated-object model to the grid. Every accepted and "
@@ -1364,6 +1373,7 @@ class TracePanel(QtWidgets.QWidget):
         filter_form.addRow(confidence_label, self.confidence)
         filter_form.addRow(self.regular_grid)
         filter_form.addRow(self.infer_missing)
+        filter_form.addRow(self.repair_grid_edges)
         filter_form.addRow(self.normalize_grid)
         filter_form.addRow(self.snap_grid_cells)
         _form_row(filter_form, "Identical-cell anchor", self.normalize_anchor)
@@ -1555,6 +1565,8 @@ class TracePanel(QtWidgets.QWidget):
         layout.addWidget(result_group)
         layout.addStretch(1)
 
+        self._restore_preferences()
+
         self.pick_color_button.clicked.connect(self.pickColorRequested)
         self.detect_button.clicked.connect(
             lambda: self.detectRequested.emit(self.options())
@@ -1596,6 +1608,7 @@ class TracePanel(QtWidgets.QWidget):
             self.confidence,
             self.regular_grid,
             self.infer_missing,
+            self.repair_grid_edges,
             self.normalize_grid,
             self.snap_grid_cells,
             self.normalize_anchor,
@@ -1607,11 +1620,152 @@ class TracePanel(QtWidgets.QWidget):
         ):
             if isinstance(widget, QtWidgets.QComboBox):
                 widget.currentIndexChanged.connect(self._mark_stale)
+                widget.currentIndexChanged.connect(self._save_preferences)
             elif isinstance(widget, QtWidgets.QAbstractButton):
                 widget.toggled.connect(self._mark_stale)
+                widget.toggled.connect(self._save_preferences)
             else:
                 widget.valueChanged.connect(self._mark_stale)
+                widget.valueChanged.connect(self._save_preferences)
         self._sync_output_controls()
+
+    @staticmethod
+    def _settings_bool(value: Any, default: bool) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+    @staticmethod
+    def _set_combo_data(combo: QtWidgets.QComboBox, value: Any) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _restore_preferences(self) -> None:
+        settings = self._trace_settings
+        settings.beginGroup("trace")
+        try:
+            self._set_combo_data(
+                self.mode_combo,
+                settings.value("detection_mode", self.mode_combo.currentData()),
+            )
+            self.target_hue.setValue(
+                float(settings.value("target_hue", self.target_hue.value()))
+            )
+            self.hue_tolerance.setValue(
+                float(settings.value("hue_tolerance", self.hue_tolerance.value()))
+            )
+            self.min_saturation.setValue(
+                int(float(settings.value("min_saturation", self.min_saturation.value())))
+            )
+            self.min_area.setValue(
+                float(settings.value("min_area_mm2", self.min_area.value()))
+            )
+            self.max_area.setValue(
+                float(settings.value("max_area_mm2", self.max_area.value()))
+            )
+            self.min_width.setValue(
+                float(settings.value("min_width_mm", self.min_width.value()))
+            )
+            self.min_height.setValue(
+                float(settings.value("min_height_mm", self.min_height.value()))
+            )
+            self.confidence.setValue(
+                float(settings.value("confidence_percent", self.confidence.value()))
+            )
+
+            for key, widget in (
+                ("regular_grid", self.regular_grid),
+                ("infer_missing", self.infer_missing),
+                ("repair_grid_edges", self.repair_grid_edges),
+                ("normalize_grid", self.normalize_grid),
+                ("snap_grid_cells", self.snap_grid_cells),
+            ):
+                widget.setChecked(
+                    self._settings_bool(settings.value(key, widget.isChecked()), widget.isChecked())
+                )
+
+            self._set_combo_data(
+                self.normalize_anchor,
+                settings.value("normalize_anchor", self.normalize_anchor.currentData()),
+            )
+            self._set_combo_data(
+                self.output_mode,
+                settings.value("output_mode", self.output_mode.currentData()),
+            )
+            self._set_combo_data(
+                self.border_offset_mode,
+                settings.value(
+                    "border_offset_mode", self.border_offset_mode.currentData()
+                ),
+            )
+            self.border_offset.setValue(
+                float(settings.value("border_offset_mm", self.border_offset.value()))
+            )
+            for edge, field in self.edge_offset_fields.items():
+                field.setValue(
+                    float(settings.value(f"border_offset_{edge}_mm", field.value()))
+                )
+            self.smoothing.setValue(
+                float(settings.value("smoothing_mm", self.smoothing.value()))
+            )
+            sampled_hue = settings.value("sampled_hue")
+            sampled_bgr = str(settings.value("sampled_bgr", "")).strip()
+            if sampled_hue is not None and sampled_bgr:
+                try:
+                    channels = [int(part) for part in sampled_bgr.split(",")]
+                    if len(channels) == 3 and all(0 <= value <= 255 for value in channels):
+                        self._sampled_hue = float(sampled_hue)
+                        self._sampled_bgr = channels
+                        blue, green, red = channels
+                        self.color_swatch.setStyleSheet(
+                            f"background: rgb({red},{green},{blue}); "
+                            "border: 1px solid #AAB4BB; border-radius: 3px;"
+                        )
+                except (TypeError, ValueError):
+                    self._sampled_hue = None
+                    self._sampled_bgr = None
+        finally:
+            settings.endGroup()
+
+    def _save_preferences(self, *_args: object) -> None:
+        settings = self._trace_settings
+        settings.beginGroup("trace")
+        try:
+            settings.setValue("detection_mode", self.mode_combo.currentData())
+            settings.setValue("target_hue", self.target_hue.value())
+            settings.setValue("hue_tolerance", self.hue_tolerance.value())
+            settings.setValue("min_saturation", self.min_saturation.value())
+            settings.setValue("min_area_mm2", self.min_area.value())
+            settings.setValue("max_area_mm2", self.max_area.value())
+            settings.setValue("min_width_mm", self.min_width.value())
+            settings.setValue("min_height_mm", self.min_height.value())
+            settings.setValue("confidence_percent", self.confidence.value())
+            settings.setValue("regular_grid", self.regular_grid.isChecked())
+            settings.setValue("infer_missing", self.infer_missing.isChecked())
+            settings.setValue("repair_grid_edges", self.repair_grid_edges.isChecked())
+            settings.setValue("normalize_grid", self.normalize_grid.isChecked())
+            settings.setValue("snap_grid_cells", self.snap_grid_cells.isChecked())
+            settings.setValue("normalize_anchor", self.normalize_anchor.currentData())
+            settings.setValue("output_mode", self.output_mode.currentData())
+            settings.setValue("border_offset_mode", self.border_offset_mode.currentData())
+            settings.setValue("border_offset_mm", self.border_offset.value())
+            for edge, field in self.edge_offset_fields.items():
+                settings.setValue(f"border_offset_{edge}_mm", field.value())
+            settings.setValue("smoothing_mm", self.smoothing.value())
+            if self._sampled_hue is not None and self._sampled_bgr is not None:
+                settings.setValue("sampled_hue", self._sampled_hue)
+                settings.setValue(
+                    "sampled_bgr", ",".join(str(value) for value in self._sampled_bgr)
+                )
+            else:
+                settings.remove("sampled_hue")
+                settings.remove("sampled_bgr")
+        finally:
+            settings.endGroup()
+        settings.sync()
 
     def options(self) -> dict[str, Any]:
         hue = self.target_hue.value()
@@ -1640,6 +1794,7 @@ class TracePanel(QtWidgets.QWidget):
             "confidence_threshold": self.confidence.value() / 100.0,
             "regular_grid": self.regular_grid.isChecked(),
             "infer_missing": self.infer_missing.isChecked(),
+            "repair_grid_edges": self.repair_grid_edges.isChecked(),
             "normalize_grid": self.normalize_grid.isChecked(),
             "snap_grid_cells": self.snap_grid_cells.isChecked(),
             "normalize_anchor": str(self.normalize_anchor.currentData()),
@@ -1672,6 +1827,7 @@ class TracePanel(QtWidgets.QWidget):
             f"X{float(payload['machine_x']):.2f} "
             f"Y{float(payload['machine_y']):.2f}. Press Detect objects."
         )
+        self._save_preferences()
 
     def set_color_pick_active(self, active: bool, *, sampling: bool = False) -> None:
         self._color_pick_active = bool(active)
@@ -1977,6 +2133,9 @@ class TracePanel(QtWidgets.QWidget):
         self.smoothing.setEnabled(smoothing_enabled)
         grid_enabled = self.regular_grid.isChecked()
         self.infer_missing.setEnabled(grid_enabled)
+        self.repair_grid_edges.setEnabled(
+            grid_enabled and self.output_mode.currentData() == "rounded"
+        )
         self.normalize_grid.setEnabled(
             grid_enabled and self.output_mode.currentData() == "rounded"
         )

@@ -55,6 +55,7 @@ class TraceOptions:
     infer_missing: bool = True
     normalize_grid: bool = True
     snap_grid_cells: bool = True
+    repair_grid_edges: bool = True
     normalize_anchor: str = "center"
     output_mode: str = "rounded"
     border_offset_mode: str = "uniform"
@@ -116,6 +117,7 @@ class TraceOptions:
             "infer_missing",
             "normalize_grid",
             "snap_grid_cells",
+            "repair_grid_edges",
         ):
             if type(getattr(self, field_name)) is not bool:
                 raise ValueError(f"{field_name} must be a JSON boolean")
@@ -560,6 +562,382 @@ def _long_axis_rect(contour: np.ndarray) -> dict[str, Any] | None:
     }
 
 
+def _normalize_long_axis_angle(angle_deg: float) -> float:
+    angle = float(angle_deg)
+    while angle >= 90.0:
+        angle -= 180.0
+    while angle < -90.0:
+        angle += 180.0
+    return angle
+
+
+def _angle_delta_degrees(first: float, second: float) -> float:
+    return abs(_normalize_long_axis_angle(float(first) - float(second)))
+
+
+def _mean_long_axis_angle(
+    values: Sequence[float],
+    weights: Sequence[float] | None = None,
+) -> float:
+    if not values:
+        raise ValueError("At least one angle is required")
+    radians = np.radians(np.asarray(values, dtype=np.float64) * 2.0)
+    if weights is None:
+        weight_array = np.ones(len(values), dtype=np.float64)
+    else:
+        weight_array = np.asarray(weights, dtype=np.float64)
+    sine = float(np.sum(np.sin(radians) * weight_array))
+    cosine = float(np.sum(np.cos(radians) * weight_array))
+    return _normalize_long_axis_angle(
+        math.degrees(math.atan2(sine, cosine)) / 2.0
+    )
+
+
+def _straight_edge_angle(
+    contour: np.ndarray,
+    rectangle: Mapping[str, Any],
+) -> tuple[float | None, dict[str, Any]]:
+    """Estimate label rotation from straight sides instead of the whole hull.
+
+    ``minAreaRect`` can rotate slightly when a corner is damaged, a shadow
+    changes one boundary, or a rounded edge is incomplete.  For elongated
+    rounded rectangles the long straight top/bottom segments are a stronger
+    angle reference.  The short sides are fitted independently as a consistency
+    check, but never bias the final long-edge angle.
+    """
+
+    points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+    if len(points) < 16:
+        return None, {"accepted": False, "reason": "too_few_contour_points"}
+
+    width = float(rectangle["width"])
+    height = float(rectangle["height"])
+    if width <= 1e-6 or height <= 1e-6 or width / height < 1.35:
+        return None, {"accepted": False, "reason": "shape_not_elongated"}
+
+    initial = float(rectangle["angle_image_deg"])
+    angle = math.radians(initial)
+    u = np.array([math.cos(angle), math.sin(angle)], dtype=np.float64)
+    v = np.array([-u[1], u[0]], dtype=np.float64)
+    center = np.asarray(rectangle["center"], dtype=np.float64)
+    local = points - center
+    along_u = local @ u
+    along_v = local @ v
+
+    # Fit only central edge spans so rounded corners do not influence the line.
+    long_center = np.abs(along_u) <= width * 0.34
+    short_center = np.abs(along_v) <= height * 0.26
+    masks = {
+        "top": long_center & (along_v <= -height * 0.20),
+        "bottom": long_center & (along_v >= height * 0.20),
+        "left": short_center & (along_u <= -width * 0.20),
+        "right": short_center & (along_u >= width * 0.20),
+    }
+
+    def fit_edge(
+        name: str,
+        expected_span: float,
+        vertical: bool,
+    ) -> dict[str, Any] | None:
+        edge_points = points[masks[name]]
+        if len(edge_points) < 6:
+            return None
+        line = cv2.fitLine(
+            edge_points.astype(np.float32),
+            cv2.DIST_WELSCH,
+            0,
+            0.01,
+            0.01,
+        ).reshape(-1)
+        direction = np.asarray(line[:2], dtype=np.float64)
+        norm = float(np.linalg.norm(direction))
+        if norm <= 1e-9:
+            return None
+        direction /= norm
+        origin = np.asarray(line[2:4], dtype=np.float64)
+        relative = edge_points - origin
+        span_values = relative @ direction
+        span = float(
+            np.percentile(span_values, 95) - np.percentile(span_values, 5)
+        )
+        normal = np.array([-direction[1], direction[0]], dtype=np.float64)
+        residuals = np.abs(relative @ normal)
+        residual = float(np.median(residuals))
+        raw_angle = math.degrees(
+            math.atan2(float(direction[1]), float(direction[0]))
+        )
+        long_angle = _normalize_long_axis_angle(
+            raw_angle - (90.0 if vertical else 0.0)
+        )
+        minimum_span = expected_span * (0.36 if vertical else 0.50)
+        maximum_residual = max(
+            1.25,
+            height * (0.030 if not vertical else 0.035),
+        )
+        accepted = span >= minimum_span and residual <= maximum_residual
+        return {
+            "name": name,
+            "accepted": accepted,
+            "angle_deg": long_angle,
+            "span_px": span,
+            "median_residual_px": residual,
+            "point_count": int(len(edge_points)),
+            "quality": (
+                max(0.0, min(1.0, span / max(expected_span, 1e-9)))
+                * max(0.0, min(1.0, maximum_residual / max(residual, 0.25)))
+            ),
+        }
+
+    fits = {
+        "top": fit_edge("top", width, False),
+        "bottom": fit_edge("bottom", width, False),
+        "left": fit_edge("left", height, True),
+        "right": fit_edge("right", height, True),
+    }
+
+    def pair(
+        first: str,
+        second: str,
+        tolerance: float,
+    ) -> tuple[float, float] | None:
+        a, b = fits[first], fits[second]
+        if not a or not b or not a["accepted"] or not b["accepted"]:
+            return None
+        if (
+            _angle_delta_degrees(
+                float(a["angle_deg"]), float(b["angle_deg"])
+            )
+            > tolerance
+        ):
+            return None
+        weights = [float(a["quality"]), float(b["quality"])]
+        return (
+            _mean_long_axis_angle(
+                [float(a["angle_deg"]), float(b["angle_deg"])],
+                weights,
+            ),
+            max(1e-6, sum(weights)),
+        )
+
+    long_pair = pair("top", "bottom", 1.75)
+    short_pair = pair("left", "right", 2.25)
+    chosen: float | None = None
+    source = "fallback"
+    if long_pair is not None and short_pair is not None:
+        if _angle_delta_degrees(long_pair[0], short_pair[0]) <= 1.75:
+            # Short sides only verify the result. Their baseline is much shorter
+            # and therefore more sensitive to pixel stair-stepping.
+            chosen = long_pair[0]
+            source = "long_edges_crosschecked"
+        else:
+            # Long sides have much more baseline on label-shaped parts.
+            chosen = long_pair[0]
+            source = "long_edges"
+    elif long_pair is not None:
+        chosen = long_pair[0]
+        source = "long_edges"
+    elif short_pair is not None:
+        # Short sides alone are intentionally insufficient.
+        chosen = None
+        source = "short_edges_only"
+
+    diagnostics = {
+        "accepted": chosen is not None,
+        "source": source,
+        "initial_angle_deg": initial,
+        "refined_angle_deg": chosen,
+        "change_deg": (
+            None
+            if chosen is None
+            else _angle_delta_degrees(chosen, initial)
+        ),
+        "edges": fits,
+    }
+    return chosen, diagnostics
+
+
+def _straight_edge_center(
+    contour: np.ndarray,
+    rectangle: Mapping[str, Any],
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    """Refine an elongated rounded-rectangle center from opposing straight edges.
+
+    A small corner/shadow defect can move ``minAreaRect``'s center even after the
+    long-edge angle is corrected.  Fit top/bottom and left/right independently,
+    then use only trustworthy opposing pairs.  Each axis is accepted separately;
+    large one-sided damage therefore falls back on that axis instead of pulling
+    the cut toward a bad edge.
+    """
+
+    points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+    if len(points) < 16:
+        return None, {"accepted": False, "reason": "too_few_contour_points"}
+
+    width = float(rectangle["width"])
+    height = float(rectangle["height"])
+    if width <= 1e-6 or height <= 1e-6 or width / height < 1.35:
+        return None, {"accepted": False, "reason": "shape_not_elongated"}
+
+    center = np.asarray(rectangle["center"], dtype=np.float64)
+    angle = math.radians(float(rectangle["angle_image_deg"]))
+    u = np.array([math.cos(angle), math.sin(angle)], dtype=np.float64)
+    v = np.array([-u[1], u[0]], dtype=np.float64)
+    local = points - center
+    along_u = local @ u
+    along_v = local @ v
+
+    # Exclude rounded corners.  These spans mirror the rotation estimator so
+    # center and angle are derived from the same physical straight-edge evidence.
+    long_center = np.abs(along_u) <= width * 0.34
+    short_center = np.abs(along_v) <= height * 0.26
+    masks = {
+        "top": long_center & (along_v <= -height * 0.20),
+        "bottom": long_center & (along_v >= height * 0.20),
+        "left": short_center & (along_u <= -width * 0.20),
+        "right": short_center & (along_u >= width * 0.20),
+    }
+
+    def fit_edge(
+        name: str,
+        expected_span: float,
+        *,
+        horizontal: bool,
+    ) -> dict[str, Any] | None:
+        edge_points = points[masks[name]]
+        if len(edge_points) < 6:
+            return None
+        line = cv2.fitLine(
+            edge_points.astype(np.float32),
+            cv2.DIST_WELSCH,
+            0,
+            0.01,
+            0.01,
+        ).reshape(-1)
+        direction = np.asarray(line[:2], dtype=np.float64)
+        norm = float(np.linalg.norm(direction))
+        if norm <= 1e-9:
+            return None
+        direction /= norm
+        origin = np.asarray(line[2:4], dtype=np.float64)
+
+        tangent = u if horizontal else v
+        center_axis = v if horizontal else u
+        denominator = float(direction @ tangent)
+        if abs(denominator) < 0.55:
+            return None
+        parameter = -float((origin - center) @ tangent) / denominator
+        center_crossing = origin + direction * parameter
+        coordinate = float((center_crossing - center) @ center_axis)
+
+        relative = edge_points - origin
+        span_values = relative @ direction
+        span = float(
+            np.percentile(span_values, 95) - np.percentile(span_values, 5)
+        )
+        line_normal = np.array(
+            [-direction[1], direction[0]], dtype=np.float64
+        )
+        residual = float(np.median(np.abs(relative @ line_normal)))
+        raw_angle = math.degrees(
+            math.atan2(float(direction[1]), float(direction[0]))
+        )
+        edge_angle = _normalize_long_axis_angle(
+            raw_angle - (0.0 if horizontal else 90.0)
+        )
+        minimum_span = expected_span * (0.50 if horizontal else 0.36)
+        maximum_residual = max(
+            1.25,
+            height * (0.030 if horizontal else 0.035),
+        )
+        accepted = (
+            span >= minimum_span
+            and residual <= maximum_residual
+            and _angle_delta_degrees(
+                edge_angle, float(rectangle["angle_image_deg"])
+            )
+            <= 2.50
+        )
+        return {
+            "name": name,
+            "accepted": accepted,
+            "coordinate_px": coordinate,
+            "angle_deg": edge_angle,
+            "span_px": span,
+            "median_residual_px": residual,
+            "point_count": int(len(edge_points)),
+        }
+
+    fits = {
+        "top": fit_edge("top", width, horizontal=True),
+        "bottom": fit_edge("bottom", width, horizontal=True),
+        "left": fit_edge("left", height, horizontal=False),
+        "right": fit_edge("right", height, horizontal=False),
+    }
+
+    def pair_offset(
+        first: str,
+        second: str,
+        expected_separation: float,
+        angle_tolerance: float,
+    ) -> tuple[float | None, str | None]:
+        first_fit = fits[first]
+        second_fit = fits[second]
+        if (
+            first_fit is None
+            or second_fit is None
+            or not first_fit["accepted"]
+            or not second_fit["accepted"]
+        ):
+            return None, "edge_fit_unavailable"
+        if (
+            _angle_delta_degrees(
+                float(first_fit["angle_deg"]),
+                float(second_fit["angle_deg"]),
+            )
+            > angle_tolerance
+        ):
+            return None, "opposing_edges_disagree"
+        first_coordinate = float(first_fit["coordinate_px"])
+        second_coordinate = float(second_fit["coordinate_px"])
+        separation = second_coordinate - first_coordinate
+        if separation <= 0.0:
+            return None, "edge_order_invalid"
+        separation_tolerance = max(3.0, expected_separation * 0.08)
+        if abs(separation - expected_separation) > separation_tolerance:
+            return None, "edge_separation_mismatch"
+        offset = (first_coordinate + second_coordinate) / 2.0
+        maximum_shift = max(3.0, expected_separation * 0.06)
+        if abs(offset) > maximum_shift:
+            return None, "center_shift_too_large"
+        return offset, None
+
+    offset_u, x_reason = pair_offset("left", "right", width, 2.25)
+    offset_v, y_reason = pair_offset("top", "bottom", height, 1.75)
+    if offset_u is None and offset_v is None:
+        return None, {
+            "accepted": False,
+            "reason": "no_trustworthy_edge_pair",
+            "x_rejection_reason": x_reason,
+            "y_rejection_reason": y_reason,
+            "edges": fits,
+        }
+
+    shift_u = 0.0 if offset_u is None else offset_u
+    shift_v = 0.0 if offset_v is None else offset_v
+    refined = center + u * shift_u + v * shift_v
+    return refined, {
+        "accepted": True,
+        "initial_center_px": [float(center[0]), float(center[1])],
+        "refined_center_px": [float(refined[0]), float(refined[1])],
+        "offset_u_px": offset_u,
+        "offset_v_px": offset_v,
+        "shift_px": float(np.linalg.norm(refined - center)),
+        "x_rejection_reason": x_reason,
+        "y_rejection_reason": y_reason,
+        "edges": fits,
+    }
+
+
 def _rounded_mask(width: int, height: int, radius: int) -> np.ndarray:
     width, height = max(2, int(width)), max(2, int(height))
     radius = max(0, min(int(radius), width // 2, height // 2))
@@ -842,6 +1220,20 @@ def _candidate(
         shape = "contour"
         score = 0.42 * solidity + 0.33 * coverage + 0.25 * compactness
         confidence = max(0.0, min(1.0, (score - 0.30) / 0.55))
+    straight_edge_diagnostics: dict[str, Any] | None = None
+    straight_edge_center_diagnostics: dict[str, Any] | None = None
+    if rounded:
+        refined_angle, straight_edge_diagnostics = _straight_edge_angle(
+            contour, rectangle
+        )
+        if refined_angle is not None:
+            rectangle["angle_image_deg"] = refined_angle
+        refined_center, straight_edge_center_diagnostics = _straight_edge_center(
+            contour, rectangle
+        )
+        if refined_center is not None:
+            rectangle["center"] = refined_center
+
     custom_edge_offsets = (
         _custom_edge_offsets(options)
         if options.output_mode == "rounded" and rounded
@@ -924,6 +1316,8 @@ def _candidate(
         "width_px": float(rectangle["width"]),
         "height_px": float(rectangle["height"]),
         "angle_image_deg": float(rectangle["angle_image_deg"]),
+        "straight_edge_rotation": straight_edge_diagnostics,
+        "straight_edge_center": straight_edge_center_diagnostics,
         "radius_px": radius_px,
         "area_mm2": area_mm2,
         "score": score,
@@ -995,12 +1389,114 @@ def _rounded_polyline(
     return [[float(x), float(y)] for x, y in world]
 
 
+def _partial_grid_recovery(
+    image: np.ndarray,
+    *,
+    predicted_center_px: np.ndarray,
+    width_px: float,
+    height_px: float,
+    angle_deg: float,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Look only for boundary evidence near an otherwise inferred grid cell.
+
+    The grid is the geometry prior.  This deliberately never changes its size
+    or angle, and requires support on both local axes before an image-derived
+    center is used.  Long expected-edge samples make internal text and small
+    texture insufficient evidence.
+    """
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    gray = cv2.GaussianBlur(gray, (0, 0), 1.0)
+    radians = math.radians(angle_deg)
+    u = np.array([math.cos(radians), math.sin(radians)])
+    v = np.array([-u[1], u[0]])
+    probe_px = max(1.5, min(4.0, min(width_px, height_px) * 0.045))
+    sample_count = max(17, min(41, int(max(width_px, height_px) / 7.0)))
+
+    def sample_values(points: np.ndarray) -> np.ndarray:
+        return cv2.remap(
+            gray,
+            points[:, 0].astype(np.float32).reshape(-1, 1),
+            points[:, 1].astype(np.float32).reshape(-1, 1),
+            cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_REPLICATE,
+        ).reshape(-1)
+
+    def side_measurements(center: np.ndarray) -> dict[str, tuple[float, float]]:
+        sides = {
+            "left": (-u * width_px / 2.0, v, u, height_px),
+            "right": (u * width_px / 2.0, v, -u, height_px),
+            "top": (-v * height_px / 2.0, u, v, width_px),
+            "bottom": (v * height_px / 2.0, u, -v, width_px),
+        }
+        result = {}
+        # Avoid the rounded corners: a straight side must supply the evidence.
+        values = np.linspace(-0.31, 0.31, sample_count)
+        for name, (offset, tangent, inward, extent) in sides.items():
+            points = center + offset + np.outer(values * extent, tangent)
+            inside = sample_values(points + inward * probe_px)
+            outside = sample_values(points - inward * probe_px)
+            contrast = np.abs(inside - outside)
+            support = float(np.mean(contrast >= 20.0))
+            result[name] = (support, float(np.median(contrast)))
+        return result
+
+    # Keep the correction small enough that interior print/noise cannot move a
+    # lattice cell across a meaningful fraction of its known physical size.
+    x_offsets = np.linspace(-width_px * 0.12, width_px * 0.12, 9)
+    y_offsets = np.linspace(-height_px * 0.18, height_px * 0.18, 9)
+
+    def axis_offset(offsets: np.ndarray, axis: np.ndarray, names: tuple[str, str]) -> float:
+        scored = []
+        for offset in offsets:
+            measures = side_measurements(predicted_center_px + axis * offset)
+            score = sum(measures[name][0] * min(1.0, measures[name][1] / 45.0) for name in names)
+            scored.append((score, abs(float(offset)), float(offset)))
+        return max(scored, key=lambda value: (value[0], -value[1]))[2]
+
+    shift_u = axis_offset(x_offsets, u, ("left", "right"))
+    shift_v = axis_offset(y_offsets, v, ("top", "bottom"))
+    recovered_center = predicted_center_px + u * shift_u + v * shift_v
+    measurements = side_measurements(recovered_center)
+    supported = [
+        name for name, (fraction, contrast) in measurements.items()
+        if fraction >= 0.42 and contrast >= 20.0
+    ]
+    has_horizontal = bool({"left", "right"} & set(supported))
+    has_vertical = bool({"top", "bottom"} & set(supported))
+    evidence_supported = len(supported) >= 2 and has_horizontal and has_vertical
+    if not evidence_supported:
+        # Legacy blind gap inference remains available, but no image evidence
+        # is claimed and it cannot nudge the predicted center.
+        recovered_center = predicted_center_px.copy()
+        shift_u = shift_v = 0.0
+        measurements = side_measurements(recovered_center)
+        supported = []
+    evidence_score = float(np.mean([
+        fraction * min(1.0, contrast / 45.0)
+        for fraction, contrast in measurements.values()
+    ]))
+    return recovered_center, {
+        "predicted_center_px": [float(value) for value in predicted_center_px],
+        "recovered_center_px": [float(value) for value in recovered_center],
+        "edge_support": {
+            name: {"fraction": round(fraction, 4), "contrast": round(contrast, 3)}
+            for name, (fraction, contrast) in measurements.items()
+        },
+        "supported_sides": supported,
+        "supported_side_count": len(supported),
+        "evidence_score": round(evidence_score, 4),
+        "evidence_supported": evidence_supported,
+        "recovery_shift_px": [float(shift_u * u[0] + shift_v * v[0]), float(shift_u * u[1] + shift_v * v[1])],
+    }
+
+
 def _infer_grid(
     candidates: list[dict[str, Any]],
     options: TraceOptions,
     work_area: WorkArea,
     output_work_area: WorkArea,
     pixels_per_mm: float,
+    image: np.ndarray,
 ) -> tuple[
     list[dict[str, Any]],
     list[dict[str, Any]],
@@ -1187,6 +1683,108 @@ def _infer_grid(
 
     normalize = bool(options.normalize_grid and options.output_mode == "rounded")
 
+    # A weak or obscured side can shrink a single rounded-rectangle contour
+    # even when the other three sides are clean.  In a repeated grid the fitted
+    # lattice and the sibling-cell median provide strong independent evidence
+    # for the missing side.  Repair only one-sided outliers: a genuinely
+    # smaller centered cell moves both opposite edges, while a shifted cell
+    # moves both edges in the same direction.  Neither case is silently
+    # normalized by this conservative repair.
+    edge_repair_plans: dict[tuple[int, int], dict[str, Any]] = {}
+    if (
+        options.repair_grid_edges
+        and options.output_mode == "rounded"
+        and len(cell_members) >= 4
+        and grid_quality >= 0.55
+    ):
+        width_stable = max(1.5, pixels_per_mm * 0.35, median_width * 0.012)
+        height_stable = max(1.5, pixels_per_mm * 0.35, median_height * 0.012)
+        width_trigger = max(2.5, pixels_per_mm * 0.60, median_width * 0.020)
+        height_trigger = max(2.5, pixels_per_mm * 0.60, median_height * 0.020)
+
+        def projected_edges(item: Mapping[str, Any]) -> dict[str, float]:
+            item_angle = math.radians(float(item["angle_image_deg"]))
+            item_u = np.array([math.cos(item_angle), math.sin(item_angle)])
+            item_v = np.array([-item_u[1], item_u[0]])
+            center = np.asarray(item["center_px"], dtype=np.float64)
+            half_width = float(item["width_px"]) / 2.0
+            half_height = float(item["height_px"]) / 2.0
+            corners = np.asarray(
+                [
+                    center + item_u * sx * half_width + item_v * sy * half_height
+                    for sx, sy in ((-1, -1), (1, -1), (1, 1), (-1, 1))
+                ],
+                dtype=np.float64,
+            )
+            along_u = corners @ u
+            along_v = corners @ v
+            return {
+                "left": float(np.min(along_u)),
+                "right": float(np.max(along_u)),
+                "top": float(np.min(along_v)),
+                "bottom": float(np.max(along_v)),
+            }
+
+        for cell, (_, item) in cell_members.items():
+            if (
+                item.get("shape") != "rounded_rectangle"
+                or bool(item.get("touches_image_edge", False))
+            ):
+                continue
+            row, column = cell
+            observed = projected_edges(item)
+            expected = {
+                "left": float(columns[column] - median_width / 2.0),
+                "right": float(columns[column] + median_width / 2.0),
+                "top": float(rows[row] - median_height / 2.0),
+                "bottom": float(rows[row] + median_height / 2.0),
+            }
+            deviations = {
+                edge: observed[edge] - expected[edge]
+                for edge in ("left", "right", "top", "bottom")
+            }
+            repairs: list[str] = []
+            for edge, opposite, trigger, stable in (
+                ("left", "right", width_trigger, width_stable),
+                ("right", "left", width_trigger, width_stable),
+                ("top", "bottom", height_trigger, height_stable),
+                ("bottom", "top", height_trigger, height_stable),
+            ):
+                if (
+                    abs(deviations[edge]) >= trigger
+                    and abs(deviations[opposite]) <= stable
+                ):
+                    repairs.append(edge)
+            # Never replace both opposing sides on one axis. That indicates a
+            # legitimately shifted or differently sized cell, not one missing
+            # boundary.
+            if {"left", "right"}.issubset(repairs):
+                repairs = [edge for edge in repairs if edge not in {"left", "right"}]
+            if {"top", "bottom"}.issubset(repairs):
+                repairs = [edge for edge in repairs if edge not in {"top", "bottom"}]
+            if not repairs:
+                continue
+            repaired = dict(observed)
+            for edge in repairs:
+                repaired[edge] = expected[edge]
+            repaired_width = repaired["right"] - repaired["left"]
+            repaired_height = repaired["bottom"] - repaired["top"]
+            if repaired_width <= 1.0 or repaired_height <= 1.0:
+                continue
+            repaired_center = (
+                u * ((repaired["left"] + repaired["right"]) / 2.0)
+                + v * ((repaired["top"] + repaired["bottom"]) / 2.0)
+            )
+            edge_repair_plans[cell] = {
+                "edges": repairs,
+                "center_px": repaired_center,
+                "width_px": repaired_width,
+                "height_px": repaired_height,
+                "observed_edges_px": observed,
+                "expected_edges_px": expected,
+                "deviations_px": deviations,
+            }
+
     def canonical_candidate(
         item: Mapping[str, Any] | None,
         row: int,
@@ -1195,12 +1793,13 @@ def _infer_grid(
         inferred: bool,
     ) -> dict[str, Any]:
         lattice_center_px = u * columns[column] + v * rows[row]
-        use_lattice_pose = inferred or options.snap_grid_cells
+        use_lattice_pose = inferred or (normalize and options.snap_grid_cells)
         center_px = (
             lattice_center_px
             if use_lattice_pose or item is None
             else np.asarray(item["center_px"], dtype=np.float64)
         )
+        edge_repair = edge_repair_plans.get((row, column))
         repaired_center_axes: list[str] = []
         if item is not None and not use_lattice_pose and normalize:
             # A clipped/obscured edge biases minAreaRect's center toward the
@@ -1234,12 +1833,30 @@ def _infer_grid(
             center_px = center_px + local_y * (
                 median_height - float(item["height_px"])
             ) / 2.0
+        if item is not None and edge_repair is not None and not normalize:
+            center_px = np.asarray(edge_repair["center_px"], dtype=np.float64)
+            cell_angle = common_angle
+            rectangle_width = float(edge_repair["width_px"])
+            rectangle_height = float(edge_repair["height_px"])
+            rectangle_radius = min(
+                median_radius,
+                rectangle_width / 2.0,
+                rectangle_height / 2.0,
+            )
+        elif item is not None and not normalize:
+            rectangle_width = float(item["width_px"])
+            rectangle_height = float(item["height_px"])
+            rectangle_radius = float(item["radius_px"])
+        else:
+            rectangle_width = median_width
+            rectangle_height = median_height
+            rectangle_radius = median_radius
         rectangle = {
             "center": center_px,
-            "width": median_width,
-            "height": median_height,
+            "width": rectangle_width,
+            "height": rectangle_height,
             "angle_image_deg": cell_angle,
-            "radius_px": median_radius,
+            "radius_px": rectangle_radius,
         }
         geometry = _machine_geometry(
             rectangle,
@@ -1268,8 +1885,64 @@ def _infer_grid(
         )
         work_area_overrun_mm = max(work_area_overruns_mm.values())
         if inferred:
+            center_px, recovery_diagnostics = _partial_grid_recovery(
+                image,
+                predicted_center_px=lattice_center_px,
+                width_px=median_width,
+                height_px=median_height,
+                angle_deg=common_angle,
+            )
+            rectangle["center"] = center_px
+            geometry = _machine_geometry(
+                rectangle,
+                work_area,
+                pixels_per_mm,
+                options.border_offset_mm,
+                edge_offsets_mm=_custom_edge_offsets(options),
+            )
+            rounded_contour = _rounded_polyline(
+                geometry["center_mm"],
+                geometry["width_mm"],
+                geometry["height_mm"],
+                geometry["rotation_deg"],
+                geometry["corner_radius_mm"],
+            )
+            camera_work_area_overruns_mm = _work_area_overruns_mm(
+                rounded_contour,
+                work_area,
+            )
+            work_area_overruns_mm = _work_area_overruns_mm(
+                rounded_contour,
+                output_work_area,
+            )
+            camera_work_area_overrun_mm = max(
+                camera_work_area_overruns_mm.values()
+            )
+            work_area_overrun_mm = max(work_area_overruns_mm.values())
+
+            predicted_geometry = _machine_geometry(
+                {**rectangle, "center": lattice_center_px},
+                work_area,
+                pixels_per_mm,
+                0.0,
+            )
+            recovery_diagnostics["predicted_center_mm"] = list(
+                predicted_geometry["center_mm"]
+            )
+            recovery_diagnostics["recovered_center_mm"] = list(
+                geometry["center_mm"]
+            )
+            recovery_diagnostics["recovery_shift_mm"] = [
+                geometry["center_mm"][0]
+                - recovery_diagnostics["predicted_center_mm"][0],
+                geometry["center_mm"][1]
+                - recovery_diagnostics["predicted_center_mm"][1],
+            ]
+
             median_score = float(
-                np.median([value[1]["score"] for value in cell_members.values()])
+                np.median(
+                    [value[1]["score"] for value in cell_members.values()]
+                )
             )
             return {
                 "center_px": center_px,
@@ -1288,7 +1961,9 @@ def _infer_grid(
                 "shape": "rounded_rectangle",
                 "touches_image_edge": False,
                 "image_edge_sides": [],
-                "within_camera_work_area": camera_work_area_overrun_mm <= 1e-9,
+                "within_camera_work_area": (
+                    camera_work_area_overrun_mm <= 1e-9
+                ),
                 "camera_work_area_overrun_mm": camera_work_area_overrun_mm,
                 "camera_work_area_overruns_mm": camera_work_area_overruns_mm,
                 "within_work_area": work_area_overrun_mm <= 1e-9,
@@ -1299,6 +1974,7 @@ def _infer_grid(
                 "grid_row": row,
                 "grid_column": column,
                 "grid_normalized": True,
+                **recovery_diagnostics,
                 **geometry,
             }
 
@@ -1315,6 +1991,26 @@ def _infer_grid(
                 "observed_rotation_deg": float(item["rotation_deg"]),
                 "observed_corner_radius_mm": float(item["corner_radius_mm"]),
                 "repaired_center_axes": repaired_center_axes,
+                "grid_edge_repairs": (
+                    list(edge_repair["edges"])
+                    if edge_repair is not None
+                    else []
+                ),
+                "grid_edge_observed_px": (
+                    dict(edge_repair["observed_edges_px"])
+                    if edge_repair is not None
+                    else None
+                ),
+                "grid_edge_expected_px": (
+                    dict(edge_repair["expected_edges_px"])
+                    if edge_repair is not None
+                    else None
+                ),
+                "grid_edge_deviations_px": (
+                    dict(edge_repair["deviations_px"])
+                    if edge_repair is not None
+                    else None
+                ),
                 "observed_within_work_area": bool(
                     item.get("within_work_area", True)
                 ),
@@ -1343,6 +2039,30 @@ def _infer_grid(
                     "camera_work_area_overruns_mm": (
                         camera_work_area_overruns_mm
                     ),
+                    "within_work_area": work_area_overrun_mm <= 1e-9,
+                    "work_area_overrun_mm": work_area_overrun_mm,
+                    "work_area_overruns_mm": work_area_overruns_mm,
+                    "vector_contour_mm": rounded_contour,
+                    **geometry,
+                }
+            )
+        elif edge_repair is not None:
+            output.update(
+                {
+                    "center_px": center_px,
+                    "width_px": rectangle_width,
+                    "height_px": rectangle_height,
+                    "angle_image_deg": cell_angle,
+                    "radius_px": rectangle_radius,
+                    "area_mm2": (
+                        rectangle_width * rectangle_height / pixels_per_mm**2
+                    ),
+                    "shape": "rounded_rectangle",
+                    "within_camera_work_area": (
+                        camera_work_area_overrun_mm <= 1e-9
+                    ),
+                    "camera_work_area_overrun_mm": camera_work_area_overrun_mm,
+                    "camera_work_area_overruns_mm": camera_work_area_overruns_mm,
                     "within_work_area": work_area_overrun_mm <= 1e-9,
                     "work_area_overrun_mm": work_area_overrun_mm,
                     "work_area_overruns_mm": work_area_overruns_mm,
@@ -1407,6 +2127,11 @@ def _infer_grid(
         "normalized": normalize,
         "cells_snapped": normalize and options.snap_grid_cells,
         "normalization_anchor": options.normalize_anchor,
+        "edge_repair_enabled": bool(options.repair_grid_edges),
+        "repaired_edges": sum(
+            len(plan["edges"]) for plan in edge_repair_plans.values()
+        ),
+        "repaired_cells": len(edge_repair_plans),
         "cell_width_mm": float(canonical_geometry["width_mm"]),
         "cell_height_mm": float(canonical_geometry["height_mm"]),
         "observed_cell_width_mm": median_width / pixels_per_mm,
@@ -1476,6 +2201,8 @@ def _to_detection(
             "fit_iou": float(item["fit_iou"]),
             "color_coverage": float(item["coverage"]),
             "compactness": float(item.get("compactness", 0.0)),
+            "straight_edge_rotation": item.get("straight_edge_rotation"),
+            "straight_edge_center": item.get("straight_edge_center"),
             "damage_suspected": damage_suspected,
             "damage_reasons": list(item.get("damage_reasons", [])),
             "grid_rotation_error_deg": float(item.get("grid_rotation_error_deg", 0.0)),
@@ -1546,6 +2273,18 @@ def _to_detection(
                     "repaired_center_axes": list(
                         item.get("repaired_center_axes", [])
                     ),
+                    "grid_edge_repairs": list(
+                        item.get("grid_edge_repairs", [])
+                    ),
+                    "grid_edge_observed_px": item.get(
+                        "grid_edge_observed_px"
+                    ),
+                    "grid_edge_expected_px": item.get(
+                        "grid_edge_expected_px"
+                    ),
+                    "grid_edge_deviations_px": item.get(
+                        "grid_edge_deviations_px"
+                    ),
                     "observed_within_work_area": bool(
                         item.get("observed_within_work_area", True)
                     ),
@@ -1554,6 +2293,23 @@ def _to_detection(
                     ),
                 }
                 if "observed_center_mm" in item
+                else {}
+            ),
+            **(
+                {
+                    "predicted_center_px": list(item["predicted_center_px"]),
+                    "recovered_center_px": list(item["recovered_center_px"]),
+                    "predicted_center_mm": list(item["predicted_center_mm"]),
+                    "recovered_center_mm": list(item["recovered_center_mm"]),
+                    "edge_support": dict(item["edge_support"]),
+                    "supported_sides": list(item["supported_sides"]),
+                    "supported_side_count": int(item["supported_side_count"]),
+                    "evidence_score": float(item["evidence_score"]),
+                    "evidence_supported": bool(item["evidence_supported"]),
+                    "recovery_shift_px": list(item["recovery_shift_px"]),
+                    "recovery_shift_mm": list(item["recovery_shift_mm"]),
+                }
+                if "evidence_supported" in item
                 else {}
             ),
         },
@@ -1768,6 +2524,13 @@ def _grid_cell_review_evidence(
             reasons.append(f"height differs by {height_error * 100:.1f}%")
         if item.get("repaired_center_axes"):
             reasons.append("a damaged edge required center repair")
+        repaired_edges = list(item.get("grid_edge_repairs", []))
+        if repaired_edges:
+            reasons.append(
+                "weak "
+                + "/".join(str(edge) for edge in repaired_edges)
+                + " edge repaired from repeated-cell consensus"
+            )
         item["damage_suspected"] = bool(reasons)
         item["damage_reasons"] = reasons
         item["grid_rotation_error_deg"] = rotation_error
@@ -1846,6 +2609,7 @@ def detect_objects(
     *,
     output_work_area: WorkArea | None = None,
     background_image: np.ndarray | None = None,
+    mask_override: np.ndarray | None = None,
 ) -> TraceResult:
     options = (
         options
@@ -1901,7 +2665,24 @@ def detect_objects(
 
     target_hue = options.target_hue
     masks: list[tuple[str, str, np.ndarray, float | None]] = []
-    if options.detection_mode in {"auto", "color"}:
+    if mask_override is not None:
+        if (
+            not isinstance(mask_override, np.ndarray)
+            or mask_override.ndim != 2
+            or mask_override.shape != image.shape[:2]
+        ):
+            raise ValueError(
+                "mask_override must be a 2-D mask matching the image"
+            )
+        masks.append(
+            (
+                "mask",
+                "exact_mask",
+                (mask_override > 0).astype(np.uint8) * 255,
+                None,
+            )
+        )
+    elif options.detection_mode in {"auto", "color"}:
         if target_hue is None:
             target_hue = auto_target_hue(image, options.min_saturation)
         if target_hue is not None:
@@ -1913,7 +2694,7 @@ def detect_objects(
                     target_hue,
                 )
             )
-    if options.detection_mode in {"auto", "contrast"}:
+    if mask_override is None and options.detection_mode in {"auto", "contrast"}:
         masks.append(
             (
                 "contrast",
@@ -2019,6 +2800,7 @@ def detect_objects(
                 work_area,
                 output_work_area,
                 pixels_per_mm,
+                image,
             )
         family = direct if grid is not None else candidates
         family_area = sum(float(item["area_mm2"]) for item in family)
@@ -2103,6 +2885,14 @@ def detect_objects(
                 f"; fitted shared dimensions across a "
                 f"{int(grid['columns'])} × {int(grid['rows'])} grid"
             )
+    if grid and int(grid.get("repaired_edges", 0)):
+        repaired_edges = int(grid["repaired_edges"])
+        repaired_cells = int(grid.get("repaired_cells", 0))
+        message += (
+            f"; repaired {repaired_edges} weak grid edge"
+            f"{'s' if repaired_edges != 1 else ''} across {repaired_cells} cell"
+            f"{'s' if repaired_cells != 1 else ''}"
+        )
     message += f"; {selected_count} selected by confidence"
     outside_count = sum(
         not bool(item.diagnostics.get("within_work_area", True))

@@ -217,7 +217,15 @@ from the bottom of otherwise clean labels. This does not force direct labels
 onto ideal grid positions.
 
 Missing cells are visual suggestions, not observed edges, and are never
-selected automatically. Inspect the proposed complete lattice before using
+selected automatically. When **Infer gaps** is enabled, a missing cell may
+also use conservative local grayscale boundary evidence inside its predicted
+grid ROI: the shared grid keeps width, height, and angle fixed, while visible
+long side runs can make a small center refinement. Diagnostics distinguish
+`evidence_supported` recovery from an unsupported legacy blind gap and report
+the predicted/recovered centers, side support, evidence score, and shift.
+At least one horizontal and one vertical expected side must be supported, so
+internal text or isolated texture cannot claim a physical label boundary.
+Inspect the proposed complete lattice before using
 **Select complete grid**. Do not use inference as a substitute for a clear
 view; move the laser head away whenever practical. Grid normalization is
 intentionally unavailable for simplified or exact contours because making

@@ -499,6 +499,15 @@ size, calibration-point, feed-rate, and coordinate-CSV inputs provide the same
 conversion. Focused unit/parser and affected desktop widget suites pass; no
 controller, calibration, or G-code storage schema was changed.
 
+Repeated-grid Trace gap suggestions now optionally inspect only the expected
+cell ROI for grayscale boundary evidence after the direct cells establish a
+shared rounded-rectangle geometry. Evidence can make a bounded center
+refinement without changing the shared dimensions or angle; unsupported gaps
+remain explicitly inferred/review-required. Synthetic Trace tests cover
+lower-side/side-edge recovery beneath simulated glare, no-evidence fallback,
+internal-text resistance, and disabled gap inference. Real C920 glare recovery
+on the 2 × 4 label scene remains to be physically validated.
+
 Powered Machine Setup calibration jobs now hand off automatically to their
 matching Home / park precision capture and scoring operation after successful
 completion. The handoff is bound to the exact prepared filename and is cleared
