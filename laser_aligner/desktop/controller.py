@@ -743,7 +743,11 @@ class DesktopController(QtCore.QObject):
             if self._camera_refresh_pending:
                 self.request_camera_refresh()
             return
-        self._camera_refresh_failed(message, source_generation)
+        self._camera_refresh_failed(
+            message,
+            source_generation,
+            manual=True,
+        )
 
     @QtCore.Slot()
     def _camera_refresh_finished(
@@ -964,11 +968,30 @@ class DesktopController(QtCore.QObject):
             }
         )
 
+    def _remote_camera_configured(self) -> bool:
+        settings = getattr(self.runtime, "settings", None)
+        camera = getattr(settings, "camera", None)
+        device = getattr(camera, "device", "")
+        return isinstance(device, str) and device.lower().startswith("e3camera://")
+
+    def _expected_remote_camera_offline(self, message: str) -> bool:
+        # RemoteCameraService deliberately uses this prefix only for
+        # network/socket-level failures. Profile, authentication, protocol,
+        # and camera-side errors use different messages and remain visible.
+        return (
+            self._remote_camera_configured()
+            and str(message).startswith(
+                "Could not communicate with remote camera at "
+            )
+        )
+
     def _camera_refresh_failed(
         self,
         message: str,
         source_generation: int,
         expected_revision: tuple[object | None, ...] | None = None,
+        *,
+        manual: bool = False,
     ) -> None:
         if source_generation != self._camera_source_generation:
             return
@@ -1007,9 +1030,26 @@ class DesktopController(QtCore.QObject):
                 f"Details: {message}"
             )
             return
+        if not manual and self._expected_remote_camera_offline(message):
+            # Being away from the Pi is a normal operating condition. The
+            # persistent OFFLINE status plus background probe backoff is enough;
+            # do not steal focus with a modal startup warning.
+            self._camera_error_latched = str(message)
+            return
+
         if self._camera_error_latched is not None:
             return
         self._camera_error_latched = str(message)
+
+        if self._remote_camera_configured():
+            self.cameraErrorOccurred.emit(
+                "Remote camera is unavailable. E3 will remain usable offline. "
+                "Background connection checks will continue automatically; use "
+                "Refresh camera to retry now.\n\n"
+                f"Details: {message}"
+            )
+            return
+
         self.cameraErrorOccurred.emit(
             "Camera image updates failed. Another application may have exclusive "
             "control of the camera. Automatic refresh will continue silently; close "
