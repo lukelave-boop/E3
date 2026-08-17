@@ -31,9 +31,19 @@ def _strict_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return output
 
 
+def _opened_file_identity(value: os.stat_result) -> tuple[int | None, ...]:
+    """Return fields comparable across separately opened handles."""
+
+    fields = ["st_dev", "st_ino", "st_size", "st_mtime_ns"]
+    if os.name == "nt":
+        fields.append("st_birthtime_ns")
+    else:
+        fields.append("st_ctime_ns")
+    return tuple(getattr(value, field, None) for field in fields)
+
+
 def _read_project_bytes(source: Path) -> bytes:
     try:
-        path_before = source.stat()
         with source.open("rb") as handle:
             before = os.fstat(handle.fileno())
             if before.st_size > MAX_PROJECT_BYTES:
@@ -42,29 +52,37 @@ def _read_project_bytes(source: Path) -> bytes:
                 )
             data = handle.read(MAX_PROJECT_BYTES + 1)
             after = os.fstat(handle.fileno())
-        current = source.stat()
+
+        # Open and read the path again. Matching metadata alone is not enough:
+        # a replacement or rewrite can preserve timestamps and file size.
+        with source.open("rb") as verification_handle:
+            verification_before = os.fstat(verification_handle.fileno())
+            verification = verification_handle.read(MAX_PROJECT_BYTES + 1)
+            verification_after = os.fstat(verification_handle.fileno())
     except FileNotFoundError:
         raise
     except OSError as exc:
         raise ProjectFormatError(f"Could not read project {source}: {exc}") from exc
-    if len(data) > MAX_PROJECT_BYTES:
+
+    if len(data) > MAX_PROJECT_BYTES or len(verification) > MAX_PROJECT_BYTES:
         raise ProjectFormatError(
             f"Project exceeds the {MAX_PROJECT_BYTES:,}-byte file limit"
         )
-    identity_fields = ("st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")
-    before_identity = tuple(getattr(before, field, None) for field in identity_fields)
-    after_identity = tuple(getattr(after, field, None) for field in identity_fields)
-    path_before_identity = tuple(
-        getattr(path_before, field, None) for field in identity_fields
-    )
-    current_identity = tuple(getattr(current, field, None) for field in identity_fields)
-    # Windows can represent path-stat and handle-fstat identities differently.
-    # Each route must remain stable across the read, without comparing unlike
-    # representations to one another.
-    if before_identity != after_identity or path_before_identity != current_identity:
-        raise ProjectFormatError(f"Project changed while it was being read: {source}")
-    return data
 
+    identities = tuple(
+        _opened_file_identity(value)
+        for value in (
+            before,
+            after,
+            verification_before,
+            verification_after,
+        )
+    )
+    if len(set(identities)) != 1 or verification != data:
+        raise ProjectFormatError(
+            f"Project changed while it was being read: {source}"
+        )
+    return data
 
 def _autosave_filename(
     document: ProjectDocument,

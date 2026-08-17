@@ -237,6 +237,40 @@ def test_save_rejects_nonfinite_metadata_without_publishing_file(tmp_path):
     assert not (tmp_path / "invalid-metadata.e3laser").exists()
 
 
+def test_project_read_rejects_changed_bytes_with_unchanged_identity(
+    tmp_path,
+    monkeypatch,
+):
+    source = tmp_path / "changing.e3laser"
+    first = b'{"state":"aaaa"}'
+    second = b'{"state":"bbbb"}'
+    assert len(first) == len(second)
+    source.write_bytes(first)
+
+    original_open = project_io.Path.open
+    read_opens = 0
+
+    def changing_open(self, *args, **kwargs):
+        nonlocal read_opens
+        mode = args[0] if args else kwargs.get("mode", "r")
+        if self == source and "r" in mode and "b" in mode:
+            read_opens += 1
+            if read_opens == 2:
+                with original_open(source, "wb") as replacement:
+                    replacement.write(second)
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(project_io.Path, "open", changing_open)
+    monkeypatch.setattr(
+        project_io,
+        "_opened_file_identity",
+        lambda _value: (1, 2, len(first), 3, 4),
+    )
+
+    with pytest.raises(ProjectFormatError, match="changed while it was being read"):
+        project_io._read_project_bytes(source)
+
+
 def test_load_rejects_oversized_project_before_parsing(tmp_path):
     path = tmp_path / "oversized.e3laser"
     with path.open("wb") as handle:

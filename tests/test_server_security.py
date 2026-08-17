@@ -291,7 +291,7 @@ def test_rejected_post_has_zero_route_side_effects(
     token = _token_from_index(server)
     headers = _authorized_headers(server, token)
     headers.update(header_changes)
-    status, _headers, _payload = _request(
+    status, response_headers, _payload = _request(
         server,
         "POST",
         "/api/camera/synthetic-scene",
@@ -299,6 +299,7 @@ def test_rejected_post_has_zero_route_side_effects(
         headers=headers,
     )
     assert status == expected_status
+    assert response_headers["connection"] == "close"
     assert context.mutations == []
 
 

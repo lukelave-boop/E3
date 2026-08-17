@@ -25,8 +25,25 @@ from laser_aligner.templates import (
     ShapeKind,
     TemplateFormatError,
     instantiate_template,
+    shape_polylines,
     template_from_shape_grid,
 )
+
+
+def test_direct_shape_geometry_rejects_missing_required_dimensions() -> None:
+    with pytest.raises(ValueError, match="inner_diameter_mm"):
+        shape_polylines(
+            ShapeKind.WASHER,
+            width_mm=20.0,
+            height_mm=20.0,
+        )
+
+    with pytest.raises(ValueError, match="flat_distance_mm"):
+        shape_polylines(
+            ShapeKind.CIRCLE_TWO_FLATS,
+            width_mm=20.0,
+            height_mm=20.0,
+        )
 
 
 @pytest.mark.parametrize("kind", list(ShapeKind)[:-1])

@@ -112,6 +112,27 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
         temp_path.unlink(missing_ok=True)
 
 
+def _publish_temp_if_absent(temp_path: Path, path: Path) -> bool:
+    """Publish one complete temporary file without replacing an existing path."""
+
+    if os.name == "nt":
+        try:
+            os.rename(temp_path, path)
+        except OSError as exc:
+            if isinstance(exc, FileExistsError) or getattr(
+                exc, "winerror", None
+            ) in {80, 183}:
+                return False
+            raise
+        return True
+
+    try:
+        os.link(temp_path, path)
+    except FileExistsError:
+        return False
+    return True
+
+
 def atomic_write_bytes_if_absent(
     path: Path,
     data: bytes,
@@ -136,14 +157,7 @@ def atomic_write_bytes_if_absent(
             os.utime(temp_path, ns=timestamps_ns)
             with temp_path.open("r+b") as handle:
                 os.fsync(handle.fileno())
-        try:
-            if os.name == "nt":
-                # Windows rename is an atomic no-clobber publication: unlike
-                # POSIX rename it fails when the destination already exists.
-                os.rename(temp_path, path)
-            else:
-                os.link(temp_path, path)
-        except FileExistsError:
+        if not _publish_temp_if_absent(temp_path, path):
             return False
         _fsync_parent_directory(path)
         return True
