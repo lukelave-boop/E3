@@ -33,6 +33,14 @@ from .io import (
     save_autosave,
     save_project,
 )
+from .lightburn import (
+    LIGHTBURN_FILE_DIALOG_FILTER,
+    MAX_LIGHTBURN_FILE_BYTES,
+    LightBurnImportError,
+    LightBurnImportResult,
+    load_lightburn_project,
+    parse_lightburn_project,
+)
 from .model import (
     DEFAULT_LAYER_COLORS,
     PROJECT_SCHEMA_VERSION,
@@ -86,7 +94,11 @@ __all__ = [
     "FunctionalCommand",
     "GroupObjectsCommand",
     "LayerMode",
+    "LightBurnImportError",
+    "LightBurnImportResult",
+    "LIGHTBURN_FILE_DIALOG_FILTER",
     "MAX_RASTER_DECODED_BYTES",
+    "MAX_LIGHTBURN_FILE_BYTES",
     "MAX_RASTER_DIMENSION",
     "MAX_RASTER_ENCODED_BYTES",
     "ObjectKind",
@@ -124,9 +136,11 @@ __all__ = [
     "generate_project_frame",
     "generate_project_gcode",
     "load_project",
+    "load_lightburn_project",
     "normalize_project_path",
     "object_polylines",
     "probe_raster_asset",
+    "parse_lightburn_project",
     "read_raster_asset_payload",
     "save_autosave",
     "save_project",

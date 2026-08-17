@@ -35,6 +35,12 @@ geometry, G-code, safety and controller services.
   groups and `preserveAspectRatio` mapping. Imports remain centered at the
   requested project placement. CSS stylesheets, clipping, masks, and any lossy
   parser warning stop the import before a project object is created.
+- Native `.lbrn2` and legacy `.lbrn` vector-project import for rectangles,
+  ellipses, transformed groups, line/Bezier paths, shared path data, and text
+  with vector backup geometry. Referenced LightBurn layer modes and usable
+  speed/power/pass/raster settings become ordinary E3 layers, always with
+  output disabled until reviewed. Unsupported content stops rather than being
+  silently discarded. See [LIGHTBURN_IMPORT.md](LIGHTBURN_IMPORT.md).
 - Mandatory window-modal exact-job Preview distinguishing rapid, powered and
   unpowered moves, with a distinct **START JOB** gate, time scrubbing, animated
   playback, move coordinates, power, timing/distance statistics, display

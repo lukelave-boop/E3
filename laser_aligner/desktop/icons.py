@@ -472,6 +472,7 @@ _DRAWERS: dict[str, Callable[[_GlyphPainter], None]] = {
     "save_as": _draw_save,
     "save_template": _draw_save,
     "import_svg": _draw_import,
+    "import_lightburn": _draw_import,
     "import_image": _draw_import,
     "undo": _draw_undo,
     "redo": _draw_redo,
