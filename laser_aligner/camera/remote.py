@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 from collections.abc import Iterator, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -27,11 +27,22 @@ from .service import CameraService, CameraStatus, FrameBurst
 _REMOTE_CAMERA_SCHEME = "e3camera"
 _DEFAULT_CAMERA_PORT = 8766
 _CONNECT_TIMEOUT_SECONDS = 5.0
+_STATUS_PROBE_CONNECT_TIMEOUT_SECONDS = 0.75
+_STATUS_PROBE_INITIAL_DELAY_SECONDS = 2.0
+_STATUS_PROBE_HEALTHY_DELAY_SECONDS = 2.0
+_STATUS_PROBE_REACHABLE_OFFLINE_DELAY_SECONDS = 5.0
+_STATUS_PROBE_MAX_DELAY_SECONDS = 30.0
 _TRANSFER_MARGIN_SECONDS = 30.0
 _STILL_TRANSFER_QUALITY = 95
 _MONITOR_FPS = frozenset({5, 10, 15})
 _MONITOR_SIZES = frozenset({(1280, 720), (1920, 1080)})
 _MAX_MONITOR_JPEG_BYTES = 4 * 1024 * 1024
+
+
+def _status_probe_delay(failure_count: int) -> float:
+    count = max(1, int(failure_count))
+    delay = _STATUS_PROBE_INITIAL_DELAY_SECONDS * (2 ** (count - 1))
+    return min(_STATUS_PROBE_MAX_DELAY_SECONDS, delay)
 
 
 def is_remote_camera_uri(value: str) -> bool:
@@ -154,6 +165,91 @@ class RemoteCameraService(CameraService):
         self.settings = settings
         self._host, self._port = _parse_remote_camera_uri(settings.device)
         self._mjpeg_generation = 0
+        self._status_lock = threading.RLock()
+        self._status_cache = self._offline_status()
+        self._status_probe_stop = threading.Event()
+        self._status_probe_thread: threading.Thread | None = None
+
+    def _offline_status(self, error: str | None = None) -> CameraStatus:
+        return CameraStatus(
+            connected=False,
+            device=self.settings.device,
+            width=0,
+            height=0,
+            fps=0.0,
+            frames_read=0,
+            last_error=error,
+        )
+
+    def _set_cached_status(self, status: CameraStatus) -> None:
+        with self._status_lock:
+            self._status_cache = replace(status)
+
+    def _fetch_status(
+        self,
+        *,
+        connect_timeout: float = _STATUS_PROBE_CONNECT_TIMEOUT_SECONDS,
+    ) -> CameraStatus:
+        header, blobs = self._request(
+            "status",
+            timeout=1.0,
+            connect_timeout=connect_timeout,
+        )
+        if blobs:
+            raise CameraError("Remote camera status contained unexpected frame data")
+        raw = header.get("status")
+        if not isinstance(raw, dict):
+            raise CameraError("Remote camera returned invalid status data")
+        status = CameraStatus(**raw)
+        self._set_cached_status(status)
+        return status
+
+    def _ensure_status_probe(self) -> None:
+        with self._status_lock:
+            thread = self._status_probe_thread
+            if thread is not None and thread.is_alive():
+                return
+            self._status_probe_stop.clear()
+            thread = threading.Thread(
+                target=self._status_probe_loop,
+                name="remote-camera-status",
+                daemon=True,
+            )
+            self._status_probe_thread = thread
+        thread.start()
+
+    def _stop_status_probe(self) -> None:
+        self._status_probe_stop.set()
+        with self._status_lock:
+            thread = self._status_probe_thread
+        if (
+            thread is not None
+            and thread.is_alive()
+            and thread is not threading.current_thread()
+        ):
+            thread.join(timeout=1.0)
+        with self._status_lock:
+            if self._status_probe_thread is thread:
+                self._status_probe_thread = None
+
+    def _status_probe_loop(self) -> None:
+        failures = 0
+        delay = _STATUS_PROBE_INITIAL_DELAY_SECONDS
+        while not self._status_probe_stop.wait(delay):
+            try:
+                status = self._fetch_status()
+            except CameraError as exc:
+                failures += 1
+                self._set_cached_status(self._offline_status(str(exc)))
+                delay = _status_probe_delay(failures)
+                continue
+
+            failures = 0
+            delay = (
+                _STATUS_PROBE_HEALTHY_DELAY_SECONDS
+                if status.connected
+                else _STATUS_PROBE_REACHABLE_OFFLINE_DELAY_SECONDS
+            )
 
     def _request(
         self,
@@ -161,7 +257,13 @@ class RemoteCameraService(CameraService):
         payload: Mapping[str, Any] | None = None,
         *,
         timeout: float = _CONNECT_TIMEOUT_SECONDS,
+        connect_timeout: float | None = None,
     ) -> tuple[dict[str, Any], tuple[bytes, ...]]:
+        connect_timeout_seconds = (
+            _CONNECT_TIMEOUT_SECONDS
+            if connect_timeout is None
+            else max(0.05, float(connect_timeout))
+        )
         token = camera_token_from_environment()
         request = {"action": action}
         if payload:
@@ -169,19 +271,23 @@ class RemoteCameraService(CameraService):
         try:
             sock = socket.create_connection(
                 (self._host, self._port),
-                timeout=_CONNECT_TIMEOUT_SECONDS,
+                timeout=connect_timeout_seconds,
             )
             with sock:
-                sock.settimeout(max(_CONNECT_TIMEOUT_SECONDS, float(timeout)))
+                sock.settimeout(max(connect_timeout_seconds, float(timeout)))
                 authenticate_camera_client(sock, token)
                 send_packet(sock, request)
                 header, blobs = receive_packet(sock)
-        except CameraError:
+        except CameraError as exc:
+            self._set_cached_status(self._offline_status(str(exc)))
             raise
         except (OSError, ValueError) as exc:
-            raise CameraError(
-                f"Could not communicate with remote camera at {self._host}:{self._port}: {exc}"
-            ) from exc
+            message = (
+                f"Could not communicate with remote camera at "
+                f"{self._host}:{self._port}: {exc}"
+            )
+            self._set_cached_status(self._offline_status(message))
+            raise CameraError(message) from exc
         if header.get("ok") is not True:
             error = header.get("error")
             detail = error if isinstance(error, str) and error else "remote camera request failed"
@@ -211,23 +317,39 @@ class RemoteCameraService(CameraService):
             )
 
     def start(self) -> None:
-        self._verify_remote_profile()
-        self._request("start")
-        self._mjpeg_generation += 1
+        try:
+            self._verify_remote_profile()
+            self._request("start")
+            self._fetch_status(connect_timeout=1.0)
+            self._mjpeg_generation += 1
+        finally:
+            # Status monitoring is independent of the GUI. If the Pi is away,
+            # failed probes back off rather than blocking Qt polling.
+            self._ensure_status_probe()
 
     def stop(self) -> None:
+        self._stop_status_probe()
         try:
-            self._request("stop")
+            self._request(
+                "stop",
+                timeout=1.0,
+                connect_timeout=_STATUS_PROBE_CONNECT_TIMEOUT_SECONDS,
+            )
         except CameraError:
             # Teardown must remain best-effort when the Pi or Wi-Fi has already
             # disappeared. The remote camera itself cannot produce laser output.
             pass
         finally:
+            self._set_cached_status(self._offline_status())
             self._mjpeg_generation += 1
 
     def restart(self) -> None:
-        self._request("restart")
-        self._mjpeg_generation += 1
+        try:
+            self._request("restart")
+            self._fetch_status(connect_timeout=1.0)
+            self._mjpeg_generation += 1
+        finally:
+            self._ensure_status_probe()
 
     def snapshot(self) -> np.ndarray:
         _, blobs = self._request(
@@ -475,24 +597,10 @@ class RemoteCameraService(CameraService):
             yield payload
 
     def status(self) -> CameraStatus:
-        try:
-            header, blobs = self._request("status")
-            if blobs:
-                raise CameraError("Remote camera status contained unexpected frame data")
-            raw = header.get("status")
-            if not isinstance(raw, dict):
-                raise CameraError("Remote camera returned invalid status data")
-            return CameraStatus(**raw)
-        except CameraError as exc:
-            return CameraStatus(
-                connected=False,
-                device=self.settings.device,
-                width=0,
-                height=0,
-                fps=0.0,
-                frames_read=0,
-                last_error=str(exc),
-            )
+        # Called from desktop status polling, including the Qt GUI thread.
+        # Never perform network I/O here.
+        with self._status_lock:
+            return replace(self._status_cache)
 
     def apply_controls(
         self,
