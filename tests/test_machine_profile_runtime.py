@@ -100,3 +100,55 @@ def test_invalid_registry_blocks_context_construction(
         CoreRuntime(settings)
 
     assert constructed is False
+
+
+def test_runtime_uses_registry_active_machine_on_next_launch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = runtime_module.MachineRegistry.load_or_migrate(settings)
+    created = registry.create_machine(
+        "Second machine",
+        "generic-grbl",
+        "generic-diode-10w",
+    )
+    created.machine.port = "e3bridge://second-controller:8765"
+    created.machine.allow_motion = True
+    created.laser.default_power = 0
+    registry.update_machine(created)
+    registry.set_active(created.id)
+
+    received: list[Any] = []
+
+    class FakeContext:
+        def __init__(
+            self,
+            received_settings: Any,
+            *,
+            hardware_enabled: bool,
+            laser_lockout: bool,
+        ) -> None:
+            del hardware_enabled, laser_lockout
+            received.append(received_settings)
+
+        def start(self) -> None:
+            pass
+
+        def stop(self) -> None:
+            pass
+
+        def status(self) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(runtime_module, "AppContext", FakeContext)
+
+    runtime = CoreRuntime(
+        settings,
+        hardware_enabled=True,
+        laser_lockout=False,
+    )
+
+    assert runtime.running_machine_id == created.id
+    assert runtime.settings.machine.port == "e3bridge://second-controller:8765"
+    assert received[0].machine.port == "e3bridge://second-controller:8765"

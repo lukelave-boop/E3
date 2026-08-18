@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..calibration.profiles import signature_from_camera_settings
 from ..config import (
     DEFAULT_CONFIG,
     LaserSettings,
@@ -567,6 +568,7 @@ def _slug(value: str) -> str:
 
 
 def _migrated_machine(settings: Settings) -> MachineInstance:
+    optical_profile_id = signature_from_camera_settings(settings.camera).key
     if settings.machine.backend == "simulator":
         profile_id = "simulator"
         head_id = "simulated-laser-head"
@@ -577,7 +579,7 @@ def _migrated_machine(settings: Settings) -> MachineInstance:
             "marlin": "generic-marlin",
         }.get(settings.machine.protocol, "custom-machine")
         head_id = "custom-laser-head"
-        name = "Imported existing machine"
+        name = "Current configured machine"
     return MachineInstance(
         id="existing-machine",
         name=name,
@@ -585,6 +587,8 @@ def _migrated_machine(settings: Settings) -> MachineInstance:
         tool_head_profile_id=head_id,
         machine=settings.machine,
         laser=settings.laser,
+        calibration_profile_id=optical_profile_id,
+        camera_profile_id=optical_profile_id,
         created_from="legacy-config",
     )
 
@@ -740,6 +744,43 @@ class MachineRegistry:
                 raise MachineRegistryError(
                     f"Saved machine ID already exists: {candidate.id}"
                 )
+            previous_active = self._active_machine_id
+            self._machines[candidate.id] = candidate
+            if self._active_machine_id is None:
+                self._active_machine_id = candidate.id
+            if persist:
+                try:
+                    self.save()
+                except Exception:
+                    del self._machines[candidate.id]
+                    self._active_machine_id = previous_active
+                    raise
+            return _copy_machine(candidate)
+
+
+    def duplicate_machine(
+        self,
+        machine_id: str,
+        *,
+        name: str | None = None,
+        persist: bool = True,
+    ) -> MachineInstance:
+        source = self.get_machine(machine_id)
+        duplicated_name = _required_text(
+            name or f"{source.name} copy",
+            "machine.name",
+        )
+        with self._lock:
+            base = _slug(duplicated_name)
+            candidate_id = base
+            suffix = 2
+            while candidate_id in self._machines:
+                candidate_id = f"{base[:72]}-{suffix}"
+                suffix += 1
+            candidate = _copy_machine(source)
+            candidate.id = candidate_id
+            candidate.name = duplicated_name
+            candidate.created_from = f"duplicate:{source.id}"
             previous_active = self._active_machine_id
             self._machines[candidate.id] = candidate
             if self._active_machine_id is None:

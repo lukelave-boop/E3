@@ -432,3 +432,37 @@ def test_persistence_failure_rolls_back_in_memory_mutations(
     with pytest.raises(OSError, match="disk full"):
         registry.update_machine(changed)
     assert registry.active_machine.name == original.name
+
+
+def test_migrated_machine_records_current_optical_profile(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.camera.width = 1920
+    settings.camera.height = 1080
+    settings.camera.controls["focus_automatic_continuous"] = 0
+    settings.camera.controls["focus_absolute"] = 10
+
+    registry = MachineRegistry.load_or_migrate(settings)
+
+    machine = registry.active_machine
+    assert machine.camera_profile_id == "1920x1080-manual-focus-010"
+    assert machine.calibration_profile_id == "1920x1080-manual-focus-010"
+
+
+def test_duplicate_machine_preserves_exact_settings_and_bindings(
+    tmp_path: Path,
+) -> None:
+    registry = MachineRegistry.load_or_migrate(_settings(tmp_path))
+    source = registry.active_machine
+    source.camera_profile_id = "camera-profile"
+    source.calibration_profile_id = "calibration-profile"
+    registry.update_machine(source)
+
+    duplicated = registry.duplicate_machine(source.id, name="House copy")
+
+    assert duplicated.id == "house-copy"
+    assert duplicated.name == "House copy"
+    assert duplicated.machine == source.machine
+    assert duplicated.laser == source.laser
+    assert duplicated.camera_profile_id == "camera-profile"
+    assert duplicated.calibration_profile_id == "calibration-profile"
+    assert duplicated.created_from == f"duplicate:{source.id}"

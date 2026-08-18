@@ -50,6 +50,10 @@ class CoreRuntime:
         self.hardware_enabled = hardware_enabled
         self.laser_lockout = laser_lockout
         self.machine_registry = MachineRegistry.load_or_migrate(settings)
+        resolved_machine = self.machine_registry.resolve_machine()
+        self.running_machine_id = resolved_machine.machine_id
+        settings.machine = resolved_machine.machine
+        settings.laser = resolved_machine.laser
         self.context = AppContext(
             settings,
             hardware_enabled=self.hardware_enabled,

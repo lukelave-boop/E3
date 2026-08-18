@@ -163,3 +163,28 @@ machine/head pair rejection, guarded-polygon validation, removal rules,
 no-clobber migration races, runtime settings identity, and fail-closed desktop
 construction for an invalid registry. No physical controller, camera, motion,
 or laser test is claimed for this data-model-only increment.
+
+
+## Machine Manager and household deployment
+
+The desktop Machine Manager exposes the registry through the normal E3 interface.
+The existing validated E3 configuration is migrated automatically and appears as
+the current running machine; opening the manager does not replace or reset its
+controller, work area, laser settings, camera endpoint, focus, or calibration
+profile.
+
+The manager can add, edit, duplicate, delete, and select saved machines. Selecting
+a machine changes the default for the next E3 launch. It deliberately does not
+hot-swap the controller underneath an open job or running session.
+
+`BUILD_E3_HOME_INSTALLER.bat` builds a private preconfigured installer from the
+current Windows E3 user-state directory. The private installer seeds:
+
+- `network-local.json`;
+- `machines.json`;
+- the active optical calibration profile;
+- the household bridge credential.
+
+Seed files use `onlyifdoesntexist`, so installing an update does not overwrite
+machine state already configured on that Windows account. The home installer
+contains a credential and must not be published as a public release artifact.
