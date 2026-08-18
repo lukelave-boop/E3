@@ -24,3 +24,9 @@ def test_version_override(monkeypatch) -> None:
     module = _module()
     monkeypatch.setenv("E3_BUILD_VERSION", "1.2.3")
     assert module.build_version(Path(".")) == "1.2.3"
+
+
+def test_runtime_version_override(monkeypatch) -> None:
+    module = _module()
+    monkeypatch.setenv("E3_POSITIONING_SYSTEM_VERSION", "9.8.7")
+    assert module.application_version(Path(".")) == "9.8.7"

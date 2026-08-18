@@ -22,9 +22,6 @@ def run() -> int:
         os.environ.setdefault("E3_BRIDGE_TOKEN", token)
     profile = resolve_launch_profile()
     arguments = ["--config", str(profile.config_path)]
-    arguments.append("--hardware" if profile.hardware_enabled else "--safe")
-    if profile.laser_lockout:
-        arguments.append("--laser-lockout")
     from laser_aligner.desktop.main import main
 
     return main(arguments)

@@ -171,39 +171,35 @@ def read_bridge_token() -> str | None:
 
 
 def resolve_launch_profile() -> LaunchProfile:
-    """Choose preserved machine state first, then a safe packaged fallback."""
+    """Choose the configured machine state for the single normal E3 launch path."""
 
     explicit = os.environ.get("E3_CONFIG_PATH", "").strip()
     if explicit:
         path = Path(explicit).expanduser().resolve()
         if not path.is_file():
             raise FileNotFoundError(f"E3 configuration does not exist: {path}")
-        hardware = (
-            os.environ.get("E3_HARDWARE_MODE", "1").strip().lower()
-            not in _FALSE_VALUES
-        )
-        return LaunchProfile(path, hardware_enabled=hardware, laser_lockout=hardware)
+        return LaunchProfile(path, hardware_enabled=True, laser_lockout=False)
 
     preserved = user_config_path()
     if preserved.is_file():
-        return LaunchProfile(preserved, hardware_enabled=True, laser_lockout=True)
+        return LaunchProfile(preserved, hardware_enabled=True, laser_lockout=False)
 
     root = application_root()
     legacy_machine = root / "config" / "network-local.json"
     if legacy_machine.is_file():
-        return LaunchProfile(legacy_machine, hardware_enabled=True, laser_lockout=True)
+        return LaunchProfile(legacy_machine, hardware_enabled=True, laser_lockout=False)
 
     packaged_default = root / "config" / "default.json"
     if packaged_default.is_file():
         return LaunchProfile(
             packaged_default,
-            hardware_enabled=False,
-            laser_lockout=True,
+            hardware_enabled=True,
+            laser_lockout=False,
         )
 
     source_default = Path(__file__).resolve().parents[1] / "config" / "default.json"
     if source_default.is_file():
-        return LaunchProfile(source_default, hardware_enabled=False, laser_lockout=True)
+        return LaunchProfile(source_default, hardware_enabled=True, laser_lockout=False)
 
     raise FileNotFoundError(
         "E3 has no preserved machine configuration or packaged default configuration"

@@ -2,12 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from laser_aligner.first_run import (
-    build_hardware_config,
-    mark_setup_deferred,
-    save_hardware_setup,
-    setup_deferred,
-)
+from laser_aligner.first_run import build_hardware_config, save_hardware_setup
 from laser_aligner.storage import read_json
 
 
@@ -23,7 +18,6 @@ def test_build_hardware_config_uses_network_bridges() -> None:
         camera_height=1080,
         autofocus=False,
         focus_value=25,
-        allow_motion=True,
     )
     assert payload["app"]["simulation"] is False
     assert payload["app"]["data_dir"] == "../data"
@@ -39,7 +33,7 @@ def test_build_hardware_config_uses_network_bridges() -> None:
     assert payload["machine"]["allow_motion"] is True
 
 
-def test_save_hardware_setup_is_user_state_and_defer_is_explicit(
+def test_save_hardware_setup_is_user_state(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -56,8 +50,6 @@ def test_save_hardware_setup_is_user_state_and_defer_is_explicit(
     assert config_path == tmp_path / "config" / "network-local.json"
     assert config_path.is_file()
     assert (tmp_path / "secrets" / "bridge-token.txt").read_text() == "x" * 32
-    assert setup_deferred() is False
     state = read_json(tmp_path / "first-run.json")
     assert state["configured"] is True
-    mark_setup_deferred()
-    assert setup_deferred() is True
+    assert state["deferred"] is False

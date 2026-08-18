@@ -328,20 +328,10 @@ class RemoteCameraService(CameraService):
             self._ensure_status_probe()
 
     def stop(self) -> None:
+        """Release this desktop client's camera state without stopping the Pi camera."""
         self._stop_status_probe()
-        try:
-            self._request(
-                "stop",
-                timeout=1.0,
-                connect_timeout=_STATUS_PROBE_CONNECT_TIMEOUT_SECONDS,
-            )
-        except CameraError:
-            # Teardown must remain best-effort when the Pi or Wi-Fi has already
-            # disappeared. The remote camera itself cannot produce laser output.
-            pass
-        finally:
-            self._set_cached_status(self._offline_status())
-            self._mjpeg_generation += 1
+        self._set_cached_status(self._offline_status())
+        self._mjpeg_generation += 1
 
     def restart(self) -> None:
         try:

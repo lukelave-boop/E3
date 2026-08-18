@@ -1,3 +1,5 @@
 """Camera-assisted alignment software for small laser engravers."""
 
-__version__ = "0.6.0"
+from .versioning import application_version
+
+__version__ = application_version()

@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from .deployment import bridge_token_path, user_config_path, user_state_root
-from .storage import atomic_write_json, atomic_write_text, read_json, strict_json_loads
+from .storage import atomic_write_json, atomic_write_text, strict_json_loads
 
 _SETUP_STATE_FILENAME = "first-run.json"
 _MINIMUM_BRIDGE_TOKEN_LENGTH = 24
@@ -12,18 +12,6 @@ _MINIMUM_BRIDGE_TOKEN_LENGTH = 24
 
 def setup_state_path() -> Path:
     return user_state_root() / _SETUP_STATE_FILENAME
-
-
-def setup_deferred() -> bool:
-    state = read_json(setup_state_path(), {})
-    return isinstance(state, dict) and state.get("deferred") is True
-
-
-def mark_setup_deferred() -> None:
-    atomic_write_json(
-        setup_state_path(),
-        {"schema_version": 1, "deferred": True, "configured": False},
-    )
 
 
 def mark_setup_complete() -> None:
@@ -45,7 +33,6 @@ def build_hardware_config(
     camera_height: int = 1080,
     autofocus: bool = False,
     focus_value: int = 40,
-    allow_motion: bool = True,
 ) -> dict[str, Any]:
     host = str(host).strip()
     if not host:
@@ -86,7 +73,7 @@ def build_hardware_config(
     machine["backend"] = "serial"
     machine["protocol"] = "auto"
     machine["port"] = f"e3bridge://{host}:{int(controller_port)}"
-    machine["allow_motion"] = bool(allow_motion)
+    machine["allow_motion"] = True
     machine["work_area"] = {
         "x_min": 0.0,
         "x_max": float(width_mm),

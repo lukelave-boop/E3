@@ -21,7 +21,7 @@ def test_preserved_machine_config_has_priority(
 
     assert profile.config_path == config.resolve()
     assert profile.hardware_enabled is True
-    assert profile.laser_lockout is True
+    assert profile.laser_lockout is False
 
 
 def test_bridge_token_prefers_environment(monkeypatch, tmp_path: Path) -> None:

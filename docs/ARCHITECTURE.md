@@ -60,7 +60,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
 | `materials/` | SQLite material-preset library |
 | `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
-| `machine/` | Safety policy, simulator, protocol probing, and serial transports |
+| `machine/` | Safety policy, simulator, protocol probing, serial transports, and the versioned saved-machine/profile registry |
 | `server.py` + `web/` | Local HTTP API and browser UI |
 | `core/` | Shared runtime lifecycle for non-HTTP consumers |
 | `desktop/` | PySide6 window, workspace, panels, tasks, and presentation logic |

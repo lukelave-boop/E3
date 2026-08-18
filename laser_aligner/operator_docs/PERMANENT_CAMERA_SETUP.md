@@ -1,6 +1,6 @@
 # Permanent Camera Setup Runbook
 
-Applies to E3 Positioning System `0.6.0` and its five numbered
+Applies to E3 Positioning System `0.6.x` and its five numbered
 **Machine Setup** tabs.
 
 This is the canonical operator sequence. Follow the tabs from left to right.

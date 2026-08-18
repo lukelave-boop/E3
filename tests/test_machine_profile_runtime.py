@@ -1,0 +1,102 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from laser_aligner.config import load_settings
+from laser_aligner.core import runtime as runtime_module
+from laser_aligner.core.runtime import CoreRuntime
+from laser_aligner.machine.profiles import MachineRegistryError
+
+
+def _settings(tmp_path: Path):
+    config = tmp_path / "runtime-config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "app": {
+                    "data_dir": "runtime",
+                    "simulation": False,
+                },
+                "machine": {
+                    "backend": "serial",
+                    "protocol": "grbl",
+                    "port": "e3bridge://pi-controller:8765",
+                    "allow_motion": True,
+                },
+                "laser": {"default_power": 275},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return load_settings(config)
+
+
+def test_runtime_bootstraps_registry_without_replacing_active_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    events: list[tuple[str, Any]] = []
+
+    class FakeContext:
+        def __init__(
+            self,
+            received_settings: Any,
+            *,
+            hardware_enabled: bool,
+            laser_lockout: bool,
+        ) -> None:
+            events.append(("context", received_settings))
+            self.settings = received_settings
+
+        def start(self) -> None:
+            events.append(("start", None))
+
+        def stop(self) -> None:
+            events.append(("stop", None))
+
+        def status(self) -> dict[str, object]:
+            return {}
+
+    monkeypatch.setattr(runtime_module, "AppContext", FakeContext)
+
+    runtime = CoreRuntime(
+        settings,
+        hardware_enabled=True,
+        laser_lockout=False,
+    )
+
+    assert runtime.settings is settings
+    assert runtime.context.settings is settings
+    assert events == [("context", settings)]
+    active = runtime.machine_registry.active_machine
+    assert active.machine.port == settings.machine.port
+    assert active.laser.default_power == 275
+    assert settings.machine.allow_motion is True
+    assert settings.laser.default_power == 275
+
+
+def test_invalid_registry_blocks_context_construction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    path = settings.app.data_dir / "machines.json"
+    path.write_text('{"schema_version": 99}', encoding="utf-8")
+    constructed = False
+
+    class UnusedContext:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            nonlocal constructed
+            constructed = True
+
+    monkeypatch.setattr(runtime_module, "AppContext", UnusedContext)
+
+    with pytest.raises(MachineRegistryError, match="Unsupported"):
+        CoreRuntime(settings)
+
+    assert constructed is False

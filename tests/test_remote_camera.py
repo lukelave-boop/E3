@@ -180,8 +180,11 @@ def test_remote_camera_round_trip(monkeypatch) -> None:
         assert result.verified["focus_absolute"] == 40
     finally:
         remote.stop()
+        # Desktop teardown releases only the client; the Pi owns the physical camera.
+        assert camera.started is True
         server.stop()
         thread.join(timeout=1)
+        assert camera.started is False
 
 
 def test_remote_camera_rejects_mismatched_capture_profile(monkeypatch) -> None:

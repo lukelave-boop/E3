@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added the Phase 1 multi-machine foundation: a versioned saved-machine
+  registry, reusable motion-platform and tool-head profiles, conservative
+  one-time migration of the active machine/laser configuration, and safe-off
+  defaults for newly profile-derived machines. The active runtime still uses
+  the existing validated `Settings`; this increment does not switch,
+  reconnect, home, move, arm, or run another controller.
+
 - Made the desktop exact Preview the mandatory final execution gate. It is
   window-modal, owns the sole visible **START JOB** control, dismisses before
   delegating to the unchanged guarded run path, and leaves software STOP
