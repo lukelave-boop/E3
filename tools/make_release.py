@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import os
-import re
 import runpy
 import subprocess
 import zipfile
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any
 
 EXCLUDED_PARTS = {
     ".git",
@@ -28,7 +26,6 @@ EXCLUDED_FILES = {
     "trace-preview.png",
     "trace-result.json",
 }
-_PROJECT_VERSION_RE = re.compile(r"version\s*=\s*(['\"])(?P<version>[^'\"]+)\1\s*(?:#.*)?")
 
 
 def is_excluded(relative: Path) -> bool:
@@ -41,34 +38,14 @@ def is_excluded(relative: Path) -> bool:
 
 
 def release_version(root: Path) -> str:
-    in_project = False
-    project_version: str | None = None
-    for line in (root / "pyproject.toml").read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if stripped.startswith("["):
-            if stripped == "[project]":
-                in_project = True
-                continue
-            if in_project:
-                break
-        if in_project:
-            match = _PROJECT_VERSION_RE.fullmatch(stripped)
-            if match is not None:
-                project_version = match.group("version").strip()
-                break
-    if not project_version:
-        raise RuntimeError("pyproject.toml [project] must define a non-empty version")
-
-    namespace: dict[str, Any] = runpy.run_path(str(root / "laser_aligner" / "__init__.py"))
-    package_version = namespace.get("__version__")
-    if not isinstance(package_version, str) or not package_version.strip():
-        raise RuntimeError("laser_aligner.__version__ must be a non-empty string")
-    if project_version != package_version.strip():
-        raise RuntimeError(
-            "Release version mismatch: pyproject.toml declares "
-            f"{project_version!r} but laser_aligner declares {package_version.strip()!r}"
-        )
-    return project_version
+    namespace = runpy.run_path(str(root / "laser_aligner" / "versioning.py"))
+    resolver = namespace.get("build_version")
+    if not callable(resolver):
+        raise RuntimeError("laser_aligner.versioning.build_version must be callable")
+    version = resolver(root)
+    if not isinstance(version, str) or not version.strip():
+        raise RuntimeError("E3 shared version resolver returned an empty version")
+    return version.strip()
 
 
 def git_tracked_paths(root: Path) -> tuple[Path, ...]:

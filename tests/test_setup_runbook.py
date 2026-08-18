@@ -13,8 +13,9 @@ RUNBOOK = (
 )
 
 
-def test_runbook_matches_current_version_and_five_tab_sequence() -> None:
-    assert f"Applies to E3 Positioning System `{__version__}`" in RUNBOOK
+def test_runbook_matches_current_version_series_and_five_tab_sequence() -> None:
+    version_series = ".".join(__version__.split(".")[:2])
+    assert f"Applies to E3 Positioning System `{version_series}.x`" in RUNBOOK
     headings = (
         "## 1. Camera",
         "## 2. Lens",

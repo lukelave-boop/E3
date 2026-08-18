@@ -35,6 +35,7 @@ Source: "..\dist\E3\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cr
 #ifdef MachineSeed
 Source: "machine-seed\config\network-local.json"; DestDir: "{localappdata}\E3 Positioning System\config"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
 Source: "machine-seed\data\calibration_profiles\*"; DestDir: "{localappdata}\E3 Positioning System\data\calibration_profiles"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist uninsneveruninstall
+Source: "machine-seed\data\machines.json"; DestDir: "{localappdata}\E3 Positioning System\data"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
 Source: "machine-seed\secrets\bridge-token.txt"; DestDir: "{localappdata}\E3 Positioning System\secrets"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
 #endif
 

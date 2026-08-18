@@ -21,21 +21,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="JSON configuration file; defaults to config/local.json when present",
     )
-    parser.add_argument(
-        "--hardware",
-        action="store_true",
-        help="Allow the process to open configured serial hardware",
-    )
-    parser.add_argument(
-        "--safe",
-        action="store_true",
-        help="Force serial hardware locked even when --hardware is also supplied",
-    )
-    parser.add_argument(
-        "--laser-lockout",
-        action="store_true",
-        help="Allow hardware and motion while rejecting laser-enable programs",
-    )
     return parser
 
 
@@ -72,8 +57,7 @@ def main(argv: list[str] | None = None) -> int:
 
     QtCore, QtGui, QtWidgets = require_qt()
     from ..core import CoreRuntime
-    from ..deployment import load_build_info, read_bridge_token, user_config_path
-    from ..first_run import setup_deferred
+    from ..deployment import read_bridge_token, resolve_launch_profile, user_config_path
     from .dialogs import install_modal_dialog_first_paint_fix
     from .first_run import install_first_run_menu, run_first_run_setup
     from .main_window import E3MainWindow
@@ -87,33 +71,31 @@ def main(argv: list[str] | None = None) -> int:
     apply_dark_theme(application)
     install_modal_dialog_first_paint_fix(application)
 
-    config = arguments.config or _default_config()
-    hardware_enabled = bool(arguments.hardware and not arguments.safe)
-    open_first_run_machine_setup = False
+    config = arguments.config
+    if config is None:
+        config = resolve_launch_profile().config_path
 
-    build = load_build_info()
+    open_first_run_machine_setup = False
     if (
-        build.packaged
-        and config is not None
+        config is not None
         and Path(config).name == "default.json"
         and not user_config_path().is_file()
-        and not setup_deferred()
     ):
         first_run = run_first_run_setup(Path(config))
-        if first_run is not None:
-            config = first_run.config_path
-            hardware_enabled = first_run.hardware_enabled
-            arguments.laser_lockout = first_run.laser_lockout
-            open_first_run_machine_setup = first_run.open_machine_setup
-            token = read_bridge_token()
-            if token:
-                os.environ["E3_BRIDGE_TOKEN"] = token
+        if first_run is None:
+            return 0
+        config = first_run.config_path
+        open_first_run_machine_setup = first_run.open_machine_setup
+
+    token = read_bridge_token()
+    if token:
+        os.environ["E3_BRIDGE_TOKEN"] = token
 
     try:
         runtime = CoreRuntime.from_config(
             config,
-            hardware_enabled=hardware_enabled,
-            laser_lockout=arguments.laser_lockout,
+            hardware_enabled=True,
+            laser_lockout=False,
         )
     except Exception as exc:
         QtWidgets.QMessageBox.critical(

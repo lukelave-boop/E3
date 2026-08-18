@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..deployment import application_root, user_config_path
-from ..first_run import mark_setup_deferred, save_hardware_setup
+from ..first_run import save_hardware_setup
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -20,8 +20,6 @@ _FINISH = 4
 @dataclass(frozen=True, slots=True)
 class FirstRunResult:
     config_path: Path
-    hardware_enabled: bool
-    laser_lockout: bool
     open_machine_setup: bool
 
 
@@ -39,7 +37,7 @@ class _WelcomePage(QtWidgets.QWizardPage):
     def __init__(self) -> None:
         super().__init__()
         self.setTitle("Welcome to E3")
-        self.setSubTitle("Set up the controller and camera now, or open E3 in offline mode.")
+        self.setSubTitle("Set up the controller and camera for this machine.")
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "This guided setup creates the machine-specific files that E3 keeps "
@@ -48,16 +46,10 @@ class _WelcomePage(QtWidgets.QWizardPage):
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
-        self.hardware = QtWidgets.QRadioButton("Set up E3 hardware now")
-        self.offline = QtWidgets.QRadioButton("Use E3 offline for now")
-        self.hardware.setChecked(True)
-        layout.addSpacing(12)
-        layout.addWidget(self.hardware)
-        layout.addWidget(self.offline)
         layout.addStretch(1)
 
     def nextId(self) -> int:
-        return _CONNECTION if self.hardware.isChecked() else _FINISH
+        return _CONNECTION
 
 
 class _ConnectionPage(QtWidgets.QWizardPage):
@@ -167,18 +159,8 @@ class _MachinePage(QtWidgets.QWizardPage):
         self.height.setDecimals(2)
         self.height.setSuffix(" mm")
         self.height.setValue(220.0)
-        self.allow_motion = QtWidgets.QCheckBox("Allow controller motion after setup")
-        self.allow_motion.setChecked(True)
         layout.addRow("X width", self.width)
         layout.addRow("Y height", self.height)
-        layout.addRow(self.allow_motion)
-        note = QtWidgets.QLabel(
-            "The first-run hardware profile still starts E3 with LASER LOCKOUT. "
-            "Allowing motion does not enable laser output."
-        )
-        note.setWordWrap(True)
-        note.setObjectName("mutedLabel")
-        layout.addRow(note)
 
 
 class _CameraPage(QtWidgets.QWizardPage):
@@ -219,25 +201,15 @@ class _FinishPage(QtWidgets.QWizardPage):
     def __init__(self) -> None:
         super().__init__()
         self.setTitle("Ready")
-        self.message = QtWidgets.QLabel()
+        self.message = QtWidgets.QLabel(
+            "Click Finish to save the machine connection and open E3. Machine Setup will "
+            "then open at the Camera tab so you can verify focus, complete lens calibration, "
+            "and create the bed mapping."
+        )
         self.message.setWordWrap(True)
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.message)
         layout.addStretch(1)
-
-    def initializePage(self) -> None:
-        wizard = self.wizard()
-        hardware = isinstance(wizard, FirstRunWizard) and wizard.welcome.hardware.isChecked()
-        if hardware:
-            self.message.setText(
-                "Click Finish to save the machine connection and open E3. Machine Setup will "
-                "then open at the Camera tab so you can verify focus, complete lens calibration, "
-                "and create the bed mapping."
-            )
-        else:
-            self.message.setText(
-                "Click Finish to open E3 in offline mode. You can use Help > Set Up Hardware… later."
-            )
 
 
 class FirstRunWizard(QtWidgets.QWizard):
@@ -261,10 +233,6 @@ class FirstRunWizard(QtWidgets.QWizard):
         self.setStartId(_WELCOME)
 
     def accept(self) -> None:
-        if self.welcome.offline.isChecked():
-            mark_setup_deferred()
-            super().accept()
-            return
         try:
             self.saved_config = save_hardware_setup(
                 self.template_config,
@@ -278,7 +246,6 @@ class FirstRunWizard(QtWidgets.QWizard):
                 camera_height=self.camera.height.value(),
                 autofocus=self.camera.autofocus.isChecked(),
                 focus_value=self.camera.focus.value(),
-                allow_motion=self.machine.allow_motion.isChecked(),
             )
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "E3 Setup", str(exc))
@@ -295,11 +262,9 @@ def run_first_run_setup(
     try:
         if wizard.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return None
-        if wizard.welcome.offline.isChecked():
-            return FirstRunResult(template, False, True, False)
         if wizard.saved_config is None:
             return None
-        return FirstRunResult(wizard.saved_config, True, True, True)
+        return FirstRunResult(wizard.saved_config, True)
     finally:
         wizard.deleteLater()
 
@@ -327,7 +292,7 @@ def install_first_run_menu(window: QtWidgets.QMainWindow) -> QtGui.QAction | Non
     def begin_setup(checked: bool = False) -> None:
         del checked
         result = run_first_run_setup(parent=window)
-        if result is None or not result.hardware_enabled:
+        if result is None:
             return
         action.setEnabled(False)
         QtWidgets.QMessageBox.information(

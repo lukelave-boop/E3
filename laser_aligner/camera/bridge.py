@@ -203,7 +203,9 @@ class CameraBridgeServer:
             self.camera.start()
             return {"ok": True}, ()
         if action == "stop":
-            self.camera.stop()
+            # Legacy desktop clients used "stop" as client teardown. The physical
+            # camera is owned by the Pi hardware node, so disconnecting one client
+            # must never turn off the shared camera for every other client.
             return {"ok": True}, ()
         if action == "restart":
             self.camera.restart()
@@ -381,6 +383,14 @@ class CameraBridgeServer:
         listener.settimeout(0.5)
         self._listener = listener
         LOGGER.info("E3 camera bridge listening on %s:%d", self.host, self.port)
+        if self.camera.settings.autostart:
+            try:
+                self.camera.start()
+                LOGGER.info("E3 camera bridge started the node-owned camera")
+            except Exception as exc:
+                # Keep the bridge reachable so an operator can retry/restart the
+                # camera remotely even if USB capture was unavailable at node boot.
+                LOGGER.warning("E3 camera did not start at node startup: %s", exc)
         try:
             while not self._stop.is_set():
                 try:

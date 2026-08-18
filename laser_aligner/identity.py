@@ -6,11 +6,16 @@ import re
 from functools import lru_cache
 from pathlib import Path
 
-from . import __version__
+from .versioning import (
+    RUNTIME_VERSION_ENVIRONMENT_VARIABLE,
+)
+from .versioning import (
+    application_version as _resolved_application_version,
+)
 
 APPLICATION_NAME = "E3 Positioning System"
 REVISION_ENVIRONMENT_VARIABLE = "E3_POSITIONING_SYSTEM_REVISION"
-VERSION_ENVIRONMENT_VARIABLE = "E3_POSITIONING_SYSTEM_VERSION"
+VERSION_ENVIRONMENT_VARIABLE = RUNTIME_VERSION_ENVIRONMENT_VARIABLE
 
 _REVISION_LENGTH = 8
 _SOURCE_SUFFIXES = frozenset({".css", ".html", ".js", ".json", ".py", ".svg"})
@@ -63,8 +68,7 @@ def build_revision() -> str:
 
 
 def application_version() -> str:
-    value = os.environ.get(VERSION_ENVIRONMENT_VARIABLE, "").strip()
-    return value or __version__
+    return _resolved_application_version()
 
 
 def application_identity() -> str:

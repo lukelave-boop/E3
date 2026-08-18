@@ -1,37 +1,26 @@
 from __future__ import annotations
 
-import os
-import subprocess
+import importlib.util
 from pathlib import Path
-
-BASE_MAJOR = 0
-BASE_MINOR = 6
-BASE_PATCH = 0
-BASELINE_REVISION = "76a7e4b193bee16008bc4bb1ee9893048ca1e586"
+from types import ModuleType
 
 
-def version_from_commit_count(count: int) -> str:
-    value = int(count)
-    if value < 0:
-        raise ValueError("Commit count cannot be negative")
-    return f"{BASE_MAJOR}.{BASE_MINOR}.{BASE_PATCH + value}"
+def _shared_versioning() -> ModuleType:
+    path = Path(__file__).resolve().parents[1] / "laser_aligner" / "versioning.py"
+    spec = importlib.util.spec_from_file_location("e3_shared_versioning", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load shared E3 versioning from {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
-def build_version(repo_root: Path | None = None) -> str:
-    override = os.environ.get("E3_BUILD_VERSION", "").strip()
-    if override:
-        return override
-    root = Path(repo_root).resolve() if repo_root is not None else Path(__file__).resolve().parents[1]
-    try:
-        completed = subprocess.run(
-            ["git", "-C", str(root), "rev-list", "--count", f"{BASELINE_REVISION}..HEAD"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        return version_from_commit_count(int(completed.stdout.strip()))
-    except (OSError, ValueError, subprocess.CalledProcessError):
-        return version_from_commit_count(0)
+_shared = _shared_versioning()
+
+version_from_commit_count = _shared.version_from_commit_count
+build_version = _shared.build_version
+application_version = _shared.application_version
+BASELINE_REVISION = _shared.BASELINE_REVISION
 
 
 if __name__ == "__main__":

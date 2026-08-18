@@ -82,6 +82,7 @@ from .controller import DesktopController
 from .controls import InspectorTabs, WheelGuard
 from .icons import action_icon, apply_action_icons
 from .job_preview import JobPreviewDialog, PreparedJobPreview, prepare_job_preview
+from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
 from .panels import (
     CameraPanel,
@@ -320,6 +321,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_coordinate_frame: tuple[Any, ...] | None = None
         self.last_job_preview_data: PreparedJobPreview | None = None
         self._job_preview_dialog: JobPreviewDialog | None = None
+        self._machine_manager_dialog: MachineManagerDialog | None = None
         self._machine_setup_dialog: MachineSetupDialog | None = None
         self._pending_calibration_capture: dict[str, Any] | None = None
         self._busy = False
@@ -483,6 +485,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("trace_objects", "Detect / trace camera objects…", "Ctrl+Alt+T")
         action("template_alignment", "Cutting template alignment…", "Ctrl+Alt+A")
         action("refresh_camera", "Refresh camera", "F5")
+        action("machine_manager", "Manage machines…", "Ctrl+Alt+Shift+M")
         action("machine_setup", "Machine Setup…", "Ctrl+Alt+M")
         action("generate", "Generate toolpath", "Ctrl+Alt+Enter")
         action("optimize_paths", "Optimize path ordering")
@@ -561,6 +564,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["trace_objects"].triggered.connect(self.open_trace_panel)
         self.actions["template_alignment"].triggered.connect(self.open_template_panel)
         self.actions["refresh_camera"].triggered.connect(self.controller.retry_camera_image)
+        self.actions["machine_manager"].triggered.connect(self.open_machine_manager)
         self.actions["machine_setup"].triggered.connect(self.open_machine_setup)
         self.actions["setup_guide"].triggered.connect(
             lambda: show_setup_guide(self)
@@ -610,6 +614,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         tools_menu.addAction(self.actions["template_alignment"])
         tools_menu.addSeparator()
         tools_menu.addAction(self.actions["refresh_camera"])
+        tools_menu.addAction(self.actions["machine_manager"])
         tools_menu.addAction(self.actions["machine_setup"])
 
         align_menu = self.menuBar().addMenu("&Arrange")
@@ -655,6 +660,29 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.help_menu.addAction(self.actions["about"])
 
     def _create_toolbars(self) -> None:
+        machine_toolbar = self.addToolBar("Machine")
+        machine_toolbar.setObjectName("machineToolbar")
+        machine_toolbar.setIconSize(QtCore.QSize(20, 20))
+        machine_toolbar.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
+        )
+        machine_label = QtWidgets.QLabel("Machine:")
+        machine_label.setToolTip(
+            "Running machine and the machine selected for the next E3 launch"
+        )
+        machine_toolbar.addWidget(machine_label)
+        self._updating_machine_selector = False
+        self.machine_selector = QtWidgets.QComboBox()
+        self.machine_selector.setObjectName("machineSelector")
+        self.machine_selector.setMinimumWidth(250)
+        self.machine_selector.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self.machine_selector.activated.connect(self._machine_selector_activated)
+        machine_toolbar.addWidget(self.machine_selector)
+        machine_toolbar.addAction(self.actions["machine_manager"])
+        self._refresh_machine_selector()
+
         file_toolbar = self.addToolBar("File")
         file_toolbar.setObjectName("fileToolbar")
         file_toolbar.setIconSize(QtCore.QSize(20, 20))
@@ -4591,6 +4619,67 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "Working…" if self._controller_busy else "",
                 0 if self._controller_busy else 1000,
             )
+
+
+    def _refresh_machine_selector(self, selected_id: str | None = None) -> None:
+        if not hasattr(self, "machine_selector"):
+            return
+        registry = self.runtime.machine_registry
+        next_launch_id = registry.active_machine_id
+        target_id = selected_id or next_launch_id
+        self._updating_machine_selector = True
+        try:
+            self.machine_selector.clear()
+            selected_index = 0
+            for index, machine in enumerate(registry.machines()):
+                badges: list[str] = []
+                if machine.id == self.runtime.running_machine_id:
+                    badges.append("running")
+                if machine.id == next_launch_id:
+                    badges.append("next launch")
+                suffix = f" ({', '.join(badges)})" if badges else ""
+                self.machine_selector.addItem(machine.name + suffix, machine.id)
+                if machine.id == target_id:
+                    selected_index = index
+            self.machine_selector.setCurrentIndex(selected_index)
+            self.machine_selector.setToolTip(
+                "Select the saved machine E3 should use on its next launch. "
+                "Use Manage Machines to edit controller, work-area, laser, camera, "
+                "and calibration bindings."
+            )
+        finally:
+            self._updating_machine_selector = False
+
+    @QtCore.Slot(int)
+    def _machine_selector_activated(self, index: int) -> None:
+        if self._updating_machine_selector or index < 0:
+            return
+        machine_id = self.machine_selector.itemData(index)
+        if not machine_id:
+            return
+        try:
+            self.runtime.machine_registry.set_active(str(machine_id))
+            machine = self.runtime.machine_registry.get_machine(str(machine_id))
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(self, "Machine selection", str(exc))
+            self._refresh_machine_selector()
+            return
+        self._refresh_machine_selector(str(machine_id))
+        self.statusBar().showMessage(
+            f"{machine.name} selected for the next E3 launch. "
+            "The running controller was not changed.",
+            8000,
+        )
+
+    def open_machine_manager(self) -> None:
+        dialog = MachineManagerDialog(self.runtime, self)
+        self._machine_manager_dialog = dialog
+        dialog.registryChanged.connect(self._refresh_machine_selector)
+        try:
+            dialog.exec()
+        finally:
+            self._machine_manager_dialog = None
+            self._refresh_machine_selector()
 
     def open_machine_setup(
         self,

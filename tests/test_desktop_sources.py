@@ -1,6 +1,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 from laser_aligner import __version__
 from laser_aligner.desktop.main import build_parser, configure_application_identity
 from laser_aligner.desktop.qt import PYSIDE6_IMPORT_ERROR
@@ -13,13 +15,17 @@ def test_desktop_python_sources_parse():
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
 
-def test_desktop_cli_exposes_hardware_and_safe_modes():
+def test_desktop_cli_has_one_normal_launch_mode():
     parser = build_parser()
-    hardware = parser.parse_args(["--hardware"])
-    safe = parser.parse_args(["--safe"])
+    arguments = parser.parse_args([])
 
-    assert hardware.hardware is True
-    assert safe.safe is True
+    assert arguments.config is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--hardware"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--safe"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--laser-lockout"])
 
 
 def test_qt_import_guard_is_explicit():

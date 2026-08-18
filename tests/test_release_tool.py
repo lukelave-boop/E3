@@ -10,6 +10,14 @@ from tools.make_release import (
 )
 
 
+def _write_versioning(package: Path, version: str) -> None:
+    (package / "versioning.py").write_text(
+        "def build_version(repo_root=None):\n"
+        f"    return {version!r}\n",
+        encoding="utf-8",
+    )
+
+
 def test_release_archive_contains_only_explicit_tracked_regular_files(
     tmp_path: Path,
 ) -> None:
@@ -17,8 +25,9 @@ def test_release_archive_contains_only_explicit_tracked_regular_files(
     package = root / "laser_aligner"
     package.mkdir(parents=True)
     (package / "__init__.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+    _write_versioning(package, "1.2.3")
     (root / "pyproject.toml").write_text(
-        '[project]\nname = "example"\nversion = "1.2.3"\n',
+        '[project]\nname = "example"\ndynamic = ["version"]\n',
         encoding="utf-8",
     )
     (root / "README.md").write_text("tracked working-tree content\n", encoding="utf-8")
@@ -43,17 +52,17 @@ def test_release_archive_contains_only_explicit_tracked_regular_files(
     assert release_version(root) == "1.2.3"
 
 
-def test_release_version_rejects_package_metadata_drift(tmp_path: Path) -> None:
+def test_release_version_uses_shared_versioning_source(tmp_path: Path) -> None:
     package = tmp_path / "laser_aligner"
     package.mkdir()
     (package / "__init__.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+    _write_versioning(package, "1.2.5")
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nname = "example"\nversion = "1.2.4"\n',
+        '[project]\nname = "example"\ndynamic = ["version"]\n',
         encoding="utf-8",
     )
 
-    with pytest.raises(RuntimeError, match="version mismatch"):
-        release_version(tmp_path)
+    assert release_version(tmp_path) == "1.2.5"
 
 
 def test_release_manifest_rejects_tracked_symbolic_links(tmp_path: Path) -> None:

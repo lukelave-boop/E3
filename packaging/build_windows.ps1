@@ -3,6 +3,7 @@ param(
     [string]$ConfigPath = ".\config\network-local.json",
     [string]$CalibrationProfile =
         ".\data\calibration_profiles\1920x1080-manual-focus-010",
+    [string]$MachineRegistryPath = "",
     [string]$BridgeToken = $env:E3_BRIDGE_TOKEN,
     [string]$Revision = $env:GITHUB_SHA,
     [string]$Channel = "development",
@@ -107,6 +108,19 @@ if ($MachineSeed) {
         $utf8NoBom
     )
     Copy-Item $CalibrationProfile $seedDataDir -Recurse -Force
+
+    if ([string]::IsNullOrWhiteSpace($MachineRegistryPath)) {
+        $stateRoot = Split-Path (Split-Path $ConfigPath -Parent) -Parent
+        $MachineRegistryPath = Join-Path $stateRoot "data\machines.json"
+    }
+    if (-not (Test-Path $MachineRegistryPath)) {
+        throw "Machine-seed builds require a saved machine registry: $MachineRegistryPath"
+    }
+    Copy-Item `
+        $MachineRegistryPath `
+        (Join-Path $seedRoot "data\machines.json") `
+        -Force
+
     [IO.File]::WriteAllText(
         (Join-Path $seedSecretsDir "bridge-token.txt"),
         $BridgeToken.Trim(),
