@@ -8,6 +8,8 @@ from pathlib import Path
 
 from .versioning import (
     RUNTIME_VERSION_ENVIRONMENT_VARIABLE,
+)
+from .versioning import (
     application_version as _resolved_application_version,
 )
 
