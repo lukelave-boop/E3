@@ -107,19 +107,21 @@ expression instead of defaulting to the complete suite:
 ```
 
 The complete local commands below are for broad changes, unexpected focused
-regressions, explicit user requests, and merge/release preparation.
+regressions, explicit user requests, and merge/release preparation. Full local
+pytest runs use four xdist workers by default; use serial execution only when
+diagnosing ordering, shared-state, or worker-specific behavior.
 
 Linux:
 
 ```bash
-.venv/bin/python -m pytest -q
+.venv/bin/python -m pytest -q -n 4
 .venv/bin/python -m ruff check .
 ```
 
 Windows PowerShell:
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe -m pytest -q -n 4
 .\.venv\Scripts\python.exe -m ruff check .
 ```
 
