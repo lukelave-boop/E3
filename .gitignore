@@ -39,3 +39,6 @@ appimagetool-*.AppImage
 packaging/machine-seed/
 packaging/machine-bridge-token.txt
 packaging/*_generated.py
+
+# PyInstaller generated spec
+/E3.spec
