@@ -24,22 +24,45 @@ remain uncached. The deterministic planning goldens remain unchanged.
 Focused cache/planning verification passed **150 tests** with Ruff, compileall,
 and diff checks clean before the benchmark-only addition. A repeatable Windows
 benchmark using 8 LINE layers x 32 objects (256 objects), seven measured runs
-per scenario, reported 325.598 ms median uncached generation, 324.146 ms cold
-cache, 317.806 ms warm identical regeneration, 319.161 ms after speed-only
-edits, 321.673 ms after power-only edits, 320.559 ms after spot-offset edits,
-and 320.764 ms when one layer's geometry changed. Cache hit/miss counts matched
-the dependency model exactly, but warm identical planning improved only about
-**2.4%**, showing that LINE geometry recomputation is not the dominant
-remaining cost. A follow-up `cProfile` run intentionally inflated absolute wall
-times but identified the dominant structure: `build_job_plan()` accumulated
-5.529 s of 7.007 s spent inside eight `generate_project_gcode()` calls
-(~79%), while `parse_words()` accumulated 3.566 s (~51%). Inspection confirmed
-that `build_job_plan()` parses each executable line once directly and then
-reparses it twice through `exact_codes()` for G and M codes. The next
-performance target is therefore single-pass `JobPlan` G-code word parsing on a
-separate branch, not another geometry-cache layer. This work is automated-test
-and local-benchmark verified only; no physical controller, motion, camera, or
-laser test was required for these internal planning changes.
+per scenario, initially reported 325.598 ms median uncached generation and
+317.806 ms warm identical regeneration. Cache hit/miss counts matched the
+dependency model exactly, but warm identical planning improved only about
+**2.4%**, showing that LINE geometry recomputation was not the dominant cost.
+Profiling then identified repeated JobPlan G-code parsing as the actual hot
+path. Two behavior-preserving follow-up changes first reduced each executable
+JobPlan line from three word parses to one and then added a low-allocation scan
+path that keeps the shared G-code regex and numeric semantics while avoiding
+temporary `GcodeWord` objects and duplicate comment stripping in
+`build_job_plan()`. The same 256-object benchmark improved to 221.688 ms median
+uncached after the single-parse change and then to 199.619 ms after the
+low-allocation scanner, with warm identical regeneration improving from
+317.806 ms to 215.142 ms and then 195.586 ms. A further experiment that moved
+JobPlan summary aggregates into the per-move loop produced no measurable
+improvement and was rejected rather than merged. Routine optimization of this
+roughly 0.20-second synthetic planning case is therefore paused; future
+performance work should be driven by a user-visible slow workload such as a
+large imported vector/raster job, not by chasing smaller benchmark-only gains.
+These internal planning changes are automated-test and local-benchmark verified
+only; no physical controller, motion, camera, or laser test was required.
+
+The project layer now has a Qt-neutral **Importer Manifest / Registry**
+foundation for foreign-file discovery before source content is committed into
+an E3 project. `ImporterSpec`, `ImportCapability`, `ImportLayerManifest`,
+`ImportScanManifest`, and `ImporterRegistry` provide immutable importer identity,
+case-insensitive suffix lookup, file-size limits, capability declarations,
+natural-size/layer scan facts, review warnings and approximations, and explicit
+blocking errors or unsupported features. The default registry describes the
+existing LightBurn and bounded foreign-G-code importers using their existing
+dialog filters and byte limits; LightBurn now also exposes one shared supported-
+suffix constant instead of duplicating that literal in its loader. This
+foundation does **not** yet perform source scanning or change either existing
+parser, desktop import flow, project schema, controller path, motion, arming, or
+laser behavior. Focused manifest, LightBurn, G-code, and desktop-import tests
+reported **47 passed, 2 skipped**; the two skips were desktop widget tests in an
+environment without PySide6. Compileall and diff checks were clean. The next
+import milestone is to implement a bounded LightBurn scan that produces this
+manifest before strict parse/vectorize/layout/assembly, followed by the same
+contract for foreign G-code.
 
 Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
 validation. Its refresh, JSON report copy, and clicked-point inspector are
