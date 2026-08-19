@@ -79,6 +79,36 @@ def test_stage_artifact_requires_its_declared_coordinate_domain() -> None:
         NormalizedGeometryArtifact(metadata=wrong_domain)
 
 
+def test_normalized_geometry_artifact_indexes_real_layer_paths() -> None:
+    path = Polyline(
+        np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float64),
+        closed=False,
+        source_tag="normalized-line",
+    )
+    artifact = NormalizedGeometryArtifact(
+        metadata=_metadata(
+            PlanningStage.NORMALIZED_GEOMETRY,
+            CoordinateDomain.PROJECT,
+        ),
+        layer_paths=(("layer-a", (path,)),),
+    )
+
+    assert artifact.paths_for_layer("layer-a")[0] is path
+    assert artifact.paths_for_layer("missing") == ()
+
+
+def test_normalized_geometry_artifact_rejects_duplicate_layer_ids() -> None:
+    metadata = _metadata(
+        PlanningStage.NORMALIZED_GEOMETRY,
+        CoordinateDomain.PROJECT,
+    )
+    with pytest.raises(ValueError, match="layer IDs must be unique"):
+        NormalizedGeometryArtifact(
+            metadata=metadata,
+            layer_paths=(("layer-a", ()), ("layer-a", ())),
+        )
+
+
 def test_artifact_metadata_rejects_invalid_versions_and_bounds() -> None:
     with pytest.raises(ValueError, match="stage_version"):
         ArtifactMetadata(

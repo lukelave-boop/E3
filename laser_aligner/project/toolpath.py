@@ -23,7 +23,16 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
-from ..planning.model import LayerOperation, RasterRow, RasterSource
+from ..planning.model import (
+    ArtifactMetadata,
+    CoordinateDomain,
+    LayerOperation,
+    NormalizedGeometryArtifact,
+    PlanningStage,
+    RasterRow,
+    RasterSource,
+    SceneRevision,
+)
 from .model import (
     CoordinateSpace,
     LayerMode,
@@ -575,6 +584,41 @@ def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyl
         ):
             paths.extend(object_polylines(item))
     return paths
+
+
+def _normalized_layer_geometry(
+    document: ProjectDocument,
+    layer: OperationLayer,
+) -> NormalizedGeometryArtifact:
+    """Capture the existing layer geometry at the first typed stage boundary."""
+
+    paths = tuple(_layer_paths(document, layer))
+    bounds_mm = _bounds(paths) if paths else None
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.NORMALIZED_GEOMETRY.value}:{layer.id}:v1"
+        ),
+        scene_revision=SceneRevision(
+            project_id=document.id,
+            revision=document.revision,
+            coordinate_space=document.coordinate_space,
+        ),
+        stage=PlanningStage.NORMALIZED_GEOMETRY,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.PROJECT,
+        bounds_mm=bounds_mm,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(f"project-layer:{layer.id}",),
+    )
+    return NormalizedGeometryArtifact(
+        metadata=metadata,
+        layer_paths=((layer.id, paths),),
+    )
 
 
 def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[RasterRow]:
@@ -1244,7 +1288,8 @@ def _operation_paths(
     layer_objects: list[SceneObject],
 ) -> list[Polyline]:
     if layer.mode == LayerMode.LINE:
-        return _layer_paths(document, layer)
+        normalized = _normalized_layer_geometry(document, layer)
+        return list(normalized.paths_for_layer(layer.id))
     unsupported = [
         item.name
         for item in layer_objects

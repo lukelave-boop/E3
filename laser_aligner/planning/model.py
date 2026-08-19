@@ -152,6 +152,15 @@ class NormalizedGeometryArtifact:
             stage=PlanningStage.NORMALIZED_GEOMETRY,
             domain=CoordinateDomain.PROJECT,
         )
+        layer_ids = [layer_id for layer_id, _paths in self.layer_paths]
+        if len(layer_ids) != len(set(layer_ids)):
+            raise ValueError("Normalized geometry layer IDs must be unique")
+
+    def paths_for_layer(self, layer_id: str) -> tuple[Polyline, ...]:
+        for candidate_id, paths in self.layer_paths:
+            if candidate_id == layer_id:
+                return paths
+        return ()
 
 
 @dataclass(frozen=True, slots=True)
