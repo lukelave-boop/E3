@@ -351,15 +351,19 @@ normalized geometry. The cache is lock-protected because planning executes off
 the GUI thread. Placement is the second reuse boundary: identical effective LINE
 geometry plus the same coordinate frame reuses the copied machine-beam paths,
 while the normal placed-path safety validation still runs afterward on every
-planning request. Speed or power changes therefore keep both normalized and
-placed geometry reusable, while geometry or coordinate-frame changes miss the
-appropriate cache key. Every hit still constructs fresh artifact metadata for
-the current project revision. Cached paths are copied on store and retrieval so
-downstream path mutation cannot contaminate later runs. There is no module-global
-cache, disk persistence, operation/controller reuse, raster/fill cache, or
-encoded-program cache yet. `EncodedProgramArtifact` is intentionally not
-assigned a cache dependency because the final stream still contains volatile
-generation-time text and whole-job dependencies.
+planning request. Controller geometry is the third reuse boundary: identical
+placed geometry plus the same laser spot offset reuses copied controller-space
+paths, while controller-path bounds or guarded-polygon validation still runs
+afterward on every request. Speed or power changes therefore keep normalized,
+placed, and controller geometry reusable; geometry, coordinate-frame, or spot-
+offset changes invalidate only the applicable dependency keys. Every hit still
+constructs fresh artifact metadata for the current project revision. Cached
+paths are copied on store and retrieval so downstream path mutation cannot
+contaminate later runs. There is no module-global cache, disk persistence,
+operation reuse, raster/fill cache, or encoded-program cache yet.
+`EncodedProgramArtifact` is intentionally not assigned a cache dependency
+because the final stream still contains volatile generation-time text and
+whole-job dependencies.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions

@@ -803,6 +803,8 @@ def _controller_line_geometry_artifact(
     layer: OperationLayer,
     placed: PlacedGeometryArtifact,
     laser: LaserSettings,
+    *,
+    planning_cache: PlanningCache | None = None,
 ) -> ControllerGeometryArtifact:
     """Apply the existing laser-spot correction at an explicit controller boundary."""
 
@@ -818,7 +820,22 @@ def _controller_line_geometry_artifact(
             ],
         },
     )
-    paths = tuple(_controller_paths(beam_paths, laser))
+    cached = (
+        None
+        if planning_cache is None
+        else planning_cache.get_controller(controller_dependency)
+    )
+    if cached is None:
+        paths = tuple(_controller_paths(beam_paths, laser))
+        bounds_mm = _bounds(paths) if paths else None
+        if planning_cache is not None:
+            planning_cache.put_controller(
+                controller_dependency,
+                paths,
+                bounds_mm,
+            )
+    else:
+        paths, bounds_mm = cached
     metadata = ArtifactMetadata(
         artifact_id=(
             f"{document.id}:{document.revision}:"
@@ -829,7 +846,7 @@ def _controller_line_geometry_artifact(
         stage_version=1,
         coordinate_domain=CoordinateDomain.CONTROLLER,
         dependency_digest=controller_dependency,
-        bounds_mm=_bounds(paths) if paths else None,
+        bounds_mm=bounds_mm,
         statistics=(
             ("layer_count", 1),
             ("path_count", len(paths)),
@@ -1924,6 +1941,7 @@ def generate_project_gcode(
                 layer,
                 placed_artifact,
                 laser,
+                planning_cache=planning_cache,
             )
             staged_line_artifact_ids.append(controller_artifact.metadata.artifact_id)
             paths = list(controller_artifact.paths_for_layer(layer.id))

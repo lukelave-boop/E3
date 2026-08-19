@@ -448,3 +448,212 @@ def test_placed_cache_is_bounded_lru() -> None:
     assert cache.get_placed("5" * 64) is None
     assert cache.get_placed("4" * 64) is not None
     assert cache.get_placed("6" * 64) is not None
+
+def test_repeated_generation_reuses_controller_line_geometry(monkeypatch) -> None:
+    document = _document()
+    cache = PlanningCache()
+    calls = 0
+    original = toolpath_module._controller_paths
+
+    def counted_controller_paths(paths, laser):
+        nonlocal calls
+        calls += 1
+        return original(paths, laser)
+
+    monkeypatch.setattr(
+        toolpath_module,
+        "_controller_paths",
+        counted_controller_paths,
+    )
+
+    generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        planning_cache=cache,
+    )
+    generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        planning_cache=cache,
+    )
+
+    assert calls == 1
+    assert cache.stats.controller_hits == 1
+    assert cache.stats.controller_misses == 1
+
+
+def test_layer_setting_change_reuses_controller_geometry(monkeypatch) -> None:
+    document = _document()
+    cache = PlanningCache()
+    calls = 0
+    original = toolpath_module._controller_paths
+
+    def counted_controller_paths(paths, laser):
+        nonlocal calls
+        calls += 1
+        return original(paths, laser)
+
+    monkeypatch.setattr(
+        toolpath_module,
+        "_controller_paths",
+        counted_controller_paths,
+    )
+
+    generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        planning_cache=cache,
+    )
+    document.layers[0].speed_mm_min += 100.0
+    document.touch()
+    generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        planning_cache=cache,
+    )
+
+    assert calls == 1
+    assert cache.stats.normalized_hits == 1
+    assert cache.stats.placed_hits == 1
+    assert cache.stats.controller_hits == 1
+
+
+def test_spot_offset_change_invalidates_only_controller_cache(monkeypatch) -> None:
+    document = _document()
+    cache = PlanningCache()
+    calls = 0
+    original = toolpath_module._controller_paths
+
+    def counted_controller_paths(paths, laser):
+        nonlocal calls
+        calls += 1
+        return original(paths, laser)
+
+    monkeypatch.setattr(
+        toolpath_module,
+        "_controller_paths",
+        counted_controller_paths,
+    )
+
+    generate_project_gcode(
+        document,
+        LaserSettings(
+            power_max=1000,
+            spot_offset_x_mm=0.0,
+            spot_offset_y_mm=0.0,
+        ),
+        planning_cache=cache,
+    )
+    generate_project_gcode(
+        document,
+        LaserSettings(
+            power_max=1000,
+            spot_offset_x_mm=0.2,
+            spot_offset_y_mm=0.0,
+        ),
+        planning_cache=cache,
+    )
+
+    assert calls == 2
+    assert cache.stats.normalized_hits == 1
+    assert cache.stats.placed_hits == 1
+    assert cache.stats.controller_misses == 2
+
+
+def test_controller_cache_hit_rehydrates_current_artifact_identity(monkeypatch) -> None:
+    document = _document()
+    layer = document.layers[0]
+    cache = PlanningCache()
+    laser = LaserSettings(power_max=1000)
+    calls = 0
+    original = toolpath_module._controller_paths
+
+    def counted_controller_paths(paths, settings):
+        nonlocal calls
+        calls += 1
+        return original(paths, settings)
+
+    monkeypatch.setattr(
+        toolpath_module,
+        "_controller_paths",
+        counted_controller_paths,
+    )
+
+    normalized_first = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+        planning_cache=cache,
+    )
+    operation_first = toolpath_module._line_operation_artifact(
+        document,
+        layer,
+        normalized_first,
+    )
+    placed_first = toolpath_module._placed_line_geometry_artifact(
+        document,
+        layer,
+        operation_first,
+        None,
+        None,
+        planning_cache=cache,
+    )
+    first = toolpath_module._controller_line_geometry_artifact(
+        document,
+        layer,
+        placed_first,
+        laser,
+        planning_cache=cache,
+    )
+
+    document.touch()
+    normalized_second = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+        planning_cache=cache,
+    )
+    operation_second = toolpath_module._line_operation_artifact(
+        document,
+        layer,
+        normalized_second,
+    )
+    placed_second = toolpath_module._placed_line_geometry_artifact(
+        document,
+        layer,
+        operation_second,
+        None,
+        None,
+        planning_cache=cache,
+    )
+    second = toolpath_module._controller_line_geometry_artifact(
+        document,
+        layer,
+        placed_second,
+        laser,
+        planning_cache=cache,
+    )
+
+    assert calls == 1
+    assert first.metadata.artifact_id != second.metadata.artifact_id
+    assert first.metadata.dependency_digest == second.metadata.dependency_digest
+    assert second.metadata.scene_revision.revision == document.revision
+
+
+def test_controller_cache_is_bounded_lru() -> None:
+    cache = PlanningCache(max_controller_entries=2)
+    path = Polyline(
+        np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64),
+        source_tag="controller-bounded",
+    )
+
+    cache.put_controller("7" * 64, (path,), (0.0, 0.0, 1.0, 0.0))
+    cache.put_controller("8" * 64, (path,), (0.0, 0.0, 1.0, 0.0))
+    assert cache.get_controller("7" * 64) is not None
+    cache.put_controller("9" * 64, (path,), (0.0, 0.0, 1.0, 0.0))
+
+    assert cache.stats.controller_entries == 2
+    assert cache.stats.controller_evictions == 1
+    assert cache.get_controller("8" * 64) is None
+    assert cache.get_controller("7" * 64) is not None
+    assert cache.get_controller("9" * 64) is not None
