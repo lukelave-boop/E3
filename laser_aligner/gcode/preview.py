@@ -95,6 +95,42 @@ def parse_words(line: str, *, require_full_match: bool = False) -> list[GcodeWor
     return words
 
 
+def scan_word_state(
+    line: str,
+    *,
+    comments_stripped: bool = False,
+) -> tuple[set[int], set[int], dict[str, float]]:
+    """Scan numeric words without allocating one ``GcodeWord`` per match.
+
+    The scanner intentionally shares ``_WORD_RE`` and the same numeric,
+    finiteness, uppercase-letter, and exact-integer G/M semantics as
+    ``parse_words``. Callers that already stripped comments may set
+    ``comments_stripped`` to avoid repeating that work.
+    """
+
+    cleaned = line if comments_stripped else strip_comment(line)
+    g_codes: set[int] = set()
+    m_codes: set[int] = set()
+    values: dict[str, float] = {}
+    for match in _WORD_RE.finditer(cleaned):
+        value = float(match.group(2))
+        if not math.isfinite(value):
+            raise ValueError("G-code values must be finite")
+        letter = match.group(1).upper()
+        values[letter] = value
+        if letter not in {"G", "M"}:
+            continue
+        rounded = round(value)
+        if abs(value - rounded) >= 1e-9:
+            continue
+        code = int(rounded)
+        if letter == "G":
+            g_codes.add(code)
+        else:
+            m_codes.add(code)
+    return g_codes, m_codes, values
+
+
 def word_values(line: str, letter: str) -> list[float]:
     target = letter.upper()
     return [word.value for word in parse_words(line) if word.letter == target]
