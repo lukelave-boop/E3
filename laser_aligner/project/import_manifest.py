@@ -169,6 +169,7 @@ class ImportScanManifest:
     natural_width_mm: float | None = None
     natural_height_mm: float | None = None
     layers: tuple[ImportLayerManifest, ...] = ()
+    source_facts: tuple[str, ...] = ()
     coordinate_facts: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
     approximations: tuple[str, ...] = ()
@@ -215,6 +216,7 @@ class ImportScanManifest:
         object.__setattr__(self, "natural_height_mm", height)
         object.__setattr__(self, "layers", layers)
         for field_name in (
+            "source_facts",
             "coordinate_facts",
             "warnings",
             "approximations",
