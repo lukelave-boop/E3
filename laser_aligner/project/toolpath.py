@@ -23,6 +23,7 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
+from ..planning.digest import project_scene_revision
 from ..planning.model import (
     ArtifactMetadata,
     ControllerGeometryArtifact,
@@ -593,6 +594,7 @@ def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyl
 def _normalized_layer_geometry(
     document: ProjectDocument,
     layer: OperationLayer,
+    scene_revision: SceneRevision | None = None,
 ) -> NormalizedGeometryArtifact:
     """Capture the existing layer geometry at the first typed stage boundary."""
 
@@ -603,11 +605,7 @@ def _normalized_layer_geometry(
             f"{document.id}:{document.revision}:"
             f"{PlanningStage.NORMALIZED_GEOMETRY.value}:{layer.id}:v1"
         ),
-        scene_revision=SceneRevision(
-            project_id=document.id,
-            revision=document.revision,
-            coordinate_space=document.coordinate_space,
-        ),
+        scene_revision=scene_revision or project_scene_revision(document),
         stage=PlanningStage.NORMALIZED_GEOMETRY,
         stage_version=1,
         coordinate_domain=CoordinateDomain.PROJECT,
@@ -734,6 +732,7 @@ def _encoded_program_artifact(
     document: ProjectDocument,
     text: str,
     *,
+    scene_revision: SceneRevision,
     bounds_mm: tuple[float, float, float, float],
     command_count: int,
     path_count: int,
@@ -749,11 +748,7 @@ def _encoded_program_artifact(
             f"{document.id}:{document.revision}:"
             f"{PlanningStage.ENCODED_PROGRAM.value}:v1"
         ),
-        scene_revision=SceneRevision(
-            project_id=document.id,
-            revision=document.revision,
-            coordinate_space=document.coordinate_space,
-        ),
+        scene_revision=scene_revision,
         stage=PlanningStage.ENCODED_PROGRAM,
         stage_version=1,
         coordinate_domain=CoordinateDomain.PROGRAM,
@@ -1438,9 +1433,15 @@ def _operation_paths(
     document: ProjectDocument,
     layer: OperationLayer,
     layer_objects: list[SceneObject],
+    *,
+    scene_revision: SceneRevision | None = None,
 ) -> tuple[list[Polyline], OperationArtifact | None]:
     if layer.mode == LayerMode.LINE:
-        normalized = _normalized_layer_geometry(document, layer)
+        normalized = _normalized_layer_geometry(
+            document,
+            layer,
+            scene_revision=scene_revision,
+        )
         operation = _line_operation_artifact(document, layer, normalized)
         planned_layer = operation.layer_for_id(layer.id)
         if planned_layer is None:
@@ -1594,6 +1595,7 @@ def generate_project_gcode(
 ) -> ProjectJob:
     """Generate one guarded vector program containing all enabled line layers."""
     document.validate()
+    scene_revision = project_scene_revision(document)
     controller_power_max = int(power_max or laser.power_max)
     raster_sources = _preflight_raster_budget(document, controller_power_max)
     local_work_area, execution_work_area, coordinate_frame_signature = (
@@ -1755,6 +1757,7 @@ def generate_project_gcode(
             document,
             layer,
             layer_objects,
+            scene_revision=scene_revision,
         )
         if not local_design_paths:
             continue
@@ -2140,6 +2143,7 @@ def generate_project_gcode(
     encoded = _encoded_program_artifact(
         document,
         text,
+        scene_revision=scene_revision,
         bounds_mm=bounds,
         command_count=command_count,
         path_count=path_count,

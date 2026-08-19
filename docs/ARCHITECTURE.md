@@ -332,9 +332,12 @@ encoded artifact does not rewrite G-code; it records program statistics, the
 current encoder provenance, the staged LINE controller-artifact identities, and
 the count of non-LINE layers that still use the legacy internal path.
 `project.toolpath.generate_project_gcode()` remains the compatibility entry
-point and orchestrator. No cache or selective recomputation is active yet; those
-follow only after the stage boundaries themselves preserve the planning
-goldens.
+point and orchestrator. `SceneRevision.source_digest` is now reserved for a
+canonical SHA-256 fingerprint of persisted planning source content; project ID,
+timestamps, and the monotonic revision counter remain separate identity and
+bookkeeping fields. The digest is observational only in this phase: no cache
+lookup, reuse, skipped stage computation, or selective recomputation is active
+yet.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions
