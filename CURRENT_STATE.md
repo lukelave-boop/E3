@@ -7,6 +7,24 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-19**
 
+The planner now has a behavior-preserving typed-stage spine for LINE output:
+`SceneRevision -> NormalizedGeometryArtifact -> OperationArtifact ->
+PlacedGeometryArtifact -> ControllerGeometryArtifact -> EncodedProgramArtifact
+-> immutable JobPlan`. The existing geometry extraction, placement,
+laser-spot correction, ordering, power correction, safety validation, exact
+G-code text, and `build_job_plan()` behavior remain in place; the artifacts make
+the existing coordinate and provenance boundaries explicit without enabling
+caching or selective recomputation. Raster/fill planning still uses the legacy
+internal path until its own staged extraction. The deterministic planning
+goldens remain unchanged. Merge-preparation verification passed the six-file
+planner-focused suite with **159 tests**, including the 36 golden cases, plus
+repository-wide Ruff, compileall, and diff checks. One command-budget test
+monkeypatch was updated to match the new private `_operation_paths()` return
+contract; no production behavior changed in that fix. This architecture
+refactor is automated-test verified only; no physical controller, motion,
+camera, or laser test was performed or required for this behavior-preserving
+internal decomposition.
+
 Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
 validation. Its refresh, JSON report copy, and clicked-point inspector are
 read-only; only the explicit **Home / park and capture audit view** action uses
@@ -213,22 +231,18 @@ modality or the dark theme; focused offscreen Qt coverage verifies visible
 content, queued repaint execution, modal results, and parent usability. Both UI
 corrections are automated-test verified and await physical Linux validation.
 
-CI now has two validation tiers. Development pushes under `fix/**`,
-`feature/**`, `agent/**`, and `cleanup/**` run Ruff, dependency/bytecode checks,
-and one complete desktop-enabled Ubuntu Python 3.12 suite in parallel. The test
-job uses four bounded xdist workers; a local full-suite benchmark passed 1,758
-tests in 217.65 seconds wall-clock (pytest 212.71 seconds), versus the recent
-serial full-suite result of 422.43 seconds. Full Compatibility CI retains the
-serial five-environment Ubuntu/Windows and Python 3.10–3.12 matrix for pushes to
-`main`/`desktop-v1`, pull requests targeting either, and manual dispatch. Major
-phases publish timing summaries. On final implementation commit `2508abd`, Fast
-CI passed 1,760 tests in a 2-minute-34-second workflow wall clock; its critical
-test job took 2 minutes 30 seconds (112.90 seconds for pytest), while Ruff took
-9 seconds and dependency/bytecode validation took 42 seconds. Full Compatibility
-CI passed in a 5-minute-32-second workflow wall clock, with Windows desktop 3.12
-as the 5-minute-28-second critical job. An earlier full run usefully exposed a
-Windows scheduler-sensitive 0.01-second timeout in a new GRBL connection test;
-the corrected compatibility run is green.
+CI now validates the desktop on Windows only. Fast Development CI runs for
+development pushes under `fix/**`, `feature/**`, `agent/**`, and `cleanup/**`;
+it uses Windows Python 3.12 for Ruff, dependency/bytecode validation, and the
+complete desktop-enabled pytest suite with four bounded xdist workers. Branches
+outside those patterns, including `architecture/**`, receive the full automated
+gate when opened as a pull request to `main`. The main compatibility workflow
+runs Windows Python 3.10 without desktop extras, Windows Python 3.12 with desktop
+extras, and a separate Windows Python 3.12 Ruff job for pushes/PRs targeting
+`main` or `desktop-v1` and for manual dispatch. Linux desktop CI is no longer a
+supported compatibility gate. Existing Linux/Pi runtime components and any
+legacy Linux packaging path are separate concerns and require focused
+verification when changed.
 
 Physical reconnect after the software STOP test found the controller alive but
 alarm-locked: settings queries succeeded while connection normalization's `M5`

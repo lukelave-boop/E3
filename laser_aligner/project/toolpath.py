@@ -23,6 +23,20 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
+from ..planning.model import (
+    ArtifactMetadata,
+    ControllerGeometryArtifact,
+    CoordinateDomain,
+    EncodedProgramArtifact,
+    LayerOperation,
+    NormalizedGeometryArtifact,
+    OperationArtifact,
+    PlacedGeometryArtifact,
+    PlanningStage,
+    RasterRow,
+    RasterSource,
+    SceneRevision,
+)
 from .model import (
     CoordinateSpace,
     LayerMode,
@@ -38,7 +52,6 @@ from .power_correction import (
 )
 from .raster_asset import (
     RasterAssetIdentity,
-    RasterAssetMetadata,
     decode_raster_grayscale,
     probe_raster_asset,
     read_raster_asset_payload,
@@ -65,33 +78,6 @@ class ProjectJob:
     coordinate_frame_signature: tuple[str, int, str] | None = None
     execution_signature: tuple[Any, ...] | None = None
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
-
-
-@dataclass(slots=True)
-class _RasterRow:
-    """One constant-velocity scan row with zero or more powered spans."""
-
-    points: np.ndarray
-    spans: list[Polyline]
-    source_tag: str
-
-
-@dataclass(slots=True)
-class _RasterSource:
-    """One bounded source shared by every image object in a generation."""
-
-    metadata: RasterAssetMetadata
-    image: np.ndarray | None = None
-    identity: RasterAssetIdentity | None = None
-
-
-@dataclass(slots=True)
-class _LayerPlan:
-    layer: OperationLayer
-    paths: list[Polyline] = field(default_factory=list)
-    raster_rows: list[_RasterRow] = field(default_factory=list)
-    dithered_image: bool = False
-    raster_assets: tuple[RasterAssetIdentity, ...] = ()
 
 
 _MAX_STREAM_COMMANDS = 250_000
@@ -460,11 +446,11 @@ def _place_paths(
 
 
 def _place_raster_rows(
-    rows: Iterable[_RasterRow],
+    rows: Iterable[RasterRow],
     coordinate_frame: HoneycombCoordinateFrame | None,
-) -> list[_RasterRow]:
+) -> list[RasterRow]:
     return [
-        _RasterRow(
+        RasterRow(
             points=_place_points(row.points, coordinate_frame),
             spans=_place_paths(row.spans, coordinate_frame),
             source_tag=row.source_tag,
@@ -511,8 +497,8 @@ def _raster_motion_points(points: np.ndarray, overscan_percent: float) -> np.nda
     return np.vstack([points[0] - extension, points[0], points[1], points[1] + extension])
 
 
-def _reverse_raster_row(row: _RasterRow) -> _RasterRow:
-    return _RasterRow(
+def _reverse_raster_row(row: RasterRow) -> RasterRow:
+    return RasterRow(
         points=row.points[::-1].copy(),
         spans=[
             Polyline(span.points[::-1].copy(), closed=False, source_tag=span.source_tag)
@@ -523,9 +509,9 @@ def _reverse_raster_row(row: _RasterRow) -> _RasterRow:
 
 
 def _controller_raster_rows(
-    rows: list[_RasterRow],
+    rows: list[RasterRow],
     laser: LaserSettings,
-) -> list[_RasterRow]:
+) -> list[RasterRow]:
     offset = np.array(
         [laser.spot_offset_x_mm, laser.spot_offset_y_mm],
         dtype=np.float64,
@@ -533,7 +519,7 @@ def _controller_raster_rows(
     if not np.isfinite(offset).all():
         raise ValueError("laser spot offsets must be finite")
     return [
-        _RasterRow(
+        RasterRow(
             points=row.points.astype(np.float64, copy=True) - offset,
             spans=[
                 Polyline(
@@ -550,7 +536,7 @@ def _controller_raster_rows(
 
 
 def _raster_motion_paths(
-    rows: list[_RasterRow],
+    rows: list[RasterRow],
     overscan_percent: float,
 ) -> list[Polyline]:
     return [
@@ -564,7 +550,7 @@ def _raster_motion_paths(
 
 
 def _raster_row_command_count(
-    row: _RasterRow,
+    row: RasterRow,
     overscan_percent: float,
     *,
     powered: bool,
@@ -604,7 +590,190 @@ def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyl
     return paths
 
 
-def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[_RasterRow]:
+def _normalized_layer_geometry(
+    document: ProjectDocument,
+    layer: OperationLayer,
+) -> NormalizedGeometryArtifact:
+    """Capture the existing layer geometry at the first typed stage boundary."""
+
+    paths = tuple(_layer_paths(document, layer))
+    bounds_mm = _bounds(paths) if paths else None
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.NORMALIZED_GEOMETRY.value}:{layer.id}:v1"
+        ),
+        scene_revision=SceneRevision(
+            project_id=document.id,
+            revision=document.revision,
+            coordinate_space=document.coordinate_space,
+        ),
+        stage=PlanningStage.NORMALIZED_GEOMETRY,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.PROJECT,
+        bounds_mm=bounds_mm,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(f"project-layer:{layer.id}",),
+    )
+    return NormalizedGeometryArtifact(
+        metadata=metadata,
+        layer_paths=((layer.id, paths),),
+    )
+
+
+def _line_operation_artifact(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    normalized: NormalizedGeometryArtifact,
+) -> OperationArtifact:
+    """Bind normalized LINE geometry to its existing operation-layer settings."""
+
+    paths = list(normalized.paths_for_layer(layer.id))
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.OPERATIONS.value}:{layer.id}:v1"
+        ),
+        scene_revision=normalized.metadata.scene_revision,
+        stage=PlanningStage.OPERATIONS,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.PROJECT,
+        bounds_mm=normalized.metadata.bounds_mm,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(normalized.metadata.artifact_id,),
+    )
+    return OperationArtifact(
+        metadata=metadata,
+        layers=(LayerOperation(layer=layer, paths=paths),),
+    )
+
+
+def _placed_line_geometry_artifact(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    operation: OperationArtifact,
+    coordinate_frame: HoneycombCoordinateFrame | None,
+    coordinate_frame_signature: tuple[str, int, str] | None,
+) -> PlacedGeometryArtifact:
+    """Apply the existing rigid placement at an explicit machine-beam boundary."""
+
+    planned_layer = operation.layer_for_id(layer.id)
+    if planned_layer is None:
+        raise RuntimeError("LINE operation artifact lost its source layer")
+    paths = tuple(_place_paths(planned_layer.paths, coordinate_frame))
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.PLACED_GEOMETRY.value}:{layer.id}:v1"
+        ),
+        scene_revision=operation.metadata.scene_revision,
+        stage=PlanningStage.PLACED_GEOMETRY,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.MACHINE_BEAM,
+        bounds_mm=_bounds(paths) if paths else None,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(operation.metadata.artifact_id,),
+    )
+    return PlacedGeometryArtifact(
+        metadata=metadata,
+        layer_paths=((layer.id, paths),),
+        coordinate_frame_signature=coordinate_frame_signature,
+    )
+
+
+def _controller_line_geometry_artifact(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    placed: PlacedGeometryArtifact,
+    laser: LaserSettings,
+) -> ControllerGeometryArtifact:
+    """Apply the existing laser-spot correction at an explicit controller boundary."""
+
+    beam_paths = list(placed.paths_for_layer(layer.id))
+    paths = tuple(_controller_paths(beam_paths, laser))
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.CONTROLLER_GEOMETRY.value}:{layer.id}:v1"
+        ),
+        scene_revision=placed.metadata.scene_revision,
+        stage=PlanningStage.CONTROLLER_GEOMETRY,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.CONTROLLER,
+        bounds_mm=_bounds(paths) if paths else None,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(placed.metadata.artifact_id,),
+    )
+    return ControllerGeometryArtifact(
+        metadata=metadata,
+        layer_paths=((layer.id, paths),),
+        spot_offset_mm=(
+            float(laser.spot_offset_x_mm),
+            float(laser.spot_offset_y_mm),
+        ),
+    )
+
+
+def _encoded_program_artifact(
+    document: ProjectDocument,
+    text: str,
+    *,
+    bounds_mm: tuple[float, float, float, float],
+    command_count: int,
+    path_count: int,
+    point_count: int,
+    staged_line_artifact_ids: Iterable[str],
+    unstaged_layer_count: int,
+) -> EncodedProgramArtifact:
+    """Wrap the exact finalized stream without changing its contents."""
+
+    staged_ids = tuple(staged_line_artifact_ids)
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.ENCODED_PROGRAM.value}:v1"
+        ),
+        scene_revision=SceneRevision(
+            project_id=document.id,
+            revision=document.revision,
+            coordinate_space=document.coordinate_space,
+        ),
+        stage=PlanningStage.ENCODED_PROGRAM,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.PROGRAM,
+        bounds_mm=bounds_mm,
+        statistics=(
+            ("command_count", command_count),
+            ("path_count", path_count),
+            ("point_count", point_count),
+            ("staged_line_layer_count", len(staged_ids)),
+            ("unstaged_layer_count", unstaged_layer_count),
+        ),
+        provenance=("project.toolpath:encoder", *staged_ids),
+    )
+    return EncodedProgramArtifact(
+        metadata=metadata,
+        text=text,
+    )
+
+
+def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[RasterRow]:
     outlines = object_polylines(item)
     if not outlines or any(not path.closed for path in outlines):
         raise ValueError(
@@ -640,7 +809,7 @@ def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[_RasterRow]
             f"exceeding the {_MAX_SCANLINE_EDGE_TESTS:,}-test planner limit; increase the line "
             "interval or simplify the vector geometry"
         )
-    rows: list[_RasterRow] = []
+    rows: list[RasterRow] = []
     for row in range(row_count):
         y = first_y + row * interval
         intersections: list[float] = []
@@ -670,7 +839,7 @@ def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[_RasterRow]
                 row_points = row_points[::-1].copy()
                 scan_spans = [span[::-1].copy() for span in reversed(scan_spans)]
             rows.append(
-                _RasterRow(
+                RasterRow(
                     points=row_points @ from_scan.T,
                     spans=[
                         Polyline(
@@ -753,10 +922,10 @@ def _raster_source_path(item: SceneObject) -> str:
 
 def _preflight_raster_sources(
     items: Iterable[SceneObject],
-) -> dict[str, _RasterSource]:
+) -> dict[str, RasterSource]:
     """Probe each unique source once and bound aggregate decode work."""
 
-    raster_sources: dict[str, _RasterSource] = {}
+    raster_sources: dict[str, RasterSource] = {}
     aggregate_encoded_bytes = 0
     aggregate_decoded_bytes = 0
     for item in items:
@@ -766,7 +935,7 @@ def _preflight_raster_sources(
         if source_path in raster_sources:
             continue
         metadata = probe_raster_asset(source_path)
-        raster_sources[metadata.path] = _RasterSource(metadata=metadata)
+        raster_sources[metadata.path] = RasterSource(metadata=metadata)
         aggregate_encoded_bytes += metadata.encoded_bytes
         aggregate_decoded_bytes += metadata.decoded_bytes
 
@@ -793,7 +962,7 @@ def _preflight_raster_sources(
 def _preflight_raster_budget(
     document: ProjectDocument,
     controller_power_max: int,
-) -> dict[str, _RasterSource]:
+) -> dict[str, RasterSource]:
     """Reject aggregate raster work before constructing row/span geometry."""
 
     aggregate_rows = 0
@@ -1062,8 +1231,8 @@ def _image_raster_rows(
     *,
     powered: bool,
     command_budget: int,
-    raster_sources: dict[str, _RasterSource],
-) -> tuple[list[_RasterRow], RasterAssetIdentity]:
+    raster_sources: dict[str, RasterSource],
+) -> tuple[list[RasterRow], RasterAssetIdentity]:
     import cv2
 
     asset = Path(str(item.geometry.get("asset", ""))).expanduser()
@@ -1146,7 +1315,7 @@ def _image_raster_rows(
     )
     dither_thresholds = _ordered_dither_thresholds(column_count)
 
-    rows: list[_RasterRow] = []
+    rows: list[RasterRow] = []
     estimated_commands = 0
     for row_index, row_position in enumerate(row_positions):
         row_interval = _scan_line_polygon_interval(scan_polygon, float(row_position))
@@ -1195,7 +1364,7 @@ def _image_raster_rows(
         if row_index % 2:
             row_scan = row_scan[::-1].copy()
             scan_spans = [span[::-1].copy() for span in reversed(scan_spans)]
-        row = _RasterRow(
+        row = RasterRow(
             points=_scan_points_to_machine(row_scan, scan_to_machine),
             spans=[
                 Polyline(
@@ -1230,9 +1399,9 @@ def _raster_rows(
     *,
     powered: bool,
     command_budget: int,
-    raster_sources: dict[str, _RasterSource],
-) -> tuple[list[_RasterRow], tuple[RasterAssetIdentity, ...], int]:
-    rows: list[_RasterRow] = []
+    raster_sources: dict[str, RasterSource],
+) -> tuple[list[RasterRow], tuple[RasterAssetIdentity, ...], int]:
+    rows: list[RasterRow] = []
     assets: list[RasterAssetIdentity] = []
     estimated_commands = 0
     for item in layer_objects:
@@ -1269,9 +1438,14 @@ def _operation_paths(
     document: ProjectDocument,
     layer: OperationLayer,
     layer_objects: list[SceneObject],
-) -> list[Polyline]:
+) -> tuple[list[Polyline], OperationArtifact | None]:
     if layer.mode == LayerMode.LINE:
-        return _layer_paths(document, layer)
+        normalized = _normalized_layer_geometry(document, layer)
+        operation = _line_operation_artifact(document, layer, normalized)
+        planned_layer = operation.layer_for_id(layer.id)
+        if planned_layer is None:
+            raise RuntimeError("LINE operation artifact lost its source layer")
+        return planned_layer.paths, operation
     unsupported = [
         item.name
         for item in layer_objects
@@ -1283,11 +1457,14 @@ def _operation_paths(
             f"{layer.mode.value.title()} output is not implemented for: "
             + ", ".join(unsupported)
         )
-    return [
-        path
-        for item in layer_objects
-        for path in _scanline_paths(item, layer)
-    ]
+    return (
+        [
+            path
+            for item in layer_objects
+            for path in _scanline_paths(item, layer)
+        ],
+        None,
+    )
 
 
 def _points_differ(first: np.ndarray, second: np.ndarray) -> bool:
@@ -1296,7 +1473,7 @@ def _points_differ(first: np.ndarray, second: np.ndarray) -> bool:
 
 def _emit_raster_row(
     lines: list[str],
-    row: _RasterRow,
+    row: RasterRow,
     layer: OperationLayer,
     laser: LaserSettings,
     power: int,
@@ -1455,7 +1632,8 @@ def generate_project_gcode(
 
     all_paths: list[Polyline] = []
     all_controller_paths: list[Polyline] = []
-    layer_plans: list[_LayerPlan] = []
+    layer_plans: list[LayerOperation] = []
+    staged_line_artifact_ids: list[str] = []
     raster_command_estimate = 0
     vector_command_estimate = 0
     for layer in sorted(document.layers, key=lambda item: item.priority):
@@ -1560,7 +1738,7 @@ def generate_project_gcode(
                     coordinate_label="raster overscan path after laser spot correction",
                 )
             layer_plans.append(
-                _LayerPlan(
+                LayerOperation(
                     layer=layer,
                     raster_rows=controller_rows,
                     dithered_image=any(
@@ -1573,7 +1751,11 @@ def generate_project_gcode(
             all_controller_paths.extend(controller_motion_paths)
             continue
 
-        local_design_paths = _operation_paths(document, layer, layer_objects)
+        local_design_paths, operation_artifact = _operation_paths(
+            document,
+            layer,
+            layer_objects,
+        )
         if not local_design_paths:
             continue
         validate_paths(
@@ -1582,7 +1764,18 @@ def generate_project_gcode(
             local_margin,
             coordinate_label="local design",
         )
-        design_paths = _place_paths(local_design_paths, coordinate_frame)
+        placed_artifact: PlacedGeometryArtifact | None = None
+        if operation_artifact is None:
+            design_paths = _place_paths(local_design_paths, coordinate_frame)
+        else:
+            placed_artifact = _placed_line_geometry_artifact(
+                document,
+                layer,
+                operation_artifact,
+                coordinate_frame,
+                coordinate_frame_signature,
+            )
+            design_paths = list(placed_artifact.paths_for_layer(layer.id))
         if guarded_polygon is None:
             validate_paths(
                 design_paths,
@@ -1596,7 +1789,17 @@ def generate_project_gcode(
                 guarded_polygon,
                 coordinate_label="placed design",
             )
-        paths = _controller_paths(design_paths, laser)
+        if placed_artifact is None:
+            paths = _controller_paths(design_paths, laser)
+        else:
+            controller_artifact = _controller_line_geometry_artifact(
+                document,
+                layer,
+                placed_artifact,
+                laser,
+            )
+            staged_line_artifact_ids.append(controller_artifact.metadata.artifact_id)
+            paths = list(controller_artifact.paths_for_layer(layer.id))
         if guarded_polygon is None:
             validate_paths(
                 paths,
@@ -1610,7 +1813,7 @@ def generate_project_gcode(
                 guarded_polygon,
                 coordinate_label="controller path after laser spot correction",
             )
-        layer_plans.append(_LayerPlan(layer=layer, paths=paths))
+        layer_plans.append(LayerOperation(layer=layer, paths=paths))
         powered = layer.controller_power(controller_power_max) > 0
         per_path_overhead = 2 if powered else 1
         vector_command_estimate += layer.passes * sum(
@@ -1934,8 +2137,20 @@ def generate_project_gcode(
             "or simplify project geometry"
         )
     text = "\n".join(lines)
-    plan = build_job_plan(
+    encoded = _encoded_program_artifact(
+        document,
         text,
+        bounds_mm=bounds,
+        command_count=command_count,
+        path_count=path_count,
+        point_count=point_count,
+        staged_line_artifact_ids=staged_line_artifact_ids,
+        unstaged_layer_count=sum(
+            1 for layer_plan in layer_plans if layer_plan.layer.mode != LayerMode.LINE
+        ),
+    )
+    plan = build_job_plan(
+        encoded.text,
         power_max=controller_power_max,
         default_feed_mm_min=laser.travel_feed_mm_min,
         start_position=(float(start[0]), float(start[1])),
@@ -1943,7 +2158,7 @@ def generate_project_gcode(
         command_delay_ms=laser.preview_command_delay_ms,
     )
     return ProjectJob(
-        text=text,
+        text=encoded.text,
         bounds_mm=bounds,
         cut_length_mm=cut_length,
         travel_length_mm=travel_length,

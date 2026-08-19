@@ -1646,7 +1646,7 @@ def test_native_vector_command_budget_rejects_before_text_construction(
     monkeypatch.setattr(
         toolpath_module,
         "_operation_paths",
-        lambda *_args, **_kwargs: [oversized],
+        lambda *_args, **_kwargs: ([oversized], None),
     )
     monkeypatch.setattr(
         toolpath_module,

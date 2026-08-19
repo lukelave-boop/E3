@@ -57,6 +57,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
+| `planning/` | Qt-free stage identities, coordinate-domain contracts, artifact provenance, and shared planner payload models |
 | `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
 | `materials/` | SQLite material-preset library |
 | `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
@@ -306,6 +307,34 @@ native shapes / imported SVG / traced outlines
   -> unchanged guarded main-window run path
   -> the same finalized G-code text is submitted to MachineService
 ```
+
+The staged-planning contract is:
+
+```text
+SceneRevision
+  -> NormalizedGeometryArtifact
+  -> OperationArtifact
+  -> PlacedGeometryArtifact
+  -> ControllerGeometryArtifact
+  -> EncodedProgramArtifact
+  -> immutable JobPlan
+```
+
+Every artifact declares its coordinate domain, stage version, bounds, warnings,
+statistics, and provenance. The first increment moved the existing layer/raster
+working records into `laser_aligner/planning/model.py`. LINE-layer object
+geometry now crosses `NormalizedGeometryArtifact`, `OperationArtifact`,
+`PlacedGeometryArtifact`, and `ControllerGeometryArtifact`, and the exact
+finalized program text crosses `EncodedProgramArtifact` before the immutable
+`JobPlan` is built. Placement and laser-spot correction still use the existing
+`_place_paths()` and `_controller_paths()` implementations unchanged. The
+encoded artifact does not rewrite G-code; it records program statistics, the
+current encoder provenance, the staged LINE controller-artifact identities, and
+the count of non-LINE layers that still use the legacy internal path.
+`project.toolpath.generate_project_gcode()` remains the compatibility entry
+point and orchestrator. No cache or selective recomputation is active yet; those
+follow only after the stage boundaries themselves preserve the planning
+goldens.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions
