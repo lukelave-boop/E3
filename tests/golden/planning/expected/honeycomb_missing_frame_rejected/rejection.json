@@ -1,0 +1,4 @@
+{
+  "exception_type": "SafetyError",
+  "message": "Honeycomb-local output requires the reviewed honeycomb coordinate frame"
+}
