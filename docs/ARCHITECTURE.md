@@ -365,6 +365,15 @@ operation reuse, raster/fill cache, or encoded-program cache yet.
 because the final stream still contains volatile generation-time text and
 whole-job dependencies.
 
+Cache performance is measured explicitly rather than inferred from hit counts.
+`scripts/benchmark_planning_cache.py` compares uncached generation, cold-cache
+generation, warm identical regeneration, speed-only and power-only edits,
+spot-offset invalidation, and one-layer geometry invalidation. It reports local
+median/min/max wall time plus normalized/placed/controller hit-miss deltas and
+verifies the expected dependency pattern without enforcing a timing threshold in
+CI. Performance claims should be recorded from an actual benchmark run rather
+than from unit-test duration.
+
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions
 use CSS physical-unit conversions (`96 px = 1 in`); `viewBox` and

@@ -10,20 +10,36 @@ Snapshot: **2026-08-19**
 The planner now has a behavior-preserving typed-stage spine for LINE output:
 `SceneRevision -> NormalizedGeometryArtifact -> OperationArtifact ->
 PlacedGeometryArtifact -> ControllerGeometryArtifact -> EncodedProgramArtifact
--> immutable JobPlan`. The existing geometry extraction, placement,
-laser-spot correction, ordering, power correction, safety validation, exact
-G-code text, and `build_job_plan()` behavior remain in place; the artifacts make
-the existing coordinate and provenance boundaries explicit without enabling
-caching or selective recomputation. Raster/fill planning still uses the legacy
-internal path until its own staged extraction. The deterministic planning
-goldens remain unchanged. Merge-preparation verification passed the six-file
-planner-focused suite with **159 tests**, including the 36 golden cases, plus
-repository-wide Ruff, compileall, and diff checks. One command-budget test
-monkeypatch was updated to match the new private `_operation_paths()` return
-contract; no production behavior changed in that fix. This architecture
-refactor is automated-test verified only; no physical controller, motion,
-camera, or laser test was performed or required for this behavior-preserving
-internal decomposition.
+-> immutable JobPlan`. `SceneRevision` carries a canonical project-content
+digest and the normalized, placed, and controller LINE artifacts carry
+versioned dependency digests separate from their run-oriented artifact IDs.
+`E3MainWindow` owns one bounded, lock-protected, in-memory `PlanningCache`
+across exact background planning requests. Unchanged normalized geometry,
+machine-beam placement, and controller geometry can therefore be reused while
+fresh artifact metadata and the normal local/placed/controller safety
+validation still run for every request. Operation wrapping, raster/fill
+planning, encoded-program generation, and immutable `JobPlan` construction
+remain uncached. The deterministic planning goldens remain unchanged.
+
+Focused cache/planning verification passed **150 tests** with Ruff, compileall,
+and diff checks clean before the benchmark-only addition. A repeatable Windows
+benchmark using 8 LINE layers x 32 objects (256 objects), seven measured runs
+per scenario, reported 325.598 ms median uncached generation, 324.146 ms cold
+cache, 317.806 ms warm identical regeneration, 319.161 ms after speed-only
+edits, 321.673 ms after power-only edits, 320.559 ms after spot-offset edits,
+and 320.764 ms when one layer's geometry changed. Cache hit/miss counts matched
+the dependency model exactly, but warm identical planning improved only about
+**2.4%**, showing that LINE geometry recomputation is not the dominant
+remaining cost. A follow-up `cProfile` run intentionally inflated absolute wall
+times but identified the dominant structure: `build_job_plan()` accumulated
+5.529 s of 7.007 s spent inside eight `generate_project_gcode()` calls
+(~79%), while `parse_words()` accumulated 3.566 s (~51%). Inspection confirmed
+that `build_job_plan()` parses each executable line once directly and then
+reparses it twice through `exact_codes()` for G and M codes. The next
+performance target is therefore single-pass `JobPlan` G-code word parsing on a
+separate branch, not another geometry-cache layer. This work is automated-test
+and local-benchmark verified only; no physical controller, motion, camera, or
+laser test was required for these internal planning changes.
 
 Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
 validation. Its refresh, JSON report copy, and clicked-point inspector are
