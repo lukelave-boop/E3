@@ -23,7 +23,7 @@ env:
 jobs:
   lint:
     name: Ruff
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 10
 
     steps:
@@ -46,7 +46,7 @@ jobs:
 
   validate:
     name: Dependency and bytecode validation
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 10
 
     steps:
@@ -64,8 +64,6 @@ jobs:
             requirements-dev.txt
             requirements-desktop.txt
 
-      - name: Install Linux desktop runtime libraries
-        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
       - name: Upgrade pip
         run: python tools/ci_timed.py "Upgrade pip (fast validation)" -- python -m pip install --upgrade pip
       - name: Install desktop and validation dependencies
@@ -76,8 +74,8 @@ jobs:
         run: python tools/ci_timed.py "Fast compileall" -- python -m compileall -q laser_aligner
 
   test:
-    name: Full Linux desktop suite (Python 3.12, 4 workers)
-    runs-on: ubuntu-latest
+    name: Full Windows desktop suite (Python 3.12, 4 workers)
+    runs-on: windows-latest
     timeout-minutes: 10
 
     steps:
@@ -95,8 +93,6 @@ jobs:
             requirements-dev.txt
             requirements-desktop.txt
 
-      - name: Install Linux desktop runtime libraries
-        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
       - name: Upgrade pip
         run: python tools/ci_timed.py "Upgrade pip (fast tests)" -- python -m pip install --upgrade pip
       - name: Install desktop and test dependencies
