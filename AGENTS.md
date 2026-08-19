@@ -48,8 +48,9 @@ requires focused tests for both acceptance and rejection paths.
 - Persistent project state belongs in `project/`; never put Qt objects in the
   `.e3laser` model.
 - Platform-specific camera and serial implementations must be imported lazily
-  through portable interfaces. Simulator mode must import and run on Windows
-  and Linux.
+  through portable interfaces. Windows is the supported desktop/simulator CI
+  target; Linux-specific Raspberry Pi node/bridge code must remain isolated from
+  Windows imports.
 - The browser's single-SVG pipeline and desktop project pipeline are currently
   distinct. Identify which pipeline a change affects and test both when shared
   behavior changes.
@@ -58,15 +59,19 @@ requires focused tests for both acceptance and rejection paths.
 
 ## Platform contract
 
-The portable core and simulator are intended to run on Windows and Linux.
-Linux-only hardware behavior must fail clearly and must not prevent portable
-modules or simulator tests from importing on Windows.
+Windows is the supported desktop and automated-CI target. Linux remains in
+scope for explicitly Linux/Raspberry-Pi components such as the remote hardware
+node, bridge, native camera backend, and their directly relevant tests. Linux
+desktop compatibility is not an automated compatibility gate; legacy Linux
+packaging may remain until it is removed separately.
 
-Use platform-native paths for new user data. Do not add new hard-coded
-`~/.local`, `/dev`, `.venv/bin`, or `.venv/Scripts` assumptions to portable
-code. POSIX-only tests must skip explicitly on unsupported platforms rather
-than failing during collection. Add equivalent Windows tests when a Windows
-backend is introduced.
+Linux-only hardware behavior must fail clearly and must not prevent supported
+Windows modules or simulator tests from importing. Use platform-native paths
+for new user data. Do not add new hard-coded `~/.local`, `/dev`, `.venv/bin`,
+or `.venv/Scripts` assumptions to portable code. POSIX-only tests must skip
+explicitly on Windows rather than failing during collection. New desktop or
+portable-backend behavior requires Windows coverage; Pi-specific changes require
+focused Linux/Pi verification when applicable.
 
 The current platform boundary and known blockers are recorded in
 `CURRENT_STATE.md`.
@@ -78,8 +83,8 @@ The current platform boundary and known blockers are recorded in
 3. Add or update focused tests.
 4. For an ordinary localized change, run the directly affected focused tests,
    Ruff on the affected code or repository as appropriate, and `compileall`.
-5. Push development branches and rely on Fast Development CI for the complete
-   representative Linux 3.12 desktop suite.
+5. Push development branches and rely on Fast Development CI, when the branch
+   pattern enables it, for the complete Windows Python 3.12 desktop suite.
 6. Update `CURRENT_STATE.md` when verification, supported behavior, known gaps,
    platform status, or active working-tree work changes.
 7. Update the README, architecture, roadmap, and changelog when user-visible
@@ -88,8 +93,9 @@ The current platform boundary and known blockers are recorded in
 Do not run the complete local suite after every small iterative fix unless the
 change is broad or cross-cutting, focused tests expose unexpected regressions,
 the user explicitly requests it, or the branch is being prepared for a merge or
-release. Before merge or release, run the Full Compatibility CI tier. That tier
-retains the supported Windows/Linux and Python-version matrix.
+release. Before merge or release, run the Windows compatibility CI tier. The
+current compatibility workflow covers Windows Python 3.10 core/non-desktop,
+Windows Python 3.12 desktop, and repository Ruff.
 
 Do not commit captures, calibration photographs, logs, generated G-code, trace
 previews, or local configuration unless a task explicitly makes them curated
@@ -111,7 +117,7 @@ regressions, explicit user requests, and merge/release preparation. Full local
 pytest runs use four xdist workers by default; use serial execution only when
 diagnosing ordering, shared-state, or worker-specific behavior.
 
-Linux:
+Linux/Pi-specific work, when relevant (not a desktop compatibility gate):
 
 ```bash
 .venv/bin/python -m pytest -q -n 4
@@ -153,7 +159,8 @@ State exactly which level was performed.
 A change is complete only when:
 
 - relevant automated tests pass;
-- supported Windows and Linux imports remain valid;
+- supported Windows imports remain valid, and touched Linux/Pi-specific modules
+  retain their focused platform coverage when applicable;
 - safety invariants are preserved;
 - generated or local artifacts are not accidentally included;
 - user-facing documentation matches the implementation;
