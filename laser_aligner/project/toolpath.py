@@ -28,6 +28,7 @@ from ..planning.model import (
     CoordinateDomain,
     LayerOperation,
     NormalizedGeometryArtifact,
+    OperationArtifact,
     PlanningStage,
     RasterRow,
     RasterSource,
@@ -618,6 +619,37 @@ def _normalized_layer_geometry(
     return NormalizedGeometryArtifact(
         metadata=metadata,
         layer_paths=((layer.id, paths),),
+    )
+
+
+def _line_operation_artifact(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    normalized: NormalizedGeometryArtifact,
+) -> OperationArtifact:
+    """Bind normalized LINE geometry to its existing operation-layer settings."""
+
+    paths = list(normalized.paths_for_layer(layer.id))
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.OPERATIONS.value}:{layer.id}:v1"
+        ),
+        scene_revision=normalized.metadata.scene_revision,
+        stage=PlanningStage.OPERATIONS,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.PROJECT,
+        bounds_mm=normalized.metadata.bounds_mm,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(normalized.metadata.artifact_id,),
+    )
+    return OperationArtifact(
+        metadata=metadata,
+        layers=(LayerOperation(layer=layer, paths=paths),),
     )
 
 
@@ -1289,7 +1321,11 @@ def _operation_paths(
 ) -> list[Polyline]:
     if layer.mode == LayerMode.LINE:
         normalized = _normalized_layer_geometry(document, layer)
-        return list(normalized.paths_for_layer(layer.id))
+        operation = _line_operation_artifact(document, layer, normalized)
+        planned_layer = operation.layer_for_id(layer.id)
+        if planned_layer is None:
+            raise RuntimeError("LINE operation artifact lost its source layer")
+        return planned_layer.paths
     unsupported = [
         item.name
         for item in layer_objects

@@ -10,6 +10,7 @@ from laser_aligner.planning import (
     EncodedProgramArtifact,
     LayerOperation,
     NormalizedGeometryArtifact,
+    OperationArtifact,
     PlanningStage,
     RasterRow,
     SceneRevision,
@@ -106,6 +107,41 @@ def test_normalized_geometry_artifact_rejects_duplicate_layer_ids() -> None:
         NormalizedGeometryArtifact(
             metadata=metadata,
             layer_paths=(("layer-a", ()), ("layer-a", ())),
+        )
+
+
+def test_operation_artifact_indexes_existing_layer_payload() -> None:
+    path = Polyline(
+        np.asarray([[0.0, 0.0], [4.0, 0.0]], dtype=np.float64),
+        closed=False,
+        source_tag="operation-line",
+    )
+    layer = _layer()
+    operation = LayerOperation(layer=layer, paths=[path])
+    artifact = OperationArtifact(
+        metadata=_metadata(
+            PlanningStage.OPERATIONS,
+            CoordinateDomain.PROJECT,
+        ),
+        layers=(operation,),
+    )
+
+    selected = artifact.layer_for_id(layer.id)
+    assert selected is operation
+    assert selected.paths[0] is path
+    assert artifact.layer_for_id("missing") is None
+
+
+def test_operation_artifact_rejects_duplicate_layer_ids() -> None:
+    layer = _layer()
+    metadata = _metadata(
+        PlanningStage.OPERATIONS,
+        CoordinateDomain.PROJECT,
+    )
+    with pytest.raises(ValueError, match="layer IDs must be unique"):
+        OperationArtifact(
+            metadata=metadata,
+            layers=(LayerOperation(layer=layer), LayerOperation(layer=layer)),
         )
 
 

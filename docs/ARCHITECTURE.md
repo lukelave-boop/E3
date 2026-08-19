@@ -322,14 +322,16 @@ SceneRevision
 
 Every artifact declares its coordinate domain, stage version, bounds, warnings,
 statistics, and provenance. The first increment moved the existing layer/raster
-working records into `laser_aligner/planning/model.py`. The next behavior-
-preserving increment routes LINE-layer object geometry through a real
-`NormalizedGeometryArtifact` at the exact former `_layer_paths()` boundary,
-carrying the project ID/revision, coordinate domain, layer identity, bounds, and
-path/point statistics. `project.toolpath.generate_project_gcode()` remains the
-compatibility entry point and orchestrator. No cache or selective recomputation
-is active yet; those follow only after the stage boundaries themselves preserve
-the planning goldens.
+working records into `laser_aligner/planning/model.py`. LINE-layer object
+geometry now crosses `NormalizedGeometryArtifact` at the former
+`_layer_paths()` boundary, and the existing layer settings plus those same path
+objects then cross `OperationArtifact` before placement. The operation artifact
+links its provenance to the normalized artifact and retains the project
+ID/revision, coordinate domain, bounds, and path/point statistics.
+`project.toolpath.generate_project_gcode()` remains the compatibility entry
+point and orchestrator. No cache or selective recomputation is active yet; those
+follow only after the stage boundaries themselves preserve the planning
+goldens.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions

@@ -174,6 +174,15 @@ class OperationArtifact:
             stage=PlanningStage.OPERATIONS,
             domain=CoordinateDomain.PROJECT,
         )
+        layer_ids = [operation.layer.id for operation in self.layers]
+        if len(layer_ids) != len(set(layer_ids)):
+            raise ValueError("Operation artifact layer IDs must be unique")
+
+    def layer_for_id(self, layer_id: str) -> LayerOperation | None:
+        for operation in self.layers:
+            if operation.layer.id == layer_id:
+                return operation
+        return None
 
 
 @dataclass(frozen=True, slots=True)
