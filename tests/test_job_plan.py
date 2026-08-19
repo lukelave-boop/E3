@@ -169,7 +169,7 @@ def test_start_here_rejects_unknown_move() -> None:
     with pytest.raises(ValueError, match="outside"):
         restart_program_from_move(plan, 5)
 
-def test_build_job_plan_parses_each_executable_line_once(monkeypatch) -> None:
+def test_build_job_plan_scans_each_executable_line_once(monkeypatch) -> None:
     text = "\n".join(
         [
             "; comment-only line",
@@ -184,14 +184,25 @@ def test_build_job_plan_parses_each_executable_line_once(monkeypatch) -> None:
             "",
         ]
     )
-    original_parse_words = job_plan_module.parse_words
-    parsed_lines: list[str] = []
+    original_scan_word_state = job_plan_module.scan_word_state
+    scanned_lines: list[tuple[str, bool]] = []
 
-    def counted_parse_words(line: str):
-        parsed_lines.append(line)
-        return original_parse_words(line)
+    def counted_scan_word_state(
+        line: str,
+        *,
+        comments_stripped: bool = False,
+    ):
+        scanned_lines.append((line, comments_stripped))
+        return original_scan_word_state(
+            line,
+            comments_stripped=comments_stripped,
+        )
 
-    monkeypatch.setattr(job_plan_module, "parse_words", counted_parse_words)
+    monkeypatch.setattr(
+        job_plan_module,
+        "scan_word_state",
+        counted_scan_word_state,
+    )
 
     plan = job_plan_module.build_job_plan(
         text,
@@ -200,12 +211,12 @@ def test_build_job_plan_parses_each_executable_line_once(monkeypatch) -> None:
     )
 
     assert len(plan.moves) == 2
-    assert parsed_lines == [
-        "G21",
-        "G90",
-        "M5",
-        "G0 X10 Y0 F600",
-        "M4 S200",
-        "G1X20Y0F1200",
-        "M5",
+    assert scanned_lines == [
+        ("G21", True),
+        ("G90", True),
+        ("M5", True),
+        ("G0 X10 Y0 F600", True),
+        ("M4 S200", True),
+        ("G1X20Y0F1200", True),
+        ("M5", True),
     ]

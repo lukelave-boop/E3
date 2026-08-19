@@ -5,7 +5,12 @@ from laser_aligner.config import WorkArea
 from laser_aligner.errors import SafetyError, SvgError
 from laser_aligner.gcode.generator import DesignPlacement, ToolpathOptions, generate_frame_gcode, generate_vector_gcode
 from laser_aligner.gcode.job_plan import build_job_plan
-from laser_aligner.gcode.preview import parse_gcode_segments
+from laser_aligner.gcode.preview import (
+    parse_gcode_segments,
+    parse_words,
+    scan_word_state,
+    strip_comment,
+)
 from laser_aligner.geometry.svg import Polyline, SvgGeometry, parse_svg
 
 
@@ -358,3 +363,48 @@ def test_browser_vector_command_budget_rejects_before_geometry_expansion(
             ToolpathOptions(power=10),
             WorkArea(),
         )
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "G1 X10 Y-2.5 F1.2e3",
+        "g90m5",
+        "G1X1Y2 ; G0 X999 Y999",
+        "G1 X1 (ignored Y9) Y2",
+        "G1.0000000005 M4.0000000005 X3",
+        "M4 S200 M5 S0",
+        "Q7 G91 X-0.25",
+    ],
+)
+def test_scan_word_state_matches_parse_words_semantics(line: str) -> None:
+    words = parse_words(line)
+    expected_g_codes = {
+        int(round(word.value))
+        for word in words
+        if word.letter == "G"
+        and abs(word.value - round(word.value)) < 1e-9
+    }
+    expected_m_codes = {
+        int(round(word.value))
+        for word in words
+        if word.letter == "M"
+        and abs(word.value - round(word.value)) < 1e-9
+    }
+    expected_values = {word.letter: word.value for word in words}
+
+    assert scan_word_state(line) == (
+        expected_g_codes,
+        expected_m_codes,
+        expected_values,
+    )
+    cleaned = strip_comment(line)
+    assert scan_word_state(cleaned, comments_stripped=True) == (
+        expected_g_codes,
+        expected_m_codes,
+        expected_values,
+    )
+
+
+def test_scan_word_state_rejects_nonfinite_numeric_words() -> None:
+    with pytest.raises(ValueError, match="must be finite"):
+        scan_word_state("G1 X1e999")
