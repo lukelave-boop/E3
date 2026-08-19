@@ -222,6 +222,15 @@ class ControllerGeometryArtifact:
         )
         if not all(math.isfinite(float(value)) for value in self.spot_offset_mm):
             raise ValueError("Controller geometry spot offset must be finite")
+        layer_ids = [layer_id for layer_id, _paths in self.layer_paths]
+        if len(layer_ids) != len(set(layer_ids)):
+            raise ValueError("Controller geometry layer IDs must be unique")
+
+    def paths_for_layer(self, layer_id: str) -> tuple[Polyline, ...]:
+        for candidate_id, paths in self.layer_paths:
+            if candidate_id == layer_id:
+                return paths
+        return ()
 
 
 @dataclass(frozen=True, slots=True)

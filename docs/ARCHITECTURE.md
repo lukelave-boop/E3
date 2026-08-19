@@ -323,12 +323,13 @@ SceneRevision
 Every artifact declares its coordinate domain, stage version, bounds, warnings,
 statistics, and provenance. The first increment moved the existing layer/raster
 working records into `laser_aligner/planning/model.py`. LINE-layer object
-geometry now crosses `NormalizedGeometryArtifact`, then `OperationArtifact`, and
-then `PlacedGeometryArtifact`. Placement still uses the existing `_place_paths()`
-rigid transform; the placed artifact makes the transition from project
-coordinates to machine-beam coordinates explicit, carries the reviewed support
-frame signature when present, and links its provenance to the operation
-artifact. `project.toolpath.generate_project_gcode()` remains the compatibility
+geometry now crosses `NormalizedGeometryArtifact`, `OperationArtifact`,
+`PlacedGeometryArtifact`, and `ControllerGeometryArtifact`. Placement still uses
+the existing `_place_paths()` rigid transform, while controller conversion still
+uses the existing `_controller_paths()` laser-spot correction. The two artifacts
+make machine-beam and commanded-controller coordinates explicit, retain the
+reviewed support-frame provenance chain, and record the exact configured spot
+offset. `project.toolpath.generate_project_gcode()` remains the compatibility
 entry point and orchestrator. No cache or selective recomputation is active yet;
 those follow only after the stage boundaries themselves preserve the planning
 goldens.

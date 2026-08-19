@@ -6,6 +6,7 @@ import pytest
 from laser_aligner.geometry.svg import Polyline
 from laser_aligner.planning import (
     ArtifactMetadata,
+    ControllerGeometryArtifact,
     CoordinateDomain,
     EncodedProgramArtifact,
     LayerOperation,
@@ -174,6 +175,38 @@ def test_placed_geometry_artifact_rejects_duplicate_layer_ids() -> None:
     )
     with pytest.raises(ValueError, match="layer IDs must be unique"):
         PlacedGeometryArtifact(
+            metadata=metadata,
+            layer_paths=(("layer-a", ()), ("layer-a", ())),
+        )
+
+
+def test_controller_geometry_artifact_indexes_corrected_paths_and_offset() -> None:
+    path = Polyline(
+        np.asarray([[8.0, 23.0], [12.0, 23.0]], dtype=np.float64),
+        closed=False,
+        source_tag="controller-line",
+    )
+    artifact = ControllerGeometryArtifact(
+        metadata=_metadata(
+            PlanningStage.CONTROLLER_GEOMETRY,
+            CoordinateDomain.CONTROLLER,
+        ),
+        layer_paths=(("layer-a", (path,)),),
+        spot_offset_mm=(2.0, -3.0),
+    )
+
+    assert artifact.paths_for_layer("layer-a")[0] is path
+    assert artifact.paths_for_layer("missing") == ()
+    assert artifact.spot_offset_mm == (2.0, -3.0)
+
+
+def test_controller_geometry_artifact_rejects_duplicate_layer_ids() -> None:
+    metadata = _metadata(
+        PlanningStage.CONTROLLER_GEOMETRY,
+        CoordinateDomain.CONTROLLER,
+    )
+    with pytest.raises(ValueError, match="layer IDs must be unique"):
+        ControllerGeometryArtifact(
             metadata=metadata,
             layer_paths=(("layer-a", ()), ("layer-a", ())),
         )

@@ -25,6 +25,7 @@ from ..geometry.polygon import (
 from ..geometry.svg import Polyline
 from ..planning.model import (
     ArtifactMetadata,
+    ControllerGeometryArtifact,
     CoordinateDomain,
     LayerOperation,
     NormalizedGeometryArtifact,
@@ -688,6 +689,43 @@ def _placed_line_geometry_artifact(
         metadata=metadata,
         layer_paths=((layer.id, paths),),
         coordinate_frame_signature=coordinate_frame_signature,
+    )
+
+
+def _controller_line_geometry_artifact(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    placed: PlacedGeometryArtifact,
+    laser: LaserSettings,
+) -> ControllerGeometryArtifact:
+    """Apply the existing laser-spot correction at an explicit controller boundary."""
+
+    beam_paths = list(placed.paths_for_layer(layer.id))
+    paths = tuple(_controller_paths(beam_paths, laser))
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.CONTROLLER_GEOMETRY.value}:{layer.id}:v1"
+        ),
+        scene_revision=placed.metadata.scene_revision,
+        stage=PlanningStage.CONTROLLER_GEOMETRY,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.CONTROLLER,
+        bounds_mm=_bounds(paths) if paths else None,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(placed.metadata.artifact_id,),
+    )
+    return ControllerGeometryArtifact(
+        metadata=metadata,
+        layer_paths=((layer.id, paths),),
+        spot_offset_mm=(
+            float(laser.spot_offset_x_mm),
+            float(laser.spot_offset_y_mm),
+        ),
     )
 
 
@@ -1681,6 +1719,7 @@ def generate_project_gcode(
             local_margin,
             coordinate_label="local design",
         )
+        placed_artifact: PlacedGeometryArtifact | None = None
         if operation_artifact is None:
             design_paths = _place_paths(local_design_paths, coordinate_frame)
         else:
@@ -1705,7 +1744,16 @@ def generate_project_gcode(
                 guarded_polygon,
                 coordinate_label="placed design",
             )
-        paths = _controller_paths(design_paths, laser)
+        if placed_artifact is None:
+            paths = _controller_paths(design_paths, laser)
+        else:
+            controller_artifact = _controller_line_geometry_artifact(
+                document,
+                layer,
+                placed_artifact,
+                laser,
+            )
+            paths = list(controller_artifact.paths_for_layer(layer.id))
         if guarded_polygon is None:
             validate_paths(
                 paths,
