@@ -36,6 +36,13 @@ Desktop foundation:
 
 Current branch feature:
 
+- Machine-aware read-only Coordinate Audit as Machine Setup tab 6, including
+  calibration-binding blockers, machine-specific physical honeycomb span,
+  diagnostic GRBL realtime pose evidence through local or `e3bridge://`
+  transports, and image-bound clicked-point coordinate/containment inspection.
+  Bed Mapping consumes that same saved-machine span read-only; realtime audit
+  sampling is excluded while a streamed job owns the controller. Permanent
+  fixture reach editing and combined-bounds proposals remain later work.
 - Mandatory window-modal exact Preview as the only visible path to
   **START JOB**, shared by project and prepared Machine Setup programs.
 - Raw Live Monitor diagnostics distinguish Pi usable-frame Capture FPS,

@@ -2,9 +2,10 @@
 
 > **Operator directions:** Follow the packaged
 > [Permanent Camera Setup Runbook](../laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
-> It is the canonical current-version five-tab sequence. This document explains
-> implementation details and optional diagnostics; it is not a competing step
-> order.
+> It is the canonical current-version five-step calibration sequence. Machine
+> Setup also includes a sixth read-only Coordinate Audit tab after those steps.
+> This document explains implementation details and optional diagnostics; it is
+> not a competing step order.
 
 Open **Tools > Machine Setup…** in the desktop application. The Camera panel's
 **Calibrate lens…** and **Bed alignment…** buttons open the same window at the
@@ -17,8 +18,13 @@ blank until explicitly measured and configured for that saved machine. Changing
 or applying a generic motion-platform profile does not infer a span, including
 for the Ender-3 S1 Pro profile, and applying profile defaults preserves an
 existing measured value. The operator can still clear the field explicitly.
-This value and the machine-scoped fixture-reach evidence are foundation data for
-a future Coordinate Audit; that audit tab is not part of the current interface.
+Bed Mapping displays this value read-only as **Configured physical ruler span**
+and supplies it unchanged to both automatic four-edge detection and the
+three-hint fallback. If it is unset, both detection paths remain blocked and
+direct the operator back to Machine Manager; Machine Setup never invents or
+edits a span. The value is also consumed by the read-only Coordinate Audit.
+Machine-scoped fixture-reach evidence remains the foundation for a later reach
+editor; that editor is not part of the current interface.
 Fixture-reach evidence remains diagnostic only and does not change GRBL
 settings, work areas, guarded polygons, G-code, arming, laser power, or motion.
 
@@ -33,7 +39,7 @@ and it is not a substitute for the physical emergency stop. Each submitted
 worker is bound to the machine's request-time STOP generation, so Home / park
 that was queued before STOP cannot begin afterward.
 
-All five setup pages scroll inside the center of the dialog when their controls
+All six setup pages scroll inside the center of the dialog when their controls
 need more room. The safety warning, machine connection and STOP controls, tabs,
 operation status, and Close action therefore remain visible at compact window
 sizes.
@@ -199,13 +205,17 @@ authorize this step.
    or collision clearance. If it exposes a discrepancy, stop and correct the
    camera/machine calibration evidence before proceeding. Do not resize the
    machine-output envelope merely to match the movable honeycomb.
-6. Set **Physical ruler span** to the printed span (normally `190 mm`)
-   and choose **Detect honeycomb automatically**. Vision segments the dominant
-   rectangular honeycomb and independently fits all four cutting-surface edges.
+6. Confirm **Configured physical ruler span** displays the measured span
+   configured for this running saved machine, then choose **Detect honeycomb
+   automatically**. If it displays **Not configured**, use Machine Manager to
+   configure the measured physical span for the saved machine before returning
+   to this workflow; do not guess it in Machine Setup. Vision segments the
+   dominant rectangular honeycomb and independently fits all four
+   cutting-surface edges.
    The active bed map maps those four measured intersections into machine
    coordinates and preserves their semantic order as origin, +X, opposite, and
-   +Y. **Physical ruler span** defines the nominal honeycomb-local width and
-   height; it does not replace the four measured corners or fabricate 190 mm
+   +Y. **Configured physical ruler span** defines the nominal honeycomb-local
+   width and height; it does not replace the four measured corners or fabricate
    observed edge lengths. Printed tick recognition is not required.
    Review and accept the detected outline. Acceptance stores a schema-2 support
    plus the exact reviewed teaching image, its four image corners, and digests
@@ -222,17 +232,16 @@ authorize this step.
    honeycomb-local job or any powered post-map Machine Setup job. Run automatic
    detection successfully before powered work.
 
-The execution-verifiable result defines the movable honeycomb's rigid
-honeycomb-local X0..190, Y0..190 job frame. The live camera, grid, Trace, and
-project geometry share that frame. Green maps the configured output authority
-into it. For the active hardware profile this is a fixed 210 × 210 mm machine
-polygon, locally X/Y−10..200, recorded from the operator-confirmed output area;
-automatic detection never moves or expands it. Features outside green remain
-red, unchecked, and blocked. Ordinary machine-coordinate jobs retain their
-guarded rectangle. Preflight, arming, and execution use the same selected
-authority. The laser-burned keyed map remains the camera-to-machine
-calibration. Use **Clear visual reference** or re-detect automatically after the
-honeycomb moves.
+The execution-verifiable result defines the movable honeycomb's rigid local job
+frame from X0/Y0 to the configured physical span on each axis. The live camera,
+grid, Trace, and project geometry share that frame. Green maps the separately
+configured machine-coordinate output authority into it; its local coordinates
+depend on the accepted support pose and configured span. Automatic detection
+never moves or expands that authority. Features outside green remain red,
+unchecked, and blocked. Ordinary machine-coordinate jobs retain their guarded
+rectangle. Preflight, arming, and execution use the same selected authority.
+The laser-burned keyed map remains the camera-to-machine calibration. Use
+**Clear visual reference** or re-detect automatically after the honeycomb moves.
 
 The generated pattern contains 23 regular crosses plus a larger and a medium
 interior cross. Those two keys let the detector resolve rotation and reflection
@@ -454,6 +463,38 @@ verified.
 
 The tab also retains rectangular-workpiece and ArUco-fiducial detection as
 secondary camera diagnostics. Those detectors are not accuracy proof.
+
+## 6. Coordinate audit
+
+The final tab is a read-only evidence view. **Refresh audit**, **Copy report**,
+and corrected-image point inspection read current in-memory state and never
+connect to or command the controller. Only **Home / park and capture audit
+view** invokes hardware; it reuses the existing laser-off Home / park,
+photography-position, precision-capture, and motor-release path.
+
+The audit identifies the running saved machine and its machine/tool-head
+profiles, compares its expected calibration binding with the actually active
+calibration profile, and reports controller protocol, Home/reference state,
+GRBL workspace/G92 state, work rectangle, photography position, guarded beam
+and carriage authority, boundary margin, laser spot offset, camera/lens/bed-map
+state, and the accepted honeycomb support. The physical support span comes only
+from `machine.honeycomb_span_mm`; an unset value is explicit and blocks READY.
+No 190/191 mm value is inferred.
+
+During an audit capture, diagnostic GRBL position samples use only the realtime
+`?` byte through the existing `MachineService` transport, including
+`e3bridge://`. The immutable evidence records MPos, WPos, WCO, workspace and G92
+state, commanded-versus-reported error, before/after stability, capture timing,
+and bed-map identity. Normal cleanup still releases the motors and clears
+current coordinate trust, so the panel distinguishes **TRUSTED AT CAPTURE**
+from **CURRENTLY TRUSTED**.
+
+The overlay shows the configured machine boundary, guarded output authority,
+current accepted support, and positive machine/support axes. Clicking it traces
+display pixel to corrected source pixel, desired beam/machine coordinate,
+honeycomb-local coordinate when valid, and spot-corrected carriage coordinate.
+Containment results are informational and never expand motion or laser-output
+authority.
 
 ## Browser parity
 

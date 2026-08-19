@@ -22,6 +22,217 @@ def wait_for_job(machine: MachineService, timeout: float = 3.0) -> None:
         time.sleep(0.01)
 
 
+def test_grbl_realtime_status_parses_and_derives_position_vectors() -> None:
+    complete = MachineService._parse_grbl_realtime_status(
+        "<Idle|MPos:10.000,20.000,3.000|WPos:9.000,18.000,3.000|WCO:1.000,2.000,0.000>"
+    )
+    derived_wpos = MachineService._parse_grbl_realtime_status(
+        "<Idle|MPos:10,20,3|WCO:1,2,0>"
+    )
+    derived_wco = MachineService._parse_grbl_realtime_status(
+        "<Idle|MPos:10,20,3|WPos:9,18,3>"
+    )
+
+    assert complete["mpos_mm"] == [10.0, 20.0, 3.0]
+    assert complete["wpos_mm"] == [9.0, 18.0, 3.0]
+    assert complete["wco_mm"] == [1.0, 2.0, 0.0]
+    assert derived_wpos["wpos_mm"] == [9.0, 18.0, 3.0]
+    assert derived_wpos["derived_fields"] == ["WPos"]
+    assert derived_wco["wco_mm"] == [1.0, 2.0, 0.0]
+    assert derived_wco["derived_fields"] == ["WCO"]
+
+
+def test_realtime_position_sampling_sends_only_question_mark() -> None:
+    class RealtimeTransport:
+        def __init__(self) -> None:
+            self.raw_writes: list[bytes] = []
+            self.responses = ["<Idle|MPos:15,195,0|WPos:15,195,0|WCO:0,0,0>"]
+
+        def write_raw(self, data: bytes) -> None:
+            self.raw_writes.append(data)
+
+        def read_line(self, timeout: float = 1.0) -> str | None:
+            del timeout
+            return self.responses.pop(0) if self.responses else None
+
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl"),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    transport = RealtimeTransport()
+    machine._transport = transport  # type: ignore[assignment]
+    machine._connected = True
+    machine._protocol = "grbl"
+
+    snapshot = machine.sample_realtime_position(timeout=0.1)
+
+    assert transport.raw_writes == [b"?"]
+    assert snapshot["xy_complete"] is True
+    assert snapshot["wpos_mm"][:2] == [15.0, 195.0]
+
+
+def test_realtime_position_sampling_rejects_running_job_without_state_changes() -> None:
+    class RealtimeTransport:
+        def __init__(self) -> None:
+            self.raw_writes: list[bytes] = []
+            self.read_calls = 0
+            self.responses = ["<Idle|MPos:15,195,0|WPos:15,195,0|WCO:0,0,0>"]
+
+        def write_raw(self, data: bytes) -> None:
+            self.raw_writes.append(data)
+
+        def read_line(self, timeout: float = 1.0) -> str | None:
+            del timeout
+            self.read_calls += 1
+            return self.responses.pop(0) if self.responses else None
+
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl"),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    transport = RealtimeTransport()
+    machine._transport = transport  # type: ignore[assignment]
+    machine._connected = True
+    machine._protocol = "grbl"
+    coordinate_state_reference = {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+    machine._coordinate_reference_ready = True
+    machine._coordinate_state_reference = coordinate_state_reference
+    machine._jog_position_mm = (15.0, 195.0)
+    machine._controller_reconnect_required = False
+    machine._trusted_controller_session_established = True
+    machine._authorization_epoch = 7
+    machine._armed_until = time.time() + 60.0
+    machine._armed_until_monotonic = time.monotonic() + 60.0
+    machine._armed_program_digest = "running-program"
+    machine._job_laser_authorized = True
+    machine._job.running = True
+    machine._job.phase = "streaming"
+    machine._job.name = "running-job.gcode"
+    machine._job.total_lines = 4
+    machine._job.completed_lines = 2
+    machine._job.program_digest = "running-program"
+    machine._job.powered = True
+
+    job = machine._job
+    expected_job_state = job.to_dict()
+    expected_session_state = (
+        machine._transport,
+        machine._connected,
+        machine._protocol,
+        machine._trusted_controller_session_established,
+    )
+    expected_coordinate_state = (
+        machine._coordinate_reference_ready,
+        machine._coordinate_state_reference,
+        machine._jog_position_mm,
+    )
+    expected_authorization_state = (
+        machine._authorization_epoch,
+        machine._armed_until,
+        machine._armed_until_monotonic,
+        machine._armed_program_digest,
+        machine._job_laser_authorized,
+    )
+    expected_log = list(machine._log)
+
+    with pytest.raises(MachineError, match="while a job is running"):
+        machine.sample_realtime_position(timeout=0.1)
+
+    assert transport.raw_writes == []
+    assert transport.read_calls == 0
+    assert transport.responses == [
+        "<Idle|MPos:15,195,0|WPos:15,195,0|WCO:0,0,0>"
+    ]
+    assert machine._job is job
+    assert machine._job.to_dict() == expected_job_state
+    assert (
+        machine._transport,
+        machine._connected,
+        machine._protocol,
+        machine._trusted_controller_session_established,
+    ) == expected_session_state
+    assert machine._controller_reconnect_required is False
+    assert (
+        machine._coordinate_reference_ready,
+        machine._coordinate_state_reference,
+        machine._jog_position_mm,
+    ) == expected_coordinate_state
+    assert machine._coordinate_state_reference is coordinate_state_reference
+    assert (
+        machine._authorization_epoch,
+        machine._armed_until,
+        machine._armed_until_monotonic,
+        machine._armed_program_digest,
+        machine._job_laser_authorized,
+    ) == expected_authorization_state
+    assert list(machine._log) == expected_log
+
+
+@pytest.mark.parametrize(
+    "response",
+    ["<Idle|MPos:bad,2,0>", "<Idle|FS:0,0>", "not-a-status-frame"],
+)
+def test_realtime_position_sampling_fails_diagnostic_only(response: str) -> None:
+    class RealtimeTransport:
+        def __init__(self) -> None:
+            self.raw_writes: list[bytes] = []
+            self.responses = [response]
+
+        def write_raw(self, data: bytes) -> None:
+            self.raw_writes.append(data)
+
+        def read_line(self, timeout: float = 1.0) -> str | None:
+            del timeout
+            return self.responses.pop(0) if self.responses else None
+
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl"),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    transport = RealtimeTransport()
+    machine._transport = transport  # type: ignore[assignment]
+    machine._connected = True
+    machine._protocol = "grbl"
+    coordinate_state_reference = {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+    expected_coordinate_state_reference = {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+    machine._coordinate_reference_ready = True
+    machine._coordinate_state_reference = coordinate_state_reference
+    machine._controller_reconnect_required = False
+    machine._trusted_controller_session_established = True
+    machine.arm(machine.ARM_PHRASE)
+    authorization_epoch = machine._authorization_epoch
+    armed_until = machine._armed_until
+
+    with pytest.raises(MachineError):
+        machine.sample_realtime_position(timeout=0.01)
+
+    status = machine.status()
+    assert transport.raw_writes == [b"?"]
+    assert status["coordinate_reference_ready"] is True
+    assert status["coordinate_state_reference"] is coordinate_state_reference
+    assert status["coordinate_state_reference"] == expected_coordinate_state_reference
+    assert status["controller_reconnect_required"] is False
+    assert status["armed"] is True
+    assert status["armed_until"] == armed_until
+    assert machine._authorization_epoch == authorization_epoch
+    assert machine._trusted_controller_session_established is True
+
+
 def test_manual_positive_laser_commands_are_always_blocked() -> None:
     machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
     machine.connect()
@@ -1824,9 +2035,77 @@ def test_prepare_photo_position_in_simulation() -> None:
     try:
         result = machine.prepare_photo_position()
         assert result["position"] == {"x": 110.0, "y": 105.0, "z": None}
+        assert result["homed"] is True
+        assert result["parked"] is True
+        assert result["home_position_snapshot"] is None
         assert machine._transport is not None
         assert machine._transport.x == pytest.approx(110)
         assert machine._transport.y == pytest.approx(105)
+    finally:
+        machine.disconnect()
+
+
+def test_prepare_photo_position_can_capture_home_before_normal_simulated_park(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingPositionTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+            self.raw_writes: list[bytes] = []
+            self.sampled_positions: list[tuple[float, float]] = []
+
+        def write_line(self, line: str) -> None:
+            self.commands.append(line.strip().upper())
+            super().write_line(line)
+
+        def write_raw(self, data: bytes) -> None:
+            self.raw_writes.append(data)
+            if data == b"?":
+                self.sampled_positions.append((self.x, self.y))
+                self._queue.put(
+                    f"<Idle|MPos:{self.x:.3f},{self.y:.3f},0.000|"
+                    f"WPos:{self.x:.3f},{self.y:.3f},0.000|WCO:0.000,0.000,0.000>"
+                )
+                return
+            super().write_raw(data)
+
+    transport = RecordingPositionTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.SimulatedTransport",
+        lambda: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="simulator",
+            photo_x=110.0,
+            photo_y=105.0,
+            home_before_photo=True,
+        ),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    machine.connect()
+    transport.x = 23.0
+    transport.y = 47.0
+    try:
+        result = machine.prepare_photo_position(capture_home_position=True)
+
+        home = result["home_position_snapshot"]
+        assert result["homed"] is True
+        assert result["parked"] is True
+        assert home["available"] is True
+        assert home["mpos_mm"][:2] == [0.0, 0.0]
+        assert home["wpos_mm"][:2] == [0.0, 0.0]
+        assert transport.sampled_positions == [(0.0, 0.0)]
+        assert transport.raw_writes == [b"?"]
+        assert result["position"] == {"x": 110.0, "y": 105.0, "z": None}
+        assert (transport.x, transport.y) == pytest.approx((110.0, 105.0))
+        assert "$H" in transport.commands
+        assert not any(
+            command.startswith(("M3", "M4")) for command in transport.commands
+        )
+        assert transport.laser_on is False
     finally:
         machine.disconnect()
 

@@ -12,6 +12,7 @@ _STEP_HEADINGS = (
     "3. Bed Mapping",
     "4. Fine Registration",
     "5. Accuracy Validation",
+    "6. Coordinate Audit",
 )
 
 

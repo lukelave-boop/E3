@@ -52,7 +52,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `config.py` | JSON defaults, merging, validation, and resolved paths |
 | `storage.py` | Atomic JSON persistence used by calibration |
 | `camera/` | OpenCV/V4L2 capture, camera controls, synthetic scenes, and portable corrected-test-image validation |
-| `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets, bounded fine registration, and holdout accuracy scoring |
+| `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets, bounded fine registration, holdout accuracy scoring, and Qt-free read-only coordinate auditing |
 | `vision/` | Workpiece, fiducial, crosshair-grid, and camera-object detection |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
@@ -487,6 +487,8 @@ execution authority.
 - serializes ordinary write/ack ownership and complete Home / park or scoped
   camera-hold sequences so concurrent desktop workers cannot consume each
   other's controller replies;
+- permits the Coordinate Audit GRBL `?` sampler only under ordinary command
+  ownership and rejects it before transmission while a streamed job is running;
 - revokes authorization on stop or disarm;
 - attempts `M5` on stop, disarm, disconnect, job failure, and scoped motor-
   release cleanup, even when mutable configuration or controller state is

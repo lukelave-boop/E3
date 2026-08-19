@@ -18,6 +18,11 @@ import cv2
 import numpy as np
 
 from . import __version__
+from .calibration.audit import (
+    build_coordinate_audit_status,
+    honeycomb_support_validity,
+    inspect_coordinate_point,
+)
 from .calibration.bed import (
     BedCalibration,
     BedMapper,
@@ -384,6 +389,8 @@ class AppContext:
         self._workspace_lock = threading.RLock()
         self._workspace_image: np.ndarray | None = None
         self._workspace_revision: tuple[Any, ...] | None = None
+        self._coordinate_audit_lock = threading.RLock()
+        self._coordinate_audit_capture_snapshot: dict[str, Any] | None = None
         self._composed_map_cache: dict[
             tuple[Any, ...],
             tuple[object, object, tuple[np.ndarray, np.ndarray]],
@@ -1170,15 +1177,168 @@ class AppContext:
             self._persist_workspace(rectified)
         return rectified
 
+    @staticmethod
+    def _position_snapshot_xy(
+        snapshot: Mapping[str, Any] | None,
+        key: str,
+    ) -> tuple[float, float] | None:
+        if not isinstance(snapshot, Mapping):
+            return None
+        value = snapshot.get(key)
+        if not isinstance(value, (list, tuple)) or len(value) < 2:
+            return None
+        if any(type(component) not in {int, float} for component in value[:2]):
+            return None
+        x = float(value[0])
+        y = float(value[1])
+        if not math.isfinite(x) or not math.isfinite(y):
+            return None
+        return x, y
+
+    @classmethod
+    def _coordinate_capture_delta_mm(
+        cls,
+        before: Mapping[str, Any] | None,
+        after: Mapping[str, Any] | None,
+    ) -> float | None:
+        deltas: list[float] = []
+        for key in ("mpos_mm", "wpos_mm", "wco_mm"):
+            first = cls._position_snapshot_xy(before, key)
+            second = cls._position_snapshot_xy(after, key)
+            if first is None or second is None:
+                continue
+            deltas.append(math.hypot(second[0] - first[0], second[1] - first[1]))
+        return max(deltas) if deltas else None
+
+    def _sample_coordinate_audit_position(self) -> dict[str, Any]:
+        try:
+            machine_status = self.machine.status()
+        except Exception as exc:
+            return {"available": False, "error": f"Machine status unavailable: {exc}"}
+        if machine_status.get("protocol") != "grbl":
+            return {
+                "available": False,
+                "error": (
+                    "Realtime MPos/WPos/WCO sampling is currently available only "
+                    "for GRBL"
+                ),
+            }
+        try:
+            snapshot = self.machine.sample_realtime_position()
+        except Exception as exc:
+            return {"available": False, "error": str(exc)}
+        return {"available": True, **snapshot}
+
+    def _record_coordinate_audit_capture(
+        self,
+        *,
+        park_result: Mapping[str, Any],
+        before_position: Mapping[str, Any],
+        after_position: Mapping[str, Any],
+        capture_started_at: float,
+        capture_finished_at: float,
+        bed_calibration_created_at: float | None,
+        bed_mapping_digest: str | None,
+    ) -> None:
+        delta = self._coordinate_capture_delta_mm(before_position, after_position)
+        reported = (
+            after_position
+            if after_position.get("available") is True
+            else before_position
+        )
+        reported_wpos = self._position_snapshot_xy(reported, "wpos_mm")
+        commanded = (
+            float(self.settings.machine.photo_x),
+            float(self.settings.machine.photo_y),
+        )
+        command_error_xy = (
+            None
+            if reported_wpos is None
+            else [reported_wpos[0] - commanded[0], reported_wpos[1] - commanded[1]]
+        )
+        before_available = before_position.get("available") is True
+        after_available = after_position.get("available") is True
+        stable = bool(
+            before_available
+            and after_available
+            and delta is not None
+            and delta <= 0.010
+            and str(before_position.get("state") or "").lower().startswith("idle")
+            and str(after_position.get("state") or "").lower().startswith("idle")
+        )
+        home_raw = park_result.get("home_position_snapshot")
+        home = copy.deepcopy(dict(home_raw)) if isinstance(home_raw, Mapping) else None
+        try:
+            current_status = self.machine.status()
+        except Exception:
+            current_status = {}
+        snapshot: dict[str, Any] = {
+            "available": bool(before_available or after_available),
+            "trusted_at_capture": stable,
+            "home_completed": bool(park_result.get("homed")),
+            "parked": bool(park_result.get("parked")),
+            "commanded_photo_position_mm": [
+                commanded[0],
+                commanded[1],
+                self.settings.machine.photo_z,
+            ],
+            "coordinate_state": copy.deepcopy(park_result.get("coordinate_state")),
+            "position_immediately_after_home": home,
+            "position_before_capture": copy.deepcopy(dict(before_position)),
+            "position_after_capture": copy.deepcopy(dict(after_position)),
+            "position_stable_during_capture": stable,
+            "maximum_position_delta_mm": delta,
+            "commanded_position_error_xy_mm": command_error_xy,
+            "commanded_position_error_mm": (
+                None
+                if command_error_xy is None
+                else math.hypot(command_error_xy[0], command_error_xy[1])
+            ),
+            "capture_started_at": float(capture_started_at),
+            "capture_finished_at": float(capture_finished_at),
+            "capture_duration_seconds": max(
+                0.0, float(capture_finished_at) - float(capture_started_at)
+            ),
+            "bed_calibration_created_at": bed_calibration_created_at,
+            "bed_mapping_digest": bed_mapping_digest,
+            "motors_released_after_capture": bool(
+                self.settings.machine.backend == "serial"
+                and str(current_status.get("protocol") or "") == "grbl"
+            ),
+            "current_position_trusted_after_cleanup": bool(
+                current_status.get("coordinate_reference_ready")
+            ),
+        }
+        samples = [before_position, after_position]
+        if isinstance(home, Mapping):
+            samples.insert(0, home)
+        snapshot["sampling_errors"] = [
+            str(item.get("error"))
+            for item in samples
+            if item.get("available") is not True and item.get("error")
+        ]
+        with self._coordinate_audit_lock:
+            self._coordinate_audit_capture_snapshot = snapshot
+
     def capture_parked_work_area_reference(self) -> np.ndarray:
-        """Capture a lens-corrected raw view for a machine-coordinate overlay."""
+        """Reuse Home / park capture and retain its immutable pose evidence."""
 
         self._require_camera_calibration_ready()
         self._require_valid_bed_calibration()
         calibration = self.bed.calibration
+        if calibration is None:
+            raise CalibrationError("Bed calibration is unavailable")
+        with self._coordinate_audit_lock:
+            self._coordinate_audit_capture_snapshot = None
         with self.machine.temporary_stepper_hold():
-            self.machine.prepare_photo_position()
+            park_result = self.machine.prepare_photo_position(
+                capture_home_position=True
+            )
+            before_position = self._sample_coordinate_audit_position()
+            capture_started_at = time.time()
             burst = self._stable_camera_burst()
+            capture_finished_at = time.time()
+            after_position = self._sample_coordinate_audit_position()
         burst = self._prepare_camera_burst(burst, undistort=True)
         if self.bed.calibration is not calibration:
             raise CalibrationError(
@@ -1189,6 +1349,15 @@ class AppContext:
             self.honeycomb_detection_input_path,
             image,
             [cv2.IMWRITE_PNG_COMPRESSION, 3],
+        )
+        self._record_coordinate_audit_capture(
+            park_result=park_result,
+            before_position=before_position,
+            after_position=after_position,
+            capture_started_at=capture_started_at,
+            capture_finished_at=capture_finished_at,
+            bed_calibration_created_at=calibration.created_at,
+            bed_mapping_digest=self.bed_mapping_digest(),
         )
         return image
 
@@ -1571,9 +1740,9 @@ class AppContext:
             ),
         )
         # The fresh four-edge fit is physical evidence. Preserve its independently
-        # observed edge lengths and angle; never fabricate a unit 190 mm square
-        # from configured dimensions. The reference model's ruler mark is the
-        # nominal physical coordinate associated with each measured far edge.
+        # observed edge lengths and angle; never fabricate observed geometry
+        # from the configured nominal square. The reference model's ruler mark
+        # is the physical coordinate associated with each measured far edge.
         span = float(ruler_mark_mm)
         reference = HoneycombSupportReference.from_four_corner_observations(
             raw_corners_machine_mm=tuple(
@@ -1640,6 +1809,77 @@ class AppContext:
 
     def clear_honeycomb_support_reference(self) -> None:
         self.honeycomb_support.clear()
+
+    def honeycomb_support_status(self) -> dict[str, Any]:
+        calibration = self.bed.calibration
+        return honeycomb_support_validity(
+            self.honeycomb_support.reference,
+            bed_calibration_created_at=(
+                None if calibration is None else calibration.created_at
+            ),
+            expected_span_mm=self.settings.machine.honeycomb_span_mm,
+        )
+
+    def coordinate_audit_status(self) -> dict[str, Any]:
+        """Report audit state without connecting to or commanding hardware."""
+
+        camera_status = asdict(self.camera.status())
+        camera_size = (
+            int(camera_status.get("width") or 0),
+            int(camera_status.get("height") or 0),
+        )
+        lens_status = (
+            self.lens.status(image_size=camera_size)
+            if camera_size[0] > 0 and camera_size[1] > 0
+            else self.lens.status()
+        )
+        lens_model = lens_status.get("model")
+        lens_model_id = (
+            str(lens_model["model_id"])
+            if isinstance(lens_model, dict) and lens_model.get("model_id")
+            else None
+        )
+        with self._coordinate_audit_lock:
+            capture = copy.deepcopy(self._coordinate_audit_capture_snapshot)
+        return build_coordinate_audit_status(
+            self.settings,
+            machine_identity=asdict(self.machine_identity),
+            active_calibration_profile_id=self.calibration_profiles.current.key,
+            active_bed_mapping_digest=self.bed_mapping_digest(),
+            machine_status=self.machine.status(),
+            camera_status=camera_status,
+            camera_readiness=self.camera_calibration_readiness(),
+            lens_status=lens_status,
+            bed_status=self.bed_status(lens_model_id=lens_model_id),
+            support_reference=self.honeycomb_support.reference,
+            honeycomb_execution_signature=self.honeycomb_execution_signature(),
+            capture_snapshot=capture,
+        )
+
+    def inspect_coordinate_point(
+        self,
+        image_x: float,
+        image_y: float,
+        *,
+        source_image_size: tuple[int, int],
+    ) -> dict[str, Any]:
+        """Trace a corrected camera pixel through current read-only mappings."""
+
+        self._require_valid_bed_calibration()
+        support_status = self.honeycomb_support_status()
+        result = inspect_coordinate_point(
+            self.settings,
+            self.bed,
+            source_image_point=(float(image_x), float(image_y)),
+            source_image_size=source_image_size,
+            support_reference=(
+                self.honeycomb_support.reference
+                if support_status["state"] == "CURRENT"
+                else None
+            ),
+        )
+        result["honeycomb_reference_state"] = support_status["state"]
+        return result
 
     def _current_honeycomb_support(self) -> HoneycombSupportReference | None:
         """Return only a support reference measured through the active bed map."""

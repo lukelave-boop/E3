@@ -1,7 +1,7 @@
 # Permanent Camera Setup Runbook
 
-Applies to E3 Positioning System `0.6.x` and its five numbered
-**Machine Setup** tabs.
+Applies to E3 Positioning System `0.6.x`, its five numbered calibration steps,
+and the sixth read-only **Coordinate Audit** tab in **Machine Setup**.
 
 This is the canonical operator sequence. Follow the tabs from left to right.
 Technical background belongs in `docs/MACHINE_SETUP.md`; it must not add an
@@ -36,7 +36,8 @@ unlisted calibration step or interrupt a tab transition described here.
    restarting restores that focus's full calibration stack.
 3. Confirm the configured machine/output envelope and camera pose match dated
    physical verification. This rectangle is independent from the movable
-   190 × 190 mm honeycomb job coordinates.
+   honeycomb job coordinates, whose X/Y extent comes from the physical span
+   configured for the running saved machine.
 4. Connect the camera. Connect the controller only when a step explicitly
    requires Home, park, commanded motion, or a guarded marking job.
 5. Open **Tools > Machine Setup**.
@@ -110,17 +111,20 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
    the camera-to-machine calibration evidence before repeating Step 3. Do not
    resize the machine-output envelope merely to match the movable honeycomb.
    The ruler overlay is a diagnostic, not automatic proof of laser reach.
-8. To establish the movable honeycomb's rigid job frame, set **Physical ruler
-    span** to the printed span (normally
-    `190 mm`), then click **Detect honeycomb automatically**. Vision segments the
-    dominant rectangle, independently fits all four cutting-surface edges, and
-    maps their intersections through the active bed map. It preserves their
-    order as origin, +X, opposite, and +Y. **Physical ruler span** defines the
-    nominal local width and height; it does not replace the four observed
-    corners or fabricate measured 190 mm edges. Printed tick recognition is not
-    required. Review and accept the magenta outline and fit report. Acceptance
-    stores the exact reviewed teaching image, its four corners, and the digests
-    that bind it to the schema-2 support and complete bed map.
+8. To establish the movable honeycomb's rigid job frame, confirm **Configured
+    physical ruler span** displays the measured span configured for the running
+    saved machine, then click **Detect honeycomb automatically**. If it displays
+    **Not configured**, use Machine Manager to configure the saved machine's
+    measured physical honeycomb span before returning here; do not guess it in
+    Machine Setup. Vision segments the dominant rectangle, independently fits
+    all four cutting-surface edges, and maps their intersections through the
+    active bed map. It preserves their order as origin, +X, opposite, and +Y.
+    **Configured physical ruler span** defines the nominal local width and
+    height; it does not replace the four observed corners or fabricate measured
+    edge lengths. Printed tick recognition is not required. Review and accept
+    the magenta outline and fit report. Acceptance stores the exact reviewed
+    teaching image, its four corners, and the digests that bind it to the
+    schema-2 support and complete bed map.
 
     At Start, registration uses fresh, spatially distributed features only from
     inside the accepted cutting surface and projects the four taught corners as
@@ -138,13 +142,14 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
     as ruler coordinates.** Only the accepted automatic four-edge result
     establishes the execution-verifiable honeycomb-local job frame: ruler zero
     is `(0,0)`, +X follows the bottom edge, and +Y follows the left edge. New
-    projects use X0..190, Y0..190; the live camera, grid, Trace, and object
-    coordinates share that frame. Green shows the independently verified
-    machine-output envelope mapped into honeycomb coordinates; red observations
-    outside green remain unchecked and blocked. The support frame cannot expand
-    machine authority. The keyed 25-point map remains the sole camera-to-machine
-    calibration. Clear and automatically re-record the support frame whenever
-    the support shifts. A changed bed map also invalidates it.
+    projects run from X0/Y0 to the configured physical span on each axis; the
+    live camera, grid, Trace, and object coordinates share that frame. Green
+    shows the independently verified machine-output envelope mapped into
+    honeycomb coordinates; red observations outside green remain unchecked and
+    blocked. The support frame cannot expand machine authority. The keyed
+    25-point map remains the sole camera-to-machine calibration. Clear and
+    automatically re-record the support frame whenever the support shifts. A
+    changed bed map also invalidates it.
 
 9. Install rigid locating stops that constrain translation and rotation without
    bowing the honeycomb. Remove and reseat it twenty times, running automatic
@@ -236,6 +241,23 @@ error is no greater than `1.00 mm`.
 If validation fails, do not tune the validation result. Return to Step 4 for a
 coherent global residual, or Step 3 when errors vary by position or the base
 mapping is suspect.
+
+## 6. Coordinate Audit
+
+This final tab is an observational verification step, not another calibration
+or a safety-rated control. Use **Refresh audit** to review the running saved
+machine, expected-versus-active calibration binding, controller/coordinate
+state, configured work and laser-output authorities, camera/lens/bed-map state,
+and the machine-specific physical honeycomb span. An unset span or mismatched
+calibration binding is a blocker; do not guess or silently rebind either value.
+
+If capture-time controller evidence is needed, use **Home / park and capture
+audit view** with the same clear-path precautions as other parked captures.
+That is the only audit control that commands hardware. Normal motor release
+afterward intentionally clears current coordinate trust while the report keeps
+the immutable **TRUSTED AT CAPTURE** evidence. **Copy report** and point
+inspection command no hardware. Overlay visibility and containment labels do
+not grant motion or laser-output authority.
 
 ## Before Normal Production
 

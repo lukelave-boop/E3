@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Restored the machine-aware read-only Coordinate Audit as the sixth Machine
+  Setup tab. It reports running-machine/calibration identity, configured work
+  and output authorities, machine-specific honeycomb span/support state, and
+  clicked-point coordinate frames. Its explicit capture action reuses the
+  existing laser-off Home / park capture path and retains immutable MPos/WPos/
+  WCO, workspace/G92, stability, timing, and bed-map evidence after normal
+  motor-release cleanup clears current coordinate trust. Diagnostic GRBL
+  sampling sends only `?` through the existing local or `e3bridge://` transport.
+  Sampling now refuses to compete with a running streamed job before any byte
+  is transmitted. Bed Mapping displays the same saved-machine honeycomb span
+  read-only, supplies it unchanged to automatic and three-hint detection, and
+  blocks both when it is unconfigured. Clicked-point evidence is cleared when a
+  replacement audit capture begins or its image, bed map, or support changes,
+  so copied reports cannot combine a current audit with an older image point.
+  Refresh, report copy, and point inspection command no hardware. Permanent
+  fixture reach editing and bounds proposals remain deferred.
+
 - Added the machine-aware physical-setup foundation for a future Coordinate
   Audit: saved machines now retain an optional explicitly configured physical
   honeycomb ruler span, `AppContext` receives detached running-machine identity,
@@ -132,8 +149,9 @@
 
 - Projects now explicitly distinguish legacy machine coordinates from a
   movable honeycomb-local coordinate system. New projects use the current
-  detected cutting surface as X0..190, Y0..190; schema-1 projects migrate as
-  machine-coordinate projects and are never silently reinterpreted.
+  detected cutting surface from X0/Y0 to the saved machine's configured
+  physical support span; schema-1 projects migrate as machine-coordinate
+  projects and are never silently reinterpreted.
 - Corrected camera images can now be rectified directly into the rigid
   honeycomb-local frame. This aligns camera pixels, rulers, the authoring grid,
   Trace results, and object coordinates while keeping the configured machine
@@ -147,9 +165,9 @@
   begins the validated program without parking at the photography pose. The
   active hardware profile can bind these jobs to an explicit
   fixed convex output polygon independent of the camera-calibration rectangle.
-  The current operator-confirmed polygon is a 210 × 210 mm square centered on
-  the accepted 190 mm support (local X/Y −10..200); it is immutable across live
-  detections and is rechecked by low-level preflight.
+  Its honeycomb-local coordinates depend on the accepted support pose and
+  configured physical span; it is immutable across live detections and is
+  rechecked by low-level preflight.
 - Execution no longer repeats camera pose verification after the operator has
   traced, generated, reviewed, and selected Start. This removes the previous
   Home/park/capture/release/Home sequence. The prepared support, bed-map, and

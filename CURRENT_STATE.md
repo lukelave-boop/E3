@@ -3,9 +3,50 @@
 This file records implementation and verification evidence. It is not an
 operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
-for the current five-tab sequence.
+for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-18**
+Snapshot: **2026-08-19**
+
+Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
+validation. Its refresh, JSON report copy, and clicked-point inspector are
+read-only; only the explicit **Home / park and capture audit view** action uses
+the existing laser-off parked precision-capture path. The audit reports the
+detached running saved-machine/profile identity, expected and actually active
+calibration profiles, controller/GRBL coordinate state, work and guarded beam/
+carriage authorities, camera/lens/bed-map state, accepted support geometry, and
+only the explicitly configured `machine.honeycomb_span_mm`. A missing physical
+span or expected/active calibration mismatch is an explicit readiness blocker.
+Bed Mapping now displays that same saved-machine span read-only and supplies it
+unchanged to automatic four-edge detection and the three-hint fallback. An
+unset span displays **Not configured** and blocks both detector workflows before
+detection and without controller work, directing the operator to Machine
+Manager instead of inventing a 190/191 mm value.
+Captured evidence retains Home/park result, MPos/WPos/WCO, workspace/G92,
+commanded-versus-reported error, before/after stability, timing, and bed-map
+identity after normal motor-release cleanup clears current coordinate trust.
+`MachineService` obtains these diagnostic samples with only the GRBL realtime
+`?` byte through its existing transport, including `e3bridge://`; malformed or
+missing frames fail the sample without granting authority or changing
+controller state. Sampling refuses a running streamed job under the shared
+command lock before transmitting the realtime byte and preserves job,
+transport, coordinate, session, reconnect, authorization, and log state. The
+audit overlay adds machine/work, guarded output, accepted support, and positive-
+axis references; the shared Bed Mapping overlay remains axis-arrow-free by
+default. A clicked audit point is bound to the published image, bed-map digest,
+and accepted-support state/frame identity. It clears when a new audit capture
+starts or any of that evidence changes, and copied reports recheck staleness so
+they cannot retain an obsolete point. Follow-up review coverage now proves the
+complete Home/park, before-sample, raw-burst, after-sample, motor-release, and
+deferred-processing order; rejects capture-evidence publication when the image
+write fails; directly exercises the optional Home-position snapshot through
+`MachineService`; and verifies malformed realtime samples preserve existing
+coordinate, reconnect, session, and authorization state. Permanent-fixture
+reach editing and bounds proposals remain absent for the next increment. The
+requested five-file focused Windows suite passes 276 tests, and the complete
+11-file Increment 2 focused suite passes 434 tests; the precision-capture file
+accounts for 19 tests. Repository-wide Ruff, compileall, and diff checks also
+pass. This increment is automated-test and offscreen-widget verified only; no
+physical controller, motion, camera, or laser test was performed.
 
 The multi-machine foundation now carries an optional, validated physical
 honeycomb ruler span on each saved machine. It remains unset for every generic
@@ -25,10 +66,9 @@ evidence or claim metadata is ignored fail-safe, and a second machine cannot
 inherit the claim. Explicitly saving valid scoped evidence clears a stale
 in-process migration error because that scoped evidence is then authoritative.
 Focused configuration, registry, runtime-identity, offscreen Machine Manager,
-evidence isolation/restart, rename/duplicate, and migration tests pass. The
-Coordinate Audit tab and audit calculations remain absent, and no controller,
-motion, G-code, bounds, arming, or laser behavior changed or was physically
-tested in this increment.
+evidence isolation/restart, rename/duplicate, and migration tests pass. That
+foundation increment changed no controller, motion, G-code, bounds, arming, or
+laser behavior and was not physically tested.
 
 The native desktop now has a bounded foreign G-code design importer for `.gc`,
 `.gcode`, `.nc`, and `.tap`. It translates supported 2-D G0/G1/G2/G3 motion into
@@ -300,15 +340,15 @@ that drew valid fine-registration targets outside the visible support by
 treating machine coordinates as local coordinates. Generated G-code and
 machine preflight are unchanged.
 
-The desktop now models an automatically detected 190 × 190 mm honeycomb as a
-real movable job coordinate system instead of conflating it with the persisted
-X10..210, Y10..210 machine rectangle. New projects created with a current,
-execution-verifiable schema-2 support use explicit `honeycomb_local`
-coordinates X0..190, Y0..190; legacy schema-1 projects migrate explicitly as
-`machine`. The four independently fitted and mapped corners are reduced to a
-closest-fit right-handed rigid frame so small edge disagreement cannot shear
-project geometry. Camera rectification, the authoring grid, Trace, and toolpath
-preview can share that local frame.
+The desktop now models an automatically detected honeycomb as a real movable
+job coordinate system instead of conflating it with the persisted machine
+rectangle. New projects created with a current, execution-verifiable schema-2
+support use explicit `honeycomb_local` coordinates from X0/Y0 to the physical
+span configured for the running saved machine; legacy schema-1 projects migrate
+explicitly as `machine`. The four independently fitted and mapped corners are
+reduced to a closest-fit right-handed rigid frame so small edge disagreement
+cannot shear project geometry. Camera rectification, the authoring grid, Trace,
+and toolpath preview can share that local frame.
 
 Vector, fill, image-raster, and frame output is planned in local coordinates,
 then rigidly placed in machine coordinates before laser-spot correction.
@@ -330,7 +370,7 @@ by the configured machine area and requires a restrained sacrificial sheet over
 the exact reviewed pattern.
 The complete 190 mm surface is available for authoring. On 2026-08-13 the
 operator explicitly confirmed that the physical output authority covers a
-210 × 210 mm square centered on the detected support. The local hardware
+210 Ã— 210 mm square centered on the detected support. The local hardware
 configuration records that exact fixed machine-coordinate polygon, in support
 order, as `(18.218005, 29.679375)`, `(228.217364, 30.198421)`,
 `(227.698319, 240.197779)`, and `(17.698960, 239.678734)` mm. Its
@@ -352,7 +392,7 @@ configured rectangle solely to avoid cropping visible evidence. The active
 saved schema-2 support spans about machine X27.0..218.7 and Y38.7..231.1 and is
 execution-verifiable in software, but is not physically verified.
 A separate green polygon maps the explicit guarded-output square into
-honeycomb coordinates. Its local bounds are X−10..200, Y−10..200: exactly
+honeycomb coordinates. Its local bounds are Xâˆ’10..200, Yâˆ’10..200: exactly
 10 mm beyond each edge of the 190 mm support. Trace, template review, project
 generation, and `MachineService` preflight use the same polygon. Only a job
 bound to the current honeycomb signature may opt into it; ordinary jobs retain
@@ -712,7 +752,7 @@ frame rather than the diagnostic coordinate overlay. Cursor-centered wheel zoom,
 middle/right-button panning, and double-click-to-fit improve placement without
 changing the source-image coordinates supplied to detection.
 For the hinted fallback, each ruler's bed-map-measured span must agree with the
-entered physical span within 2 mm (or 1 percent for larger rulers); a poorer fit
+configured physical span within 2 mm (or 1 percent for larger rulers); a poorer fit
 is rejected before it can replace the saved visual reference. Recording or
 clearing either reference does not mutate the laser-burned keyed bed map,
 configured machine area, or guarded laser limits. An accepted automatic

@@ -41,6 +41,7 @@ _GRBL_COORDINATE_EPSILON_MM = 0.001
 _REALTIME_STOP_WRITE_DEADLINE_SECONDS = 0.35
 _MAX_ARM_TIMEOUT_SECONDS = 600
 _GRBL_WORK_COORDINATE_CODES = {f"G{number}" for number in range(54, 60)}
+_GRBL_STATUS_VECTOR_KEYS = {"MPOS", "WPOS", "WCO"}
 _GRBL_OFFSET_PATTERN = re.compile(
     r"^\[(G5[4-9]|G92):\s*"
     r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)),\s*"
@@ -1266,6 +1267,182 @@ class MachineService:
         return self._parse_grbl_coordinate_state(modal, offsets)
 
     @staticmethod
+    def _parse_grbl_status_vector(raw: str) -> list[float]:
+        values: list[float] = []
+        for component in raw.split(","):
+            try:
+                value = float(component.strip())
+            except ValueError as exc:
+                raise MachineError(
+                    f"GRBL realtime status contains an invalid coordinate vector: {raw!r}"
+                ) from exc
+            if not math.isfinite(value):
+                raise MachineError("GRBL realtime status coordinates must be finite")
+            values.append(value)
+        if len(values) < 2:
+            raise MachineError(
+                "GRBL realtime status must report at least X and Y coordinates"
+            )
+        return values[:4]
+
+    @staticmethod
+    def _vector_math(
+        left: list[float | None],
+        right: list[float | None],
+        *,
+        subtract: bool,
+    ) -> list[float | None]:
+        size = max(len(left), len(right), 3)
+        output: list[float | None] = []
+        for index in range(size):
+            a = left[index] if index < len(left) else None
+            b = right[index] if index < len(right) else None
+            if a is None or b is None:
+                output.append(None)
+            else:
+                output.append(float(a) - float(b) if subtract else float(a) + float(b))
+        return output
+
+    @classmethod
+    def _parse_grbl_realtime_status(
+        cls,
+        response: str,
+        *,
+        coordinate_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        text = response.strip()
+        if not (text.startswith("<") and text.endswith(">")):
+            raise MachineError(f"Invalid GRBL realtime status frame: {response!r}")
+        fields = text[1:-1].split("|")
+        if not fields or not fields[0].strip():
+            raise MachineError("GRBL realtime status did not report a machine state")
+        state = fields[0].strip()
+        vectors: dict[str, list[float | None]] = {}
+        for field in fields[1:]:
+            key, separator, raw = field.partition(":")
+            key = key.strip().upper()
+            if separator and key in _GRBL_STATUS_VECTOR_KEYS:
+                vectors[key] = list(cls._parse_grbl_status_vector(raw))
+
+        mpos = vectors.get("MPOS")
+        wpos = vectors.get("WPOS")
+        wco = vectors.get("WCO")
+        wco_source = "reported" if wco is not None else None
+        derived_fields: list[str] = []
+        if wco is None and coordinate_state is not None:
+            active = coordinate_state.get("active_offset_mm")
+            g92 = coordinate_state.get("g92_offset_mm")
+            if (
+                isinstance(active, (list, tuple))
+                and isinstance(g92, (list, tuple))
+                and len(active) >= 2
+                and len(g92) >= 2
+            ):
+                wco = [
+                    float(active[0]) + float(g92[0]),
+                    float(active[1]) + float(g92[1]),
+                    None,
+                ]
+                wco_source = "derived X/Y from active workspace and G92"
+                derived_fields.append("WCO")
+        if mpos is None and wpos is not None and wco is not None:
+            mpos = cls._vector_math(wpos, wco, subtract=False)
+            derived_fields.append("MPos")
+        if wpos is None and mpos is not None and wco is not None:
+            wpos = cls._vector_math(mpos, wco, subtract=True)
+            derived_fields.append("WPos")
+        if wco is None and mpos is not None and wpos is not None:
+            wco = cls._vector_math(mpos, wpos, subtract=True)
+            wco_source = "derived from MPos - WPos"
+            derived_fields.append("WCO")
+        if mpos is None and wpos is None:
+            raise MachineError("GRBL realtime status did not report MPos or WPos")
+
+        def xy_complete(value: list[float | None] | None) -> bool:
+            return bool(
+                value is not None
+                and len(value) >= 2
+                and all(
+                    type(component) in {int, float}
+                    and math.isfinite(float(component))
+                    for component in value[:2]
+                )
+            )
+
+        return {
+            "state": state,
+            "mpos_mm": mpos,
+            "wpos_mm": wpos,
+            "wco_mm": wco,
+            "wco_source": wco_source,
+            "derived_fields": derived_fields,
+            "xy_complete": bool(
+                xy_complete(mpos) and xy_complete(wpos) and xy_complete(wco)
+            ),
+            "raw_status": text,
+        }
+
+    def sample_realtime_position(
+        self,
+        timeout: float = 1.5,
+        *,
+        coordinate_state: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Read one diagnostic GRBL position snapshot using only ``?``."""
+
+        if type(timeout) not in {int, float} or not math.isfinite(float(timeout)):
+            raise MachineError("Realtime position timeout must be a finite number")
+        timeout_seconds = float(timeout)
+        if timeout_seconds <= 0.0 or timeout_seconds > 10.0:
+            raise MachineError(
+                "Realtime position timeout must be greater than 0 and at most 10 seconds"
+            )
+        with self._command_lock:
+            if self._job.running:
+                raise MachineError("Cannot sample realtime position while a job is running")
+            transport = self._require_connection()
+            if self._protocol != "grbl":
+                raise MachineError(
+                    "Realtime MPos/WPos/WCO sampling is currently available only for GRBL"
+                )
+            with self._transport_write_lock:
+                transport.write_raw(b"?")
+                self._append_log("TX", "? (realtime position snapshot)")
+            deadline = time.monotonic() + timeout_seconds
+            while time.monotonic() < deadline:
+                response = transport.read_line(
+                    timeout=min(0.2, max(0.0, deadline - time.monotonic()))
+                )
+                if not response:
+                    continue
+                self._append_log("RX", response)
+                stripped = response.strip()
+                if stripped.startswith("<") and stripped.endswith(">"):
+                    snapshot = self._parse_grbl_realtime_status(
+                        stripped,
+                        coordinate_state=(
+                            self._coordinate_state_reference
+                            if coordinate_state is None
+                            else coordinate_state
+                        ),
+                    )
+                    if snapshot["xy_complete"] is not True:
+                        raise MachineError(
+                            "GRBL realtime status did not provide a complete XY position"
+                        )
+                    snapshot["sampled_at"] = time.time()
+                    return snapshot
+                lower = stripped.lower()
+                if lower.startswith("alarm") or lower.startswith("error"):
+                    raise MachineError(
+                        f"GRBL rejected realtime position sampling: {stripped}"
+                    )
+            raise MachineError(
+                "GRBL did not return realtime position status within "
+                f"{timeout_seconds:g} seconds"
+            )
+
+    @staticmethod
     def _coordinate_state_difference(
         reference: dict[str, Any], current: dict[str, Any]
     ) -> str | None:
@@ -1331,17 +1508,22 @@ class MachineService:
                 "absolute positions match the physical machine: " + "; ".join(nonzero)
             )
 
-    def prepare_photo_position(self) -> dict[str, Any]:
+    def prepare_photo_position(
+        self, *, capture_home_position: bool = False
+    ) -> dict[str, Any]:
         """Home if configured, then park XY at the repeatable camera pose.
 
         This routine never emits a laser-enable command. It remains subject to
         the normal serial-hardware and ``machine.allow_motion`` gates.
         """
+        if type(capture_home_position) is not bool:
+            raise TypeError("capture_home_position must be an exact boolean")
         operation_stop_epoch = self._operation_stop_epoch()
         with self._command_lock:
             return self._prepare_photo_position_locked(
                 operation_stop_epoch=operation_stop_epoch,
                 park_at_photo_position=True,
+                capture_home_position=capture_home_position,
             )
 
     def prepare_job_start(self) -> dict[str, Any]:
@@ -1357,6 +1539,7 @@ class MachineService:
             return self._prepare_photo_position_locked(
                 operation_stop_epoch=operation_stop_epoch,
                 park_at_photo_position=False,
+                capture_home_position=False,
             )
 
     def _prepare_photo_position_locked(
@@ -1364,6 +1547,7 @@ class MachineService:
         *,
         operation_stop_epoch: int,
         park_at_photo_position: bool,
+        capture_home_position: bool,
     ) -> dict[str, Any]:
         with self._stop_epoch_lock:
             if self._stop_epoch != operation_stop_epoch:
@@ -1388,6 +1572,7 @@ class MachineService:
 
         transcript: list[dict[str, Any]] = []
         idle_responses: list[str] = []
+        home_position_snapshot: dict[str, Any] | None = None
 
         def require_not_stopped() -> None:
             with self._stop_epoch_lock:
@@ -1439,6 +1624,23 @@ class MachineService:
                 # homing. Reject them before issuing the photography-position
                 # move, then verify again after the move below.
                 self._require_zero_xy_coordinate_offsets(coordinate_state)
+            if capture_home_position and self.settings.home_before_photo:
+                try:
+                    home_position_snapshot = {
+                        "available": True,
+                        **self.sample_realtime_position(
+                            coordinate_state=coordinate_state,
+                        ),
+                    }
+                except Exception as exc:
+                    home_position_snapshot = {
+                        "available": False,
+                        "error": str(exc),
+                    }
+                    self._append_log(
+                        "INFO",
+                        f"Post-home realtime position was unavailable: {exc}",
+                    )
             execute("G21")
             execute("G90")
             if park_at_photo_position:
@@ -1501,6 +1703,7 @@ class MachineService:
             "transcript": transcript,
             "idle_responses": idle_responses,
             "coordinate_state": coordinate_state,
+            "home_position_snapshot": home_position_snapshot,
             "warning": (
                 "photo_position.z is recorded but is not moved automatically; set laser focus/material height manually."
                 if park_at_photo_position and self.settings.photo_z is not None

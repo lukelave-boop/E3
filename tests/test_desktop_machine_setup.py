@@ -43,11 +43,16 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
     application.processEvents()
 
 
-def _runtime(tmp_path: Path) -> CoreRuntime:
+def _runtime(
+    tmp_path: Path,
+    *,
+    honeycomb_span_mm: float | None = None,
+) -> CoreRuntime:
     root = Path(__file__).resolve().parents[1]
     payload = json.loads((root / "config" / "default.json").read_text(encoding="utf-8"))
     payload["app"]["data_dir"] = str(tmp_path / "data")
     payload["app"]["open_browser"] = False
+    payload["machine"]["honeycomb_span_mm"] = honeycomb_span_mm
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     runtime = CoreRuntime.from_config(path, hardware_enabled=False)
@@ -81,6 +86,7 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             "3 · Bed mapping",
             "4 · Fine registration",
             "5 · Accuracy validation",
+            "6 · Coordinate audit",
         ]
         assert dialog.synthetic_scene.isEnabled()
         assert dialog.runtime.hardware_enabled is False
@@ -99,13 +105,18 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             label_text
         )
         assert "Detected honeycomb rulers" in label_text
+        assert "Configured physical ruler span" in label_text
+        assert dialog.honeycomb_ruler_mark.isReadOnly()
+        assert dialog.honeycomb_ruler_mark.text() == "Not configured"
         assert dialog.honeycomb_support_auto_button.text() == (
             "Detect honeycomb automatically"
         )
         assert dialog.honeycomb_support_record_button.text() == (
             "Fallback: detect with 3 hints"
         )
-        assert "not recorded" in dialog.honeycomb_support_status.text()
+        assert "Machine Manager" in dialog.honeycomb_support_status.text()
+        assert not dialog.honeycomb_support_auto_button.isEnabled()
+        assert not dialog.honeycomb_support_record_button.isEnabled()
         assert dialog.points.rowCount() >= 4
         assert "Solved" in dialog.bed_status.text()
         assert dialog.registration_results.horizontalHeaderItem(0).text() == "Use"
@@ -124,6 +135,9 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             "Apply reviewed full-bed map",
             "Reset full-bed refinement",
             "Prepare powered validation job",
+            "Home / park and capture audit view",
+            "Refresh audit",
+            "Copy report",
         }.issubset(button_text)
         assert not any("dry" in text.lower() for text in button_text)
         assert not dialog.reverse_x.isChecked()
@@ -140,6 +154,193 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert f"{camera.negotiated_fps:.1f} fps negotiated" in dialog.camera_status.text()
         assert dialog.base_grid_power.value() == 0
         assert dialog.base_grid_mark_size.maximum() == 5
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_coordinate_audit_read_only_actions_command_no_hardware(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    calls: list[str] = []
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        calls.append("hardware")
+        raise AssertionError("read-only audit action commanded hardware")
+
+    try:
+        monkeypatch.setattr(runtime.context.machine, "send_command", unexpected)
+        monkeypatch.setattr(runtime.context.machine, "ensure_connected", unexpected)
+        monkeypatch.setattr(runtime.context.machine, "prepare_photo_position", unexpected)
+        monkeypatch.setattr(runtime.context.machine, "sample_realtime_position", unexpected)
+
+        dialog.audit_refresh_button.click()
+        dialog.audit_copy_button.click()
+        calibration = runtime.context.bed.calibration
+        assert calibration is not None
+        dialog._bed_image = np.zeros(
+            (calibration.image_height, calibration.image_width, 3), dtype=np.uint8
+        )
+        dialog._work_area_reference_calibration = calibration
+        dialog._render_work_area_reference_preview()
+        dialog.inspect_coordinate_audit_point(5.0, 6.0)
+
+        assert calls == []
+        assert "coordinate_audit" in QtWidgets.QApplication.clipboard().text()
+        assert "Machine / desired beam" in dialog.audit_point_details.toPlainText()
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_coordinate_audit_new_capture_clears_clicked_point_and_copied_report(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    capture_started = threading.Event()
+    release_capture = threading.Event()
+    try:
+        calibration = runtime.context.bed.calibration
+        assert calibration is not None
+        old_image = np.zeros(
+            (calibration.image_height, calibration.image_width, 3), dtype=np.uint8
+        )
+        dialog._bed_image = old_image
+        dialog._work_area_reference_calibration = calibration
+        dialog._render_work_area_reference_preview()
+        dialog.inspect_coordinate_audit_point(5.0, 6.0)
+        assert dialog._coordinate_audit_point_snapshot is not None
+        assert "Machine / desired beam" in dialog.audit_point_details.toPlainText()
+
+        def capture() -> np.ndarray:
+            capture_started.set()
+            if not release_capture.wait(2.0):
+                raise AssertionError("test did not release replacement audit capture")
+            return np.full_like(old_image, 80)
+
+        monkeypatch.setattr(
+            runtime.context,
+            "capture_parked_work_area_reference",
+            capture,
+        )
+
+        dialog.audit_capture_button.click()
+        _wait_until(qt_application, capture_started.is_set)
+
+        assert dialog.operation_busy
+        assert dialog._coordinate_audit_point_snapshot is None
+        assert dialog.audit_point_details.toPlainText() == (
+            "Click the captured overlay to inspect a point."
+        )
+
+        release_capture.set()
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
+        dialog.copy_coordinate_audit_report()
+        copied = json.loads(QtWidgets.QApplication.clipboard().text())
+
+        assert dialog._coordinate_audit_point_snapshot is None
+        assert copied["clicked_point"] is None
+    finally:
+        release_capture.set()
+        if dialog.operation_busy:
+            _wait_until(qt_application, lambda: not dialog.operation_busy)
+        dialog.close()
+        runtime.stop()
+
+
+@pytest.mark.parametrize("evidence_change", ("image", "bed_map", "support"))
+def test_coordinate_audit_point_clears_when_image_evidence_changes(
+    evidence_change: str,
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    try:
+        calibration = runtime.context.bed.calibration
+        assert calibration is not None
+        dialog._bed_image = np.zeros(
+            (calibration.image_height, calibration.image_width, 3), dtype=np.uint8
+        )
+        dialog._work_area_reference_calibration = calibration
+        dialog._render_work_area_reference_preview()
+        dialog.inspect_coordinate_audit_point(5.0, 6.0)
+        assert dialog._coordinate_audit_point_snapshot is not None
+
+        if evidence_change == "image":
+            dialog._bed_image = np.ones_like(dialog._bed_image)
+        elif evidence_change == "bed_map":
+            dialog._work_area_reference_calibration = object()
+        else:
+            runtime.context.honeycomb_support.save(
+                HoneycombSupportReference.from_observations(
+                    ruler_origin_machine_mm=(10.0, 10.0),
+                    ruler_x_mark_machine_mm=(201.0, 10.0),
+                    ruler_xy_mark_machine_mm=(201.0, 201.0),
+                    ruler_mark_mm=191.0,
+                    support_width_mm=191.0,
+                    support_height_mm=191.0,
+                    bed_calibration_created_at=calibration.created_at,
+                )
+            )
+
+        dialog._refresh_coordinate_audit()
+
+        assert dialog._coordinate_audit_point_snapshot is None
+        assert dialog.audit_point_details.toPlainText() == (
+            "Click the captured overlay to inspect a point."
+        )
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_coordinate_audit_capture_reuses_work_area_home_park_capture(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    calls: list[str] = []
+    coordinate_axis_flags: list[bool] = []
+
+    def capture() -> np.ndarray:
+        calls.append("capture_parked_work_area_reference")
+        return np.zeros((120, 160, 3), dtype=np.uint8)
+
+    def overlay(
+        image: np.ndarray,
+        *_args: object,
+        show_coordinate_axes: bool = False,
+        **_kwargs: object,
+    ) -> np.ndarray:
+        coordinate_axis_flags.append(show_coordinate_axes)
+        return image.copy()
+
+    try:
+        monkeypatch.setattr(
+            runtime.context,
+            "capture_parked_work_area_reference",
+            capture,
+        )
+        monkeypatch.setattr(
+            "laser_aligner.desktop.machine_setup._work_area_reference_overlay",
+            overlay,
+        )
+        dialog.audit_capture_button.click()
+        _wait_until(qt_application, lambda: dialog._active_task is None)
+
+        assert calls == ["capture_parked_work_area_reference"]
+        assert coordinate_axis_flags == [False, True]
+        assert dialog.audit_preview._image is not None
     finally:
         dialog.close()
         runtime.stop()
@@ -210,6 +411,74 @@ def test_work_area_reference_overlay_draws_support_and_picked_points() -> None:
 
     assert tuple(int(value) for value in preview[132, 68]) == (220, 95, 205)
     assert tuple(int(value) for value in preview[120, 120]) == (0, 225, 255)
+
+
+def test_work_area_reference_overlay_coordinate_axes_are_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.zeros((240, 240, 3), dtype=np.uint8)
+    axis_labels = {"Machine X+", "Machine Y+", "Support X+", "Support Y+"}
+    drawn_text: list[str] = []
+    original_put_text = cv2.putText
+
+    def record_put_text(
+        image: np.ndarray,
+        text: str,
+        origin: tuple[int, int],
+        font_face: int,
+        font_scale: float,
+        color: tuple[int, int, int],
+        thickness: int,
+        line_type: int,
+    ) -> np.ndarray:
+        drawn_text.append(text)
+        return original_put_text(
+            image,
+            text,
+            origin,
+            font_face,
+            font_scale,
+            color,
+            thickness,
+            line_type,
+        )
+
+    class IdentityBed:
+        @staticmethod
+        def mm_to_image(machine_x: float, machine_y: float) -> tuple[float, float]:
+            return machine_x * 4.0 + 20.0, 220.0 - machine_y * 4.0
+
+    support = HoneycombSupportReference.from_observations(
+        ruler_origin_machine_mm=(12.0, 12.0),
+        ruler_x_mark_machine_mm=(32.0, 12.0),
+        ruler_xy_mark_machine_mm=(32.0, 32.0),
+        ruler_mark_mm=20.0,
+        support_width_mm=20.0,
+        support_height_mm=20.0,
+        created_at=1.0,
+        bed_calibration_created_at=1.0,
+    )
+    monkeypatch.setattr(cv2, "putText", record_put_text)
+
+    _work_area_reference_overlay(
+        image,
+        IdentityBed(),
+        WorkArea(10.0, 40.0, 10.0, 40.0),
+        5.0,
+        support_reference=support,
+    )
+    assert axis_labels.isdisjoint(drawn_text)
+
+    drawn_text.clear()
+    _work_area_reference_overlay(
+        image,
+        IdentityBed(),
+        WorkArea(10.0, 40.0, 10.0, 40.0),
+        5.0,
+        support_reference=support,
+        show_coordinate_axes=True,
+    )
+    assert axis_labels.issubset(drawn_text)
 
 
 def test_image_picker_zoom_keeps_source_pixel_mapping(
@@ -356,7 +625,7 @@ def test_honeycomb_hint_mode_hides_diagnostic_overlay_and_preserves_zoom(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = _runtime(tmp_path)
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
     dialog = MachineSetupDialog(runtime)
     try:
         calibration = runtime.context.bed.calibration
@@ -386,12 +655,131 @@ def test_honeycomb_hint_mode_hides_diagnostic_overlay_and_preserves_zoom(
         runtime.stop()
 
 
-def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
+def test_machine_setup_uses_configured_span_for_automatic_honeycomb_detection(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    received: dict[str, object] = {}
+    try:
+        calibration = runtime.context.bed.calibration
+        assert calibration is not None
+        dialog._bed_image = np.zeros(
+            (calibration.image_height, calibration.image_width, 3), dtype=np.uint8
+        )
+        dialog._work_area_reference_calibration = calibration
+        dialog._refresh_work_area_reference_status()
+
+        def detect(image: np.ndarray, *, ruler_mark_mm: float) -> object:
+            received["image"] = image.copy()
+            received["mark"] = ruler_mark_mm
+            return object()
+
+        def succeeded(
+            result: object,
+            *,
+            automatic: bool,
+            teaching_image: np.ndarray | None = None,
+        ) -> None:
+            received["result"] = result
+            received["automatic"] = automatic
+            received["teaching_image"] = teaching_image
+
+        monkeypatch.setattr(
+            runtime.context,
+            "detect_honeycomb_support_reference_automatically",
+            detect,
+        )
+        monkeypatch.setattr(dialog, "_honeycomb_detection_succeeded", succeeded)
+
+        dialog.detect_honeycomb_support_automatically()
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
+
+        assert dialog.honeycomb_ruler_mark.isReadOnly()
+        assert dialog.honeycomb_ruler_mark.text() == "191.0 mm"
+        assert received["mark"] == pytest.approx(191.0)
+        assert received["automatic"] is True
+        assert np.array_equal(received["image"], dialog._bed_image)
+        assert np.array_equal(received["teaching_image"], dialog._bed_image)
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_unconfigured_span_blocks_both_honeycomb_detection_workflows_before_io(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    calls: list[str] = []
+    messages: list[str] = []
+    try:
+        calibration = runtime.context.bed.calibration
+        assert calibration is not None
+        dialog._bed_image = np.zeros(
+            (calibration.image_height, calibration.image_width, 3), dtype=np.uint8
+        )
+        dialog._work_area_reference_calibration = calibration
+        dialog._refresh_work_area_reference_status()
+
+        def unexpected(*_args: object, **_kwargs: object) -> None:
+            calls.append("unexpected")
+
+        monkeypatch.setattr(
+            runtime.context,
+            "detect_honeycomb_support_reference_automatically",
+            unexpected,
+        )
+        monkeypatch.setattr(
+            runtime.context,
+            "detect_honeycomb_support_reference",
+            unexpected,
+        )
+        monkeypatch.setattr(dialog, "_start_operation", unexpected)
+        monkeypatch.setattr(runtime.context.machine, "send_command", unexpected)
+        monkeypatch.setattr(runtime.context.machine, "ensure_connected", unexpected)
+        monkeypatch.setattr(
+            runtime.context.machine,
+            "prepare_photo_position",
+            unexpected,
+        )
+        monkeypatch.setattr(
+            runtime.context,
+            "capture_parked_work_area_reference",
+            unexpected,
+        )
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            "information",
+            lambda _parent, _title, message, *_args, **_kwargs: messages.append(message),
+        )
+
+        dialog.detect_honeycomb_support_automatically()
+        dialog.toggle_honeycomb_support_picking()
+
+        assert calls == []
+        assert not dialog.operation_busy
+        assert not dialog._honeycomb_pick_active
+        assert dialog.honeycomb_ruler_mark.text() == "Not configured"
+        assert not dialog.honeycomb_support_auto_button.isEnabled()
+        assert not dialog.honeycomb_support_record_button.isEnabled()
+        assert len(messages) == 2
+        assert all("Machine Manager" in message for message in messages)
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
     dialog = MachineSetupDialog(runtime)
     try:
         calibration = runtime.context.bed.calibration
@@ -407,7 +795,7 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
 
         detected_image_points = tuple(
             runtime.context.bed.mm_to_image(*machine_point)
-            for machine_point in ((10.0, 10.0), (200.0, 10.0), (200.0, 200.0))
+            for machine_point in ((10.0, 10.0), (201.0, 10.0), (201.0, 201.0))
         )
         detection = HoneycombRulerDetection(
             ruler_origin_image_px=detected_image_points[0],
@@ -436,11 +824,11 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
         )
         candidate = HoneycombSupportReference.from_observations(
             ruler_origin_machine_mm=(10.0, 10.0),
-            ruler_x_mark_machine_mm=(200.0, 10.0),
-            ruler_xy_mark_machine_mm=(200.0, 200.0),
-            ruler_mark_mm=190.0,
-            support_width_mm=190.0,
-            support_height_mm=190.0,
+            ruler_x_mark_machine_mm=(201.0, 10.0),
+            ruler_xy_mark_machine_mm=(201.0, 201.0),
+            ruler_mark_mm=191.0,
+            support_width_mm=191.0,
+            support_height_mm=191.0,
             bed_calibration_created_at=calibration.created_at,
         )
         received: dict[str, object] = {}
@@ -475,13 +863,16 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
         reference = runtime.context.honeycomb_support.reference
         assert reference is not None
         assert received["hints"] == rough_hints
-        assert received["mark"] == 190.0
+        assert dialog.honeycomb_ruler_mark.isReadOnly()
+        assert dialog.honeycomb_ruler_mark.text() == "191.0 mm"
+        assert received["mark"] == 191.0
         assert np.array_equal(received["image"], dialog._bed_image)
         assert reference.ruler_origin_machine_mm == pytest.approx((10.0, 10.0))
-        assert reference.measured_ruler_span_mm == pytest.approx((190.0, 190.0))
+        assert reference.measured_ruler_span_mm == pytest.approx((191.0, 191.0))
         assert np.asarray(reference.support_corners_machine_mm) == pytest.approx(
-            np.asarray(((10.0, 10.0), (200.0, 10.0), (200.0, 200.0), (10.0, 200.0)))
+            np.asarray(((10.0, 10.0), (201.0, 10.0), (201.0, 201.0), (10.0, 201.0)))
         )
+        assert runtime.context.honeycomb_support_status()["state"] == "CURRENT"
         assert dialog.honeycomb_support_record_button.text() == (
             "Fallback: detect with 3 hints"
         )
@@ -527,7 +918,7 @@ def test_honeycomb_hint_detection_failure_saves_nothing(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime = _runtime(tmp_path)
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
     dialog = MachineSetupDialog(runtime)
     try:
         calibration = runtime.context.bed.calibration

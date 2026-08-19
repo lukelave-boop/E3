@@ -101,6 +101,13 @@ Native desktop workflow:
   holdout accuracy validation. Registration and validation can use precision
   multi-frame capture and can be repeated without another home cycle to
   separate camera variation from homing variation
+- A sixth read-only Coordinate Audit tab with running-machine/calibration
+  binding checks, immutable capture-time GRBL pose evidence, machine/support
+  overlays, and clicked-point tracing across camera, beam, honeycomb, and
+  carriage coordinate frames. Only its explicit capture action commands
+  hardware; refresh, report copy, and point inspection are observational. Bed
+  Mapping displays the same saved-machine physical span read-only and blocks
+  support detection until that dimension is configured in Machine Manager
 - Versioned `.e3template` cutting-template library with manual selection,
   geometry-based automatic matching, role-labeled camera/cut overlays, rigid
   alignment review, and one-step undo when aligned cut objects are created
