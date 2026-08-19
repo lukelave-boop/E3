@@ -70,6 +70,7 @@ class ArtifactMetadata:
     stage: PlanningStage
     stage_version: int
     coordinate_domain: CoordinateDomain
+    dependency_digest: str | None = None
     bounds_mm: BoundsMm | None = None
     warnings: tuple[str, ...] = ()
     statistics: tuple[tuple[str, StatisticValue], ...] = ()
@@ -80,6 +81,14 @@ class ArtifactMetadata:
             raise ValueError("Planning artifact_id must not be empty")
         if self.stage_version < 1:
             raise ValueError("Planning stage_version must be at least 1")
+        if self.dependency_digest is not None:
+            digest = self.dependency_digest
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(
+                    "Planning dependency_digest must be a lowercase SHA-256 digest"
+                )
         if self.bounds_mm is not None:
             if len(self.bounds_mm) != 4 or not all(
                 math.isfinite(float(value)) for value in self.bounds_mm

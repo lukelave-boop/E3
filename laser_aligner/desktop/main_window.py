@@ -13,6 +13,7 @@ from ..geometry.polygon import normalize_convex_polygon
 from ..geometry.svg import parse_svg
 from ..identity import application_identity, application_window_title
 from ..materials import MaterialDatabase, MaterialPreset
+from ..planning import PlanningCache
 from ..project import (
     GCODE_FILE_DIALOG_FILTER,
     LIGHTBURN_FILE_DIALOG_FILTER,
@@ -309,6 +310,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.runtime.settings.app.data_dir / "templates"
         )
         self._templates: dict[str, CutTemplate] = {}
+        self._planning_cache = PlanningCache()
         self.document = self._new_document()
         self.history = CommandStack(max_depth=300)
         self.project_path: Path | None = None
@@ -2238,6 +2240,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "optimize_order": optimize_order,
             "laser": laser,
             "filename": filename,
+            "planning_cache": self._planning_cache,
         }
 
         def snapshot_operation() -> ProjectDocument | None:
@@ -2299,6 +2302,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 coordinate_frame=context["coordinate_frame"],
                 machine_work_area=context["machine_work_area"],
                 guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
+                planning_cache=context["planning_cache"],
             )
             plan = job.plan
             if plan is None:

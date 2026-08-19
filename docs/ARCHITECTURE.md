@@ -332,9 +332,47 @@ encoded artifact does not rewrite G-code; it records program statistics, the
 current encoder provenance, the staged LINE controller-artifact identities, and
 the count of non-LINE layers that still use the legacy internal path.
 `project.toolpath.generate_project_gcode()` remains the compatibility entry
-point and orchestrator. No cache or selective recomputation is active yet; those
-follow only after the stage boundaries themselves preserve the planning
-goldens.
+point and orchestrator. `SceneRevision.source_digest` is a canonical SHA-256
+fingerprint of persisted planning source content; project ID, timestamps, and
+the monotonic revision counter remain separate identity and bookkeeping fields.
+LINE geometry artifacts now also carry a deterministic `dependency_digest`
+separate from their run-oriented `artifact_id`. The normalized digest covers the
+ordered source geometry consumed by that layer, the operation digest adds layer
+settings, the placed digest covers effective geometry plus the exact coordinate
+frame, and the controller digest covers placed geometry plus laser spot offset.
+A revision-only change can therefore produce a new artifact ID while retaining
+the same dependency digest. The first reuse boundary is now opt-in normalized
+LINE geometry through a caller-owned `PlanningCache`. The cache is bounded,
+memory-only, keyed by the normalized dependency digest, and stores copied
+geometry payloads rather than artifact metadata. `E3MainWindow` owns one
+session-long cache and passes that exact object into each background project
+planning snapshot, so normal generate/edit/regenerate cycles can reuse unchanged
+normalized geometry. The cache is lock-protected because planning executes off
+the GUI thread. Placement is the second reuse boundary: identical effective LINE
+geometry plus the same coordinate frame reuses the copied machine-beam paths,
+while the normal placed-path safety validation still runs afterward on every
+planning request. Controller geometry is the third reuse boundary: identical
+placed geometry plus the same laser spot offset reuses copied controller-space
+paths, while controller-path bounds or guarded-polygon validation still runs
+afterward on every request. Speed or power changes therefore keep normalized,
+placed, and controller geometry reusable; geometry, coordinate-frame, or spot-
+offset changes invalidate only the applicable dependency keys. Every hit still
+constructs fresh artifact metadata for the current project revision. Cached
+paths are copied on store and retrieval so downstream path mutation cannot
+contaminate later runs. There is no module-global cache, disk persistence,
+operation reuse, raster/fill cache, or encoded-program cache yet.
+`EncodedProgramArtifact` is intentionally not assigned a cache dependency
+because the final stream still contains volatile generation-time text and
+whole-job dependencies.
+
+Cache performance is measured explicitly rather than inferred from hit counts.
+`scripts/benchmark_planning_cache.py` compares uncached generation, cold-cache
+generation, warm identical regeneration, speed-only and power-only edits,
+spot-offset invalidation, and one-layer geometry invalidation. It reports local
+median/min/max wall time plus normalized/placed/controller hit-miss deltas and
+verifies the expected dependency pattern without enforcing a timing threshold in
+CI. Performance claims should be recorded from an actual benchmark run rather
+than from unit-test duration.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions
