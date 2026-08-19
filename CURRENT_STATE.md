@@ -53,16 +53,29 @@ case-insensitive suffix lookup, file-size limits, capability declarations,
 natural-size/layer scan facts, review warnings and approximations, and explicit
 blocking errors or unsupported features. The default registry describes the
 existing LightBurn and bounded foreign-G-code importers using their existing
-dialog filters and byte limits; LightBurn now also exposes one shared supported-
-suffix constant instead of duplicating that literal in its loader. This
-foundation does **not** yet perform source scanning or change either existing
-parser, desktop import flow, project schema, controller path, motion, arming, or
-laser behavior. Focused manifest, LightBurn, G-code, and desktop-import tests
-reported **47 passed, 2 skipped**; the two skips were desktop widget tests in an
-environment without PySide6. Compileall and diff checks were clean. The next
-import milestone is to implement a bounded LightBurn scan that produces this
-manifest before strict parse/vectorize/layout/assembly, followed by the same
-contract for foreign G-code.
+dialog filters and byte limits; LightBurn also exposes one shared supported-
+suffix constant instead of duplicating that literal in its loader.
+
+LightBurn now implements the first bounded **scan -> strict parse** path on top
+of that contract. `scan_lightburn_file()` and `scan_lightburn_project()` inspect
+bounded XML structure without invoking the existing `_parse_shape()` geometry
+vectorizer. The manifest reports the LightBurn format version, referenced cut
+layers, layer names/mode hints/object counts, coordinate-processing facts,
+review warnings, known approximations such as ellipse/rounded-rectangle/Bezier
+flattening and vector-backup text, and explicit unsupported/blocking content.
+Embedded bitmaps, text without a usable vector backup, unsupported shape/path
+types, malformed XML, wrong extensions, and size-limit violations are surfaced
+fail-closed before strict vector parsing. `load_lightburn_project()` reads the
+file once, performs this scan, and enters the unchanged strict parser only when
+the manifest has no blocking errors or unsupported features; the strict parser
+remains authoritative for geometry conversion and detailed validation. No
+desktop import-review UI, project schema, controller path, motion, arming, or
+laser behavior changed. Focused LightBurn scan/import, manifest, and desktop-
+import tests reported **43 passed, 1 skipped**; the skip was the PySide6-
+dependent desktop widget test in the local environment. Ruff, compileall, and
+diff checks were clean after the annotation cleanup. The next importer milestone
+is to bring bounded foreign G-code discovery under the same scan-manifest
+contract before its existing strict translation step.
 
 Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
 validation. Its refresh, JSON report copy, and clicked-point inspector are
