@@ -237,10 +237,10 @@ proposed vector crosses the guarded laser-output boundary. For ordinary
 machine-coordinate work, that boundary is the configured camera/work rectangle
 inset by `laser.boundary_margin_mm` and reduced for the physical spot offset.
 For a current honeycomb-bound project, it can instead be an explicit fixed
-machine-coordinate polygon. The active profile's polygon maps to local
-X/Y−10..200, a 210 × 210 mm square centered on the 190 mm support. Camera
-detection does not move or enlarge it. Red cells report the exceeded edge and
-distance and remain
+machine-coordinate polygon. Its honeycomb-local coordinates depend on the
+accepted support pose and the physical span configured for the running saved
+machine. Camera detection does not move or enlarge it. Red cells report the
+exceeded edge and distance and remain
 unchecked. If raw observed geometry was inside but shared grid sizing caused
 the overrun, the Geometry tooltip says so explicitly.
 
@@ -253,11 +253,11 @@ creating output. Never treat physical support on a movable honeycomb as proof
 that the laser spot can reach the same coordinate.
 
 When Step 3 has a current automatic four-edge honeycomb reference, Trace draws
-its 190 mm support outline in magenta and uses its rigid local frame. The
-three-click fallback remains diagnostic-only and cannot authorize output. The
-magenta support and green output polygon are distinct evidence: detection never
-changes the configured polygon. Camera coverage, the selected guarded-output
-authority, and crop-edge evidence affect the review gates.
+its configured-span support outline in magenta and uses its rigid local frame.
+The three-click fallback remains diagnostic-only and cannot authorize output.
+The magenta support and green output polygon are distinct evidence: detection
+never changes the configured polygon. Camera coverage, the selected guarded-
+output authority, and crop-edge evidence affect the review gates.
 
 These checks keep the fitted grid and its occupancy internally coherent while
 making the required remedy explicit. Trace and color sampling also refuse to

@@ -40,10 +40,12 @@ emission has stopped or that the area is safe to enter.
   evidence of laser reach. The local hardware profile contains an explicit,
   fixed machine-coordinate polygon for honeycomb-bound jobs. It is not inferred
   or moved by live detection; ordinary jobs retain the guarded machine rectangle.
-- A honeycomb-local project displays the complete 190 mm cutting surface. The
-  configured green polygon is 210 × 210 mm, extending 10 mm beyond each support
-  edge in the accepted pose. Generation rejects powered or laser-off controller
-  motion that leaves that polygon; the display never grants reach. Honeycomb-local jobs
+- A honeycomb-local project displays the complete physical support span
+  configured for the running saved machine. The separately configured green
+  machine-coordinate polygon remains the output authority; it is not inferred
+  from the support span or expanded by detection. Generation rejects powered or
+  laser-off controller motion that leaves that polygon; the display never grants
+  reach. Honeycomb-local jobs
   require an accepted automatic four-edge teaching image and bind its four
   measured corners, rigid pose, and complete bed-map digest. A legacy schema-1
   or three-hint visual reference is not execution evidence. **START JOB** rechecks the
