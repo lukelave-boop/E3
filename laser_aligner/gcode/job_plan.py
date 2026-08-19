@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .preview import exact_codes, parse_spot_offset_comment, parse_words, strip_comment
+from .preview import parse_spot_offset_comment, parse_words, strip_comment
 
 
 @dataclass(slots=True, frozen=True)
@@ -147,8 +147,18 @@ def build_job_plan(
         if not line:
             continue
         words = parse_words(line)
-        g_codes = exact_codes(line, "G")
-        m_codes = exact_codes(line, "M")
+        g_codes = {
+            int(round(word.value))
+            for word in words
+            if word.letter == "G"
+            and abs(word.value - round(word.value)) < 1e-9
+        }
+        m_codes = {
+            int(round(word.value))
+            for word in words
+            if word.letter == "M"
+            and abs(word.value - round(word.value)) < 1e-9
+        }
         values = {word.letter: word.value for word in words}
         if 90 in g_codes:
             absolute = True

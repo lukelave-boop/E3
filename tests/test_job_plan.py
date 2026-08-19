@@ -2,6 +2,7 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+import laser_aligner.gcode.job_plan as job_plan_module
 from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.gcode.job_plan import (
     build_job_plan,
@@ -167,3 +168,44 @@ def test_start_here_rejects_unknown_move() -> None:
     plan = build_job_plan("G90\nG0 X1 Y1\n", power_max=1000)
     with pytest.raises(ValueError, match="outside"):
         restart_program_from_move(plan, 5)
+
+def test_build_job_plan_parses_each_executable_line_once(monkeypatch) -> None:
+    text = "\n".join(
+        [
+            "; comment-only line",
+            "G21",
+            "G90",
+            "M5",
+            '; @E3_LAYER {"id":"line-01","name":"Line 01"}',
+            "G0 X10 Y0 F600",
+            "M4 S200",
+            "G1X20Y0F1200",
+            "M5",
+            "",
+        ]
+    )
+    original_parse_words = job_plan_module.parse_words
+    parsed_lines: list[str] = []
+
+    def counted_parse_words(line: str):
+        parsed_lines.append(line)
+        return original_parse_words(line)
+
+    monkeypatch.setattr(job_plan_module, "parse_words", counted_parse_words)
+
+    plan = job_plan_module.build_job_plan(
+        text,
+        power_max=1000,
+        start_position=(0.0, 0.0),
+    )
+
+    assert len(plan.moves) == 2
+    assert parsed_lines == [
+        "G21",
+        "G90",
+        "M5",
+        "G0 X10 Y0 F600",
+        "M4 S200",
+        "G1X20Y0F1200",
+        "M5",
+    ]
