@@ -1,5 +1,6 @@
 """UI-neutral staged planning contracts."""
 
+from .cache import PlanningCache, PlanningCacheStats
 from .digest import (
     canonical_json_digest,
     polyline_sequence_digest,
@@ -26,6 +27,8 @@ from .model import (
 __all__ = [
     "ArtifactMetadata",
     "canonical_json_digest",
+    "PlanningCache",
+    "PlanningCacheStats",
     "ControllerGeometryArtifact",
     "CoordinateDomain",
     "EncodedProgramArtifact",

@@ -23,6 +23,7 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
+from ..planning.cache import PlanningCache
 from ..planning.digest import (
     polyline_sequence_digest,
     project_scene_revision,
@@ -624,11 +625,32 @@ def _normalized_layer_geometry(
     document: ProjectDocument,
     layer: OperationLayer,
     scene_revision: SceneRevision | None = None,
+    *,
+    planning_cache: PlanningCache | None = None,
 ) -> NormalizedGeometryArtifact:
-    """Capture the existing layer geometry at the first typed stage boundary."""
+    """Capture or safely reuse LINE geometry at the normalized stage boundary."""
 
-    paths = tuple(_layer_paths(document, layer))
-    bounds_mm = _bounds(paths) if paths else None
+    dependency_digest = stage_dependency_digest(
+        PlanningStage.NORMALIZED_GEOMETRY,
+        1,
+        _normalized_layer_dependency_payload(document, layer),
+    )
+    cached = (
+        None
+        if planning_cache is None
+        else planning_cache.get_normalized(dependency_digest)
+    )
+    if cached is None:
+        paths = tuple(_layer_paths(document, layer))
+        bounds_mm = _bounds(paths) if paths else None
+        if planning_cache is not None:
+            planning_cache.put_normalized(
+                dependency_digest,
+                paths,
+                bounds_mm,
+            )
+    else:
+        paths, bounds_mm = cached
     metadata = ArtifactMetadata(
         artifact_id=(
             f"{document.id}:{document.revision}:"
@@ -638,11 +660,7 @@ def _normalized_layer_geometry(
         stage=PlanningStage.NORMALIZED_GEOMETRY,
         stage_version=1,
         coordinate_domain=CoordinateDomain.PROJECT,
-        dependency_digest=stage_dependency_digest(
-            PlanningStage.NORMALIZED_GEOMETRY,
-            1,
-            _normalized_layer_dependency_payload(document, layer),
-        ),
+        dependency_digest=dependency_digest,
         bounds_mm=bounds_mm,
         statistics=(
             ("layer_count", 1),
@@ -1519,12 +1537,14 @@ def _operation_paths(
     layer_objects: list[SceneObject],
     *,
     scene_revision: SceneRevision | None = None,
+    planning_cache: PlanningCache | None = None,
 ) -> tuple[list[Polyline], OperationArtifact | None]:
     if layer.mode == LayerMode.LINE:
         normalized = _normalized_layer_geometry(
             document,
             layer,
             scene_revision=scene_revision,
+            planning_cache=planning_cache,
         )
         operation = _line_operation_artifact(document, layer, normalized)
         planned_layer = operation.layer_for_id(layer.id)
@@ -1676,6 +1696,7 @@ def generate_project_gcode(
     coordinate_frame: HoneycombCoordinateFrame | None = None,
     machine_work_area: WorkArea | None = None,
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
+    planning_cache: PlanningCache | None = None,
 ) -> ProjectJob:
     """Generate one guarded vector program containing all enabled line layers."""
     document.validate()
@@ -1842,6 +1863,7 @@ def generate_project_gcode(
             layer,
             layer_objects,
             scene_revision=scene_revision,
+            planning_cache=planning_cache,
         )
         if not local_design_paths:
             continue

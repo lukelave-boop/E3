@@ -341,11 +341,17 @@ ordered source geometry consumed by that layer, the operation digest adds layer
 settings, the placed digest covers effective geometry plus the exact coordinate
 frame, and the controller digest covers placed geometry plus laser spot offset.
 A revision-only change can therefore produce a new artifact ID while retaining
-the same dependency digest. These digests remain observational in this phase:
-there is still no cache lookup, reuse, skipped stage computation, or selective
-recomputation. `EncodedProgramArtifact` is intentionally not assigned a cache
-dependency yet because the final stream still contains volatile generation-time
-text and whole-job dependencies.
+the same dependency digest. The first reuse boundary is now opt-in normalized
+LINE geometry through a caller-owned `PlanningCache`. The cache is bounded,
+memory-only, keyed by the normalized dependency digest, and stores copied
+geometry payloads rather than artifact metadata. A hit therefore avoids
+`object_polylines()` recomputation while still constructing a fresh artifact for
+the current project revision. Cached paths are copied on store and retrieval so
+downstream path mutation cannot contaminate later runs. There is no module-global
+cache, disk persistence, operation/placement/controller reuse, raster/fill cache,
+or encoded-program cache yet. `EncodedProgramArtifact` is intentionally not
+assigned a cache dependency because the final stream still contains volatile
+generation-time text and whole-job dependencies.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions
