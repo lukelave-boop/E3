@@ -223,6 +223,7 @@ class MachineSettings:
     baudrate: int = 115200
     read_timeout: float = 2.0
     work_area: WorkArea = field(default_factory=WorkArea)
+    honeycomb_span_mm: float | None = None
     photo_x: float = 110.0
     photo_y: float = 110.0
     photo_z: float | None = None
@@ -342,6 +343,7 @@ class Settings:
                     "y_min": self.machine.work_area.y_min,
                     "y_max": self.machine.work_area.y_max,
                 },
+                "honeycomb_span_mm": self.machine.honeycomb_span_mm,
                 "photo_position": {
                     "x": self.machine.photo_x,
                     "y": self.machine.photo_y,
@@ -439,6 +441,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "baudrate": 115200,
         "read_timeout": 2.0,
         "work_area": {"x_min": 0.0, "x_max": 220.0, "y_min": 0.0, "y_max": 220.0},
+        "honeycomb_span_mm": None,
         "photo_position": {"x": 110.0, "y": 110.0, "z": None},
         "home_before_photo": True,
         "home_and_release_after_powered_job": True,
@@ -568,6 +571,14 @@ def _validate(raw: Mapping[str, Any]) -> None:
     )
     for label, value in number_values:
         _require_number(value, label)
+    honeycomb_span = raw["machine"]["honeycomb_span_mm"]
+    if honeycomb_span is not None:
+        span = _require_number(
+            honeycomb_span,
+            "machine.honeycomb_span_mm",
+        )
+        if span <= 0:
+            raise ConfigError("machine.honeycomb_span_mm must be positive")
     guarded_polygon = laser.get("guarded_output_polygon_mm")
     if guarded_polygon is not None:
         if not isinstance(guarded_polygon, list) or len(guarded_polygon) != 4:
@@ -842,6 +853,11 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
                 x_max=float(area_raw["x_max"]),
                 y_min=float(area_raw["y_min"]),
                 y_max=float(area_raw["y_max"]),
+            ),
+            honeycomb_span_mm=(
+                None
+                if raw["machine"]["honeycomb_span_mm"] is None
+                else float(raw["machine"]["honeycomb_span_mm"])
             ),
             photo_x=float(photo["x"]),
             photo_y=float(photo["y"]),

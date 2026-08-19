@@ -11,6 +11,17 @@ Open **Tools > Machine Setup…** in the desktop application. The Camera panel's
 relevant step. The dialog uses the shared `AppContext`; it does not start a web
 server or create a second camera owner.
 
+Machine-specific physical dimensions are edited separately in **Machine
+Manager**. Under **Work area and motion**, **Physical honeycomb ruler span** is
+blank until explicitly measured and configured for that saved machine. Changing
+or applying a generic motion-platform profile does not infer a span, including
+for the Ender-3 S1 Pro profile, and applying profile defaults preserves an
+existing measured value. The operator can still clear the field explicitly.
+This value and the machine-scoped fixture-reach evidence are foundation data for
+a future Coordinate Audit; that audit tab is not part of the current interface.
+Fixture-reach evidence remains diagnostic only and does not change GRBL
+settings, work areas, guarded polygons, G-code, arming, laser power, or motion.
+
 Home / park, stable and precision captures, checkerboard capture and solve, and
 camera diagnostics run as one owned background operation at a time. The footer
 shows indeterminate progress while the remaining setup controls and Close action

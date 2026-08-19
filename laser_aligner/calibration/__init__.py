@@ -5,6 +5,7 @@ from .profiles import (
     CalibrationProfileStore,
     signature_from_camera_settings,
 )
+from .reach import FixtureReachEvidence, FixtureReachStore
 from .support import HoneycombSupportReference, HoneycombSupportStore
 
 __all__ = [
@@ -13,6 +14,8 @@ __all__ = [
     "BedPoint",
     "CalibrationProfileSignature",
     "CalibrationProfileStore",
+    "FixtureReachEvidence",
+    "FixtureReachStore",
     "HoneycombSupportReference",
     "HoneycombSupportStore",
     "LensCalibrator",

@@ -5,6 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from laser_aligner.calibration.reach import (
+    FixtureReachEvidence,
+    FixtureReachStore,
+)
 from laser_aligner.config import (
     LaserSettings,
     MachineSettings,
@@ -47,6 +51,7 @@ def _settings(tmp_path: Path, *, simulator: bool = False):
                         "y_min": 20.0,
                         "y_max": 240.0,
                     },
+                    "honeycomb_span_mm": 191.25,
                     "photo_position": {
                         "x": 118.0,
                         "y": 129.0,
@@ -108,6 +113,7 @@ def test_missing_registry_migrates_exact_current_machine_once(
     assert migrated.machine.baudrate == 250000
     assert migrated.machine.allow_motion is True
     assert migrated.machine.work_area == settings.machine.work_area
+    assert migrated.machine.honeycomb_span_mm == pytest.approx(191.25)
     assert migrated.laser.default_power == 275
     assert migrated.laser.guarded_output_polygon_mm == (
         (15.0, 25.0),
@@ -160,6 +166,7 @@ def test_profile_created_machine_starts_with_motion_and_laser_defaults_disabled(
     assert created.id == "dad-s-ender-laser"
     assert created.machine.allow_motion is False
     assert created.machine.port == "SELECT_CONTROLLER_PORT"
+    assert created.machine.honeycomb_span_mm is None
     assert created.laser.default_power == 0
     assert created.laser.frame_power == 0
     assert created.laser.allow_low_power_frame is False
@@ -192,6 +199,33 @@ def test_profile_objects_force_safe_setup_defaults() -> None:
     assert head_profile.laser_defaults.allow_low_power_frame is False
 
 
+def test_all_generic_machine_profiles_leave_honeycomb_span_unset(
+    tmp_path: Path,
+) -> None:
+    registry = MachineRegistry.load_or_migrate(_settings(tmp_path))
+
+    for profile in registry.machine_profiles():
+        assert profile.machine_defaults.honeycomb_span_mm is None
+
+
+@pytest.mark.parametrize(
+    "value",
+    [True, "191", 0, -1.0, float("nan"), float("inf")],
+)
+def test_honeycomb_span_rejects_non_positive_or_non_finite_values(
+    value: object,
+) -> None:
+    with pytest.raises(MachineRegistryError, match="honeycomb_span_mm"):
+        MachineInstance(
+            id="invalid-span",
+            name="Invalid span",
+            machine_profile_id="generic-grbl",
+            tool_head_profile_id="custom-laser-head",
+            machine=MachineSettings(honeycomb_span_mm=value),  # type: ignore[arg-type]
+            laser=LaserSettings(),
+        )
+
+
 def test_multiple_machines_and_active_selection_persist(
     tmp_path: Path,
 ) -> None:
@@ -219,6 +253,101 @@ def test_multiple_machines_and_active_selection_persist(
     }
 
 
+def test_create_machine_does_not_reuse_deleted_machine_state_scope(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = MachineRegistry.load_or_migrate(settings)
+    first = registry.create_machine(
+        "Workshop laser",
+        "generic-grbl",
+        "custom-laser-head",
+    )
+    registry.set_active(first.id)
+    first_store = FixtureReachStore(
+        settings.app.data_dir,
+        machine_id=first.id,
+    )
+    first_store.save(
+        FixtureReachEvidence(fixture_mode="permanent", x_min_mm=5.0)
+    )
+    registry.set_active("existing-machine")
+    registry.remove_machine(first.id)
+
+    replacement = registry.create_machine(
+        "Workshop laser",
+        "generic-grbl",
+        "custom-laser-head",
+    )
+    replacement_store = FixtureReachStore(
+        settings.app.data_dir,
+        machine_id=replacement.id,
+    )
+
+    assert replacement.id == "workshop-laser-2"
+    assert first_store.path.exists()
+    assert replacement_store.path != first_store.path
+    assert replacement_store.evidence.fixture_mode == "unclassified"
+    assert not replacement_store.path.exists()
+
+
+def test_duplicate_machine_does_not_reuse_deleted_machine_state_scope(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = MachineRegistry.load_or_migrate(settings)
+    source = registry.active_machine
+    first = registry.duplicate_machine(source.id, name="Workshop copy")
+    registry.set_active(first.id)
+    first_store = FixtureReachStore(
+        settings.app.data_dir,
+        machine_id=first.id,
+    )
+    first_store.save(
+        FixtureReachEvidence(fixture_mode="permanent", x_min_mm=7.0)
+    )
+    registry.set_active(source.id)
+    registry.remove_machine(first.id)
+
+    replacement = registry.duplicate_machine(
+        source.id,
+        name="Workshop copy",
+    )
+    replacement_store = FixtureReachStore(
+        settings.app.data_dir,
+        machine_id=replacement.id,
+    )
+
+    assert replacement.id == "workshop-copy-2"
+    assert first_store.path.exists()
+    assert replacement_store.path != first_store.path
+    assert replacement_store.evidence.fixture_mode == "unclassified"
+    assert not replacement_store.path.exists()
+
+
+def test_explicit_machine_id_rejects_orphaned_machine_state_scope(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = MachineRegistry.load_or_migrate(
+        settings,
+        path=tmp_path / "alternate-registry" / "machines.json",
+    )
+    scope = settings.app.data_dir / "machine_state" / "retired-machine"
+    scope.mkdir(parents=True)
+
+    with pytest.raises(
+        MachineRegistryError,
+        match="preserved machine-state evidence",
+    ):
+        registry.create_machine(
+            "Replacement",
+            "generic-grbl",
+            "custom-laser-head",
+            machine_id="retired-machine",
+        )
+
+
 def test_registry_returns_copies_not_mutable_internal_objects(
     tmp_path: Path,
 ) -> None:
@@ -242,6 +371,7 @@ def test_resolved_machine_is_a_detached_complete_configuration(
     resolved.laser.default_power = 0
 
     assert resolved.machine_id == "existing-machine"
+    assert resolved.created_from == "legacy-config"
     assert resolved.machine_profile.id == "generic-grbl"
     assert resolved.tool_head_profile.id == "custom-laser-head"
     assert registry.active_machine.machine.port != "CHANGED"
@@ -261,6 +391,7 @@ def test_instance_update_round_trips_without_switching_runtime(
     created.machine.work_area = WorkArea(0.0, 300.0, 0.0, 400.0)
     created.machine.photo_x = 150.0
     created.machine.photo_y = 200.0
+    created.machine.honeycomb_span_mm = 187.5
 
     updated = registry.update_machine(created)
 
@@ -269,6 +400,10 @@ def test_instance_update_round_trips_without_switching_runtime(
     saved = reloaded.get_machine(created.id)
     assert saved.machine.port == "COM7"
     assert saved.machine.work_area == WorkArea(0.0, 300.0, 0.0, 400.0)
+    assert saved.machine.honeycomb_span_mm == pytest.approx(187.5)
+    assert registry.resolve_machine(created.id).machine.honeycomb_span_mm == pytest.approx(
+        187.5
+    )
     assert reloaded.active_machine_id == "existing-machine"
 
 
@@ -455,6 +590,7 @@ def test_duplicate_machine_preserves_exact_settings_and_bindings(
     source = registry.active_machine
     source.camera_profile_id = "camera-profile"
     source.calibration_profile_id = "calibration-profile"
+    source.machine.honeycomb_span_mm = 188.75
     registry.update_machine(source)
 
     duplicated = registry.duplicate_machine(source.id, name="House copy")
@@ -462,6 +598,7 @@ def test_duplicate_machine_preserves_exact_settings_and_bindings(
     assert duplicated.id == "house-copy"
     assert duplicated.name == "House copy"
     assert duplicated.machine == source.machine
+    assert duplicated.machine.honeycomb_span_mm == pytest.approx(188.75)
     assert duplicated.laser == source.laser
     assert duplicated.camera_profile_id == "camera-profile"
     assert duplicated.calibration_profile_id == "calibration-profile"

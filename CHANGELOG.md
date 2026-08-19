@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added the machine-aware physical-setup foundation for a future Coordinate
+  Audit: saved machines now retain an optional explicitly configured physical
+  honeycomb ruler span, `AppContext` receives detached running-machine identity,
+  and diagnostic fixture-reach evidence is isolated by stable machine ID with a
+  no-clobber migration reserved for the original `legacy-config` machine.
+  Retained evidence scopes permanently reserve their IDs, preventing deleted
+  machines' evidence from attaching to replacements. This does not change
+  motion, bounds, G-code, arming, laser power, or controller behavior.
+
 - Added the desktop Machine Manager with an always-visible machine selector,
   automatic preservation of the current configured machine, editable and
   duplicable saved machine instances, next-launch activation, camera/calibration

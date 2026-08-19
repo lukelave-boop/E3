@@ -5,7 +5,30 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-tab sequence.
 
-Snapshot: **2026-08-16**
+Snapshot: **2026-08-18**
+
+The multi-machine foundation now carries an optional, validated physical
+honeycomb ruler span on each saved machine. It remains unset for every generic
+and Ender-3 S1 Pro starting profile until an operator explicitly configures it
+in Machine Manager. `CoreRuntime` also passes a detached snapshot of the stable
+running-machine, profile, camera, and calibration identities into `AppContext`.
+The legacy Coordinate Audit fixture-reach evidence model is restored as
+diagnostic-only state under
+`<data_dir>/machine_state/<stable-machine-id>/fixture_reach.json`; renames retain
+that path and duplicates begin without evidence. Preserved machine-state
+directories permanently reserve their IDs even after registry deletion, so a
+new or duplicated machine cannot inherit orphaned physical evidence. Only the
+physical `legacy-config` machine can claim the old global `fixture_reach.json`,
+using strict, no-clobber copy metadata; profile-created and duplicated machines
+cannot win by launching first. The legacy source is never changed, malformed
+evidence or claim metadata is ignored fail-safe, and a second machine cannot
+inherit the claim. Explicitly saving valid scoped evidence clears a stale
+in-process migration error because that scoped evidence is then authoritative.
+Focused configuration, registry, runtime-identity, offscreen Machine Manager,
+evidence isolation/restart, rename/duplicate, and migration tests pass. The
+Coordinate Audit tab and audit calculations remain absent, and no controller,
+motion, G-code, bounds, arming, or laser behavior changed or was physically
+tested in this increment.
 
 The native desktop now has a bounded foreign G-code design importer for `.gc`,
 `.gcode`, `.nc`, and `.tap`. It translates supported 2-D G0/G1/G2/G3 motion into
