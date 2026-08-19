@@ -20,6 +20,7 @@ from typing import Any
 from .model import LayerMode, OperationLayer, SceneObject
 
 LIGHTBURN_FILE_DIALOG_FILTER = "LightBurn Projects (*.lbrn *.lbrn2 *.LBRN *.LBRN2)"
+SUPPORTED_LIGHTBURN_SUFFIXES = {".lbrn", ".lbrn2"}
 MAX_LIGHTBURN_FILE_BYTES = 64 * 1024 * 1024
 MAX_LIGHTBURN_XML_ELEMENTS = 100_000
 MAX_LIGHTBURN_SHAPES = 20_000
@@ -976,7 +977,7 @@ def load_lightburn_project(
 
     source = Path(path)
     suffix = source.suffix.casefold()
-    if suffix not in {".lbrn", ".lbrn2"}:
+    if suffix not in SUPPORTED_LIGHTBURN_SUFFIXES:
         raise LightBurnImportError("LightBurn projects must use the .lbrn or .lbrn2 extension")
     try:
         size = source.stat().st_size
