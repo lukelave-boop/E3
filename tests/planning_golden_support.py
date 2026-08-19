@@ -6,6 +6,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from planning_golden_extended_cases import (
+    EXTENDED_CASE_BUILDERS,
+    EXTENDED_CASE_NAMES,
+    RejectionResult,
+)
+
 from laser_aligner.config import LaserSettings
 from laser_aligner.project import (
     Bounds,
@@ -22,7 +28,7 @@ from laser_aligner.project import (
 
 GOLDEN_ROOT = Path(__file__).parent / "golden" / "planning"
 EXPECTED_ROOT = GOLDEN_ROOT / "expected"
-CASE_NAMES = (
+CORE_CASE_NAMES = (
     "simple_rectangle",
     "ellipse_curve",
     "nested_contours",
@@ -31,6 +37,7 @@ CASE_NAMES = (
     "multi_pass",
     "vector_power_correction",
 )
+CASE_NAMES = CORE_CASE_NAMES + EXTENDED_CASE_NAMES
 
 
 def _simple_rectangle_job() -> ProjectJob:
@@ -409,6 +416,8 @@ _CASE_BUILDERS = {
     "vector_power_correction": _vector_power_correction_job,
 }
 
+_CASE_BUILDERS.update(EXTENDED_CASE_BUILDERS)
+
 
 
 def canonical_program(text: str) -> str:
@@ -466,16 +475,35 @@ def result_payload(job: ProjectJob) -> dict[str, Any]:
         "layer_summaries": job.layer_summaries,
         "path_count": job.path_count,
         "point_count": job.point_count,
-        "raster_assets": job.raster_assets,
+        "raster_assets": [
+            {
+                "sha256": identity.sha256,
+                "encoded_bytes": identity.encoded_bytes,
+                "format": identity.format,
+                "width": identity.width,
+                "height": identity.height,
+            }
+            for identity in job.raster_assets
+        ],
         "travel_length_mm": job.travel_length_mm,
     }
 
 
 def snapshot_case(case_name: str) -> dict[str, str]:
     try:
-        job = _CASE_BUILDERS[case_name]()
+        result = _CASE_BUILDERS[case_name]()
     except KeyError as exc:
         raise ValueError(f"Unknown planning golden case: {case_name}") from exc
+    if isinstance(result, RejectionResult):
+        return {
+            "rejection.json": _json_text(
+                {
+                    "exception_type": result.exception_type,
+                    "message": result.message,
+                }
+            )
+        }
+    job = result
     if job.plan is None:
         raise AssertionError(f"Planning golden case {case_name} produced no JobPlan")
     return {

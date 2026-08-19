@@ -1,4 +1,4 @@
-# E3 planning golden baseline
+﻿# E3 planning golden baseline
 
 These curated fixtures freeze observable planning behavior before the staged
 planning-pipeline refactor.
@@ -12,7 +12,7 @@ rectangle in a fixed 100 x 100 mm machine-coordinate project. It runs through
 the production `generate_project_gcode()` entry point with no Qt, camera,
 controller, Pi, serial connection, or hardware access.
 
-Each successful case records three artifacts:
+Successful cases record three artifacts:
 
 - `program.gcode` - the generated controller program. Only the human-readable
   `; Generated:` timestamp is canonicalized to `<TIMESTAMP>`; command ordering,
@@ -22,6 +22,8 @@ Each successful case records three artifacts:
 - `preview.json` - the immutable `JobPlan` built from the exact generated
   program, including moves, bounds, laser state, power, feeds, distances,
   timing, warnings, and planner metadata.
+
+Expected-rejection cases instead record a single `rejection.json` containing the exception type and stable rejection message.
 
 Golden files are read-only during normal tests. Missing or changed fixtures
 fail the test. Regeneration is deliberately separate and requires `--accept`.
@@ -47,3 +49,4 @@ git diff -- tests/golden/planning
 Do not regenerate a golden merely because a test fails. First determine whether
 the planning change is intended. If it is intended, regenerate explicitly and
 review the exact program, result, and preview diff before accepting it.
+

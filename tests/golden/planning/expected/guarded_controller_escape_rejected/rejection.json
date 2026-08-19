@@ -1,0 +1,4 @@
+{
+  "exception_type": "SafetyError",
+  "message": "Path exceeds the configured guarded output polygon: controller path after laser spot correction escapes by 9.00 mm"
+}

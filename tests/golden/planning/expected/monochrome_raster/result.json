@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    30.0,
+    30.0,
+    50.0,
+    45.0
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 80.0,
+  "estimated_seconds": 7.680731381147328,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 80.0,
+      "layer_id": "layer-golden-raster",
+      "name": "Golden Raster",
+      "passes": 1,
+      "path_count": 4,
+      "power": 200,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1000.0,
+      "travel_length_mm": 72.03656905736639,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 4,
+  "point_count": 8,
+  "raster_assets": [],
+  "travel_length_mm": 72.03656905736639
+}
