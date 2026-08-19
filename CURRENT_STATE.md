@@ -56,26 +56,48 @@ existing LightBurn and bounded foreign-G-code importers using their existing
 dialog filters and byte limits; LightBurn also exposes one shared supported-
 suffix constant instead of duplicating that literal in its loader.
 
-LightBurn now implements the first bounded **scan -> strict parse** path on top
-of that contract. `scan_lightburn_file()` and `scan_lightburn_project()` inspect
-bounded XML structure without invoking the existing `_parse_shape()` geometry
-vectorizer. The manifest reports the LightBurn format version, referenced cut
-layers, layer names/mode hints/object counts, coordinate-processing facts,
-review warnings, known approximations such as ellipse/rounded-rectangle/Bezier
-flattening and vector-backup text, and explicit unsupported/blocking content.
-Embedded bitmaps, text without a usable vector backup, unsupported shape/path
-types, malformed XML, wrong extensions, and size-limit violations are surfaced
-fail-closed before strict vector parsing. `load_lightburn_project()` reads the
-file once, performs this scan, and enters the unchanged strict parser only when
-the manifest has no blocking errors or unsupported features; the strict parser
-remains authoritative for geometry conversion and detailed validation. No
-desktop import-review UI, project schema, controller path, motion, arming, or
-laser behavior changed. Focused LightBurn scan/import, manifest, and desktop-
-import tests reported **43 passed, 1 skipped**; the skip was the PySide6-
-dependent desktop widget test in the local environment. Ruff, compileall, and
-diff checks were clean after the annotation cleanup. The next importer milestone
-is to bring bounded foreign G-code discovery under the same scan-manifest
-contract before its existing strict translation step.
+LightBurn implements a bounded **scan -> strict parse** path on top of that
+contract. `scan_lightburn_file()` and `scan_lightburn_project()` inspect bounded
+XML structure without invoking the existing `_parse_shape()` geometry vectorizer.
+The manifest reports the LightBurn format version, referenced cut layers, layer
+names/mode hints/object counts, coordinate-processing facts, review warnings,
+known approximations such as ellipse/rounded-rectangle/Bezier flattening and
+vector-backup text, and explicit unsupported/blocking content. Embedded bitmaps,
+text without a usable vector backup, unsupported shape/path types, malformed XML,
+wrong extensions, and size-limit violations are surfaced fail-closed before
+strict vector parsing. `load_lightburn_project()` reads the file once, performs
+this scan, and enters the unchanged strict parser only when the manifest has no
+blocking errors or unsupported features; the strict parser remains authoritative
+for geometry conversion and detailed validation. Focused LightBurn scan/import,
+manifest, and desktop-import tests reported **43 passed, 1 skipped**; the skip
+was the PySide6-dependent desktop widget test in the local environment.
+
+Foreign G-code now has the matching bounded **scan -> strict translate** path.
+`scan_gcode_file()` and `scan_gcode_project()` follow modal units, absolute/
+relative positioning, feed, power, laser mode, plane selection, and supported
+G/M command state without calling `_motion_points()` or `_append_move()` and
+therefore without sampling arcs or assembling E3 geometry during discovery.
+The manifest reports source line/powered/travel counts, reconstructed feed/
+power/M3-M4 operation combinations, coordinate-mode facts, stated or inferred
+S-scale review information, arc-sampling approximations, and omitted controller
+or work-coordinate behavior. Unsupported axes, words, G/M codes, block-delete
+or checksum syntax, invalid/missing feed, conflicting or exceeded S-scale hints,
+non-XY arc planes, and other known untranslatable constructs are reported
+fail-closed before the existing strict translator runs. `load_gcode_project()`
+reads the source once, scans it, and calls the unchanged strict translator only
+when the manifest is ready. `ImportScanManifest` now also has immutable
+`source_facts` for non-warning source statistics. Focused G-code/LightBurn scan
+and importer plus manifest coverage reported **70 passed, 1 skipped**; the skip
+was the PySide6-dependent G-code desktop widget test in the local environment.
+Ruff, compileall, and diff checks were clean.
+
+Both major foreign formats therefore now share the same Qt-neutral discovery
+contract before native E3 assembly. No desktop import-review UI, project schema,
+controller path, motion, arming, or laser behavior changed in either scan
+increment. The next importer milestone is to present these manifests in a
+desktop pre-import review step before objects/layers are committed to the open
+project; registry coverage for SVG/raster can follow after that shared review
+flow exists.
 
 Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
 validation. Its refresh, JSON report copy, and clicked-point inspector are

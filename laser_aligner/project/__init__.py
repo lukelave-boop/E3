@@ -9,6 +9,8 @@ from .gcode_import import (
     GcodeImportResult,
     load_gcode_project,
     parse_gcode_project,
+    scan_gcode_file,
+    scan_gcode_project,
 )
 from .history import (
     AddLayerCommand,
@@ -206,6 +208,8 @@ __all__ = [
     "probe_raster_asset",
     "parse_lightburn_project",
     "parse_gcode_project",
+    "scan_gcode_file",
+    "scan_gcode_project",
     "scan_lightburn_file",
     "scan_lightburn_project",
     "read_raster_asset_payload",
