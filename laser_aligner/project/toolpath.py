@@ -29,6 +29,7 @@ from ..planning.model import (
     LayerOperation,
     NormalizedGeometryArtifact,
     OperationArtifact,
+    PlacedGeometryArtifact,
     PlanningStage,
     RasterRow,
     RasterSource,
@@ -650,6 +651,43 @@ def _line_operation_artifact(
     return OperationArtifact(
         metadata=metadata,
         layers=(LayerOperation(layer=layer, paths=paths),),
+    )
+
+
+def _placed_line_geometry_artifact(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    operation: OperationArtifact,
+    coordinate_frame: HoneycombCoordinateFrame | None,
+    coordinate_frame_signature: tuple[str, int, str] | None,
+) -> PlacedGeometryArtifact:
+    """Apply the existing rigid placement at an explicit machine-beam boundary."""
+
+    planned_layer = operation.layer_for_id(layer.id)
+    if planned_layer is None:
+        raise RuntimeError("LINE operation artifact lost its source layer")
+    paths = tuple(_place_paths(planned_layer.paths, coordinate_frame))
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.PLACED_GEOMETRY.value}:{layer.id}:v1"
+        ),
+        scene_revision=operation.metadata.scene_revision,
+        stage=PlanningStage.PLACED_GEOMETRY,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.MACHINE_BEAM,
+        bounds_mm=_bounds(paths) if paths else None,
+        statistics=(
+            ("layer_count", 1),
+            ("path_count", len(paths)),
+            ("point_count", sum(len(path.points) for path in paths)),
+        ),
+        provenance=(operation.metadata.artifact_id,),
+    )
+    return PlacedGeometryArtifact(
+        metadata=metadata,
+        layer_paths=((layer.id, paths),),
+        coordinate_frame_signature=coordinate_frame_signature,
     )
 
 
@@ -1318,14 +1356,14 @@ def _operation_paths(
     document: ProjectDocument,
     layer: OperationLayer,
     layer_objects: list[SceneObject],
-) -> list[Polyline]:
+) -> tuple[list[Polyline], OperationArtifact | None]:
     if layer.mode == LayerMode.LINE:
         normalized = _normalized_layer_geometry(document, layer)
         operation = _line_operation_artifact(document, layer, normalized)
         planned_layer = operation.layer_for_id(layer.id)
         if planned_layer is None:
             raise RuntimeError("LINE operation artifact lost its source layer")
-        return planned_layer.paths
+        return planned_layer.paths, operation
     unsupported = [
         item.name
         for item in layer_objects
@@ -1337,11 +1375,14 @@ def _operation_paths(
             f"{layer.mode.value.title()} output is not implemented for: "
             + ", ".join(unsupported)
         )
-    return [
-        path
-        for item in layer_objects
-        for path in _scanline_paths(item, layer)
-    ]
+    return (
+        [
+            path
+            for item in layer_objects
+            for path in _scanline_paths(item, layer)
+        ],
+        None,
+    )
 
 
 def _points_differ(first: np.ndarray, second: np.ndarray) -> bool:
@@ -1627,7 +1668,11 @@ def generate_project_gcode(
             all_controller_paths.extend(controller_motion_paths)
             continue
 
-        local_design_paths = _operation_paths(document, layer, layer_objects)
+        local_design_paths, operation_artifact = _operation_paths(
+            document,
+            layer,
+            layer_objects,
+        )
         if not local_design_paths:
             continue
         validate_paths(
@@ -1636,7 +1681,17 @@ def generate_project_gcode(
             local_margin,
             coordinate_label="local design",
         )
-        design_paths = _place_paths(local_design_paths, coordinate_frame)
+        if operation_artifact is None:
+            design_paths = _place_paths(local_design_paths, coordinate_frame)
+        else:
+            placed_artifact = _placed_line_geometry_artifact(
+                document,
+                layer,
+                operation_artifact,
+                coordinate_frame,
+                coordinate_frame_signature,
+            )
+            design_paths = list(placed_artifact.paths_for_layer(layer.id))
         if guarded_polygon is None:
             validate_paths(
                 design_paths,

@@ -11,6 +11,7 @@ from laser_aligner.planning import (
     LayerOperation,
     NormalizedGeometryArtifact,
     OperationArtifact,
+    PlacedGeometryArtifact,
     PlanningStage,
     RasterRow,
     SceneRevision,
@@ -142,6 +143,39 @@ def test_operation_artifact_rejects_duplicate_layer_ids() -> None:
         OperationArtifact(
             metadata=metadata,
             layers=(LayerOperation(layer=layer), LayerOperation(layer=layer)),
+        )
+
+
+def test_placed_geometry_artifact_indexes_machine_beam_paths() -> None:
+    path = Polyline(
+        np.asarray([[10.0, 20.0], [14.0, 20.0]], dtype=np.float64),
+        closed=False,
+        source_tag="placed-line",
+    )
+    signature = ("support-stage-model", 3, "a" * 64)
+    artifact = PlacedGeometryArtifact(
+        metadata=_metadata(
+            PlanningStage.PLACED_GEOMETRY,
+            CoordinateDomain.MACHINE_BEAM,
+        ),
+        layer_paths=(("layer-a", (path,)),),
+        coordinate_frame_signature=signature,
+    )
+
+    assert artifact.paths_for_layer("layer-a")[0] is path
+    assert artifact.paths_for_layer("missing") == ()
+    assert artifact.coordinate_frame_signature == signature
+
+
+def test_placed_geometry_artifact_rejects_duplicate_layer_ids() -> None:
+    metadata = _metadata(
+        PlanningStage.PLACED_GEOMETRY,
+        CoordinateDomain.MACHINE_BEAM,
+    )
+    with pytest.raises(ValueError, match="layer IDs must be unique"):
+        PlacedGeometryArtifact(
+            metadata=metadata,
+            layer_paths=(("layer-a", ()), ("layer-a", ())),
         )
 
 
