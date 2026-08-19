@@ -723,6 +723,8 @@ def _placed_line_geometry_artifact(
     operation: OperationArtifact,
     coordinate_frame: HoneycombCoordinateFrame | None,
     coordinate_frame_signature: tuple[str, int, str] | None,
+    *,
+    planning_cache: PlanningCache | None = None,
 ) -> PlacedGeometryArtifact:
     """Apply the existing rigid placement at an explicit machine-beam boundary."""
 
@@ -755,7 +757,22 @@ def _placed_line_geometry_artifact(
             "coordinate_frame": frame_dependency,
         },
     )
-    paths = tuple(_place_paths(planned_layer.paths, coordinate_frame))
+    cached = (
+        None
+        if planning_cache is None
+        else planning_cache.get_placed(placement_dependency)
+    )
+    if cached is None:
+        paths = tuple(_place_paths(planned_layer.paths, coordinate_frame))
+        bounds_mm = _bounds(paths) if paths else None
+        if planning_cache is not None:
+            planning_cache.put_placed(
+                placement_dependency,
+                paths,
+                bounds_mm,
+            )
+    else:
+        paths, bounds_mm = cached
     metadata = ArtifactMetadata(
         artifact_id=(
             f"{document.id}:{document.revision}:"
@@ -766,7 +783,7 @@ def _placed_line_geometry_artifact(
         stage_version=1,
         coordinate_domain=CoordinateDomain.MACHINE_BEAM,
         dependency_digest=placement_dependency,
-        bounds_mm=_bounds(paths) if paths else None,
+        bounds_mm=bounds_mm,
         statistics=(
             ("layer_count", 1),
             ("path_count", len(paths)),
@@ -1883,6 +1900,7 @@ def generate_project_gcode(
                 operation_artifact,
                 coordinate_frame,
                 coordinate_frame_signature,
+                planning_cache=planning_cache,
             )
             design_paths = list(placed_artifact.paths_for_layer(layer.id))
         if guarded_polygon is None:
