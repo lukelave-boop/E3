@@ -1,4 +1,4 @@
-﻿# E3 planning golden baseline
+# E3 planning golden baseline
 
 These curated fixtures freeze observable planning behavior before the staged
 planning-pipeline refactor.

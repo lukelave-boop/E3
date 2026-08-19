@@ -1,0 +1,4 @@
+{
+  "exception_type": "ValueError",
+  "message": "Project raster geometry requires at least 400,010 streamed commands and up to 80,002 vector spans, exceeding the 250,000-command limit; increase raster intervals or simplify the project"
+}

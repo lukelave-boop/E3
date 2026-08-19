@@ -33,11 +33,13 @@ EXTENDED_CASE_NAMES = (
     "vector_fill",
     "monochrome_raster",
     "grayscale_raster",
+    "raster_power_correction",
     "spot_offset",
     "honeycomb_guarded_placement",
     "honeycomb_missing_frame_rejected",
     "guarded_placement_escape_rejected",
     "guarded_controller_escape_rejected",
+    "aggregate_command_budget_rejected",
 )
 
 
@@ -277,6 +279,39 @@ def _grayscale_raster_job() -> ProjectJob:
         )
 
 
+def _raster_power_correction_job() -> ProjectJob:
+    layer = _layer(
+        layer_id="layer-golden-raster-correction",
+        name="Golden Raster Correction",
+        mode=LayerMode.RASTER,
+        speed_mm_min=1000.0,
+        power_percent=20.0,
+        line_interval_mm=10.0,
+        scan_angle_deg=0.0,
+        overscan_percent=0.0,
+    )
+    layer.raster_power_correction = 60.0
+    rectangle = SceneObject(
+        id="object-golden-raster-correction",
+        name="Golden corrected raster rectangle",
+        kind=ObjectKind.RECTANGLE,
+        layer_id=layer.id,
+        transform=Transform(40.0, 40.0, 20.0, 20.0),
+        geometry={"corner_radius_mm": 0.0},
+    )
+    return generate_project_gcode(
+        _document(
+            project_id="project-golden-raster-correction",
+            name="Golden raster power correction",
+            layer=layer,
+            objects=[rectangle],
+        ),
+        _laser(),
+        optimize_order=True,
+        start_position=(0.0, 0.0),
+    )
+
+
 def _spot_offset_job() -> ProjectJob:
     layer = _layer(
         layer_id="layer-golden-spot",
@@ -456,13 +491,52 @@ def _guarded_controller_escape_rejected() -> RejectionResult:
     )
 
 
+def _aggregate_command_budget_rejected() -> RejectionResult:
+    layer = _layer(
+        layer_id="layer-golden-command-budget",
+        name="Golden Command Budget",
+        mode=LayerMode.RASTER,
+        speed_mm_min=1000.0,
+        power_percent=20.0,
+        line_interval_mm=0.0005,
+        scan_angle_deg=0.0,
+        overscan_percent=0.0,
+    )
+    rectangle = SceneObject(
+        id="object-golden-command-budget",
+        name="Golden command-budget rectangle",
+        kind=ObjectKind.RECTANGLE,
+        layer_id=layer.id,
+        transform=Transform(50.0, 50.0, 20.0, 20.0),
+        geometry={"corner_radius_mm": 0.0},
+    )
+    document = _document(
+        project_id="project-golden-command-budget",
+        name="Golden aggregate command budget rejection",
+        layer=layer,
+        objects=[rectangle],
+    )
+    try:
+        generate_project_gcode(
+            document,
+            _laser(),
+            optimize_order=True,
+            start_position=(0.0, 0.0),
+        )
+    except ValueError as exc:
+        return RejectionResult(type(exc).__name__, str(exc))
+    raise AssertionError("Expected aggregate raster command-budget rejection")
+
+
 EXTENDED_CASE_BUILDERS = {
     "vector_fill": _vector_fill_job,
     "monochrome_raster": _monochrome_raster_job,
     "grayscale_raster": _grayscale_raster_job,
+    "raster_power_correction": _raster_power_correction_job,
     "spot_offset": _spot_offset_job,
     "honeycomb_guarded_placement": _honeycomb_guarded_placement_job,
     "honeycomb_missing_frame_rejected": _honeycomb_missing_frame_rejected,
     "guarded_placement_escape_rejected": _guarded_placement_escape_rejected,
     "guarded_controller_escape_rejected": _guarded_controller_escape_rejected,
+    "aggregate_command_budget_rejected": _aggregate_command_budget_rejected,
 }
