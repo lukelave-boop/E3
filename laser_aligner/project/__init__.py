@@ -60,6 +60,8 @@ from .lightburn import (
     LightBurnImportResult,
     load_lightburn_project,
     parse_lightburn_project,
+    scan_lightburn_file,
+    scan_lightburn_project,
 )
 from .model import (
     DEFAULT_LAYER_COLORS,
@@ -204,6 +206,8 @@ __all__ = [
     "probe_raster_asset",
     "parse_lightburn_project",
     "parse_gcode_project",
+    "scan_lightburn_file",
+    "scan_lightburn_project",
     "read_raster_asset_payload",
     "save_autosave",
     "save_project",

@@ -15,9 +15,12 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .model import LayerMode, OperationLayer, SceneObject
+
+if TYPE_CHECKING:
+    from .import_manifest import ImportLayerManifest, ImportScanManifest
 
 LIGHTBURN_FILE_DIALOG_FILTER = "LightBurn Projects (*.lbrn *.lbrn2 *.LBRN *.LBRN2)"
 SUPPORTED_LIGHTBURN_SUFFIXES = {".lbrn", ".lbrn2"}
@@ -852,6 +855,509 @@ def _shape_points(shape: _RawShape) -> Iterable[tuple[float, float]]:
             yield float(point[0]), float(point[1])
 
 
+
+def _scan_lightburn_shapes(
+    root: ET.Element,
+    *,
+    warnings: list[str],
+    approximations: list[str],
+    unsupported_features: list[str],
+    errors: list[str],
+) -> tuple[dict[int, int], int]:
+    """Inspect LightBurn shape structure without vectorizing source geometry."""
+
+    counts_by_cut: dict[int, int] = {}
+    shape_count = 0
+    vertex_cache_ids: set[int] = set()
+    primitive_cache_ids: set[int] = set()
+
+    def add_once(target: list[str], message: str) -> None:
+        if message not in target:
+            target.append(message)
+
+    def scan_path(element: ET.Element, label: str) -> None:
+        vertex_id_raw = _attribute(element, "VertID")
+        primitive_id_raw = _attribute(element, "PrimID")
+        try:
+            vertex_id = (
+                None
+                if vertex_id_raw is None
+                else _integer(vertex_id_raw, f"{label} VertID")
+            )
+            primitive_id = (
+                None
+                if primitive_id_raw is None
+                else _integer(primitive_id_raw, f"{label} PrimID")
+            )
+        except LightBurnImportError as exc:
+            add_once(errors, str(exc))
+            return
+
+        vertex_node = _first_direct_child(element, "VertList")
+        primitive_node = _first_direct_child(element, "PrimList")
+        vertex_text = _element_value(vertex_node) if vertex_node is not None else None
+        primitive_text = (
+            _element_value(primitive_node) if primitive_node is not None else None
+        )
+
+        if vertex_text and vertex_id is not None:
+            vertex_cache_ids.add(vertex_id)
+        elif not vertex_text and vertex_id is not None and vertex_id not in vertex_cache_ids:
+            add_once(errors, f"{label} is missing its VertList data")
+
+        if primitive_text and primitive_id is not None:
+            primitive_cache_ids.add(primitive_id)
+        elif (
+            not primitive_text
+            and primitive_id is not None
+            and primitive_id not in primitive_cache_ids
+        ):
+            add_once(errors, f"{label} is missing its PrimList data")
+
+        for text, list_name in (
+            (vertex_text, "VertList"),
+            (primitive_text, "PrimList"),
+        ):
+            if text and len(text.encode("utf-8")) > MAX_LIGHTBURN_LIST_TEXT:
+                add_once(errors, f"{label} {list_name} is too large")
+
+        if not primitive_text:
+            return
+
+        primitive_kind = re.sub(r"\s+", "", primitive_text).casefold()
+        if primitive_kind in {"lineclosed", "lineopen"}:
+            return
+
+        primitives = list(_PRIMITIVE_PATTERN.finditer(primitive_text))
+        if not primitives:
+            add_once(
+                unsupported_features,
+                f"{label} contains no supported path primitives",
+            )
+            return
+
+        residue = _PRIMITIVE_PATTERN.sub("", primitive_text)
+        if residue.strip():
+            tokens = sorted(set(re.findall(r"[A-Za-z]+", residue)))
+            add_once(
+                unsupported_features,
+                f"{label} uses unsupported path primitive data: "
+                f"{', '.join(tokens) or residue[:40]}",
+            )
+        primitive_types = {match.group(1).upper() for match in primitives}
+        for primitive_type in sorted(primitive_types.difference({"L", "B"})):
+            add_once(
+                unsupported_features,
+                f"{label} uses unsupported primitive {primitive_type}",
+            )
+        if "B" in primitive_types:
+            add_once(
+                approximations,
+                "Bezier path segments will be flattened to bounded polylines",
+            )
+
+    def scan_shape(
+        element: ET.Element,
+        *,
+        inherited_cut_index: int | None = None,
+        group_depth: int = 0,
+    ) -> None:
+        nonlocal shape_count
+        shape_count += 1
+        if shape_count > MAX_LIGHTBURN_SHAPES:
+            add_once(
+                errors,
+                f"LightBurn project exceeds the {MAX_LIGHTBURN_SHAPES:,}-shape import limit",
+            )
+            return
+
+        shape_type = str(
+            _attribute(element, "Type", _local_name(element.tag))
+        ).strip()
+        type_key = shape_type.casefold()
+        label = f"LightBurn {shape_type or 'shape'} {shape_count}"
+        try:
+            cut_index = _shape_cut_index(element, inherited_cut_index, label)
+        except LightBurnImportError as exc:
+            add_once(errors, str(exc))
+            return
+
+        if type_key in {"group", "shapecontainer"}:
+            children_parent = _first_direct_child(element, "Children")
+            candidates = (
+                list(children_parent)
+                if children_parent is not None
+                else _direct_children(element, "Shape")
+            )
+            children = [
+                child
+                for child in candidates
+                if _local_name(child.tag).casefold() == "shape"
+            ]
+            if not children:
+                add_once(warnings, f"{label} is empty and will not add geometry")
+                return
+            if group_depth:
+                add_once(
+                    approximations,
+                    "Nested LightBurn groups will be flattened into one E3 object group",
+                )
+            for child in children:
+                scan_shape(
+                    child,
+                    inherited_cut_index=cut_index,
+                    group_depth=group_depth + 1,
+                )
+            return
+
+        if type_key == "text":
+            backup = _first_direct_child(element, "BackupPath")
+            if backup is None:
+                add_once(
+                    unsupported_features,
+                    f"{label} has no vector BackupPath. Convert the text to paths in LightBurn, then retry.",
+                )
+                return
+            backup_shapes = [
+                child
+                for child in backup
+                if _local_name(child.tag).casefold() == "shape"
+            ]
+            if backup_shapes:
+                add_once(
+                    approximations,
+                    "LightBurn text will use its stored vector BackupPath rather than editable font text",
+                )
+                for child in backup_shapes:
+                    scan_shape(
+                        child,
+                        inherited_cut_index=cut_index,
+                        group_depth=group_depth,
+                    )
+                return
+            if str(_attribute(backup, "Type", "")).casefold() == "path":
+                add_once(
+                    approximations,
+                    "LightBurn text will use its stored vector BackupPath rather than editable font text",
+                )
+                scan_shape(
+                    backup,
+                    inherited_cut_index=cut_index,
+                    group_depth=group_depth,
+                )
+                return
+            add_once(
+                unsupported_features,
+                f"{label} BackupPath does not contain a usable vector Shape",
+            )
+            return
+
+        if type_key in {"bitmap", "image"}:
+            add_once(
+                unsupported_features,
+                f"{label} is an embedded bitmap. This native importer is vector-only; "
+                "export that bitmap from LightBurn as PNG and import it into E3 separately.",
+            )
+            return
+
+        if type_key in {"rect", "rectangle"}:
+            radius_raw = _attribute(element, "Cr", 0.0)
+            try:
+                radius = _finite(radius_raw, f"{label} corner radius")
+            except LightBurnImportError as exc:
+                add_once(errors, str(exc))
+                return
+            if abs(radius) > 1e-12:
+                add_once(
+                    approximations,
+                    "Rounded LightBurn rectangles will be sampled into bounded vector polylines",
+                )
+        elif type_key in {"ellipse", "circle"}:
+            add_once(
+                approximations,
+                "LightBurn ellipses/circles will be sampled into bounded vector polylines",
+            )
+        elif type_key == "path":
+            scan_path(element, label)
+        else:
+            add_once(
+                unsupported_features,
+                f"{label} uses unsupported shape type {shape_type!r}. "
+                "Convert it to vector paths in LightBurn.",
+            )
+            return
+
+        counts_by_cut[cut_index] = counts_by_cut.get(cut_index, 0) + 1
+
+    for element in root:
+        if _local_name(element.tag).casefold() == "shape":
+            scan_shape(element)
+
+    return counts_by_cut, shape_count
+
+
+def _scan_lightburn_layers(
+    root: ET.Element,
+    counts_by_cut: Mapping[int, int],
+    *,
+    warnings: list[str],
+    approximations: list[str],
+) -> tuple[ImportLayerManifest, ...]:
+    from .import_manifest import ImportLayerManifest
+
+    settings = _collect_cut_settings(root)
+    settings_by_index = {index: element for index, element in settings}
+    setting_rank: dict[int, tuple[float, int]] = {}
+    for ordinal, (index, element) in enumerate(settings):
+        values = _flatten_setting(element)
+        raw_priority = _first_value(values, "priority", "order")
+        priority = (
+            float(ordinal)
+            if raw_priority is None
+            else _finite(raw_priority, f"LightBurn layer {index} priority")
+        )
+        setting_rank[index] = (priority, ordinal)
+
+    referenced_indices = list(counts_by_cut)
+    layer_order = sorted(
+        (index for index in referenced_indices if index in settings_by_index),
+        key=lambda index: setting_rank[index],
+    )
+    layer_order.extend(
+        index for index in referenced_indices if index not in settings_by_index
+    )
+
+    output: list[ImportLayerManifest] = []
+    for index in layer_order:
+        element = settings_by_index.get(index)
+        values = {} if element is None else _flatten_setting(element)
+        if element is None:
+            warnings.append(
+                f"No CutSetting was stored for LightBurn layer {index}; "
+                "strict import will use conservative defaults"
+            )
+
+        name = _first_value(values, "name", "desc", "description")
+        if not name:
+            name = f"C{index:02d}" if index >= 0 else f"Index {index}"
+
+        mode_warnings: list[str] = []
+        mode = _layer_mode(values, mode_warnings, index)
+        for warning in mode_warnings:
+            if warning not in approximations:
+                approximations.append(warning)
+
+        unsupported_parameters = [
+            label
+            for aliases, label in (
+                (("frequency",), "frequency"),
+                (("qpulsewidth", "pulsewidth"), "pulse width"),
+                (("ppi",), "PPI"),
+                (("zoffset", "zstep", "zperpass"), "Z-axis settings"),
+                (("tabcount", "perflen", "perfgap"), "tabs/perforation"),
+                (("wobble", "wobblewidth", "wobblestep"), "wobble"),
+            )
+            if _first_value(values, *aliases) is not None
+        ]
+        if unsupported_parameters:
+            message = (
+                f"LightBurn layer {index} contains "
+                + ", ".join(unsupported_parameters)
+                + "; E3 cannot represent those controller-specific settings"
+            )
+            if message not in approximations:
+                approximations.append(message)
+
+        output.append(
+            ImportLayerManifest(
+                source_key=f"cut:{index}",
+                name=str(name)[:80],
+                mode_hint=mode.value,
+                object_count=counts_by_cut[index],
+            )
+        )
+    return tuple(output)
+
+
+def scan_lightburn_project(
+    xml: str | bytes,
+    *,
+    source_name: str = "untitled.lbrn2",
+    source_suffix: str | None = None,
+    source_size_bytes: int | None = None,
+    max_file_bytes: int = MAX_LIGHTBURN_FILE_BYTES,
+) -> ImportScanManifest:
+    """Return bounded, non-mutating LightBurn facts before strict vector parsing."""
+
+    from .import_manifest import LIGHTBURN_IMPORTER_SPEC, ImportScanManifest
+
+    raw = xml.encode("utf-8") if isinstance(xml, str) else bytes(xml)
+    suffix = (
+        Path(source_name).suffix.casefold()
+        if source_suffix is None
+        else str(source_suffix).casefold()
+    )
+    if not suffix:
+        suffix = ".lbrn2"
+    size = len(raw) if source_size_bytes is None else int(source_size_bytes)
+    limit = int(max_file_bytes)
+    if limit < 1:
+        raise ValueError("max_file_bytes must be positive")
+
+    base = {
+        "importer_id": LIGHTBURN_IMPORTER_SPEC.importer_id,
+        "source_name": source_name,
+        "source_suffix": suffix,
+        "source_size_bytes": max(0, size),
+        "capabilities": LIGHTBURN_IMPORTER_SPEC.capabilities,
+    }
+
+    if suffix not in SUPPORTED_LIGHTBURN_SUFFIXES:
+        return ImportScanManifest(
+            **base,
+            errors=("LightBurn projects must use the .lbrn or .lbrn2 extension",),
+        )
+    if size < 0:
+        return ImportScanManifest(
+            **base,
+            errors=("LightBurn source size must not be negative",),
+        )
+    if size > limit or len(raw) > limit:
+        measured = max(size, len(raw))
+        return ImportScanManifest(
+            **base,
+            errors=(
+                f"LightBurn project is {measured / (1024 * 1024):.1f} MiB; "
+                f"import limit is {limit / (1024 * 1024):.1f} MiB",
+            ),
+        )
+
+    try:
+        root = _root_from_xml(raw)
+    except LightBurnImportError as exc:
+        return ImportScanManifest(**base, errors=(str(exc),))
+
+    warnings = [
+        "Imported LightBurn operation layers will remain output-disabled until reviewed in E3"
+    ]
+    approximations: list[str] = []
+    unsupported_features: list[str] = []
+    errors: list[str] = []
+
+    counts_by_cut, _shape_count = _scan_lightburn_shapes(
+        root,
+        warnings=warnings,
+        approximations=approximations,
+        unsupported_features=unsupported_features,
+        errors=errors,
+    )
+
+    layers: tuple[ImportLayerManifest, ...] = ()
+    if counts_by_cut:
+        try:
+            layers = _scan_lightburn_layers(
+                root,
+                counts_by_cut,
+                warnings=warnings,
+                approximations=approximations,
+            )
+        except LightBurnImportError as exc:
+            errors.append(str(exc))
+
+    if not counts_by_cut and not unsupported_features and not errors:
+        errors.append("LightBurn project contains no usable vector shapes")
+
+    return ImportScanManifest(
+        **base,
+        format_version=str(_attribute(root, "FormatVersion", "")),
+        layers=layers,
+        coordinate_facts=(
+            "LightBurn affine transforms are resolved during strict import before E3 recenters the imported design",
+        ),
+        warnings=tuple(dict.fromkeys(warnings)),
+        approximations=tuple(dict.fromkeys(approximations)),
+        unsupported_features=tuple(dict.fromkeys(unsupported_features)),
+        errors=tuple(dict.fromkeys(errors)),
+    )
+
+
+def scan_lightburn_file(
+    path: str | Path,
+    *,
+    max_file_bytes: int = MAX_LIGHTBURN_FILE_BYTES,
+) -> ImportScanManifest:
+    """Read one LightBurn file once and return a bounded pre-parse manifest."""
+
+    from .import_manifest import LIGHTBURN_IMPORTER_SPEC, ImportScanManifest
+
+    source = Path(path)
+    suffix = source.suffix.casefold() or ".lbrn2"
+    limit = int(max_file_bytes)
+    if limit < 1:
+        raise ValueError("max_file_bytes must be positive")
+
+    try:
+        size = source.stat().st_size
+    except OSError as exc:
+        return ImportScanManifest(
+            importer_id=LIGHTBURN_IMPORTER_SPEC.importer_id,
+            source_name=source.name or "untitled.lbrn2",
+            source_suffix=suffix,
+            source_size_bytes=0,
+            capabilities=LIGHTBURN_IMPORTER_SPEC.capabilities,
+            errors=(f"Could not inspect LightBurn project: {exc}",),
+        )
+
+    if suffix not in SUPPORTED_LIGHTBURN_SUFFIXES:
+        return ImportScanManifest(
+            importer_id=LIGHTBURN_IMPORTER_SPEC.importer_id,
+            source_name=source.name,
+            source_suffix=suffix,
+            source_size_bytes=max(0, size),
+            capabilities=LIGHTBURN_IMPORTER_SPEC.capabilities,
+            errors=("LightBurn projects must use the .lbrn or .lbrn2 extension",),
+        )
+    if size > limit:
+        return ImportScanManifest(
+            importer_id=LIGHTBURN_IMPORTER_SPEC.importer_id,
+            source_name=source.name,
+            source_suffix=suffix,
+            source_size_bytes=size,
+            capabilities=LIGHTBURN_IMPORTER_SPEC.capabilities,
+            errors=(
+                f"LightBurn project is {size / (1024 * 1024):.1f} MiB; "
+                f"import limit is {limit / (1024 * 1024):.1f} MiB",
+            ),
+        )
+
+    try:
+        payload = source.read_bytes()
+    except OSError as exc:
+        return ImportScanManifest(
+            importer_id=LIGHTBURN_IMPORTER_SPEC.importer_id,
+            source_name=source.name,
+            source_suffix=suffix,
+            source_size_bytes=size,
+            capabilities=LIGHTBURN_IMPORTER_SPEC.capabilities,
+            errors=(f"Could not read LightBurn project: {exc}",),
+        )
+
+    return scan_lightburn_project(
+        payload,
+        source_name=source.name,
+        source_suffix=suffix,
+        source_size_bytes=size,
+        max_file_bytes=limit,
+    )
+
+
+def _raise_for_blocked_lightburn_manifest(manifest: ImportScanManifest) -> None:
+    if manifest.errors:
+        raise LightBurnImportError(manifest.errors[0])
+    if manifest.unsupported_features:
+        raise LightBurnImportError(manifest.unsupported_features[0])
+
+
 def parse_lightburn_project(
     xml: str | bytes,
     *,
@@ -995,4 +1501,12 @@ def load_lightburn_project(
         payload = source.read_bytes()
     except OSError as exc:
         raise LightBurnImportError(f"Could not read LightBurn project: {exc}") from exc
+    manifest = scan_lightburn_project(
+        payload,
+        source_name=source.name,
+        source_suffix=suffix,
+        source_size_bytes=size,
+        max_file_bytes=limit,
+    )
+    _raise_for_blocked_lightburn_manifest(manifest)
     return parse_lightburn_project(payload, source_name=source.name, center=center)
