@@ -23,7 +23,14 @@ Successful cases record three artifacts:
   program, including moves, bounds, laser state, power, feeds, distances,
   timing, warnings, and planner metadata.
 
-Expected-rejection cases instead record a single `rejection.json` containing the exception type and stable rejection message.
+Finite floating-point values in the semantic JSON artifacts are canonicalized
+to 12 decimal places. This removes meaningless last-bit differences across
+Python, NumPy, and operating-system combinations while preserving changes as
+small as one trillionth of a millimetre or second. `program.gcode` remains an
+exact text comparison after timestamp and newline normalization.
+
+Expected-rejection cases instead record a single `rejection.json` containing
+the exception type and stable rejection message.
 
 Golden files are read-only during normal tests. Missing or changed fixtures
 fail the test. Regeneration is deliberately separate and requires `--accept`.

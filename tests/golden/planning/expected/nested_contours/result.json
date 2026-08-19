@@ -8,7 +8,7 @@
   "coordinate_frame_signature": null,
   "coordinate_space": "machine",
   "cut_length_mm": 336.0,
-  "estimated_seconds": 22.21058585652453,
+  "estimated_seconds": 22.210585856525,
   "execution_signature": null,
   "guarded_output_polygon_mm": null,
   "layer_summaries": [
@@ -21,12 +21,12 @@
       "power": 300,
       "raster_power_correction": 0.0,
       "speed_mm_min": 1000.0,
-      "travel_length_mm": 79.19595949289332,
+      "travel_length_mm": 79.195959492893,
       "vector_power_correction": 0.0
     }
   ],
   "path_count": 2,
   "point_count": 10,
   "raster_assets": [],
-  "travel_length_mm": 79.19595949289332
+  "travel_length_mm": 79.195959492893
 }

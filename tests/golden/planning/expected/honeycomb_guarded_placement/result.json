@@ -12,7 +12,7 @@
   ],
   "coordinate_space": "honeycomb_local",
   "cut_length_mm": 60.0,
-  "estimated_seconds": 3.802236651868559,
+  "estimated_seconds": 3.802236651869,
   "execution_signature": null,
   "guarded_output_polygon_mm": [
     [
@@ -42,12 +42,12 @@
       "power": 280,
       "raster_power_correction": 0.0,
       "speed_mm_min": 1100.0,
-      "travel_length_mm": 14.142135623730951,
+      "travel_length_mm": 14.142135623731,
       "vector_power_correction": 0.0
     }
   ],
   "path_count": 1,
   "point_count": 5,
   "raster_assets": [],
-  "travel_length_mm": 14.142135623730951
+  "travel_length_mm": 14.142135623731
 }

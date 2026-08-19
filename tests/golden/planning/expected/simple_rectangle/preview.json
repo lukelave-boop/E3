@@ -12,9 +12,9 @@
   "maximum_power": 250.0,
   "moves": [
     {
-      "distance_mm": 26.575364531836623,
-      "duration_seconds": 0.6315072906367325,
-      "end_seconds": 0.6315072906367325,
+      "distance_mm": 26.575364531837,
+      "duration_seconds": 0.631507290637,
+      "end_seconds": 0.631507290637,
       "end_x": 20.0,
       "end_y": 17.5,
       "feed_mm_min": 3000.0,
@@ -39,7 +39,7 @@
     {
       "distance_mm": 40.0,
       "duration_seconds": 2.04,
-      "end_seconds": 2.6715072906367325,
+      "end_seconds": 2.671507290637,
       "end_x": 60.0,
       "end_y": 17.5,
       "feed_mm_min": 1200.0,
@@ -56,7 +56,7 @@
       "rapid": false,
       "raster_power_correction": 0.0,
       "source_name": "Golden rectangle",
-      "start_seconds": 0.6315072906367325,
+      "start_seconds": 0.631507290637,
       "start_x": 20.0,
       "start_y": 17.5,
       "vector_power_correction": 0.0
@@ -64,7 +64,7 @@
     {
       "distance_mm": 25.0,
       "duration_seconds": 1.29,
-      "end_seconds": 3.9615072906367326,
+      "end_seconds": 3.961507290637,
       "end_x": 60.0,
       "end_y": 42.5,
       "feed_mm_min": 1200.0,
@@ -81,7 +81,7 @@
       "rapid": false,
       "raster_power_correction": 0.0,
       "source_name": "Golden rectangle",
-      "start_seconds": 2.6715072906367325,
+      "start_seconds": 2.671507290637,
       "start_x": 60.0,
       "start_y": 17.5,
       "vector_power_correction": 0.0
@@ -89,7 +89,7 @@
     {
       "distance_mm": 40.0,
       "duration_seconds": 2.04,
-      "end_seconds": 6.001507290636733,
+      "end_seconds": 6.001507290637,
       "end_x": 20.0,
       "end_y": 42.5,
       "feed_mm_min": 1200.0,
@@ -106,7 +106,7 @@
       "rapid": false,
       "raster_power_correction": 0.0,
       "source_name": "Golden rectangle",
-      "start_seconds": 3.9615072906367326,
+      "start_seconds": 3.961507290637,
       "start_x": 60.0,
       "start_y": 42.5,
       "vector_power_correction": 0.0
@@ -114,7 +114,7 @@
     {
       "distance_mm": 25.0,
       "duration_seconds": 1.29,
-      "end_seconds": 7.291507290636733,
+      "end_seconds": 7.291507290637,
       "end_x": 20.0,
       "end_y": 17.5,
       "feed_mm_min": 1200.0,
@@ -131,7 +131,7 @@
       "rapid": false,
       "raster_power_correction": 0.0,
       "source_name": "Golden rectangle",
-      "start_seconds": 6.001507290636733,
+      "start_seconds": 6.001507290637,
       "start_x": 20.0,
       "start_y": 42.5,
       "vector_power_correction": 0.0
@@ -140,11 +140,11 @@
   "planner_mode": "nearest path",
   "planner_savings_mm": 0.0,
   "power_max": 1000,
-  "source_order_travel_mm": 26.575364531836623,
+  "source_order_travel_mm": 26.575364531837,
   "spot_offset_x": 0.0,
   "spot_offset_y": 0.0,
-  "total_seconds": 7.291507290636733,
-  "travel_distance_mm": 26.575364531836623,
-  "travel_seconds": 0.6315072906367325,
+  "total_seconds": 7.291507290637,
+  "travel_distance_mm": 26.575364531837,
+  "travel_seconds": 0.631507290637,
   "warnings": []
 }

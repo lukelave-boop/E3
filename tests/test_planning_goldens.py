@@ -1,7 +1,32 @@
 from __future__ import annotations
 
 import pytest
-from planning_golden_support import CASE_NAMES, expected_case_dir, snapshot_case
+from planning_golden_support import (
+    CASE_NAMES,
+    canonical_json_text,
+    expected_case_dir,
+    snapshot_case,
+)
+
+
+def test_planning_golden_json_normalizes_cross_runtime_float_noise() -> None:
+    equivalent_pairs = (
+        (131.99999999999997, 132.0),
+        (29.92290882536933, 29.922908825369326),
+        (7.401446237163121, 7.401446237163124),
+        (-0.0, 0.0),
+    )
+
+    for first, second in equivalent_pairs:
+        assert canonical_json_text({"value": first}) == canonical_json_text(
+            {"value": second}
+        )
+
+
+def test_planning_golden_json_preserves_meaningful_float_changes() -> None:
+    assert canonical_json_text({"value": 1.0}) != canonical_json_text(
+        {"value": 1.000000001}
+    )
 
 
 @pytest.mark.parametrize("case_name", CASE_NAMES)

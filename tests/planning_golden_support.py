@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import asdict, is_dataclass
 from enum import Enum
 from pathlib import Path
@@ -28,6 +29,7 @@ from laser_aligner.project import (
 
 GOLDEN_ROOT = Path(__file__).parent / "golden" / "planning"
 EXPECTED_ROOT = GOLDEN_ROOT / "expected"
+_FLOAT_DECIMAL_PLACES = 12
 CORE_CASE_NAMES = (
     "simple_rectangle",
     "ellipse_curve",
@@ -445,12 +447,17 @@ def _canonical_value(value: Any) -> Any:
         }
     if isinstance(value, (list, tuple)):
         return [_canonical_value(child) for child in value]
-    if isinstance(value, (str, int, float, bool)) or value is None:
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("Golden JSON floats must be finite")
+        rounded = round(value, _FLOAT_DECIMAL_PLACES)
+        return 0.0 if rounded == 0.0 else rounded
+    if isinstance(value, (str, int, bool)) or value is None:
         return value
     raise TypeError(f"Unsupported golden value: {type(value).__name__}")
 
 
-def _json_text(value: Any) -> str:
+def canonical_json_text(value: Any) -> str:
     return (
         json.dumps(
             _canonical_value(value),
@@ -496,7 +503,7 @@ def snapshot_case(case_name: str) -> dict[str, str]:
         raise ValueError(f"Unknown planning golden case: {case_name}") from exc
     if isinstance(result, RejectionResult):
         return {
-            "rejection.json": _json_text(
+            "rejection.json": canonical_json_text(
                 {
                     "exception_type": result.exception_type,
                     "message": result.message,
@@ -508,8 +515,8 @@ def snapshot_case(case_name: str) -> dict[str, str]:
         raise AssertionError(f"Planning golden case {case_name} produced no JobPlan")
     return {
         "program.gcode": canonical_program(job.text),
-        "result.json": _json_text(result_payload(job)),
-        "preview.json": _json_text(job.plan),
+        "result.json": canonical_json_text(result_payload(job)),
+        "preview.json": canonical_json_text(job.plan),
     }
 
 
