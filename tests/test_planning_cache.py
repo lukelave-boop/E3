@@ -186,3 +186,96 @@ def test_normalized_cache_is_bounded_lru() -> None:
     assert cache.get_normalized("2" * 64) is None
     assert cache.get_normalized("1" * 64) is not None
     assert cache.get_normalized("3" * 64) is not None
+
+def test_planning_cache_supports_concurrent_worker_access() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    cache = PlanningCache(max_normalized_entries=16)
+    path = Polyline(
+        np.asarray([[0.0, 0.0], [1.0, 0.0]], dtype=np.float64),
+        source_tag="threaded",
+    )
+
+    def exercise(worker: int) -> None:
+        for index in range(100):
+            digest = f"{(worker * 100 + index) % 32:064x}"
+            cache.put_normalized(digest, (path,), (0.0, 0.0, 1.0, 0.0))
+            cache.get_normalized(digest)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        list(executor.map(exercise, range(4)))
+
+    assert cache.stats.normalized_entries <= 16
+
+
+def test_desktop_job_generation_owns_and_passes_session_planning_cache() -> None:
+    import ast
+    from pathlib import Path
+
+    source_path = (
+        Path(__file__).resolve().parents[1]
+        / "laser_aligner"
+        / "desktop"
+        / "main_window.py"
+    )
+    tree = ast.parse(source_path.read_text(encoding="utf-8"))
+
+    main_window = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == "E3MainWindow"
+    )
+    methods = {
+        node.name: node
+        for node in main_window.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+
+    init = methods["__init__"]
+    owns_cache = any(
+        isinstance(node, ast.Assign)
+        and any(
+            isinstance(target, ast.Attribute)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+            and target.attr == "_planning_cache"
+            for target in node.targets
+        )
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id == "PlanningCache"
+        for node in ast.walk(init)
+    )
+    assert owns_cache
+
+    begin = methods["_begin_job_generation"]
+    context_captures_cache = any(
+        isinstance(node, ast.Dict)
+        and any(
+            isinstance(key, ast.Constant)
+            and key.value == "planning_cache"
+            and isinstance(value, ast.Attribute)
+            and isinstance(value.value, ast.Name)
+            and value.value.id == "self"
+            and value.attr == "_planning_cache"
+            for key, value in zip(node.keys, node.values, strict=True)
+        )
+        for node in ast.walk(begin)
+    )
+    assert context_captures_cache
+
+    ready = methods["_job_snapshot_ready"]
+    passes_cache = any(
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "generate_project_gcode"
+        and any(
+            keyword.arg == "planning_cache"
+            and isinstance(keyword.value, ast.Subscript)
+            and isinstance(keyword.value.value, ast.Name)
+            and keyword.value.value.id == "context"
+            for keyword in node.keywords
+        )
+        for node in ast.walk(ready)
+    )
+    assert passes_cache

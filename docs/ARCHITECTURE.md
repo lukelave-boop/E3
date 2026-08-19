@@ -344,14 +344,18 @@ A revision-only change can therefore produce a new artifact ID while retaining
 the same dependency digest. The first reuse boundary is now opt-in normalized
 LINE geometry through a caller-owned `PlanningCache`. The cache is bounded,
 memory-only, keyed by the normalized dependency digest, and stores copied
-geometry payloads rather than artifact metadata. A hit therefore avoids
-`object_polylines()` recomputation while still constructing a fresh artifact for
-the current project revision. Cached paths are copied on store and retrieval so
-downstream path mutation cannot contaminate later runs. There is no module-global
-cache, disk persistence, operation/placement/controller reuse, raster/fill cache,
-or encoded-program cache yet. `EncodedProgramArtifact` is intentionally not
-assigned a cache dependency because the final stream still contains volatile
-generation-time text and whole-job dependencies.
+geometry payloads rather than artifact metadata. `E3MainWindow` owns one
+session-long cache and passes that exact object into each background project
+planning snapshot, so normal generate/edit/regenerate cycles can reuse unchanged
+normalized geometry. The cache is lock-protected because planning executes off
+the GUI thread. A hit avoids `object_polylines()` recomputation while still
+constructing a fresh artifact for the current project revision. Cached paths are
+copied on store and retrieval so downstream path mutation cannot contaminate
+later runs. There is no module-global cache, disk persistence,
+operation/placement/controller reuse, raster/fill cache, or encoded-program
+cache yet. `EncodedProgramArtifact` is intentionally not assigned a cache
+dependency because the final stream still contains volatile generation-time
+text and whole-job dependencies.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions

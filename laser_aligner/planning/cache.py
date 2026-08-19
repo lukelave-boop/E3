@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
+from threading import RLock
 
 from ..geometry.svg import Polyline
 from .model import BoundsMm
@@ -53,6 +54,7 @@ class PlanningCache:
         if type(max_normalized_entries) is not int or max_normalized_entries < 1:
             raise ValueError("max_normalized_entries must be a positive integer")
         self._max_normalized_entries = max_normalized_entries
+        self._lock = RLock()
         self._normalized: OrderedDict[str, _NormalizedGeometryCacheValue] = OrderedDict()
         self._normalized_hits = 0
         self._normalized_misses = 0
@@ -65,13 +67,14 @@ class PlanningCache:
         """Return an isolated copy of one cached normalized payload."""
 
         key = _require_sha256(dependency_digest)
-        value = self._normalized.pop(key, None)
-        if value is None:
-            self._normalized_misses += 1
-            return None
-        self._normalized[key] = value
-        self._normalized_hits += 1
-        return _clone_paths(value.paths), value.bounds_mm
+        with self._lock:
+            value = self._normalized.pop(key, None)
+            if value is None:
+                self._normalized_misses += 1
+                return None
+            self._normalized[key] = value
+            self._normalized_hits += 1
+            return _clone_paths(value.paths), value.bounds_mm
 
     def put_normalized(
         self,
@@ -86,23 +89,26 @@ class PlanningCache:
             paths=_clone_paths(paths),
             bounds_mm=bounds_mm,
         )
-        self._normalized.pop(key, None)
-        self._normalized[key] = value
-        while len(self._normalized) > self._max_normalized_entries:
-            self._normalized.popitem(last=False)
-            self._normalized_evictions += 1
+        with self._lock:
+            self._normalized.pop(key, None)
+            self._normalized[key] = value
+            while len(self._normalized) > self._max_normalized_entries:
+                self._normalized.popitem(last=False)
+                self._normalized_evictions += 1
 
     def clear(self) -> None:
-        self._normalized.clear()
+        with self._lock:
+            self._normalized.clear()
 
     @property
     def stats(self) -> PlanningCacheStats:
-        return PlanningCacheStats(
-            normalized_entries=len(self._normalized),
-            normalized_hits=self._normalized_hits,
-            normalized_misses=self._normalized_misses,
-            normalized_evictions=self._normalized_evictions,
-        )
+        with self._lock:
+            return PlanningCacheStats(
+                normalized_entries=len(self._normalized),
+                normalized_hits=self._normalized_hits,
+                normalized_misses=self._normalized_misses,
+                normalized_evictions=self._normalized_evictions,
+            )
 
 
 __all__ = ["PlanningCache", "PlanningCacheStats"]
