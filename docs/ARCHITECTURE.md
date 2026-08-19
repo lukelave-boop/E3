@@ -324,14 +324,16 @@ Every artifact declares its coordinate domain, stage version, bounds, warnings,
 statistics, and provenance. The first increment moved the existing layer/raster
 working records into `laser_aligner/planning/model.py`. LINE-layer object
 geometry now crosses `NormalizedGeometryArtifact`, `OperationArtifact`,
-`PlacedGeometryArtifact`, and `ControllerGeometryArtifact`. Placement still uses
-the existing `_place_paths()` rigid transform, while controller conversion still
-uses the existing `_controller_paths()` laser-spot correction. The two artifacts
-make machine-beam and commanded-controller coordinates explicit, retain the
-reviewed support-frame provenance chain, and record the exact configured spot
-offset. `project.toolpath.generate_project_gcode()` remains the compatibility
-entry point and orchestrator. No cache or selective recomputation is active yet;
-those follow only after the stage boundaries themselves preserve the planning
+`PlacedGeometryArtifact`, and `ControllerGeometryArtifact`, and the exact
+finalized program text crosses `EncodedProgramArtifact` before the immutable
+`JobPlan` is built. Placement and laser-spot correction still use the existing
+`_place_paths()` and `_controller_paths()` implementations unchanged. The
+encoded artifact does not rewrite G-code; it records program statistics, the
+current encoder provenance, the staged LINE controller-artifact identities, and
+the count of non-LINE layers that still use the legacy internal path.
+`project.toolpath.generate_project_gcode()` remains the compatibility entry
+point and orchestrator. No cache or selective recomputation is active yet; those
+follow only after the stage boundaries themselves preserve the planning
 goldens.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping

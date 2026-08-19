@@ -27,6 +27,7 @@ from ..planning.model import (
     ArtifactMetadata,
     ControllerGeometryArtifact,
     CoordinateDomain,
+    EncodedProgramArtifact,
     LayerOperation,
     NormalizedGeometryArtifact,
     OperationArtifact,
@@ -726,6 +727,49 @@ def _controller_line_geometry_artifact(
             float(laser.spot_offset_x_mm),
             float(laser.spot_offset_y_mm),
         ),
+    )
+
+
+def _encoded_program_artifact(
+    document: ProjectDocument,
+    text: str,
+    *,
+    bounds_mm: tuple[float, float, float, float],
+    command_count: int,
+    path_count: int,
+    point_count: int,
+    staged_line_artifact_ids: Iterable[str],
+    unstaged_layer_count: int,
+) -> EncodedProgramArtifact:
+    """Wrap the exact finalized stream without changing its contents."""
+
+    staged_ids = tuple(staged_line_artifact_ids)
+    metadata = ArtifactMetadata(
+        artifact_id=(
+            f"{document.id}:{document.revision}:"
+            f"{PlanningStage.ENCODED_PROGRAM.value}:v1"
+        ),
+        scene_revision=SceneRevision(
+            project_id=document.id,
+            revision=document.revision,
+            coordinate_space=document.coordinate_space,
+        ),
+        stage=PlanningStage.ENCODED_PROGRAM,
+        stage_version=1,
+        coordinate_domain=CoordinateDomain.PROGRAM,
+        bounds_mm=bounds_mm,
+        statistics=(
+            ("command_count", command_count),
+            ("path_count", path_count),
+            ("point_count", point_count),
+            ("staged_line_layer_count", len(staged_ids)),
+            ("unstaged_layer_count", unstaged_layer_count),
+        ),
+        provenance=("project.toolpath:encoder", *staged_ids),
+    )
+    return EncodedProgramArtifact(
+        metadata=metadata,
+        text=text,
     )
 
 
@@ -1589,6 +1633,7 @@ def generate_project_gcode(
     all_paths: list[Polyline] = []
     all_controller_paths: list[Polyline] = []
     layer_plans: list[LayerOperation] = []
+    staged_line_artifact_ids: list[str] = []
     raster_command_estimate = 0
     vector_command_estimate = 0
     for layer in sorted(document.layers, key=lambda item: item.priority):
@@ -1753,6 +1798,7 @@ def generate_project_gcode(
                 placed_artifact,
                 laser,
             )
+            staged_line_artifact_ids.append(controller_artifact.metadata.artifact_id)
             paths = list(controller_artifact.paths_for_layer(layer.id))
         if guarded_polygon is None:
             validate_paths(
@@ -2091,8 +2137,20 @@ def generate_project_gcode(
             "or simplify project geometry"
         )
     text = "\n".join(lines)
-    plan = build_job_plan(
+    encoded = _encoded_program_artifact(
+        document,
         text,
+        bounds_mm=bounds,
+        command_count=command_count,
+        path_count=path_count,
+        point_count=point_count,
+        staged_line_artifact_ids=staged_line_artifact_ids,
+        unstaged_layer_count=sum(
+            1 for layer_plan in layer_plans if layer_plan.layer.mode != LayerMode.LINE
+        ),
+    )
+    plan = build_job_plan(
+        encoded.text,
         power_max=controller_power_max,
         default_feed_mm_min=laser.travel_feed_mm_min,
         start_position=(float(start[0]), float(start[1])),
@@ -2100,7 +2158,7 @@ def generate_project_gcode(
         command_delay_ms=laser.preview_command_delay_ms,
     )
     return ProjectJob(
-        text=text,
+        text=encoded.text,
         bounds_mm=bounds,
         cut_length_mm=cut_length,
         travel_length_mm=travel_length,

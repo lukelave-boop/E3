@@ -266,3 +266,26 @@ def test_encoded_program_artifact_keeps_exact_program_text() -> None:
     )
 
     assert artifact.text == text
+
+
+
+def test_encoded_program_artifact_requires_program_domain() -> None:
+    with pytest.raises(ValueError, match="Expected program coordinates"):
+        EncodedProgramArtifact(
+            metadata=_metadata(
+                PlanningStage.ENCODED_PROGRAM,
+                CoordinateDomain.CONTROLLER,
+            ),
+            text="M5\n",
+        )
+
+
+def test_encoded_program_artifact_rejects_empty_text() -> None:
+    with pytest.raises(ValueError, match="must not be empty"):
+        EncodedProgramArtifact(
+            metadata=_metadata(
+                PlanningStage.ENCODED_PROGRAM,
+                CoordinateDomain.PROGRAM,
+            ),
+            text="",
+        )
