@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    20.0,
+    17.5,
+    60.0,
+    42.5
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 130.0,
+  "estimated_seconds": 7.291507290636733,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 130.0,
+      "layer_id": "layer-golden-line",
+      "name": "Golden Line",
+      "passes": 1,
+      "path_count": 1,
+      "power": 250,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1200.0,
+      "travel_length_mm": 26.575364531836623,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 1,
+  "point_count": 5,
+  "raster_assets": [],
+  "travel_length_mm": 26.575364531836623
+}
