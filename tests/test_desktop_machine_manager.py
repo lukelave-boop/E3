@@ -104,6 +104,7 @@ def test_manager_saves_edits_without_resetting_unexposed_settings(
     dialog = MachineManagerDialog(runtime)
     dialog.name.setText("Home Ender laser")
     dialog.port.setText("e3bridge://home-pi:8765")
+    dialog.honeycomb_span.setText("189.5")
 
     assert dialog._save_selected() is True
 
@@ -111,6 +112,7 @@ def test_manager_saves_edits_without_resetting_unexposed_settings(
     assert saved.name == "Home Ender laser"
     assert saved.machine.port == "e3bridge://home-pi:8765"
     assert saved.machine.allow_motion is True
+    assert saved.machine.honeycomb_span_mm == pytest.approx(189.5)
     assert saved.laser.guarded_output_polygon_mm == original.laser.guarded_output_polygon_mm
     dialog.close()
 
@@ -143,6 +145,8 @@ def test_profile_identity_change_does_not_overwrite_concrete_settings(
 ) -> None:
     runtime = _runtime(tmp_path)
     before = runtime.machine_registry.active_machine
+    before.machine.honeycomb_span_mm = 190.25
+    runtime.machine_registry.update_machine(before)
     dialog = MachineManagerDialog(runtime)
 
     ender_index = dialog.machine_profile.findData("ender-3-s1-pro")
@@ -158,6 +162,7 @@ def test_profile_identity_change_does_not_overwrite_concrete_settings(
     assert dialog.port.text() == before.machine.port
     assert dialog.x_min.value() == before.machine.work_area.x_min
     assert dialog.power_max.value() == before.laser.power_max
+    assert dialog.honeycomb_span.text() == "190.25"
 
     assert dialog._save_selected() is True
     saved = runtime.machine_registry.active_machine
@@ -166,6 +171,7 @@ def test_profile_identity_change_does_not_overwrite_concrete_settings(
     assert saved.machine.port == before.machine.port
     assert saved.machine.work_area == before.machine.work_area
     assert saved.laser.power_max == before.laser.power_max
+    assert saved.machine.honeycomb_span_mm == pytest.approx(190.25)
     dialog.close()
 
 
@@ -176,6 +182,8 @@ def test_apply_machine_profile_defaults_is_explicit_and_does_not_touch_laser(
 ) -> None:
     runtime = _runtime(tmp_path)
     before = runtime.machine_registry.active_machine
+    before.machine.honeycomb_span_mm = 191.0
+    runtime.machine_registry.update_machine(before)
     dialog = MachineManagerDialog(runtime)
     ender_index = dialog.machine_profile.findData("ender-3-s1-pro")
     dialog.machine_profile.setCurrentIndex(ender_index)
@@ -190,12 +198,40 @@ def test_apply_machine_profile_defaults_is_explicit_and_does_not_touch_laser(
     assert dialog.max_travel_feed.value() == 3000.0
     assert dialog.port.text() == "SELECT_CONTROLLER_PORT"
     assert dialog.power_max.value() == before.laser.power_max
+    assert dialog.honeycomb_span.text() == "191"
     unchanged = runtime.machine_registry.active_machine
     assert unchanged.machine.port == before.machine.port
     assert (
         unchanged.machine.max_travel_feed_mm_min
         == before.machine.max_travel_feed_mm_min
     )
+    assert unchanged.machine.honeycomb_span_mm == pytest.approx(191.0)
+
+    assert dialog._save_selected() is True
+    saved = runtime.machine_registry.active_machine
+    assert saved.machine.port == "SELECT_CONTROLLER_PORT"
+    assert saved.machine.max_travel_feed_mm_min == pytest.approx(3000.0)
+    assert saved.machine.honeycomb_span_mm == pytest.approx(191.0)
+    assert saved.laser.power_max == before.laser.power_max
+    dialog.close()
+
+
+def test_manager_can_clear_physical_honeycomb_span(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    machine = runtime.machine_registry.active_machine
+    machine.machine.honeycomb_span_mm = 191.0
+    runtime.machine_registry.update_machine(machine)
+    dialog = MachineManagerDialog(runtime)
+
+    assert dialog.honeycomb_span.text() == "191"
+    assert "Not configured" in dialog.honeycomb_span.placeholderText()
+    dialog.honeycomb_span.clear()
+
+    assert dialog._save_selected() is True
+    assert runtime.machine_registry.active_machine.machine.honeycomb_span_mm is None
     dialog.close()
 
 

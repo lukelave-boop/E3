@@ -49,9 +49,11 @@ def test_runtime_bootstraps_registry_without_replacing_active_settings(
             *,
             hardware_enabled: bool,
             laser_lockout: bool,
+            machine_identity: Any,
         ) -> None:
-            events.append(("context", received_settings))
+            events.append(("context", (received_settings, machine_identity)))
             self.settings = received_settings
+            self.machine_identity = machine_identity
 
         def start(self) -> None:
             events.append(("start", None))
@@ -72,12 +74,23 @@ def test_runtime_bootstraps_registry_without_replacing_active_settings(
 
     assert runtime.settings is settings
     assert runtime.context.settings is settings
-    assert events == [("context", settings)]
+    assert events == [("context", (settings, runtime.context.machine_identity))]
     active = runtime.machine_registry.active_machine
     assert active.machine.port == settings.machine.port
     assert active.laser.default_power == 275
     assert settings.machine.allow_motion is True
     assert settings.laser.default_power == 275
+    identity = runtime.context.machine_identity
+    assert identity.machine_id == "existing-machine"
+    assert identity.machine_name == active.name
+    assert identity.created_from == "legacy-config"
+    assert identity.machine_profile_id == "generic-grbl"
+    assert identity.tool_head_profile_id == "custom-laser-head"
+    assert identity.expected_camera_profile_id == active.camera_profile_id
+    assert (
+        identity.expected_calibration_profile_id
+        == active.calibration_profile_id
+    )
 
 
 def test_invalid_registry_blocks_context_construction(
@@ -128,9 +141,10 @@ def test_runtime_uses_registry_active_machine_on_next_launch(
             *,
             hardware_enabled: bool,
             laser_lockout: bool,
+            machine_identity: Any,
         ) -> None:
             del hardware_enabled, laser_lockout
-            received.append(received_settings)
+            received.append((received_settings, machine_identity))
 
         def start(self) -> None:
             pass
@@ -151,4 +165,6 @@ def test_runtime_uses_registry_active_machine_on_next_launch(
 
     assert runtime.running_machine_id == created.id
     assert runtime.settings.machine.port == "e3bridge://second-controller:8765"
-    assert received[0].machine.port == "e3bridge://second-controller:8765"
+    assert received[0][0].machine.port == "e3bridge://second-controller:8765"
+    assert received[0][1].machine_id == created.id
+    assert received[0][1].created_from == "profile"

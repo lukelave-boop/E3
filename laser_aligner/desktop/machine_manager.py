@@ -381,6 +381,12 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.photo_z.setPlaceholderText("blank = no Z move")
         self.max_travel_feed = _double_spin(0.01, 1_000_000.0, decimals=1, step=100.0)
         self.max_work_feed = _double_spin(0.01, 1_000_000.0, decimals=1, step=100.0)
+        self.honeycomb_span = QtWidgets.QLineEdit()
+        self.honeycomb_span.setPlaceholderText("Not configured (leave blank)")
+        self.honeycomb_span.setToolTip(
+            "Optional physical zero-to-far-ruler span in millimetres. "
+            "Leave blank when this machine has not been measured."
+        )
         self.home_before_photo = QtWidgets.QCheckBox("Home before photo position")
         self.release_after_job = QtWidgets.QCheckBox(
             "Home and release motors after powered job"
@@ -392,6 +398,12 @@ class MachineManagerDialog(QtWidgets.QDialog):
             ("Photo X", self.photo_x, "Photo Y", self.photo_y),
             ("Photo Z", self.photo_z, "Max travel feed", self.max_travel_feed),
             ("Max work feed", self.max_work_feed, "", QtWidgets.QLabel("")),
+            (
+                "Physical honeycomb ruler span",
+                self.honeycomb_span,
+                "",
+                QtWidgets.QLabel(""),
+            ),
         )
         for row, (left_label, left, right_label, right) in enumerate(rows):
             grid.addWidget(QtWidgets.QLabel(left_label), row, 0)
@@ -592,6 +604,11 @@ class MachineManagerDialog(QtWidgets.QDialog):
             )
             self.max_travel_feed.setValue(machine.machine.max_travel_feed_mm_min)
             self.max_work_feed.setValue(machine.machine.max_work_feed_mm_min)
+            self.honeycomb_span.setText(
+                ""
+                if machine.machine.honeycomb_span_mm is None
+                else f"{machine.machine.honeycomb_span_mm:g}"
+            )
             self.home_before_photo.setChecked(machine.machine.home_before_photo)
             self.release_after_job.setChecked(
                 machine.machine.home_and_release_after_powered_job
@@ -668,7 +685,9 @@ class MachineManagerDialog(QtWidgets.QDialog):
             return
         if self._working_machine is None:
             return
+        honeycomb_span_mm = self._working_machine.machine.honeycomb_span_mm
         self._working_machine.machine = profile.machine_defaults
+        self._working_machine.machine.honeycomb_span_mm = honeycomb_span_mm
         defaults = self._working_machine.machine
         self._set_combo_data(self.protocol, defaults.protocol)
         self.port.setText(defaults.port)
@@ -763,6 +782,10 @@ class MachineManagerDialog(QtWidgets.QDialog):
         candidate.machine.photo_z = None if not photo_z else float(photo_z)
         candidate.machine.max_travel_feed_mm_min = self.max_travel_feed.value()
         candidate.machine.max_work_feed_mm_min = self.max_work_feed.value()
+        honeycomb_span = self.honeycomb_span.text().strip()
+        candidate.machine.honeycomb_span_mm = (
+            None if not honeycomb_span else float(honeycomb_span)
+        )
         candidate.machine.home_before_photo = self.home_before_photo.isChecked()
         candidate.machine.home_and_release_after_powered_job = (
             self.release_after_job.isChecked()

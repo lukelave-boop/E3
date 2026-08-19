@@ -6,7 +6,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from ..app import AppContext
+from ..app import AppContext, RunningMachineIdentity
 from ..config import Settings, load_settings
 from ..machine.profiles import MachineRegistry
 
@@ -58,6 +58,19 @@ class CoreRuntime:
             settings,
             hardware_enabled=self.hardware_enabled,
             laser_lockout=self.laser_lockout,
+            machine_identity=RunningMachineIdentity(
+                machine_id=resolved_machine.machine_id,
+                machine_name=resolved_machine.machine_name,
+                created_from=resolved_machine.created_from,
+                machine_profile_id=resolved_machine.machine_profile.id,
+                tool_head_profile_id=resolved_machine.tool_head_profile.id,
+                expected_camera_profile_id=(
+                    resolved_machine.camera_profile_id
+                ),
+                expected_calibration_profile_id=(
+                    resolved_machine.calibration_profile_id
+                ),
+            ),
         )
         self._state = RuntimeState.STOPPED
         self._error: str | None = None

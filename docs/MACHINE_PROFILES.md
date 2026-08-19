@@ -56,7 +56,16 @@ A `MachineInstance` is one saved physical or simulated machine. It references a
 machine profile and a tool-head profile but stores a complete validated snapshot
 of its concrete `MachineSettings` and `LaserSettings`. This allows two machines
 based on the same profile to retain different ports, work areas, speeds,
-offsets, and future calibration/camera bindings.
+offsets, physical honeycomb spans, and calibration/camera bindings.
+
+`MachineSettings.honeycomb_span_mm` is optional machine-specific physical setup
+data. `null` means not configured; a configured value must be a finite positive
+number. Built-in profiles, including Creality Ender-3 S1 Pro, leave it `null`.
+Selecting a profile or explicitly applying generic profile defaults never
+invents a nominal span. Applying those defaults preserves an existing measured
+span while replacing the generic controller, work-area, homing, and motion
+values. Duplicating a saved machine copies this configuration value along with
+its other settings.
 
 The complete machine/head pair is validated with the same configuration rules
 as the existing application. For example, a saved laser feed cannot exceed its
@@ -68,7 +77,10 @@ boolean safety fields are not coerced from strings or numbers.
 `MachineRegistry.resolve_machine()` returns detached copies of the selected
 instance, profile metadata, machine settings, laser settings, and optional
 camera/calibration references. Mutating that returned object cannot mutate the
-saved registry.
+saved registry. `CoreRuntime` converts those values into detached running-machine
+identity passed to `AppContext`: machine ID/name, machine/tool-head profile IDs,
+and the expected camera/calibration profile IDs. `AppContext` does not retain a
+mutable registry object and remains independent of Qt.
 
 ## Persistence and migration
 
@@ -90,6 +102,32 @@ invalid machine/laser settings are rejected rather than silently repaired.
 Initial migration uses no-clobber atomic publication. If another process creates
 the registry first, E3 reads and validates that file instead of overwriting it.
 Subsequent changes use the repository's existing atomic JSON replacement helper.
+
+Fixture-reach observations for the future Coordinate Audit are a separate
+diagnostic persistence domain:
+
+```text
+<data_dir>/machine_state/<stable-machine-id>/fixture_reach.json
+```
+
+The stable ID, not the editable machine name, selects the path. Renaming keeps
+the evidence; duplicating creates a new ID and does not copy evidence. Direct
+standalone `AppContext` construction uses an explicit `standalone` legacy scope.
+Automatic machine-ID allocation also treats every existing
+`machine_state/<id>` scope as permanently unavailable, including after its saved
+machine is deleted. The retained directory acts as an evidence tombstone; E3
+does not delete it, reuse the ID, or attach it to a newly created or duplicated
+machine. An explicitly requested ID with an orphaned scope is rejected.
+
+If the former global `<data_dir>/fixture_reach.json` exists, only the physical
+saved machine whose detached provenance is `created_from: legacy-config` can
+claim it. A profile-created or duplicated machine cannot claim it merely by
+launching first. E3 validates the legacy evidence, atomically records the
+claiming stable ID and source digest in
+`machine_state/.fixture_reach_legacy_claim.json`, and copies the bytes only when
+the machine-specific destination is absent. It never deletes or rewrites the
+legacy source. Another ID cannot consume the same claim, and malformed evidence
+or migration metadata blocks migration without guessing or overwriting data.
 
 Migration deliberately makes only conservative classifications:
 
@@ -176,6 +214,13 @@ profile.
 The manager can add, edit, duplicate, delete, and select saved machines. Selecting
 a machine changes the default for the next E3 launch. It deliberately does not
 hot-swap the controller underneath an open job or running session.
+
+Under **Work area and motion**, **Physical honeycomb ruler span** accepts an
+explicit positive millimetre value or a blank **Not configured** state. Profile
+identity changes and applying built-in machine profile defaults leave an
+existing measured value untouched; no profile supplies 191 mm or any other
+inferred physical measurement. The operator can still clear it explicitly and
+save the machine.
 
 `BUILD_E3_HOME_INSTALLER.bat` builds a private preconfigured installer from the
 current Windows E3 user-state directory. The private installer seeds:

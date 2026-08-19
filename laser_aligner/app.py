@@ -10,7 +10,7 @@ import secrets
 import threading
 import time
 from collections.abc import Mapping
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,7 @@ from .calibration.bed import (
 )
 from .calibration.lens import LensCalibrator
 from .calibration.profiles import CalibrationProfileStore, signature_from_camera_settings
+from .calibration.reach import FixtureReachStore
 from .calibration.registration import (
     AccuracyValidationJob,
     BaseBedCalibrationJob,
@@ -266,12 +267,37 @@ def _camera_provenance_matches(
     return saved_camera == current_camera
 
 
+@dataclass(frozen=True, slots=True)
+class RunningMachineIdentity:
+    """Detached identity for the machine whose settings own this context."""
+
+    machine_id: str
+    machine_name: str
+    created_from: str
+    machine_profile_id: str
+    tool_head_profile_id: str
+    expected_camera_profile_id: str | None = None
+    expected_calibration_profile_id: str | None = None
+
+    @classmethod
+    def standalone(cls) -> RunningMachineIdentity:
+        return cls(
+            machine_id="standalone",
+            machine_name="Standalone / legacy AppContext",
+            created_from="standalone",
+            machine_profile_id="standalone",
+            tool_head_profile_id="standalone",
+        )
+
+
 class AppContext:
     def __init__(
         self,
         settings: Settings,
         hardware_enabled: bool = False,
         laser_lockout: bool = False,
+        *,
+        machine_identity: RunningMachineIdentity | None = None,
     ):
         if type(hardware_enabled) is not bool:
             raise TypeError("hardware_enabled must be an exact boolean")
@@ -280,6 +306,19 @@ class AppContext:
         self.settings = settings
         self.hardware_enabled = hardware_enabled
         self.laser_lockout = laser_lockout
+        identity = machine_identity or RunningMachineIdentity.standalone()
+        if not isinstance(identity, RunningMachineIdentity):
+            raise TypeError("machine_identity must be a RunningMachineIdentity")
+        self.machine_identity = identity
+        self.machine_id = identity.machine_id
+        self.machine_name = identity.machine_name
+        self.machine_created_from = identity.created_from
+        self.machine_profile_id = identity.machine_profile_id
+        self.tool_head_profile_id = identity.tool_head_profile_id
+        self.expected_camera_profile_id = identity.expected_camera_profile_id
+        self.expected_calibration_profile_id = (
+            identity.expected_calibration_profile_id
+        )
         settings.app.data_dir.mkdir(parents=True, exist_ok=True)
         for directory in ("captures", "calibration", "generated", "logs"):
             (settings.app.data_dir / directory).mkdir(parents=True, exist_ok=True)
@@ -300,6 +339,14 @@ class AppContext:
         self.lens = LensCalibrator(calibration_dir, settings.calibration.lens)
         self.bed = BedMapper(calibration_dir, settings.calibration.bed, settings.machine.work_area)
         self.honeycomb_support = HoneycombSupportStore(calibration_dir)
+        self.fixture_reach = FixtureReachStore(
+            settings.app.data_dir,
+            machine_id=identity.machine_id,
+            migrate_legacy=(
+                settings.machine.backend == "serial"
+                and identity.created_from == "legacy-config"
+            ),
+        )
         self.machine = MachineService(
             settings.machine,
             settings.laser,

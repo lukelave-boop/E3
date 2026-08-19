@@ -140,6 +140,11 @@ def _validated_pair(
                 y_min=float(area["y_min"]),
                 y_max=float(area["y_max"]),
             ),
+            honeycomb_span_mm=(
+                None
+                if machine_raw["honeycomb_span_mm"] is None
+                else float(machine_raw["honeycomb_span_mm"])
+            ),
             photo_x=float(photo["x"]),
             photo_y=float(photo["y"]),
             photo_z=(
@@ -435,6 +440,7 @@ class MachineInstance:
 class ResolvedMachineConfig:
     machine_id: str
     machine_name: str
+    created_from: str
     machine_profile: MachineProfile
     tool_head_profile: ToolHeadProfile
     machine: MachineSettings
@@ -596,8 +602,18 @@ def _migrated_machine(settings: Settings) -> MachineInstance:
 class MachineRegistry:
     """Versioned saved-machine data with no controller authority."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(
+        self,
+        path: Path,
+        *,
+        machine_state_root: Path | None = None,
+    ) -> None:
         self.path = Path(path)
+        self._machine_state_root = (
+            Path(machine_state_root)
+            if machine_state_root is not None
+            else self.path.parent / "machine_state"
+        )
         self._profiles = builtin_machine_profiles()
         self._heads = builtin_tool_head_profiles()
         self._machines: dict[str, MachineInstance] = {}
@@ -611,7 +627,8 @@ class MachineRegistry:
         path: Path | None = None,
     ) -> MachineRegistry:
         registry = cls(
-            path or settings.app.data_dir / MACHINE_REGISTRY_FILENAME
+            path or settings.app.data_dir / MACHINE_REGISTRY_FILENAME,
+            machine_state_root=settings.app.data_dir / "machine_state",
         )
         if registry.path.exists():
             registry.load()
@@ -700,6 +717,7 @@ class MachineRegistry:
         return ResolvedMachineConfig(
             machine_id=instance.id,
             machine_name=instance.name,
+            created_from=instance.created_from,
             machine_profile=self.get_machine_profile(
                 instance.machine_profile_id
             ),
@@ -711,6 +729,24 @@ class MachineRegistry:
             calibration_profile_id=instance.calibration_profile_id,
             camera_profile_id=instance.camera_profile_id,
         )
+
+    def _machine_state_scope_exists(self, machine_id: str) -> bool:
+        return (self._machine_state_root / machine_id).exists()
+
+    def _machine_id_is_available(self, machine_id: str) -> bool:
+        return (
+            machine_id not in self._machines
+            and not self._machine_state_scope_exists(machine_id)
+        )
+
+    def _next_available_machine_id(self, name: str) -> str:
+        base = _slug(name)
+        candidate_id = base
+        suffix = 2
+        while not self._machine_id_is_available(candidate_id):
+            candidate_id = f"{base[:72]}-{suffix}"
+            suffix += 1
+        return candidate_id
 
     def create_machine(
         self,
@@ -725,12 +761,19 @@ class MachineRegistry:
         head = self.get_tool_head_profile(tool_head_profile_id)
         validated_name = _required_text(name, "machine.name")
         with self._lock:
-            candidate_id = machine_id or _slug(validated_name)
-            suffix = 2
-            base = candidate_id
-            while machine_id is None and candidate_id in self._machines:
-                candidate_id = f"{base[:72]}-{suffix}"
-                suffix += 1
+            if machine_id is None:
+                candidate_id = self._next_available_machine_id(validated_name)
+            else:
+                candidate_id = _identifier(machine_id, "machine.id")
+                if candidate_id in self._machines:
+                    raise MachineRegistryError(
+                        f"Saved machine ID already exists: {candidate_id}"
+                    )
+                if self._machine_state_scope_exists(candidate_id):
+                    raise MachineRegistryError(
+                        "Saved machine ID has preserved machine-state evidence: "
+                        f"{candidate_id}; choose a different ID"
+                    )
             candidate = MachineInstance(
                 id=candidate_id,
                 name=validated_name,
@@ -771,12 +814,7 @@ class MachineRegistry:
             "machine.name",
         )
         with self._lock:
-            base = _slug(duplicated_name)
-            candidate_id = base
-            suffix = 2
-            while candidate_id in self._machines:
-                candidate_id = f"{base[:72]}-{suffix}"
-                suffix += 1
+            candidate_id = self._next_available_machine_id(duplicated_name)
             candidate = _copy_machine(source)
             candidate.id = candidate_id
             candidate.name = duplicated_name
