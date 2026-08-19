@@ -332,12 +332,20 @@ encoded artifact does not rewrite G-code; it records program statistics, the
 current encoder provenance, the staged LINE controller-artifact identities, and
 the count of non-LINE layers that still use the legacy internal path.
 `project.toolpath.generate_project_gcode()` remains the compatibility entry
-point and orchestrator. `SceneRevision.source_digest` is now reserved for a
-canonical SHA-256 fingerprint of persisted planning source content; project ID,
-timestamps, and the monotonic revision counter remain separate identity and
-bookkeeping fields. The digest is observational only in this phase: no cache
-lookup, reuse, skipped stage computation, or selective recomputation is active
-yet.
+point and orchestrator. `SceneRevision.source_digest` is a canonical SHA-256
+fingerprint of persisted planning source content; project ID, timestamps, and
+the monotonic revision counter remain separate identity and bookkeeping fields.
+LINE geometry artifacts now also carry a deterministic `dependency_digest`
+separate from their run-oriented `artifact_id`. The normalized digest covers the
+ordered source geometry consumed by that layer, the operation digest adds layer
+settings, the placed digest covers effective geometry plus the exact coordinate
+frame, and the controller digest covers placed geometry plus laser spot offset.
+A revision-only change can therefore produce a new artifact ID while retaining
+the same dependency digest. These digests remain observational in this phase:
+there is still no cache lookup, reuse, skipped stage computation, or selective
+recomputation. `EncodedProgramArtifact` is intentionally not assigned a cache
+dependency yet because the final stream still contains volatile generation-time
+text and whole-job dependencies.
 
 `parse_svg()` retains source user-space polylines and records the exact mapping
 from that coordinate system to physical millimetres. Absolute root dimensions

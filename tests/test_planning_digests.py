@@ -96,3 +96,164 @@ def test_project_generation_computes_one_scene_digest(
     generate_project_gcode(document, LaserSettings(power_max=1000))
 
     assert calls == 1
+
+def test_stage_dependency_digest_is_version_namespaced() -> None:
+    from laser_aligner.planning import PlanningStage, stage_dependency_digest
+
+    first = stage_dependency_digest(
+        PlanningStage.NORMALIZED_GEOMETRY,
+        1,
+        {"value": 1},
+    )
+    second = stage_dependency_digest(
+        PlanningStage.NORMALIZED_GEOMETRY,
+        2,
+        {"value": 1},
+    )
+
+    assert first != second
+
+
+def test_artifact_dependency_digest_rejects_non_sha256_text() -> None:
+    import pytest
+
+    from laser_aligner.planning import ArtifactMetadata, CoordinateDomain, PlanningStage
+
+    scene = project_scene_revision(_document())
+    with pytest.raises(ValueError, match="dependency_digest"):
+        ArtifactMetadata(
+            artifact_id="artifact-invalid-dependency",
+            scene_revision=scene,
+            stage=PlanningStage.NORMALIZED_GEOMETRY,
+            stage_version=1,
+            coordinate_domain=CoordinateDomain.PROJECT,
+            dependency_digest="not-a-digest",
+        )
+
+
+def test_normalized_dependency_digest_survives_revision_only_change() -> None:
+    document = _document()
+    layer = document.layers[0]
+
+    first = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+    )
+    document.touch()
+    second = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+    )
+
+    assert first.metadata.artifact_id != second.metadata.artifact_id
+    assert first.metadata.dependency_digest == second.metadata.dependency_digest
+
+    document.objects[0].transform.x_mm += 0.25
+    third = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+    )
+    assert third.metadata.dependency_digest != second.metadata.dependency_digest
+
+
+def test_operation_dependency_changes_without_forcing_placement_change() -> None:
+    document = _document()
+    layer = document.layers[0]
+    scene = project_scene_revision(document)
+    normalized_before = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        scene,
+    )
+    operation_before = toolpath_module._line_operation_artifact(
+        document,
+        layer,
+        normalized_before,
+    )
+    placed_before = toolpath_module._placed_line_geometry_artifact(
+        document,
+        layer,
+        operation_before,
+        None,
+        None,
+    )
+
+    layer.speed_mm_min += 100.0
+    normalized_after = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+    )
+    operation_after = toolpath_module._line_operation_artifact(
+        document,
+        layer,
+        normalized_after,
+    )
+    placed_after = toolpath_module._placed_line_geometry_artifact(
+        document,
+        layer,
+        operation_after,
+        None,
+        None,
+    )
+
+    assert (
+        normalized_after.metadata.dependency_digest
+        == normalized_before.metadata.dependency_digest
+    )
+    assert (
+        operation_after.metadata.dependency_digest
+        != operation_before.metadata.dependency_digest
+    )
+    assert (
+        placed_after.metadata.dependency_digest
+        == placed_before.metadata.dependency_digest
+    )
+
+
+def test_controller_dependency_changes_with_spot_offset_only() -> None:
+    document = _document()
+    layer = document.layers[0]
+    normalized = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+    )
+    operation = toolpath_module._line_operation_artifact(
+        document,
+        layer,
+        normalized,
+    )
+    placed = toolpath_module._placed_line_geometry_artifact(
+        document,
+        layer,
+        operation,
+        None,
+        None,
+    )
+
+    first = toolpath_module._controller_line_geometry_artifact(
+        document,
+        layer,
+        placed,
+        LaserSettings(
+            power_max=1000,
+            spot_offset_x_mm=0.0,
+            spot_offset_y_mm=0.0,
+        ),
+    )
+    second = toolpath_module._controller_line_geometry_artifact(
+        document,
+        layer,
+        placed,
+        LaserSettings(
+            power_max=1000,
+            spot_offset_x_mm=0.2,
+            spot_offset_y_mm=0.0,
+        ),
+    )
+
+    assert first.metadata.dependency_digest != second.metadata.dependency_digest

@@ -23,7 +23,11 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
-from ..planning.digest import project_scene_revision
+from ..planning.digest import (
+    polyline_sequence_digest,
+    project_scene_revision,
+    stage_dependency_digest,
+)
 from ..planning.model import (
     ArtifactMetadata,
     ControllerGeometryArtifact,
@@ -579,6 +583,31 @@ def _raster_row_command_count(
     return count
 
 
+def _normalized_layer_dependency_payload(
+    document: ProjectDocument,
+    layer: OperationLayer,
+) -> dict[str, Any]:
+    """Capture only source fields consumed by LINE geometry normalization."""
+
+    return {
+        "layer_id": layer.id,
+        "objects": [
+            {
+                "name": item.name,
+                "kind": item.kind.value,
+                "transform": item.transform.to_dict(),
+                "geometry": item.geometry,
+            }
+            for item in document.objects
+            if (
+                item.layer_id == layer.id
+                and item.visible
+                and item.is_output_geometry
+            )
+        ],
+    }
+
+
 def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyline]:
     paths: list[Polyline] = []
     for item in document.objects:
@@ -609,6 +638,11 @@ def _normalized_layer_geometry(
         stage=PlanningStage.NORMALIZED_GEOMETRY,
         stage_version=1,
         coordinate_domain=CoordinateDomain.PROJECT,
+        dependency_digest=stage_dependency_digest(
+            PlanningStage.NORMALIZED_GEOMETRY,
+            1,
+            _normalized_layer_dependency_payload(document, layer),
+        ),
         bounds_mm=bounds_mm,
         statistics=(
             ("layer_count", 1),
@@ -631,6 +665,9 @@ def _line_operation_artifact(
     """Bind normalized LINE geometry to its existing operation-layer settings."""
 
     paths = list(normalized.paths_for_layer(layer.id))
+    normalized_dependency = normalized.metadata.dependency_digest
+    if normalized_dependency is None:
+        raise RuntimeError("Normalized LINE artifact is missing its dependency digest")
     metadata = ArtifactMetadata(
         artifact_id=(
             f"{document.id}:{document.revision}:"
@@ -640,6 +677,14 @@ def _line_operation_artifact(
         stage=PlanningStage.OPERATIONS,
         stage_version=1,
         coordinate_domain=CoordinateDomain.PROJECT,
+        dependency_digest=stage_dependency_digest(
+            PlanningStage.OPERATIONS,
+            1,
+            {
+                "normalized_geometry": normalized_dependency,
+                "layer": layer.to_dict(),
+            },
+        ),
         bounds_mm=normalized.metadata.bounds_mm,
         statistics=(
             ("layer_count", 1),
@@ -666,6 +711,32 @@ def _placed_line_geometry_artifact(
     planned_layer = operation.layer_for_id(layer.id)
     if planned_layer is None:
         raise RuntimeError("LINE operation artifact lost its source layer")
+    frame_dependency = (
+        None
+        if coordinate_frame is None
+        else {
+            "origin_machine_mm": [
+                float(value) for value in coordinate_frame.origin_machine_mm
+            ],
+            "x_axis_machine": [
+                float(value) for value in coordinate_frame.x_axis_machine
+            ],
+            "y_axis_machine": [
+                float(value) for value in coordinate_frame.y_axis_machine
+            ],
+            "width_mm": float(coordinate_frame.width_mm),
+            "height_mm": float(coordinate_frame.height_mm),
+            "provenance_signature": coordinate_frame_signature,
+        }
+    )
+    placement_dependency = stage_dependency_digest(
+        PlanningStage.PLACED_GEOMETRY,
+        1,
+        {
+            "geometry": polyline_sequence_digest(planned_layer.paths),
+            "coordinate_frame": frame_dependency,
+        },
+    )
     paths = tuple(_place_paths(planned_layer.paths, coordinate_frame))
     metadata = ArtifactMetadata(
         artifact_id=(
@@ -676,6 +747,7 @@ def _placed_line_geometry_artifact(
         stage=PlanningStage.PLACED_GEOMETRY,
         stage_version=1,
         coordinate_domain=CoordinateDomain.MACHINE_BEAM,
+        dependency_digest=placement_dependency,
         bounds_mm=_bounds(paths) if paths else None,
         statistics=(
             ("layer_count", 1),
@@ -700,6 +772,17 @@ def _controller_line_geometry_artifact(
     """Apply the existing laser-spot correction at an explicit controller boundary."""
 
     beam_paths = list(placed.paths_for_layer(layer.id))
+    controller_dependency = stage_dependency_digest(
+        PlanningStage.CONTROLLER_GEOMETRY,
+        1,
+        {
+            "geometry": polyline_sequence_digest(beam_paths),
+            "spot_offset_mm": [
+                float(laser.spot_offset_x_mm),
+                float(laser.spot_offset_y_mm),
+            ],
+        },
+    )
     paths = tuple(_controller_paths(beam_paths, laser))
     metadata = ArtifactMetadata(
         artifact_id=(
@@ -710,6 +793,7 @@ def _controller_line_geometry_artifact(
         stage=PlanningStage.CONTROLLER_GEOMETRY,
         stage_version=1,
         coordinate_domain=CoordinateDomain.CONTROLLER,
+        dependency_digest=controller_dependency,
         bounds_mm=_bounds(paths) if paths else None,
         statistics=(
             ("layer_count", 1),
