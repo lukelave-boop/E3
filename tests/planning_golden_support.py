@@ -22,7 +22,15 @@ from laser_aligner.project import (
 
 GOLDEN_ROOT = Path(__file__).parent / "golden" / "planning"
 EXPECTED_ROOT = GOLDEN_ROOT / "expected"
-CASE_NAMES = ("simple_rectangle",)
+CASE_NAMES = (
+    "simple_rectangle",
+    "ellipse_curve",
+    "nested_contours",
+    "multiple_disjoint",
+    "rotated_scaled",
+    "multi_pass",
+    "vector_power_correction",
+)
 
 
 def _simple_rectangle_job() -> ProjectJob:
@@ -99,7 +107,308 @@ def _simple_rectangle_job() -> ProjectJob:
     )
 
 
-_CASE_BUILDERS = {"simple_rectangle": _simple_rectangle_job}
+def _line_layer(
+    *,
+    layer_id: str,
+    name: str,
+    speed_mm_min: float,
+    power_percent: float,
+    passes: int = 1,
+    vector_power_correction: float = 0.0,
+) -> OperationLayer:
+    return OperationLayer(
+        id=layer_id,
+        name=name,
+        color="#5CA9E7",
+        mode=LayerMode.LINE,
+        speed_mm_min=speed_mm_min,
+        power_percent=power_percent,
+        passes=passes,
+        line_interval_mm=0.10,
+        scan_angle_deg=0.0,
+        overscan_percent=2.5,
+        vector_power_correction=vector_power_correction,
+        raster_power_correction=0.0,
+        air_assist=False,
+        output_enabled=True,
+        visible=True,
+        priority=0,
+    )
+
+
+def _document(
+    *,
+    project_id: str,
+    name: str,
+    layer: OperationLayer,
+    objects: list[SceneObject],
+) -> ProjectDocument:
+    return ProjectDocument(
+        id=project_id,
+        name=name,
+        work_area=Bounds(0.0, 0.0, 100.0, 100.0),
+        coordinate_space=CoordinateSpace.MACHINE,
+        layers=[layer],
+        objects=objects,
+        created_at="2026-08-19T00:00:00+00:00",
+        modified_at="2026-08-19T00:00:00+00:00",
+        revision=0,
+    )
+
+
+def _laser() -> LaserSettings:
+    return LaserSettings(
+        power_mode="M4",
+        power_max=1000,
+        default_power=100,
+        frame_power=0,
+        travel_feed_mm_min=3000.0,
+        engrave_feed_mm_min=1200.0,
+        curve_tolerance_mm=0.15,
+        boundary_margin_mm=0.0,
+        guarded_output_polygon_mm=None,
+        spot_offset_x_mm=0.0,
+        spot_offset_y_mm=0.0,
+        arm_timeout_seconds=60,
+        allow_low_power_frame=False,
+        return_to_photo_position=False,
+        preview_acceleration_mm_s2=500.0,
+        preview_command_delay_ms=0.0,
+    )
+
+
+def _generate(document: ProjectDocument) -> ProjectJob:
+    return generate_project_gcode(
+        document,
+        _laser(),
+        optimize_order=True,
+        start_position=(0.0, 0.0),
+    )
+
+
+def _ellipse_curve_job() -> ProjectJob:
+    layer = _line_layer(
+        layer_id="layer-golden-ellipse",
+        name="Golden Ellipse",
+        speed_mm_min=1500.0,
+        power_percent=20.0,
+    )
+    ellipse = SceneObject(
+        id="object-golden-ellipse",
+        name="Golden ellipse",
+        kind=ObjectKind.ELLIPSE,
+        layer_id=layer.id,
+        transform=Transform(
+            x_mm=50.0,
+            y_mm=45.0,
+            width_mm=36.0,
+            height_mm=24.0,
+        ),
+        geometry={},
+        visible=True,
+        locked=False,
+    )
+    return _generate(
+        _document(
+            project_id="project-golden-ellipse",
+            name="Golden ellipse curve",
+            layer=layer,
+            objects=[ellipse],
+        )
+    )
+
+
+def _nested_contours_job() -> ProjectJob:
+    layer = _line_layer(
+        layer_id="layer-golden-nested",
+        name="Golden Nested",
+        speed_mm_min=1000.0,
+        power_percent=30.0,
+    )
+    nested = SceneObject(
+        id="object-golden-nested",
+        name="Golden nested contours",
+        kind=ObjectKind.PATH,
+        layer_id=layer.id,
+        transform=Transform(
+            x_mm=50.0,
+            y_mm=50.0,
+            width_mm=60.0,
+            height_mm=60.0,
+        ),
+        geometry={
+            "polylines": [
+                {
+                    "points": [
+                        [-0.5, -0.5],
+                        [0.5, -0.5],
+                        [0.5, 0.5],
+                        [-0.5, 0.5],
+                        [-0.5, -0.5],
+                    ],
+                    "closed": True,
+                },
+                {
+                    "points": [
+                        [-0.2, -0.2],
+                        [0.2, -0.2],
+                        [0.2, 0.2],
+                        [-0.2, 0.2],
+                        [-0.2, -0.2],
+                    ],
+                    "closed": True,
+                },
+            ]
+        },
+        visible=True,
+        locked=False,
+    )
+    return _generate(
+        _document(
+            project_id="project-golden-nested",
+            name="Golden nested contours",
+            layer=layer,
+            objects=[nested],
+        )
+    )
+
+
+def _multiple_disjoint_job() -> ProjectJob:
+    layer = _line_layer(
+        layer_id="layer-golden-disjoint",
+        name="Golden Disjoint",
+        speed_mm_min=1600.0,
+        power_percent=15.0,
+    )
+    objects = [
+        SceneObject(
+            id="object-golden-disjoint-a",
+            name="Disjoint A",
+            kind=ObjectKind.RECTANGLE,
+            layer_id=layer.id,
+            transform=Transform(15.0, 15.0, 10.0, 10.0),
+            geometry={"corner_radius_mm": 0.0},
+        ),
+        SceneObject(
+            id="object-golden-disjoint-b",
+            name="Disjoint B",
+            kind=ObjectKind.RECTANGLE,
+            layer_id=layer.id,
+            transform=Transform(80.0, 20.0, 12.0, 8.0),
+            geometry={"corner_radius_mm": 0.0},
+        ),
+        SceneObject(
+            id="object-golden-disjoint-c",
+            name="Disjoint C",
+            kind=ObjectKind.RECTANGLE,
+            layer_id=layer.id,
+            transform=Transform(45.0, 70.0, 14.0, 12.0),
+            geometry={"corner_radius_mm": 0.0},
+        ),
+    ]
+    return _generate(
+        _document(
+            project_id="project-golden-disjoint",
+            name="Golden multiple disjoint",
+            layer=layer,
+            objects=objects,
+        )
+    )
+
+
+def _rotated_scaled_job() -> ProjectJob:
+    layer = _line_layer(
+        layer_id="layer-golden-transform",
+        name="Golden Transform",
+        speed_mm_min=1400.0,
+        power_percent=22.0,
+    )
+    rectangle = SceneObject(
+        id="object-golden-transform",
+        name="Golden transformed rectangle",
+        kind=ObjectKind.RECTANGLE,
+        layer_id=layer.id,
+        transform=Transform(
+            x_mm=55.0,
+            y_mm=45.0,
+            width_mm=48.0,
+            height_mm=18.0,
+            rotation_deg=32.5,
+        ),
+        geometry={"corner_radius_mm": 0.0},
+    )
+    return _generate(
+        _document(
+            project_id="project-golden-transform",
+            name="Golden rotated scaled",
+            layer=layer,
+            objects=[rectangle],
+        )
+    )
+
+
+def _multi_pass_job() -> ProjectJob:
+    layer = _line_layer(
+        layer_id="layer-golden-multipass",
+        name="Golden Multi Pass",
+        speed_mm_min=900.0,
+        power_percent=40.0,
+        passes=3,
+    )
+    rectangle = SceneObject(
+        id="object-golden-multipass",
+        name="Golden three pass rectangle",
+        kind=ObjectKind.RECTANGLE,
+        layer_id=layer.id,
+        transform=Transform(35.0, 40.0, 24.0, 16.0),
+        geometry={"corner_radius_mm": 0.0},
+    )
+    return _generate(
+        _document(
+            project_id="project-golden-multipass",
+            name="Golden multi pass",
+            layer=layer,
+            objects=[rectangle],
+        )
+    )
+
+
+def _vector_power_correction_job() -> ProjectJob:
+    layer = _line_layer(
+        layer_id="layer-golden-correction",
+        name="Golden Correction",
+        speed_mm_min=1800.0,
+        power_percent=35.0,
+        vector_power_correction=60.0,
+    )
+    rectangle = SceneObject(
+        id="object-golden-correction",
+        name="Golden corrected rectangle",
+        kind=ObjectKind.RECTANGLE,
+        layer_id=layer.id,
+        transform=Transform(40.0, 40.0, 30.0, 20.0),
+        geometry={"corner_radius_mm": 0.0},
+    )
+    return _generate(
+        _document(
+            project_id="project-golden-correction",
+            name="Golden vector power correction",
+            layer=layer,
+            objects=[rectangle],
+        )
+    )
+
+
+_CASE_BUILDERS = {
+    "simple_rectangle": _simple_rectangle_job,
+    "ellipse_curve": _ellipse_curve_job,
+    "nested_contours": _nested_contours_job,
+    "multiple_disjoint": _multiple_disjoint_job,
+    "rotated_scaled": _rotated_scaled_job,
+    "multi_pass": _multi_pass_job,
+    "vector_power_correction": _vector_power_correction_job,
+}
+
 
 
 def canonical_program(text: str) -> str:
