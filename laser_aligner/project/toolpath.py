@@ -23,6 +23,7 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..geometry.svg import Polyline
+from ..planning.model import LayerOperation, RasterRow, RasterSource
 from .model import (
     CoordinateSpace,
     LayerMode,
@@ -38,7 +39,6 @@ from .power_correction import (
 )
 from .raster_asset import (
     RasterAssetIdentity,
-    RasterAssetMetadata,
     decode_raster_grayscale,
     probe_raster_asset,
     read_raster_asset_payload,
@@ -65,33 +65,6 @@ class ProjectJob:
     coordinate_frame_signature: tuple[str, int, str] | None = None
     execution_signature: tuple[Any, ...] | None = None
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
-
-
-@dataclass(slots=True)
-class _RasterRow:
-    """One constant-velocity scan row with zero or more powered spans."""
-
-    points: np.ndarray
-    spans: list[Polyline]
-    source_tag: str
-
-
-@dataclass(slots=True)
-class _RasterSource:
-    """One bounded source shared by every image object in a generation."""
-
-    metadata: RasterAssetMetadata
-    image: np.ndarray | None = None
-    identity: RasterAssetIdentity | None = None
-
-
-@dataclass(slots=True)
-class _LayerPlan:
-    layer: OperationLayer
-    paths: list[Polyline] = field(default_factory=list)
-    raster_rows: list[_RasterRow] = field(default_factory=list)
-    dithered_image: bool = False
-    raster_assets: tuple[RasterAssetIdentity, ...] = ()
 
 
 _MAX_STREAM_COMMANDS = 250_000
@@ -460,11 +433,11 @@ def _place_paths(
 
 
 def _place_raster_rows(
-    rows: Iterable[_RasterRow],
+    rows: Iterable[RasterRow],
     coordinate_frame: HoneycombCoordinateFrame | None,
-) -> list[_RasterRow]:
+) -> list[RasterRow]:
     return [
-        _RasterRow(
+        RasterRow(
             points=_place_points(row.points, coordinate_frame),
             spans=_place_paths(row.spans, coordinate_frame),
             source_tag=row.source_tag,
@@ -511,8 +484,8 @@ def _raster_motion_points(points: np.ndarray, overscan_percent: float) -> np.nda
     return np.vstack([points[0] - extension, points[0], points[1], points[1] + extension])
 
 
-def _reverse_raster_row(row: _RasterRow) -> _RasterRow:
-    return _RasterRow(
+def _reverse_raster_row(row: RasterRow) -> RasterRow:
+    return RasterRow(
         points=row.points[::-1].copy(),
         spans=[
             Polyline(span.points[::-1].copy(), closed=False, source_tag=span.source_tag)
@@ -523,9 +496,9 @@ def _reverse_raster_row(row: _RasterRow) -> _RasterRow:
 
 
 def _controller_raster_rows(
-    rows: list[_RasterRow],
+    rows: list[RasterRow],
     laser: LaserSettings,
-) -> list[_RasterRow]:
+) -> list[RasterRow]:
     offset = np.array(
         [laser.spot_offset_x_mm, laser.spot_offset_y_mm],
         dtype=np.float64,
@@ -533,7 +506,7 @@ def _controller_raster_rows(
     if not np.isfinite(offset).all():
         raise ValueError("laser spot offsets must be finite")
     return [
-        _RasterRow(
+        RasterRow(
             points=row.points.astype(np.float64, copy=True) - offset,
             spans=[
                 Polyline(
@@ -550,7 +523,7 @@ def _controller_raster_rows(
 
 
 def _raster_motion_paths(
-    rows: list[_RasterRow],
+    rows: list[RasterRow],
     overscan_percent: float,
 ) -> list[Polyline]:
     return [
@@ -564,7 +537,7 @@ def _raster_motion_paths(
 
 
 def _raster_row_command_count(
-    row: _RasterRow,
+    row: RasterRow,
     overscan_percent: float,
     *,
     powered: bool,
@@ -604,7 +577,7 @@ def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyl
     return paths
 
 
-def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[_RasterRow]:
+def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[RasterRow]:
     outlines = object_polylines(item)
     if not outlines or any(not path.closed for path in outlines):
         raise ValueError(
@@ -640,7 +613,7 @@ def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[_RasterRow]
             f"exceeding the {_MAX_SCANLINE_EDGE_TESTS:,}-test planner limit; increase the line "
             "interval or simplify the vector geometry"
         )
-    rows: list[_RasterRow] = []
+    rows: list[RasterRow] = []
     for row in range(row_count):
         y = first_y + row * interval
         intersections: list[float] = []
@@ -670,7 +643,7 @@ def _scanline_rows(item: SceneObject, layer: OperationLayer) -> list[_RasterRow]
                 row_points = row_points[::-1].copy()
                 scan_spans = [span[::-1].copy() for span in reversed(scan_spans)]
             rows.append(
-                _RasterRow(
+                RasterRow(
                     points=row_points @ from_scan.T,
                     spans=[
                         Polyline(
@@ -753,10 +726,10 @@ def _raster_source_path(item: SceneObject) -> str:
 
 def _preflight_raster_sources(
     items: Iterable[SceneObject],
-) -> dict[str, _RasterSource]:
+) -> dict[str, RasterSource]:
     """Probe each unique source once and bound aggregate decode work."""
 
-    raster_sources: dict[str, _RasterSource] = {}
+    raster_sources: dict[str, RasterSource] = {}
     aggregate_encoded_bytes = 0
     aggregate_decoded_bytes = 0
     for item in items:
@@ -766,7 +739,7 @@ def _preflight_raster_sources(
         if source_path in raster_sources:
             continue
         metadata = probe_raster_asset(source_path)
-        raster_sources[metadata.path] = _RasterSource(metadata=metadata)
+        raster_sources[metadata.path] = RasterSource(metadata=metadata)
         aggregate_encoded_bytes += metadata.encoded_bytes
         aggregate_decoded_bytes += metadata.decoded_bytes
 
@@ -793,7 +766,7 @@ def _preflight_raster_sources(
 def _preflight_raster_budget(
     document: ProjectDocument,
     controller_power_max: int,
-) -> dict[str, _RasterSource]:
+) -> dict[str, RasterSource]:
     """Reject aggregate raster work before constructing row/span geometry."""
 
     aggregate_rows = 0
@@ -1062,8 +1035,8 @@ def _image_raster_rows(
     *,
     powered: bool,
     command_budget: int,
-    raster_sources: dict[str, _RasterSource],
-) -> tuple[list[_RasterRow], RasterAssetIdentity]:
+    raster_sources: dict[str, RasterSource],
+) -> tuple[list[RasterRow], RasterAssetIdentity]:
     import cv2
 
     asset = Path(str(item.geometry.get("asset", ""))).expanduser()
@@ -1146,7 +1119,7 @@ def _image_raster_rows(
     )
     dither_thresholds = _ordered_dither_thresholds(column_count)
 
-    rows: list[_RasterRow] = []
+    rows: list[RasterRow] = []
     estimated_commands = 0
     for row_index, row_position in enumerate(row_positions):
         row_interval = _scan_line_polygon_interval(scan_polygon, float(row_position))
@@ -1195,7 +1168,7 @@ def _image_raster_rows(
         if row_index % 2:
             row_scan = row_scan[::-1].copy()
             scan_spans = [span[::-1].copy() for span in reversed(scan_spans)]
-        row = _RasterRow(
+        row = RasterRow(
             points=_scan_points_to_machine(row_scan, scan_to_machine),
             spans=[
                 Polyline(
@@ -1230,9 +1203,9 @@ def _raster_rows(
     *,
     powered: bool,
     command_budget: int,
-    raster_sources: dict[str, _RasterSource],
-) -> tuple[list[_RasterRow], tuple[RasterAssetIdentity, ...], int]:
-    rows: list[_RasterRow] = []
+    raster_sources: dict[str, RasterSource],
+) -> tuple[list[RasterRow], tuple[RasterAssetIdentity, ...], int]:
+    rows: list[RasterRow] = []
     assets: list[RasterAssetIdentity] = []
     estimated_commands = 0
     for item in layer_objects:
@@ -1296,7 +1269,7 @@ def _points_differ(first: np.ndarray, second: np.ndarray) -> bool:
 
 def _emit_raster_row(
     lines: list[str],
-    row: _RasterRow,
+    row: RasterRow,
     layer: OperationLayer,
     laser: LaserSettings,
     power: int,
@@ -1455,7 +1428,7 @@ def generate_project_gcode(
 
     all_paths: list[Polyline] = []
     all_controller_paths: list[Polyline] = []
-    layer_plans: list[_LayerPlan] = []
+    layer_plans: list[LayerOperation] = []
     raster_command_estimate = 0
     vector_command_estimate = 0
     for layer in sorted(document.layers, key=lambda item: item.priority):
@@ -1560,7 +1533,7 @@ def generate_project_gcode(
                     coordinate_label="raster overscan path after laser spot correction",
                 )
             layer_plans.append(
-                _LayerPlan(
+                LayerOperation(
                     layer=layer,
                     raster_rows=controller_rows,
                     dithered_image=any(
@@ -1610,7 +1583,7 @@ def generate_project_gcode(
                 guarded_polygon,
                 coordinate_label="controller path after laser spot correction",
             )
-        layer_plans.append(_LayerPlan(layer=layer, paths=paths))
+        layer_plans.append(LayerOperation(layer=layer, paths=paths))
         powered = layer.controller_power(controller_power_max) > 0
         per_path_overhead = 2 if powered else 1
         vector_command_estimate += layer.passes * sum(
