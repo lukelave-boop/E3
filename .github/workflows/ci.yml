@@ -1,4 +1,4 @@
-name: Full Compatibility CI
+name: Windows CI
 
 on:
   push:
@@ -20,27 +20,16 @@ concurrency:
 
 jobs:
   test:
-    name: Test (${{ matrix.os }}, Python ${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
+    name: Test (Windows, Python ${{ matrix.python-version }})
+    runs-on: windows-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            python-version: "3.10"
+          - python-version: "3.10"
             desktop: false
-          - os: ubuntu-latest
-            python-version: "3.11"
-            desktop: false
-          - os: ubuntu-latest
-            python-version: "3.12"
-            desktop: true
-          - os: windows-latest
-            python-version: "3.10"
-            desktop: false
-          - os: windows-latest
-            python-version: "3.12"
+          - python-version: "3.12"
             desktop: true
 
     env:
@@ -63,9 +52,6 @@ jobs:
             requirements-dev.txt
             requirements-desktop.txt
 
-      - if: runner.os == 'Linux' && matrix.desktop
-        run: sudo apt-get update && sudo apt-get install --yes libegl1 libgl1
-
       - name: Upgrade pip
         run: python tools/ci_timed.py "Upgrade pip" -- python -m pip install --upgrade pip
       - name: Install base and test dependencies
@@ -80,10 +66,10 @@ jobs:
       - name: Compile Python sources
         run: python tools/ci_timed.py "compileall" -- python -m compileall -q laser_aligner
       - name: Run full compatibility tests
-        run: python tools/ci_timed.py "Full pytest (${{ matrix.os }}, Python ${{ matrix.python-version }})" -- python -m pytest -q
+        run: python tools/ci_timed.py "Full pytest (Windows, Python ${{ matrix.python-version }})" -- python -m pytest -q
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     timeout-minutes: 10
 
     env:
