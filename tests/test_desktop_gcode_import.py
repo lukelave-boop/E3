@@ -109,6 +109,7 @@ def test_desktop_gcode_import_is_one_undoable_output_disabled_operation(
     monkeypatch.setattr(QtWidgets.QMessageBox, "warning", lambda *_args, **_kwargs: None)
     harness = _harness()
     events: list[str] = []
+    reviewed_sha256: list[str] = []
     real_scan = main_window_module.scan_gcode_file
     real_load = main_window_module.load_gcode_project
 
@@ -124,11 +125,23 @@ def test_desktop_gcode_import_is_one_undoable_output_disabled_operation(
         assert manifest.source_facts
         assert manifest.coordinate_facts
         assert manifest.warnings or manifest.approximations
+        assert len(manifest.source_sha256) == 64
+        reviewed_sha256.append(manifest.source_sha256)
         return True
 
-    def load(path: str, *, center: tuple[float, float]):
+    def load(
+        path: str,
+        *,
+        center: tuple[float, float],
+        expected_source_sha256: str,
+    ):
         events.append("load")
-        return real_load(path, center=center)
+        assert expected_source_sha256 == reviewed_sha256[-1]
+        return real_load(
+            path,
+            center=center,
+            expected_source_sha256=expected_source_sha256,
+        )
 
     monkeypatch.setattr(main_window_module, "scan_gcode_file", scan)
     monkeypatch.setattr(main_window_module, "review_import_manifest", review)
@@ -243,6 +256,44 @@ def test_desktop_gcode_review_cancel_preserves_complete_authoring_state(
     assert _state_snapshot(harness) == before
     assert harness.errors == []
     assert harness.notices == []
+
+
+def test_desktop_gcode_source_changed_after_approval_preserves_all_state(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    filename = tmp_path / "changed-after-review.gcode"
+    original = "G21 G90 M4\nG1 F900 S200 X10 Y0\nM5\n"
+    changed = "G21 G90 M4\nG1 F900 S200 X20 Y0\nM5\n"
+    assert len(original.encode("utf-8")) == len(changed.encode("utf-8"))
+    filename.write_text(original, encoding="utf-8")
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(filename), ""),
+    )
+
+    def replace_source_after_approval(manifest, _parent) -> bool:
+        assert manifest.ready_for_parse
+        assert len(manifest.source_sha256) == 64
+        filename.write_text(changed, encoding="utf-8")
+        return True
+
+    monkeypatch.setattr(
+        main_window_module,
+        "review_import_manifest",
+        replace_source_after_approval,
+    )
+    harness = _harness(with_existing_object=True)
+    before = _state_snapshot(harness)
+
+    E3MainWindow.import_gcode(harness)
+
+    assert _state_snapshot(harness) == before
+    assert harness.notices == []
+    assert len(harness.errors) == 1
+    assert "changed after import review" in harness.errors[0].casefold()
 
 
 def test_desktop_gcode_strict_import_remains_authoritative_after_approval(

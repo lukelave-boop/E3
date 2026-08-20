@@ -164,3 +164,24 @@ def test_scan_manifest_requires_complete_natural_size_pair() -> None:
             source_size_bytes=100,
             natural_width_mm=50.0,
         )
+
+
+def test_scan_manifest_normalizes_and_validates_optional_source_sha256() -> None:
+    manifest = ImportScanManifest(
+        importer_id="gcode",
+        source_name="job.gcode",
+        source_suffix=".gcode",
+        source_size_bytes=100,
+        source_sha256="AB" * 32,
+    )
+
+    assert manifest.source_sha256 == "ab" * 32
+
+    with pytest.raises(ValueError, match="source_sha256"):
+        ImportScanManifest(
+            importer_id="gcode",
+            source_name="job.gcode",
+            source_suffix=".gcode",
+            source_size_bytes=100,
+            source_sha256="not-a-sha256",
+        )

@@ -74,7 +74,9 @@ Native desktop workflow:
   numeric width/height and corner-radius editing for rectangles
 - Shared pre-import review for LightBurn and foreign G-code manifests. Blocked
   scans disable Import, valid or warning-only scans require explicit approval,
-  and Cancel leaves the project, selection, history, and authoring mode intact
+  and Cancel leaves the project, selection, history, and authoring mode intact.
+  The review caps each rendered list at 200 with exact omitted counts, and its
+  SHA-256 approval is rejected if the source bytes change before strict import
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including

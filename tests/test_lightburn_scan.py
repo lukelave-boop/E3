@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -155,6 +156,50 @@ def test_scan_lightburn_file_reports_wrong_extension_and_size_limit(
     large_manifest = scan_lightburn_file(large, max_file_bytes=8)
     assert not large_manifest.ready_for_parse
     assert any("import limit" in error for error in large_manifest.errors)
+
+
+def test_lightburn_file_scan_digest_binds_exact_bytes_and_memory_scan_is_deterministic(
+    tmp_path: Path,
+) -> None:
+    payload = (
+        b'<LightBurnProject><Shape Type="Rect" CutIndex="0" W="2" H="1"/>'
+        b"</LightBurnProject>"
+    )
+    path = tmp_path / "digest.lbrn2"
+    path.write_bytes(payload)
+
+    file_manifest = scan_lightburn_file(path)
+    first_memory_manifest = scan_lightburn_project(payload, source_name=path.name)
+    second_memory_manifest = scan_lightburn_project(payload, source_name=path.name)
+
+    assert file_manifest.ready_for_parse
+    assert file_manifest.source_size_bytes == len(payload)
+    assert file_manifest.source_sha256 == hashlib.sha256(payload).hexdigest()
+    assert first_memory_manifest == second_memory_manifest
+    assert first_memory_manifest.source_sha256 == file_manifest.source_sha256
+
+
+def test_lightburn_loader_rejects_content_changed_after_review_before_parse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "changed.lbrn2"
+    original = (
+        '<LightBurnProject><Shape Type="Rect" CutIndex="0" W="2" H="1"/>'
+        "</LightBurnProject>"
+    )
+    changed = original.replace('W="2"', 'W="3"')
+    path.write_text(original, encoding="utf-8")
+    manifest = scan_lightburn_file(path)
+    path.write_text(changed, encoding="utf-8")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("changed reviewed source must not reach strict parse")
+
+    monkeypatch.setattr(lightburn_module, "parse_lightburn_project", fail_if_called)
+
+    with pytest.raises(LightBurnImportError, match="changed after import review"):
+        load_lightburn_project(path, expected_source_sha256=manifest.source_sha256)
 
 
 def test_lightburn_scan_returns_errors_for_malformed_xml() -> None:

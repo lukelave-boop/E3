@@ -8,6 +8,7 @@ output.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 import uuid
@@ -1186,6 +1187,7 @@ def scan_lightburn_project(
     source_suffix: str | None = None,
     source_size_bytes: int | None = None,
     max_file_bytes: int = MAX_LIGHTBURN_FILE_BYTES,
+    source_sha256: str | None = None,
 ) -> ImportScanManifest:
     """Return bounded, non-mutating LightBurn facts before strict vector parsing."""
 
@@ -1210,6 +1212,11 @@ def scan_lightburn_project(
         "source_suffix": suffix,
         "source_size_bytes": max(0, size),
         "capabilities": LIGHTBURN_IMPORTER_SPEC.capabilities,
+        "source_sha256": (
+            hashlib.sha256(raw).hexdigest()
+            if source_sha256 is None
+            else source_sha256
+        ),
     }
 
     if suffix not in SUPPORTED_LIGHTBURN_SUFFIXES:
@@ -1346,8 +1353,9 @@ def scan_lightburn_file(
         payload,
         source_name=source.name,
         source_suffix=suffix,
-        source_size_bytes=size,
+        source_size_bytes=len(payload),
         max_file_bytes=limit,
+        source_sha256=hashlib.sha256(payload).hexdigest(),
     )
 
 
@@ -1478,6 +1486,7 @@ def load_lightburn_project(
     *,
     center: tuple[float, float] = (0.0, 0.0),
     max_file_bytes: int = MAX_LIGHTBURN_FILE_BYTES,
+    expected_source_sha256: str | None = None,
 ) -> LightBurnImportResult:
     """Read and parse one ``.lbrn`` or ``.lbrn2`` file with a bounded allocation."""
 
@@ -1501,12 +1510,21 @@ def load_lightburn_project(
         payload = source.read_bytes()
     except OSError as exc:
         raise LightBurnImportError(f"Could not read LightBurn project: {exc}") from exc
+    source_sha256 = hashlib.sha256(payload).hexdigest()
+    if (
+        expected_source_sha256 is not None
+        and source_sha256 != str(expected_source_sha256).strip().casefold()
+    ):
+        raise LightBurnImportError(
+            "LightBurn source changed after import review; select and review the file again"
+        )
     manifest = scan_lightburn_project(
         payload,
         source_name=source.name,
         source_suffix=suffix,
-        source_size_bytes=size,
+        source_size_bytes=len(payload),
         max_file_bytes=limit,
+        source_sha256=source_sha256,
     )
     _raise_for_blocked_lightburn_manifest(manifest)
     return parse_lightburn_project(payload, source_name=source.name, center=center)

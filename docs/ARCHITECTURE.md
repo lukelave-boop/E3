@@ -395,20 +395,25 @@ boundary:
 ```text
 selected foreign file
   -> bounded scan_lightburn_file() or scan_gcode_file()
-  -> immutable ImportScanManifest
-  -> window-modal ImportReviewDialog and explicit non-blocked approval
-  -> existing authoritative load_*_project() strict scan + parse
+  -> immutable ImportScanManifest + exact source-byte SHA-256
+  -> bounded window-modal ImportReviewDialog and explicit non-blocked approval
+  -> authoritative load_*_project() re-read + SHA-256 match + strict scan/parse
   -> detached layers and objects
   -> one FunctionalCommand project commit
 ```
 
 The review presents every manifest category, including discovered layers or
-reconstructed operations and explicit errors/unsupported features. A blocked
-manifest cannot be accepted. Cancel occurs before the selection tool, project
-document, command stack, active layer, or selection is changed. The manifest is
-advisory rather than a geometry source: the existing strict loaders construct
-all imported E3 records and can still reject details not fully parsed by the
-bounded scan. Both formats retain their existing one-step undo/redo transaction.
+reconstructed operations and explicit errors/unsupported features. Its Qt
+projection preserves manifest order while showing at most 200 layer/operation
+rows and 200 entries per repeated text section, with an exact omitted count;
+the immutable manifest remains complete. A blocked manifest cannot be accepted.
+Cancel occurs before the selection tool, project document, command stack,
+active layer, or selection is changed. The manifest is advisory rather than a
+geometry source: the existing strict loaders construct all imported E3 records
+and can still reject details not fully parsed by the bounded scan. They first
+verify that the bytes they read have the reviewed SHA-256, so changed content
+cannot be imported under stale approval. Both formats retain their existing
+one-step undo/redo transaction.
 
 `JobPlan` models the final stream rather than a second approximation of the
 project geometry. It records motion order, elapsed time, feed, controller power,

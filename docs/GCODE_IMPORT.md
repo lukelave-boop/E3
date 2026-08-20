@@ -9,7 +9,9 @@ Selecting a file first runs the bounded G-code scan without reconstructing E3
 geometry. A window-modal review shows the source name, extension and size,
 declared importer capabilities, reconstructed operation combinations, source
 statistics, coordinate-mode facts, warnings, approximations, unsupported
-features, and errors.
+features, errors, and the SHA-256 of the exact scanned file bytes. The complete
+manifest is retained, while the dialog shows at most 200 operations and 200
+entries per repeated text section and reports the exact number omitted.
 
 Errors or unsupported features block the file and disable **Import**. A valid
 manifest—including one containing only warnings or approximations—does not
@@ -17,10 +19,11 @@ start import by itself: the operator must explicitly choose **Import**. Cancel
 returns without changing project layers, objects, history, selection, active
 layer, or the current drawing/point-pick authoring state.
 
-After approval, the existing strict loader reads and scans the file again, then
-performs the authoritative translation. A strict-translation failure still
-stops before any project commit. A successful result is added through one
-undoable project command, as before.
+After approval, the existing strict loader reads the file again and verifies
+those bytes have the reviewed SHA-256 before scanning or performing the
+authoritative translation. A changed source or strict-translation failure stops
+before any project, history, selection, or authoring-state change. A successful
+result is added through one undoable project command, as before.
 
 ## Safety boundary
 

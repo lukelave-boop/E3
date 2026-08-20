@@ -51,7 +51,8 @@ an E3 project. `ImporterSpec`, `ImportCapability`, `ImportLayerManifest`,
 `ImportScanManifest`, and `ImporterRegistry` provide immutable importer identity,
 case-insensitive suffix lookup, file-size limits, capability declarations,
 natural-size/layer scan facts, review warnings and approximations, and explicit
-blocking errors or unsupported features. The default registry describes the
+blocking errors or unsupported features. File manifests also carry the SHA-256
+of the exact scanned source bytes. The default registry describes the
 existing LightBurn and bounded foreign-G-code importers using their existing
 dialog filters and byte limits; LightBurn also exposes one shared supported-
 suffix constant instead of duplicating that literal in its loader.
@@ -100,22 +101,30 @@ information, discovered layers or reconstructed operations, source and
 coordinate facts, warnings, approximations, unsupported features, and errors,
 including explicit empty states for facts a format does not report. Errors or
 unsupported features disable **Import**; valid and warning-only manifests still
-require an explicit **Import** action. Cancel and blocked review return before
+require an explicit **Import** action. Rendering is presentation-bounded to the
+first 200 layer/operation rows and first 200 entries in each repeated fact or
+message section; exact omitted counts remain visible and the immutable manifest
+itself is not truncated. Cancel and blocked review return before
 project layers, objects, history, selection, active layer, or creation/point-
 pick authoring state changes. The existing `load_lightburn_project()` and
 `load_gcode_project()` paths still re-read, re-scan, and strictly parse the
-source and remain authoritative; detached results are committed through the
+source and remain authoritative. Before scanning or parsing, each loader now
+verifies that those newly read bytes match the reviewed manifest's SHA-256; a
+changed source aborts without project/history/selection/authoring mutation.
+Detached results are committed through the
 unchanged single `FunctionalCommand`, preserving one-step undo/redo. No project
 schema, controller path, motion, arming, execution, or laser behavior changed.
-Focused Windows Python 3.13 verification passed **85 tests** across the importer
+Focused Windows Python 3.13 verification passed **95 tests** across the importer
 manifest, both bounded scanners and strict importers, the reusable offscreen Qt
 dialog, both desktop integrations, and their source/documentation contract.
 Coverage includes explicit approval, warning-only acceptance, independent error
 and unsupported-feature blockers, Cancel preservation of document/history/
-selection/authoring state, scan-before-strict ordering, strict-parser rejection,
-and one-step undo/redo. Repository-wide Ruff, package compileall, and diff
-checks also pass. This flow is automated-test and offscreen-widget verified
-only; it required no physical controller, motion, camera, or laser test.
+selection/authoring state, deterministic UI truncation with exact omitted counts,
+raw-byte digest generation and propagation, same-size source replacement after
+approval, scan-before-strict ordering, strict-parser rejection, and one-step
+undo/redo. Repository-wide Ruff, package compileall, and diff checks also pass.
+This flow is automated-test and offscreen-widget verified only; it required no
+physical controller, motion, camera, or laser test.
 
 Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
 validation. Its refresh, JSON report copy, and clicked-point inspector are

@@ -5,6 +5,9 @@ from .qt import require_qt
 
 QtCore, _QtGui, QtWidgets = require_qt()
 
+MAX_DISPLAYED_LAYER_ROWS = 200
+MAX_DISPLAYED_TEXT_ENTRIES = 200
+
 
 def _format_bytes(value: int) -> str:
     exact = f"{value:,} bytes"
@@ -101,6 +104,7 @@ class ImportReviewDialog(QtWidgets.QDialog):
         content_layout.addWidget(self._build_layers_group())
 
         self.section_text: dict[str, QtWidgets.QPlainTextEdit] = {}
+        self.section_omission_labels: dict[str, QtWidgets.QLabel] = {}
         for key, title, values in (
             ("source_facts", "Source facts", manifest.source_facts),
             ("coordinate_facts", "Coordinate facts", manifest.coordinate_facts),
@@ -113,8 +117,9 @@ class ImportReviewDialog(QtWidgets.QDialog):
             ),
             ("errors", "Errors", manifest.errors),
         ):
-            group, text = self._build_text_group(title, values)
+            group, text, omission_label = self._build_text_group(title, values)
             self.section_text[key] = text
+            self.section_omission_labels[key] = omission_label
             content_layout.addWidget(group)
 
         content_layout.addStretch(1)
@@ -176,6 +181,7 @@ class ImportReviewDialog(QtWidgets.QDialog):
             ("File", self.manifest.source_name),
             ("Extension", self.manifest.source_suffix),
             ("File size", _format_bytes(self.manifest.source_size_bytes)),
+            ("Source SHA-256", self.manifest.source_sha256 or "Not available"),
             ("Format version", self.manifest.format_version or "Not reported"),
             (
                 "Natural width",
@@ -219,9 +225,10 @@ class ImportReviewDialog(QtWidgets.QDialog):
         self.layer_table.verticalHeader().setVisible(False)
 
         layers = self.manifest.layers
-        self.layer_table.setRowCount(max(1, len(layers)))
-        if layers:
-            for row, layer in enumerate(layers):
+        visible_layers = layers[:MAX_DISPLAYED_LAYER_ROWS]
+        self.layer_table.setRowCount(max(1, len(visible_layers)))
+        if visible_layers:
+            for row, layer in enumerate(visible_layers):
                 values = (
                     layer.source_key,
                     layer.name,
@@ -253,7 +260,7 @@ class ImportReviewDialog(QtWidgets.QDialog):
             3,
             QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
         )
-        visible_rows = min(max(1, len(layers)), 5)
+        visible_rows = min(max(1, len(visible_layers)), 5)
         table_height = (
             self.layer_table.horizontalHeader().sizeHint().height()
             + visible_rows * self.layer_table.verticalHeader().defaultSectionSize()
@@ -262,28 +269,65 @@ class ImportReviewDialog(QtWidgets.QDialog):
         self.layer_table.setMinimumHeight(min(180, table_height))
         self.layer_table.setMaximumHeight(max(90, min(210, table_height)))
         layout.addWidget(self.layer_table)
+
+        omitted_count = len(layers) - len(visible_layers)
+        self.layer_omission_label = QtWidgets.QLabel()
+        self.layer_omission_label.setObjectName("mutedLabel")
+        self.layer_omission_label.setWordWrap(True)
+        self.layer_omission_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.layer_omission_label.setText(
+            f"{omitted_count:,} additional layers / operations not shown."
+            if omitted_count
+            else ""
+        )
+        self.layer_omission_label.setHidden(not omitted_count)
+        layout.addWidget(self.layer_omission_label)
         return group
 
     @staticmethod
     def _build_text_group(
         title: str,
         values: tuple[str, ...],
-    ) -> tuple[QtWidgets.QGroupBox, QtWidgets.QPlainTextEdit]:
+    ) -> tuple[
+        QtWidgets.QGroupBox,
+        QtWidgets.QPlainTextEdit,
+        QtWidgets.QLabel,
+    ]:
         group = QtWidgets.QGroupBox(title)
         layout = QtWidgets.QVBoxLayout(group)
         text = QtWidgets.QPlainTextEdit()
         text.setReadOnly(True)
         text.setUndoRedoEnabled(False)
         text.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.WidgetWidth)
+        visible_values = values[:MAX_DISPLAYED_TEXT_ENTRIES]
         text.setPlainText(
-            "None reported" if not values else "\n".join(f"• {value}" for value in values)
+            "None reported"
+            if not visible_values
+            else "\n".join(f"• {value}" for value in visible_values)
         )
-        visible_lines = min(max(1, len(values)), 4)
+        visible_lines = min(max(1, len(visible_values)), 4)
         line_height = text.fontMetrics().lineSpacing()
         text.setMinimumHeight(max(46, line_height * visible_lines + 18))
         text.setMaximumHeight(max(70, min(132, line_height * visible_lines + 24)))
         layout.addWidget(text)
-        return group, text
+
+        omitted_count = len(values) - len(visible_values)
+        omission_label = QtWidgets.QLabel()
+        omission_label.setObjectName("mutedLabel")
+        omission_label.setWordWrap(True)
+        omission_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        omission_label.setText(
+            f"{omitted_count:,} additional entries not shown."
+            if omitted_count
+            else ""
+        )
+        omission_label.setHidden(not omitted_count)
+        layout.addWidget(omission_label)
+        return group, text, omission_label
 
     def accept(self) -> None:
         """Accept only manifests whose bounded scan has no known blockers."""
@@ -307,4 +351,9 @@ def review_import_manifest(
     )
 
 
-__all__ = ["ImportReviewDialog", "review_import_manifest"]
+__all__ = [
+    "MAX_DISPLAYED_LAYER_ROWS",
+    "MAX_DISPLAYED_TEXT_ENTRIES",
+    "ImportReviewDialog",
+    "review_import_manifest",
+]

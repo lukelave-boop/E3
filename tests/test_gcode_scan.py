@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -162,6 +163,46 @@ def test_scan_gcode_file_reports_extension_size_and_encoding_errors(
     binary_manifest = scan_gcode_file(binary)
     assert not binary_manifest.ready_for_parse
     assert any("UTF-8" in error for error in binary_manifest.errors)
+
+
+def test_gcode_file_scan_digest_binds_exact_raw_bytes_and_memory_scan_is_deterministic(
+    tmp_path: Path,
+) -> None:
+    payload = b"\xef\xbb\xbfG21 G90 M4 S100\nG1 F600 X10 Y0\nM5\n"
+    path = tmp_path / "digest.gcode"
+    path.write_bytes(payload)
+
+    file_manifest = scan_gcode_file(path)
+    decoded = payload.decode("utf-8-sig")
+    first_memory_manifest = scan_gcode_project(decoded, source_name=path.name)
+    second_memory_manifest = scan_gcode_project(decoded, source_name=path.name)
+
+    assert file_manifest.ready_for_parse
+    assert file_manifest.source_size_bytes == len(payload)
+    assert file_manifest.source_sha256 == hashlib.sha256(payload).hexdigest()
+    assert first_memory_manifest == second_memory_manifest
+    assert first_memory_manifest.source_sha256 == hashlib.sha256(
+        decoded.encode("utf-8")
+    ).hexdigest()
+    assert file_manifest.source_sha256 != first_memory_manifest.source_sha256
+
+
+def test_gcode_loader_rejects_content_changed_after_review_before_translation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "changed.gcode"
+    path.write_text("G21 G90 M4 S100\nG1 F600 X10 Y0\nM5\n", encoding="utf-8")
+    manifest = scan_gcode_file(path)
+    path.write_text("G21 G90 M4 S100\nG1 F600 X20 Y0\nM5\n", encoding="utf-8")
+
+    def fail_if_called(*_args, **_kwargs):
+        raise AssertionError("changed reviewed source must not reach translation")
+
+    monkeypatch.setattr(gcode_module, "parse_gcode_project", fail_if_called)
+
+    with pytest.raises(GcodeImportError, match="changed after import review"):
+        load_gcode_project(path, expected_source_sha256=manifest.source_sha256)
 
 
 def test_existing_gcode_loader_still_imports_after_nonblocking_scan(

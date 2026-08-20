@@ -7,9 +7,13 @@
   source, layer/operation, coordinate, warning, approximation, unsupported, and
   error facts. Blocked manifests disable Import; all other manifests require
   explicit approval. Cancel returns before project/history/selection/authoring
-  mutation, while approved results retain the existing authoritative strict
-  loaders and one-step undo/redo transaction. This changes no project schema,
-  controller, motion, arming, execution, or laser behavior.
+  mutation. The dialog renders no more than 200 discovered rows or 200 entries
+  per repeated text section and reports exact omitted counts without truncating
+  the manifest. File scans now record the exact source-byte SHA-256, and the
+  authoritative strict loader rejects a changed source before parsing or
+  project mutation. Approved unchanged sources retain one-step undo/redo. This
+  changes no project schema, controller, motion, arming, execution, or laser
+  behavior.
 
 - Restored the machine-aware read-only Coordinate Audit as the sixth Machine
   Setup tab. It reports running-machine/calibration identity, configured work

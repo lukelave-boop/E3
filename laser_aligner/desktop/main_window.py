@@ -1929,6 +1929,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             result = load_gcode_project(
                 filename,
                 center=self._document_center(),
+                expected_source_sha256=manifest.source_sha256,
             )
             layer_start = len(self.document.layers)
             for offset, layer in enumerate(result.layers):
@@ -2015,6 +2016,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             result = load_lightburn_project(
                 filename,
                 center=self._document_center(),
+                expected_source_sha256=manifest.source_sha256,
             )
             layer_start = len(self.document.layers)
             for offset, layer in enumerate(result.layers):

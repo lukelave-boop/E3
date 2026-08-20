@@ -9,6 +9,7 @@ an imported design can later reach a controller.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import re
 from collections.abc import Iterable
@@ -376,6 +377,7 @@ def scan_gcode_project(
     source_suffix: str | None = None,
     source_size_bytes: int | None = None,
     max_file_bytes: int = MAX_GCODE_FILE_BYTES,
+    source_sha256: str | None = None,
 ) -> ImportScanManifest:
     """Return bounded, non-vectorizing facts before strict G-code translation."""
 
@@ -394,9 +396,16 @@ def scan_gcode_project(
         suffix = ".gcode"
 
     if isinstance(text, str):
-        encoded_size = len(text.encode("utf-8"))
+        encoded_payload = text.encode("utf-8")
+        encoded_size = len(encoded_payload)
     else:
+        encoded_payload = b""
         encoded_size = 0
+    digest = (
+        hashlib.sha256(encoded_payload).hexdigest()
+        if source_sha256 is None and isinstance(text, str)
+        else (source_sha256 or "")
+    )
 
     size = encoded_size if source_size_bytes is None else int(source_size_bytes)
     limit = int(max_file_bytes)
@@ -409,6 +418,7 @@ def scan_gcode_project(
         "source_suffix": suffix,
         "source_size_bytes": max(0, size),
         "capabilities": GCODE_IMPORTER_SPEC.capabilities,
+        "source_sha256": digest,
     }
 
     if suffix not in SUPPORTED_GCODE_SUFFIXES:
@@ -879,15 +889,18 @@ def scan_gcode_file(
         )
 
     try:
-        payload = source.read_text(encoding="utf-8-sig")
+        payload_bytes = source.read_bytes()
+        source_sha256 = hashlib.sha256(payload_bytes).hexdigest()
+        payload = payload_bytes.decode("utf-8-sig")
     except UnicodeDecodeError:
         return ImportScanManifest(
             importer_id=GCODE_IMPORTER_SPEC.importer_id,
             source_name=source.name,
             source_suffix=suffix,
-            source_size_bytes=size,
+            source_size_bytes=len(payload_bytes),
             capabilities=GCODE_IMPORTER_SPEC.capabilities,
             errors=("G-code file is not valid UTF-8/ASCII text",),
+            source_sha256=source_sha256,
         )
     except OSError as exc:
         return ImportScanManifest(
@@ -903,8 +916,9 @@ def scan_gcode_file(
         payload,
         source_name=source.name,
         source_suffix=suffix,
-        source_size_bytes=size,
+        source_size_bytes=len(payload_bytes),
         max_file_bytes=limit,
+        source_sha256=source_sha256,
     )
 
 
@@ -1206,6 +1220,7 @@ def load_gcode_project(
     *,
     center: tuple[float, float] = (0.0, 0.0),
     max_file_bytes: int = MAX_GCODE_FILE_BYTES,
+    expected_source_sha256: str | None = None,
 ) -> GcodeImportResult:
     """Load a supported G-code file and translate it into native E3 project data."""
 
@@ -1223,17 +1238,28 @@ def load_gcode_project(
             f"G-code file exceeds the {max_file_bytes:,}-byte import limit"
         )
     try:
-        payload = source.read_text(encoding="utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise GcodeImportError("G-code file is not valid UTF-8/ASCII text") from exc
+        payload_bytes = source.read_bytes()
     except OSError as exc:
         raise GcodeImportError(f"Could not read G-code file: {exc}") from exc
+    source_sha256 = hashlib.sha256(payload_bytes).hexdigest()
+    if (
+        expected_source_sha256 is not None
+        and source_sha256 != str(expected_source_sha256).strip().casefold()
+    ):
+        raise GcodeImportError(
+            "G-code source changed after import review; select and review the file again"
+        )
+    try:
+        payload = payload_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise GcodeImportError("G-code file is not valid UTF-8/ASCII text") from exc
     manifest = scan_gcode_project(
         payload,
         source_name=source.name,
         source_suffix=source.suffix.casefold(),
-        source_size_bytes=size,
+        source_size_bytes=len(payload_bytes),
         max_file_bytes=max_file_bytes,
+        source_sha256=source_sha256,
     )
     _raise_for_blocked_gcode_manifest(manifest)
     return parse_gcode_project(payload, source_name=source.name, center=center)
