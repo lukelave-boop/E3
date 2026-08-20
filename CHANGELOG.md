@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Added a Qt-neutral structured job-preflight report before native desktop
+  project generation. Stable coded info, warning, and blocker findings summarize
+  existing work-area, coordinate/calibration/support binding, output/settings,
+  machine feed ceilings, and bounded raster-readiness rules without planning
+  geometry or contacting hardware. Stale local calibration/support blocks, and
+  only exact unrounded-rectangle or line local bounds become structured bounds
+  blockers; rounded rectangles, ellipses, images, paths, and other complex
+  geometry remain deferred.
+  Blockers stop before exact generation and open a reusable non-modal report;
+  ready and warning-only reports continue through the authoritative planner and
+  appear in exact Preview. Existing async cancellation, exact planner rejection,
+  guarded `MachineService` preflight, motion, arming, laser, execution, and
+  project-schema behavior remain unchanged.
+
 - Extended the reusable desktop pre-import review flow to SVG and raster images
   as well as LightBurn and foreign G-code. All four paths now run a bounded scan
   before strict import and show source, layer/operation, coordinate, warning,

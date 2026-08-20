@@ -264,7 +264,7 @@ def test_desktop_job_generation_owns_and_passes_session_planning_cache() -> None
     )
     assert context_captures_cache
 
-    ready = methods["_job_snapshot_ready"]
+    ready = methods["_start_exact_job_generation"]
     passes_cache = any(
         isinstance(node, ast.Call)
         and isinstance(node.func, ast.Name)

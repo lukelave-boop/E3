@@ -1,8 +1,16 @@
 # Generated-job Preview
 
-The native desktop opens a dedicated graphical Preview after **Generate** and
-after calibration-job preparation. This window-modal review is the mandatory
-final gate before execution and answers two separate questions:
+For native project generation, the desktop first builds a structured,
+Qt-neutral job-preflight report from a detached project snapshot. A blocking
+report stops before exact toolpath generation and opens a reusable non-modal
+findings window; there is no generated program to preview. A ready or warning-
+only report continues to the authoritative planner and is shown inside the
+resulting Preview. Warnings are visible but do not replace or block exact
+planning.
+
+The native desktop opens the dedicated graphical Preview after successful
+**Generate** and after calibration-job preparation. This window-modal review is
+the mandatory final gate before execution and answers two separate questions:
 
 1. What exact motion and controller power did generation produce?
 2. In what order and at approximately what time will each move occur?
@@ -23,6 +31,34 @@ Home/park/motor-release actions belong to `MachineService`, occur outside the
 stream, and are not drawn. The machine job remains running until configured
 completion actions finish; the Laser panel reports the drain, home, park, and
 motor-release phases after the previewed stream reaches 100%.
+
+## Structured preflight report
+
+Each finding has an info, warning, or blocker severity; a stable dotted code;
+a title and message; and optional detail and structured context. The reusable
+Qt view shows deterministic severity totals and a bounded projection of the
+ordered report. The complete immutable report remains available to the desktop.
+
+Preflight summarizes existing preparation constraints: project/machine work-
+area agreement, coordinate-space and honeycomb execution binding, calibration-
+profile identity, read-only bed-calibration validity and honeycomb-support
+CURRENT state for local output, eligible output, operation settings, machine
+work/travel feed ceilings, and bounded raster metadata/resource budgets. Stale
+bed-calibration or support readiness is a honeycomb-local blocker. Only provably
+exact local bounds for unrounded rectangles and valid two-point lines can become
+structured bounds blockers. Rounded rectangles, ellipses, images, paths, and
+other complex geometry remain intentionally deferred. Preflight does not
+flatten those vectors, decode raster pixels, apply final placement or spot
+correction, generate commands, or run machine preflight. A ready report is
+therefore not a promise that exact generation will succeed.
+`generate_project_gcode()` remains authoritative for geometry and the final
+program, and `MachineService` remains authoritative at execution time.
+
+Blocked findings are presented only after the active preparation owner has been
+released, and the modeless window cannot continue to Preview. Warning-only and
+ready reports stay attached to the same generation request and appear in the
+exact Preview sidebar. Neither presentation can connect, home, enable motion,
+arm the laser, submit G-code, or grant execution authority.
 
 ## Controls and readouts
 
@@ -53,13 +89,17 @@ example `20.0% / S200`. Controller polling reports execution progress on its own
 line and cannot replace that prepared-job value.
 
 Generation and exact-preview preparation do not monopolize the Qt event loop.
-An owned worker clones the framework-independent project model before planning;
-authoring controls are temporarily held while that worker reads the live model,
-but software STOP remains available. The worker then generates and indexes the
-immutable `JobPlan`. Separate worker and renderer request owners accept a result
-only while its token, source document, and revision remain current. Raw G-code,
-the workspace overlay, and the dedicated Preview painter paths are populated in
-bounded GUI-thread slices; no Qt object is created or mutated by a worker.
+An owned worker clones the framework-independent project model, builds the
+structured preflight report, and only for a non-blocked report enters exact
+planning. Authoring controls are temporarily held while that worker reads the
+live model, but software STOP remains available. The worker then generates and
+indexes the immutable `JobPlan`. Preflight and planning share the request's
+cancellation token and authority snapshot. Separate worker and renderer request
+owners accept a result only while its token, source document, revision,
+coordinate/support/calibration binding, feed ceilings, and runtime identity
+remain current. Raw G-code, the workspace overlay, and the dedicated Preview
+painter paths are populated in bounded GUI-thread slices; no Qt object is
+created or mutated by a worker.
 
 The Laser inspector shows preparation progress and blocks overlapping Generate,
 Frame, Preview, Start, and export commands until all exact views are complete.

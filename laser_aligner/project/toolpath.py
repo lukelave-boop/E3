@@ -51,6 +51,19 @@ from .model import (
     ProjectDocument,
     SceneObject,
 )
+from .planner_limits import MAX_NEAREST_ORDER_PATHS as _MAX_NEAREST_ORDER_PATHS
+from .planner_limits import MAX_RASTER_ROWS as _MAX_RASTER_ROWS
+from .planner_limits import MAX_RASTER_SAMPLES as _MAX_RASTER_SAMPLES
+from .planner_limits import MAX_SCANLINE_EDGE_TESTS as _MAX_SCANLINE_EDGE_TESTS
+from .planner_limits import MAX_STREAM_COMMANDS as _MAX_STREAM_COMMANDS
+from .planner_limits import MAX_UNIQUE_RASTER_ASSETS as _MAX_UNIQUE_RASTER_ASSETS
+from .planner_limits import (
+    MAX_UNIQUE_RASTER_DECODED_BYTES as _MAX_UNIQUE_RASTER_DECODED_BYTES,
+)
+from .planner_limits import (
+    MAX_UNIQUE_RASTER_ENCODED_BYTES as _MAX_UNIQUE_RASTER_ENCODED_BYTES,
+)
+from .planner_limits import STREAM_COMMAND_RESERVE as _STREAM_COMMAND_RESERVE
 from .power_correction import (
     DEFAULT_RAMP_STEPS,
     corrected_raster_span_motions,
@@ -85,16 +98,6 @@ class ProjectJob:
     execution_signature: tuple[Any, ...] | None = None
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
 
-
-_MAX_STREAM_COMMANDS = 250_000
-_MAX_RASTER_SAMPLES = 16_000_000
-_MAX_RASTER_ROWS = 60_000
-_MAX_SCANLINE_EDGE_TESTS = 16_000_000
-_STREAM_COMMAND_RESERVE = 64
-_MAX_NEAREST_ORDER_PATHS = 512
-_MAX_UNIQUE_RASTER_ASSETS = 64
-_MAX_UNIQUE_RASTER_ENCODED_BYTES = 64 * 1024 * 1024
-_MAX_UNIQUE_RASTER_DECODED_BYTES = 64 * 1024 * 1024
 
 # An 8x8 Bayer matrix preserves deterministic grayscale detail without requiring
 # controller-specific inline S words on motion commands.

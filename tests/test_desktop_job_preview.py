@@ -20,6 +20,11 @@ from laser_aligner.desktop.panels import JobPanel
 from laser_aligner.desktop.theme import DARK_STYLESHEET
 from laser_aligner.calibration.support import HoneycombCoordinateFrame
 from laser_aligner.gcode.job_plan import build_job_plan, e3_metadata_line
+from laser_aligner.project.job_preflight import (
+    JobPreflightReport,
+    PreflightFinding,
+    PreflightSeverity,
+)
 
 
 @pytest.fixture(scope="module")
@@ -154,6 +159,118 @@ def test_preview_start_job_is_distinct_from_timeline_start(
     assert dialog.run_button is not dialog.reset_button
     dialog.run_button.click()
     assert requests == [True]
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_warning_preflight_is_retained_in_preview_without_blocking_controls(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    report = JobPreflightReport(
+        findings=(
+            PreflightFinding(
+                code="bounds.near_edge",
+                severity=PreflightSeverity.WARNING,
+                title="Near work-area edge",
+                message="The exact job approaches the configured work-area edge.",
+                detail="Inspect the outermost powered move in this exact preview.",
+                context={"margin_mm": 0.25, "object": "Perimeter"},
+            ),
+        )
+    )
+    plan = _plan()
+    dialog = JobPreviewDialog(
+        plan,
+        (0.0, 100.0, 0.0, 100.0),
+        "warning-preflight.gcode",
+        preflight_report=report,
+    )
+    run_requests: list[bool] = []
+    dialog.runRequested.connect(lambda: run_requests.append(True))
+    dialog.resize(900, 680)
+    dialog.show()
+    qt_application.processEvents()
+
+    assert dialog.preflight_report is report
+    assert dialog.preflight_view is not None
+    assert dialog.preflight_view.report is report
+    assert dialog.preflight_view.status_label.objectName() == "statusWarning"
+    assert dialog.preflight_view.counts_label.text() == (
+        "Blockers: 0  ·  Warnings: 1  ·  Info: 0  ·  Total: 1"
+    )
+    assert dialog.preflight_view.findings_tree.topLevelItemCount() == 1
+    finding = dialog.preflight_view.findings_tree.topLevelItem(0)
+    assert finding is not None
+    assert tuple(finding.text(column) for column in range(6)) == (
+        "Warning",
+        "bounds.near_edge",
+        "Near work-area edge",
+        "The exact job approaches the configured work-area edge.",
+        "Inspect the outermost powered move in this exact preview.",
+        "margin_mm=0.25; object=Perimeter",
+    )
+
+    assert dialog.preflight_view.minimumWidth() == 0
+    assert (
+        dialog.preflight_view.sizePolicy().horizontalPolicy()
+        == QtWidgets.QSizePolicy.Policy.Ignored
+    )
+    assert dialog.preflight_view.findings_tree.minimumWidth() == 0
+    assert (
+        dialog.preflight_view.findings_tree.horizontalScrollBarPolicy()
+        == QtCore.Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    )
+    assert dialog.sidebar.horizontalScrollBarPolicy() == (
+        QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    )
+    assert dialog.canvas.width() >= 360
+    assert dialog.sidebar.width() >= 300
+    assert not dialog.canvas.geometry().intersects(dialog.sidebar.geometry())
+
+    powered_move = next(move for move in plan.moves if move.laser_on)
+    dialog.set_elapsed(powered_move.start_seconds + 0.01)
+    assert all(
+        control.isEnabled()
+        for control in (
+            dialog.slider,
+            dialog.reset_button,
+            dialog.play_button,
+            dialog.speed_combo,
+            dialog.start_here_button,
+            dialog.run_button,
+            dialog.close_button,
+            dialog.travel_check,
+            dialog.fit_button,
+        )
+    )
+    dialog.run_button.click()
+    assert run_requests == [True]
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_preview_without_preflight_preserves_existing_constructor_behavior(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    dialog = JobPreviewDialog(
+        _plan(),
+        (0.0, 100.0, 0.0, 100.0),
+        "no-preflight.gcode",
+    )
+    dialog.show()
+    qt_application.processEvents()
+
+    assert dialog.preflight_report is None
+    assert dialog.preflight_view is None
+    assert dialog.layer_tree.topLevelItemCount() == 1
+    assert dialog.run_button.isEnabled()
+    assert dialog.close_button.isEnabled()
+    assert dialog.travel_check.isChecked()
+    assert dialog.legend_check.isChecked()
 
     dialog.close()
     dialog.deleteLater()
