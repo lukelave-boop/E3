@@ -363,6 +363,109 @@ def test_manager_rejects_programmatic_incompatible_profile_pair(
     dialog.close()
 
 
+@pytest.mark.parametrize(
+    ("machine_profile_id", "tool_head_profile_id"),
+    (
+        ("simulator", "generic-diode-10w"),
+        ("generic-grbl", "simulated-laser-head"),
+    ),
+)
+def test_manager_rejects_incompatible_profile_pair_when_editing(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    machine_profile_id: str,
+    tool_head_profile_id: str,
+) -> None:
+    runtime = _runtime(tmp_path)
+    registry = runtime.machine_registry
+    before_machine = registry.active_machine.to_dict()
+    before_active_id = registry.active_machine_id
+    warnings: list[str] = []
+    dialog = MachineManagerDialog(runtime)
+    assert dialog._working_machine is not None
+    before_working = dialog._working_machine.to_dict()
+    dialog.machine_profile.setCurrentIndex(
+        dialog.machine_profile.findData(machine_profile_id)
+    )
+    dialog.tool_head_profile.setCurrentIndex(
+        dialog.tool_head_profile.findData(tool_head_profile_id)
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "update_machine",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Invalid profile pair reached registry mutation"
+        ),
+    )
+
+    assert dialog._save_selected() is False
+
+    assert registry.active_machine.to_dict() == before_machine
+    assert registry.active_machine_id == before_active_id
+    assert dialog._working_machine.to_dict() == before_working
+    assert warnings
+    assert "simulated laser head" in warnings[-1].casefold()
+    dialog.close()
+
+
+def test_manager_rejects_incompatible_profile_pair_before_next_launch_selection(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    registry = runtime.machine_registry
+    original_active_id = registry.active_machine_id
+    created = registry.create_machine(
+        "Second physical machine",
+        "generic-grbl",
+        "generic-diode-10w",
+    )
+    before_machine = registry.get_machine(created.id).to_dict()
+    warnings: list[str] = []
+    dialog = MachineManagerDialog(runtime)
+    dialog._reload_list(created.id)
+    dialog.machine_profile.setCurrentIndex(
+        dialog.machine_profile.findData("simulator")
+    )
+    dialog.tool_head_profile.setCurrentIndex(
+        dialog.tool_head_profile.findData("generic-diode-10w")
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda _parent, _title, message: warnings.append(str(message)),
+    )
+    monkeypatch.setattr(
+        registry,
+        "update_machine",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Invalid profile pair reached registry mutation"
+        ),
+    )
+    monkeypatch.setattr(
+        registry,
+        "set_active",
+        lambda *_args, **_kwargs: pytest.fail(
+            "Invalid profile pair reached next-launch selection"
+        ),
+    )
+
+    dialog._set_active_selected()
+
+    assert registry.get_machine(created.id).to_dict() == before_machine
+    assert registry.active_machine_id == original_active_id
+    assert warnings
+    assert "simulated laser head" in warnings[-1].casefold()
+    dialog.close()
+
+
 def test_manager_running_label_uses_immutable_runtime_name(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,

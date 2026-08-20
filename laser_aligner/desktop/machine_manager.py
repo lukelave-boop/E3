@@ -888,12 +888,19 @@ class MachineManagerDialog(QtWidgets.QDialog):
         endpoint = self.port.text().strip()
         if backend == "serial" and is_bridge_uri(endpoint):
             parse_bridge_uri(endpoint)
+        machine_profile_id = str(self.machine_profile.currentData())
+        tool_head_profile_id = str(self.tool_head_profile.currentData())
+        _validate_machine_tool_pair(
+            self.registry,
+            machine_profile_id,
+            tool_head_profile_id,
+        )
         candidate = self._working_machine
         if candidate is None or candidate.id != machine_id:
             candidate = self.registry.get_machine(machine_id)
         candidate.name = self.name.text().strip()
-        candidate.machine_profile_id = str(self.machine_profile.currentData())
-        candidate.tool_head_profile_id = str(self.tool_head_profile.currentData())
+        candidate.machine_profile_id = machine_profile_id
+        candidate.tool_head_profile_id = tool_head_profile_id
         candidate.machine.backend = backend
         candidate.machine.protocol = str(self.protocol.currentData())
         candidate.machine.port = endpoint
