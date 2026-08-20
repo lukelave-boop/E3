@@ -91,13 +91,31 @@ and importer plus manifest coverage reported **70 passed, 1 skipped**; the skip
 was the PySide6-dependent G-code desktop widget test in the local environment.
 Ruff, compileall, and diff checks were clean.
 
-Both major foreign formats therefore now share the same Qt-neutral discovery
-contract before native E3 assembly. No desktop import-review UI, project schema,
-controller path, motion, arming, or laser behavior changed in either scan
-increment. The next importer milestone is to present these manifests in a
-desktop pre-import review step before objects/layers are committed to the open
-project; registry coverage for SVG/raster can follow after that shared review
-flow exists.
+Both major foreign formats now use that shared discovery contract in one native
+desktop pre-import review flow. After file selection, the desktop runs the
+format's bounded file scan and presents a reusable window-modal
+`ImportReviewDialog` before invoking the existing strict loader or changing the
+active authoring tool. The dialog shows source identity/size/format/capability
+information, discovered layers or reconstructed operations, source and
+coordinate facts, warnings, approximations, unsupported features, and errors,
+including explicit empty states for facts a format does not report. Errors or
+unsupported features disable **Import**; valid and warning-only manifests still
+require an explicit **Import** action. Cancel and blocked review return before
+project layers, objects, history, selection, active layer, or creation/point-
+pick authoring state changes. The existing `load_lightburn_project()` and
+`load_gcode_project()` paths still re-read, re-scan, and strictly parse the
+source and remain authoritative; detached results are committed through the
+unchanged single `FunctionalCommand`, preserving one-step undo/redo. No project
+schema, controller path, motion, arming, execution, or laser behavior changed.
+Focused Windows Python 3.13 verification passed **85 tests** across the importer
+manifest, both bounded scanners and strict importers, the reusable offscreen Qt
+dialog, both desktop integrations, and their source/documentation contract.
+Coverage includes explicit approval, warning-only acceptance, independent error
+and unsupported-feature blockers, Cancel preservation of document/history/
+selection/authoring state, scan-before-strict ordering, strict-parser rejection,
+and one-step undo/redo. Repository-wide Ruff, package compileall, and diff
+checks also pass. This flow is automated-test and offscreen-widget verified
+only; it required no physical controller, motion, camera, or laser test.
 
 Machine Setup now has a sixth **Coordinate Audit** tab after Accuracy
 validation. Its refresh, JSON report copy, and clicked-point inspector are

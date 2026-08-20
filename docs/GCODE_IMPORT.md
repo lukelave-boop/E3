@@ -3,6 +3,25 @@
 E3 can import existing 2-D laser G-code through **File > Import G-code…**. The
 importer accepts `.gc`, `.gcode`, `.nc`, and `.tap` text files.
 
+## Pre-import review
+
+Selecting a file first runs the bounded G-code scan without reconstructing E3
+geometry. A window-modal review shows the source name, extension and size,
+declared importer capabilities, reconstructed operation combinations, source
+statistics, coordinate-mode facts, warnings, approximations, unsupported
+features, and errors.
+
+Errors or unsupported features block the file and disable **Import**. A valid
+manifest—including one containing only warnings or approximations—does not
+start import by itself: the operator must explicitly choose **Import**. Cancel
+returns without changing project layers, objects, history, selection, active
+layer, or the current drawing/point-pick authoring state.
+
+After approval, the existing strict loader reads and scans the file again, then
+performs the authoritative translation. A strict-translation failure still
+stops before any project commit. A successful result is added through one
+undoable project command, as before.
+
 ## Safety boundary
 
 Imported G-code is **never sent directly to the controller**. E3 interprets a

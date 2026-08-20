@@ -389,6 +389,27 @@ Any remaining lossy warning, such as ignored text or embedded raster content,
 also stops desktop import before `SceneObject` creation. Operators must convert
 that content to explicit vector paths in the source editor.
 
+LightBurn and foreign-G-code desktop imports share a separate pre-import review
+boundary:
+
+```text
+selected foreign file
+  -> bounded scan_lightburn_file() or scan_gcode_file()
+  -> immutable ImportScanManifest
+  -> window-modal ImportReviewDialog and explicit non-blocked approval
+  -> existing authoritative load_*_project() strict scan + parse
+  -> detached layers and objects
+  -> one FunctionalCommand project commit
+```
+
+The review presents every manifest category, including discovered layers or
+reconstructed operations and explicit errors/unsupported features. A blocked
+manifest cannot be accepted. Cancel occurs before the selection tool, project
+document, command stack, active layer, or selection is changed. The manifest is
+advisory rather than a geometry source: the existing strict loaders construct
+all imported E3 records and can still reject details not fully parsed by the
+bounded scan. Both formats retain their existing one-step undo/redo transaction.
+
 `JobPlan` models the final stream rather than a second approximation of the
 project geometry. It records motion order, elapsed time, feed, controller power,
 layer/pass/source context, and the physical laser-spot coordinates recovered

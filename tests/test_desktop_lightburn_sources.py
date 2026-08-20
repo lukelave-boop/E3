@@ -15,6 +15,8 @@ def test_lightburn_import_is_exposed_by_the_desktop_file_menu() -> None:
     assert 'self.actions["import_lightburn"].triggered.connect(self.import_lightburn)' in source
     assert '"import_lightburn",\n            "import_image",' in source
     assert "def import_lightburn(self) -> None:" in source
+    assert "scan_lightburn_file(" in source
+    assert "review_import_manifest(manifest, self)" in source
     assert "load_lightburn_project(" in source
     assert 'FunctionalCommand(\n                    "Import LightBurn project"' in source
     assert "output-disabled layer" in source

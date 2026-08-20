@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Added one reusable desktop pre-import review dialog for LightBurn and foreign
+  G-code. Both paths now run their bounded scan before strict import and show
+  source, layer/operation, coordinate, warning, approximation, unsupported, and
+  error facts. Blocked manifests disable Import; all other manifests require
+  explicit approval. Cancel returns before project/history/selection/authoring
+  mutation, while approved results retain the existing authoritative strict
+  loaders and one-step undo/redo transaction. This changes no project schema,
+  controller, motion, arming, execution, or laser behavior.
+
 - Restored the machine-aware read-only Coordinate Audit as the sixth Machine
   Setup tab. It reports running-machine/calibration identity, configured work
   and output authorities, machine-specific honeycomb span/support state, and

@@ -67,11 +67,14 @@ Native desktop workflow:
   draggable viewport-fixed overlay key
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
-- Rectangle, rounded rectangle, ellipse, line, imported SVG-path, imported
-  2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
+- Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,
+  imported 2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
   output-disabled speed/power layers, vector outline text, and automatically
   bridged stencil-safe text objects, with
   numeric width/height and corner-radius editing for rectangles
+- Shared pre-import review for LightBurn and foreign G-code manifests. Blocked
+  scans disable Import, valid or warning-only scans require explicit approval,
+  and Cancel leaves the project, selection, history, and authoring mode intact
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
