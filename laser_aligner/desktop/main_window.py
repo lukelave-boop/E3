@@ -11,7 +11,12 @@ from ..core import CoreRuntime
 from ..gcode.job_plan import build_job_plan, restart_program_from_move
 from ..geometry.polygon import normalize_convex_polygon
 from ..identity import application_identity, application_window_title
-from ..materials import MaterialDatabase, MaterialPreset, builtin_material_presets
+from ..materials import (
+    MaterialDatabase,
+    MaterialPreset,
+    builtin_material_presets,
+    resolve_new_project_operation_defaults,
+)
 from ..planning import PlanningCache
 from ..project import (
     GCODE_FILE_DIALOG_FILTER,
@@ -55,7 +60,6 @@ from ..project import (
     build_job_preflight_report,
     center_selection_on_stock,
     clear_autosave,
-    default_operation_layers,
     distributed_transforms,
     fit_selection_to_stock,
     generate_project_gcode,
@@ -322,6 +326,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self._templates: dict[str, CutTemplate] = {}
         self._planning_cache = PlanningCache()
+        self._new_project_defaults_notice: str | None = None
+        self._new_project_defaults_source: str | None = None
         self.document = self._new_document()
         self.history = CommandStack(max_depth=300)
         self.project_path: Path | None = None
@@ -388,6 +394,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._create_toolbars()
         self._create_docks()
         self._create_status_bar()
+        if self._new_project_defaults_notice is not None:
+            self.show_notice(self._new_project_defaults_notice)
         self._default_window_state = self.saveState(6)
         self._connect_signals()
         self.controller.set_live_camera(
@@ -431,7 +439,17 @@ class E3MainWindow(QtWidgets.QMainWindow):
             document = ProjectDocument.new(
                 work_area=Bounds(area.x_min, area.y_min, area.x_max, area.y_max)
             )
-        document.layers = default_operation_layers()
+        identity = self.runtime.context.machine_identity
+        defaults = resolve_new_project_operation_defaults(
+            machine_profile_id=identity.machine_profile_id,
+            tool_head_profile_id=identity.tool_head_profile_id,
+            max_work_feed_mm_min=(
+                self.runtime.settings.machine.max_work_feed_mm_min
+            ),
+        )
+        document.layers = list(defaults.layers)
+        self._new_project_defaults_source = defaults.source.value
+        self._new_project_defaults_notice = defaults.notice
         return document
 
     def _running_material_profile_ids(self) -> tuple[str, str]:
@@ -2218,6 +2236,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._clear_trace_preview()
         self._clear_template_preview(show_message=False)
         self._refresh_document()
+        if self._new_project_defaults_notice is not None:
+            self.show_notice(self._new_project_defaults_notice)
 
     def open_project(self) -> None:
         if not self._confirm_discard_changes():
@@ -5017,6 +5037,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         registry = self.runtime.machine_registry
         next_launch_id = registry.active_machine_id
         target_id = selected_id or next_launch_id
+        running_identity = self.runtime.context.machine_identity
         self._updating_machine_selector = True
         try:
             self.machine_selector.clear()
@@ -5024,7 +5045,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
             for index, machine in enumerate(registry.machines()):
                 badges: list[str] = []
                 if machine.id == self.runtime.running_machine_id:
-                    badges.append("running")
+                    if machine.name == running_identity.machine_name:
+                        badges.append("running")
+                    else:
+                        badges.append(
+                            f"running as {running_identity.machine_name}"
+                        )
                 if machine.id == next_launch_id:
                     badges.append("next launch")
                 suffix = f" ({', '.join(badges)})" if badges else ""

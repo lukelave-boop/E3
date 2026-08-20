@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+from html import escape
 from typing import Any
 
-from ..calibration.profiles import signature_from_camera_settings
 from ..config import WorkArea
+from ..errors import MachineError
+from ..machine.controller_dialects import CONTROLLER_DIALECT_REGISTRY
+from ..machine.network_transport import is_bridge_uri, parse_bridge_uri
 from ..machine.profiles import MachineInstance, MachineRegistryError
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+_SIMULATED_TOOL_HEAD_PROFILE_ID = "simulated-laser-head"
 
 
 def _double_spin(
@@ -29,6 +34,22 @@ def _profile_capabilities(values: tuple[str, ...]) -> str:
     return ", ".join(value.replace("-", " ") for value in values) or "none listed"
 
 
+def _validate_machine_tool_pair(
+    registry: Any,
+    machine_profile_id: str,
+    tool_head_profile_id: str,
+) -> None:
+    machine = registry.get_machine_profile(machine_profile_id)
+    head = registry.get_tool_head_profile(tool_head_profile_id)
+    machine_is_simulated = machine.machine_defaults.backend == "simulator"
+    head_is_simulated = "simulation" in head.capabilities
+    if machine_is_simulated != head_is_simulated:
+        raise MachineRegistryError(
+            "The Simulator machine profile requires the Simulated Laser Head; "
+            "physical machine profiles require a physical tool-head profile"
+        )
+
+
 def _machine_profile_text(profile: Any, *, new_machine: bool) -> str:
     defaults = profile.machine_defaults
     area = defaults.work_area
@@ -43,7 +64,8 @@ def _machine_profile_text(profile: Any, *, new_machine: bool) -> str:
     )
     return (
         f"<b>{identity}</b> — {profile.description}<br>"
-        f"<b>Profile defaults:</b> {defaults.protocol.upper()} · "
+        f"<b>Profile defaults:</b> {defaults.backend} backend · "
+        f"{defaults.protocol.upper()} protocol · "
         f"{area.width:g} × {area.height:g} mm work area · "
         f"{defaults.max_travel_feed_mm_min:g} mm/min travel ceiling · "
         f"{defaults.max_work_feed_mm_min:g} mm/min work ceiling.<br>"
@@ -104,6 +126,13 @@ class _NewMachineDialog(QtWidgets.QDialog):
         self.tool_head_profile = QtWidgets.QComboBox()
         for profile in registry.tool_head_profiles():
             self.tool_head_profile.addItem(profile.name, profile.id)
+        self._preferred_physical_tool_head_id = "custom-laser-head"
+        self.machine_profile.setCurrentIndex(
+            max(0, self.machine_profile.findData("simulator"))
+        )
+        self.tool_head_profile.setCurrentIndex(
+            max(0, self.tool_head_profile.findData("simulated-laser-head"))
+        )
         form.addRow("Machine name", self.name)
         form.addRow("Motion-platform profile", self.machine_profile)
         outer.addLayout(form)
@@ -139,8 +168,42 @@ class _NewMachineDialog(QtWidgets.QDialog):
         buttons.rejected.connect(self.reject)
         outer.addWidget(buttons)
 
-        self.machine_profile.currentIndexChanged.connect(self._refresh_profile_help)
+        self.machine_profile.currentIndexChanged.connect(
+            self._machine_profile_changed
+        )
         self.tool_head_profile.currentIndexChanged.connect(self._refresh_profile_help)
+        self._machine_profile_changed()
+
+    def _machine_profile_changed(self) -> None:
+        current_tool_id = self.tool_head_profile.currentData()
+        if (
+            current_tool_id is not None
+            and current_tool_id != _SIMULATED_TOOL_HEAD_PROFILE_ID
+        ):
+            self._preferred_physical_tool_head_id = str(current_tool_id)
+        machine = self.registry.get_machine_profile(
+            str(self.machine_profile.currentData())
+        )
+        require_simulated_head = machine.machine_defaults.backend == "simulator"
+        heads = [
+            head
+            for head in self.registry.tool_head_profiles()
+            if ("simulation" in head.capabilities) == require_simulated_head
+        ]
+        self.tool_head_profile.blockSignals(True)
+        try:
+            self.tool_head_profile.clear()
+            for head in heads:
+                self.tool_head_profile.addItem(head.name, head.id)
+            preferred_id = (
+                _SIMULATED_TOOL_HEAD_PROFILE_ID
+                if require_simulated_head
+                else self._preferred_physical_tool_head_id
+            )
+            preferred_index = self.tool_head_profile.findData(preferred_id)
+            self.tool_head_profile.setCurrentIndex(max(0, preferred_index))
+        finally:
+            self.tool_head_profile.blockSignals(False)
         self._refresh_profile_help()
 
     def _refresh_profile_help(self) -> None:
@@ -161,6 +224,15 @@ class _NewMachineDialog(QtWidgets.QDialog):
         if not self.name.text().strip():
             QtWidgets.QMessageBox.warning(self, "Add machine", "Enter a machine name.")
             return
+        try:
+            _validate_machine_tool_pair(
+                self.registry,
+                str(self.machine_profile.currentData()),
+                str(self.tool_head_profile.currentData()),
+            )
+        except MachineRegistryError as exc:
+            QtWidgets.QMessageBox.warning(self, "Add machine", str(exc))
+            return
         self.accept()
 
     def values(self) -> tuple[str, str, str]:
@@ -180,14 +252,11 @@ class MachineManagerDialog(QtWidgets.QDialog):
         super().__init__(parent)
         self.runtime = runtime
         self.registry = runtime.machine_registry
-        self.running_machine_id = str(runtime.running_machine_id)
+        self.running_identity = runtime.context.machine_identity
+        self.running_machine_id = str(self.running_identity.machine_id)
         self._current_machine_id: str | None = None
         self._working_machine: MachineInstance | None = None
         self._loading = False
-        self._optical_profile_key = signature_from_camera_settings(
-            runtime.settings.camera
-        ).key
-
         self.setWindowTitle("Machine Manager")
         self.setModal(True)
         self.resize(1040, 720)
@@ -200,13 +269,18 @@ class MachineManagerDialog(QtWidgets.QDialog):
         outer.addWidget(heading)
 
         intro = QtWidgets.QLabel(
-            "Your current E3 machine was imported automatically from the existing "
-            "controller, laser, camera, and calibration configuration. Selecting a "
-            "different machine changes the default for the next E3 launch; the running "
-            "controller is never hot-swapped from this dialog."
+            "Each saved machine is a concrete validated copy of its selected machine "
+            "and tool-head profile defaults. Selecting a different machine changes "
+            "the default for the next E3 launch; the running controller is never "
+            "hot-swapped from this dialog."
         )
         intro.setWordWrap(True)
         outer.addWidget(intro)
+
+        self.lifecycle_summary = QtWidgets.QLabel()
+        self.lifecycle_summary.setWordWrap(True)
+        self.lifecycle_summary.setObjectName("machineLifecycleSummary")
+        outer.addWidget(self.lifecycle_summary)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Horizontal)
         outer.addWidget(splitter, 1)
@@ -267,7 +341,6 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.use_button.clicked.connect(self._set_active_selected)
         self.close_button.clicked.connect(self.accept)
 
-        self._ensure_current_machine_binding()
         self._reload_list(self.running_machine_id)
 
     def _build_identity_group(self) -> None:
@@ -346,9 +419,14 @@ class MachineManagerDialog(QtWidgets.QDialog):
     def _build_connection_group(self) -> None:
         group = QtWidgets.QGroupBox("Controller connection")
         form = QtWidgets.QFormLayout(group)
+        self.connection_form = form
+        self.backend = QtWidgets.QComboBox()
+        self.backend.addItem("Simulator", "simulator")
+        self.backend.addItem("Serial / e3bridge", "serial")
         self.protocol = QtWidgets.QComboBox()
-        for value in ("grbl", "marlin", "auto"):
-            self.protocol.addItem(value.upper(), value)
+        self.protocol.addItem("AUTO (detect GRBL or Marlin)", "auto")
+        for dialect in CONTROLLER_DIALECT_REGISTRY.dialects:
+            self.protocol.addItem(dialect.display_name, dialect.id)
         self.port = QtWidgets.QLineEdit()
         self.port.setPlaceholderText("e3bridge://host:8765, COM4, or serial device")
         self.baudrate = QtWidgets.QSpinBox()
@@ -357,15 +435,46 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.read_timeout = _double_spin(0.01, 120.0, decimals=2, step=0.25)
         self.startup_delay = _double_spin(0.0, 120.0, decimals=2, step=0.25)
         self.grbl_idle_delay = QtWidgets.QSpinBox()
-        self.grbl_idle_delay.setRange(0, 65_535)
+        self.grbl_idle_delay.setRange(0, 254)
         self.grbl_idle_delay.setSuffix(" ms")
+        self.grbl_idle_delay.setToolTip(
+            "Applied only when the running controller dialect is GRBL."
+        )
+        self.port_label = QtWidgets.QLabel("Controller endpoint")
+        self.baudrate_label = QtWidgets.QLabel("Baud rate")
+        self.grbl_idle_label = QtWidgets.QLabel("GRBL step-idle delay")
+        form.addRow("Backend", self.backend)
         form.addRow("Protocol", self.protocol)
-        form.addRow("Controller endpoint", self.port)
-        form.addRow("Baud rate", self.baudrate)
+        form.addRow(self.port_label, self.port)
+        form.addRow(self.baudrate_label, self.baudrate)
         form.addRow("Read timeout", self.read_timeout)
         form.addRow("Startup delay", self.startup_delay)
-        form.addRow("GRBL step-idle delay", self.grbl_idle_delay)
+        form.addRow(self.grbl_idle_label, self.grbl_idle_delay)
+        self.backend.currentIndexChanged.connect(
+            self._refresh_connection_conditionals
+        )
+        self.protocol.currentIndexChanged.connect(
+            self._refresh_connection_conditionals
+        )
+        self._refresh_connection_conditionals()
         self.editor_layout.addWidget(group)
+
+    def _refresh_connection_conditionals(self) -> None:
+        serial_backend = self.backend.currentData() == "serial"
+        self.connection_form.setRowVisible(self.port, serial_backend)
+        self.connection_form.setRowVisible(self.baudrate, serial_backend)
+
+        protocol = str(self.protocol.currentData() or "")
+        grbl_relevant = protocol in {"auto", "grbl"}
+        self.connection_form.setRowVisible(
+            self.grbl_idle_delay,
+            grbl_relevant,
+        )
+        self.grbl_idle_label.setText(
+            "GRBL step-idle delay (if detected)"
+            if protocol == "auto"
+            else "GRBL step-idle delay"
+        )
 
     def _build_geometry_group(self) -> None:
         group = QtWidgets.QGroupBox("Work area and motion")
@@ -391,6 +500,13 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.release_after_job = QtWidgets.QCheckBox(
             "Home and release motors after powered job"
         )
+        self.allow_motion = QtWidgets.QCheckBox(
+            "Allow motion when this machine is running"
+        )
+        self.allow_motion.setToolTip(
+            "This saved permission is separate from hardware-enabled startup, "
+            "controller connection, Home/reference trust, and every job safety gate."
+        )
 
         rows = (
             ("X minimum", self.x_min, "X maximum", self.x_max),
@@ -413,6 +529,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
                 grid.addWidget(right, row, 3)
         grid.addWidget(self.home_before_photo, len(rows), 0, 1, 2)
         grid.addWidget(self.release_after_job, len(rows), 2, 1, 2)
+        grid.addWidget(self.allow_motion, len(rows) + 1, 0, 1, 4)
         self.editor_layout.addWidget(group)
 
     def _build_laser_group(self) -> None:
@@ -463,7 +580,9 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.editor_layout.addWidget(group)
 
     def _build_camera_group(self) -> None:
-        group = QtWidgets.QGroupBox("Camera and calibration preloaded with this E3 setup")
+        group = QtWidgets.QGroupBox(
+            "Running camera and selected-machine calibration bindings"
+        )
         form = QtWidgets.QFormLayout(group)
         camera = self.runtime.settings.camera
         controls = camera.controls
@@ -485,45 +604,38 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.camera_optics.setTextInteractionFlags(
             QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
         )
-        self.calibration_binding = QtWidgets.QLabel(self._optical_profile_key)
+        self.camera_binding = QtWidgets.QLabel()
+        self.camera_binding.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        self.calibration_binding = QtWidgets.QLabel()
         self.calibration_binding.setTextInteractionFlags(
             QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
         )
         note = QtWidgets.QLabel(
-            "The current network camera settings and calibration stack remain "
-            "preloaded. New and duplicated machines inherit this binding unless a "
-            "future camera-specific profile is assigned."
+            "The endpoint and optics above belong to the immutable running process. "
+            "New and duplicated saved machines begin with no camera, calibration, "
+            "or honeycomb-support binding; Setup must establish evidence for that "
+            "machine after it is actually running."
         )
         note.setWordWrap(True)
         form.addRow("Camera endpoint", self.camera_endpoint)
         form.addRow("Optical profile", self.camera_optics)
-        form.addRow("Calibration profile", self.calibration_binding)
+        form.addRow("Saved camera binding", self.camera_binding)
+        form.addRow("Saved calibration binding", self.calibration_binding)
         form.addRow(note)
         self.editor_layout.addWidget(group)
 
-    def _ensure_current_machine_binding(self) -> None:
-        try:
-            machine = self.registry.get_machine(self.running_machine_id)
-        except MachineRegistryError:
-            return
-        changed = False
-        if machine.camera_profile_id is None:
-            machine.camera_profile_id = self._optical_profile_key
-            changed = True
-        if machine.calibration_profile_id is None:
-            machine.calibration_profile_id = self._optical_profile_key
-            changed = True
-        if (
-            machine.id == "existing-machine"
-            and machine.name == "Imported existing machine"
-        ):
-            machine.name = "Current configured machine"
-            changed = True
-        if changed:
-            self.registry.update_machine(machine)
-
     def _reload_list(self, selected_id: str | None = None) -> None:
         next_launch_id = self.registry.active_machine_id
+        next_launch = self.registry.get_machine(next_launch_id)
+        self.lifecycle_summary.setText(
+            f"<b>Running now:</b> "
+            f"{escape(str(self.running_identity.machine_name))} &nbsp; · &nbsp; "
+            f"<b>Use on next launch:</b> {escape(next_launch.name)}<br>"
+            "Saved edits and profile choices do not alter the running controller, "
+            "recipe compatibility, work area, or calibration state."
+        )
         selected_id = selected_id or self._current_machine_id or next_launch_id
         self.machine_list.blockSignals(True)
         self.machine_list.clear()
@@ -586,6 +698,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self._set_combo_data(self.tool_head_profile, machine.tool_head_profile_id)
             self.origin.setText(machine.created_from)
             self._refresh_profile_help()
+            self._set_combo_data(self.backend, machine.machine.backend)
             self._set_combo_data(self.protocol, machine.machine.protocol)
             self.port.setText(machine.machine.port)
             self.baudrate.setValue(machine.machine.baudrate)
@@ -613,6 +726,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self.release_after_job.setChecked(
                 machine.machine.home_and_release_after_powered_job
             )
+            self.allow_motion.setChecked(machine.machine.allow_motion)
             self._set_combo_data(self.power_mode, machine.laser.power_mode)
             self.power_max.setValue(machine.laser.power_max)
             self.default_power.setValue(machine.laser.default_power)
@@ -632,15 +746,25 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self.polygon_summary.setText(
                 "Not configured"
                 if polygon is None
-                else f"{len(polygon)} points preserved from this machine profile"
+                else f"{len(polygon)} points in the saved guarded-output polygon"
             )
-            self.delete_button.setEnabled(len(self.registry.machines()) > 1)
+            self.camera_binding.setText(
+                machine.camera_profile_id or "Not configured"
+            )
+            self.calibration_binding.setText(
+                machine.calibration_profile_id or "Not configured"
+            )
+            self.delete_button.setEnabled(
+                len(self.registry.machines()) > 1
+                and machine.id != self.running_machine_id
+            )
             self.use_button.setEnabled(
                 machine.id != self.registry.active_machine_id
             )
             if machine.id == self.running_machine_id:
                 self.status_label.setText(
-                    "This is the machine currently running in E3."
+                    "This machine identity is running now. Saved edits apply only "
+                    "after a later E3 launch; the current runtime is unchanged."
                 )
             elif machine.id == self.registry.active_machine_id:
                 self.status_label.setText(
@@ -689,6 +813,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self._working_machine.machine = profile.machine_defaults
         self._working_machine.machine.honeycomb_span_mm = honeycomb_span_mm
         defaults = self._working_machine.machine
+        self._set_combo_data(self.backend, defaults.backend)
         self._set_combo_data(self.protocol, defaults.protocol)
         self.port.setText(defaults.port)
         self.baudrate.setValue(defaults.baudrate)
@@ -709,6 +834,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.release_after_job.setChecked(
             defaults.home_and_release_after_powered_job
         )
+        self.allow_motion.setChecked(defaults.allow_motion)
         self.status_label.setText(
             f"Loaded {profile.name} machine defaults into the form. "
             "Review them, then click Save changes if they are correct."
@@ -758,14 +884,19 @@ class MachineManagerDialog(QtWidgets.QDialog):
         machine_id = self._selected_id()
         if machine_id is None:
             raise MachineRegistryError("Select a saved machine")
+        backend = str(self.backend.currentData())
+        endpoint = self.port.text().strip()
+        if backend == "serial" and is_bridge_uri(endpoint):
+            parse_bridge_uri(endpoint)
         candidate = self._working_machine
         if candidate is None or candidate.id != machine_id:
             candidate = self.registry.get_machine(machine_id)
         candidate.name = self.name.text().strip()
         candidate.machine_profile_id = str(self.machine_profile.currentData())
         candidate.tool_head_profile_id = str(self.tool_head_profile.currentData())
+        candidate.machine.backend = backend
         candidate.machine.protocol = str(self.protocol.currentData())
-        candidate.machine.port = self.port.text().strip()
+        candidate.machine.port = endpoint
         candidate.machine.baudrate = self.baudrate.value()
         candidate.machine.read_timeout = self.read_timeout.value()
         candidate.machine.controller_startup_delay = self.startup_delay.value()
@@ -790,9 +921,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         candidate.machine.home_and_release_after_powered_job = (
             self.release_after_job.isChecked()
         )
-        # E3 has one normal operating mode. Saved physical machines are not
-        # converted into a second motion-disabled launch state.
-        candidate.machine.allow_motion = True
+        candidate.machine.allow_motion = self.allow_motion.isChecked()
 
         candidate.laser.power_mode = str(self.power_mode.currentData())
         candidate.laser.power_max = self.power_max.value()
@@ -809,19 +938,13 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self.allow_low_power_frame.isChecked()
         )
         candidate.laser.return_to_photo_position = self.return_to_photo.isChecked()
-        candidate.camera_profile_id = (
-            candidate.camera_profile_id or self._optical_profile_key
-        )
-        candidate.calibration_profile_id = (
-            candidate.calibration_profile_id or self._optical_profile_key
-        )
         return candidate
 
     def _save_selected(self) -> bool:
         try:
             candidate = self._candidate_from_form()
             saved = self.registry.update_machine(candidate)
-        except (MachineRegistryError, ValueError) as exc:
+        except (MachineError, MachineRegistryError, ValueError) as exc:
             QtWidgets.QMessageBox.warning(self, "Machine Manager", str(exc))
             return False
         self.status_label.setText(f"Saved {saved.name}.")
@@ -834,40 +957,65 @@ class MachineManagerDialog(QtWidgets.QDialog):
             return
         name, machine_profile_id, tool_head_profile_id = dialog.values()
         try:
+            _validate_machine_tool_pair(
+                self.registry,
+                machine_profile_id,
+                tool_head_profile_id,
+            )
             created = self.registry.create_machine(
                 name,
                 machine_profile_id,
                 tool_head_profile_id,
             )
-            created.machine.allow_motion = True
-            created.camera_profile_id = self._optical_profile_key
-            created.calibration_profile_id = self._optical_profile_key
-            created = self.registry.update_machine(created)
         except MachineRegistryError as exc:
             QtWidgets.QMessageBox.warning(self, "Add machine", str(exc))
             return
         self._reload_list(created.id)
+        self.status_label.setText(
+            "Created from profile defaults with motion permission off and no "
+            "camera, calibration, or honeycomb-support binding. Review the concrete "
+            "settings before selecting it for a later launch."
+        )
 
     def _duplicate_machine(self) -> None:
         machine_id = self._selected_id()
         if machine_id is None:
             return
         source = self.registry.get_machine(machine_id)
+        duplicated: MachineInstance | None = None
         try:
             duplicated = self.registry.duplicate_machine(
                 machine_id,
                 name=f"{source.name} copy",
+                persist=False,
             )
+            duplicated.camera_profile_id = None
+            duplicated.calibration_profile_id = None
+            duplicated.machine.honeycomb_span_mm = None
+            duplicated = self.registry.update_machine(duplicated)
         except MachineRegistryError as exc:
+            if duplicated is not None:
+                self.registry.remove_machine(duplicated.id, persist=False)
             QtWidgets.QMessageBox.warning(self, "Duplicate machine", str(exc))
             return
         self._reload_list(duplicated.id)
+        self.status_label.setText(
+            "Duplicated the concrete settings. Camera, calibration, and physical "
+            "honeycomb-span bindings were cleared for the new saved-machine ID."
+        )
 
     def _delete_machine(self) -> None:
         machine_id = self._selected_id()
         if machine_id is None:
             return
         machine = self.registry.get_machine(machine_id)
+        if machine.id == self.running_machine_id:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Delete machine",
+                "The machine identity running in this E3 process cannot be deleted.",
+            )
+            return
         answer = QtWidgets.QMessageBox.question(
             self,
             "Delete machine",

@@ -698,6 +698,49 @@ complete validated snapshot of both. These are configuration and compatibility
 identities only: neither profile grants motion, arming, output, or execution
 authority.
 
+### Saved-machine and authoring-default lifecycle
+
+The profile and runtime identities have deliberately different lifetimes:
+
+| Term | Meaning |
+|---|---|
+| `MachineProfile` | Reusable motion-platform/controller starting values |
+| `ToolHeadProfile` | Reusable laser/tool starting values |
+| `MachineInstance` | Operator-owned, validated concrete saved snapshot |
+| running machine | Immutable instance resolved once into the current `CoreRuntime` |
+| next-launch machine | Registry persistence choice; it cannot hot-swap current settings or authority |
+| curated material recipe | Authoring suggestion scoped by stable profile IDs; never execution authority |
+
+Machine Manager creates a fresh instance by deep-copying the selected machine
+and tool defaults. Later profile selection changes identity only unless the
+operator explicitly loads that profile's defaults into the editable form and
+saves. Creating, editing, duplicating, or choosing the next-launch instance
+does not call `MachineService` and cannot connect, Home, jog, arm, move, emit, or
+execute. Instances created from profiles, and duplicates created through
+Machine Manager, start without camera, calibration, support, or coordinate
+evidence from another machine; profile-created instances are also
+motion-disabled. Machine Setup may
+explicitly persist the active optical/calibration profile IDs onto the running
+saved instance for a future launch, but the frozen current runtime identity is
+not rewritten and existing calibration/support validity gates still apply.
+
+First-run uses the same built-in profiles and schema-1 `MachineRegistry`. It
+defaults to the simulator; choosing physical hardware stores a safe-off profile
+snapshot and existing bridge/camera endpoints without contacting either one.
+This adds no controller compatibility beyond the existing GRBL and Marlin
+dialects.
+
+New-project authoring defaults are resolved separately from coordinates. A
+Qt-neutral resolver reads only source-curated operation records and selects one
+highest compatible tier: exact machine+tool, tool-only, universal, or a neutral
+fallback. It never reads user SQLite recipes and never mixes tiers. The exact
+Ender-3 S1 Pro / generic 10 W match preserves the historical 13 layers. An
+unmatched running identity receives one 0%-power, output-disabled Line layer
+whose positive speed is capped by the running maximum work feed. The actual
+running work area and existing bound honeycomb-support logic continue to choose
+the project bounds and coordinate space; a next-launch selection is irrelevant
+until a new process resolves it.
+
 This boundary refactor has automated verification only. Existing historical
 physical evidence remains historical; the refactored paths have not been
 re-verified against physical GRBL or Marlin hardware. No new machine or

@@ -58,6 +58,15 @@ mode/range, feeds, spot offset, and guarded-boundary settings. A saved machine
 instance retains the complete validated configuration. None of these profiles
 grants connection, motion, arming, laser output, or execution authority.
 
+Desktop first-run and Machine Manager now select from those same existing
+profiles. First-run defaults to Simulator. A physical choice may store an
+`e3bridge://` controller endpoint and `e3camera://` camera endpoint, but saving
+only creates a motion-disabled, zero-default/frame-power machine snapshot with
+no inherited calibration binding; it sends no network or controller command.
+Choosing another saved machine affects the next launch only. The current
+`CoreRuntime`, transport, recipe compatibility, work area, and execution gates
+remain bound to the machine resolved when the process started.
+
 This refactor adds no controller or machine compatibility. Its verification is
 automated only; neither the direct nor bridged refactored path has been
 re-verified on physical GRBL or Marlin hardware.

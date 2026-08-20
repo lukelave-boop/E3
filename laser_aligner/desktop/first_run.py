@@ -5,16 +5,23 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..deployment import application_root, user_config_path
-from ..first_run import save_hardware_setup
+from ..first_run import save_profile_setup
+from ..machine.profiles import (
+    builtin_machine_profiles,
+    builtin_tool_head_profiles,
+)
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
 
 _WELCOME = 0
-_CONNECTION = 1
-_MACHINE = 2
-_CAMERA = 3
-_FINISH = 4
+_PROFILE = 1
+_CONNECTION = 2
+_MACHINE = 3
+_CAMERA = 4
+_FINISH = 5
+_SIMULATOR_PROFILE_ID = "simulator"
+_SIMULATOR_TOOL_HEAD_ID = "simulated-laser-head"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,27 +44,149 @@ class _WelcomePage(QtWidgets.QWizardPage):
     def __init__(self) -> None:
         super().__init__()
         self.setTitle("Welcome to E3")
-        self.setSubTitle("Set up the controller and camera for this machine.")
+        self.setSubTitle("Choose a safe simulator or configure a saved machine.")
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
-            "This guided setup creates the machine-specific files that E3 keeps "
-            "separate from the application. Future E3 updates will not replace "
-            "these settings or calibration data."
+            "This guided setup creates machine-specific files that E3 keeps "
+            "separate from the application. Choosing or saving a profile does "
+            "not connect, Home, jog, arm, move, or enable laser output. Hardware "
+            "settings remain unverified until they are tested physically."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
         layout.addStretch(1)
 
     def nextId(self) -> int:
-        return _CONNECTION
+        return _PROFILE
+
+
+class _ProfilePage(QtWidgets.QWizardPage):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setTitle("Saved machine profile")
+        self.setSubTitle(
+            "Create one concrete saved machine from reusable machine and tool-head profiles."
+        )
+        self._machine_profiles = builtin_machine_profiles()
+        self._tool_head_profiles = builtin_tool_head_profiles()
+        self._hardware_tool_head_id = "custom-laser-head"
+
+        layout = QtWidgets.QFormLayout(self)
+        self.machine_name = QtWidgets.QLineEdit("My E3 machine")
+        self.machine_profile = QtWidgets.QComboBox()
+        ordered_machine_ids = (_SIMULATOR_PROFILE_ID,) + tuple(
+            sorted(
+                profile_id
+                for profile_id in self._machine_profiles
+                if profile_id != _SIMULATOR_PROFILE_ID
+            )
+        )
+        for profile_id in ordered_machine_ids:
+            profile = self._machine_profiles[profile_id]
+            self.machine_profile.addItem(profile.name, profile.id)
+        self.tool_head_profile = QtWidgets.QComboBox()
+        self.profile_summary = QtWidgets.QLabel()
+        self.profile_summary.setWordWrap(True)
+        self.profile_summary.setObjectName("firstRunProfileSummary")
+        safety = QtWidgets.QLabel(
+            "New saved machines start with motion disabled, 0 default/frame "
+            "power, low-power framing disabled, and no inherited camera or "
+            "calibration binding."
+        )
+        safety.setWordWrap(True)
+        safety.setObjectName("mutedLabel")
+        layout.addRow("Saved machine name", self.machine_name)
+        layout.addRow("Machine profile", self.machine_profile)
+        layout.addRow("Laser / tool-head profile", self.tool_head_profile)
+        layout.addRow(self.profile_summary)
+        layout.addRow(safety)
+
+        self.machine_name.textChanged.connect(self.completeChanged)
+        self.machine_profile.currentIndexChanged.connect(
+            self._machine_profile_changed
+        )
+        self.tool_head_profile.currentIndexChanged.connect(
+            self._tool_head_changed
+        )
+        self._machine_profile_changed()
+
+    def is_simulator(self) -> bool:
+        return self.machine_profile.currentData() == _SIMULATOR_PROFILE_ID
+
+    def isComplete(self) -> bool:
+        return bool(self.machine_name.text().strip())
+
+    def validatePage(self) -> bool:
+        if not self.machine_name.text().strip():
+            QtWidgets.QMessageBox.warning(
+                self,
+                "E3 Setup",
+                "Enter a name for the saved machine.",
+            )
+            return False
+        return True
+
+    def nextId(self) -> int:
+        return _FINISH if self.is_simulator() else _CONNECTION
+
+    def _machine_profile_changed(self) -> None:
+        selected_tool = self.tool_head_profile.currentData()
+        if selected_tool and selected_tool != _SIMULATOR_TOOL_HEAD_ID:
+            self._hardware_tool_head_id = str(selected_tool)
+        self.tool_head_profile.blockSignals(True)
+        self.tool_head_profile.clear()
+        if self.is_simulator():
+            profile = self._tool_head_profiles[_SIMULATOR_TOOL_HEAD_ID]
+            self.tool_head_profile.addItem(profile.name, profile.id)
+            self.tool_head_profile.setEnabled(False)
+        else:
+            for profile_id in ("custom-laser-head", "generic-diode-10w"):
+                profile = self._tool_head_profiles[profile_id]
+                self.tool_head_profile.addItem(profile.name, profile.id)
+            index = self.tool_head_profile.findData(
+                self._hardware_tool_head_id
+            )
+            self.tool_head_profile.setCurrentIndex(max(index, 0))
+            self.tool_head_profile.setEnabled(True)
+        self.tool_head_profile.blockSignals(False)
+        self._refresh_summary()
+        self.completeChanged.emit()
+
+    def _tool_head_changed(self) -> None:
+        selected = self.tool_head_profile.currentData()
+        if selected and selected != _SIMULATOR_TOOL_HEAD_ID:
+            self._hardware_tool_head_id = str(selected)
+        self._refresh_summary()
+
+    def _refresh_summary(self) -> None:
+        machine_id = self.machine_profile.currentData()
+        tool_id = self.tool_head_profile.currentData()
+        if machine_id is None or tool_id is None:
+            self.profile_summary.clear()
+            return
+        machine = self._machine_profiles[str(machine_id)]
+        tool = self._tool_head_profiles[str(tool_id)]
+        area = machine.machine_defaults.work_area
+        if self.is_simulator():
+            mode = "Software-only simulator; no hardware endpoint is used."
+        else:
+            mode = (
+                f"{machine.machine_defaults.protocol.upper()} controller "
+                "policy over the existing E3 bridge transport."
+            )
+        self.profile_summary.setText(
+            f"<b>{machine.name}</b> + <b>{tool.name}</b><br>"
+            f"{mode}<br>Starting work area: {area.width:g} × "
+            f"{area.height:g} mm. Review hardware values on the following pages."
+        )
 
 
 class _ConnectionPage(QtWidgets.QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Connect to the E3 hardware node")
+        self.setTitle("Hardware-node connection")
         self.setSubTitle(
-            "Enter the Raspberry Pi address and the bridge credential configured on the Pi."
+            "Enter the Raspberry Pi address and bridge credential configured on the Pi."
         )
         layout = QtWidgets.QFormLayout(self)
         self.host = QtWidgets.QLineEdit()
@@ -76,15 +205,16 @@ class _ConnectionPage(QtWidgets.QWizardPage):
         layout.addRow("Camera bridge port", self.camera_port)
         layout.addRow("Bridge credential", self.token)
         row = QtWidgets.QHBoxLayout()
-        self.test_button = QtWidgets.QPushButton("Test network connection")
+        self.test_button = QtWidgets.QPushButton("Test network reachability")
         self.status = QtWidgets.QLabel("")
         self.status.setWordWrap(True)
         row.addWidget(self.test_button)
         row.addWidget(self.status, 1)
         layout.addRow(row)
         note = QtWidgets.QLabel(
-            "The test checks that both E3 bridge ports are reachable. The credential "
-            "itself is validated when E3 starts the hardware connection."
+            "The optional test checks only that both bridge ports are reachable. "
+            "It does not connect a controller, send commands, or physically "
+            "verify the machine, motion, camera, or laser."
         )
         note.setWordWrap(True)
         note.setObjectName("mutedLabel")
@@ -94,11 +224,17 @@ class _ConnectionPage(QtWidgets.QWizardPage):
         self.token.textChanged.connect(self.completeChanged)
 
     def isComplete(self) -> bool:
-        return bool(self.host.text().strip()) and len(self.token.text().strip()) >= 24
+        return bool(self.host.text().strip()) and len(
+            self.token.text().strip()
+        ) >= 24
 
     def validatePage(self) -> bool:
         if not self.host.text().strip():
-            QtWidgets.QMessageBox.warning(self, "E3 Setup", "Enter the Raspberry Pi address.")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "E3 Setup",
+                "Enter the Raspberry Pi address.",
+            )
             return False
         if len(self.token.text().strip()) < 24:
             QtWidgets.QMessageBox.warning(
@@ -123,22 +259,31 @@ class _ConnectionPage(QtWidgets.QWizardPage):
             self.status.setText("Enter the Raspberry Pi address first.")
             return
         self.test_button.setEnabled(False)
-        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
+        QtWidgets.QApplication.setOverrideCursor(
+            QtCore.Qt.CursorShape.WaitCursor
+        )
         try:
-            controller = self._reachable(host, self.controller_port.value())
+            controller = self._reachable(
+                host,
+                self.controller_port.value(),
+            )
             camera = self._reachable(host, self.camera_port.value())
         finally:
             QtWidgets.QApplication.restoreOverrideCursor()
             self.test_button.setEnabled(True)
         if controller and camera:
-            self.status.setText("Controller and camera bridge ports are reachable.")
+            self.status.setText(
+                "Both bridge ports are reachable; hardware remains unverified."
+            )
         else:
             missing = []
             if not controller:
                 missing.append("controller")
             if not camera:
                 missing.append("camera")
-            self.status.setText("Could not reach: " + " and ".join(missing) + ".")
+            self.status.setText(
+                "Could not reach: " + " and ".join(missing) + "."
+            )
 
 
 class _MachinePage(QtWidgets.QWizardPage):
@@ -146,21 +291,40 @@ class _MachinePage(QtWidgets.QWizardPage):
         super().__init__()
         self.setTitle("Machine work area")
         self.setSubTitle(
-            "Enter the usable X/Y travel area. E3 will start the photo position at the center."
+            "Review the usable X/Y area. The initial photo position is its center."
         )
+        self._initialized_profile_id: str | None = None
         layout = QtWidgets.QFormLayout(self)
         self.width = QtWidgets.QDoubleSpinBox()
         self.width.setRange(1.0, 5000.0)
         self.width.setDecimals(2)
         self.width.setSuffix(" mm")
-        self.width.setValue(220.0)
         self.height = QtWidgets.QDoubleSpinBox()
         self.height.setRange(1.0, 5000.0)
         self.height.setDecimals(2)
         self.height.setSuffix(" mm")
-        self.height.setValue(220.0)
         layout.addRow("X width", self.width)
         layout.addRow("Y height", self.height)
+        note = QtWidgets.QLabel(
+            "Saving these values does not enable motion. Verify physical travel "
+            "and limits separately before opting in later."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedLabel")
+        layout.addRow(note)
+
+    def initializePage(self) -> None:
+        wizard = self.wizard()
+        profile_page = getattr(wizard, "profile", None)
+        if profile_page is None:
+            return
+        profile_id = str(profile_page.machine_profile.currentData())
+        if profile_id == self._initialized_profile_id:
+            return
+        defaults = builtin_machine_profiles()[profile_id].machine_defaults
+        self.width.setValue(defaults.work_area.width)
+        self.height.setValue(defaults.work_area.height)
+        self._initialized_profile_id = profile_id
 
 
 class _CameraPage(QtWidgets.QWizardPage):
@@ -168,8 +332,7 @@ class _CameraPage(QtWidgets.QWizardPage):
         super().__init__()
         self.setTitle("Camera starting settings")
         self.setSubTitle(
-            "These values get the camera online. Fine focus and calibration are completed "
-            "inside Machine Setup."
+            "These values configure the camera endpoint; calibration remains a separate review."
         )
         layout = QtWidgets.QFormLayout(self)
         self.width = QtWidgets.QSpinBox()
@@ -187,10 +350,12 @@ class _CameraPage(QtWidgets.QWizardPage):
         layout.addRow("Camera height", self.height)
         layout.addRow(self.autofocus)
         layout.addRow("Manual focus", self.focus)
-        self.autofocus.toggled.connect(lambda checked: self.focus.setEnabled(not checked))
+        self.autofocus.toggled.connect(
+            lambda checked: self.focus.setEnabled(not checked)
+        )
         note = QtWidgets.QLabel(
-            "For precision positioning, lock focus before performing lens and bed calibration. "
-            "Machine Setup provides the focus tools and calibration steps."
+            "No camera or calibration evidence is inherited from another saved "
+            "machine. Complete and review calibration for this machine separately."
         )
         note.setWordWrap(True)
         note.setObjectName("mutedLabel")
@@ -200,52 +365,87 @@ class _CameraPage(QtWidgets.QWizardPage):
 class _FinishPage(QtWidgets.QWizardPage):
     def __init__(self) -> None:
         super().__init__()
-        self.setTitle("Ready")
-        self.message = QtWidgets.QLabel(
-            "Click Finish to save the machine connection and open E3. Machine Setup will "
-            "then open at the Camera tab so you can verify focus, complete lens calibration, "
-            "and create the bed mapping."
-        )
+        self.setTitle("Ready to save")
+        self.message = QtWidgets.QLabel()
         self.message.setWordWrap(True)
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.message)
         layout.addStretch(1)
 
+    def initializePage(self) -> None:
+        wizard = self.wizard()
+        profile_page = getattr(wizard, "profile", None)
+        if profile_page is not None and profile_page.is_simulator():
+            self.message.setText(
+                "Click Finish to save and select the software-only simulator. "
+                "No hardware endpoint will be contacted."
+            )
+        else:
+            self.message.setText(
+                "Click Finish to save and select this machine for the next E3 "
+                "launch. Motion and laser output remain disabled. No connection, "
+                "Home, jog, arming, output, or physical verification is performed."
+            )
+
 
 class FirstRunWizard(QtWidgets.QWizard):
-    def __init__(self, template_config: Path, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        template_config: Path,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.template_config = Path(template_config)
         self.saved_config: Path | None = None
         self.setWindowTitle("E3 First-Run Setup")
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
-        self.setMinimumSize(620, 440)
+        self.setMinimumSize(660, 480)
         self.welcome = _WelcomePage()
+        self.profile = _ProfilePage()
         self.connection = _ConnectionPage()
         self.machine = _MachinePage()
         self.camera = _CameraPage()
         self.finish = _FinishPage()
         self.setPage(_WELCOME, self.welcome)
+        self.setPage(_PROFILE, self.profile)
         self.setPage(_CONNECTION, self.connection)
         self.setPage(_MACHINE, self.machine)
         self.setPage(_CAMERA, self.camera)
         self.setPage(_FINISH, self.finish)
         self.setStartId(_WELCOME)
 
+    @property
+    def open_machine_setup(self) -> bool:
+        return not self.profile.is_simulator()
+
     def accept(self) -> None:
+        machine_profile_id = str(
+            self.profile.machine_profile.currentData()
+        )
+        tool_head_profile_id = str(
+            self.profile.tool_head_profile.currentData()
+        )
+        options: dict[str, object] = {}
+        if not self.profile.is_simulator():
+            options = {
+                "bridge_token": self.connection.token.text(),
+                "host": self.connection.host.text(),
+                "controller_port": self.connection.controller_port.value(),
+                "camera_port": self.connection.camera_port.value(),
+                "width_mm": self.machine.width.value(),
+                "height_mm": self.machine.height.value(),
+                "camera_width": self.camera.width.value(),
+                "camera_height": self.camera.height.value(),
+                "autofocus": self.camera.autofocus.isChecked(),
+                "focus_value": self.camera.focus.value(),
+            }
         try:
-            self.saved_config = save_hardware_setup(
+            self.saved_config = save_profile_setup(
                 self.template_config,
-                bridge_token=self.connection.token.text(),
-                host=self.connection.host.text(),
-                controller_port=self.connection.controller_port.value(),
-                camera_port=self.connection.camera_port.value(),
-                width_mm=self.machine.width.value(),
-                height_mm=self.machine.height.value(),
-                camera_width=self.camera.width.value(),
-                camera_height=self.camera.height.value(),
-                autofocus=self.camera.autofocus.isChecked(),
-                focus_value=self.camera.focus.value(),
+                machine_name=self.profile.machine_name.text(),
+                machine_profile_id=machine_profile_id,
+                tool_head_profile_id=tool_head_profile_id,
+                **options,
             )
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self, "E3 Setup", str(exc))
@@ -257,14 +457,21 @@ def run_first_run_setup(
     template_config: Path | None = None,
     parent: QtWidgets.QWidget | None = None,
 ) -> FirstRunResult | None:
-    template = Path(template_config) if template_config is not None else _default_template_config()
+    template = (
+        Path(template_config)
+        if template_config is not None
+        else _default_template_config()
+    )
     wizard = FirstRunWizard(template, parent)
     try:
         if wizard.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return None
         if wizard.saved_config is None:
             return None
-        return FirstRunResult(wizard.saved_config, True)
+        return FirstRunResult(
+            wizard.saved_config,
+            wizard.open_machine_setup,
+        )
     finally:
         wizard.deleteLater()
 
@@ -275,7 +482,10 @@ def _help_menu(window: QtWidgets.QMainWindow) -> QtWidgets.QMenu:
         return retained
     for menu_action in window.menuBar().actions():
         menu = menu_action.menu()
-        if menu is not None and menu.title().replace("&", "").strip().lower() == "help":
+        if (
+            menu is not None
+            and menu.title().replace("&", "").strip().lower() == "help"
+        ):
             window.help_menu = menu
             return menu
     menu = window.menuBar().addMenu("&Help")
@@ -283,10 +493,12 @@ def _help_menu(window: QtWidgets.QMainWindow) -> QtWidgets.QMenu:
     return menu
 
 
-def install_first_run_menu(window: QtWidgets.QMainWindow) -> QtGui.QAction | None:
+def install_first_run_menu(
+    window: QtWidgets.QMainWindow,
+) -> QtGui.QAction | None:
     if user_config_path().is_file():
         return None
-    action = QtGui.QAction("Set Up Hardware…", window)
+    action = QtGui.QAction("Set Up Machine…", window)
     action.setObjectName("firstRunHardwareSetupAction")
 
     def begin_setup(checked: bool = False) -> None:
@@ -295,12 +507,20 @@ def install_first_run_menu(window: QtWidgets.QMainWindow) -> QtGui.QAction | Non
         if result is None:
             return
         action.setEnabled(False)
+        next_step = (
+            "The simulator will be used after restart."
+            if not result.open_machine_setup
+            else (
+                "After restart, review this machine in Machine Setup before "
+                "enabling motion or output."
+            )
+        )
         QtWidgets.QMessageBox.information(
             window,
             "E3 Setup Saved",
-            "The machine configuration and bridge credential were saved.\n\n"
-            "Close and reopen E3 to start using the hardware. Your setup files will be "
-            "preserved across future E3 updates.",
+            "The saved machine profile was selected for the next E3 launch.\n\n"
+            f"{next_step}\n\n"
+            "No controller action or physical verification was performed.",
         )
 
     action.triggered.connect(begin_setup)

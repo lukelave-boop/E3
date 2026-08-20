@@ -122,10 +122,29 @@ def test_missing_registry_migrates_exact_current_machine_once(
         (15.0, 235.0),
     )
 
+    persisted = registry.path.read_bytes()
     second = MachineRegistry.load_or_migrate(settings)
     assert [machine.id for machine in second.machines()] == [
         "existing-machine"
     ]
+    assert registry.path.read_bytes() == persisted
+
+
+def test_builtin_profile_ids_are_stable_and_complete(tmp_path: Path) -> None:
+    registry = MachineRegistry.load_or_migrate(_settings(tmp_path))
+
+    assert {profile.id for profile in registry.machine_profiles()} == {
+        "simulator",
+        "generic-grbl",
+        "generic-marlin",
+        "ender-3-s1-pro",
+        "custom-machine",
+    }
+    assert {profile.id for profile in registry.tool_head_profiles()} == {
+        "generic-diode-10w",
+        "custom-laser-head",
+        "simulated-laser-head",
+    }
 
 
 def test_simulator_migration_does_not_infer_a_physical_machine(
@@ -167,9 +186,41 @@ def test_profile_created_machine_starts_with_motion_and_laser_defaults_disabled(
     assert created.machine.allow_motion is False
     assert created.machine.port == "SELECT_CONTROLLER_PORT"
     assert created.machine.honeycomb_span_mm is None
+    assert created.camera_profile_id is None
+    assert created.calibration_profile_id is None
     assert created.laser.default_power == 0
     assert created.laser.frame_power == 0
     assert created.laser.allow_low_power_frame is False
+
+
+def test_profile_created_instances_are_detached_from_each_other_and_profiles(
+    tmp_path: Path,
+) -> None:
+    registry = MachineRegistry.load_or_migrate(_settings(tmp_path))
+    profile_before = registry.get_machine_profile("generic-marlin")
+    first = registry.create_machine(
+        "First Marlin",
+        "generic-marlin",
+        "custom-laser-head",
+    )
+    second = registry.create_machine(
+        "Second Marlin",
+        "generic-marlin",
+        "custom-laser-head",
+    )
+
+    first.machine.port = "COM77"
+    first.machine.work_area.x_max = 333.0
+    first.laser.power_max = 255
+
+    assert second.machine.port == "SELECT_CONTROLLER_PORT"
+    assert second.machine.work_area.x_max == 220.0
+    assert second.laser.power_max == 1000
+    assert registry.get_machine_profile("generic-marlin") == profile_before
+    assert first.camera_profile_id is None
+    assert first.calibration_profile_id is None
+    assert second.camera_profile_id is None
+    assert second.calibration_profile_id is None
 
 
 def test_profile_objects_force_safe_setup_defaults() -> None:

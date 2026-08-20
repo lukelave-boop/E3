@@ -12,6 +12,51 @@ Open **Tools > Machine Setup…** in the desktop application. The Camera panel's
 relevant step. The dialog uses the shared `AppContext`; it does not start a web
 server or create a second camera owner.
 
+## Saved machines and the running process
+
+**Machine Manager** uses the existing saved-machine registry. A machine profile
+is reusable motion-platform/controller starting data; a tool-head profile is
+reusable laser/tool starting data; and a saved machine instance is the
+operator's concrete validated copy. **Add** creates from the selected profiles.
+Editing an existing instance does not silently reload profile defaults, and the
+separate profile-default buttons only change the form after confirmation.
+
+The dialog distinguishes **Running now** from **Use on next launch**. The running
+machine was resolved once when `CoreRuntime` was created. Selecting or editing a
+next-launch machine cannot change the current controller, Material Recipe
+compatibility, workspace bounds, preflight, calibration state, or execution.
+Restart E3 to run another saved instance.
+
+Connection fields are conditional: endpoint and baud apply to the serial/
+`e3bridge://` backend, while GRBL step-idle applies only to GRBL or an automatic
+selection that may resolve to GRBL. The current built-ins remain Simulator,
+Generic GRBL, Generic Marlin, Ender-3 S1 Pro, and Custom Machine, with Generic
+10 W Diode, Custom Laser Head, and Simulated Laser Head tool profiles. This UI
+does not claim compatibility with an untested printer or controller.
+
+New profile-created machines start with motion permission off, default and frame
+power at zero, low-power framing off, and no inherited camera, calibration, or
+honeycomb binding. Machine Setup shows the running profile identity, active
+optical profile, and any saved binding. If the running saved machine is unbound
+or mismatched, **Bind active profile for a later launch** explicitly records the
+current camera/calibration profile IDs on that saved instance. It performs no
+hardware action, does not change the immutable current runtime, and does not
+assert that calibration evidence is valid. Restart and satisfy the ordinary
+bed/support validity checks before honeycomb-local coordinate authority can be
+used.
+
+The first-run wizard uses these same profiles and defaults to Simulator. A
+physical selection stores the bridge/camera endpoints and a safe-off saved
+snapshot; its optional network test is reachability-only. First-run never
+connects, Homes, jogs, arms, moves, emits, or physically verifies the machine.
+
+New projects use curated operations compatible with the **running** profile
+identity. The current Ender-3 S1 Pro / generic 10 W match retains its exact 13
+historical operations. Other current combinations receive one clearly named,
+0%-power, output-disabled Line operation capped by the running work-feed limit.
+Apply a compatible Material Recipe or configure that layer before deliberately
+enabling output. User-created SQLite recipes are never selected automatically.
+
 Machine-specific physical dimensions are edited separately in **Machine
 Manager**. Under **Work area and motion**, **Physical honeycomb ruler span** is
 blank until explicitly measured and configured for that saved machine. Changing

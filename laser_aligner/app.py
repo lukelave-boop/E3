@@ -1882,7 +1882,15 @@ class AppContext:
         return result
 
     def _current_honeycomb_support(self) -> HoneycombSupportReference | None:
-        """Return only a support reference measured through the active bed map."""
+        """Return support bound to this running machine's active optical profile."""
+
+        if self.machine_identity.created_from != "standalone":
+            active_profile_id = self.calibration_profiles.current.key
+            if (
+                self.expected_camera_profile_id != active_profile_id
+                or self.expected_calibration_profile_id != active_profile_id
+            ):
+                return None
 
         reference = self.honeycomb_support.reference
         calibration = self.bed.calibration

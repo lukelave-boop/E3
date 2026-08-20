@@ -15,6 +15,7 @@ from ..calibration.registration import base_bed_grid_mark_sizes, base_bed_grid_t
 from ..calibration.support import HoneycombSupportReference
 from ..config import effective_laser_output_area
 from ..core import CoreRuntime
+from ..machine.profiles import MachineRegistryError
 from ..units import parse_to_mm
 from .controls import MeasurementSpinBox
 from .coordinate_audit import CoordinateAuditPanel
@@ -603,6 +604,30 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.calibration_warning.setWordWrap(True)
         self.calibration_warning.setObjectName("warningLabel")
         layout.addWidget(self.calibration_warning)
+        self.runtime_identity_status = QtWidgets.QLabel()
+        self.runtime_identity_status.setWordWrap(True)
+        self.runtime_identity_status.setObjectName("machineSetupRuntimeIdentity")
+        layout.addWidget(self.runtime_identity_status)
+        binding_row = QtWidgets.QHBoxLayout()
+        self.saved_profile_binding_status = QtWidgets.QLabel()
+        self.saved_profile_binding_status.setWordWrap(True)
+        self.saved_profile_binding_status.setObjectName(
+            "machineSetupSavedProfileBinding"
+        )
+        self.bind_running_profile_button = QtWidgets.QPushButton(
+            "Bind active profile for a later launch"
+        )
+        self.bind_running_profile_button.setToolTip(
+            "Persist the active optical-profile ID on the saved machine that is "
+            "running now. This does not change the current runtime, select a "
+            "next-launch machine, contact a controller, or validate calibration."
+        )
+        self.bind_running_profile_button.clicked.connect(
+            self.bind_active_profile_to_running_machine
+        )
+        binding_row.addWidget(self.saved_profile_binding_status, 1)
+        binding_row.addWidget(self.bind_running_profile_button)
+        layout.addLayout(binding_row)
         connection_row = QtWidgets.QHBoxLayout()
         self.machine_connection_status = QtWidgets.QLabel()
         self.machine_connection_status.setObjectName("machineSetupConnectionStatus")
@@ -2305,7 +2330,131 @@ class MachineSetupDialog(QtWidgets.QDialog):
             "Prior validation review invalidated by Home / park."
         )
 
+    def _refresh_running_machine_binding(self) -> None:
+        identity = self.context.machine_identity
+        active_calibration_profile_id = self.context.calibration_profiles.current.key
+        expected_camera_profile_id = identity.expected_camera_profile_id
+        expected_calibration_profile_id = identity.expected_calibration_profile_id
+        if (
+            expected_camera_profile_id is None
+            and expected_calibration_profile_id is None
+        ):
+            binding_status = (
+                "This running process has no camera or calibration binding. "
+                "Existing calibration evidence is not assumed compatible with "
+                "this machine."
+            )
+        else:
+            binding_parts = [
+                "camera binding "
+                + (expected_camera_profile_id or "not bound"),
+                "calibration binding "
+                + (expected_calibration_profile_id or "not bound"),
+                f"active calibration profile {active_calibration_profile_id}",
+            ]
+            if (
+                expected_camera_profile_id != active_calibration_profile_id
+                or expected_calibration_profile_id
+                != active_calibration_profile_id
+            ):
+                binding_parts.append("MISMATCH — review or redo calibration")
+            binding_status = " · ".join(binding_parts)
+        self.runtime_identity_status.setText(
+            f"Running now: {identity.machine_name} · machine profile "
+            f"{identity.machine_profile_id} · tool head "
+            f"{identity.tool_head_profile_id}\n{binding_status}"
+        )
+
+        try:
+            saved = self.runtime.machine_registry.get_machine(identity.machine_id)
+        except (AttributeError, MachineRegistryError) as exc:
+            self.saved_profile_binding_status.setText(
+                "Saved running-machine entry unavailable: " + str(exc)
+            )
+            self.bind_running_profile_button.setEnabled(False)
+            return
+        saved_matches_active = (
+            saved.camera_profile_id == active_calibration_profile_id
+            and saved.calibration_profile_id == active_calibration_profile_id
+        )
+        if saved_matches_active:
+            saved_status = (
+                "Saved binding for this machine: active optical profile "
+                f"{active_calibration_profile_id}. It takes effect only when this "
+                "saved machine is launched again."
+            )
+        else:
+            saved_status = (
+                "Saved binding for this machine: camera "
+                f"{saved.camera_profile_id or 'not bound'} · calibration "
+                f"{saved.calibration_profile_id or 'not bound'}. Binding the "
+                "active profile affects only a later launch of this saved machine."
+            )
+        self.saved_profile_binding_status.setText(saved_status)
+        self.bind_running_profile_button.setEnabled(not saved_matches_active)
+
+    def bind_active_profile_to_running_machine(self) -> None:
+        """Persist an explicit optical binding without changing this runtime."""
+
+        identity = self.context.machine_identity
+        active_profile_id = self.context.calibration_profiles.current.key
+        try:
+            saved = self.runtime.machine_registry.get_machine(identity.machine_id)
+        except (AttributeError, MachineRegistryError) as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Bind optical profile",
+                "The saved entry for the running machine is unavailable:\n" + str(exc),
+            )
+            return
+        if (
+            saved.machine_profile_id != identity.machine_profile_id
+            or saved.tool_head_profile_id != identity.tool_head_profile_id
+        ):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Bind optical profile",
+                "The saved machine profile identity no longer matches the running "
+                "process. No binding was changed.",
+            )
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Bind active optical profile",
+            "Bind the active optical/calibration profile\n\n"
+            f"{active_profile_id}\n\n"
+            f"to saved machine {identity.machine_name!r}?\n\n"
+            "This changes only the saved entry for a later launch of this same "
+            "machine. The current runtime identity and calibration authority stay "
+            "unchanged. No controller action or physical validation is performed.",
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.Cancel,
+            QtWidgets.QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        saved.camera_profile_id = active_profile_id
+        saved.calibration_profile_id = active_profile_id
+        try:
+            self.runtime.machine_registry.update_machine(saved)
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Bind optical profile",
+                str(exc),
+            )
+            return
+        self._refresh_running_machine_binding()
+        QtWidgets.QMessageBox.information(
+            self,
+            "Optical profile binding saved",
+            "The saved machine will use this binding when it is launched again. "
+            "The current runtime remains unchanged; complete and review all "
+            "calibration evidence before relying on coordinate output.",
+        )
+
     def refresh_all(self) -> None:
+        self._refresh_running_machine_binding()
         machine = self.context.machine.status()
         connected = bool(machine.get("connected"))
         reconnect_required = bool(
@@ -3231,18 +3380,25 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 f" and spot offset X{laser.spot_offset_x_mm:g}/"
                 f"Y{laser.spot_offset_y_mm:g}"
             )
-        self.work_area_reference_status.setText(
-            f"Camera/calibration map: X{area.x_min:g}..{area.x_max:g}, "
-            f"Y{area.y_min:g}..{area.y_max:g} mm\nGuarded laser output: "
-            "explicit 210 × 210 mm four-corner machine polygon"
-            if laser.guarded_output_polygon_mm is not None
-            else (
+        polygon = laser.guarded_output_polygon_mm
+        if polygon is not None:
+            polygon_x = [point[0] for point in polygon]
+            polygon_y = [point[1] for point in polygon]
+            output_status = (
+                f"Camera/work: X{area.x_min:g}..{area.x_max:g}, "
+                f"Y{area.y_min:g}..{area.y_max:g} mm\nGuarded laser output: "
+                f"explicit {len(polygon)}-point machine polygon with bounds "
+                f"X{min(polygon_x):g}..{max(polygon_x):g}, "
+                f"Y{min(polygon_y):g}..{max(polygon_y):g} mm"
+            )
+        else:
+            output_status = (
                 f"Camera/work: X{area.x_min:g}..{area.x_max:g}, "
                 f"Y{area.y_min:g}..{area.y_max:g} mm\nGuarded laser output after "
                 f"{margin:g} mm margin{offset_note}: X{output.x_min:g}.."
                 f"{output.x_max:g}, Y{output.y_min:g}..{output.y_max:g} mm"
             )
-        )
+        self.work_area_reference_status.setText(output_status)
         reference = self.context.honeycomb_support.reference
         configured_span = self.context.settings.machine.honeycomb_span_mm
         self.honeycomb_ruler_mark.setText(

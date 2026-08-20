@@ -109,6 +109,41 @@ def test_calibration_binding_mismatch_is_a_blocker(tmp_path: Path) -> None:
     assert any("Calibration binding mismatch" in item for item in status["blockers"])
 
 
+def test_unbound_profile_machine_cannot_inherit_honeycomb_support(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path, honeycomb_span_mm=190.0)
+    context = AppContext(
+        settings,
+        machine_identity=RunningMachineIdentity(
+            machine_id="new-profile-machine",
+            machine_name="New profile machine",
+            created_from="profile",
+            machine_profile_id="generic-marlin",
+            tool_head_profile_id="custom-laser-head",
+        ),
+    )
+    context.start()
+    try:
+        calibration = context.bed.calibration
+        assert calibration is not None
+        reference = _support(
+            span=190.0,
+            bed_created_at=calibration.created_at,
+        )
+        context.honeycomb_support.save(reference)
+
+        assert context.honeycomb_support.reference is not None
+        assert context._current_honeycomb_support() is None
+
+        active = context.calibration_profiles.current.key
+        context.expected_camera_profile_id = active
+        context.expected_calibration_profile_id = active
+        assert context._current_honeycomb_support() == reference
+    finally:
+        context.stop()
+
+
 def test_context_coordinate_audit_refresh_is_read_only(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
