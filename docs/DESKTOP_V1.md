@@ -35,15 +35,17 @@ geometry, G-code, safety and controller services.
   dimensions plus viewBox-only files (`96 CSS px = 1 in`), including transformed
   groups and `preserveAspectRatio` mapping. Imports remain centered at the
   requested project placement. CSS stylesheets, clipping, masks, and any lossy
-  parser warning stop the import before a project object is created.
+  parser warning stop the import before a project object is created. A bounded
+  manifest scan and explicit review precede the authoritative strict parse.
 - Native `.lbrn2` and legacy `.lbrn` vector-project import for rectangles,
   ellipses, transformed groups, line/Bezier paths, shared path data, and text
   with vector backup geometry. Referenced LightBurn layer modes and usable
   speed/power/pass/raster settings become ordinary E3 layers, always with
   output disabled until reviewed. Unsupported content stops rather than being
   silently discarded. See [LIGHTBURN_IMPORT.md](LIGHTBURN_IMPORT.md).
-- Shared window-modal pre-import review for LightBurn and bounded foreign
-  G-code. It presents the scan manifest's source, layer/operation, coordinate,
+- Shared window-modal pre-import review for SVG, raster images, LightBurn, and
+  bounded foreign G-code. It presents the scan manifest's source,
+  layer/operation, coordinate,
   warning, approximation, unsupported-feature, and error facts before strict
   import. Blockers disable **Import**; warning-only and valid manifests require
   explicit approval; Cancel leaves project and authoring state unchanged. Each

@@ -387,19 +387,21 @@ Desktop SVG import is fail-closed. Selector-based CSS, clip paths, masks,
 markers, dashed strokes, and geometry-changing CSS are rejected by the parser.
 Any remaining lossy warning, such as ignored text or embedded raster content,
 also stops desktop import before `SceneObject` creation. Operators must convert
-that content to explicit vector paths in the source editor.
+that content to explicit vector paths in the source editor. Its bounded scan
+uses the same capped parser to produce detached `SvgGeometry` facts without
+constructing a `SceneObject`; the strict loader reparses the approved bytes and
+remains authoritative for geometry.
 
-LightBurn and foreign-G-code desktop imports share a separate pre-import review
-boundary:
+SVG, raster-image, LightBurn, and foreign-G-code desktop imports share the
+pre-import review boundary:
 
 ```text
 selected foreign file
-  -> bounded scan_lightburn_file() or scan_gcode_file()
+  -> bounded format-specific scan_*_file()
   -> immutable ImportScanManifest + exact source-byte SHA-256
   -> bounded window-modal ImportReviewDialog and explicit non-blocked approval
-  -> authoritative load_*_project() re-read + SHA-256 match + strict scan/parse
-  -> detached layers and objects
-  -> one FunctionalCommand project commit
+  -> exact-byte verification + existing authoritative strict parse/probe
+  -> native E3 conversion and existing undoable commit path
 ```
 
 The review presents every manifest category, including discovered layers or
@@ -409,11 +411,12 @@ rows and 200 entries per repeated text section, with an exact omitted count;
 the immutable manifest remains complete. A blocked manifest cannot be accepted.
 Cancel occurs before the selection tool, project document, command stack,
 active layer, or selection is changed. The manifest is advisory rather than a
-geometry source: the existing strict loaders construct all imported E3 records
-and can still reject details not fully parsed by the bounded scan. They first
-verify that the bytes they read have the reviewed SHA-256, so changed content
-cannot be imported under stale approval. Both formats retain their existing
-one-step undo/redo transaction.
+geometry source: the existing strict parser/probe paths remain authoritative
+and can still reject details not fully established by the scan. They verify the
+bytes they consume have the reviewed SHA-256, so changed content cannot be
+imported under stale approval. SVG retains its one-object undo command;
+LightBurn and G-code retain one atomic import transaction; raster retains its
+existing object command and, when needed, preceding raster-layer command.
 
 `JobPlan` models the final stream rather than a second approximation of the
 project geometry. It records motion order, elapsed time, feed, controller power,
@@ -439,10 +442,14 @@ that lattice minifies the source, and converted with deterministic 8x8 ordered
 grayscale dithering. The source top edge follows the
 same positive-project-Y, mirror, and rotation transform shown by the canvas.
 One shared PNG/JPEG/BMP contract bounds encoded bytes, dimensions, bit depth,
-channels, and conservative decoded bytes before decode; TIFF is rejected.
-`read_raster_asset_payload` returns metadata, SHA-256 identity, and the exact
-bounded stable encoded bytes from one read, so Qt workspace pixels and toolpath
-identity cannot come from different file versions. Workspace items retain that
+channels, and conservative decoded bytes before decode; TIFF is rejected. The
+pre-import scan uses that encoded-payload/metadata contract without decoding
+pixels or constructing a project object, then reports pixel and display-sizing
+facts through the shared manifest. `read_raster_asset_payload` returns metadata,
+SHA-256 identity, and the exact bounded stable encoded bytes from one read, and
+can require the reviewed digest before desktop import proceeds. Qt workspace
+pixels and toolpath identity therefore cannot come from different file
+versions. Workspace items retain that
 displayed identity across unrelated project refreshes and share their decoded
 memory budget across current project sources. Project jobs carry exact raster
 identities for later authority checks and must match the canvas identities before

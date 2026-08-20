@@ -7,10 +7,8 @@ from typing import Any
 
 from ..camera import load_corrected_test_image
 from ..core import CoreRuntime
-from ..errors import SvgError
 from ..gcode.job_plan import build_job_plan, restart_program_from_move
 from ..geometry.polygon import normalize_convex_polygon
-from ..geometry.svg import parse_svg
 from ..identity import application_identity, application_window_title
 from ..materials import MaterialDatabase, MaterialPreset
 from ..planning import PlanningCache
@@ -18,6 +16,7 @@ from ..project import (
     GCODE_FILE_DIALOG_FILTER,
     LIGHTBURN_FILE_DIALOG_FILTER,
     RASTER_FILE_DIALOG_FILTER,
+    SVG_FILE_DIALOG_FILTER,
     AddLayerCommand,
     AddObjectCommand,
     AddObjectsCommand,
@@ -60,12 +59,15 @@ from ..project import (
     load_gcode_project,
     load_lightburn_project,
     load_project,
+    load_svg_project,
     mark_stock_boundary,
-    probe_raster_asset,
+    read_raster_asset_payload,
     save_autosave,
     save_project,
     scan_gcode_file,
     scan_lightburn_file,
+    scan_raster_file,
+    scan_svg_file,
     snap_selection_rotation_to_stock,
     stock_boundaries,
     verify_project_job_assets,
@@ -1874,19 +1876,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self,
             "Import SVG",
             str(Path.home()),
-            "Scalable Vector Graphics (*.svg)",
+            SVG_FILE_DIALOG_FILTER,
         )
         if not filename:
             return
         try:
-            svg_text = Path(filename).read_text(encoding="utf-8")
-            geometry = parse_svg(svg_text)
-            if geometry.warnings:
-                raise SvgError(
-                    "SVG import stopped because conversion would be incomplete: "
-                    + "; ".join(geometry.warnings)
-                    + ". Convert unsupported content to explicit vector paths and retry."
-                )
+            manifest = scan_svg_file(filename)
+        except Exception as exc:
+            self.show_error(f"Could not inspect SVG: {exc}")
+            return
+        if (
+            not review_import_manifest(manifest, self)
+            or not manifest.ready_for_parse
+        ):
+            return
+        try:
+            result = load_svg_project(
+                filename,
+                expected_source_sha256=manifest.source_sha256,
+            )
+            geometry = result.geometry
             polylines = [
                 {
                     "points": [[float(x), float(-y)] for x, y in line.points],
@@ -1897,10 +1906,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             item = SceneObject.path(
                 self.active_layer_id,
                 polylines,
-                name=Path(filename).stem,
+                name=Path(result.source_name).stem,
                 center=self._document_center(),
-                source_name=Path(filename).name,
-                source_svg=svg_text,
+                source_name=result.source_name,
+                source_svg=result.source_text,
             )
             self._add_object(item, "Import SVG")
         except Exception as exc:
@@ -2090,10 +2099,24 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if not filename:
             return
         try:
-            metadata = probe_raster_asset(filename)
-        except ValueError as exc:
+            manifest = scan_raster_file(filename)
+        except Exception as exc:
+            self.show_error(f"Could not inspect raster image: {exc}")
+            return
+        if (
+            not review_import_manifest(manifest, self)
+            or not manifest.ready_for_parse
+        ):
+            return
+        try:
+            payload = read_raster_asset_payload(
+                filename,
+                expected_source_sha256=manifest.source_sha256,
+            )
+        except Exception as exc:
             self.show_error(f"Could not import raster image: {exc}")
             return
+        metadata = payload.metadata
         image_size = QtCore.QSize(metadata.width, metadata.height)
         layer = self.document.get_layer(self.active_layer_id)
         if layer.mode != LayerMode.RASTER:
@@ -2102,6 +2125,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 color=self.document.next_layer_color(),
                 mode=LayerMode.RASTER,
                 priority=len(self.document.layers),
+                output_enabled=False,
             )
             self.history.execute(
                 AddLayerCommand(self.document, layer, description="Add raster layer")
