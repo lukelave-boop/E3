@@ -11,7 +11,7 @@ from ..core import CoreRuntime
 from ..gcode.job_plan import build_job_plan, restart_program_from_move
 from ..geometry.polygon import normalize_convex_polygon
 from ..identity import application_identity, application_window_title
-from ..materials import MaterialDatabase, MaterialPreset
+from ..materials import MaterialDatabase, MaterialPreset, builtin_material_presets
 from ..planning import PlanningCache
 from ..project import (
     GCODE_FILE_DIALOG_FILTER,
@@ -316,6 +316,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if application is not None:
             application.installEventFilter(self._wheel_guard)
         self.material_database = MaterialDatabase()
+        self.material_database.seed(builtin_material_presets())
         self.template_library = TemplateLibrary(
             self.runtime.settings.app.data_dir / "templates"
         )
@@ -432,6 +433,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
         document.layers = default_operation_layers()
         return document
+
+    def _running_material_profile_ids(self) -> tuple[str, str]:
+        """Return stable profiles from the running context, never next launch."""
+
+        identity = self.runtime.context.machine_identity
+        return (
+            identity.machine_profile_id,
+            identity.tool_head_profile_id,
+        )
 
     def _create_actions(self) -> None:
         style = self.style()
@@ -889,7 +899,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
             dict(self.runtime.settings.camera.controls)
         )
         self.machine_panel = MachinePanel()
-        self.material_panel = MaterialPanel(self.material_database)
+        machine_profile_id, tool_head_profile_id = (
+            E3MainWindow._running_material_profile_ids(self)
+        )
+        self.material_panel = MaterialPanel(
+            self.material_database,
+            machine_profile_id=machine_profile_id,
+            tool_head_profile_id=tool_head_profile_id,
+        )
         self.console_panel = ConsolePanel()
         self.job_panel = JobPanel()
         self.gcode_preview = QtWidgets.QPlainTextEdit()
@@ -922,7 +939,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.job_tabs.setTabPosition(QtWidgets.QTabWidget.TabPosition.South)
         self.job_tabs.add_panel("job", "Laser", self.job_panel)
         self.job_tabs.add_panel("machine", "Machine", self.machine_panel)
-        self.job_tabs.add_panel("materials", "Material Library", self.material_panel)
+        self.job_tabs.add_panel("materials", "Material Recipes", self.material_panel)
 
         right = QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         bottom = QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
@@ -1389,14 +1406,32 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
 
     def apply_material_preset(self, preset: MaterialPreset) -> None:
+        machine_profile_id, tool_head_profile_id = (
+            E3MainWindow._running_material_profile_ids(self)
+        )
+        compatibility = preset.compatibility(
+            machine_profile_id=machine_profile_id,
+            tool_head_profile_id=tool_head_profile_id,
+        )
+        if not compatibility.can_apply:
+            self.show_error(
+                f"Cannot apply {preset.material} \N{MIDDLE DOT} {preset.name}: "
+                f"the recipe is {compatibility.label.lower()} for the running "
+                "machine and tool-head profiles."
+            )
+            return
         layer = self.document.get_layer(self.active_layer_id)
-        replacement = preset.apply_to_layer(layer)
+        replacement = preset.apply_to_layer(
+            layer,
+            machine_profile_id=machine_profile_id,
+            tool_head_profile_id=tool_head_profile_id,
+        )
         self.history.execute(
             UpdateLayerCommand(
                 self.document,
                 layer.id,
                 replacement,
-                description=f"Apply {preset.material} preset",
+                description=f"Apply {preset.material} recipe",
             )
         )
         self._refresh_document(self.workspace.selected_object_ids())
@@ -4747,6 +4782,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         state = status.get("runtime_state", "unknown")
         camera = status.get("camera")
         machine = status.get("machine")
+        machine_profile_id, tool_head_profile_id = (
+            E3MainWindow._running_material_profile_ids(self)
+        )
+        self.material_panel.set_profile_context(
+            machine_profile_id,
+            tool_head_profile_id,
+        )
         self.camera_panel.set_status(camera)
         self.camera_panel.set_calibration_profile(status.get("calibration_profile"))
         calibration_ready = bool((status.get("bed") or {}).get("calibrated", False))

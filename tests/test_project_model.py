@@ -1,6 +1,7 @@
 
 import pytest
 
+from laser_aligner.materials import builtin_material_presets
 from laser_aligner.project import (
     Bounds,
     CoordinateSpace,
@@ -45,6 +46,71 @@ def test_e3_default_profiles_match_operator_workbook():
     ) == ("Opaque Black Acrylic — RASTER", 5000.0, 25.0, 0.08, 4.0)
     assert all(layer.vector_power_correction == 0 for layer in layers)
     assert all(layer.raster_power_correction == 0 for layer in layers)
+
+
+def test_curated_recipe_source_preserves_every_default_layer_field() -> None:
+    layers = default_operation_layers()
+    expected = [
+        ("Copy / Printer Paper — CUT", "#ED23D2", LayerMode.LINE, 1500.0, 100.0, 1, 0.10, 0.0, 2.5),
+        ("3 mm Basswood / Poplar Ply — CUT", "#F02C3D", LayerMode.LINE, 300.0, 100.0, 5, 0.10, 0.0, 2.5),
+        ("3 mm Birch Plywood — CUT", "#FF8A18", LayerMode.LINE, 220.0, 100.0, 7, 0.10, 0.0, 2.5),
+        ("3 mm MDF — CUT", "#E5DA19", LayerMode.LINE, 180.0, 100.0, 8, 0.10, 0.0, 2.5),
+        ("2 mm Opaque Black Acrylic — CUT", "#2DD12D", LayerMode.LINE, 180.0, 100.0, 8, 0.10, 0.0, 2.5),
+        ("2 mm Vegetable-Tanned Leather — CUT", "#185CFF", LayerMode.LINE, 450.0, 100.0, 4, 0.10, 0.0, 2.5),
+        ("1.5 mm Cardboard / Chipboard — CUT", "#A982E3", LayerMode.LINE, 900.0, 85.0, 2, 0.10, 0.0, 2.5),
+        ("Basswood / Poplar Ply — RASTER", "#F02C3D", LayerMode.RASTER, 4000.0, 35.0, 1, 0.10, 0.0, 3.0),
+        ("Birch Plywood — RASTER", "#FF8A18", LayerMode.RASTER, 3500.0, 32.0, 1, 0.10, 0.0, 3.0),
+        ("MDF — RASTER", "#E5DA19", LayerMode.RASTER, 4500.0, 22.0, 1, 0.10, 0.0, 3.0),
+        ("Opaque Black Acrylic — RASTER", "#2DD12D", LayerMode.RASTER, 5000.0, 25.0, 1, 0.08, 0.0, 4.0),
+        ("Vegetable-Tanned Leather — RASTER", "#185CFF", LayerMode.RASTER, 4500.0, 18.0, 1, 0.10, 0.0, 3.0),
+        ("Copy / Printer Paper — RASTER", "#ED23D2", LayerMode.RASTER, 6000.0, 12.0, 1, 0.10, 0.0, 3.0),
+    ]
+
+    assert [
+        (
+            layer.name,
+            layer.color,
+            layer.mode,
+            layer.speed_mm_min,
+            layer.power_percent,
+            layer.passes,
+            layer.line_interval_mm,
+            layer.scan_angle_deg,
+            layer.overscan_percent,
+        )
+        for layer in layers
+    ] == expected
+    assert [layer.priority for layer in layers] == list(range(13))
+    assert all(layer.vector_power_correction == 0.0 for layer in layers)
+    assert all(layer.raster_power_correction == 0.0 for layer in layers)
+    assert all(layer.air_assist is False for layer in layers)
+    assert all(layer.output_enabled is True for layer in layers)
+    assert all(layer.visible is True for layer in layers)
+
+
+def test_builtin_recipes_derive_all_controlled_values_from_default_layers() -> None:
+    layers = default_operation_layers()
+    recipes = builtin_material_presets()
+
+    assert len(recipes) == len(layers) == 13
+    assert len({recipe.builtin_key for recipe in recipes}) == 13
+    for layer, recipe in zip(layers, recipes, strict=True):
+        assert recipe.name == (
+            "Cut" if layer.mode is LayerMode.LINE else "Raster"
+        )
+        assert recipe.mode is layer.mode
+        assert recipe.speed_mm_min == layer.speed_mm_min
+        assert recipe.power_percent == layer.power_percent
+        assert recipe.passes == layer.passes
+        assert recipe.line_interval_mm == layer.line_interval_mm
+        assert recipe.scan_angle_deg == layer.scan_angle_deg
+        assert recipe.overscan_percent == layer.overscan_percent
+        assert recipe.vector_power_correction == layer.vector_power_correction
+        assert recipe.raster_power_correction == layer.raster_power_correction
+        assert recipe.air_assist is layer.air_assist
+        assert recipe.recommended_color == layer.color
+        assert recipe.machine_profile_id == "ender-3-s1-pro"
+        assert recipe.tool_head_profile_id == "generic-diode-10w"
 
 
 def test_transform_rotated_bounds_are_correct():

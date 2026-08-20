@@ -94,7 +94,11 @@ Native desktop workflow:
 - Mandatory window-modal exact-job Preview with a distinct **START JOB** gate,
   time scrubber, animated playback up to 40×, cut/travel visibility, power
   shading, live move coordinates, timing and distance statistics, and PNG export
-- SQLite material presets and camera focus/sharpness controls
+- Machine-aware SQLite material recipes with strict stable-profile
+  compatibility, complete one-step operation-layer application, and preserved
+  custom CRUD; recipes remain authoring aids and never become execution
+  authority
+- Camera focus/sharpness controls
 - Authenticated raw Live Monitor for Pi-hosted cameras, preferring exact source
   JPEG passthrough from the single-owner native Linux V4L2 backend and visibly
   falling back to 1280×720/10 fps transcoded JPEG when native capture is
@@ -235,7 +239,7 @@ The browser and native desktop applications run on Windows with the synthetic
 camera and simulated controller. The CI matrix collects and runs the portable
 suite on Windows as well as Linux. POSIX serial code is imported only if the
 serial backend is selected; Windows serial hardware, V4L2 camera controls, and
-install/launch scripts are not implemented. Autosaves and material presets use
+install/launch scripts are not implemented. Autosaves and material recipes use
 a writable OS-native per-user data root.
 
 GitHub Actions has two validation tiers. Pushes to `fix/**`, `feature/**`,
@@ -319,7 +323,7 @@ laser_aligner/
   geometry/      SVG parsing, curves, transforms, units
   gcode/         placement, validation, generation, preview parsing
   machine/       POSIX serial, simulator, controller safety service
-  materials/     SQLite material-preset library
+  materials/     SQLite material-recipe library and compatibility model
   project/       project model, history, persistence, alignment, toolpaths
   templates/     reusable templates, grid authoring, library, and rigid placement
   vision/        workpiece, fiducial, object tracing, and template alignment

@@ -1,8 +1,14 @@
 import sqlite3
+from dataclasses import replace
 
 import pytest
 
-from laser_aligner.materials import MaterialDatabase, MaterialPreset
+from laser_aligner.materials import (
+    MaterialCompatibility,
+    MaterialDatabase,
+    MaterialPreset,
+    builtin_material_presets,
+)
 from laser_aligner.project import LayerMode, OperationLayer
 
 
@@ -284,3 +290,443 @@ def test_material_database_rejects_malformed_persisted_rows(tmp_path, column, va
 
     with pytest.raises(ValueError):
         database.list()
+
+
+def test_material_preset_preserves_legacy_positional_argument_order() -> None:
+    preset = MaterialPreset(
+        "Wood",
+        "Legacy positional",
+        3.0,
+        LayerMode.FILL,
+        1234.0,
+        45.0,
+        2,
+        0.2,
+        -10.0,
+        20.0,
+        "Legacy notes",
+        42,
+    )
+
+    assert preset.vector_power_correction == -10.0
+    assert preset.raster_power_correction == 20.0
+    assert preset.notes == "Legacy notes"
+    assert preset.id == 42
+    assert preset.scan_angle_deg == 0.0
+
+
+@pytest.mark.parametrize(
+    ("preset_scope", "running_scope", "expected"),
+    [
+        (
+            ("ender-3-s1-pro", "generic-diode-10w"),
+            ("ender-3-s1-pro", "generic-diode-10w"),
+            MaterialCompatibility.EXACT_MACHINE_TOOL,
+        ),
+        (
+            ("ender-3-s1-pro", "generic-diode-10w"),
+            ("generic-grbl", "generic-diode-10w"),
+            MaterialCompatibility.INCOMPATIBLE,
+        ),
+        (
+            (None, "generic-diode-10w"),
+            ("generic-grbl", "generic-diode-10w"),
+            MaterialCompatibility.TOOL_ONLY,
+        ),
+        (
+            (None, "generic-diode-10w"),
+            ("generic-grbl", "custom-laser-head"),
+            MaterialCompatibility.INCOMPATIBLE,
+        ),
+        (
+            (None, None),
+            ("generic-grbl", "custom-laser-head"),
+            MaterialCompatibility.UNIVERSAL,
+        ),
+    ],
+)
+def test_material_compatibility_is_strict_and_deterministic(
+    preset_scope: tuple[str | None, str | None],
+    running_scope: tuple[str | None, str | None],
+    expected: MaterialCompatibility,
+) -> None:
+    preset = MaterialPreset(
+        material="Wood",
+        name="Recipe",
+        machine_profile_id=preset_scope[0],
+        tool_head_profile_id=preset_scope[1],
+    )
+
+    compatibility = preset.compatibility(*running_scope)
+
+    assert compatibility is expected
+    assert compatibility.can_apply is (expected is not MaterialCompatibility.INCOMPATIBLE)
+    assert compatibility.label
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("machine_profile_id", "Ender-3-S1-Pro"),
+        ("machine_profile_id", " ender-3-s1-pro"),
+        ("tool_head_profile_id", "generic diode"),
+        ("tool_head_profile_id", ""),
+    ],
+)
+def test_material_preset_rejects_noncanonical_profile_ids(field, value) -> None:
+    payload = {
+        "material": "Wood",
+        "name": "Invalid scope",
+        "tool_head_profile_id": "generic-diode-10w",
+        field: value,
+    }
+
+    with pytest.raises(ValueError, match="canonical profile ID"):
+        MaterialPreset(**payload)
+
+
+def test_material_preset_rejects_machine_only_scope() -> None:
+    with pytest.raises(ValueError, match="must also specify a tool-head"):
+        MaterialPreset(
+            material="Wood",
+            name="Machine only",
+            machine_profile_id="ender-3-s1-pro",
+        )
+
+
+def test_material_preset_applies_complete_settings_without_scaling_or_enabling() -> None:
+    layer = OperationLayer(
+        id="layer-existing",
+        name="Hand-edited name",
+        color="#E35D6A",
+        mode=LayerMode.LINE,
+        speed_mm_min=777.0,
+        power_percent=7.0,
+        passes=7,
+        line_interval_mm=0.7,
+        scan_angle_deg=-45.0,
+        overscan_percent=8.0,
+        vector_power_correction=-8.0,
+        raster_power_correction=9.0,
+        air_assist=False,
+        output_enabled=False,
+        visible=False,
+        priority=9,
+    )
+    preset = MaterialPreset(
+        material="Wood",
+        name="Raster",
+        mode=LayerMode.RASTER,
+        speed_mm_min=4321.0,
+        power_percent=67.0,
+        passes=3,
+        line_interval_mm=0.08,
+        scan_angle_deg=37.0,
+        overscan_percent=6.5,
+        vector_power_correction=-12.0,
+        raster_power_correction=23.0,
+        air_assist=True,
+        recommended_color="#a1b2c3",
+        machine_profile_id="ender-3-s1-pro",
+        tool_head_profile_id="generic-diode-10w",
+    )
+
+    updated = preset.apply_to_layer(
+        layer,
+        machine_profile_id="ender-3-s1-pro",
+        tool_head_profile_id="generic-diode-10w",
+    )
+
+    assert updated.id == "layer-existing"
+    assert updated.name == "Hand-edited name"
+    assert updated.color == "#A1B2C3"
+    assert updated.mode is LayerMode.RASTER
+    assert updated.speed_mm_min == 4321.0
+    assert updated.power_percent == 67.0
+    assert updated.passes == 3
+    assert updated.line_interval_mm == 0.08
+    assert updated.scan_angle_deg == 37.0
+    assert updated.overscan_percent == 6.5
+    assert updated.vector_power_correction == -12.0
+    assert updated.raster_power_correction == 23.0
+    assert updated.air_assist is True
+    assert updated.output_enabled is False
+    assert updated.visible is False
+    assert updated.priority == 9
+
+    with pytest.raises(ValueError, match="incompatible"):
+        preset.apply_to_layer(
+            layer,
+            machine_profile_id="generic-grbl",
+            tool_head_profile_id="generic-diode-10w",
+        )
+
+
+def test_material_database_migrates_old_schema_losslessly_and_idempotently(
+    tmp_path,
+) -> None:
+    path = tmp_path / "old-materials.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE material_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material TEXT NOT NULL,
+                name TEXT NOT NULL,
+                thickness_mm REAL,
+                mode TEXT NOT NULL,
+                speed_mm_min REAL NOT NULL,
+                power_percent REAL NOT NULL,
+                passes INTEGER NOT NULL,
+                line_interval_mm REAL NOT NULL,
+                vector_power_correction REAL NOT NULL DEFAULT 0,
+                raster_power_correction REAL NOT NULL DEFAULT 0,
+                notes TEXT NOT NULL DEFAULT '',
+                UNIQUE(material, name, thickness_mm)
+            )
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO material_presets (
+                id, material, name, thickness_mm, mode, speed_mm_min,
+                power_percent, passes, line_interval_mm,
+                vector_power_correction, raster_power_correction, notes
+            ) VALUES (17, 'Birch', 'Legacy', 3.0, 'fill', 987.5,
+                      23.5, 4, 0.125, -7.5, 8.5, 'keep exactly')
+            """
+        )
+
+    first = MaterialDatabase(path)
+    migrated = first.get(17)
+    first_payload = migrated
+    second = MaterialDatabase(path)
+
+    assert second.get(17) == first_payload
+    assert migrated.material == "Birch"
+    assert migrated.name == "Legacy"
+    assert migrated.thickness_mm == 3.0
+    assert migrated.mode is LayerMode.FILL
+    assert migrated.speed_mm_min == 987.5
+    assert migrated.power_percent == 23.5
+    assert migrated.passes == 4
+    assert migrated.line_interval_mm == 0.125
+    assert migrated.vector_power_correction == -7.5
+    assert migrated.raster_power_correction == 8.5
+    assert migrated.notes == "keep exactly"
+    assert migrated.scan_angle_deg == 0.0
+    assert migrated.overscan_percent == 2.5
+    assert migrated.air_assist is False
+    assert migrated.recommended_color is None
+    assert migrated.machine_profile_id is None
+    assert migrated.tool_head_profile_id is None
+    with sqlite3.connect(path) as connection:
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT COUNT(*) FROM material_presets"
+        ).fetchone()[0] == 1
+
+
+def test_material_database_migration_preserves_legacy_null_thickness_duplicates(
+    tmp_path,
+) -> None:
+    path = tmp_path / "legacy-null-duplicates.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE material_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material TEXT NOT NULL,
+                name TEXT NOT NULL,
+                thickness_mm REAL,
+                mode TEXT NOT NULL,
+                speed_mm_min REAL NOT NULL,
+                power_percent REAL NOT NULL,
+                passes INTEGER NOT NULL,
+                line_interval_mm REAL NOT NULL,
+                notes TEXT NOT NULL DEFAULT '',
+                UNIQUE(material, name, thickness_mm)
+            )
+            """
+        )
+        connection.executemany(
+            """
+            INSERT INTO material_presets (
+                id, material, name, thickness_mm, mode, speed_mm_min,
+                power_percent, passes, line_interval_mm, notes
+            ) VALUES (?, 'Paper', 'Mark', NULL, 'line', ?, 10, 1, 0.1, ?)
+            """,
+            ((4, 1000, "first"), (9, 1100, "second")),
+        )
+
+    migrated = MaterialDatabase(path).list()
+
+    assert [preset.id for preset in migrated] == [4, 9]
+    assert [preset.speed_mm_min for preset in migrated] == [1000.0, 1100.0]
+    assert [preset.notes for preset in migrated] == ["first", "second"]
+
+    migrated[0].speed_mm_min = 1200.0
+    updated = MaterialDatabase(path).save(migrated[0])
+    assert updated.id == 4
+    assert updated.speed_mm_min == 1200.0
+    assert [preset.id for preset in MaterialDatabase(path).list()] == [4, 9]
+
+
+@pytest.mark.parametrize(
+    "schema_change",
+    [
+        "ALTER TABLE material_presets DROP COLUMN notes",
+        "ALTER TABLE material_presets ADD COLUMN mystery TEXT",
+    ],
+)
+def test_material_database_migration_fails_closed_for_unknown_schema(
+    tmp_path,
+    schema_change: str,
+) -> None:
+    path = tmp_path / "unsafe-schema.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            """
+            CREATE TABLE material_presets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material TEXT NOT NULL,
+                name TEXT NOT NULL,
+                thickness_mm REAL,
+                mode TEXT NOT NULL,
+                speed_mm_min REAL NOT NULL,
+                power_percent REAL NOT NULL,
+                passes INTEGER NOT NULL,
+                line_interval_mm REAL NOT NULL,
+                notes TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        connection.execute(schema_change)
+
+    with pytest.raises(ValueError, match="Cannot safely migrate"):
+        MaterialDatabase(path)
+
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall() == [("material_presets",), ("sqlite_sequence",)]
+
+
+def test_material_database_rejects_newer_schema(tmp_path) -> None:
+    path = tmp_path / "newer.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute("PRAGMA user_version = 99")
+
+    with pytest.raises(ValueError, match="newer"):
+        MaterialDatabase(path)
+
+
+def test_scoped_presets_can_coexist_and_are_sorted_by_compatibility(tmp_path) -> None:
+    database = MaterialDatabase(tmp_path / "scopes.sqlite")
+    common = {
+        "material": "Birch",
+        "name": "Cut",
+        "thickness_mm": 3.0,
+    }
+    incompatible = database.save(
+        MaterialPreset(
+            **common,
+            machine_profile_id="generic-grbl",
+            tool_head_profile_id="custom-laser-head",
+        )
+    )
+    universal = database.save(MaterialPreset(**common))
+    tool = database.save(
+        MaterialPreset(**common, tool_head_profile_id="generic-diode-10w")
+    )
+    exact = database.save(
+        MaterialPreset(
+            **common,
+            machine_profile_id="ender-3-s1-pro",
+            tool_head_profile_id="generic-diode-10w",
+        )
+    )
+
+    ordered = database.list_for_profiles(
+        machine_profile_id="ender-3-s1-pro",
+        tool_head_profile_id="generic-diode-10w",
+    )
+
+    assert [item.id for item in ordered] == [
+        exact.id,
+        tool.id,
+        universal.id,
+        incompatible.id,
+    ]
+    assert [
+        item.compatibility("ender-3-s1-pro", "generic-diode-10w")
+        for item in ordered
+    ] == [
+        MaterialCompatibility.EXACT_MACHINE_TOOL,
+        MaterialCompatibility.TOOL_ONLY,
+        MaterialCompatibility.UNIVERSAL,
+        MaterialCompatibility.INCOMPATIBLE,
+    ]
+    with pytest.raises(sqlite3.IntegrityError):
+        database.save(
+            MaterialPreset(
+                **common,
+                machine_profile_id="ender-3-s1-pro",
+                tool_head_profile_id="generic-diode-10w",
+            )
+        )
+
+    exact.speed_mm_min = 765.0
+    exact.notes = "Scoped update"
+    updated = database.save(exact)
+    assert updated.speed_mm_min == 765.0
+    assert updated.notes == "Scoped update"
+    assert updated.machine_profile_id == "ender-3-s1-pro"
+    database.delete(incompatible.id)
+    reopened = MaterialDatabase(database.path)
+    assert {preset.id for preset in reopened.list()} == {
+        universal.id,
+        tool.id,
+        exact.id,
+    }
+
+
+def test_builtin_seed_is_insert_only_and_remembers_edits_and_deletion(tmp_path) -> None:
+    path = tmp_path / "seed.sqlite"
+    database = MaterialDatabase(path)
+    builtins = builtin_material_presets()
+
+    assert database.seed(builtins) == 13
+    assert database.seed(builtins) == 0
+    seeded = database.list()[0]
+    edited = replace(
+        seeded,
+        speed_mm_min=seeded.speed_mm_min + 123.0,
+        builtin_key=None,
+    )
+    saved = database.save(edited)
+    original_key = seeded.builtin_key
+
+    assert saved.builtin_key == original_key
+    assert MaterialDatabase(path).seed(builtin_material_presets()) == 0
+    assert MaterialDatabase(path).get(seeded.id).speed_mm_min == edited.speed_mm_min
+
+    MaterialDatabase(path).delete(seeded.id)
+    reopened = MaterialDatabase(path)
+    assert reopened.seed(builtin_material_presets()) == 0
+    assert len(reopened.list()) == 12
+
+
+def test_builtin_seed_never_replaces_user_row_with_same_scoped_identity(
+    tmp_path,
+) -> None:
+    database = MaterialDatabase(tmp_path / "occupied-seed.sqlite")
+    builtin = builtin_material_presets()[0]
+    custom = database.save(replace(builtin, builtin_key=None, speed_mm_min=42.0))
+
+    assert database.seed([builtin]) == 0
+    assert database.get(custom.id).speed_mm_min == 42.0
+
+    database.delete(custom.id)
+    assert MaterialDatabase(database.path).seed([builtin]) == 0
+    assert MaterialDatabase(database.path).list() == []

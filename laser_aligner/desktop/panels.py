@@ -2798,15 +2798,24 @@ class MaterialPanel(QtWidgets.QWidget):
     notice = QtCore.Signal(str)
     error = QtCore.Signal(str)
 
-    def __init__(self, database: object, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        database: object,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        machine_profile_id: str | None = None,
+        tool_head_profile_id: str | None = None,
+    ) -> None:
         super().__init__(parent)
         self.database = database
         self._updating = False
         self._current_id: int | None = None
+        self._machine_profile_id = machine_profile_id
+        self._tool_head_profile_id = tool_head_profile_id
 
         layout = _panel_layout(self)
         self.search = QtWidgets.QLineEdit()
-        self.search.setPlaceholderText("Search material presets")
+        self.search.setPlaceholderText("Search material recipes")
         layout.addWidget(self.search)
         self.list = QtWidgets.QListWidget()
         self.list.setAlternatingRowColors(True)
@@ -2836,6 +2845,15 @@ class MaterialPanel(QtWidgets.QWidget):
         self.interval_spin.setRange(0.001, 100.0)
         self.interval_spin.setDecimals(3)
         self.interval_spin.setSuffix(" mm")
+        self.scan_angle_spin = QtWidgets.QDoubleSpinBox()
+        self.scan_angle_spin.setRange(-360.0, 360.0)
+        self.scan_angle_spin.setDecimals(1)
+        self.scan_angle_spin.setSuffix("\N{DEGREE SIGN}")
+        self.overscan_spin = QtWidgets.QDoubleSpinBox()
+        self.overscan_spin.setRange(0.0, 100.0)
+        self.overscan_spin.setDecimals(2)
+        self.overscan_spin.setSuffix(" %")
+        self.air_assist_check = QtWidgets.QCheckBox("Use air assist")
         self.vector_correction_spin = QtWidgets.QDoubleSpinBox()
         self.vector_correction_spin.setRange(-100.0, 100.0)
         self.vector_correction_spin.setSuffix(" %")
@@ -2848,25 +2866,46 @@ class MaterialPanel(QtWidgets.QWidget):
         self.raster_correction_spin.setToolTip(
             "Material-specific commanded-power bias near raster reversals"
         )
+        self.recommended_color_edit = QtWidgets.QLineEdit()
+        self.recommended_color_edit.setPlaceholderText("Keep current layer color")
+        self.recommended_color_edit.setToolTip(
+            "Optional #RRGGBB authoring color to use when this recipe is applied"
+        )
+        self.machine_scope_edit = QtWidgets.QLineEdit()
+        self.machine_scope_edit.setPlaceholderText("Universal / no machine scope")
+        self.machine_scope_edit.setToolTip(
+            "Optional stable machine profile ID; exact matches only"
+        )
+        self.tool_scope_edit = QtWidgets.QLineEdit()
+        self.tool_scope_edit.setPlaceholderText("Universal / no tool-head scope")
+        self.tool_scope_edit.setToolTip(
+            "Optional stable tool-head profile ID; exact matches only"
+        )
         self.notes_edit = QtWidgets.QPlainTextEdit()
         self.notes_edit.setMaximumHeight(80)
         _form_row(form, "Material", self.material_edit)
-        _form_row(form, "Preset", self.name_edit)
+        _form_row(form, "Recipe", self.name_edit)
         _form_row(form, "Thickness", self.thickness_spin)
         _form_row(form, "Mode", self.mode_combo)
         _form_row(form, "Speed", self.speed_spin)
         _form_row(form, "Power", self.power_spin)
         _form_row(form, "Passes", self.passes_spin)
         _form_row(form, "Line interval", self.interval_spin)
+        _form_row(form, "Scan angle", self.scan_angle_spin)
+        _form_row(form, "Overscan", self.overscan_spin)
+        _form_row(form, "Air assist", self.air_assist_check)
         _form_row(form, "Vector correction", self.vector_correction_spin)
         _form_row(form, "Raster correction", self.raster_correction_spin)
+        _form_row(form, "Recommended color", self.recommended_color_edit)
+        _form_row(form, "Machine profile", self.machine_scope_edit)
+        _form_row(form, "Tool-head profile", self.tool_scope_edit)
         _form_row(form, "Notes", self.notes_edit)
         layout.addLayout(form)
 
         actions = QtWidgets.QGridLayout()
         self.new_button = QtWidgets.QPushButton("New")
         self.save_button = QtWidgets.QPushButton("Save")
-        self.apply_button = QtWidgets.QPushButton("Apply to active layer")
+        self.apply_button = QtWidgets.QPushButton("Apply recipe to active layer")
         self.delete_button = QtWidgets.QPushButton("Delete")
         actions.addWidget(self.new_button, 0, 0)
         actions.addWidget(self.save_button, 0, 1)
@@ -2880,15 +2919,56 @@ class MaterialPanel(QtWidgets.QWidget):
         self.save_button.clicked.connect(self.save_current)
         self.apply_button.clicked.connect(self.apply_current)
         self.delete_button.clicked.connect(self.delete_current)
+        self.machine_scope_edit.textChanged.connect(self._update_apply_state)
+        self.tool_scope_edit.textChanged.connect(self._update_apply_state)
         self.refresh()
         self.clear_form()
+
+    def set_profile_context(
+        self,
+        machine_profile_id: str | None,
+        tool_head_profile_id: str | None,
+    ) -> None:
+        """Refresh recipe compatibility for the immutable running profiles."""
+
+        machine_profile_id = machine_profile_id or None
+        tool_head_profile_id = tool_head_profile_id or None
+        if (
+            machine_profile_id == self._machine_profile_id
+            and tool_head_profile_id == self._tool_head_profile_id
+        ):
+            return
+        self._machine_profile_id = machine_profile_id
+        self._tool_head_profile_id = tool_head_profile_id
+        self.refresh()
+        self._update_apply_state()
+
+    @staticmethod
+    def _scope_text(preset: object) -> str:
+        machine_profile_id = preset.machine_profile_id
+        tool_head_profile_id = preset.tool_head_profile_id
+        if machine_profile_id is not None:
+            return f"machine {machine_profile_id} + tool {tool_head_profile_id}"
+        if tool_head_profile_id is not None:
+            return f"tool {tool_head_profile_id}"
+        return "universal"
+
+    def _compatibility(self, preset: object) -> object:
+        return preset.compatibility(
+            machine_profile_id=self._machine_profile_id,
+            tool_head_profile_id=self._tool_head_profile_id,
+        )
 
     def refresh(self, *args: Any) -> None:
         del args
         try:
-            presets = self.database.list(self.search.text())
+            presets = self.database.list_for_profiles(
+                machine_profile_id=self._machine_profile_id,
+                tool_head_profile_id=self._tool_head_profile_id,
+                search=self.search.text(),
+            )
         except Exception as exc:
-            self.error.emit(f"Could not load material presets: {exc}")
+            self.error.emit(f"Could not load material recipes: {exc}")
             return
         current_id = self._current_id
         self._updating = True
@@ -2896,12 +2976,27 @@ class MaterialPanel(QtWidgets.QWidget):
             self.list.clear()
             current_row = -1
             for row, preset in enumerate(presets):
-                thickness = "any thickness" if preset.thickness_mm is None else f"{preset.thickness_mm:g} mm"
+                thickness = (
+                    "any thickness"
+                    if preset.thickness_mm is None
+                    else f"{preset.thickness_mm:g} mm"
+                )
+                compatibility = self._compatibility(preset)
                 item = QtWidgets.QListWidgetItem(
                     f"{preset.material} · {preset.name}\n"
-                    f"{thickness} · {preset.speed_mm_min:g} mm/min · {preset.power_percent:g}%"
+                    f"{thickness} · {preset.mode.value.title()} · "
+                    f"{preset.speed_mm_min:g} mm/min · {preset.power_percent:g}% · "
+                    f"{preset.passes} pass{'es' if preset.passes != 1 else ''}\n"
+                    f"{compatibility.label} · {self._scope_text(preset)}"
                 )
                 item.setData(QtCore.Qt.ItemDataRole.UserRole, preset.id)
+                item.setData(QtCore.Qt.ItemDataRole.UserRole + 1, compatibility.value)
+                if not compatibility.can_apply:
+                    item.setForeground(QtGui.QColor("#9A9A9A"))
+                item.setToolTip(
+                    f"Compatibility: {compatibility.label}\n"
+                    f"Scope: {self._scope_text(preset)}"
+                )
                 self.list.addItem(item)
                 if preset.id == current_id:
                     current_row = row
@@ -2909,6 +3004,7 @@ class MaterialPanel(QtWidgets.QWidget):
                 self.list.setCurrentRow(current_row)
         finally:
             self._updating = False
+        self._update_apply_state()
 
     def clear_form(self) -> None:
         self._current_id = None
@@ -2916,18 +3012,25 @@ class MaterialPanel(QtWidgets.QWidget):
         try:
             self.list.clearSelection()
             self.material_edit.setText("Material")
-            self.name_edit.setText("Preset")
+            self.name_edit.setText("Recipe")
             self.thickness_spin.setValue(-1.0)
             self.mode_combo.setCurrentIndex(self.mode_combo.findData(LayerMode.LINE.value))
             self.speed_spin.setValue(2000.0)
             self.power_spin.setValue(10.0)
             self.passes_spin.setValue(1)
             self.interval_spin.setValue(0.10)
+            self.scan_angle_spin.setValue(0.0)
+            self.overscan_spin.setValue(2.5)
+            self.air_assist_check.setChecked(False)
             self.vector_correction_spin.setValue(0.0)
             self.raster_correction_spin.setValue(0.0)
+            self.recommended_color_edit.clear()
+            self.machine_scope_edit.clear()
+            self.tool_scope_edit.clear()
             self.notes_edit.clear()
         finally:
             self._updating = False
+        self._update_apply_state()
 
     def _selection_changed(
         self,
@@ -2941,10 +3044,11 @@ class MaterialPanel(QtWidgets.QWidget):
         try:
             preset = self.database.get(preset_id)
         except Exception as exc:
-            self.error.emit(f"Could not load material preset: {exc}")
+            self.error.emit(f"Could not load material recipe: {exc}")
             return
         self._current_id = preset.id
         self._show_preset(preset)
+        self._update_apply_state()
 
     def _show_preset(self, preset: object) -> None:
         self._updating = True
@@ -2957,8 +3061,14 @@ class MaterialPanel(QtWidgets.QWidget):
             self.power_spin.setValue(preset.power_percent)
             self.passes_spin.setValue(preset.passes)
             self.interval_spin.setValue(preset.line_interval_mm)
+            self.scan_angle_spin.setValue(preset.scan_angle_deg)
+            self.overscan_spin.setValue(preset.overscan_percent)
+            self.air_assist_check.setChecked(preset.air_assist)
             self.vector_correction_spin.setValue(preset.vector_power_correction)
             self.raster_correction_spin.setValue(preset.raster_power_correction)
+            self.recommended_color_edit.setText(preset.recommended_color or "")
+            self.machine_scope_edit.setText(preset.machine_profile_id or "")
+            self.tool_scope_edit.setText(preset.tool_head_profile_id or "")
             self.notes_edit.setPlainText(preset.notes)
         finally:
             self._updating = False
@@ -2977,26 +3087,50 @@ class MaterialPanel(QtWidgets.QWidget):
             power_percent=self.power_spin.value(),
             passes=self.passes_spin.value(),
             line_interval_mm=self.interval_spin.value(),
+            scan_angle_deg=self.scan_angle_spin.value(),
+            overscan_percent=self.overscan_spin.value(),
+            air_assist=self.air_assist_check.isChecked(),
             vector_power_correction=self.vector_correction_spin.value(),
             raster_power_correction=self.raster_correction_spin.value(),
+            recommended_color=self.recommended_color_edit.text().strip() or None,
+            machine_profile_id=self.machine_scope_edit.text().strip() or None,
+            tool_head_profile_id=self.tool_scope_edit.text().strip() or None,
             notes=self.notes_edit.toPlainText(),
         )
+
+    def _update_apply_state(self, *args: Any) -> None:
+        del args
+        if self._updating:
+            return
+        try:
+            can_apply = self._compatibility(self._form_preset()).can_apply
+        except (TypeError, ValueError):
+            can_apply = False
+        self.apply_button.setEnabled(can_apply)
 
     def save_current(self) -> None:
         try:
             preset = self.database.save(self._form_preset())
         except Exception as exc:
-            self.error.emit(f"Could not save material preset: {exc}")
+            self.error.emit(f"Could not save material recipe: {exc}")
             return
         self._current_id = preset.id
         self.refresh()
-        self.notice.emit(f"Saved material preset {preset.material} · {preset.name}")
+        self.notice.emit(f"Saved material recipe {preset.material} · {preset.name}")
 
     def apply_current(self) -> None:
         try:
             preset = self._form_preset()
         except Exception as exc:
-            self.error.emit(f"Invalid material preset: {exc}")
+            self.error.emit(f"Invalid material recipe: {exc}")
+            return
+        compatibility = self._compatibility(preset)
+        if not compatibility.can_apply:
+            self.error.emit(
+                f"Cannot apply this material recipe: {compatibility.label} "
+                "for the running machine and tool-head profiles"
+            )
+            self._update_apply_state()
             return
         self.applyPresetRequested.emit(preset)
 
@@ -3006,8 +3140,8 @@ class MaterialPanel(QtWidgets.QWidget):
         try:
             self.database.delete(self._current_id)
         except Exception as exc:
-            self.error.emit(f"Could not delete material preset: {exc}")
+            self.error.emit(f"Could not delete material recipe: {exc}")
             return
         self.clear_form()
         self.refresh()
-        self.notice.emit("Material preset deleted")
+        self.notice.emit("Material recipe deleted")

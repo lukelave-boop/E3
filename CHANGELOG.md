@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Extended the existing `MaterialPreset` / SQLite `MaterialDatabase` into a
+  machine-aware material-recipe library without adding recipe identity to
+  projects or execution. Recipes now carry the complete operation authoring
+  settings, optional exact stable machine/tool-head profile scope, and an
+  optional recommended operation color. Exact machine/tool, tool-only, and
+  universal recipes are prioritized deterministically; incompatible recipes
+  remain visible for CRUD but cannot be applied. Applying a compatible recipe
+  is one undoable layer update, performs no scaling, preserves the layer ID,
+  name, visibility, priority, and output-enabled state, and never contacts
+  hardware. The legacy SQLite table migrates transactionally in place with old
+  rows retained as universal recipes, while the existing 13 E3 10 W new-project
+  operations and seeded built-ins now derive from one curated value source.
+  Structured preflight, exact planning, `MachineService`, arming, motion, and
+  project-schema authority remain unchanged.
+
 - Added a Qt-neutral structured job-preflight report before native desktop
   project generation. Stable coded info, warning, and blocker findings summarize
   existing work-area, coordinate/calibration/support binding, output/settings,

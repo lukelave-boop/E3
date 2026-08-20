@@ -847,7 +847,10 @@ def _window(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[E3MainWindow, list[str], list[str]]:
-    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    user_data_root = tmp_path / "user-data"
+    monkeypatch.setenv("XDG_DATA_HOME", str(user_data_root))
+    monkeypatch.setenv("LOCALAPPDATA", str(user_data_root))
+    monkeypatch.setenv("APPDATA", str(user_data_root))
     monkeypatch.setattr(
         main_window_module,
         "build_job_preflight_report",
