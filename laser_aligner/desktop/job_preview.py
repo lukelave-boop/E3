@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..gcode.job_plan import JobPlan, PlannedMove
+from ..project.job_preflight import JobPreflightReport
+from .job_preflight import JobPreflightView
 from .qt import require_qt
 
 if TYPE_CHECKING:
@@ -604,11 +606,13 @@ class JobPreviewDialog(QtWidgets.QDialog):
         max_work_feed_mm_min: float | None = None,
         max_travel_feed_mm_min: float | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
+        preflight_report: JobPreflightReport | None = None,
     ) -> None:
         super().__init__(parent)
         self.plan = plan
         self.prepared = prepared or prepare_job_preview(plan)
         self.coordinate_frame = coordinate_frame
+        self.preflight_report = preflight_report
         self.max_work_feed_mm_min = max_work_feed_mm_min
         self.max_travel_feed_mm_min = max_travel_feed_mm_min
         self._deferred_render = bool(defer_render)
@@ -692,6 +696,13 @@ class JobPreviewDialog(QtWidgets.QDialog):
         side_layout = QtWidgets.QVBoxLayout(side_page)
         side_layout.setContentsMargins(4, 0, 4, 0)
         side_layout.setSpacing(6)
+
+        self.preflight_view: JobPreflightView | None = None
+        if preflight_report is not None:
+            self.preflight_view = JobPreflightView(preflight_report, side_page)
+            self.preflight_view.findings_tree.setMinimumHeight(150)
+            self.preflight_view.findings_tree.setMaximumHeight(220)
+            side_layout.addWidget(self.preflight_view)
 
         self.layer_tree = self._build_layer_tree()
         side_layout.addWidget(self.layer_tree)

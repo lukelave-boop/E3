@@ -5,7 +5,52 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-19**
+Snapshot: **2026-08-20**
+
+The desktop project pipeline now has a Qt-neutral **structured job preflight**
+before exact toolpath generation. `PreflightSeverity`, `PreflightFinding`,
+`PreflightCounts`, and `JobPreflightReport` expose deterministic dotted finding
+codes, structured context, severity counts, and one derived ready/blocker result.
+`build_job_preflight_report()` inspects a detached `ProjectDocument` snapshot
+against a detached `JobPreflightContext`; it does not flatten vector geometry,
+decode raster pixels, build G-code, create Qt objects, contact a controller, or
+change machine authority.
+
+The report projects existing preparation rules rather than defining a second
+planner. It covers project-versus-machine work-area agreement, machine versus
+honeycomb-local coordinate authority, execution-grade support/frame and output-
+polygon binding, calibration-profile identity, read-only bed-calibration
+validity and honeycomb-support CURRENT state, layer/object/output eligibility,
+operation-setting validity, configured machine work/travel feed ceilings,
+bounded raster headers and aggregate resource limits, and known execution-
+readiness facts. A stale bed calibration or support state blocks honeycomb-local
+generation. Only provably exact local bounds for unrounded rectangles and valid
+two-point lines become structured bounds blockers. Rounded rectangles, ellipses,
+images, paths, and other complex geometry remain deferred with vector
+flattening, fill/raster construction, placement, laser-spot correction, final
+bounds, exact raster identity/decode, stream construction, and command
+validation to the authoritative planner and guarded machine path.
+
+Desktop Generate now runs snapshot, structured preflight, exact planning, and
+Preview preparation under the existing owner-tokened asynchronous lifecycle. A
+blocking report stops before `generate_project_gcode()` and opens a reusable,
+non-modal structured findings dialog after releasing preparation ownership.
+Ready and warning-only reports continue into exact planning and are embedded in
+the window-modal exact Preview; warnings remain visible and non-blocking. The
+view bounds rendered findings and structured context without truncating the
+immutable report. STOP, project replacement, revision changes, and authority
+changes retain their existing cancellation/stale-result behavior.
+
+Focused Windows Python 3.13 verification passed **57 tests** across the core
+report, reusable offscreen Qt view, embedded Preview, and planning-cache
+contract; **64 tests** across the full desktop asynchronous job lifecycle;
+**159 tests** across toolpath, JobPlan, staged planning, dependency digests,
+cache behavior, and deterministic planning goldens; and **251 tests** across
+raster assets, coordinate audit, calibration provenance/profiles, and
+`MachineService` safety. Repository-wide Ruff, `compileall`, and final diff
+checks are clean. This increment has no interactive GUI or physical controller,
+motion, camera, arming, or laser verification and does not change their
+authority or behavior.
 
 The planner now has a behavior-preserving typed-stage spine for LINE output:
 `SceneRevision -> NormalizedGeometryArtifact -> OperationArtifact ->

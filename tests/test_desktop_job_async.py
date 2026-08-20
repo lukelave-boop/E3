@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -34,6 +35,10 @@ from laser_aligner.project import (
     SceneObject,
     Transform,
     capture_raster_asset_identity,
+)
+from laser_aligner.project.job_preflight import JobPreflightReport
+from laser_aligner.project.job_preflight import (
+    build_job_preflight_report as _real_build_job_preflight_report,
 )
 
 
@@ -843,6 +848,11 @@ def _window(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[E3MainWindow, list[str], list[str]]:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        lambda _document, _context: JobPreflightReport(),
+    )
     window = E3MainWindow(_runtime(tmp_path))
     errors: list[str] = []
     notices: list[str] = []
@@ -851,6 +861,25 @@ def _window(
     window.job_tabs.setCurrentIndex(0)
     window.show()
     return window, errors, notices
+
+
+def _restore_real_job_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        _real_build_job_preflight_report,
+    )
+
+
+def _add_line_output(window: E3MainWindow) -> SceneObject:
+    scene_object = SceneObject.line(
+        window.document.layers[0].id,
+        center=(20.0, 20.0),
+        length_mm=10.0,
+    )
+    window.document.add_object(scene_object)
+    window._refresh_document()
+    return scene_object
 
 
 def _dispose(
@@ -1192,6 +1221,467 @@ def test_generation_keeps_gui_and_stop_live_and_rejects_result(
     finally:
         release.set()
         timer.stop()
+        _dispose(qt_application, window)
+
+
+def test_structured_preflight_runs_on_cloned_snapshot_and_reaches_exact_preview(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    source_document = window.document
+    source_object = _add_line_output(window)
+    gui_thread = threading.get_ident()
+    preflight_calls: list[
+        tuple[int, ProjectDocument, JobPreflightReport]
+    ] = []
+    exact_snapshots: list[ProjectDocument] = []
+    job = _job()
+
+    def inspected_preflight(document, context) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(document, context)
+        preflight_calls.append((threading.get_ident(), document, report))
+        return report
+
+    def exact_generation(
+        document: ProjectDocument,
+        *_args,
+        **_kwargs,
+    ) -> ProjectJob:
+        exact_snapshots.append(document)
+        return job
+
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        inspected_preflight,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and not window._job_preparation_busy,
+        )
+
+        assert len(preflight_calls) == 1
+        worker_thread, snapshot, report = preflight_calls[0]
+        assert worker_thread != gui_thread
+        assert snapshot is not source_document
+        assert snapshot.revision == source_document.revision
+        assert snapshot.objects[0] is not source_object
+        assert snapshot.objects[0].id == source_object.id
+        assert exact_snapshots == [snapshot]
+        assert report.ready
+        assert report.warning_count >= 1
+        assert any(
+            finding.code == "execution.not_ready" for finding in report.findings
+        )
+        assert window.last_job is job
+        assert window.last_job_preflight_report is report
+        assert window._job_preflight_dialog is None
+        preview = window._job_preview_dialog
+        assert preview is not None
+        assert preview.preflight_report is report
+        assert preview.preflight_view is not None
+        assert preview.preflight_view.report is report
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_blocked_preflight_is_modeless_and_never_invokes_exact_or_machine_actions(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    exact_calls: list[ProjectDocument] = []
+    action_calls: list[str] = []
+
+    def exact_generation(
+        document: ProjectDocument,
+        *_args,
+        **_kwargs,
+    ) -> ProjectJob:
+        exact_calls.append(document)
+        return _job()
+
+    def record_action(name: str):
+        def operation(*_args, **_kwargs) -> None:
+            action_calls.append(name)
+
+        return operation
+
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        with monkeypatch.context() as action_patch:
+            machine = window.runtime.context.machine
+            for name in (
+                "connect",
+                "disconnect",
+                "replace_connection",
+                "arm",
+                "arm_program",
+                "disarm",
+                "send_command",
+                "prepare_photo_position",
+                "prepare_job_start",
+                "jog",
+                "preflight_program",
+                "start_validated_program",
+                "start_job",
+                "request_stop",
+                "stop_job",
+            ):
+                action_patch.setattr(machine, name, record_action(f"machine.{name}"))
+            for name in (
+                "connect_machine",
+                "reconnect_machine",
+                "disconnect_machine",
+                "park_at_camera_pose",
+                "run_job",
+                "pause_resume",
+                "emergency_stop",
+                "send_diagnostic",
+                "jog",
+            ):
+                action_patch.setattr(
+                    window.controller,
+                    name,
+                    record_action(f"controller.{name}"),
+                )
+
+            window.generate_toolpath()
+            _wait_until(
+                qt_application,
+                lambda: window._job_preflight_dialog is not None,
+            )
+
+            dialog = window._job_preflight_dialog
+            assert dialog is not None
+            assert dialog.isVisible()
+            assert dialog.windowModality() is QtCore.Qt.WindowModality.NonModal
+            assert window.isEnabled()
+            assert dialog.report.has_blockers
+            assert any(
+                finding.code == "project.objects_missing"
+                for finding in dialog.report.findings
+            )
+            assert not dialog.continue_button.isEnabled()
+            assert exact_calls == []
+            assert action_calls == []
+            assert window.last_job is None
+            assert window.last_job_preflight_report is dialog.report
+            assert window._job_preparation_owner is None
+            assert not window._job_preparation_busy
+            assert window._job_worker_requests == {}
+            assert window._job_worker_phases == {}
+            assert errors == []
+            dialog.close()
+            qt_application.processEvents()
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_layer_work_feed_above_machine_ceiling_blocks_exact_generation(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    _add_line_output(window)
+    limit = window.runtime.settings.machine.max_work_feed_mm_min
+    window.document.layers[0].speed_mm_min = limit + 1.0
+    exact_calls = 0
+
+    def exact_generation(*_args, **_kwargs) -> ProjectJob:
+        nonlocal exact_calls
+        exact_calls += 1
+        return _job()
+
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preflight_dialog is not None,
+        )
+
+        dialog = window._job_preflight_dialog
+        assert dialog is not None
+        findings = {
+            finding.code: finding for finding in dialog.report.findings
+        }
+        blocker = findings["layer.work_feed_exceeds_machine_limit"]
+        assert blocker.severity.value == "blocker"
+        assert blocker.context["layer_id"] == window.document.layers[0].id
+        assert blocker.context["requested_mm_min"] == limit + 1.0
+        assert blocker.context["limit_mm_min"] == limit
+        assert exact_calls == 0
+        assert window.last_job is None
+        assert window._job_preparation_owner is None
+        assert not window._job_preparation_busy
+        assert errors == []
+        dialog.close()
+        qt_application.processEvents()
+    finally:
+        _dispose(qt_application, window)
+
+
+@pytest.mark.parametrize(
+    "changed_authority",
+    ("readiness", "expected_calibration_profile"),
+)
+def test_local_authority_change_discards_preflight_before_exact_generation(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    changed_authority: str,
+) -> None:
+    window, errors, notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda *_args, **_kwargs: QtWidgets.QMessageBox.StandardButton.Ok,
+    )
+    frame = _legacy_honeycomb_support().coordinate_frame
+    document = ProjectDocument.new(
+        work_area=main_window_module.Bounds(
+            0.0,
+            0.0,
+            frame.width_mm,
+            frame.height_mm,
+        ),
+        coordinate_space=main_window_module.CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    window.document = document
+    window.active_layer_id = document.active_layer_id
+    window.history.clear()
+    window.history.mark_clean()
+    window._refresh_document()
+    _add_line_output(window)
+
+    app_context = window.runtime.context
+    active_profile_id = app_context.calibration_profiles.current.key
+    monkeypatch.setattr(
+        app_context,
+        "machine_identity",
+        replace(
+            app_context.machine_identity,
+            expected_calibration_profile_id=active_profile_id,
+        ),
+    )
+    execution_signature = (*frame.provenance_signature, "a" * 64)
+    readiness = [("VALID", (), "CURRENT", ())]
+    monkeypatch.setattr(
+        window,
+        "_capture_job_coordinate_authority",
+        lambda: (frame, execution_signature),
+    )
+    monkeypatch.setattr(
+        window,
+        "_capture_job_coordinate_readiness",
+        lambda: readiness[0],
+    )
+
+    entered = threading.Event()
+    release = threading.Event()
+    reports: list[JobPreflightReport] = []
+    exact_calls = 0
+
+    def blocked_preflight(document, context) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(document, context)
+        reports.append(report)
+        entered.set()
+        assert release.wait(5.0)
+        return report
+
+    def exact_generation(*_args, **_kwargs) -> ProjectJob:
+        nonlocal exact_calls
+        exact_calls += 1
+        return _job()
+
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        blocked_preflight,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(qt_application, entered.is_set)
+        assert len(reports) == 1
+        assert reports[0].ready
+
+        if changed_authority == "readiness":
+            readiness[0] = (
+                "STALE",
+                ("Bed mapping provenance changed.",),
+                "STALE",
+                ("Honeycomb support evidence changed.",),
+            )
+        else:
+            monkeypatch.setattr(
+                app_context,
+                "machine_identity",
+                replace(
+                    app_context.machine_identity,
+                    expected_calibration_profile_id="changed-profile",
+                ),
+            )
+        release.set()
+        _wait_until(
+            qt_application,
+            lambda: not window._job_worker_requests
+            and window._job_preparation_owner is None
+            and not window._job_preparation_busy,
+        )
+
+        assert exact_calls == 0
+        assert window.last_job is None
+        assert window._job_preflight_dialog is None
+        assert window._job_preview_dialog is None
+        assert errors == []
+        assert any("Job preparation cancelled" in notice for notice in notices)
+    finally:
+        release.set()
+        _dispose(qt_application, window)
+
+
+def test_warning_preflight_does_not_override_authoritative_exact_failure(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    _add_line_output(window)
+    reports: list[JobPreflightReport] = []
+    exact_calls = 0
+
+    def inspected_preflight(document, context) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(document, context)
+        reports.append(report)
+        return report
+
+    def fail_generation(*_args, **_kwargs) -> ProjectJob:
+        nonlocal exact_calls
+        exact_calls += 1
+        raise ValueError("authoritative exact planning failure")
+
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        inspected_preflight,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        fail_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: not window._job_worker_requests
+            and not window._job_preparation_busy,
+        )
+
+        assert len(reports) == 1
+        assert reports[0].ready
+        assert reports[0].warning_count >= 1
+        assert exact_calls == 1
+        assert window.last_job is None
+        assert window.last_job_preflight_report is None
+        assert window._job_preflight_dialog is None
+        assert window._job_preview_dialog is None
+        assert window.actions["generate"].isEnabled()
+        assert errors == [
+            "Toolpath generation failed: authoritative exact planning failure"
+        ]
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_software_stop_cancels_blocked_preflight_worker_before_exact_generation(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    _add_line_output(window)
+    entered = threading.Event()
+    release = threading.Event()
+    exact_calls = 0
+
+    def blocked_preflight(document, context) -> JobPreflightReport:
+        entered.set()
+        assert release.wait(5.0)
+        return _real_build_job_preflight_report(document, context)
+
+    def exact_generation(*_args, **_kwargs) -> ProjectJob:
+        nonlocal exact_calls
+        exact_calls += 1
+        return _job()
+
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        blocked_preflight,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(qt_application, entered.is_set)
+
+        assert "preflight" in window._job_worker_phases.values()
+        assert window.runtime_strip.stop_button.isEnabled()
+        window.runtime_strip.stop_button.click()
+        qt_application.processEvents()
+        release.set()
+        _wait_until(
+            qt_application,
+            lambda: not window._job_worker_requests
+            and window._job_preparation_owner is None
+            and not window._job_preparation_busy,
+        )
+
+        assert exact_calls == 0
+        assert window.last_job is None
+        assert window._job_preflight_dialog is None
+        assert window._job_preview_dialog is None
+        assert errors == []
+        assert any("Stop cancelled" in notice for notice in notices)
+    finally:
+        release.set()
         _dispose(qt_application, window)
 
 

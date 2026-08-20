@@ -299,6 +299,8 @@ native shapes / imported SVG / traced outlines
   -> SceneObject instances
   -> ProjectDocument operation layers
   -> undoable CommandStack changes
+  -> project.job_preflight.build_job_preflight_report()
+  -> immutable structured findings (blockers stop before exact generation)
   -> project.toolpath.generate_project_gcode()
   -> finalized multi-layer vector G-code + controller-ignored E3 metadata
   -> gcode.job_plan.build_job_plan()
@@ -307,6 +309,55 @@ native shapes / imported SVG / traced outlines
   -> unchanged guarded main-window run path
   -> the same finalized G-code text is submitted to MachineService
 ```
+
+The structured job-preflight boundary is Qt-neutral and advisory.
+`PreflightSeverity` classifies findings as info, warning, or blocker;
+`PreflightFinding` carries a stable dotted code, title, message, optional detail,
+and immutable structured context; `JobPreflightReport` carries the ordered
+findings, severity counts, and derived `ready` / `has_blockers` state. The
+builder receives only a detached project snapshot plus a detached
+`JobPreflightContext`. It does not construct `SceneObject` values, flatten
+geometry, decode pixels, generate G-code, call `MachineService`, or communicate
+with a controller.
+
+Preflight projects existing preparation rules into one reviewable report. It
+checks project/machine work-area agreement; machine-coordinate versus
+honeycomb-local frame, support signature, guarded polygon, and calibration-
+profile identity; the read-only bed-calibration validity and honeycomb-support
+CURRENT state required for local output; layer/object/output eligibility and
+operation-setting validity; configured machine work/travel feed ceilings; and
+bounded raster headers and aggregate encoded/decoded/row/sample/command budgets.
+Stale bed-calibration or support readiness blocks honeycomb-local generation.
+Only provably exact local bounds for unrounded rectangles and valid two-point
+lines are eligible for structured bounds blockers. Rounded rectangles, ellipses,
+images, paths, and other complex geometry bounds remain explicitly deferred
+with vector flattening, fill and raster construction, laser-spot correction,
+raster payload identity/decode, motion placement, final stream limits, and
+G-code validation. Stable finding codes are the programmatic contract; display
+text can improve without changing those identifiers. The existing strict
+`generate_project_gcode()` planner may therefore still reject a report that has
+no blockers, and its result is the only geometry/program source for exact
+Preview. `MachineService` preflight and the guarded start path remain the only
+execution authority.
+
+Desktop Generate extends the existing asynchronous owner chain rather than
+adding a synchronous UI pass:
+
+```text
+GUI captures detached configuration/coordinate facts
+  -> owned worker clones the current ProjectDocument
+  -> worker builds JobPreflightReport
+  -> blockers: release owner and show non-modal structured report
+  -> ready/warnings: same request and cancellation token enter exact planning
+  -> bounded GUI rendering opens exact Preview with the report embedded
+```
+
+Project revision, STOP, replacement, application close, feed-ceiling changes,
+and coordinate/calibration/support authority changes invalidate the detached
+request under the same token and stale-result checks used by exact generation.
+No worker creates or mutates Qt objects. Blocking review is modeless so it does
+not hold preparation ownership or hide software STOP; the exact generated-job
+Preview remains the window-modal execution review gate.
 
 The staged-planning contract is:
 

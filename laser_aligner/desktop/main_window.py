@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import threading
 import time
 from pathlib import Path
@@ -28,6 +29,8 @@ from ..project import (
     DuplicateObjectsCommand,
     FunctionalCommand,
     GroupObjectsCommand,
+    JobPreflightContext,
+    JobPreflightReport,
     LayerMode,
     ObjectKind,
     OperationLayer,
@@ -49,6 +52,7 @@ from ..project import (
     aligned_transforms,
     autosave_is_newer,
     autosave_path,
+    build_job_preflight_report,
     center_selection_on_stock,
     clear_autosave,
     default_operation_layers,
@@ -87,6 +91,7 @@ from .controller import DesktopController
 from .controls import InspectorTabs, WheelGuard
 from .icons import action_icon, apply_action_icons
 from .import_review import review_import_manifest
+from .job_preflight import JobPreflightDialog
 from .job_preview import JobPreviewDialog, PreparedJobPreview, prepare_job_preview
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
@@ -327,6 +332,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_work_area: tuple[float, float, float, float] | None = None
         self.last_job_coordinate_frame: tuple[Any, ...] | None = None
         self.last_job_preview_data: PreparedJobPreview | None = None
+        self.last_job_preflight_report: JobPreflightReport | None = None
+        self._job_preflight_dialog: JobPreflightDialog | None = None
         self._job_preview_dialog: JobPreviewDialog | None = None
         self._machine_manager_dialog: MachineManagerDialog | None = None
         self._machine_setup_dialog: MachineSetupDialog | None = None
@@ -1295,6 +1302,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._cancel_job_preparation(
                 "Project changed; discarded the unfinished job preparation"
             )
+        blocked_preflight = getattr(self, "_job_preflight_dialog", None)
+        if blocked_preflight is not None:
+            self._job_preflight_dialog = None
+            self.last_job_preflight_report = None
+            blocked_preflight.close()
         if (
             self.last_job is not None
             and self.last_job_revision != self.document.revision
@@ -1326,6 +1338,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_work_area = None
         self.last_job_coordinate_frame = None
         self.last_job_preview_data = None
+        self.last_job_preflight_report = None
+        preflight_dialog = getattr(self, "_job_preflight_dialog", None)
+        if preflight_dialog is not None:
+            preflight_dialog.close()
+            self._job_preflight_dialog = None
         preview_dialog = getattr(self, "_job_preview_dialog", None)
         if preview_dialog is not None:
             preview_dialog.close()
@@ -2244,26 +2261,59 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self._job_preparation_owner is not None:
             self.show_notice("A job preparation is already in progress")
             return
-        try:
-            self._require_project_machine_work_area_match()
-        except Exception as exc:
-            self.show_error(f"Toolpath generation failed: {exc}")
-            return
 
         source_document = self.document
         revision = self.document.revision
-        machine_work_area = self.runtime.settings.machine.work_area
-        work_area = self._work_area_signature(machine_work_area)
-        coordinate_frame = self._project_coordinate_frame()
-        coordinate_frame_signature = self._project_execution_signature()
-        guarded_output_polygon_mm = (
-            self.runtime.settings.laser.guarded_output_polygon_mm
-            if coordinate_frame_signature is not None
-            else None
-        )
-        start_position = self._planned_job_start_position()
-        optimize_order = self.actions["optimize_paths"].isChecked()
-        laser = self.runtime.settings.laser
+        try:
+            machine = copy.deepcopy(self.runtime.settings.machine)
+            laser = copy.deepcopy(self.runtime.settings.laser)
+            machine_work_area = machine.work_area
+            work_area = self._work_area_signature(machine_work_area)
+            coordinate_frame, coordinate_frame_signature = (
+                self._capture_job_coordinate_authority()
+            )
+            coordinate_readiness = self._capture_job_coordinate_readiness()
+            guarded_output_polygon_mm = (
+                laser.guarded_output_polygon_mm
+                if coordinate_frame_signature is not None
+                else None
+            )
+            start_position = (float(machine.photo_x), float(machine.photo_y))
+            optimize_order = self.actions["optimize_paths"].isChecked()
+            app_context = self.runtime.context
+            identity = app_context.machine_identity
+            active_calibration_profile_id = (
+                app_context.calibration_profiles.current.key
+            )
+            preflight_context = JobPreflightContext(
+                machine_work_area=machine_work_area,
+                controller_power_max=laser.power_max,
+                machine_max_work_feed_mm_min=machine.max_work_feed_mm_min,
+                machine_max_travel_feed_mm_min=machine.max_travel_feed_mm_min,
+                planned_travel_feed_mm_min=laser.travel_feed_mm_min,
+                coordinate_frame=coordinate_frame,
+                honeycomb_execution_signature=coordinate_frame_signature,
+                guarded_output_polygon_mm=guarded_output_polygon_mm,
+                machine_id=identity.machine_id,
+                machine_profile_id=identity.machine_profile_id,
+                expected_calibration_profile_id=(
+                    identity.expected_calibration_profile_id
+                ),
+                active_calibration_profile_id=active_calibration_profile_id,
+                bed_calibration_state=coordinate_readiness[0],
+                bed_calibration_reasons=coordinate_readiness[1],
+                honeycomb_support_state=coordinate_readiness[2],
+                honeycomb_support_reasons=coordinate_readiness[3],
+                execution_ready=bool(machine.allow_motion),
+                execution_unready_reason=(
+                    "Motion is blocked in the running machine configuration."
+                    if not machine.allow_motion
+                    else ""
+                ),
+            )
+        except Exception as exc:
+            self.show_error(f"Job preflight failed: {exc}")
+            return
         timestamp = time.strftime("%Y%m%d-%H%M%S")
         filename = f"{source_document.name}-{timestamp}.gcode"
 
@@ -2280,6 +2330,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         context = {
             "source_document": source_document,
             "revision": revision,
+            "project_work_area": source_document.work_area,
+            "coordinate_space": source_document.coordinate_space,
             "work_area": work_area,
             "machine_work_area": machine_work_area,
             "coordinate_frame": coordinate_frame,
@@ -2290,6 +2342,17 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "laser": laser,
             "filename": filename,
             "planning_cache": self._planning_cache,
+            "preflight_context": preflight_context,
+            "machine_id": identity.machine_id,
+            "machine_profile_id": identity.machine_profile_id,
+            "expected_calibration_profile_id": (
+                identity.expected_calibration_profile_id
+            ),
+            "active_calibration_profile_id": active_calibration_profile_id,
+            "allow_motion": bool(machine.allow_motion),
+            "max_work_feed_mm_min": float(machine.max_work_feed_mm_min),
+            "max_travel_feed_mm_min": float(machine.max_travel_feed_mm_min),
+            "coordinate_readiness": coordinate_readiness,
         }
 
         def snapshot_operation() -> ProjectDocument | None:
@@ -2328,12 +2391,114 @@ class E3MainWindow(QtWidgets.QMainWindow):
             or snapshot is None
             or request_id != self._job_request_id
             or self._job_preparation_owner != owner
-            or context["source_document"] is not self.document
-            or int(context["revision"]) != self.document.revision
+            or not self._job_request_context_is_current(context)
         ):
             self._finish_stale_job_worker(request_id)
             return
 
+        self._job_worker_phases[request_id] = "preflight"
+        stage = "Checking project and machine readiness"
+        self._update_job_preparation(owner, stage)
+
+        def operation() -> JobPreflightReport | None:
+            if cancellation.is_set():
+                return None
+            report = build_job_preflight_report(
+                snapshot,
+                context["preflight_context"],
+            )
+            return None if cancellation.is_set() else report
+
+        self.controller.run_background(
+            operation,
+            on_success=lambda report, request_id=request_id, context=context, snapshot=snapshot: (
+                self._job_preflight_ready(request_id, context, snapshot, report)
+            ),
+            on_failure=lambda message, request_id=request_id: (
+                self._job_preflight_failed(request_id, message)
+            ),
+            label=stage,
+        )
+
+    @QtCore.Slot(int, object, object, object)
+    def _job_preflight_ready(
+        self,
+        request_id: int,
+        context: dict[str, Any],
+        snapshot: ProjectDocument,
+        report: JobPreflightReport | None,
+    ) -> None:
+        if self._job_worker_phases.get(request_id) != "preflight":
+            return
+        cancellation = self._job_worker_requests.get(request_id)
+        owner = ("worker", request_id)
+        if (
+            cancellation is None
+            or cancellation.is_set()
+            or report is None
+            or request_id != self._job_request_id
+            or self._job_preparation_owner != owner
+            or not self._job_request_context_is_current(context)
+        ):
+            self._finish_stale_job_worker(request_id)
+            return
+        if report.has_blockers:
+            self._finish_job_worker(request_id)
+            self._release_job_preparation(owner)
+            self.last_job_preflight_report = report
+            self._show_blocked_job_preflight(report)
+            return
+        context["preflight_report"] = report
+        self._start_exact_job_generation(request_id, context, snapshot)
+
+    @QtCore.Slot(int, str)
+    def _job_preflight_failed(self, request_id: int, message: str) -> None:
+        if self._job_worker_phases.get(request_id) != "preflight":
+            return
+        self._job_worker_failed(request_id, "Job preflight", message)
+
+    def _show_blocked_job_preflight(self, report: JobPreflightReport) -> None:
+        previous = self._job_preflight_dialog
+        if previous is not None:
+            previous.close()
+        dialog = JobPreflightDialog(report, self)
+        dialog.setWindowModality(QtCore.Qt.WindowModality.NonModal)
+        dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        dialog.setWindowTitle("Job preflight blocked")
+        dialog.cancel_button.setText("Close")
+        dialog.destroyed.connect(
+            lambda _object=None, target=dialog: (
+                self._preflight_dialog_destroyed(target)
+            )
+        )
+        self._job_preflight_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _preflight_dialog_destroyed(self, dialog: JobPreflightDialog) -> None:
+        if self._job_preflight_dialog is dialog:
+            self._job_preflight_dialog = None
+            if self.last_job is None:
+                self.last_job_preflight_report = None
+
+    def _start_exact_job_generation(
+        self,
+        request_id: int,
+        context: dict[str, Any],
+        snapshot: ProjectDocument,
+    ) -> None:
+        cancellation = self._job_worker_requests.get(request_id)
+        owner = ("worker", request_id)
+        if (
+            cancellation is None
+            or cancellation.is_set()
+            or request_id != self._job_request_id
+            or self._job_preparation_owner != owner
+            or not self._job_request_context_is_current(context)
+        ):
+            self._finish_stale_job_worker(request_id)
+            return
         self._job_worker_phases[request_id] = "planning"
         stage = "Generating exact toolpath"
         self._update_job_preparation(owner, stage)
@@ -2381,6 +2546,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "coordinate_frame_signature": context[
                     "coordinate_frame_signature"
                 ],
+                "preflight_report": context["preflight_report"],
+                "request_context": context,
             }
 
         self.controller.run_background(
@@ -2410,10 +2577,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         except Exception:
             current_frame_signature = object()
         authority_current = False
+        request_context_current = True
         if payload is not None:
             authority_current = self._prepared_output_authority_is_current(
                 payload["job"]
             )
+            request_context = payload.get("request_context")
+            if request_context is not None:
+                request_context_current = self._job_request_context_is_current(
+                    request_context
+                )
         if (
             payload is None
             or cancellation is None
@@ -2424,6 +2597,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             or payload.get("coordinate_frame_signature")
             != current_frame_signature
             or not authority_current
+            or not request_context_current
         ):
             if self._job_preparation_owner == owner:
                 self._release_job_preparation(owner)
@@ -2444,9 +2618,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
     ) -> None:
         if self._job_worker_phases.get(request_id) != "planning":
             return
+        if request_id != self._job_request_id:
+            self._finish_stale_job_worker(request_id)
+            return
         self._finish_job_worker(request_id)
         owner = ("worker", request_id)
-        if request_id != self._job_request_id or self._job_preparation_owner != owner:
+        if self._job_preparation_owner != owner:
             return
         self._release_job_preparation(owner)
         self.show_error(f"Toolpath generation failed: {message}")
@@ -2454,10 +2631,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _job_worker_failed(self, request_id: int, label: str, message: str) -> None:
         if request_id not in self._job_worker_requests:
             return
+        if request_id != self._job_request_id:
+            self._finish_stale_job_worker(request_id)
+            return
         self._set_authoring_frozen(request_id, False)
         self._finish_job_worker(request_id)
         owner = ("worker", request_id)
-        if request_id != self._job_request_id or self._job_preparation_owner != owner:
+        if self._job_preparation_owner != owner:
             return
         self._release_job_preparation(owner)
         self._invalidate_generated_job(cancel_preparation=False)
@@ -2509,6 +2689,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.last_job_work_area = tuple(payload["work_area"])
         self.last_job_coordinate_frame = prepared_signature
         self.last_job_preview_data = payload["prepared"]
+        self.last_job_preflight_report = payload.get("preflight_report")
         if payload.get("summary"):
             summary = str(payload["summary"])
         else:
@@ -2676,6 +2857,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     self.runtime.settings.machine.max_travel_feed_mm_min
                 ),
                 coordinate_frame=coordinate_frame,
+                preflight_report=self.last_job_preflight_report,
             )
         except Exception as exc:
             self._job_render_failed(
@@ -2837,6 +3019,110 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _planned_job_start_position(self) -> tuple[float, float]:
         machine = self.runtime.settings.machine
         return float(machine.photo_x), float(machine.photo_y)
+
+    def _capture_job_coordinate_authority(
+        self,
+    ) -> tuple[Any | None, tuple[Any, ...] | None]:
+        """Capture current coordinate authority without rejecting missing setup."""
+
+        coordinate_space = getattr(
+            self.document,
+            "coordinate_space",
+            CoordinateSpace.MACHINE,
+        )
+        if coordinate_space is CoordinateSpace.MACHINE:
+            return None, None
+        support = self.runtime.context._current_honeycomb_support()
+        coordinate_frame = (
+            support.coordinate_frame
+            if support is not None and support.is_execution_verifiable
+            else None
+        )
+        signature = self.runtime.context.honeycomb_execution_signature()
+        return (
+            coordinate_frame,
+            None if signature is None else tuple(signature),
+        )
+
+    def _capture_job_coordinate_readiness(
+        self,
+    ) -> tuple[str | None, tuple[str, ...], str | None, tuple[str, ...]]:
+        """Capture read-only calibration/support readiness for local projects."""
+
+        if self.document.coordinate_space is CoordinateSpace.MACHINE:
+            return None, (), None, ()
+        app_context = self.runtime.context
+        bed = app_context.bed_calibration_validity()
+        support = app_context.honeycomb_support_status()
+
+        def status(value: Any) -> tuple[str, tuple[str, ...]]:
+            state = str(value.get("state") or "UNKNOWN").strip().upper()
+            reasons = tuple(
+                message
+                for item in value.get("reasons", ())
+                if (message := str(item).strip())
+            )
+            return state, reasons
+
+        bed_state, bed_reasons = status(bed)
+        support_state, support_reasons = status(support)
+        return bed_state, bed_reasons, support_state, support_reasons
+
+    def _job_request_context_is_current(self, context: dict[str, Any]) -> bool:
+        """Reject detached preflight/planning inputs after any authority change."""
+
+        try:
+            if (
+                context["source_document"] is not self.document
+                or int(context["revision"]) != self.document.revision
+                or context["project_work_area"] != self.document.work_area
+                or context["coordinate_space"] is not self.document.coordinate_space
+            ):
+                return False
+            machine = self.runtime.settings.machine
+            if self._work_area_signature(machine.work_area) != tuple(
+                context["work_area"]
+            ):
+                return False
+            if (float(machine.photo_x), float(machine.photo_y)) != tuple(
+                context["start_position"]
+            ):
+                return False
+            if bool(machine.allow_motion) != bool(context["allow_motion"]):
+                return False
+            if (
+                float(machine.max_work_feed_mm_min)
+                != float(context["max_work_feed_mm_min"])
+                or float(machine.max_travel_feed_mm_min)
+                != float(context["max_travel_feed_mm_min"])
+                or self._capture_job_coordinate_readiness()
+                != context["coordinate_readiness"]
+            ):
+                return False
+            if self.runtime.settings.laser != context["laser"]:
+                return False
+            if self.actions["optimize_paths"].isChecked() != bool(
+                context["optimize_order"]
+            ):
+                return False
+            coordinate_frame, signature = self._capture_job_coordinate_authority()
+            if (
+                coordinate_frame != context["coordinate_frame"]
+                or signature != context["coordinate_frame_signature"]
+            ):
+                return False
+            app_context = self.runtime.context
+            identity = app_context.machine_identity
+            return (
+                identity.machine_id == context["machine_id"]
+                and identity.machine_profile_id == context["machine_profile_id"]
+                and identity.expected_calibration_profile_id
+                == context["expected_calibration_profile_id"]
+                and app_context.calibration_profiles.current.key
+                == context["active_calibration_profile_id"]
+            )
+        except Exception:
+            return False
 
     @staticmethod
     def _work_area_signature(area: Any) -> tuple[float, float, float, float]:
@@ -3225,6 +3511,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         power_mode = self.runtime.settings.laser.power_mode
         controller_start_position = self._planned_job_start_position()
         source_job = self.last_job
+        source_preflight_report = getattr(
+            self,
+            "last_job_preflight_report",
+            None,
+        )
         self._invalidate_generated_job(cancel_preparation=False)
         self._job_request_id += 1
         request_id = self._job_request_id
@@ -3283,6 +3574,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "revision": revision,
                 "work_area": work_area,
                 "coordinate_frame_signature": coordinate_frame_signature,
+                "preflight_report": source_preflight_report,
                 "frame": False,
                 "summary": (
                     f"Start Here at original move {move_index + 1} · "
@@ -3306,9 +3598,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _start_here_failed(self, request_id: int, message: str) -> None:
         if self._job_worker_phases.get(request_id) != "planning":
             return
+        if request_id != self._job_request_id:
+            self._finish_stale_job_worker(request_id)
+            return
         self._finish_job_worker(request_id)
         owner = ("worker", request_id)
-        if request_id != self._job_request_id or self._job_preparation_owner != owner:
+        if self._job_preparation_owner != owner:
             return
         self._release_job_preparation(owner)
         self.show_error(message)

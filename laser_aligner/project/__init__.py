@@ -56,6 +56,14 @@ from .io import (
     save_autosave,
     save_project,
 )
+from .job_preflight import (
+    JobPreflightContext,
+    JobPreflightReport,
+    PreflightCounts,
+    PreflightFinding,
+    PreflightSeverity,
+    build_job_preflight_report,
+)
 from .lightburn import (
     LIGHTBURN_FILE_DIALOG_FILTER,
     MAX_LIGHTBURN_FILE_BYTES,
@@ -158,6 +166,8 @@ __all__ = [
     "ImportLayerManifest",
     "ImportScanManifest",
     "LayerMode",
+    "JobPreflightContext",
+    "JobPreflightReport",
     "LightBurnImportError",
     "LightBurnImportResult",
     "LIGHTBURN_FILE_DIALOG_FILTER",
@@ -176,6 +186,9 @@ __all__ = [
     "ProjectDocument",
     "ProjectFormatError",
     "ProjectJob",
+    "PreflightCounts",
+    "PreflightFinding",
+    "PreflightSeverity",
     "RASTER_FILE_DIALOG_FILTER",
     "RASTER_IMPORTER_SPEC",
     "RasterAssetIdentity",
@@ -206,6 +219,7 @@ __all__ = [
     "choose_stock_edge",
     "autosave_is_newer",
     "autosave_path",
+    "build_job_preflight_report",
     "clear_autosave",
     "capture_raster_asset_identity",
     "decode_raster_grayscale",
