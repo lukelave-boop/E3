@@ -27,10 +27,17 @@ laser_aligner.__main__                  laser_aligner.desktop.main
           +-------------------+-------------------+
                               v
                          MachineService
+                 safety / authorization / orchestration
                               |
-                   +----------+----------+
-                   v                     v
-          SimulatedTransport       platform serial transport
+                +-------------+-------------+
+                v                           v
+       machine transport factory     controller-dialect registry
+                |                    (immutable GRBL / Marlin policy)
+       +--------+--------+
+       v        v        v
+   simulator  local    e3bridge
+              POSIX     network
+              serial    transport
 ```
 
 The browser uses `AppContext` directly. The desktop uses `CoreRuntime` as a
@@ -61,7 +68,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
 | `materials/` | SQLite material-recipe library, scoped compatibility, and legacy database migration |
 | `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
-| `machine/` | Safety policy, simulator, protocol probing, serial transports, and the versioned saved-machine/profile registry |
+| `machine/` | MachineService safety/orchestration, neutral transports and their construction factory, immutable controller dialects, simulator/controller peers, and the versioned saved-machine/profile registry |
 | `server.py` + `web/` | Local HTTP API and browser UI |
 | `core/` | Shared runtime lifecycle for non-HTTP consumers |
 | `desktop/` | PySide6 window, workspace, panels, tasks, and presentation logic |
@@ -646,6 +653,56 @@ fixed convex polygon when that polygon is explicitly carried by the
 support-bound preflight; without it, the guarded machine rectangle remains the
 execution authority.
 
+## Machine transport and controller dialect boundaries
+
+The machine core separates communication mechanics, controller semantics, and
+execution authority:
+
+| Boundary | Responsibility | Explicitly not responsible for |
+|---|---|---|
+| `MachineTransport` | Open/close, raw/line writes, line reads, and drain mechanics | Controller command meaning, identity decisions, safety gates, retries, or execution authorization |
+| immutable `ControllerDialect` | Pure GRBL or Marlin identity, response classification, command-policy, and parsing semantics | Opening or writing transports, locking, mutable service state, authorization, or starting work |
+| `MachineService` | Safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data or delegating authority to a transport or dialect |
+
+`create_machine_transport(backend, port, baudrate)` is the single explicit,
+construction-only transport factory. It returns a fresh unopened simulator for
+the existing `simulator` backend, or delegates the existing `serial` backend to
+the serial selector. That selector recognizes `e3bridge://` before applying the
+local platform gate, so authenticated bridge transport remains available on
+Windows while local POSIX serial remains unavailable there with the same clear
+failure. POSIX serial, network transport, and simulator implementations remain
+lazy imports. The former `machine.serial_backend` protocol and factory imports
+remain compatibility entry points. Protocol is deliberately not a factory
+input: choosing a byte/line carrier cannot select controller semantics.
+
+The frozen controller-dialect registry contains only the already supported
+GRBL and Marlin policies. With `machine.protocol = auto`, `MachineService`
+retains the same deterministic sequence: configured startup delay and drain,
+GRBL startup-banner recognition, then `$I` with a 1.0-second response window,
+then `M115` with a 1.5-second response window, using the existing accepted
+identity markers and fail-closed result. The dialect values describe those
+semantics; `MachineService` decides when each probe may be written and owns the
+exchange. No additional probe or controller command was introduced.
+
+The simulator follows the same separation in process. `SimulatedTransport`
+keeps queueing and line/byte transport mechanics while a stateful
+`SimulatedController` peer interprets commands and produces responses. The
+existing `SimulatedTransport` import path, hooks, observable state, and behavior
+remain compatible.
+
+A saved machine profile supplies reusable physical motion-platform defaults,
+including backend, protocol, connection, envelope, homing, and feed settings. A
+tool-head profile supplies laser/tool defaults such as power mode/range, feeds,
+spot offset, and guarded-boundary settings. The saved machine instance retains a
+complete validated snapshot of both. These are configuration and compatibility
+identities only: neither profile grants motion, arming, output, or execution
+authority.
+
+This boundary refactor has automated verification only. Existing historical
+physical evidence remains historical; the refactored paths have not been
+re-verified against physical GRBL or Marlin hardware. No new machine or
+controller support is claimed.
+
 ## Machine safety boundary
 
 `MachineService` is the only normal path to the controller. It:
@@ -721,13 +778,17 @@ to that source so existing operator data does not disappear.
 
 ## Platform boundary
 
-The portable core and simulator run on Windows and Linux, while real hardware
-is currently Linux-only:
+The portable core, simulator, and authenticated `e3bridge://` client run on
+Windows and Linux. Direct local serial and camera hardware remain Linux-only:
 
-- `machine.serial_backend` exposes the transport protocol and imports the POSIX
-  implementation only when real serial hardware is selected.
-- Unsupported systems report no serial ports and reject real serial selection
-  with a clear simulator-only message.
+- `machine.transport` exposes the neutral byte/line protocol.
+- `machine.transport_factory` constructs simulator or serial-family transports;
+  the serial selector checks bridge URIs before the local POSIX platform gate.
+- `machine.serial_backend` retains its compatibility exports and imports the
+  POSIX implementation only when local serial hardware is selected.
+- Unsupported systems report no local serial ports and reject local serial
+  selection clearly; an authenticated bridge URI remains a supported transport
+  selection on Windows.
 - Camera enumeration and controls use `/dev/video*`, V4L2, and `v4l2-ctl`.
 - Launch/install scripts and desktop integration are Linux shell assets.
 - Fast Development CI runs the complete desktop-enabled suite on Ubuntu Python

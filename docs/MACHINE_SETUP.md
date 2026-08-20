@@ -49,6 +49,39 @@ capture immediately clears its prior review and disables every related Apply
 action. A failure or software stop leaves that prior result invalid rather than
 restoring it. A result that arrives after STOP is discarded.
 
+## Machine configuration and controller boundary
+
+The saved machine instance contains a complete validated snapshot of its
+machine and laser settings. Its machine profile describes reusable physical
+motion-platform defaults, including the controller backend/protocol, connection,
+work envelope, homing behavior, and feed ceilings. Its separate tool-head
+profile describes laser/tool defaults, including power mode/range, feeds, spot
+offsets, and guarded-boundary settings. Applying or selecting either profile
+does not connect, home, move, arm, or enable output; the running settings and
+`MachineService` safety gates remain authoritative.
+
+At connection time, one construction-only factory maps the saved `backend`,
+`port`, and `baudrate` to the existing simulator, local POSIX serial, or
+authenticated `e3bridge://` network transport. Transport objects carry only raw
+bytes and lines; they do not interpret commands or grant controller access. The
+bridge URI is recognized before the local-platform check, so Windows can use an
+authenticated bridge while direct local serial remains unavailable there.
+Platform transports are imported lazily, preserving simulator and portable
+imports on Windows.
+
+GRBL and Marlin behavior is described by immutable, UI-neutral dialect policy,
+but `MachineService` still owns connection timing, command writes, response
+ownership, retries, safety checks, and cleanup. Exact `grbl` or `marlin` settings
+select only their existing semantics. `auto` remains deterministic and sends no
+new probes: after the configured startup delay and drain it recognizes the GRBL
+banner, otherwise tries `$I` for 1.0 seconds and then `M115` for 1.5 seconds,
+using the same accepted identity markers and failing closed if neither matches.
+
+This architecture change adds no controller or machine compatibility. It has
+automated verification only; physical GRBL and Marlin behavior through the
+refactored boundaries remains to be re-verified before it can be recorded as
+physical evidence.
+
 ## 1. Camera
 
 - `camera.view_rotation_degrees` rotates every raw-camera image shown in native

@@ -20,6 +20,48 @@ arming, motion gates, coordinate-state checks, stop generation, and job
 streaming. The Pi bridge is a transport boundary, not an alternate execution
 path.
 
+## Transport, dialect, and profile separation
+
+The desktop uses one construction-only
+`create_machine_transport(backend, port, baudrate)` factory for the existing
+simulator and serial backend choices. A simulator setting constructs a fresh
+in-process transport. For the serial backend, an `e3bridge://` port selects the
+authenticated network transport before the local POSIX platform check; any
+other port follows the existing local serial path. This preserves bridge access
+on Windows while direct local serial remains unavailable there. Concrete
+simulator, network, and POSIX implementations are imported lazily, and the
+existing `machine.serial_backend` imports remain available for compatibility.
+The factory only constructs an unopened transport and receives no controller
+protocol input.
+
+Transport authority stops at open/close and raw-byte or line communication. On
+the desktop, immutable GRBL and Marlin dialect values describe pure identity,
+response, command-policy, and parsing semantics. `MachineService` remains the
+authority that decides when a connection or probe is allowed, performs writes,
+owns command/ACK exchange and retries, applies motion/arming/output gates, and
+orchestrates jobs, STOP, cancellation, and cleanup. Neither the bridge nor a
+dialect can authorize or start work.
+
+Existing `protocol = auto` behavior is unchanged and deterministic: the desktop
+performs the configured startup delay and drain, recognizes an existing GRBL
+banner, then tries `$I` with the existing 1.0-second window and `M115` with the
+existing 1.5-second window. The same identity markers are accepted and failure
+remains closed; no additional probe is sent. The Pi bridge's explicit GRBL or
+Marlin setting remains limited to its existing connection-loss emergency
+cleanup choice. It consults the same immutable command policy, but remains a
+byte/line forwarding boundary rather than a second job-control authority.
+
+The saved machine profile describes reusable physical motion-platform defaults,
+including controller/transport, envelope, homing, and feed settings. The
+separate tool-head profile describes laser/tool defaults such as power
+mode/range, feeds, spot offset, and guarded-boundary settings. A saved machine
+instance retains the complete validated configuration. None of these profiles
+grants connection, motion, arming, laser output, or execution authority.
+
+This refactor adds no controller or machine compatibility. Its verification is
+automated only; neither the direct nor bridged refactored path has been
+re-verified on physical GRBL or Marlin hardware.
+
 ## Safety boundary
 
 The bridge is experimental software, not a safety-rated control. The physical
@@ -217,4 +259,6 @@ control values, and precision-capture settings; only `camera.device` differs.
 
 Record the controller identity, firmware, configuration, camera mode, network
 path, and result in `CURRENT_STATE.md`; passing software tests alone is not
-physical verification.
+physical verification. The transport/dialect refactor has not completed this
+physical acceptance sequence; existing historical results do not constitute
+physical verification of the refactored boundary.
