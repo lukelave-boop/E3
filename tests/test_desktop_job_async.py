@@ -1304,6 +1304,10 @@ def test_blocked_preflight_is_modeless_and_never_invokes_exact_or_machine_action
 ) -> None:
     window, errors, _notices = _window(tmp_path, monkeypatch)
     _restore_real_job_preflight(monkeypatch)
+    _wait_until(
+        qt_application,
+        lambda: window.runtime.running and not window.controller.has_active_tasks,
+    )
     exact_calls: list[ProjectDocument] = []
     action_calls: list[str] = []
 
