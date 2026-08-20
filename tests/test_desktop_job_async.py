@@ -157,12 +157,30 @@ def _legacy_honeycomb_support() -> HoneycombSupportReference:
     )
 
 
+def _running_identity(
+    machine_profile_id: str = "ender-3-s1-pro",
+    tool_head_profile_id: str = "generic-diode-10w",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        machine_profile_id=machine_profile_id,
+        tool_head_profile_id=tool_head_profile_id,
+    )
+
+
 def test_legacy_support_selects_local_empty_workspace_but_not_execution() -> None:
     support = _legacy_honeycomb_support()
     machine_area = WorkArea(10.0, 210.0, 10.0, 210.0)
     runtime = SimpleNamespace(
-        context=SimpleNamespace(_current_honeycomb_support=lambda: support),
-        settings=SimpleNamespace(machine=SimpleNamespace(work_area=machine_area)),
+        context=SimpleNamespace(
+            _current_honeycomb_support=lambda: support,
+            machine_identity=_running_identity(),
+        ),
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(
+                work_area=machine_area,
+                max_work_feed_mm_min=3000.0,
+            )
+        ),
     )
     harness = SimpleNamespace(runtime=runtime)
 
@@ -191,8 +209,16 @@ def test_legacy_support_selects_local_empty_workspace_but_not_execution() -> Non
 def test_machine_frame_new_project_uses_default_e3_profiles() -> None:
     machine_area = WorkArea(10.0, 210.0, 10.0, 210.0)
     runtime = SimpleNamespace(
-        context=SimpleNamespace(_current_honeycomb_support=lambda: None),
-        settings=SimpleNamespace(machine=SimpleNamespace(work_area=machine_area)),
+        context=SimpleNamespace(
+            _current_honeycomb_support=lambda: None,
+            machine_identity=_running_identity(),
+        ),
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(
+                work_area=machine_area,
+                max_work_feed_mm_min=3000.0,
+            )
+        ),
     )
 
     document = E3MainWindow._new_document(SimpleNamespace(runtime=runtime))
@@ -202,6 +228,42 @@ def test_machine_frame_new_project_uses_default_e3_profiles() -> None:
     assert len(document.layers) == 13
     assert document.layers[0].name == "Copy / Printer Paper — CUT"
     assert document.layers[12].name == "Copy / Printer Paper — RASTER"
+
+
+def test_machine_frame_new_project_uses_safe_running_profile_fallback() -> None:
+    machine_area = WorkArea(5.0, 405.0, 10.0, 310.0)
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(
+            _current_honeycomb_support=lambda: None,
+            machine_identity=_running_identity(
+                "generic-marlin",
+                "custom-laser-head",
+            ),
+        ),
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(
+                work_area=machine_area,
+                max_work_feed_mm_min=425.0,
+            )
+        ),
+        machine_registry=SimpleNamespace(active_machine_id="next-launch-only"),
+    )
+    harness = SimpleNamespace(runtime=runtime)
+
+    document = E3MainWindow._new_document(harness)
+
+    assert document.coordinate_space is main_window_module.CoordinateSpace.MACHINE
+    assert document.work_area == main_window_module.Bounds(5.0, 10.0, 405.0, 310.0)
+    assert len(document.layers) == 1
+    layer = document.layers[0]
+    assert layer.name == "Line — configure material"
+    assert layer.speed_mm_min == 425.0
+    assert layer.power_percent == 0.0
+    assert layer.passes == 1
+    assert layer.output_enabled is False
+    assert layer.visible is True
+    assert harness._new_project_defaults_source == "safe_neutral"
+    assert "No curated material defaults" in harness._new_project_defaults_notice
 
 
 def test_machine_calibration_preview_uses_active_honeycomb_display_frame() -> None:
@@ -253,6 +315,7 @@ def test_legacy_support_empty_workspace_drives_exact_local_camera_area(
 
     context = SimpleNamespace(
         _current_honeycomb_support=lambda: support,
+        machine_identity=_running_identity(),
         current_honeycomb_coordinate_frame=lambda: coordinate_frame,
         trace_camera_work_area=lambda: machine_area,
         has_simulation_workspace_frame=False,
@@ -264,7 +327,12 @@ def test_legacy_support_empty_workspace_drives_exact_local_camera_area(
     runtime = SimpleNamespace(
         running=False,
         context=context,
-        settings=SimpleNamespace(machine=SimpleNamespace(work_area=machine_area)),
+        settings=SimpleNamespace(
+            machine=SimpleNamespace(
+                work_area=machine_area,
+                max_work_feed_mm_min=3000.0,
+            )
+        ),
     )
     document = E3MainWindow._new_document(SimpleNamespace(runtime=runtime))
     controller = DesktopController(runtime)
@@ -817,6 +885,7 @@ def _core_registration_job(job: ProjectJob) -> SimpleNamespace:
 def _add_raster_source(window: E3MainWindow, path: Path) -> None:
     layer = window.document.layers[0]
     layer.mode = LayerMode.RASTER
+    layer.output_enabled = True
     window.document.add_object(
         SceneObject(
             name=path.stem,
@@ -875,6 +944,7 @@ def _restore_real_job_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _add_line_output(window: E3MainWindow) -> SceneObject:
+    window.document.layers[0].output_enabled = True
     scene_object = SceneObject.line(
         window.document.layers[0].id,
         center=(20.0, 20.0),
@@ -897,6 +967,111 @@ def _dispose(
     window.close()
     window.deleteLater()
     application.processEvents()
+
+
+def test_next_launch_ender_selection_preserves_running_simulator_authority(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, notices = _window(tmp_path, monkeypatch)
+    try:
+        _wait_until(
+            qt_application,
+            lambda: window.runtime.running and not window.controller.has_active_tasks,
+        )
+        notices.clear()
+        running_machine_id = window.runtime.running_machine_id
+        running_area = window.runtime.settings.machine.work_area
+        running_bounds = main_window_module.Bounds(
+            running_area.x_min,
+            running_area.y_min,
+            running_area.x_max,
+            running_area.y_max,
+        )
+        assert window.runtime.context.machine_identity.machine_profile_id == "simulator"
+        assert (
+            window.runtime.context.machine_identity.tool_head_profile_id
+            == "simulated-laser-head"
+        )
+        assert window._new_project_defaults_source == "safe_neutral"
+        assert len(window.document.layers) == 1
+        layer = window.document.layers[0]
+        assert layer.name == "Line — configure material"
+        assert layer.power_percent == 0.0
+        assert layer.output_enabled is False
+
+        registry = window.runtime.machine_registry
+        running_saved = registry.get_machine(running_machine_id)
+        immutable_running_name = (
+            window.runtime.context.machine_identity.machine_name
+        )
+        running_saved.name = "Renamed simulator for next launch"
+        registry.update_machine(running_saved)
+        window._refresh_machine_selector(running_machine_id)
+        running_index = window.machine_selector.findData(running_machine_id)
+        running_text = window.machine_selector.itemText(running_index)
+        assert "Renamed simulator for next launch" in running_text
+        assert f"running as {immutable_running_name}" in running_text
+        assert (
+            window.runtime.context.machine_identity.machine_name
+            == immutable_running_name
+        )
+
+        next_launch = registry.create_machine(
+            "Next-launch Ender + 10 W",
+            "ender-3-s1-pro",
+            "generic-diode-10w",
+        )
+        next_launch.machine.work_area = WorkArea(5.0, 405.0, 10.0, 310.0)
+        registry.update_machine(next_launch)
+        window._refresh_machine_selector(next_launch.id)
+        next_launch_index = window.machine_selector.findData(next_launch.id)
+        assert next_launch_index >= 0
+        window._machine_selector_activated(next_launch_index)
+
+        assert registry.active_machine_id == next_launch.id
+        assert window.runtime.running_machine_id == running_machine_id
+        assert window.runtime.context.machine_identity.machine_profile_id == "simulator"
+        assert (
+            window.runtime.context.machine_identity.tool_head_profile_id
+            == "simulated-laser-head"
+        )
+
+        window.new_project()
+
+        assert window.document.work_area == running_bounds
+        assert window.document.work_area != main_window_module.Bounds(
+            5.0,
+            10.0,
+            405.0,
+            310.0,
+        )
+        assert window._new_project_defaults_source == "safe_neutral"
+        assert len(window.document.layers) == 1
+        layer = window.document.layers[0]
+        assert layer.name == "Line — configure material"
+        assert layer.power_percent == 0.0
+        assert layer.output_enabled is False
+
+        window.material_panel.search.setText("Copy / Printer Paper")
+        qt_application.processEvents()
+        assert window.material_panel.list.count() == 2
+        ender_recipe = window.material_panel.list.item(0)
+        assert "Incompatible" in ender_recipe.text()
+        assert (
+            ender_recipe.data(QtCore.Qt.ItemDataRole.UserRole + 1)
+            == "incompatible"
+        )
+        window.material_panel.list.setCurrentItem(ender_recipe)
+        qt_application.processEvents()
+        assert window.material_panel.apply_button.isEnabled() is False
+
+        assert notices == [window._new_project_defaults_notice]
+        assert "No curated material defaults" in notices[0]
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
 
 
 def test_object_panel_visible_toggle_is_applied_after_item_signal_returns(
@@ -2649,6 +2824,7 @@ def test_exact_plan_controls_zero_effective_power_state_and_run_gate(
 ) -> None:
     window, errors, _notices = _window(tmp_path, monkeypatch)
     layer = window.document.layers[0]
+    layer.output_enabled = True
     layer.power_percent = 0.04
     window.document.add_object(
         SceneObject.line(

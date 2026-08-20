@@ -90,6 +90,10 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         ]
         assert dialog.synthetic_scene.isEnabled()
         assert dialog.runtime.hardware_enabled is False
+        assert "Running now:" in dialog.runtime_identity_status.text()
+        assert "machine profile simulator" in dialog.runtime_identity_status.text()
+        assert "tool head simulated-laser-head" in dialog.runtime_identity_status.text()
+        assert "active calibration profile" in dialog.runtime_identity_status.text()
         assert dialog.work_area_reference_button.text() == "Capture ruler"
         assert "Home / park" in dialog.work_area_reference_button.toolTip()
         assert "Camera/work: X0..220, Y0..220 mm" in (
@@ -157,6 +161,165 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
     finally:
         dialog.close()
         runtime.stop()
+
+
+def test_machine_setup_reports_missing_bindings_and_actual_guarded_polygon(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    identity = runtime.context.machine_identity
+    runtime.context.machine_identity = type(identity)(
+        machine_id=identity.machine_id,
+        machine_name="Uncalibrated machine",
+        created_from=identity.created_from,
+        machine_profile_id="generic-marlin",
+        tool_head_profile_id="custom-laser-head",
+    )
+    runtime.context.settings.laser.guarded_output_polygon_mm = (
+        (10.0, 20.0),
+        (180.0, 20.0),
+        (180.0, 140.0),
+        (10.0, 140.0),
+    )
+    dialog = MachineSetupDialog(runtime)
+    try:
+        assert "Running now: Uncalibrated machine" in (
+            dialog.runtime_identity_status.text()
+        )
+        assert "running process has no camera or calibration binding" in (
+            dialog.runtime_identity_status.text()
+        )
+        assert "explicit 4-point machine polygon" in (
+            dialog.work_area_reference_status.text()
+        )
+        assert "X10..180, Y20..140 mm" in (
+            dialog.work_area_reference_status.text()
+        )
+        assert "210 × 210" not in dialog.work_area_reference_status.text()
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_machine_setup_explicit_binding_is_persisted_for_later_launch_only(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seed_runtime = _runtime(tmp_path)
+    created = seed_runtime.machine_registry.create_machine(
+        "Unbound simulator",
+        "simulator",
+        "simulated-laser-head",
+    )
+    seed_runtime.machine_registry.set_active(created.id)
+    seed_runtime.stop()
+
+    runtime = CoreRuntime.from_config(
+        tmp_path / "config.json",
+        hardware_enabled=False,
+    )
+    runtime.start()
+    dialog = MachineSetupDialog(runtime)
+    identity_before = runtime.context.machine_identity
+    active_profile_id = runtime.context.calibration_profiles.current.key
+    selected_before = runtime.machine_registry.active_machine_id
+    action_calls: list[str] = []
+
+    def unexpected_action(name: str):
+        def fail(*_args: object, **_kwargs: object) -> None:
+            action_calls.append(name)
+            raise AssertionError(f"Binding invoked machine action: {name}")
+
+        return fail
+
+    for action_name in (
+        "connect",
+        "ensure_connected",
+        "disconnect",
+        "arm",
+        "arm_program",
+        "disarm",
+        "send_command",
+        "prepare_photo_position",
+        "prepare_job_start",
+        "jog",
+        "start_validated_program",
+        "start_job",
+        "request_stop",
+        "stop_job",
+    ):
+        monkeypatch.setattr(
+            runtime.context.machine,
+            action_name,
+            unexpected_action(action_name),
+        )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+    )
+    information: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "information",
+        lambda _parent, _title, message: information.append(str(message)),
+    )
+
+    try:
+        assert identity_before.expected_camera_profile_id is None
+        assert identity_before.expected_calibration_profile_id is None
+        assert "running process has no camera or calibration binding" in (
+            dialog.runtime_identity_status.text()
+        )
+        assert "camera not bound · calibration not bound" in (
+            dialog.saved_profile_binding_status.text()
+        )
+        assert dialog.bind_running_profile_button.isEnabled()
+
+        dialog.bind_running_profile_button.click()
+        qt_application.processEvents()
+
+        saved = runtime.machine_registry.get_machine(created.id)
+        assert saved.camera_profile_id == active_profile_id
+        assert saved.calibration_profile_id == active_profile_id
+        assert runtime.machine_registry.active_machine_id == selected_before
+        assert runtime.running_machine_id == created.id
+        assert runtime.context.machine_identity is identity_before
+        assert identity_before.expected_camera_profile_id is None
+        assert identity_before.expected_calibration_profile_id is None
+        assert runtime.context.expected_camera_profile_id is None
+        assert runtime.context.expected_calibration_profile_id is None
+        assert "running process has no camera or calibration binding" in (
+            dialog.runtime_identity_status.text()
+        )
+        assert "takes effect only when this saved machine is launched again" in (
+            dialog.saved_profile_binding_status.text()
+        )
+        assert not dialog.bind_running_profile_button.isEnabled()
+        assert action_calls == []
+        assert information
+        assert "current runtime remains unchanged" in information[-1]
+    finally:
+        dialog.close()
+        monkeypatch.undo()
+        runtime.stop()
+
+    restarted = CoreRuntime.from_config(
+        tmp_path / "config.json",
+        hardware_enabled=False,
+    )
+    try:
+        assert restarted.context.machine_identity.expected_camera_profile_id == (
+            active_profile_id
+        )
+        assert (
+            restarted.context.machine_identity.expected_calibration_profile_id
+            == active_profile_id
+        )
+    finally:
+        restarted.stop()
 
 
 def test_coordinate_audit_read_only_actions_command_no_hardware(

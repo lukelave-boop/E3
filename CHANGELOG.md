@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Made first-run, Machine Manager, and Machine Setup generic across the existing
+  simulator, GRBL, and Marlin profiles without adding controller support or a
+  second profile model. Profile-created machines are validated concrete
+  snapshots with motion, default/frame power, and low-power framing off and no
+  inherited camera/calibration/support binding. Running-now versus next-launch
+  identity is explicit; profile/registry edits perform no controller action and
+  cannot hot-swap the current runtime. Machine Setup reports binding state and
+  can explicitly persist the active optical profile for a future launch without
+  changing current calibration or execution authority. New projects now use
+  only the highest compatible tier of curated built-in operations from the
+  immutable running identity: Ender-3 S1 Pro / generic 10 W retains the exact
+  historical 13 layers, while unmatched combinations get one 0%-power,
+  output-disabled neutral Line layer capped by the running work-feed ceiling.
+  User SQLite recipes are never automatic defaults. Machine, material, and
+  project schemas and all MachineService, motion, arming, laser, STOP, G-code,
+  and execution behavior remain unchanged.
+
 - Extended the existing `MaterialPreset` / SQLite `MaterialDatabase` into a
   machine-aware material-recipe library without adding recipe identity to
   projects or execution. Recipes now carry the complete operation authoring

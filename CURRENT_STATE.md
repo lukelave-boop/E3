@@ -7,6 +7,60 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-20**
 
+The desktop machine-configuration workflow is now generic across the existing
+simulator, GRBL, and Marlin profiles without adding a controller dialect or a
+second profile model. `MachineProfile` remains reusable motion-platform and
+controller defaults, `ToolHeadProfile` remains reusable laser/tool defaults,
+and each `MachineInstance` remains the operator's complete validated saved
+snapshot. Machine Manager exposes the existing backend, protocol, endpoint,
+timing, work-area, feed, Home/release/photo, laser, framing, offset, and guarded-
+output values. Serial fields and GRBL-only step-idle settings are conditional.
+Creating from profiles is distinct from editing a saved instance; neither
+operation connects, Homes, jogs, arms, moves, emits, or executes work.
+
+Machines created or duplicated through Machine Manager begin without another
+machine's camera, calibration, or honeycomb-span binding, and profile-created
+machines retain the existing safe-off motion/default-power/frame defaults.
+Machine Setup names the immutable running machine and its machine/tool profiles,
+reports current versus saved optical/calibration binding state, and offers an
+explicit persistence-only action to bind the active optical profile to that
+saved machine for a future launch. This action does not mutate the current
+`CoreRuntime` identity or grant calibration, coordinate, motion, or output
+authority. Until a matching bound profile is actually running, foreign
+honeycomb support is not used as the current authoring/execution frame.
+
+First-run onboarding now defaults to the software simulator and can instead
+create a concrete saved machine from any existing physical machine profile plus
+an existing physical tool-head profile. The selected schema-1 registry snapshot
+is used on launch, while motion, default/frame power, and low-power framing stay
+off and camera/calibration bindings stay empty. The optional network test checks
+reachability only; saving performs no controller or camera action and is not
+physical verification.
+
+Normal new projects now resolve operation defaults from the immutable **running**
+machine/tool profile identity, never the next-launch registry selection or
+arbitrary user SQLite recipes. The curated priority is exact machine+tool, then
+future explicit tool-only, then future universal records, with no tier mixing.
+The existing Ender-3 S1 Pro plus generic 10 W identity retains all 13 historical
+operations exactly. Other current combinations receive one visible Line layer
+at `min(1000, running max work feed)` with 0% power, one pass, output disabled,
+zero corrections, no air-assist assumption, and a visible instruction to
+configure or apply a compatible recipe. `default_operation_layers()` and the
+project/material/machine registry schemas remain unchanged. Project bounds and
+machine-versus-honeycomb coordinate selection still come only from the actual
+running work area and currently bound support.
+
+Focused verification for this milestone passed **886 tests** across saved
+profiles and runtime resolution, Machine Manager and Machine Setup, first-run,
+material recipes, historical and resolved project defaults, coordinate/support
+authority, structured preflight, `MachineService`, strict controller
+transcripts, dialect/transport selection, deterministic planning goldens,
+desktop async lifecycle, toolpath generation, and job planning. Repository-wide
+Ruff, `compileall -q laser_aligner`, and `git diff --check` also passed. This was
+automated Windows Python 3.13 verification only; no physical machine,
+controller, camera, motion, arming, or laser behavior was re-verified or newly
+claimed by this configuration/authoring change.
+
 The machine core now has explicit transport and controller-dialect boundaries
 without changing controller support or execution authority. The neutral
 `MachineTransport` protocol remains limited to open, close, raw/line writes,
