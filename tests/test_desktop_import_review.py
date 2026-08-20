@@ -19,6 +19,7 @@ from laser_aligner.desktop.import_review import (
     ImportReviewDialog,
 )
 from laser_aligner.project import (
+    DEFAULT_IMPORTER_REGISTRY,
     ImportCapability,
     ImportLayerManifest,
     ImportScanManifest,
@@ -139,6 +140,37 @@ def test_warning_only_manifest_requires_explicit_import_approval(
     qt_application.processEvents()
 
     assert dialog.result() == QtWidgets.QDialog.DialogCode.Accepted
+
+
+@pytest.mark.parametrize("importer_id", ("lightburn", "gcode", "svg", "raster"))
+def test_shared_review_dialog_supports_every_registered_importer_type(
+    qt_application: QtWidgets.QApplication,
+    importer_id: str,
+) -> None:
+    spec = DEFAULT_IMPORTER_REGISTRY.get(importer_id)
+    assert spec is not None
+    suffix = spec.suffixes[0]
+    manifest = ImportScanManifest(
+        importer_id=importer_id,
+        source_name=f"review{suffix}",
+        source_suffix=suffix,
+        source_size_bytes=32,
+        source_sha256="cd" * 32,
+        capabilities=spec.capabilities,
+        source_facts=("Bounded source fact",),
+    )
+
+    dialog = ImportReviewDialog(manifest)
+    labels = _source_label_text(dialog)
+
+    assert dialog.importer_display_name == spec.display_name
+    assert dialog.windowTitle() == f"Review {spec.display_name} import"
+    assert f"{spec.display_name} ({importer_id})" in labels
+    assert "cd" * 32 in labels
+    assert dialog.import_button.isEnabled()
+    assert dialog.status_label.objectName() == "statusGood"
+
+    dialog.reject()
 
 
 @pytest.mark.parametrize(

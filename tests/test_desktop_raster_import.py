@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
 import pytest
 
@@ -18,14 +20,14 @@ from PySide6 import QtWidgets
 
 from laser_aligner.desktop import main_window as main_window_module
 from laser_aligner.desktop.main_window import E3MainWindow
-from laser_aligner.errors import SvgError
 from laser_aligner.project import (
     AddObjectCommand,
     CommandStack,
+    LayerMode,
+    ObjectKind,
     ProjectDocument,
     SceneObject,
 )
-from laser_aligner.project.toolpath import object_polylines
 
 
 @pytest.fixture(scope="module")
@@ -35,11 +37,9 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
     application.processEvents()
 
 
-def _bounds(polylines) -> tuple[float, float, float, float]:
-    points = np.vstack([line.points for line in polylines])
-    minimum = points.min(axis=0)
-    maximum = points.max(axis=0)
-    return minimum[0], minimum[1], maximum[0], maximum[1]
+def _write_image(path: Path, *, width: int, height: int, value: int) -> None:
+    pixels = np.full((height, width, 3), value, dtype=np.uint8)
+    assert cv2.imwrite(str(path), pixels)
 
 
 def _harness(*, with_existing_object: bool = False) -> SimpleNamespace:
@@ -72,7 +72,7 @@ def _harness(*, with_existing_object: bool = False) -> SimpleNamespace:
         history=history,
         active_layer_id=document.active_layer_id,
         workspace=SimpleNamespace(select_objects=select_objects, selection=selection),
-        _document_center=lambda: (95.0, 95.0),
+        _document_center=lambda: (110.0, 110.0),
         _add_object=add_object,
         show_notice=notices.append,
         show_error=errors.append,
@@ -101,36 +101,13 @@ def _state_snapshot(harness: SimpleNamespace) -> dict[str, object]:
     }
 
 
-@pytest.mark.parametrize(
-    ("dimensions", "expected_width", "expected_height"),
-    [
-        ('width="50.8mm" height="25.4mm"', 15.24, 10.16),
-        ('width="5.08cm" height="2.54cm"', 15.24, 10.16),
-        ('width="2in" height="1in"', 15.24, 10.16),
-        ('width="192px" height="96px"', 15.24, 10.16),
-        ("", 15.875, 10.583),
-    ],
-)
-def test_desktop_svg_review_preserves_physical_result_and_one_step_undo(
+def test_desktop_raster_review_preserves_result_and_existing_undo_semantics(
     qt_application: QtWidgets.QApplication,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-    dimensions: str,
-    expected_width: float,
-    expected_height: float,
+    tmp_path: Path,
 ) -> None:
-    filename = tmp_path / "physical.svg"
-    filename.write_text(
-        f"""
-        <svg xmlns="http://www.w3.org/2000/svg" {dimensions}
-             viewBox="0 0 200 100">
-          <g transform="translate(7,11) scale(1.5,2)">
-            <rect x="10" y="20" width="40" height="20"/>
-          </g>
-        </svg>
-        """,
-        encoding="utf-8",
-    )
+    filename = tmp_path / "engraving.png"
+    _write_image(filename, width=12, height=6, value=83)
     monkeypatch.setattr(
         QtWidgets.QFileDialog,
         "getOpenFileName",
@@ -139,8 +116,8 @@ def test_desktop_svg_review_preserves_physical_result_and_one_step_undo(
     harness = _harness()
     events: list[str] = []
     reviewed_sha256: list[str] = []
-    real_scan = main_window_module.scan_svg_file
-    real_load = main_window_module.load_svg_project
+    real_scan = main_window_module.scan_raster_file
+    real_read = main_window_module.read_raster_asset_payload
 
     def scan(path: str):
         events.append("scan")
@@ -151,84 +128,77 @@ def test_desktop_svg_review_preserves_physical_result_and_one_step_undo(
         assert parent is harness
         assert manifest.ready_for_parse
         assert len(manifest.source_sha256) == 64
-        assert manifest.layers
         assert manifest.source_facts
-        assert manifest.coordinate_facts
         reviewed_sha256.append(manifest.source_sha256)
         return True
 
-    def load(path: str, *, expected_source_sha256: str):
+    def read(path: str, *, expected_source_sha256: str):
         events.append("load")
         assert expected_source_sha256 == reviewed_sha256[-1]
-        return real_load(path, expected_source_sha256=expected_source_sha256)
+        return real_read(path, expected_source_sha256=expected_source_sha256)
 
-    monkeypatch.setattr(main_window_module, "scan_svg_file", scan)
+    monkeypatch.setattr(main_window_module, "scan_raster_file", scan)
     monkeypatch.setattr(main_window_module, "review_import_manifest", review)
-    monkeypatch.setattr(main_window_module, "load_svg_project", load)
-    initial_active_layer_id = harness.active_layer_id
+    monkeypatch.setattr(main_window_module, "read_raster_asset_payload", read)
+    initial_layer_ids = [layer.id for layer in harness.document.layers]
 
-    E3MainWindow.import_svg(harness)
+    E3MainWindow.import_image(harness)
 
     assert events == ["scan", "review", "load"]
     assert harness.errors == []
+    imported_layers = [
+        layer for layer in harness.document.layers if layer.id not in initial_layer_ids
+    ]
+    assert len(imported_layers) == 1
+    assert imported_layers[0].mode == LayerMode.RASTER
+    assert imported_layers[0].output_enabled is False
+    assert harness.active_layer_id == imported_layers[0].id
     assert len(harness.document.objects) == 1
     item = harness.document.objects[0]
-    assert item.transform.x_mm == pytest.approx(95.0, abs=0.01)
-    assert item.transform.y_mm == pytest.approx(95.0, abs=0.01)
-    assert item.transform.width_mm == pytest.approx(expected_width, abs=0.01)
-    assert item.transform.height_mm == pytest.approx(expected_height, abs=0.01)
-    assert _bounds(object_polylines(item)) == pytest.approx(
-        (
-            95.0 - expected_width / 2.0,
-            95.0 - expected_height / 2.0,
-            95.0 + expected_width / 2.0,
-            95.0 + expected_height / 2.0,
-        ),
-        abs=0.01,
-    )
-    assert item.metadata["source_name"] == "physical.svg"
-    assert item.metadata["source_svg"] == filename.read_bytes().decode("utf-8")
-    assert harness.active_layer_id == initial_active_layer_id
-    assert harness.history.depth == 1
-    assert harness.history.undo_text == "Import SVG"
+    assert item.kind == ObjectKind.IMAGE
+    assert item.layer_id == imported_layers[0].id
+    assert item.transform.x_mm == pytest.approx(110.0)
+    assert item.transform.y_mm == pytest.approx(110.0)
+    assert item.transform.width_mm == pytest.approx(80.0)
+    assert item.transform.height_mm == pytest.approx(40.0)
+    assert item.geometry["asset"] == str(filename.resolve())
     assert harness.workspace.selection == [item.id]
     assert harness.authoring_state == {
         "tool": "rectangle",
         "point_pick": "pending",
     }
+    assert harness.selection_tool_activations == []
+    assert harness.history.depth == 2
+    assert harness.history.undo_text == "Import raster image"
+    assert "deterministic ordered dithering" in harness.notices[-1]
 
     assert harness.history.undo()
     assert harness.document.objects == []
-    assert harness.active_layer_id == initial_active_layer_id
-    assert harness.history.redo_text == "Import SVG"
+    assert len(harness.document.layers) == len(initial_layer_ids) + 1
+    assert harness.history.undo_text == "Add raster layer"
+
+    assert harness.history.undo()
+    assert [layer.id for layer in harness.document.layers] == initial_layer_ids
+    assert harness.history.redo_text == "Add raster layer"
+
+    assert harness.history.redo()
+    assert len(harness.document.layers) == len(initial_layer_ids) + 1
+    assert harness.document.objects == []
+    assert harness.history.redo_text == "Import raster image"
 
     assert harness.history.redo()
     assert len(harness.document.objects) == 1
     assert harness.document.objects[0].id == item.id
-    assert harness.history.depth == 1
+    assert harness.history.depth == 2
 
 
-@pytest.mark.parametrize(
-    "unsupported_content",
-    [
-        '<text x="2" y="4">not converted</text>',
-        '<image href="part.png" width="5" height="5"/>',
-        '<style>.cut { transform: scale(0.5); }</style>',
-    ],
-)
-def test_desktop_svg_blocker_never_reaches_strict_import_and_changes_nothing(
+def test_desktop_raster_blocker_never_reaches_strict_probe_and_changes_nothing(
     qt_application: QtWidgets.QApplication,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
-    unsupported_content: str,
+    tmp_path: Path,
 ) -> None:
-    filename = tmp_path / "blocked.svg"
-    filename.write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
-        '<rect class="cut" width="10" height="10"/>'
-        f"{unsupported_content}</svg>",
-        encoding="utf-8",
-    )
+    filename = tmp_path / "invalid.png"
+    filename.write_bytes(b"not a supported raster image")
     monkeypatch.setattr(
         QtWidgets.QFileDialog,
         "getOpenFileName",
@@ -240,35 +210,35 @@ def test_desktop_svg_blocker_never_reaches_strict_import_and_changes_nothing(
         reviewed.append(manifest)
         return True
 
-    def unexpected_load(*_args, **_kwargs):
-        raise AssertionError("Blocked SVG must not reach strict import")
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("Blocked raster must not reach strict probe")
 
     monkeypatch.setattr(main_window_module, "review_import_manifest", review)
-    monkeypatch.setattr(main_window_module, "load_svg_project", unexpected_load)
+    monkeypatch.setattr(
+        main_window_module,
+        "read_raster_asset_payload",
+        unexpected_read,
+    )
     harness = _harness(with_existing_object=True)
     before = _state_snapshot(harness)
 
-    E3MainWindow.import_svg(harness)
+    E3MainWindow.import_image(harness)
 
     assert len(reviewed) == 1
     assert not reviewed[0].ready_for_parse
-    assert reviewed[0].unsupported_features or reviewed[0].errors
+    assert reviewed[0].errors or reviewed[0].unsupported_features
     assert _state_snapshot(harness) == before
     assert harness.errors == []
     assert harness.notices == []
 
 
-def test_desktop_svg_review_cancel_preserves_complete_authoring_state(
+def test_desktop_raster_review_cancel_preserves_complete_authoring_state(
     qt_application: QtWidgets.QApplication,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    filename = tmp_path / "cancel.svg"
-    filename.write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
-        '<rect width="10" height="10"/></svg>',
-        encoding="utf-8",
-    )
+    filename = tmp_path / "cancel.png"
+    _write_image(filename, width=8, height=5, value=127)
     monkeypatch.setattr(
         QtWidgets.QFileDialog,
         "getOpenFileName",
@@ -280,15 +250,19 @@ def test_desktop_svg_review_cancel_preserves_complete_authoring_state(
         reviewed.append(manifest)
         return False
 
-    def unexpected_load(*_args, **_kwargs):
-        raise AssertionError("Cancelled SVG must not reach strict import")
+    def unexpected_read(*_args, **_kwargs):
+        raise AssertionError("Cancelled raster must not reach strict probe")
 
     monkeypatch.setattr(main_window_module, "review_import_manifest", cancel_review)
-    monkeypatch.setattr(main_window_module, "load_svg_project", unexpected_load)
+    monkeypatch.setattr(
+        main_window_module,
+        "read_raster_asset_payload",
+        unexpected_read,
+    )
     harness = _harness(with_existing_object=True)
     before = _state_snapshot(harness)
 
-    E3MainWindow.import_svg(harness)
+    E3MainWindow.import_image(harness)
 
     assert len(reviewed) == 1
     assert reviewed[0].ready_for_parse
@@ -297,22 +271,17 @@ def test_desktop_svg_review_cancel_preserves_complete_authoring_state(
     assert harness.notices == []
 
 
-def test_desktop_svg_source_changed_after_approval_preserves_all_state(
+def test_desktop_raster_source_changed_after_approval_preserves_all_state(
     qt_application: QtWidgets.QApplication,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    filename = tmp_path / "changed-after-review.svg"
-    original = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10">'
-        '<rect width="10" height="10"/></svg>'
-    )
-    changed = (
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10">'
-        '<rect width="20" height="10"/></svg>'
-    )
-    assert len(original.encode("utf-8")) == len(changed.encode("utf-8"))
-    filename.write_text(original, encoding="utf-8")
+    filename = tmp_path / "changed-after-review.bmp"
+    replacement = tmp_path / "replacement.bmp"
+    _write_image(filename, width=9, height=7, value=20)
+    _write_image(replacement, width=9, height=7, value=220)
+    changed = replacement.read_bytes()
+    assert len(filename.read_bytes()) == len(changed)
     monkeypatch.setattr(
         QtWidgets.QFileDialog,
         "getOpenFileName",
@@ -322,7 +291,7 @@ def test_desktop_svg_source_changed_after_approval_preserves_all_state(
     def replace_source_after_approval(manifest, _parent) -> bool:
         assert manifest.ready_for_parse
         assert len(manifest.source_sha256) == 64
-        filename.write_text(changed, encoding="utf-8")
+        filename.write_bytes(changed)
         return True
 
     monkeypatch.setattr(
@@ -333,7 +302,7 @@ def test_desktop_svg_source_changed_after_approval_preserves_all_state(
     harness = _harness(with_existing_object=True)
     before = _state_snapshot(harness)
 
-    E3MainWindow.import_svg(harness)
+    E3MainWindow.import_image(harness)
 
     assert _state_snapshot(harness) == before
     assert harness.notices == []
@@ -341,17 +310,13 @@ def test_desktop_svg_source_changed_after_approval_preserves_all_state(
     assert "changed after import review" in harness.errors[0].casefold()
 
 
-def test_desktop_svg_strict_parser_remains_authoritative_after_approval(
+def test_desktop_raster_strict_probe_remains_authoritative_after_approval(
     qt_application: QtWidgets.QApplication,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    filename = tmp_path / "strict.svg"
-    filename.write_text(
-        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
-        '<rect width="10" height="10"/></svg>',
-        encoding="utf-8",
-    )
+    filename = tmp_path / "strict.png"
+    _write_image(filename, width=8, height=5, value=64)
     monkeypatch.setattr(
         QtWidgets.QFileDialog,
         "getOpenFileName",
@@ -364,15 +329,19 @@ def test_desktop_svg_strict_parser_remains_authoritative_after_approval(
     )
 
     def reject_strictly(*_args, **_kwargs):
-        raise SvgError("Strict SVG parser sentinel rejection")
+        raise ValueError("Strict raster probe sentinel rejection")
 
-    monkeypatch.setattr(main_window_module, "load_svg_project", reject_strictly)
+    monkeypatch.setattr(
+        main_window_module,
+        "read_raster_asset_payload",
+        reject_strictly,
+    )
     harness = _harness(with_existing_object=True)
     before = _state_snapshot(harness)
 
-    E3MainWindow.import_svg(harness)
+    E3MainWindow.import_image(harness)
 
     assert _state_snapshot(harness) == before
     assert harness.notices == []
     assert len(harness.errors) == 1
-    assert "strict svg parser sentinel rejection" in harness.errors[0].casefold()
+    assert "strict raster probe sentinel rejection" in harness.errors[0].casefold()

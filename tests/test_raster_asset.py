@@ -1,3 +1,4 @@
+import hashlib
 import os
 import struct
 import zlib
@@ -7,6 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
+import laser_aligner.project.raster_asset as raster_asset_module
 from laser_aligner.project import (
     MAX_RASTER_DECODED_BYTES,
     RASTER_FILE_DIALOG_FILTER,
@@ -14,6 +16,8 @@ from laser_aligner.project import (
     decode_raster_grayscale,
     probe_raster_asset,
     read_raster_asset_payload,
+    scan_raster_file,
+    scan_raster_project,
     verify_raster_asset_identity,
 )
 
@@ -180,3 +184,194 @@ def test_shared_payload_rejects_header_change_with_restored_file_stat(
 
     with pytest.raises(ValueError, match="changed after metadata inspection"):
         read_raster_asset_payload(path, metadata=metadata)
+
+
+@pytest.mark.parametrize(
+    ("suffix", "format_name"),
+    [(".png", "PNG"), (".jpg", "JPEG"), (".jpeg", "JPEG"), (".bmp", "BMP")],
+)
+def test_raster_file_scan_reports_bounded_metadata_and_exact_digest_without_decode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+    format_name: str,
+) -> None:
+    path = tmp_path / f"review{suffix}"
+    assert cv2.imwrite(str(path), np.full((7, 11, 3), 93, dtype=np.uint8))
+    encoded = path.read_bytes()
+    monkeypatch.setattr(
+        cv2,
+        "imdecode",
+        lambda *_args, **_kwargs: pytest.fail("raster scan must not decode pixels"),
+    )
+
+    manifest = scan_raster_file(path)
+
+    assert manifest.ready_for_parse
+    assert manifest.importer_id == "raster"
+    assert manifest.source_name == path.name
+    assert manifest.source_suffix == suffix
+    assert manifest.source_size_bytes == len(encoded)
+    assert manifest.source_sha256 == hashlib.sha256(encoded).hexdigest()
+    assert manifest.natural_size_mm is None
+    assert {value.value for value in manifest.capabilities} == {"grayscale_raster"}
+    assert [(layer.source_key, layer.name, layer.mode_hint, layer.object_count) for layer in manifest.layers] == [
+        ("image:0", "review", "raster", 1)
+    ]
+    assert f"Encoded format: {format_name}" in manifest.source_facts
+    assert "Oriented pixel dimensions: 11 x 7" in manifest.source_facts
+    assert any("physical size" in fact for fact in manifest.coordinate_facts)
+    assert any("grayscale" in fact for fact in manifest.approximations)
+
+
+def test_raster_project_scan_is_deterministic_and_does_not_construct_or_decode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "memory.png"
+    assert cv2.imwrite(str(path), np.zeros((3, 5, 4), dtype=np.uint8))
+    encoded = path.read_bytes()
+    monkeypatch.setattr(
+        cv2,
+        "imdecode",
+        lambda *_args, **_kwargs: pytest.fail("in-memory scan must not decode pixels"),
+    )
+
+    first = scan_raster_project(encoded, source_name="memory.png")
+    second = scan_raster_project(encoded, source_name="memory.png")
+
+    assert first == second
+    assert first.ready_for_parse
+    assert first.source_size_bytes == len(encoded)
+    assert first.source_sha256 == hashlib.sha256(encoded).hexdigest()
+    assert first.layers[0].object_count == 1
+
+
+def test_raster_project_scan_rejects_over_limit_bytes_before_hash_or_header(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        raster_asset_module.hashlib,
+        "sha256",
+        lambda _payload: pytest.fail("over-limit raster must not be hashed"),
+    )
+    monkeypatch.setattr(
+        raster_asset_module,
+        "_raster_header",
+        lambda *_args: pytest.fail("over-limit raster must not be inspected"),
+    )
+
+    manifest = scan_raster_project(
+        b"x" * 11,
+        source_name="large.png",
+        max_file_bytes=10,
+    )
+
+    assert not manifest.ready_for_parse
+    assert manifest.source_sha256 == ""
+    assert "10-byte file limit" in manifest.errors[0]
+
+
+@pytest.mark.parametrize("source_name", ["blocked.tif", "blocked.unknown"])
+def test_raster_file_scan_hashes_readable_wrong_suffix_before_blocking(
+    tmp_path: Path,
+    source_name: str,
+) -> None:
+    source = tmp_path / "source.png"
+    assert cv2.imwrite(str(source), np.zeros((2, 4, 3), dtype=np.uint8))
+    path = tmp_path / source_name
+    encoded = source.read_bytes()
+    path.write_bytes(encoded)
+
+    manifest = scan_raster_file(path)
+
+    assert not manifest.ready_for_parse
+    assert manifest.source_sha256 == hashlib.sha256(encoded).hexdigest()
+    assert "accepts PNG, JPEG, and BMP" in manifest.errors[0]
+
+
+def test_raster_file_scan_hashes_malformed_bounded_payload_and_reports_limits(
+    tmp_path: Path,
+) -> None:
+    malformed = tmp_path / "malformed.png"
+    encoded = b"not a raster image"
+    malformed.write_bytes(encoded)
+
+    malformed_manifest = scan_raster_file(malformed)
+    limited_manifest = scan_raster_file(malformed, max_file_bytes=len(encoded) - 1)
+
+    assert not malformed_manifest.ready_for_parse
+    assert malformed_manifest.source_sha256 == hashlib.sha256(encoded).hexdigest()
+    assert "Unsupported raster image format" in malformed_manifest.errors[0]
+    assert not limited_manifest.ready_for_parse
+    assert limited_manifest.source_sha256 == ""
+    assert "file limit" in limited_manifest.errors[0]
+
+
+def test_reviewed_raster_digest_is_verified_without_pixel_decode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "reviewed.png"
+    assert cv2.imwrite(str(path), np.full((4, 6, 3), 17, dtype=np.uint8))
+    manifest = scan_raster_file(path)
+    monkeypatch.setattr(
+        cv2,
+        "imdecode",
+        lambda *_args, **_kwargs: pytest.fail(
+            "strict source verification must not decode pixels"
+        ),
+    )
+    monkeypatch.setattr(
+        raster_asset_module,
+        "probe_raster_asset",
+        lambda *_args, **_kwargs: pytest.fail(
+            "reviewed bytes must be verified before the strict header probe"
+        ),
+    )
+
+    payload = read_raster_asset_payload(
+        path,
+        expected_source_sha256=manifest.source_sha256.upper(),
+    )
+
+    assert payload.identity.sha256 == manifest.source_sha256
+    assert (payload.metadata.width, payload.metadata.height) == (6, 4)
+
+
+def test_reviewed_raster_digest_rejects_valid_same_dimension_replacement(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "changed.png"
+    assert cv2.imwrite(str(path), np.full((4, 6, 3), 17, dtype=np.uint8))
+    manifest = scan_raster_file(path)
+    assert cv2.imwrite(str(path), np.full((4, 6, 3), 221, dtype=np.uint8))
+
+    with pytest.raises(ValueError, match="changed after import review"):
+        read_raster_asset_payload(
+            path,
+            expected_source_sha256=manifest.source_sha256,
+        )
+
+
+def test_reviewed_raster_digest_rejects_malformed_replacement_before_header_parse(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "malformed-after-review.png"
+    assert cv2.imwrite(str(path), np.full((4, 6, 3), 17, dtype=np.uint8))
+    manifest = scan_raster_file(path)
+    path.write_bytes(b"replacement is not a raster image")
+    monkeypatch.setattr(
+        raster_asset_module,
+        "_raster_header",
+        lambda *_args: pytest.fail(
+            "changed reviewed bytes must be rejected before header parsing"
+        ),
+    )
+
+    with pytest.raises(ValueError, match="changed after import review"):
+        read_raster_asset_payload(
+            path,
+            expected_source_sha256=manifest.source_sha256,
+        )

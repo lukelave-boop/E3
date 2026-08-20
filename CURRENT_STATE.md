@@ -52,10 +52,9 @@ an E3 project. `ImporterSpec`, `ImportCapability`, `ImportLayerManifest`,
 case-insensitive suffix lookup, file-size limits, capability declarations,
 natural-size/layer scan facts, review warnings and approximations, and explicit
 blocking errors or unsupported features. File manifests also carry the SHA-256
-of the exact scanned source bytes. The default registry describes the
-existing LightBurn and bounded foreign-G-code importers using their existing
-dialog filters and byte limits; LightBurn also exposes one shared supported-
-suffix constant instead of duplicating that literal in its loader.
+of the exact scanned source bytes. The default registry describes SVG, raster
+images, LightBurn, and bounded foreign G-code using shared supported-suffix,
+dialog-filter, and byte-limit constants.
 
 LightBurn implements a bounded **scan -> strict parse** path on top of that
 contract. `scan_lightburn_file()` and `scan_lightburn_project()` inspect bounded
@@ -92,7 +91,28 @@ and importer plus manifest coverage reported **70 passed, 1 skipped**; the skip
 was the PySide6-dependent G-code desktop widget test in the local environment.
 Ruff, compileall, and diff checks were clean.
 
-Both major foreign formats now use that shared discovery contract in one native
+SVG now has the matching bounded scan and exact-source strict adapter.
+`scan_svg_file()` hashes the exact bounded bytes and delegates to the capped SVG
+parser only to produce detached geometry facts; it never constructs a
+`SceneObject`. Natural physical dimensions, path/point counts, viewBox and
+coordinate mapping, flattening approximations, parser errors, and incomplete
+content are represented in the manifest. Existing fail-closed SVG semantics are
+preserved: parser warnings become review blockers, and `load_svg_project()`
+verifies the approved digest before the authoritative strict parse and native
+object conversion.
+
+Raster image discovery now reuses the bounded stable encoded-payload and header
+metadata contract. `scan_raster_file()` reports exact encoded-byte SHA-256,
+format and pixel dimensions, bit depth/channels/orientation/decode budget, and
+the desktop's existing fitted-size and grayscale/dither facts without decoding
+pixels or creating a project object. The post-review
+`read_raster_asset_payload()` call requires the approved digest before any layer,
+active-layer, history, selection, or object mutation. Newly created raster
+layers are explicitly output-disabled; encoded-size, dimension, header,
+decode-budget, display sizing, and one-/two-command undo behavior otherwise
+remain unchanged.
+
+All four formats now use that shared discovery contract in one native
 desktop pre-import review flow. After file selection, the desktop runs the
 format's bounded file scan and presents a reusable window-modal
 `ImportReviewDialog` before invoking the existing strict loader or changing the
@@ -106,23 +126,25 @@ first 200 layer/operation rows and first 200 entries in each repeated fact or
 message section; exact omitted counts remain visible and the immutable manifest
 itself is not truncated. Cancel and blocked review return before
 project layers, objects, history, selection, active layer, or creation/point-
-pick authoring state changes. The existing `load_lightburn_project()` and
-`load_gcode_project()` paths still re-read, re-scan, and strictly parse the
-source and remain authoritative. Before scanning or parsing, each loader now
-verifies that those newly read bytes match the reviewed manifest's SHA-256; a
-changed source aborts without project/history/selection/authoring mutation.
-Detached results are committed through the
-unchanged single `FunctionalCommand`, preserving one-step undo/redo. No project
-schema, controller path, motion, arming, execution, or laser behavior changed.
-Focused Windows Python 3.13 verification passed **95 tests** across the importer
-manifest, both bounded scanners and strict importers, the reusable offscreen Qt
-dialog, both desktop integrations, and their source/documentation contract.
+pick authoring state changes. The existing strict SVG, raster, LightBurn, and
+G-code paths remain authoritative and verify that newly read bytes match the
+reviewed manifest's SHA-256; a changed source aborts without project/history/
+selection/authoring mutation. Each format retains its existing undo/redo
+transaction granularity. No project schema, controller path, motion, arming,
+execution, or laser behavior changed. Focused Windows Python 3.13 verification
+passed **204 tests** across the importer manifest, all four bounded scanners and
+strict paths, the reusable offscreen Qt dialog, all four desktop integrations,
+and their source/documentation contract. An additional raster-focused toolpath
+run passed **32 tests** with 39 deselected.
+
 Coverage includes explicit approval, warning-only acceptance, independent error
 and unsupported-feature blockers, Cancel preservation of document/history/
 selection/authoring state, deterministic UI truncation with exact omitted counts,
 raw-byte digest generation and propagation, same-size source replacement after
-approval, scan-before-strict ordering, strict-parser rejection, and one-step
-undo/redo. Repository-wide Ruff, package compileall, and diff checks also pass.
+approval, scan-before-strict ordering, strict-parser/probe rejection, and each
+format's existing undo/redo behavior. Repository-wide Ruff, package compileall,
+and diff checks also pass.
+
 This flow is automated-test and offscreen-widget verified only; it required no
 physical controller, motion, camera, or laser test.
 

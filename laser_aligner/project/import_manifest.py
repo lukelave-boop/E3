@@ -25,6 +25,16 @@ from .lightburn import (
     MAX_LIGHTBURN_FILE_BYTES,
     SUPPORTED_LIGHTBURN_SUFFIXES,
 )
+from .raster_asset import (
+    MAX_RASTER_ENCODED_BYTES,
+    RASTER_FILE_DIALOG_FILTER,
+    SUPPORTED_RASTER_SUFFIXES,
+)
+from .svg_import import (
+    MAX_SVG_FILE_BYTES,
+    SUPPORTED_SVG_SUFFIXES,
+    SVG_FILE_DIALOG_FILTER,
+)
 
 _IMPORTER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 _SOURCE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -38,6 +48,7 @@ class ImportCapability(str, Enum):
     OPERATION_SETTINGS = "operation_settings"
     GROUPING = "grouping"
     ARC_GEOMETRY = "arc_geometry"
+    GRAYSCALE_RASTER = "grayscale_raster"
 
 
 def _importer_id(value: str) -> str:
@@ -332,9 +343,29 @@ LIGHTBURN_IMPORTER_SPEC = ImporterSpec(
     file_dialog_filter=LIGHTBURN_FILE_DIALOG_FILTER,
 )
 
+SVG_IMPORTER_SPEC = ImporterSpec(
+    importer_id="svg",
+    display_name="SVG",
+    suffixes=SUPPORTED_SVG_SUFFIXES,
+    capabilities=frozenset({ImportCapability.VECTOR_GEOMETRY}),
+    max_file_bytes=MAX_SVG_FILE_BYTES,
+    file_dialog_filter=SVG_FILE_DIALOG_FILTER,
+)
+
+RASTER_IMPORTER_SPEC = ImporterSpec(
+    importer_id="raster",
+    display_name="Raster Image",
+    suffixes=SUPPORTED_RASTER_SUFFIXES,
+    capabilities=frozenset({ImportCapability.GRAYSCALE_RASTER}),
+    max_file_bytes=MAX_RASTER_ENCODED_BYTES,
+    file_dialog_filter=RASTER_FILE_DIALOG_FILTER,
+)
+
 DEFAULT_IMPORTER_REGISTRY = ImporterRegistry(
     (
         LIGHTBURN_IMPORTER_SPEC,
         GCODE_IMPORTER_SPEC,
+        SVG_IMPORTER_SPEC,
+        RASTER_IMPORTER_SPEC,
     )
 )

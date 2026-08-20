@@ -8,8 +8,14 @@ from laser_aligner.project import (
     LIGHTBURN_IMPORTER_SPEC,
     MAX_GCODE_FILE_BYTES,
     MAX_LIGHTBURN_FILE_BYTES,
+    MAX_RASTER_ENCODED_BYTES,
+    MAX_SVG_FILE_BYTES,
+    RASTER_IMPORTER_SPEC,
     SUPPORTED_GCODE_SUFFIXES,
     SUPPORTED_LIGHTBURN_SUFFIXES,
+    SUPPORTED_RASTER_SUFFIXES,
+    SUPPORTED_SVG_SUFFIXES,
+    SVG_IMPORTER_SPEC,
     ImportCapability,
     ImporterRegistry,
     ImporterSpec,
@@ -34,18 +40,24 @@ def _spec(
     )
 
 
-def test_default_registry_describes_existing_importers() -> None:
+def test_default_registry_describes_supported_importers() -> None:
     assert GCODE_IMPORTER_SPEC.suffixes == tuple(sorted(SUPPORTED_GCODE_SUFFIXES))
     assert GCODE_IMPORTER_SPEC.max_file_bytes == MAX_GCODE_FILE_BYTES
     assert LIGHTBURN_IMPORTER_SPEC.suffixes == tuple(
         sorted(SUPPORTED_LIGHTBURN_SUFFIXES)
     )
     assert LIGHTBURN_IMPORTER_SPEC.max_file_bytes == MAX_LIGHTBURN_FILE_BYTES
+    assert SVG_IMPORTER_SPEC.suffixes == SUPPORTED_SVG_SUFFIXES
+    assert SVG_IMPORTER_SPEC.max_file_bytes == MAX_SVG_FILE_BYTES
+    assert RASTER_IMPORTER_SPEC.suffixes == SUPPORTED_RASTER_SUFFIXES
+    assert RASTER_IMPORTER_SPEC.max_file_bytes == MAX_RASTER_ENCODED_BYTES
 
     assert ImportCapability.ARC_GEOMETRY in GCODE_IMPORTER_SPEC.capabilities
     assert ImportCapability.SOURCE_LAYERS not in GCODE_IMPORTER_SPEC.capabilities
     assert ImportCapability.SOURCE_LAYERS in LIGHTBURN_IMPORTER_SPEC.capabilities
     assert ImportCapability.GROUPING in LIGHTBURN_IMPORTER_SPEC.capabilities
+    assert ImportCapability.VECTOR_GEOMETRY in SVG_IMPORTER_SPEC.capabilities
+    assert ImportCapability.GRAYSCALE_RASTER in RASTER_IMPORTER_SPEC.capabilities
 
 
 @pytest.mark.parametrize(
@@ -55,6 +67,11 @@ def test_default_registry_describes_existing_importers() -> None:
         ("job.tap", "gcode"),
         ("layout.LBRN", "lightburn"),
         ("layout.lbrn2", "lightburn"),
+        ("artwork.SVG", "svg"),
+        ("photo.PNG", "raster"),
+        ("photo.jpg", "raster"),
+        ("photo.JPEG", "raster"),
+        ("photo.bmp", "raster"),
     ],
 )
 def test_default_registry_resolves_paths_case_insensitively(

@@ -19,6 +19,7 @@ _POINTS_RE = re.compile(_NUMBER)
 _XML_STYLESHEET_RE = re.compile(r"<\?xml-stylesheet\b", re.IGNORECASE)
 _XML_DECLARATION_RE = re.compile(r"<!\s*(?:DOCTYPE|ENTITY)\b", re.IGNORECASE)
 _CSS_PX_TO_MM = 25.4 / 96.0
+MAX_SVG_TEXT_CHARACTERS = 10_000_000
 _MAX_SVG_PATHS = 50_000
 _MAX_SVG_POINTS = 250_000
 _MAX_SVG_FLATTENED_POINTS = 32_768
@@ -941,7 +942,7 @@ def parse_svg(svg_text: str, curve_tolerance_ratio: float = 0.0005) -> SvgGeomet
     tolerance_ratio = float(curve_tolerance_ratio)
     if not math.isfinite(tolerance_ratio) or tolerance_ratio <= 0.0:
         raise SvgError("curve_tolerance_ratio must be a finite positive number")
-    if len(svg_text) > 10_000_000:
+    if len(svg_text) > MAX_SVG_TEXT_CHARACTERS:
         raise SvgError("SVG is larger than the 10 MB parser limit")
     if svg_text.count("<") > _MAX_SVG_XML_MARKERS:
         raise SvgError(

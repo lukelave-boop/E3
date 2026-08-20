@@ -2,18 +2,21 @@
 
 ## Unreleased
 
-- Added one reusable desktop pre-import review dialog for LightBurn and foreign
-  G-code. Both paths now run their bounded scan before strict import and show
-  source, layer/operation, coordinate, warning, approximation, unsupported, and
-  error facts. Blocked manifests disable Import; all other manifests require
-  explicit approval. Cancel returns before project/history/selection/authoring
-  mutation. The dialog renders no more than 200 discovered rows or 200 entries
-  per repeated text section and reports exact omitted counts without truncating
-  the manifest. File scans now record the exact source-byte SHA-256, and the
-  authoritative strict loader rejects a changed source before parsing or
-  project mutation. Approved unchanged sources retain one-step undo/redo. This
-  changes no project schema, controller, motion, arming, execution, or laser
-  behavior.
+- Extended the reusable desktop pre-import review flow to SVG and raster images
+  as well as LightBurn and foreign G-code. All four paths now run a bounded scan
+  before strict import and show source, layer/operation, coordinate, warning,
+  approximation, unsupported, and error facts. Blocked manifests disable
+  Import; all other manifests require explicit approval. Cancel returns before
+  project/history/selection/authoring mutation. The dialog renders no more than
+  200 discovered rows or 200 entries per repeated text section and reports exact
+  omitted counts without truncating the manifest. File scans now record the
+  exact source-byte SHA-256, and the authoritative strict path rejects a changed
+  source before native object or project mutation. SVG remains fail-closed, and
+  raster scanning reuses the bounded encoded-payload metadata path without
+  decoding pixels. Approved unchanged sources retain their existing undo/redo
+  behavior. Newly created
+  raster layers are explicitly output-disabled. This changes no project schema,
+  controller, motion, arming, execution, or laser behavior.
 
 - Restored the machine-aware read-only Coordinate Audit as the sixth Machine
   Setup tab. It reports running-machine/calibration identity, configured work
