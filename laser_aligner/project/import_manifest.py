@@ -27,6 +27,7 @@ from .lightburn import (
 )
 
 _IMPORTER_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_SOURCE_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class ImportCapability(str, Enum):
@@ -87,6 +88,15 @@ def _text_tuple(values: Iterable[str], label: str) -> tuple[str, ...]:
             raise ValueError(f"{label} entries must be strings")
         output.append(value)
     return tuple(output)
+
+
+def _source_sha256(value: str) -> str:
+    digest = str(value).strip().casefold()
+    if digest and not _SOURCE_SHA256_RE.fullmatch(digest):
+        raise ValueError(
+            "source_sha256 must be an empty string or 64 hexadecimal characters"
+        )
+    return digest
 
 
 @dataclass(slots=True, frozen=True)
@@ -175,6 +185,7 @@ class ImportScanManifest:
     approximations: tuple[str, ...] = ()
     unsupported_features: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
+    source_sha256: str = ""
 
     def __post_init__(self) -> None:
         source_name = str(self.source_name).strip()
@@ -215,6 +226,7 @@ class ImportScanManifest:
         object.__setattr__(self, "natural_width_mm", width)
         object.__setattr__(self, "natural_height_mm", height)
         object.__setattr__(self, "layers", layers)
+        object.__setattr__(self, "source_sha256", _source_sha256(self.source_sha256))
         for field_name in (
             "source_facts",
             "coordinate_facts",

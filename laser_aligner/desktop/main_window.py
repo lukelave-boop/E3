@@ -64,6 +64,8 @@ from ..project import (
     probe_raster_asset,
     save_autosave,
     save_project,
+    scan_gcode_file,
+    scan_lightburn_file,
     snap_selection_rotation_to_stock,
     stock_boundaries,
     verify_project_job_assets,
@@ -82,6 +84,7 @@ from .context_bar import ContextPropertyBar
 from .controller import DesktopController
 from .controls import InspectorTabs, WheelGuard
 from .icons import action_icon, apply_action_icons
+from .import_review import review_import_manifest
 from .job_preview import JobPreviewDialog, PreparedJobPreview, prepare_job_preview
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
@@ -1912,11 +1915,21 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         if not filename:
             return
-        self._activate_selection_tool(show_message=False)
+        try:
+            manifest = scan_gcode_file(filename)
+        except Exception as exc:
+            self.show_error(f"Could not inspect G-code: {exc}")
+            return
+        if (
+            not review_import_manifest(manifest, self)
+            or not manifest.ready_for_parse
+        ):
+            return
         try:
             result = load_gcode_project(
                 filename,
                 center=self._document_center(),
+                expected_source_sha256=manifest.source_sha256,
             )
             layer_start = len(self.document.layers)
             for offset, layer in enumerate(result.layers):
@@ -1961,6 +1974,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.show_error(f"Could not import G-code: {exc}")
             return
 
+        self._activate_selection_tool(show_message=False)
         object_ids = [item.id for item in result.objects]
         self.workspace.select_objects(object_ids)
         if result.warnings:
@@ -1988,11 +2002,21 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         if not filename:
             return
-        self._activate_selection_tool(show_message=False)
+        try:
+            manifest = scan_lightburn_file(filename)
+        except Exception as exc:
+            self.show_error(f"Could not inspect LightBurn project: {exc}")
+            return
+        if (
+            not review_import_manifest(manifest, self)
+            or not manifest.ready_for_parse
+        ):
+            return
         try:
             result = load_lightburn_project(
                 filename,
                 center=self._document_center(),
+                expected_source_sha256=manifest.source_sha256,
             )
             layer_start = len(self.document.layers)
             for offset, layer in enumerate(result.layers):
@@ -2037,6 +2061,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.show_error(f"Could not import LightBurn project: {exc}")
             return
 
+        self._activate_selection_tool(show_message=False)
         object_ids = [item.id for item in result.objects]
         self.workspace.select_objects(object_ids)
         if result.warnings:

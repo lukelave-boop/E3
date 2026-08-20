@@ -42,6 +42,13 @@ geometry, G-code, safety and controller services.
   speed/power/pass/raster settings become ordinary E3 layers, always with
   output disabled until reviewed. Unsupported content stops rather than being
   silently discarded. See [LIGHTBURN_IMPORT.md](LIGHTBURN_IMPORT.md).
+- Shared window-modal pre-import review for LightBurn and bounded foreign
+  G-code. It presents the scan manifest's source, layer/operation, coordinate,
+  warning, approximation, unsupported-feature, and error facts before strict
+  import. Blockers disable **Import**; warning-only and valid manifests require
+  explicit approval; Cancel leaves project and authoring state unchanged. Each
+  rendered layer/text list is capped at 200 with exact omitted counts, while the
+  strict loader verifies the reviewed raw-source SHA-256 before parsing.
 - Mandatory window-modal exact-job Preview distinguishing rapid, powered and
   unpowered moves, with a distinct **START JOB** gate, time scrubbing, animated
   playback, move coordinates, power, timing/distance statistics, display

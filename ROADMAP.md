@@ -36,6 +36,12 @@ Desktop foundation:
 
 Current branch feature:
 
+- Shared importer manifests, bounded LightBurn and foreign-G-code scans, and a
+  native pre-import review gate. Blocked scans cannot proceed; valid and
+  warning-only scans require explicit approval before the existing strict
+  importer creates one undoable project transaction. Review rendering is capped
+  at 200 rows/entries per category with exact omitted counts, and strict import
+  verifies the approved source-byte SHA-256 before parsing.
 - Machine-aware read-only Coordinate Audit as Machine Setup tab 6, including
   calibration-binding blockers, machine-specific physical honeycomb span,
   diagnostic GRBL realtime pose evidence through local or `e3bridge://`

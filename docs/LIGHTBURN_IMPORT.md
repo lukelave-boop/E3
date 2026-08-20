@@ -8,6 +8,28 @@ The importer is intentionally separate from machine execution. It translates
 LightBurn data into ordinary E3 `SceneObject` and `OperationLayer` records; no
 LightBurn-specific object type remains after import.
 
+## Pre-import review
+
+Selecting a project first runs the bounded LightBurn XML-structure scan without
+vectorizing its shapes. A window-modal review shows source name, extension,
+size, format and importer capabilities; referenced layers and object counts;
+source and coordinate facts; warnings; approximations; unsupported features;
+errors; and the SHA-256 of the exact scanned source bytes. Facts the format does
+not report are shown explicitly rather than silently omitted. The complete
+manifest is retained, while the dialog shows at most 200 layers and 200 entries
+per repeated text section and reports the exact number omitted.
+
+Errors or unsupported features block the project and disable **Import**. Valid
+and warning-only manifests still require the operator to explicitly choose
+**Import**. Cancel returns without changing project layers, objects, history,
+selection, active layer, or the current drawing/point-pick authoring state.
+
+After approval, the existing strict LightBurn loader reads the file again and
+verifies those bytes have the reviewed SHA-256 before scanning or performing
+the authoritative geometry conversion. A changed source or strict-parser
+failure stops before any project, history, selection, or authoring-state change.
+A successful import remains one undoable E3 command.
+
 ## Safety boundary
 
 Every imported layer is created with **Output disabled**, regardless of the
