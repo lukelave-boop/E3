@@ -17,7 +17,7 @@ geometry, G-code, safety and controller services.
   short source revision, current project, and unsaved-change marker
 - A full-height right-side inspector for Cuts/Layers, Cameras, Objects, Shape
   Properties, Templates, and Trace, plus a compact bottom row with G-code on
-  the left and Laser, Machine, and Material Library tabs beside it
+  the left and Laser, Machine, and Material Recipes tabs beside it
 - Physical coordinate-aware workspace with adaptive grid, rulers, origin, pan,
   zoom and selectable snap spacing. Machine projects use machine coordinates;
   current honeycomb-local projects use the detected support's rigid X0/Y0 frame.
@@ -96,7 +96,7 @@ without copying LightBurn branding or changing the E3 machine-control model:
 8. Cuts/Layers, Cameras, Objects, Shape Properties, Templates, and Trace share
    one full-height tabbed inspector on the right.
 9. A short dock row beneath the canvas keeps raw G-code in a narrow left panel
-   and Laser, Machine, and Material Library in a wider tabbed panel beside it.
+   and Laser, Machine, and Material Recipes in a wider tabbed panel beside it.
 10. A fixed 30-color bottom palette assigns selected objects to existing
    operations; clicking an unused color creates a matching operation. The
    status bar reports direct-edit affordances and live workspace feedback.
@@ -175,7 +175,7 @@ rejected consistently because its Qt decode plugin is not portable.
 | Camera overlay, focus, and corrected test sources | Camera inspector and workspace | Existing camera/controller lifecycle is unchanged |
 | Object tracing and stock layout | Trace tool, inspector, contextual Stock layout toolbar, and workspace | Existing frozen-frame review remains authoritative; Stock boundaries are role-tagged construction objects that persist but are filtered from every output path |
 | Cutting templates and alignment | Templates tool, inspector, and grid designer | Existing rigid placement, review, and one-command apply path is unchanged |
-| Operation layers and materials | Operations/Layers table, bottom palette, and Materials inspector | Existing layer schema, ordering, presets, and explicit unsupported-mode checks are retained |
+| Operation layers and materials | Operations/Layers table, bottom palette, and Material Recipes inspector | Existing layer schema, ordering, machine-aware recipes, and explicit unsupported-mode checks are retained; recipes add no execution authority |
 | Toolpath generation, framing, preview, and run | Job toolbar, Job inspector, dedicated graphical Preview, and on-demand raw G-code | Preview parses the exact finalized stream; existing revision invalidation, validation, arming, and execution gates are unchanged |
 | Browser calibration and placement application | Native Machine Setup plus richer desktop project workflow | Browser remains an optional legacy single-SVG surface; no operator capability requires it |
 
@@ -188,11 +188,15 @@ rejected consistently because its Qt decode plugin is not portable.
 - Atomic project saves, `.bak` files, periodic autosaves and recovery prompts
 - Colored operation layers with line/fill/raster mode, speed, power, passes,
   visibility, output state and priority
-- SQLite material-preset library stored outside the source tree
-- Per-operation and material-preset Vector/Raster Power Correction controls;
+- Machine-aware SQLite material-recipe library stored outside the source tree;
+  legacy/custom rows remain universal, scoped rows use exact stable machine and
+  tool-head profile IDs, and incompatible rows cannot be applied
+- Per-operation and material-recipe Vector/Raster Power Correction controls;
   zero retains ordinary GRBL `M4`, while nonzero settings add bounded localized
   commanded-power bias near modeled motion changes
-- Material presets can be applied to the active operation layer
+- Compatible material recipes apply complete authoring settings to the active
+  operation layer as one undoable action without scaling or enabling output;
+  hand-edited layer values remain equally valid inputs to preflight and planning
 
 ### Toolpaths and machine controls
 

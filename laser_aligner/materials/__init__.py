@@ -1,3 +1,13 @@
-from .database import MaterialDatabase, MaterialPreset
+from .database import (
+    MaterialCompatibility,
+    MaterialDatabase,
+    MaterialPreset,
+    builtin_material_presets,
+)
 
-__all__ = ["MaterialDatabase", "MaterialPreset"]
+__all__ = [
+    "MaterialCompatibility",
+    "MaterialDatabase",
+    "MaterialPreset",
+    "builtin_material_presets",
+]

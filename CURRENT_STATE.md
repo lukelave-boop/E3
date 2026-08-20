@@ -7,6 +7,44 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-20**
 
+The existing SQLite `MaterialPreset` / `MaterialDatabase` system is now a
+machine-aware material-recipe authoring library rather than a parallel preset
+model. Recipes include the complete controlled `OperationLayer` settings,
+optional stable motion-platform/tool-head profile scope, and an optional
+recommended color. Compatibility is Qt-neutral and deterministic: exact
+machine/tool, tool-only, universal, or incompatible by exact IDs only. The
+desktop prioritizes compatible recipes, keeps incompatible rows visible for
+custom CRUD, disables their Apply action, and refreshes against the immutable
+running profile identity when the surrounding machine/profile UI changes.
+
+Applying a compatible recipe performs one undoable `UpdateLayerCommand`. It
+does no power/speed scaling, creates no geometry, and preserves the operation's
+ID, authoring name, visibility, priority, and current output-enabled state; an
+optional recommended color is the only authoring identity it may replace.
+Recipes are not stored in `.e3laser` projects and grant no output authority.
+Structured preflight and exact planning continue to inspect the resulting
+ordinary layer values, and hand-edited layers remain supported. No controller,
+motion, arming, stop, laser, G-code, JobPlan, project-schema, or execution path
+changed.
+
+The material database now uses an explicit in-place schema migration. Existing
+row IDs and values are copied transactionally, old rows become universal,
+new fields receive deterministic defaults, scope-aware rows with the same
+material/name/thickness can coexist, and reopening is idempotent. Default
+seeding is insert-only and cannot overwrite newer user data. The 13 existing
+operator-supplied E3 10 W new-project operations and their exact-profile
+built-in recipes derive from one curated value source while preserving every
+historical layer field, order, color, correction, visibility, and output value.
+
+Focused verification for this authoring/database increment passed 480 tests:
+material/database migration and CRUD, complete default-layer parity, recipe
+authority, structured preflight, deterministic planner goldens, toolpaths,
+MachineService regressions, desktop material/layer integration, the real
+startup-drained no-hardware action gate, dock wiring, and the full asynchronous
+job-preflight desktop file. Repository Ruff, compileall, and diff checks also
+pass. This increment requires no physical controller, motion, camera, arming,
+or laser test.
+
 The desktop project pipeline now has a Qt-neutral **structured job preflight**
 before exact toolpath generation. `PreflightSeverity`, `PreflightFinding`,
 `PreflightCounts`, and `JobPreflightReport` expose deterministic dotted finding
@@ -708,7 +746,7 @@ the implementation, including three-pass washers, reversed contours, multiple
 washers, imported compound paths, and three nesting depths. No generated shape
 or containment ordering has been run on physical hardware.
 
-Per-operation and material-preset Power Correction is implemented as a bounded,
+Per-operation and material-recipe Power Correction is implemented as a bounded,
 material-specific commanded-power bias layered over GRBL `M4`. Vector paths use
 turn-angle severity and the configured acceleration model to add at most three
 collinear ramp blocks on each side of a real junction. Raster correction first
@@ -959,7 +997,7 @@ was not physically measured during that session.
 
 The native default workspace now gives Cuts/Layers and its related design tabs
 a full-height right column. A short row beneath the canvas places a narrow raw
-G-code dock on the left and the wider Laser/Machine/Material Library tabs beside
+G-code dock on the left and the wider Laser/Machine/Material Recipes tabs beside
 it. All three regions remain resizable Qt docks. The dock-state contract is
 versioned as `v6`: compatible older window geometry and active-tab choices may
 migrate, but the obsolete `v5` dock topology is not restored. Raw G-code starts
@@ -1884,7 +1922,7 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   z-order commands.
 - Undo/redo.
 - `.e3laser` save/load, backup, autosave, and recovery.
-- SQLite material presets.
+- SQLite material recipes.
 - Multi-layer vector toolpaths, zero-power framing, previews, and estimates.
 - Automatic invalidation of generated G-code and toolpath previews after any
   project revision changes.
@@ -1985,7 +2023,7 @@ physical placement. No marker detector is implemented. See
 - Selecting real serial hardware on Windows fails clearly and directs the user
   back to the simulator.
 - Camera hardware handling assumes V4L2 and `/dev/video*`.
-- Autosaves and material presets share an OS-native writable per-user data
+- Autosaves and material recipes share an OS-native writable per-user data
   root (XDG/userbase on Linux and LocalAppData/AppData on Windows). Existing
   legacy-root data is copied forward without deleting the source, with fallback
   to the legacy file if migration cannot complete.

@@ -31,6 +31,9 @@ class _MaterialDatabaseStub:
         del query
         return []
 
+    def list_for_profiles(self, **_kwargs: object) -> list[object]:
+        return []
+
 
 class _DockLayoutHarness(QtWidgets.QMainWindow):
     _dock = E3MainWindow._dock
@@ -47,7 +50,13 @@ class _DockLayoutHarness(QtWidgets.QMainWindow):
         self.window_menu = QtWidgets.QMenu(self)
         self.material_database = _MaterialDatabaseStub()
         self.runtime = SimpleNamespace(
-            context=SimpleNamespace(simulation_workspace_frame_supported=False),
+            context=SimpleNamespace(
+                simulation_workspace_frame_supported=False,
+                machine_identity=SimpleNamespace(
+                    machine_profile_id="simulator",
+                    tool_head_profile_id="simulated-laser-head",
+                ),
+            ),
             settings=SimpleNamespace(camera=SimpleNamespace(controls={})),
         )
         self._create_docks()
@@ -96,7 +105,7 @@ def test_default_docks_match_drawn_three_region_layout(
     assert [
         window.job_tabs.tabText(index)
         for index in range(window.job_tabs.count())
-    ] == ["Laser", "Machine", "Material Library"]
+    ] == ["Laser", "Machine", "Material Recipes"]
 
     assert window.layer_dock.isVisible()
     assert window.preview_dock.isVisible()

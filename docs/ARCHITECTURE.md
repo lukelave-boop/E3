@@ -59,7 +59,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
 | `planning/` | Qt-free stage identities, coordinate-domain contracts, artifact provenance, and shared planner payload models |
 | `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
-| `materials/` | SQLite material-preset library |
+| `materials/` | SQLite material-recipe library, scoped compatibility, and legacy database migration |
 | `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
 | `machine/` | Safety policy, simulator, protocol probing, serial transports, and the versioned saved-machine/profile registry |
 | `server.py` + `web/` | Local HTTP API and browser UI |
@@ -576,6 +576,38 @@ by geometry ranking and require explicit user selection and overlay review.
 See [CUT_TEMPLATES.md](CUT_TEMPLATES.md) for the format and verification
 boundary.
 
+Material recipes remain a separate authoring input over the existing
+`MaterialPreset` / `MaterialDatabase` implementation:
+
+```text
+SQLite MaterialPreset
+  -> exact stable machine/tool-head profile compatibility
+  -> explicit compatible recipe selection
+  -> one UpdateLayerCommand
+  -> ordinary portable OperationLayer values
+  -> structured preflight and exact planning inspect those values normally
+```
+
+Legacy and unscoped custom rows are universal. Scoped rows use exact stable
+motion-platform and tool-head profile IDs; no local machine UUID, fuzzy match,
+power conversion, or speed scaling participates. Exact machine/tool matches are
+shown first, followed by tool-only and universal recipes. Incompatible rows can
+remain visible for editing but cannot be applied. Applying a recipe updates the
+complete controlled operation settings and an optional recommended color while
+preserving the layer ID, authoring name, visibility, priority, and current
+`output_enabled` value. It creates no geometry and carries no recipe ID into the
+project schema. Hand-authored layers remain fully supported, and
+`JobPreflightReport`, the exact planner, `MachineService`, and the guarded start
+path continue to inspect only the resulting concrete layer/program state.
+
+The 13 operator-supplied E3 10 W new-project operations and their matching
+machine/tool-scoped built-in recipes project from one curated value source.
+New-project layers retain their historical field values and output state;
+recipe application deliberately does not copy that default output bit. SQLite
+schema migration retains legacy row IDs and values, assigns deterministic
+defaults only to newly introduced fields, treats old rows as universal, and
+uses insert-only default seeding so newer user edits are not overwritten.
+
 Both pipelines generate conservative G-code that is revalidated by
 `MachineService` before execution.
 
@@ -675,12 +707,12 @@ This is an accidental-command boundary, not functional safety.
 | Desktop projects | user-selected `.e3laser` paths |
 | Project backups | adjacent `.e3laser.bak` files |
 | Autosaves | OS-native per-user data root under `backups/` by default |
-| Material presets | OS-native per-user data root as `materials.sqlite` by default |
+| Material recipes | OS-native per-user data root as `materials.sqlite` by default |
 | Cutting templates | configured application data directory under `templates/` |
 | Active alignment test image | memory only; never persisted automatically |
 | Window geometry, dock topology, and active desktop tabs | Qt `QSettings`; dock topology is versioned independently from compatible geometry/tab fallbacks |
 
-Autosaves, packaged-config fallback data, and material presets share the
+Autosaves, packaged-config fallback data, and material recipes share the
 `storage.default_user_data_dir()` platform abstraction. When the native root
 differs from the pre-portability `~/.local/share/e3-positioning-system` root,
 autosave recovery files and the material database are copied forward once

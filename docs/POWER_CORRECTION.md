@@ -97,7 +97,8 @@ power. Overscan remains included in design and controller bounds validation.
 
 The selected operation editor exposes **Advanced · Power Correction** with
 precise Vector and Raster fields from -100 through +100. Edits use the existing
-project undo/redo command path. Material presets persist the same two fields.
+project undo/redo command path. Material recipes persist the same two fields
+alongside their other operation-authoring settings.
 
 The fields are additive within the current `.e3laser` schema. Older projects
 and material databases receive zero defaults. Saving and reopening preserves
