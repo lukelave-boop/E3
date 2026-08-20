@@ -20,39 +20,40 @@ from ..geometry.polygon import (
     convex_polygon_contains_normalized,
     normalize_convex_polygon,
 )
-from .serial_backend import (
-    MachineTransport,
-    create_serial_transport,
+from .controller_dialects import (
+    CONTROLLER_DIALECT_REGISTRY,
+    GRBL_DIALECT,
+    MANUAL_QUERY_COMMANDS,
+    MARLIN_DIALECT,
+    CommandResponseKind,
+    ControllerDialect,
+    HomingResponseKind,
+    is_exact_grbl_locked_error_response,
+    parse_grbl_coordinate_state,
+    parse_grbl_realtime_status,
+    parse_grbl_step_idle_delay,
 )
 from .serial_backend import list_serial_ports as list_serial_ports
-from .simulator import SimulatedTransport
+from .transport import MachineTransport
+from .transport_factory import create_machine_transport
 
 LOGGER = logging.getLogger(__name__)
-_QUERY_COMMANDS = {"$I", "$$", "$G", "$#", "M105", "M114", "M115", "M503"}
+_QUERY_COMMANDS = set(MANUAL_QUERY_COMMANDS)
 _STREAM_G_CODES = {0, 1, 21, 90}
 _STREAM_M_CODES = {3, 4, 5}
 _STREAM_LETTERS = {"G", "M", "X", "Y", "F", "S"}
 _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS = 6.0
 _INITIAL_CONNECT_RETRY_DELAY_SECONDS = 0.2
-_GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS = 0.2
-_GRBL_HOMING_TIMEOUT_SECONDS = 120.0
+# Compatibility timing seams retained for deterministic homing race tests. The
+# production defaults come from the immutable GRBL dialect policy.
+_GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS = float(
+    GRBL_DIALECT.homing.status_query_interval_seconds or 0.2
+)
+_GRBL_HOMING_TIMEOUT_SECONDS = GRBL_DIALECT.homing.timeout_floor_seconds
 _JOB_COMMAND_ACK_TIMEOUT_SECONDS = 120.0
 _GRBL_COORDINATE_EPSILON_MM = 0.001
 _REALTIME_STOP_WRITE_DEADLINE_SECONDS = 0.35
 _MAX_ARM_TIMEOUT_SECONDS = 600
-_GRBL_WORK_COORDINATE_CODES = {f"G{number}" for number in range(54, 60)}
-_GRBL_STATUS_VECTOR_KEYS = {"MPOS", "WPOS", "WCO"}
-_GRBL_OFFSET_PATTERN = re.compile(
-    r"^\[(G5[4-9]|G92):\s*"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)),\s*"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+)),\s*"
-    r"([-+]?(?:\d+(?:\.\d*)?|\.\d+))\]$",
-    re.IGNORECASE,
-)
-_GRBL_STEP_IDLE_PATTERN = re.compile(
-    r"^\s*\$1\s*=\s*(\d+)(?:\.0*)?(?:\s+\([^)]*\))?\s*$",
-    re.IGNORECASE,
-)
 _PROGRAM_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 
@@ -118,6 +119,34 @@ class ValidatedProgram:
 
 class MachineService:
     ARM_PHRASE = "ENABLE LASER CONTROL"
+
+    @property
+    def _protocol(self) -> str:
+        """Compatibility view of the selected or resolved dialect ID."""
+
+        return self._protocol_id
+
+    @_protocol.setter
+    def _protocol(self, value: str) -> None:
+        self._protocol_id = value
+        try:
+            self._dialect = CONTROLLER_DIALECT_REGISTRY.get(value)
+        except KeyError:
+            self._dialect = None
+
+    def _require_resolved_dialect(self) -> ControllerDialect:
+        dialect = self._dialect
+        if dialect is None:
+            raise MachineError("Controller protocol has not been resolved")
+        return dialect
+
+    def _uses_grbl_coordinate_state(self) -> bool:
+        dialect = self._dialect
+        return bool(
+            self.settings.backend == "serial"
+            and dialect is not None
+            and dialect.coordinate_state_query_commands
+        )
 
     def __init__(
         self,
@@ -249,7 +278,7 @@ class MachineService:
             if type(selected_protocol) is not str:
                 raise MachineError("Protocol must be auto, grbl, or marlin")
             selected = selected_protocol.lower()
-            if selected not in {"auto", "grbl", "marlin"}:
+            if selected not in {"auto", *CONTROLLER_DIALECT_REGISTRY.ids}:
                 raise MachineError("Protocol must be auto, grbl, or marlin")
             active_port = self.settings.port if port is None else port
             if type(active_port) is not str or not active_port.strip():
@@ -262,10 +291,10 @@ class MachineService:
                 attempts = 2 if not self._trusted_controller_session_established else 1
                 transport: MachineTransport | None = None
                 for attempt in range(attempts):
-                    transport = (
-                        SimulatedTransport()
-                        if self.settings.backend == "simulator"
-                        else create_serial_transport(active_port, active_baudrate)
+                    transport = create_machine_transport(
+                        self.settings.backend,
+                        active_port,
+                        active_baudrate,
                     )
                     try:
                         transport.open()
@@ -305,11 +334,11 @@ class MachineService:
                         expected_stop_epoch=connect_stop_epoch
                     )
                     self._protocol = selected
-                if self.settings.backend == "serial" and self._protocol == "grbl":
+                if self.settings.backend == "serial" and self._dialect is GRBL_DIALECT:
                     self._normalize_and_release_grbl_after_connect()
-                elif self.settings.backend == "serial" and self._protocol == "marlin":
+                elif self.settings.backend == "serial" and self._dialect is MARLIN_DIALECT:
                     self._send_command_locked(
-                        "M5",
+                        MARLIN_DIALECT.laser_off_command,
                         timeout=max(
                             _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS,
                             self.settings.read_timeout,
@@ -392,31 +421,22 @@ class MachineService:
         startup = self._wait_for_controller_startup(
             expected_stop_epoch=expected_stop_epoch
         )
-        joined = "\n".join(startup).lower()
-        if "grbl" in joined:
-            return "grbl"
-        try:
-            responses = self._send_command_locked(
-                "$I",
-                timeout=1.0,
-                _expected_stop_epoch=expected_stop_epoch,
-                _terminal_error_consumed=True,
-            )
-        except _ControllerCommandRejected:
-            responses = []
-        if any("grbl" in line.lower() or "[ver:" in line.lower() for line in responses):
-            return "grbl"
-        try:
-            responses = self._send_command_locked(
-                "M115",
-                timeout=1.5,
-                _expected_stop_epoch=expected_stop_epoch,
-                _terminal_error_consumed=True,
-            )
-        except _ControllerCommandRejected:
-            responses = []
-        if any("firmware_name" in line.lower() or "marlin" in line.lower() for line in responses):
-            return "marlin"
+        startup_dialect = CONTROLLER_DIALECT_REGISTRY.recognize_startup(startup)
+        if startup_dialect is not None:
+            return startup_dialect.id
+        for probe in CONTROLLER_DIALECT_REGISTRY.probe_attempts:
+            try:
+                responses = self._send_command_locked(
+                    probe.command,
+                    timeout=probe.timeout_seconds,
+                    _expected_stop_epoch=expected_stop_epoch,
+                    _terminal_error_consumed=probe.terminal_error_consumed,
+                )
+            except _ControllerCommandRejected:
+                responses = []
+            dialect = CONTROLLER_DIALECT_REGISTRY.get(probe.dialect_id)
+            if dialect.recognizes_identity(responses):
+                return dialect.id
         raise MachineError(
             "Controller protocol could not be identified. Set machine.protocol explicitly after running tools/controller_probe.py."
         )
@@ -817,30 +837,34 @@ class MachineService:
                         raise MachineError("Operation was cancelled by software STOP")
             responses.append(response)
             self._append_log("RX", response)
-            lower = response.lower()
-            if lower == "ok" or lower.startswith("ok "):
+            response_kind = ControllerDialect.classify_command_response(response)
+            if response_kind is CommandResponseKind.ACKNOWLEDGEMENT:
                 return responses
-            if lower.startswith("error") and (
-                self._protocol == "grbl" or terminal_error_consumed
+            if response_kind is CommandResponseKind.ERROR and (
+                bool(
+                    self._dialect is not None
+                    and self._dialect.command_errors_are_consumed
+                )
+                or terminal_error_consumed
             ):
                 raise _ControllerCommandRejected(response)
-            if lower.startswith("error") or lower.startswith("alarm"):
+            if response_kind in {
+                CommandResponseKind.ERROR,
+                CommandResponseKind.ALARM,
+            }:
                 raise MachineError(response)
-            if lower.startswith("busy") or response.startswith("<") or response.startswith("["):
-                continue
         raise MachineError(f"Controller did not acknowledge command within {timeout:g} seconds")
 
     def query_identity(self) -> list[str]:
-        command = "$I" if self._protocol == "grbl" else "M115"
-        return self.send_command(command, timeout=3.0)
+        # Preserve the pre-connection failure path: unresolved ``auto`` and
+        # simulator services historically selected M115, then failed through
+        # the ordinary connection gate rather than a protocol-resolution gate.
+        dialect = self._dialect or MARLIN_DIALECT
+        return self.send_command(dialect.identity_query_command, timeout=3.0)
 
     @staticmethod
     def _reported_grbl_step_idle_delay(responses: list[str]) -> int | None:
-        for response in responses:
-            match = _GRBL_STEP_IDLE_PATTERN.match(response.strip())
-            if match:
-                return int(match.group(1))
-        return None
+        return parse_grbl_step_idle_delay(responses)
 
     @staticmethod
     def _is_exact_grbl_locked_error(error: BaseException) -> bool:
@@ -849,7 +873,7 @@ class MachineService:
         current: BaseException | None = error
         while current is not None:
             if isinstance(current, _ControllerCommandRejected):
-                return str(current).strip().lower() == "error:9"
+                return is_exact_grbl_locked_error_response(str(current))
             current = current.__cause__
         return False
 
@@ -862,10 +886,10 @@ class MachineService:
         """Require M5, narrowly unlocking an exact GRBL pre-home alarm lock."""
 
         try:
-            execute("M5")
+            execute(GRBL_DIALECT.laser_off_command)
         except MachineError as exc:
             if not (
-                self._protocol == "grbl"
+                self._dialect is GRBL_DIALECT
                 and self.settings.home_before_photo
                 and self._is_exact_grbl_locked_error(exc)
             ):
@@ -875,17 +899,21 @@ class MachineService:
                 f"M5 was blocked by the GRBL alarm lock during {context}; "
                 "unlocking before mandatory Home / park",
             )
-            execute("$X")
-            execute("M5")
+            session = GRBL_DIALECT.grbl_session
+            assert session is not None
+            execute(session.unlock_command)
+            execute(GRBL_DIALECT.laser_off_command)
 
     def _normalize_and_release_grbl_after_connect(self) -> None:
         """Normalize a newly connected controller without resetting it."""
 
+        session = GRBL_DIALECT.grbl_session
+        assert session is not None
         timeout = _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS
         normal = int(self.settings.grbl_step_idle_delay_ms)
         settings_error: Exception | None = None
         try:
-            responses = self.send_command("$$", timeout=timeout)
+            responses = self.send_command(session.settings_query_command, timeout=timeout)
             current = self._reported_grbl_step_idle_delay(responses)
             if current is None:
                 settings_error = MachineError("GRBL $$ did not report the $1 step-idle delay")
@@ -904,9 +932,9 @@ class MachineService:
             execute,
             context="connection normalization",
         )
-        if current == 255 or settings_error is not None:
+        if current == session.held_step_idle_delay_ms or settings_error is not None:
             self.send_command(
-                f"$1={normal}",
+                session.format_step_idle_delay(normal),
                 timeout=timeout,
                 _internal_motion=True,
             )
@@ -918,7 +946,7 @@ class MachineService:
                 "Controller connection normalized laser output and restored the configured "
                 f"step-idle delay, but GRBL settings could not be read: {settings_error}"
             ) from settings_error
-        if current == 255:
+        if current == session.held_step_idle_delay_ms:
             self._append_log(
                 "INFO",
                 f"Recovered stale camera motor hold at connection; restored $1={normal}",
@@ -933,6 +961,8 @@ class MachineService:
     ) -> None:
         """Restore scoped hold state and explicitly release GRBL motors."""
 
+        session = GRBL_DIALECT.grbl_session
+        assert session is not None
         timeout = _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS
         failures: list[str] = []
 
@@ -946,18 +976,18 @@ class MachineService:
             )
 
         try:
-            execute("M5")
+            execute(GRBL_DIALECT.laser_off_command)
         except Exception as exc:
             failures.append(f"M5 failed: {exc}")
 
         if restore_idle_delay is not None:
             try:
-                execute(f"$1={int(restore_idle_delay)}")
+                execute(session.format_step_idle_delay(restore_idle_delay))
             except Exception as exc:
                 failures.append(f"idle-delay restore failed: {exc}")
 
         try:
-            execute("$MD")
+            execute(session.motor_disable_command)
             self._append_log("INFO", f"{context}: motors released with $MD")
         except MachineError as disable_error:
             self._append_log(
@@ -965,20 +995,25 @@ class MachineService:
                 f"{context}: $MD unavailable ({disable_error}); falling back to GRBL sleep",
             )
             try:
-                execute("$SLP")
-                time.sleep(0.1)
+                execute(session.motor_sleep_command)
+                time.sleep(session.sleep_before_reset_seconds)
                 transport = self._require_connection()
-                transport.write_raw(b"\x18")
+                transport.write_raw(session.soft_reset_command)
                 self._append_log("TX", f"GRBL soft reset after {context} $SLP")
                 startup_delay = self.settings.controller_startup_delay
                 if type(startup_delay) not in {int, float} or not math.isfinite(
                     float(startup_delay)
                 ):
                     startup_delay = 0.1
-                time.sleep(min(5.0, max(0.1, float(startup_delay))))
+                time.sleep(
+                    min(
+                        session.reset_startup_delay_max_seconds,
+                        max(session.reset_startup_delay_min_seconds, float(startup_delay)),
+                    )
+                )
                 for line in transport.drain():
                     self._append_log("RX", line)
-                execute("$X")
+                execute(session.unlock_command)
                 self._append_log("INFO", f"{context}: motors released with $SLP/reset")
             except Exception as exc:
                 failures.append(f"explicit motor release failed: {exc}")
@@ -1003,23 +1038,28 @@ class MachineService:
         """Implement a camera hold while the caller owns controller replies."""
 
         self._require_safety_configuration()
-        if self.settings.backend != "serial" or self._protocol != "grbl":
+        if self.settings.backend != "serial" or self._dialect is not GRBL_DIALECT:
             yield
             return
-        responses = self.send_command("$$", timeout=max(6.0, self.settings.read_timeout))
+        session = GRBL_DIALECT.grbl_session
+        assert session is not None
+        responses = self.send_command(
+            session.settings_query_command,
+            timeout=max(6.0, self.settings.read_timeout),
+        )
         original = self._reported_grbl_step_idle_delay(responses)
         if original is None:
             raise MachineError("GRBL did not report $1, so temporary stepper holding was not started")
         restore_delay = (
             int(self.settings.grbl_step_idle_delay_ms)
-            if original == 255
+            if original == session.held_step_idle_delay_ms
             else original
         )
         operation_error: BaseException | None = None
         try:
-            if original != 255:
+            if original != session.held_step_idle_delay_ms:
                 self.send_command(
-                    "$1=255",
+                    session.format_step_idle_delay(session.held_step_idle_delay_ms),
                     timeout=max(6.0, self.settings.read_timeout),
                     _internal_motion=True,
                 )
@@ -1054,14 +1094,19 @@ class MachineService:
                     )
 
     def _wait_until_idle(self, timeout: float = 120.0) -> list[str]:
+        dialect = self._require_resolved_dialect()
         transport = self._require_connection()
-        if self._protocol == "marlin":
-            return self.send_command("M400", timeout=timeout, _internal_motion=True)
+        if dialect.realtime_status_query is None:
+            return self.send_command(
+                dialect.motion_barrier_command,
+                timeout=timeout,
+                _internal_motion=True,
+            )
 
         deadline = time.monotonic() + timeout
         responses: list[str] = []
         while time.monotonic() < deadline:
-            transport.write_raw(b"?")
+            transport.write_raw(dialect.realtime_status_query)
             self._append_log("TX", "?")
             query_deadline = min(deadline, time.monotonic() + 0.8)
             while time.monotonic() < query_deadline:
@@ -1092,7 +1137,7 @@ class MachineService:
         a dedicated synchronization command.
         """
 
-        command = "G4 P0.01" if self._protocol == "grbl" else "M400"
+        command = self._require_resolved_dialect().motion_barrier_command
         return self.send_command(
             command,
             timeout=timeout,
@@ -1117,6 +1162,8 @@ class MachineService:
 
         if is_cancelled():
             raise MachineError(cancellation_message)
+        homing = GRBL_DIALECT.homing
+        assert homing.realtime_status_query is not None
         transport = self._require_connection()
         responses: list[str] = []
         saw_active_homing = False
@@ -1132,9 +1179,11 @@ class MachineService:
                     raise MachineError(cancellation_message)
                 now = time.monotonic()
                 if now >= next_status_query:
-                    transport.write_raw(b"?")
+                    transport.write_raw(homing.realtime_status_query)
                     self._append_log("TX", "?")
-                    next_status_query = now + _GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS
+                    next_status_query = (
+                        now + _GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS
+                    )
                 line = transport.read_line(
                     timeout=min(0.1, max(0.0, deadline - time.monotonic()))
                 )
@@ -1144,21 +1193,23 @@ class MachineService:
                     raise MachineError(cancellation_message)
                 responses.append(line)
                 self._append_log("RX", line)
-                lower = line.strip().lower()
-                if lower == "ok" or lower.startswith("ok "):
+                response_kind = GRBL_DIALECT.classify_homing_response(line)
+                if response_kind is HomingResponseKind.ACKNOWLEDGEMENT:
                     return responses
-                if lower.startswith("error") or lower.startswith("alarm") or lower.startswith("<alarm"):
+                if response_kind is HomingResponseKind.REJECTION:
                     raise _ControllerCommandRejected(line)
-                if lower.startswith("<") and lower.endswith(">"):
-                    state = lower[1:].split("|", 1)[0].split(":", 1)[0]
-                    if state in {"home", "homing", "run"}:
-                        saw_active_homing = True
-                    elif state == "idle" and saw_active_homing:
-                        self._append_log(
-                            "INFO",
-                            "GRBL homing completed from active-to-idle realtime status evidence without a terminal ok",
-                        )
-                        return responses
+                if response_kind is HomingResponseKind.ACTIVE:
+                    saw_active_homing = True
+                elif (
+                    response_kind is HomingResponseKind.IDLE
+                    and saw_active_homing
+                    and homing.accepts_active_to_idle_without_ack
+                ):
+                    self._append_log(
+                        "INFO",
+                        "GRBL homing completed from active-to-idle realtime status evidence without a terminal ok",
+                    )
+                    return responses
             raise MachineError(
                 "Controller did not provide an acknowledgement or a verified active-to-idle homing transition "
                 f"within {timeout:g} seconds"
@@ -1191,11 +1242,11 @@ class MachineService:
             with self._transport_write_lock:
                 if is_cancelled():
                     raise MachineError("Home / park was cancelled by software STOP")
-                self._check_line_safety("$H")
+                self._check_line_safety(GRBL_DIALECT.homing.command)
                 transport = self._require_connection()
                 try:
-                    transport.write_line("$H")
-                    self._append_log("TX", "$H")
+                    transport.write_line(GRBL_DIALECT.homing.command)
+                    self._append_log("TX", GRBL_DIALECT.homing.command)
                 except Exception as exc:
                     raise MachineError(f"Command '$H' failed while writing: {exc}") from exc
 
@@ -1211,7 +1262,9 @@ class MachineService:
 
         return self._execute_grbl_homing_exchange(
             timeout=timeout,
-            write_homing_command=lambda: self._write_running_job_line("$H"),
+            write_homing_command=lambda: self._write_running_job_line(
+                GRBL_DIALECT.homing.command
+            ),
             is_cancelled=self._job_stop.is_set,
             cancellation_message="Job stopped",
         )
@@ -1221,87 +1274,19 @@ class MachineService:
         modal_responses: list[str],
         offset_responses: list[str],
     ) -> dict[str, Any]:
-        active_workspace: str | None = None
-        for response in modal_responses:
-            upper = response.strip().upper()
-            if not upper.startswith("[GC:"):
-                continue
-            words = upper[4:-1].split() if upper.endswith("]") else upper[4:].split()
-            active_workspace = next(
-                (word for word in words if word in _GRBL_WORK_COORDINATE_CODES),
-                None,
-            )
-            break
-
-        offsets: dict[str, list[float]] = {}
-        for response in offset_responses:
-            match = _GRBL_OFFSET_PATTERN.match(response.strip())
-            if match is None:
-                continue
-            offsets[match.group(1).upper()] = [
-                float(match.group(2)),
-                float(match.group(3)),
-                float(match.group(4)),
-            ]
-        if active_workspace is None:
-            raise MachineError("GRBL did not report an active G54-G59 work-coordinate system")
-        if active_workspace not in offsets or "G92" not in offsets:
-            raise MachineError(
-                "GRBL did not report the active work offset and G92 offset in response to $#"
-            )
-        return {
-            "active_workspace": active_workspace,
-            "active_offset_mm": offsets[active_workspace],
-            "g92_offset_mm": offsets["G92"],
-        }
+        return parse_grbl_coordinate_state(modal_responses, offset_responses)
 
     def _read_grbl_coordinate_state(self) -> dict[str, Any]:
+        modal_command, offsets_command = GRBL_DIALECT.coordinate_state_query_commands
         modal = self.send_command(
-            "$G",
+            modal_command,
             timeout=max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout),
         )
         offsets = self.send_command(
-            "$#",
+            offsets_command,
             timeout=max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout),
         )
         return self._parse_grbl_coordinate_state(modal, offsets)
-
-    @staticmethod
-    def _parse_grbl_status_vector(raw: str) -> list[float]:
-        values: list[float] = []
-        for component in raw.split(","):
-            try:
-                value = float(component.strip())
-            except ValueError as exc:
-                raise MachineError(
-                    f"GRBL realtime status contains an invalid coordinate vector: {raw!r}"
-                ) from exc
-            if not math.isfinite(value):
-                raise MachineError("GRBL realtime status coordinates must be finite")
-            values.append(value)
-        if len(values) < 2:
-            raise MachineError(
-                "GRBL realtime status must report at least X and Y coordinates"
-            )
-        return values[:4]
-
-    @staticmethod
-    def _vector_math(
-        left: list[float | None],
-        right: list[float | None],
-        *,
-        subtract: bool,
-    ) -> list[float | None]:
-        size = max(len(left), len(right), 3)
-        output: list[float | None] = []
-        for index in range(size):
-            a = left[index] if index < len(left) else None
-            b = right[index] if index < len(right) else None
-            if a is None or b is None:
-                output.append(None)
-            else:
-                output.append(float(a) - float(b) if subtract else float(a) + float(b))
-        return output
 
     @classmethod
     def _parse_grbl_realtime_status(
@@ -1310,77 +1295,10 @@ class MachineService:
         *,
         coordinate_state: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        text = response.strip()
-        if not (text.startswith("<") and text.endswith(">")):
-            raise MachineError(f"Invalid GRBL realtime status frame: {response!r}")
-        fields = text[1:-1].split("|")
-        if not fields or not fields[0].strip():
-            raise MachineError("GRBL realtime status did not report a machine state")
-        state = fields[0].strip()
-        vectors: dict[str, list[float | None]] = {}
-        for field in fields[1:]:
-            key, separator, raw = field.partition(":")
-            key = key.strip().upper()
-            if separator and key in _GRBL_STATUS_VECTOR_KEYS:
-                vectors[key] = list(cls._parse_grbl_status_vector(raw))
-
-        mpos = vectors.get("MPOS")
-        wpos = vectors.get("WPOS")
-        wco = vectors.get("WCO")
-        wco_source = "reported" if wco is not None else None
-        derived_fields: list[str] = []
-        if wco is None and coordinate_state is not None:
-            active = coordinate_state.get("active_offset_mm")
-            g92 = coordinate_state.get("g92_offset_mm")
-            if (
-                isinstance(active, (list, tuple))
-                and isinstance(g92, (list, tuple))
-                and len(active) >= 2
-                and len(g92) >= 2
-            ):
-                wco = [
-                    float(active[0]) + float(g92[0]),
-                    float(active[1]) + float(g92[1]),
-                    None,
-                ]
-                wco_source = "derived X/Y from active workspace and G92"
-                derived_fields.append("WCO")
-        if mpos is None and wpos is not None and wco is not None:
-            mpos = cls._vector_math(wpos, wco, subtract=False)
-            derived_fields.append("MPos")
-        if wpos is None and mpos is not None and wco is not None:
-            wpos = cls._vector_math(mpos, wco, subtract=True)
-            derived_fields.append("WPos")
-        if wco is None and mpos is not None and wpos is not None:
-            wco = cls._vector_math(mpos, wpos, subtract=True)
-            wco_source = "derived from MPos - WPos"
-            derived_fields.append("WCO")
-        if mpos is None and wpos is None:
-            raise MachineError("GRBL realtime status did not report MPos or WPos")
-
-        def xy_complete(value: list[float | None] | None) -> bool:
-            return bool(
-                value is not None
-                and len(value) >= 2
-                and all(
-                    type(component) in {int, float}
-                    and math.isfinite(float(component))
-                    for component in value[:2]
-                )
-            )
-
-        return {
-            "state": state,
-            "mpos_mm": mpos,
-            "wpos_mm": wpos,
-            "wco_mm": wco,
-            "wco_source": wco_source,
-            "derived_fields": derived_fields,
-            "xy_complete": bool(
-                xy_complete(mpos) and xy_complete(wpos) and xy_complete(wco)
-            ),
-            "raw_status": text,
-        }
+        return parse_grbl_realtime_status(
+            response,
+            coordinate_state=coordinate_state,
+        )
 
     def sample_realtime_position(
         self,
@@ -1401,12 +1319,13 @@ class MachineService:
             if self._job.running:
                 raise MachineError("Cannot sample realtime position while a job is running")
             transport = self._require_connection()
-            if self._protocol != "grbl":
+            dialect = self._require_resolved_dialect()
+            if dialect.realtime_status_query is None:
                 raise MachineError(
                     "Realtime MPos/WPos/WCO sampling is currently available only for GRBL"
                 )
             with self._transport_write_lock:
-                transport.write_raw(b"?")
+                transport.write_raw(dialect.realtime_status_query)
                 self._append_log("TX", "? (realtime position snapshot)")
             deadline = time.monotonic() + timeout_seconds
             while time.monotonic() < deadline:
@@ -1597,25 +1516,35 @@ class MachineService:
         self._coordinate_reference_ready = self.settings.backend == "simulator"
         self._coordinate_state_reference = None
         self._jog_position_mm = None
+        dialect = self._require_resolved_dialect()
         try:
             self._laser_off_with_pre_home_grbl_unlock(
                 execute,
                 context="Home / park",
             )
             if self.settings.home_before_photo:
-                if self._protocol == "grbl":
+                if dialect is GRBL_DIALECT:
                     homing_responses = self._execute_grbl_homing_locked(
-                        timeout=max(_GRBL_HOMING_TIMEOUT_SECONDS, self.settings.read_timeout),
+                        timeout=max(
+                            _GRBL_HOMING_TIMEOUT_SECONDS,
+                            self.settings.read_timeout,
+                        ),
                         expected_stop_epoch=operation_stop_epoch,
                     )
                     transcript.append(
-                        {"command": "$H", "responses": homing_responses}
+                        {"command": dialect.homing.command, "responses": homing_responses}
                     )
                 else:
-                    execute("G28", timeout=max(120.0, self.settings.read_timeout))
+                    execute(
+                        dialect.homing.command,
+                        timeout=max(
+                            dialect.homing.timeout_floor_seconds,
+                            self.settings.read_timeout,
+                        ),
+                    )
             coordinate_state = (
                 self._read_grbl_coordinate_state()
-                if self.settings.backend == "serial" and self._protocol == "grbl"
+                if self._uses_grbl_coordinate_state()
                 else None
             )
             require_not_stopped()
@@ -1657,7 +1586,7 @@ class MachineService:
                 )
                 parked_coordinate_state = (
                     self._read_grbl_coordinate_state()
-                    if self.settings.backend == "serial" and self._protocol == "grbl"
+                    if self._uses_grbl_coordinate_state()
                     else None
                 )
                 require_not_stopped()
@@ -1771,7 +1700,7 @@ class MachineService:
                 raise SafetyError(
                     "Home / park must complete before jogging so the current XY position is known"
                 )
-            if self.settings.backend == "serial" and self._protocol == "grbl":
+            if self._uses_grbl_coordinate_state():
                 self._verify_grbl_coordinate_state()
 
             current_x, current_y = self._jog_position_mm
@@ -2363,8 +2292,7 @@ class MachineService:
                 )
             if (
                 requires_motion
-                and self.settings.backend == "serial"
-                and self._protocol == "grbl"
+                and self._uses_grbl_coordinate_state()
             ):
                 self._verify_grbl_coordinate_state()
             if (
@@ -2456,6 +2384,7 @@ class MachineService:
         """Home, park, and release a serial machine after a successful laser job."""
 
         self._require_safety_configuration()
+        dialect = self._require_resolved_dialect()
         if not self.settings.home_before_photo:
             raise SafetyError(
                 "Automatic post-job Home / park requires machine.home_before_photo=true"
@@ -2480,7 +2409,7 @@ class MachineService:
             # necessarily complete. Synchronize behind the final job move before
             # issuing the system-level homing command, which GRBL rejects in Run.
             self._execute_running_job_command(
-                "G4 P0.01" if self._protocol == "grbl" else "M400",
+                dialect.motion_barrier_command,
                 timeout=max(
                     _JOB_COMMAND_ACK_TIMEOUT_SECONDS,
                     self.settings.read_timeout,
@@ -2488,14 +2417,20 @@ class MachineService:
             )
             with self._lock:
                 self._job.phase = "homing"
-            if self._protocol == "grbl":
+            if dialect is GRBL_DIALECT:
                 self._execute_running_job_grbl_homing(
-                    timeout=max(_GRBL_HOMING_TIMEOUT_SECONDS, self.settings.read_timeout),
+                    timeout=max(
+                        _GRBL_HOMING_TIMEOUT_SECONDS,
+                        self.settings.read_timeout,
+                    ),
                 )
             else:
                 self._execute_running_job_command(
-                    "G28",
-                    timeout=max(120.0, self.settings.read_timeout),
+                    dialect.homing.command,
+                    timeout=max(
+                        dialect.homing.timeout_floor_seconds,
+                        self.settings.read_timeout,
+                    ),
                 )
             with self._lock:
                 self._job.phase = "parking"
@@ -2507,7 +2442,7 @@ class MachineService:
                 timeout=setup_timeout,
             )
             self._execute_running_job_command(
-                "G4 P0.01" if self._protocol == "grbl" else "M400",
+                dialect.motion_barrier_command,
                 timeout=max(120.0, self.settings.read_timeout),
             )
         except Exception as exc:
@@ -2517,15 +2452,18 @@ class MachineService:
         try:
             with self._lock:
                 self._job.phase = "releasing"
-            if self._protocol == "grbl":
+            if dialect is GRBL_DIALECT:
+                session = dialect.grbl_session
+                assert session is not None
                 try:
                     responses = self._execute_running_job_command(
-                        "$$",
+                        session.settings_query_command,
                         timeout=setup_timeout,
                     )
                     restore_idle_delay = (
                         configured_idle_delay
-                        if self._reported_grbl_step_idle_delay(responses) == 255
+                        if self._reported_grbl_step_idle_delay(responses)
+                        == session.held_step_idle_delay_ms
                         else None
                     )
                 except Exception as settings_error:
@@ -2543,7 +2481,10 @@ class MachineService:
                     context="post-job Home / park",
                 )
             else:
-                self._execute_running_job_command("M84", timeout=setup_timeout)
+                self._execute_running_job_command(
+                    dialect.motor_release_command,
+                    timeout=setup_timeout,
+                )
         except Exception as exc:
             release_error = exc
 
@@ -2613,7 +2554,7 @@ class MachineService:
                 with self._lock:
                     self._job.phase = "draining"
                 self._execute_running_job_command(
-                    "G4 P0.01" if self._protocol == "grbl" else "M400",
+                    self._require_resolved_dialect().motion_barrier_command,
                     timeout=max(
                         _JOB_COMMAND_ACK_TIMEOUT_SECONDS,
                         self.settings.read_timeout,
@@ -2678,7 +2619,7 @@ class MachineService:
             self._job_laser_authorized = False
             self._clear_arm_authorization()
             transport = self._transport
-            stop_protocol = self._protocol
+            stop_dialect = self._dialect
             if transport is not None:
                 # STOP injects an unacknowledged M5 into the controller stream.
                 # Even the simulator must reconnect before any later command,
@@ -2689,13 +2630,18 @@ class MachineService:
                 self._coordinate_state_reference = None
                 self._jog_position_mm = None
         if transport is not None:
-            if emergency and stop_protocol == "grbl":
+            stop_policy = (
+                stop_dialect.emergency_stop
+                if emergency and stop_dialect is not None
+                else None
+            )
+            if stop_policy is not None and stop_policy.raw_command is not None:
                 finished = threading.Event()
                 failures: list[Exception] = []
 
                 def realtime_stop() -> None:
                     try:
-                        transport.write_raw(b"!\x18")
+                        transport.write_raw(stop_policy.raw_command)
                     except Exception as exc:
                         failures.append(exc)
                     finally:
@@ -2710,28 +2656,31 @@ class MachineService:
                 except Exception as exc:
                     self._append_log(
                         "ERROR",
-                        f"GRBL realtime stop could not start: {exc}; continuing with M5",
+                        f"{stop_policy.failure_label} could not start: {exc}; continuing with M5",
                     )
                 else:
                     if not finished.wait(_REALTIME_STOP_WRITE_DEADLINE_SECONDS):
                         self._append_log(
                             "ERROR",
-                            "GRBL realtime stop write timed out; continuing with M5",
+                            f"{stop_policy.failure_label} write timed out; continuing with M5",
                         )
                     elif failures:
                         self._append_log(
                             "ERROR",
-                            f"GRBL realtime stop failed: {failures[0]}",
+                            f"{stop_policy.failure_label} failed: {failures[0]}",
                         )
                     else:
-                        self._append_log("TX", "GRBL feed hold + soft reset")
-            elif emergency and stop_protocol == "marlin":
+                        self._append_log("TX", stop_policy.success_log)
+            elif stop_policy is not None and stop_policy.line_command is not None:
                 try:
                     with self._transport_write_lock:
-                        transport.write_line("M112")
-                    self._append_log("TX", "M112")
+                        transport.write_line(stop_policy.line_command)
+                    self._append_log("TX", stop_policy.success_log)
                 except Exception as exc:
-                    self._append_log("ERROR", f"Marlin emergency stop failed: {exc}")
+                    self._append_log(
+                        "ERROR",
+                        f"{stop_policy.failure_label} failed: {exc}",
+                    )
             try:
                 # Place M5 after an in-flight job write. A worker reaching the
                 # same gate later sees the stop/auth latch and cannot transmit.

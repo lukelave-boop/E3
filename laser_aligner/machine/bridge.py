@@ -14,6 +14,7 @@ from collections.abc import Callable
 from typing import Protocol
 
 from ..errors import MachineError
+from .controller_dialects import CONTROLLER_DIALECT_REGISTRY
 
 LOGGER = logging.getLogger(__name__)
 _BRIDGE_VERSION = "E3BRIDGE/1"
@@ -114,16 +115,26 @@ def _fail_safe_disconnect(serial: BridgeSerial, protocol: str) -> None:
     the reset. Physical emergency-stop hardware remains authoritative.
     """
 
-    if protocol == "grbl":
+    try:
+        stop_policy = CONTROLLER_DIALECT_REGISTRY.get(protocol).emergency_stop
+    except KeyError:
+        stop_policy = None
+    if stop_policy is not None and stop_policy.raw_command is not None:
         try:
-            serial.write_raw(b"!\x18")
+            serial.write_raw(stop_policy.raw_command)
         except Exception:
-            LOGGER.exception("Could not issue GRBL realtime stop after client loss")
-    elif protocol == "marlin":
+            LOGGER.exception(
+                "Could not issue %s after client loss",
+                stop_policy.failure_label,
+            )
+    elif stop_policy is not None and stop_policy.line_command is not None:
         try:
-            serial.write_line("M112")
+            serial.write_line(stop_policy.line_command)
         except Exception:
-            LOGGER.exception("Could not issue Marlin emergency stop after client loss")
+            LOGGER.exception(
+                "Could not issue %s after client loss",
+                stop_policy.failure_label,
+            )
     try:
         serial.write_line("M5")
     except Exception:

@@ -7,6 +7,60 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-20**
 
+The machine core now has explicit transport and controller-dialect boundaries
+without changing controller support or execution authority. The neutral
+`MachineTransport` protocol remains limited to open, close, raw/line writes,
+line reads, and drain. One construction-only `create_machine_transport()`
+factory maps the existing saved `backend`, `port`, and `baudrate` values to a
+fresh simulator, local POSIX serial, or authenticated `e3bridge://` network
+transport. Bridge URI selection still happens before the local-platform gate,
+so the network transport remains available on Windows while unsupported local
+POSIX serial continues to fail clearly. Concrete network and POSIX imports stay
+lazy, and the former `machine.serial_backend` protocol and factory imports remain
+available for compatibility. No `machines.json` or configuration schema changed.
+
+Current GRBL and Marlin command/parsing policy now lives in immutable,
+Qt-neutral `ControllerDialect` values and a deterministic registry. Dialects
+describe pure semantics: stable IDs, identity recognition and probes, response
+classification, query/home/barrier/release/stop command policy, and existing
+GRBL status, position, coordinate, and session parsing. They cannot open or
+write a transport, acquire service locks, authorize output, or start work.
+`protocol = auto` retains the existing startup delay and drain, GRBL-banner
+recognition, ordered `$I` then `M115` probes, 1.0/1.5-second probe timeouts,
+accepted responses, and fail-closed result; it sends no additional commands.
+The simulator transport now delegates the same state and response behavior to a
+separate in-process simulated-controller peer, leaving its transport surface as
+communication mechanics while preserving its import path and observable test
+state.
+
+`MachineService` remains the sole normal safety, authorization, and orchestration
+authority. It still decides when probing and writes are allowed and retains the
+hardware gate, motion gate, temporary arming, program-digest authority, guarded
+stream validation, command/ACK ownership, STOP epochs, cancellation, uncertain-
+state/reconnect handling, job lifecycle, and all best-effort `M5` paths. A saved
+machine profile continues to describe the physical motion platform and its
+transport/controller settings; a tool-head profile continues to describe the
+laser/tool configuration. Neither profile, a dialect, nor a transport grants
+execution authority, and no stable profile IDs changed.
+
+Focused machine-boundary verification passed 507 tests with the six expected
+Windows skips for POSIX pseudoterminal/`termios` cases. That selection covered
+MachineService, immutable dialects, strict GRBL/Marlin transcripts, the
+simulator peer, transport selection, local/network/bridge behavior, saved
+machine profiles and runtime resolution, structured preflight, deterministic
+planner goldens, reconnect/runtime-strip behavior, Machine Setup/Manager, and
+desktop async job lifecycle. After final parity-audit additions, the complete
+MachineService/dialect/factory/transcript subset passed 269 tests. Repository-
+wide Ruff, `compileall -q laser_aligner`, and `git diff --check` also passed.
+
+An identical synthetic immediate-ACK loop measured a median 540.32 ns per ACK
+before and 578.28 ns after the refactor: about 37.96 ns of policy-dispatch cost
+per acknowledged line, with no registry lookup in the stream loop. That
+CPU-only difference is negligible beside controller I/O and does not introduce
+a generic execution framework. This refactor has automated verification only;
+no physical GRBL or Marlin controller behavior was re-verified, and no new
+machine/controller compatibility is claimed.
+
 The existing SQLite `MaterialPreset` / `MaterialDatabase` system is now a
 machine-aware material-recipe authoring library rather than a parallel preset
 model. Recipes include the complete controlled `OperationLayer` settings,

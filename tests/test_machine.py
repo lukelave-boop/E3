@@ -629,13 +629,17 @@ def test_malformed_backend_is_rejected_before_serial_transport_creation(
 ) -> None:
     calls = 0
 
-    def unexpected_transport(_port: str, _baudrate: int) -> SimulatedTransport:
+    def unexpected_transport(
+        _backend: str,
+        _port: str,
+        _baudrate: int,
+    ) -> SimulatedTransport:
         nonlocal calls
         calls += 1
         return SimulatedTransport()
 
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
+        "laser_aligner.machine.service.create_machine_transport",
         unexpected_transport,
     )
     machine = MachineService(
@@ -1135,8 +1139,8 @@ def test_stop_during_connection_cannot_be_overwritten_by_successful_commit(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -1201,8 +1205,8 @@ def test_stop_during_transport_open_gets_connection_cleanup_m5(
 
     transport = PausedOpenTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(backend="serial", protocol="marlin", allow_motion=True),
@@ -1245,8 +1249,8 @@ def test_successful_marlin_connection_starts_with_acknowledged_m5(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(backend="serial", protocol="marlin"),
@@ -1354,8 +1358,8 @@ def test_auto_protocol_probe_falls_back_to_marlin_after_consumed_grbl_rejection(
 
     transport = MarlinProbeTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -1884,8 +1888,8 @@ def test_stop_cancels_home_park_waiting_for_homing_ack(
 
     transport = BlockedHomeTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -1934,8 +1938,8 @@ def test_stop_in_final_home_park_commit_window_cannot_restore_reference(
 ) -> None:
     transport = SimulatedTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2072,8 +2076,8 @@ def test_prepare_photo_position_can_capture_home_before_normal_simulated_park(
 
     transport = RecordingPositionTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2124,8 +2128,8 @@ def test_prepare_job_start_homes_without_parking_in_simulation(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2165,8 +2169,8 @@ def test_jog_uses_bounded_absolute_laser_off_moves(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2229,8 +2233,8 @@ def test_jog_uses_requested_feed_on_feed_controlled_motion(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2280,8 +2284,8 @@ def test_serial_grbl_jog_rechecks_homed_coordinate_state(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2398,8 +2402,8 @@ def test_stop_during_jog_invalidates_position_and_prevents_completion(
 
     transport = BlockedJogTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2566,8 +2570,8 @@ def test_serial_connect_repairs_camera_hold_persisted_across_power_cycle(
 
     transport = StaleHoldTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2608,8 +2612,8 @@ def test_serial_connect_explicitly_releases_motors_with_normal_idle_delay(
 
     transport = NormalIdleTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(backend="serial", protocol="grbl"),
@@ -2652,8 +2656,8 @@ def test_serial_connect_recovers_exact_grbl_alarm_lock_but_still_requires_home(
 
     transport = AlarmLockedTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2727,8 +2731,8 @@ def test_serial_connect_alarm_unlock_rejects_every_non_exact_or_failed_exchange(
 
     transport = RejectedNormalizationTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2782,8 +2786,8 @@ def test_serial_connect_alarm_unlock_rejects_ambiguous_first_m5_exchange(
 
     transport = AmbiguousNormalizationTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     monkeypatch.setattr(
         "laser_aligner.machine.service._PHOTO_COMMAND_ACK_TIMEOUT_SECONDS",
@@ -2851,8 +2855,8 @@ def test_home_park_waits_for_serial_connection_initialization(
 
     transport = BlockingSettingsTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2929,8 +2933,8 @@ def test_queued_home_park_does_not_move_when_connection_initialization_fails(
 
     transport = MissingSettingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -2987,8 +2991,8 @@ def test_serial_connect_forces_finite_idle_delay_when_grbl_omits_setting(
 
     transport = MissingIdleSettingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -3034,8 +3038,8 @@ def test_explicit_grbl_connect_waits_for_controller_startup_before_querying(
         transport.ready = True
 
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     monkeypatch.setattr("laser_aligner.machine.service.time.sleep", finish_startup)
     machine = MachineService(
@@ -3430,8 +3434,8 @@ def test_grbl_home_park_uses_planner_barrier_not_realtime_idle_polling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: SimulatedTransport(),
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: SimulatedTransport(),
     )
     machine = MachineService(
         MachineSettings(
@@ -3490,8 +3494,8 @@ def test_serial_job_rejects_work_offset_changed_after_home_park(
 
     transport = OffsetTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -3546,8 +3550,8 @@ def test_serial_motion_and_arming_require_home_park_in_each_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: SimulatedTransport(),
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: SimulatedTransport(),
     )
     machine = MachineService(
         MachineSettings(
@@ -3941,8 +3945,8 @@ def test_successful_powered_serial_job_homes_parks_and_releases_motors(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4022,8 +4026,8 @@ def test_powered_job_waits_past_interactive_timeout_for_final_m5(
 
     transport = DelayedLaserOffTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     monkeypatch.setattr(
         "laser_aligner.machine.service._JOB_COMMAND_ACK_TIMEOUT_SECONDS",
@@ -4077,8 +4081,8 @@ def test_stop_interrupts_extended_job_ack_wait(
 
     transport = BlockedMoveTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4137,8 +4141,8 @@ def test_stop_during_final_ack_cannot_publish_success_receipt(
 
     transport = GatedFinalAckTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(backend="simulator"),
@@ -4186,8 +4190,8 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
 
     transport = RejectMotorDisableTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4254,8 +4258,8 @@ def test_dry_serial_job_does_not_move_or_release_after_completion(
 
     transport = RecordingTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4305,8 +4309,8 @@ def test_serial_motion_job_does_not_publish_success_before_planner_barrier(
 
     transport = DelayedBarrierTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda _port, _baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4364,8 +4368,8 @@ def test_post_job_positioning_failure_still_attempts_motor_release(
 
     transport = FailingHomeTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4423,8 +4427,8 @@ def test_post_job_park_failure_still_attempts_motor_release(
 
     transport = FailingParkTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4483,8 +4487,8 @@ def test_failed_powered_serial_job_does_not_home_park_or_release(
 
     transport = FailingJobTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(
@@ -4524,8 +4528,8 @@ def test_serial_home_park_rejects_motion_without_homing_enabled(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
-        lambda port, baudrate: SimulatedTransport(),
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: SimulatedTransport(),
     )
     machine = MachineService(
         MachineSettings(
@@ -4613,8 +4617,8 @@ def test_failed_simulator_job_requires_reconnect_before_retry(
 
     transport = ErrorTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(backend="simulator"),
@@ -4656,8 +4660,8 @@ def test_ack_timeout_requires_reconnect_before_any_retry(
 
     transport = DelayedAckTransport()
     monkeypatch.setattr(
-        "laser_aligner.machine.service.SimulatedTransport",
-        lambda: transport,
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
         MachineSettings(backend="simulator"),
@@ -4892,7 +4896,7 @@ def test_initial_transient_connect_failure_retries_once(
     first.close = record_close  # type: ignore[method-assign]
     transports = iter([first, second])
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
+        "laser_aligner.machine.service.create_machine_transport",
         lambda *_args: next(transports),
     )
     monkeypatch.setattr(
@@ -4922,7 +4926,7 @@ def test_initial_connection_retries_at_most_once_and_not_validation_errors(
             raise TransientConnectionError("temporary network failure")
 
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
+        "laser_aligner.machine.service.create_machine_transport",
         lambda *_args: FailingTransport(),
     )
     monkeypatch.setattr(
@@ -4955,7 +4959,7 @@ def test_initial_bridge_authentication_failure_is_not_retried(
             raise MachineError("E3 bridge rejected the connection: authentication_failed")
 
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
+        "laser_aligner.machine.service.create_machine_transport",
         lambda *_args: AuthenticationFailureTransport(),
     )
     machine = MachineService(
@@ -4985,7 +4989,7 @@ def test_later_manual_reconnect_does_not_receive_initial_retry(
     failing.open = fail_open  # type: ignore[method-assign]
     transports = iter([successful, failing])
     monkeypatch.setattr(
-        "laser_aligner.machine.service.create_serial_transport",
+        "laser_aligner.machine.service.create_machine_transport",
         lambda *_args: next(transports),
     )
     machine = MachineService(
