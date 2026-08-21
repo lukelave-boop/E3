@@ -22,7 +22,7 @@ def create_serial_transport(path: str, baudrate: int) -> MachineTransport:
     if not posix_serial_supported():
         raise MachineError(
             "POSIX serial hardware is unavailable on this platform. "
-            "Use machine.backend='simulator' or an e3bridge:// machine endpoint."
+            "Use an e3bridge:// machine endpoint."
         )
     from .serial_posix import PosixSerial
 

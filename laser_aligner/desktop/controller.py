@@ -321,7 +321,6 @@ class DesktopController(QtCore.QObject):
     traceColorFailed = QtCore.Signal(str)
     templateMatchReady = QtCore.Signal(dict)
     reviewEvidenceInvalidated = QtCore.Signal()
-    simulationFrameChanged = QtCore.Signal(dict)
     stopInitiated = QtCore.Signal()
     tasksDrained = QtCore.Signal()
     jobStarted = QtCore.Signal(dict)
@@ -382,27 +381,6 @@ class DesktopController(QtCore.QObject):
             raise ValueError(f"Unsupported workspace coordinate space: {value}")
         if value == self._workspace_coordinate_space:
             return
-        if (
-            value == "honeycomb_local"
-            and getattr(
-                self.runtime.context,
-                "has_simulation_workspace_frame",
-                False,
-            )
-        ):
-            # Frozen test frames are explicitly machine-work-area rasters.
-            # Never reinterpret those pixels as honeycomb-local coordinates.
-            self.runtime.context.clear_simulation_workspace_frame()
-            self.simulationFrameChanged.emit(
-                {
-                    "active": False,
-                    "source_name": "",
-                    "reason": (
-                        "Machine-coordinate test image cleared for a "
-                        "honeycomb-local project"
-                    ),
-                }
-            )
         self._workspace_coordinate_space = value
         self._camera_source_generation += 1
         self._invalidate_camera_image()
@@ -574,11 +552,6 @@ class DesktopController(QtCore.QObject):
             or self._camera_reconnect_in_flight
             or self._camera_review_active()
         ):
-            return
-        if self.runtime.context.has_simulation_workspace_frame:
-            self._publish_camera_image(
-                image_to_qimage(self.runtime.context.rectified_frame(refresh=True))
-            )
             return
         if self.runtime.context.bed.calibration is None:
             self._invalidate_camera_image()
@@ -1058,16 +1031,10 @@ class DesktopController(QtCore.QObject):
         )
 
     def _sync_camera_timer(self) -> None:
-        context = getattr(self.runtime, "context", None)
-        test_frame_active = bool(
-            context is not None
-            and getattr(context, "has_simulation_workspace_frame", False)
-        )
         should_run = bool(
             self._live_camera_enabled
             and self.runtime.running
             and not self._camera_review_active()
-            and not test_frame_active
         )
         if should_run:
             self._camera_live_timer.start()
@@ -1085,78 +1052,6 @@ class DesktopController(QtCore.QObject):
             and self._live_camera_enabled
         ):
             self.refresh_camera_image()
-
-    def activate_simulation_workspace_frame(
-        self,
-        image: np.ndarray,
-        *,
-        source_name: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Activate one frozen corrected frame behind all desktop vision tools."""
-
-        if self._workspace_coordinate_space != "machine":
-            raise ValueError(
-                "Corrected test images use machine coordinates and cannot be "
-                "activated on a honeycomb-local canvas"
-            )
-
-        info = self.runtime.context.set_simulation_workspace_frame(
-            image,
-            source_name=source_name,
-            metadata=metadata,
-        )
-        self._camera_source_generation += 1
-        self._camera_error_latched = None
-        self._camera_mapping_latched = None
-        self._camera_overlay_error_latched = None
-        self._camera_refresh_in_flight = False
-        self._camera_refresh_generation = None
-        self._camera_refresh_pending = False
-        self._trace_request_id += 1
-        self._trace_review_active = False
-        self._trace_sample_image = None
-        self._trace_sample_area = None
-        self._trace_sample_signature = None
-        self._template_match_request_id += 1
-        self._template_review_active = False
-        self._template_review_signature = None
-        self._sync_camera_timer()
-        self._publish_camera_image(
-            image_to_qimage(self.runtime.context.rectified_frame())
-        )
-        self.simulationFrameChanged.emit(info)
-        self.notice.emit(f"Using frozen test image: {source_name}")
-        return info
-
-    def return_to_synthetic_camera(self) -> None:
-        """Clear the ephemeral corrected-frame override and resume live simulation."""
-
-        if not self.runtime.context.has_simulation_workspace_frame:
-            return
-        self.runtime.context.clear_simulation_workspace_frame()
-        self._camera_source_generation += 1
-        self._camera_error_latched = None
-        self._camera_mapping_latched = None
-        self._camera_overlay_error_latched = None
-        self._camera_refresh_in_flight = False
-        self._camera_refresh_generation = None
-        self._camera_refresh_pending = False
-        self._invalidate_camera_image()
-        self._trace_request_id += 1
-        self._trace_review_active = False
-        self._trace_sample_image = None
-        self._trace_sample_area = None
-        self._trace_sample_signature = None
-        self._template_match_request_id += 1
-        self._template_review_active = False
-        self._template_review_signature = None
-        self.simulationFrameChanged.emit(
-            {"active": False, "source_name": "Synthetic camera", "metadata": {}}
-        )
-        self._sync_camera_timer()
-        self.refresh_camera_image()
-        self.notice.emit("Returned to the synthetic camera")
 
     def set_template_review_active(self, active: bool) -> None:
         """Freeze live-camera replacement while an alignment overlay is reviewed."""
@@ -1236,18 +1131,7 @@ class DesktopController(QtCore.QObject):
         focus_value: int,
     ) -> dict[str, Any]:
         camera = self.runtime.context.camera
-        status = camera.status()
         value = max(0, min(250, int(focus_value)))
-        if status.synthetic:
-            return {
-                "autofocus": bool(autofocus),
-                "focus_value": value,
-                "sharpness": self._sharpness_score(camera.snapshot()),
-                "applied": {},
-                "skipped": {"camera": "synthetic camera"},
-                "changed": True,
-            }
-
         automatic = 1 if autofocus else 0
         requested: dict[str, int] = {
             "focus_automatic_continuous": automatic,

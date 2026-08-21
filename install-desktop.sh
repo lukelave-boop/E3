@@ -31,14 +31,14 @@ PYQT
 APPLICATIONS="$HOME/.local/share/applications"
 mkdir -p "$APPLICATIONS"
 
-for template in \
-  system/e3-positioning-system.desktop.in \
-  system/e3-positioning-system-safe.desktop.in
+for template in system/e3-positioning-system.desktop.in
 do
   output="$APPLICATIONS/$(basename "${template%.in}")"
   sed "s|@ROOT@|$ROOT|g" "$template" > "$output"
   chmod +x "$output"
 done
+
+rm -f "$APPLICATIONS/e3-positioning-system-safe.desktop"
 
 if [[ -d "$HOME/Desktop" ]]; then
   cp "$APPLICATIONS/e3-positioning-system.desktop" "$HOME/Desktop/"
@@ -50,4 +50,3 @@ update-desktop-database "$APPLICATIONS" >/dev/null 2>&1 || true
 echo
 echo "Desktop installation complete."
 echo "Launch 'E3 Positioning System' from the application menu."
-echo "Use 'E3 Positioning System (Safe)' when serial hardware must remain locked."

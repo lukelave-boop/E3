@@ -103,14 +103,9 @@ function updateStatusView(data) {
   const lens = data.lens;
   const bed = data.bed;
   const machine = data.machine;
-  const simulation = settings.app.simulation;
-
-  setBadge($('modeBadge'), simulation ? 'Simulation mode' : (machine.hardware_enabled ? 'Hardware mode' : 'Hardware locked'), simulation || machine.hardware_enabled, !simulation);
+  setBadge($('modeBadge'), machine.hardware_enabled ? 'Hardware mode' : 'Hardware locked', machine.hardware_enabled, !machine.hardware_enabled);
   setBadge($('cameraBadge'), camera.connected ? 'Camera online' : 'Camera offline', camera.connected);
-  setBadge($('machineBadge'), machine.connected ? `${machine.protocol} connected` : 'Controller offline', machine.connected, machine.backend === 'simulator');
-
-  $('simulationPanel').classList.toggle('hidden', !simulation);
-  $('syntheticControls').classList.toggle('hidden', !simulation);
+  setBadge($('machineBadge'), machine.connected ? `${machine.protocol} connected` : 'Controller offline', machine.connected);
   $('overviewCamera').textContent = camera.connected ? 'Ready' : 'Offline';
   $('overviewCameraDetail').textContent = camera.last_error || `${camera.width} × ${camera.height} at ${fmt(camera.fps, 1)} fps`;
   $('overviewLens').textContent = lens.calibrated ? 'Calibrated' : 'Not calibrated';
@@ -118,7 +113,7 @@ function updateStatusView(data) {
   $('overviewBed').textContent = bed.calibrated ? 'Mapped' : 'Not mapped';
   $('overviewBedDetail').textContent = bed.calibrated ? `${fmt(bed.calibration.rms_error_mm, 3)} mm RMS · ${bed.calibration.inlier_count}/${bed.calibration.point_count} inliers` : `${bed.points.length}/${bed.minimum_points} point pairs`;
   $('overviewMachine').textContent = machine.connected ? (machine.armed ? 'Armed' : 'Connected') : 'Disconnected';
-  $('overviewMachineDetail').textContent = `${machine.backend} · motion ${machine.allow_motion || machine.backend === 'simulator' ? 'enabled' : 'blocked'}`;
+  $('overviewMachineDetail').textContent = `${machine.backend} · motion ${machine.allow_motion ? 'enabled' : 'blocked'}`;
 
   const area = settings.machine.work_area;
   $('workAreaX').textContent = `${fmt(area.x_min)} to ${fmt(area.x_max)} mm`;
@@ -694,14 +689,6 @@ $('applyCameraControlsButton').addEventListener('click', async () => {
     toast(`Applied ${applied} camera controls; skipped ${skipped}.`);
   } catch (error) { toast(error.message, true); }
 });
-$('setSyntheticSceneButton').addEventListener('click', async () => {
-  try {
-    await api('/api/camera/synthetic-scene', 'POST', { scene: $('syntheticScene').value });
-    $('lensPreview').src = `/api/camera/frame.jpg?undistort=0&t=${Date.now()}`;
-    toast('Synthetic camera scene changed.');
-  } catch (error) { toast(error.message, true); }
-});
-
 $('captureLensButton').addEventListener('click', async () => {
   try {
     const result = await api('/api/calibration/lens/capture', 'POST', {});

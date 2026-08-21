@@ -6,7 +6,6 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..camera import load_corrected_test_image
 from ..core import CoreRuntime
 from ..gcode.job_plan import build_job_plan, restart_program_from_move
 from ..geometry.polygon import normalize_convex_polygon
@@ -85,7 +84,6 @@ from ..templates import (
     CutTemplate,
     RectangleGridSpec,
     TemplateLibrary,
-    generate_template_test_frame,
     instantiate_template,
     template_from_project,
     template_from_rectangle_grid,
@@ -116,7 +114,6 @@ from .setup_guide import show_setup_guide
 from .stock_layout_bar import StockLayoutToolBar
 from .template_designer import WORK_AREA_TOLERANCE_MM, GridTemplateDesignerDialog
 from .template_panel import TemplatePanel
-from .template_test_image import TemplateTestImageDialog
 from .text_dialog import VectorTextDialog
 from .text_geometry import create_vector_text_object
 from .workspace import WorkspaceFrame, WorkspaceView
@@ -909,9 +906,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.transform_panel = TransformPanel()
         self.trace_panel = TracePanel()
         self.template_panel = TemplatePanel()
-        self.template_panel.set_test_image_available(
-            self.runtime.context.simulation_workspace_frame_supported
-        )
         self.camera_panel = CameraPanel()
         self.camera_panel.set_focus_controls(
             dict(self.runtime.settings.camera.controls)
@@ -1170,15 +1164,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.template_panel.applyRequested.connect(self._apply_template_objects)
         self.template_panel.clearRequested.connect(self._clear_template_preview)
-        self.template_panel.loadTestImageRequested.connect(
-            self.load_template_test_image
-        )
-        self.template_panel.generateTestImageRequested.connect(
-            self.generate_template_test_image
-        )
-        self.template_panel.returnToCameraRequested.connect(
-            self.return_to_synthetic_camera
-        )
 
         self.camera_panel.refreshRequested.connect(self.controller.retry_camera_image)
         self.camera_panel.monitorRequested.connect(self.open_live_monitor)
@@ -1246,9 +1231,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.controller.reviewEvidenceInvalidated.connect(
             self._calibration_review_evidence_invalidated
-        )
-        self.controller.simulationFrameChanged.connect(
-            self._simulation_frame_changed
         )
         self.controller.errorOccurred.connect(self.show_error)
         self.controller.cameraErrorOccurred.connect(self.show_camera_error)
@@ -2226,7 +2208,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if not self._confirm_discard_changes():
             return
         document = self._new_document()
-        self._end_test_image_for_project_replacement()
         self.document = document
         self.project_path = None
         self.active_layer_id = self.document.active_layer_id
@@ -2268,7 +2249,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         except Exception as exc:
             self.show_error(f"Could not open project: {exc}")
             return
-        self._end_test_image_for_project_replacement()
         self.document = document
         self.project_path = Path(filename)
         self.active_layer_id = self.document.active_layer_id
@@ -4084,134 +4064,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.template_panel.set_busy(True)
         self.controller.match_cut_templates(snapshots, template_id=template_id)
 
-    def load_template_test_image(self) -> None:
-        """Load a corrected full-bed PNG/JPEG as the frozen simulation source."""
-
-        if not self.runtime.context.simulation_workspace_frame_supported:
-            self.show_error("Alignment test images are available only in safe simulation")
-            return
-        filename, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Load corrected alignment test image",
-            str(self.runtime.settings.app.data_dir),
-            "Images (*.png *.jpg *.jpeg);;All files (*)",
-        )
-        if not filename:
-            return
-        try:
-            image = load_corrected_test_image(
-                filename,
-                self.runtime.settings.machine.work_area,
-                self.runtime.settings.calibration.bed.pixels_per_mm,
-            )
-            label = f"Loaded: {Path(filename).name}"
-            self.controller.activate_simulation_workspace_frame(
-                image,
-                source_name=label,
-                metadata={"kind": "loaded", "filename": Path(filename).name},
-            )
-        except Exception as exc:
-            self.show_error(f"Could not load alignment test image: {exc}")
-            return
-        self._test_image_source_replaced()
-
-    def generate_template_test_image(self) -> None:
-        """Generate a deterministic corrected frame from the selected template."""
-
-        if not self.runtime.context.simulation_workspace_frame_supported:
-            self.show_error("Alignment test images are available only in safe simulation")
-            return
-        template_id = self.template_panel.current_template_id()
-        template = self._templates.get(str(template_id or ""))
-        if template is None:
-            self.show_notice("Select a cutting template before generating a test image")
-            return
-        if self.template_panel.has_placement():
-            current = self.template_panel.placement()
-            initial_center = (
-                float(current["center_x_mm"]),
-                float(current["center_y_mm"]),
-            )
-            initial_rotation = float(current["rotation_deg"])
-        else:
-            initial_center = self._document_center()
-            initial_rotation = 0.0
-
-        def submit(parameters: dict[str, Any]) -> None:
-            generator_parameters = dict(parameters)
-            missing_count = int(generator_parameters.pop("missing_count"))
-            missing_indices = tuple(
-                range(len(template.features) - missing_count, len(template.features))
-            )
-            generated = generate_template_test_frame(
-                template,
-                self.runtime.settings.machine.work_area,
-                self.runtime.settings.calibration.bed.pixels_per_mm,
-                missing_feature_indices=missing_indices,
-                **generator_parameters,
-            )
-            clipped = [
-                feature.index
-                for feature in generated.ground_truth.features
-                if feature.rendered and feature.clipped
-            ]
-            if clipped:
-                raise ValueError(
-                    f"the requested pose places {len(clipped)} visible label"
-                    f"{'s' if len(clipped) != 1 else ''} outside the work area"
-                )
-            center_x, center_y = generated.ground_truth.center_mm
-            rotation = generated.ground_truth.rotation_deg
-            label = (
-                f"Generated: {template.name} · X {center_x:.2f} · "
-                f"Y {center_y:.2f} · R {rotation:.2f}°"
-            )
-            self.controller.activate_simulation_workspace_frame(
-                generated.image,
-                source_name=label,
-                metadata={"kind": "generated", **generated.metadata},
-            )
-
-        dialog = TemplateTestImageDialog(
-            template.name,
-            len(template.features),
-            self.runtime.settings.machine.work_area,
-            initial_center=initial_center,
-            initial_rotation_deg=initial_rotation,
-            parent=self,
-            submit_handler=submit,
-        )
-        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
-        self._test_image_source_replaced()
-
-    def _test_image_source_replaced(self) -> None:
-        self._clear_trace_preview()
-        self._clear_template_preview(show_message=False)
-        self.inspector_tabs.select_panel("templates")
-
-    def _end_test_image_for_project_replacement(self) -> None:
-        """Prevent a frozen full-bed image from surviving a canvas replacement."""
-
-        if self.runtime.context.has_simulation_workspace_frame:
-            self.controller.return_to_synthetic_camera()
-
-    def return_to_synthetic_camera(self) -> None:
-        self._clear_trace_preview()
-        self._clear_template_preview(show_message=False)
-        self.controller.return_to_synthetic_camera()
-
-    def _simulation_frame_changed(self, payload: dict[str, Any]) -> None:
-        active = bool(payload.get("active", False))
-        label = str(payload.get("source_name", ""))
-        self.template_panel.set_test_image_source(active, label)
-        self.camera_panel.set_test_frame_source(active, label)
-        if not active:
-            # Never leave test pixels visible after their warning is removed.
-            # A successful synthetic-camera refresh will repopulate the overlay.
-            self.workspace.set_camera_image(None)
-        self.workspace.set_test_frame_source(active, label)
-
     def _template_match_ready(self, payload: dict[str, Any]) -> None:
         self.template_panel.set_busy(False)
         camera_image = payload.get("camera_image")
@@ -4897,8 +4749,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         pending["started_at"] = job["started_at"]
         pending["program_digest"] = str(job["program_digest"])
-        # A simulator can finish before the queued start callback reaches Qt.
-        # Poll once now so the matching terminal state is not delayed or lost.
+        # A fast controller peer can finish before the queued start callback
+        # reaches Qt. Poll once so the matching terminal state is not lost.
         self.controller.poll_status()
 
     def _open_automatic_calibration_capture(

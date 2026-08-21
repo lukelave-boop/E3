@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 
-from ..gcode.preview import exact_codes, parse_words, strip_comment
+from laser_aligner.gcode.preview import exact_codes, parse_words, strip_comment
 
 
 class SimulatedController:

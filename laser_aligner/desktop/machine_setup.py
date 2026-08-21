@@ -645,7 +645,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         connection_row.addWidget(self.machine_stop_button)
         layout.addLayout(connection_row)
         self.preferences_note = QtWidgets.QLabel(
-            "Setup remembers this window, selected tab, simulation scene, cross sizes, "
+            "Setup remembers this window, selected tab, cross sizes, "
             "marking speeds, and saved axis orientation. Marking power intentionally "
             "returns to 0% whenever Setup opens."
         )
@@ -1096,21 +1096,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         precision_note.setWordWrap(True)
         precision_note.setObjectName("mutedLabel")
         layout.addWidget(precision_note)
-        scene_row = QtWidgets.QHBoxLayout()
-        scene_row.addWidget(QtWidgets.QLabel("Simulation scene"))
-        self.synthetic_scene = QtWidgets.QComboBox()
-        for label, value in (("Perspective bed", "bed"), ("Checkerboard", "checkerboard"), ("Workpiece", "workpiece")):
-            self.synthetic_scene.addItem(label, value)
-        self.synthetic_scene.setEnabled(self.context.settings.app.simulation)
-        scene_row.addWidget(self.synthetic_scene, 1)
-        set_scene = QtWidgets.QPushButton("Set scene")
-        set_scene.setEnabled(self.context.settings.app.simulation)
-        scene_row.addWidget(set_scene)
-        layout.addLayout(scene_row)
         refresh.clicked.connect(self.refresh_camera)
         apply_controls.clicked.connect(self.apply_controls)
         save.clicked.connect(self.save_still)
-        set_scene.clicked.connect(self.set_synthetic_scene)
         self.camera_scroll_area = self._add_scrollable_tab(tab, "1 · Camera")
 
     def _build_lens_tab(self) -> None:
@@ -2578,14 +2566,6 @@ class MachineSetupDialog(QtWidgets.QDialog):
             lambda path: QtWidgets.QMessageBox.information(self, "Saved", str(path)),
         )
 
-    def set_synthetic_scene(self) -> None:
-        result = self._message(
-            "Simulation scene",
-            lambda: self.context.synthetic_scene(str(self.synthetic_scene.currentData())),
-        )
-        if result is None:
-            self.refresh_camera()
-
     def capture_lens(self) -> None:
         def operation() -> tuple[dict[str, Any], np.ndarray]:
             result = self.context.capture_lens_calibration()
@@ -3255,10 +3235,6 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if geometry:
             self.restoreGeometry(geometry)
         self.tabs.setCurrentIndex(max(0, min(self.tabs.count() - 1, int(self._settings.value("machineSetup/tab", 0)))))
-        scene = str(self._settings.value("machineSetup/syntheticScene", "bed"))
-        scene_index = self.synthetic_scene.findData(scene)
-        if scene_index >= 0:
-            self.synthetic_scene.setCurrentIndex(scene_index)
         for key, widget in (
             ("baseGridMarkSize", self.base_grid_mark_size),
             ("baseGridSpeed", self.base_grid_speed),
@@ -3274,7 +3250,6 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def _save_preferences(self) -> None:
         self._settings.setValue("machineSetup/geometry-v1", self.saveGeometry())
         self._settings.setValue("machineSetup/tab", self.tabs.currentIndex())
-        self._settings.setValue("machineSetup/syntheticScene", self.synthetic_scene.currentData())
         for key, widget in (
             ("baseGridMarkSize", self.base_grid_mark_size),
             ("baseGridSpeed", self.base_grid_speed),

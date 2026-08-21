@@ -10,9 +10,7 @@ from laser_aligner.config import load_settings
 from laser_aligner.errors import MachineError
 from laser_aligner.first_run import (
     build_hardware_config,
-    build_simulator_config,
     save_hardware_setup,
-    save_profile_setup,
 )
 from laser_aligner.machine.profiles import (
     MACHINE_REGISTRY_SCHEMA_VERSION,
@@ -70,7 +68,7 @@ def test_build_hardware_config_uses_network_bridges() -> None:
         machine_profile_id="generic-marlin",
         tool_head_profile_id="generic-diode-10w",
     )
-    assert payload["app"]["simulation"] is False
+    assert "simulation" not in payload["app"]
     assert payload["app"]["data_dir"] == "../data"
     assert payload["camera"]["device"] == "e3camera://10.0.0.42:8766"
     assert payload["camera"]["controls"]["focus_auto"] == 0
@@ -82,18 +80,6 @@ def test_build_hardware_config_uses_network_bridges() -> None:
     assert payload["machine"]["work_area"]["y_max"] == 200.0
     assert payload["machine"]["photo_position"]["x"] == 150.0
     assert payload["machine"]["photo_position"]["y"] == 100.0
-    assert payload["machine"]["allow_motion"] is False
-    assert payload["laser"]["default_power"] == 0
-    assert payload["laser"]["frame_power"] == 0
-    assert payload["laser"]["allow_low_power_frame"] is False
-
-
-def test_build_simulator_config_is_safe_and_uses_no_hardware_endpoint() -> None:
-    payload = build_simulator_config(Path("config/default.json"))
-
-    assert payload["app"]["simulation"] is True
-    assert payload["machine"]["backend"] == "simulator"
-    assert payload["machine"]["port"] == "simulator"
     assert payload["machine"]["allow_motion"] is False
     assert payload["laser"]["default_power"] == 0
     assert payload["laser"]["frame_power"] == 0
@@ -136,36 +122,6 @@ def test_save_hardware_setup_is_user_state(
     assert saved.laser.default_power == 0
     assert saved.laser.frame_power == 0
     assert saved.laser.allow_low_power_frame is False
-    assert saved.camera_profile_id is None
-    assert saved.calibration_profile_id is None
-
-
-def test_save_simulator_profile_needs_no_bridge_secret_and_selects_snapshot(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("E3_USER_STATE_DIR", str(tmp_path))
-
-    config_path = save_profile_setup(
-        Path("config/default.json"),
-        machine_name="Safe simulator",
-        machine_profile_id="simulator",
-        tool_head_profile_id="simulated-laser-head",
-    )
-
-    settings = load_settings(config_path)
-    registry = MachineRegistry.load_or_migrate(settings)
-    saved = registry.active_machine
-    assert settings.app.simulation is True
-    assert settings.machine.backend == "simulator"
-    assert not (tmp_path / "secrets" / "bridge-token.txt").exists()
-    assert len(registry.machines()) == 1
-    assert saved.name == "Safe simulator"
-    assert saved.created_from == "profile"
-    assert saved.machine_profile_id == "simulator"
-    assert saved.tool_head_profile_id == "simulated-laser-head"
-    assert saved.machine.allow_motion is False
-    assert saved.laser.default_power == 0
     assert saved.camera_profile_id is None
     assert saved.calibration_profile_id is None
 

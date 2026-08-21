@@ -805,8 +805,6 @@ class CameraPanel(QtWidgets.QWidget):
         self._syncing_focus = False
         self._calibration_ready = False
         self._camera_connected = False
-        self._test_frame_active = False
-        self._test_frame_label = ""
         layout = _panel_layout(self)
 
         heading = QtWidgets.QLabel("Camera and overlay")
@@ -1062,48 +1060,22 @@ class CameraPanel(QtWidgets.QWidget):
 
     def set_calibration_ready(self, ready: bool) -> None:
         self._calibration_ready = bool(ready)
-        overlay_enabled = self._calibration_ready and not self._test_frame_active
+        overlay_enabled = self._calibration_ready
         self.live_check.setEnabled(overlay_enabled)
         self.live_rate.setEnabled(overlay_enabled)
         self.refresh_button.setEnabled(overlay_enabled)
-        if not ready and not self._test_frame_active:
+        if not ready:
             self.image_state.setText(
                 "Bed mapping is required for a corrected overlay"
             )
 
     def set_image_updated(self) -> None:
-        if self._test_frame_active:
-            self._render_test_frame_status()
-            return
         current = QtCore.QTime.currentTime().toString("HH:mm:ss")
         mode = "LIVE" if self.live_check.isChecked() else "STILL"
         self.image_state.setText(f"{mode} overlay updated at {current}")
 
-    def set_test_frame_source(self, active: bool, label: str = "") -> None:
-        """Keep camera controls honest while an in-memory test frame is frozen."""
-
-        self._test_frame_active = bool(active)
-        self._test_frame_label = str(label).strip()
-        if not self._test_frame_active:
-            self.image_state.setToolTip("")
-        self.capture_button.setEnabled(not self._test_frame_active)
-        self.lens_button.setEnabled(not self._test_frame_active)
-        self.bed_button.setEnabled(not self._test_frame_active)
-        self.set_calibration_ready(self._calibration_ready)
-        self._update_focus_enabled()
-        if self._test_frame_active:
-            self._render_test_frame_status()
-        elif self._calibration_ready:
-            self.image_state.setText("Waiting for synthetic camera image")
-            self.image_state.setToolTip("")
-
-    def _render_test_frame_status(self) -> None:
-        label = self._test_frame_label or "Corrected simulation frame"
-        self.image_state.setText(f"TEST IMAGE · FROZEN\n{label}")
-        self.image_state.setToolTip(label)
-
     def _update_focus_enabled(self) -> None:
-        enabled = self._camera_connected and not self._test_frame_active
+        enabled = self._camera_connected
         for widget in (
             self.autofocus_check,
             self.apply_focus_button,
@@ -1134,7 +1106,7 @@ class CameraPanel(QtWidgets.QWidget):
         self._update_focus_enabled()
 
     def _set_manual_focus_enabled(self, enabled: bool) -> None:
-        resolved = bool(enabled) and not self._test_frame_active
+        resolved = bool(enabled)
         self.focus_slider.setEnabled(resolved)
         self.focus_spin.setEnabled(resolved)
 

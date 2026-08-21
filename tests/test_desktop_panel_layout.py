@@ -303,7 +303,14 @@ def test_trace_result_labels_damaged_and_already_open_cells(
 
 def test_trace_preferences_persist_but_replace_previous_resets(
     qt_application: QtWidgets.QApplication,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    settings = QtCore.QSettings(
+        str(tmp_path / "trace-preferences.ini"),
+        QtCore.QSettings.Format.IniFormat,
+    )
+    monkeypatch.setattr(QtCore, "QSettings", lambda *_args, **_kwargs: settings)
     first = TracePanel()
     first.snap_grid_cells.setChecked(False)
     first.replace_previous.setChecked(False)
@@ -658,24 +665,6 @@ def test_transform_summary_wraps_long_names_without_widening_inspector(
     assert panel.summary.wordWrap()
     assert panel.summary.height() > panel.summary.fontMetrics().height()
     assert panel.summary.toolTip() == summary
-
-    scroll.close()
-    scroll.deleteLater()
-
-
-def test_camera_test_source_does_not_widen_narrow_inspector(
-    qt_application: QtWidgets.QApplication,
-) -> None:
-    panel = CameraPanel()
-    long_source = (
-        "Loaded: "
-        "warehouse-label-sheet-red-rounded-rectangles-revision-2026-08-06.png"
-    )
-    panel.set_test_frame_source(True, long_source)
-    scroll = _show_in_narrow_inspector(panel, qt_application)
-
-    _assert_no_hidden_horizontal_content(scroll, panel)
-    assert panel.image_state.toolTip() == long_source
 
     scroll.close()
     scroll.deleteLater()

@@ -7,12 +7,15 @@ versioned saved-machine registry and reusable machine/tool-head profiles without
 changing which configuration controls the running camera, controller, motion,
 or laser.
 
-At desktop startup, `CoreRuntime` creates or loads
+At browser and desktop startup, `CoreRuntime` creates or loads
 `<data_dir>/machines.json`. When that file does not exist, E3 atomically records
 one `existing-machine` entry containing an exact copy of the already validated
-`machine` and `laser` sections from the active JSON configuration. Existing
-hardware behavior therefore remains unchanged: the loaded `Settings` object is
-still passed to `AppContext` and remains the only runtime authority.
+`machine` and `laser` sections from the active JSON configuration, but only when
+the configuration has an explicit endpoint. `SELECT_CONTROLLER_PORT` and the
+former implicit `/dev/ttyUSB0` default require setup instead of creating a
+plausible registry. Once a registry exists, its active saved-machine snapshot is
+the runtime authority passed to `AppContext`; raw JSON machine/laser values do
+not override it.
 
 The registry is intentionally not yet exposed as a Machine Manager, and
 changing the saved active-machine ID does not reconnect, home, move, arm, or
@@ -52,7 +55,7 @@ low-power framing disabled. These are setup defaults, not permission to emit.
 
 ### Machine instance
 
-A `MachineInstance` is one saved physical or simulated machine. It references a
+A `MachineInstance` is one saved physical machine. It references a
 machine profile and a tool-head profile but stores a complete validated snapshot
 of its concrete `MachineSettings` and `LaserSettings`. This allows two machines
 based on the same profile to retain different ports, work areas, speeds,
@@ -131,12 +134,26 @@ or migration metadata blocks migration without guessing or overwriting data.
 
 Migration deliberately makes only conservative classifications:
 
-- simulator configurations use the simulator machine and simulated head;
+- legacy simulator configurations are rejected or retired by the dedicated
+  removal migration and are never converted into physical identity;
 - explicit GRBL configurations use the Generic GRBL profile;
 - explicit Marlin configurations use the Generic Marlin profile;
 - serial configurations using protocol auto remain Custom Machine;
 - physical laser wattage is never inferred, so migrated hardware uses Custom
   Laser Head.
+
+If legacy simulator state is active or is the only saved state, desktop startup
+uses a separate read-only recovery inspection before credentials or runtime
+construction. The recovery UI starts without a selected machine and requires an
+explicit configured physical choice or creation of a new safe physical snapshot.
+Finish preserves raw validated physical records, retires simulator records with
+an exact backup, and transactionally rolls back configuration, registry,
+credential, backup, and completion marker on failure. Cancel writes nothing.
+Inactive simulator entries beside an active physical machine continue to be
+retired automatically by the normal loader. Browser startup does not run a GUI
+recovery flow; both the legacy simulation flag and simulator backend fail closed
+with setup instructions. Normal packaged fallback recovery writes a durable user
+configuration; an explicit `--config` is repaired in place.
 
 The migrated instance preserves the current validated settings exactly,
 including an existing operator-enabled `allow_motion` value or configured
@@ -147,7 +164,6 @@ authority because the registry is not yet connected to execution.
 
 Machine profiles:
 
-- Simulator
 - Generic GRBL Laser
 - Generic Marlin Laser
 - Creality Ender-3 S1 Pro
@@ -157,11 +173,10 @@ Tool-head profiles:
 
 - Generic 10 W Diode Laser
 - Custom Laser Head
-- Simulated Laser Head
 
 These profiles are starting points, not verified declarations about an attached
 machine. A profile-derived physical machine still requires an explicit
-controller port, reviewed limits, calibration, hardware-enabled startup, motion
+controller port, reviewed limits, calibration, normal hardware-capable startup, motion
 gate, homing/reference establishment, exact Preview, and ordinary temporary
 laser arming before output.
 
@@ -194,7 +209,7 @@ and machine-neutral.
 ## Verification for this increment
 
 Focused portable tests cover exact legacy migration, conservative profile
-classification, simulator migration, safe profile-derived defaults, multiple
+classification, retired-simulator migration, safe profile-derived defaults, multiple
 saved machines, active selection, update and reload, detached resolved values,
 duplicate and unknown JSON rejection, future-schema rejection, invalid
 machine/head pair rejection, guarded-polygon validation, removal rules,

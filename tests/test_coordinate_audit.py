@@ -23,12 +23,11 @@ def _settings(tmp_path: Path, *, honeycomb_span_mm: float | None = None):
     payload = {
         "app": {
             "data_dir": str(tmp_path / "data"),
-            "simulation": True,
             "open_browser": False,
         },
         "camera": {"view_rotation_degrees": 90},
         "machine": {
-            "backend": "simulator",
+            "backend": "serial",
             "honeycomb_span_mm": honeycomb_span_mm,
             "photo_position": {"x": 15.0, "y": 195.0, "z": None},
         },
@@ -122,6 +121,17 @@ def test_unbound_profile_machine_cannot_inherit_honeycomb_support(
             machine_profile_id="generic-marlin",
             tool_head_profile_id="custom-laser-head",
         ),
+    )
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 1079.0, 0.0, 0.0),
+            BedPoint(1919.0, 1079.0, 220.0, 0.0),
+            BedPoint(1919.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        1920,
+        1080,
+        provenance=context._bed_provenance(),
     )
     context.start()
     try:
@@ -265,7 +275,7 @@ def test_capture_snapshot_survives_current_coordinate_trust_cleanup(
         "status",
         lambda: {
             "connected": True,
-            "backend": "simulator",
+            "backend": "serial",
             "protocol": "grbl",
             "coordinate_reference_ready": False,
         },

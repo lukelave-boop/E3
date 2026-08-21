@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .errors import RealMachineSetupRequired
 from .storage import default_user_data_dir, strict_json_loads
 
 
@@ -15,8 +16,14 @@ class ConfigError(ValueError):
     """Raised when a configuration file contains an invalid value."""
 
 
+class RemovedSimulationConfigError(ConfigError, RealMachineSetupRequired):
+    """A legacy simulation-enabled configuration requires real setup."""
+
+
 _SUPPORTED_HTTP_BIND_HOSTS = frozenset({"127.0.0.1", "localhost", "0.0.0.0"})
 _MAX_ARM_TIMEOUT_SECONDS = 600
+UNCONFIGURED_CONTROLLER_PORT = "SELECT_CONTROLLER_PORT"
+LEGACY_IMPLICIT_CONTROLLER_PORT = "/dev/ttyUSB0"
 
 
 def validate_http_bind_host(value: object) -> str:
@@ -122,7 +129,6 @@ class AppSettings:
     host: str = "127.0.0.1"
     port: int = 8080
     data_dir: Path = Path("data")
-    simulation: bool = True
     open_browser: bool = True
     allow_remote_control: bool = False
     max_request_bytes: int = 10_000_000
@@ -217,9 +223,9 @@ def effective_laser_output_area(
 
 @dataclass(slots=True)
 class MachineSettings:
-    backend: str = "simulator"
+    backend: str = "serial"
     protocol: str = "auto"
-    port: str = "/dev/ttyUSB0"
+    port: str = UNCONFIGURED_CONTROLLER_PORT
     baudrate: int = 115200
     read_timeout: float = 2.0
     work_area: WorkArea = field(default_factory=WorkArea)
@@ -309,7 +315,6 @@ class Settings:
         """Return settings safe for the local browser UI."""
         return {
             "app": {
-                "simulation": self.app.simulation,
                 "allow_remote_control": self.app.allow_remote_control,
             },
             "camera": {
@@ -395,7 +400,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "host": "127.0.0.1",
         "port": 8080,
         "data_dir": "data",
-        "simulation": True,
         "open_browser": True,
         "allow_remote_control": False,
         "max_request_bytes": 10_000_000,
@@ -435,9 +439,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "machine": {
-        "backend": "simulator",
+        "backend": "serial",
         "protocol": "auto",
-        "port": "/dev/ttyUSB0",
+        "port": UNCONFIGURED_CONTROLLER_PORT,
         "baudrate": 115200,
         "read_timeout": 2.0,
         "work_area": {"x_min": 0.0, "x_max": 220.0, "y_min": 0.0, "y_max": 220.0},
@@ -611,7 +615,6 @@ def _validate(raw: Mapping[str, Any]) -> None:
             "app.allow_remote_control is no longer supported; the HTTP control surface is local-only"
         )
     for section, key in (
-        ("app", "simulation"),
         ("app", "open_browser"),
         ("app", "allow_remote_control"),
         ("camera", "autostart"),
@@ -686,8 +689,13 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("machine.work_area.x_max must be greater than x_min")
     if float(area["y_max"]) <= float(area["y_min"]):
         raise ConfigError("machine.work_area.y_max must be greater than y_min")
-    if str(raw["machine"]["backend"]) not in {"simulator", "serial"}:
-        raise ConfigError("machine.backend must be 'simulator' or 'serial'")
+    if str(raw["machine"]["backend"]) == "simulator":
+        raise RemovedSimulationConfigError(
+            "This configuration used the removed E3 simulator backend. "
+            "Configure a real machine before continuing."
+        )
+    if str(raw["machine"]["backend"]) != "serial":
+        raise ConfigError("machine.backend must be 'serial'")
     if str(raw["machine"]["protocol"]) not in {"auto", "grbl", "marlin"}:
         raise ConfigError("machine.protocol must be auto, grbl, or marlin")
     if int(raw["machine"]["baudrate"]) <= 0:
@@ -781,7 +789,20 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             raise ConfigError(f"Could not read configuration file {source_path}: {exc}") from exc
         if not isinstance(loaded, Mapping):
             raise ConfigError("Configuration root must be a JSON object")
-        override = loaded
+        override = copy.deepcopy(dict(loaded))
+        app_override = override.get("app")
+        if isinstance(app_override, Mapping) and "simulation" in app_override:
+            legacy_simulation = app_override["simulation"]
+            if type(legacy_simulation) is not bool:
+                raise ConfigError("app.simulation must be a JSON boolean")
+            if legacy_simulation:
+                raise RemovedSimulationConfigError(
+                    "This configuration used the removed E3 simulation mode. "
+                    "Configure a real machine before continuing."
+                )
+            app_override = dict(app_override)
+            del app_override["simulation"]
+            override["app"] = app_override
     elif config_path is not None or os.environ.get("LASER_ALIGNER_CONFIG"):
         raise ConfigError(f"Configuration file does not exist: {source_path}")
 
@@ -807,7 +828,6 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             host=validate_http_bind_host(raw["app"]["host"]),
             port=validate_http_port(raw["app"]["port"]),
             data_dir=_path(raw["app"]["data_dir"], root),
-            simulation=_require_boolean(raw["app"]["simulation"], "app.simulation"),
             open_browser=_require_boolean(raw["app"]["open_browser"], "app.open_browser"),
             allow_remote_control=_require_boolean(
                 raw["app"]["allow_remote_control"],

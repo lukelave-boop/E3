@@ -17,7 +17,6 @@ from laser_aligner.server import AppHTTPServer, AppRequestHandler, _json_boolean
 _MUTATING_ROUTES = (
     "/api/camera/capture",
     "/api/camera/controls/apply",
-    "/api/camera/synthetic-scene",
     "/api/calibration/lens/capture",
     "/api/calibration/lens/solve",
     "/api/calibration/lens/clear",
@@ -248,13 +247,13 @@ def test_valid_same_origin_json_post_mutates_once(http_app) -> None:
     status, _headers, payload = _request(
         server,
         "POST",
-        "/api/camera/synthetic-scene",
-        body=json.dumps({"scene": "checkerboard"}),
+        "/api/machine/disarm",
+        body=json.dumps({}),
         headers=_authorized_headers(server, token),
     )
     assert status == 200
     assert json.loads(payload)["ok"] is True
-    assert context.mutations == [("synthetic_scene", "checkerboard")]
+    assert context.mutations == [("disarm", None)]
 
 
 def test_localhost_authority_remains_usable(http_app) -> None:
@@ -263,12 +262,12 @@ def test_localhost_authority_remains_usable(http_app) -> None:
     status, _headers, _payload = _request(
         server,
         "POST",
-        "/api/camera/synthetic-scene",
+        "/api/machine/disarm",
         body="{}",
         headers=_authorized_headers(server, token, host="localhost"),
     )
     assert status == 200
-    assert context.mutations == [("synthetic_scene", "bed")]
+    assert context.mutations == [("disarm", None)]
 
 
 @pytest.mark.parametrize(

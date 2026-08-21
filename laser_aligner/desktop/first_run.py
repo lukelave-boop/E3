@@ -5,7 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..deployment import application_root, user_config_path
-from ..first_run import save_profile_setup
+from ..first_run import (
+    SimulatorRecoveryPlan,
+    save_profile_setup,
+    save_simulator_recovery_selection,
+)
 from ..machine.profiles import (
     builtin_machine_profiles,
     builtin_tool_head_profiles,
@@ -20,8 +24,8 @@ _CONNECTION = 2
 _MACHINE = 3
 _CAMERA = 4
 _FINISH = 5
-_SIMULATOR_PROFILE_ID = "simulator"
-_SIMULATOR_TOOL_HEAD_ID = "simulated-laser-head"
+_RECOVERY_CHOICE = 6
+_CREATE_NEW_MACHINE = "__create_new_real_machine__"
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,23 +45,94 @@ def _default_template_config() -> Path:
 
 
 class _WelcomePage(QtWidgets.QWizardPage):
-    def __init__(self) -> None:
+    def __init__(self, *, recovering_simulator: bool = False) -> None:
         super().__init__()
-        self.setTitle("Welcome to E3")
-        self.setSubTitle("Choose a safe simulator or configure a saved machine.")
+        self._recovering_simulator = recovering_simulator
+        self.setTitle(
+            "Replace the removed simulator"
+            if recovering_simulator
+            else "Welcome to E3"
+        )
+        self.setSubTitle(
+            "Explicitly select or configure a real saved machine."
+            if recovering_simulator
+            else "Configure a real saved machine."
+        )
         layout = QtWidgets.QVBoxLayout(self)
+        prefix = (
+            (
+                "E3 no longer provides a simulator runtime. Recovery requires "
+                "an explicit real-machine choice; it never converts a simulator "
+                "or transfers simulator camera or calibration evidence. "
+            )
+            if recovering_simulator
+            else (
+                "This guided setup creates machine-specific files that E3 keeps "
+                "separate from the application. "
+            )
+        )
         intro = QtWidgets.QLabel(
-            "This guided setup creates machine-specific files that E3 keeps "
-            "separate from the application. Choosing or saving a profile does "
-            "not connect, Home, jog, arm, move, or enable laser output. Hardware "
-            "settings remain unverified until they are tested physically."
+            prefix
+            + "Choosing or saving a profile does not connect, Home, jog, arm, "
+            "move, or enable laser output. Hardware settings remain unverified "
+            "until they are tested physically."
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
         layout.addStretch(1)
 
     def nextId(self) -> int:
-        return _PROFILE
+        return _RECOVERY_CHOICE if self._recovering_simulator else _PROFILE
+
+
+class _RecoveryChoicePage(QtWidgets.QWizardPage):
+    def __init__(self, recovery: SimulatorRecoveryPlan) -> None:
+        super().__init__()
+        self.recovery = recovery
+        self.setTitle("Real saved machine")
+        self.setSubTitle(
+            "Choose an existing configured physical machine or configure a new one."
+        )
+        layout = QtWidgets.QFormLayout(self)
+        self.choice = QtWidgets.QComboBox()
+        self.choice.setObjectName("simulatorRecoveryMachineChoice")
+        self.choice.addItem("Choose a recovery action…", None)
+        self.choice.addItem(
+            "Configure a new real machine",
+            _CREATE_NEW_MACHINE,
+        )
+        for machine in recovery.configured_physical_machines:
+            self.choice.addItem(
+                f"Select existing: {machine.name} — {machine.machine.port}",
+                machine.id,
+            )
+        layout.addRow("Recovery action", self.choice)
+        note = QtWidgets.QLabel(
+            "No existing physical machine is selected automatically. Simulator "
+            "records are retired only after Finish succeeds; cancel leaves all "
+            "configuration and saved machines unchanged."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("mutedLabel")
+        layout.addRow(note)
+        self.choice.currentIndexChanged.connect(self.completeChanged)
+
+    @property
+    def selected_machine_id(self) -> str | None:
+        selected = self.choice.currentData()
+        if selected in {None, _CREATE_NEW_MACHINE}:
+            return None
+        return str(selected)
+
+    @property
+    def creating_new_machine(self) -> bool:
+        return self.choice.currentData() == _CREATE_NEW_MACHINE
+
+    def isComplete(self) -> bool:
+        return self.choice.currentData() is not None
+
+    def nextId(self) -> int:
+        return _PROFILE if self.creating_new_machine else _FINISH
 
 
 class _ProfilePage(QtWidgets.QWizardPage):
@@ -74,13 +149,7 @@ class _ProfilePage(QtWidgets.QWizardPage):
         layout = QtWidgets.QFormLayout(self)
         self.machine_name = QtWidgets.QLineEdit("My E3 machine")
         self.machine_profile = QtWidgets.QComboBox()
-        ordered_machine_ids = (_SIMULATOR_PROFILE_ID,) + tuple(
-            sorted(
-                profile_id
-                for profile_id in self._machine_profiles
-                if profile_id != _SIMULATOR_PROFILE_ID
-            )
-        )
+        ordered_machine_ids = tuple(sorted(self._machine_profiles))
         for profile_id in ordered_machine_ids:
             profile = self._machine_profiles[profile_id]
             self.machine_profile.addItem(profile.name, profile.id)
@@ -110,9 +179,6 @@ class _ProfilePage(QtWidgets.QWizardPage):
         )
         self._machine_profile_changed()
 
-    def is_simulator(self) -> bool:
-        return self.machine_profile.currentData() == _SIMULATOR_PROFILE_ID
-
     def isComplete(self) -> bool:
         return bool(self.machine_name.text().strip())
 
@@ -127,34 +193,27 @@ class _ProfilePage(QtWidgets.QWizardPage):
         return True
 
     def nextId(self) -> int:
-        return _FINISH if self.is_simulator() else _CONNECTION
+        return _CONNECTION
 
     def _machine_profile_changed(self) -> None:
         selected_tool = self.tool_head_profile.currentData()
-        if selected_tool and selected_tool != _SIMULATOR_TOOL_HEAD_ID:
+        if selected_tool:
             self._hardware_tool_head_id = str(selected_tool)
         self.tool_head_profile.blockSignals(True)
         self.tool_head_profile.clear()
-        if self.is_simulator():
-            profile = self._tool_head_profiles[_SIMULATOR_TOOL_HEAD_ID]
+        for profile_id in ("custom-laser-head", "generic-diode-10w"):
+            profile = self._tool_head_profiles[profile_id]
             self.tool_head_profile.addItem(profile.name, profile.id)
-            self.tool_head_profile.setEnabled(False)
-        else:
-            for profile_id in ("custom-laser-head", "generic-diode-10w"):
-                profile = self._tool_head_profiles[profile_id]
-                self.tool_head_profile.addItem(profile.name, profile.id)
-            index = self.tool_head_profile.findData(
-                self._hardware_tool_head_id
-            )
-            self.tool_head_profile.setCurrentIndex(max(index, 0))
-            self.tool_head_profile.setEnabled(True)
+        index = self.tool_head_profile.findData(self._hardware_tool_head_id)
+        self.tool_head_profile.setCurrentIndex(max(index, 0))
+        self.tool_head_profile.setEnabled(True)
         self.tool_head_profile.blockSignals(False)
         self._refresh_summary()
         self.completeChanged.emit()
 
     def _tool_head_changed(self) -> None:
         selected = self.tool_head_profile.currentData()
-        if selected and selected != _SIMULATOR_TOOL_HEAD_ID:
+        if selected:
             self._hardware_tool_head_id = str(selected)
         self._refresh_summary()
 
@@ -167,13 +226,10 @@ class _ProfilePage(QtWidgets.QWizardPage):
         machine = self._machine_profiles[str(machine_id)]
         tool = self._tool_head_profiles[str(tool_id)]
         area = machine.machine_defaults.work_area
-        if self.is_simulator():
-            mode = "Software-only simulator; no hardware endpoint is used."
-        else:
-            mode = (
-                f"{machine.machine_defaults.protocol.upper()} controller "
-                "policy over the existing E3 bridge transport."
-            )
+        mode = (
+            f"{machine.machine_defaults.protocol.upper()} controller "
+            "policy over the existing E3 bridge transport."
+        )
         self.profile_summary.setText(
             f"<b>{machine.name}</b> + <b>{tool.name}</b><br>"
             f"{mode}<br>Starting work area: {area.width:g} × "
@@ -182,8 +238,9 @@ class _ProfilePage(QtWidgets.QWizardPage):
 
 
 class _ConnectionPage(QtWidgets.QWizardPage):
-    def __init__(self) -> None:
+    def __init__(self, *, allow_reachability_test: bool = True) -> None:
         super().__init__()
+        self._allow_reachability_test = allow_reachability_test
         self.setTitle("Hardware-node connection")
         self.setSubTitle(
             "Enter the Raspberry Pi address and bridge credential configured on the Pi."
@@ -206,6 +263,7 @@ class _ConnectionPage(QtWidgets.QWizardPage):
         layout.addRow("Bridge credential", self.token)
         row = QtWidgets.QHBoxLayout()
         self.test_button = QtWidgets.QPushButton("Test network reachability")
+        self.test_button.setVisible(allow_reachability_test)
         self.status = QtWidgets.QLabel("")
         self.status.setWordWrap(True)
         row.addWidget(self.test_button)
@@ -254,6 +312,12 @@ class _ConnectionPage(QtWidgets.QWizardPage):
             return False
 
     def _test_connection(self) -> None:
+        if not self._allow_reachability_test:
+            self.status.setText(
+                "Reachability testing is disabled until simulator recovery "
+                "has completed."
+            )
+            return
         host = self.host.text().strip()
         if not host:
             self.status.setText("Enter the Raspberry Pi address first.")
@@ -374,18 +438,29 @@ class _FinishPage(QtWidgets.QWizardPage):
 
     def initializePage(self) -> None:
         wizard = self.wizard()
-        profile_page = getattr(wizard, "profile", None)
-        if profile_page is not None and profile_page.is_simulator():
-            self.message.setText(
-                "Click Finish to save and select the software-only simulator. "
-                "No hardware endpoint will be contacted."
+        recovery_choice = getattr(wizard, "recovery_choice", None)
+        selected_machine_id = (
+            recovery_choice.selected_machine_id
+            if recovery_choice is not None
+            else None
+        )
+        if selected_machine_id is not None:
+            selected = next(
+                machine
+                for machine in recovery_choice.recovery.physical_machines
+                if machine.id == selected_machine_id
             )
-        else:
             self.message.setText(
-                "Click Finish to save and select this machine for the next E3 "
-                "launch. Motion and laser output remain disabled. No connection, "
-                "Home, jog, arming, output, or physical verification is performed."
+                f"Click Finish to explicitly select {selected.name} and retire "
+                "the legacy simulator records. No connection, Home, jog, arming, "
+                "motion, output, or physical verification is performed."
             )
+            return
+        self.message.setText(
+            "Click Finish to save and select this machine for the next E3 "
+            "launch. Motion and laser output remain disabled. No connection, "
+            "Home, jog, arming, output, or physical verification is performed."
+        )
 
 
 class FirstRunWizard(QtWidgets.QWizard):
@@ -393,16 +468,32 @@ class FirstRunWizard(QtWidgets.QWizard):
         self,
         template_config: Path,
         parent: QtWidgets.QWidget | None = None,
+        *,
+        recovery: SimulatorRecoveryPlan | None = None,
     ) -> None:
         super().__init__(parent)
         self.template_config = Path(template_config)
+        self.recovery = recovery
         self.saved_config: Path | None = None
-        self.setWindowTitle("E3 First-Run Setup")
+        self.setWindowTitle(
+            "E3 Simulator Recovery"
+            if recovery is not None
+            else "E3 First-Run Setup"
+        )
         self.setWizardStyle(QtWidgets.QWizard.WizardStyle.ModernStyle)
         self.setMinimumSize(660, 480)
-        self.welcome = _WelcomePage()
+        self.welcome = _WelcomePage(
+            recovering_simulator=recovery is not None
+        )
+        self.recovery_choice = (
+            _RecoveryChoicePage(recovery)
+            if recovery is not None
+            else None
+        )
         self.profile = _ProfilePage()
-        self.connection = _ConnectionPage()
+        self.connection = _ConnectionPage(
+            allow_reachability_test=recovery is None
+        )
         self.machine = _MachinePage()
         self.camera = _CameraPage()
         self.finish = _FinishPage()
@@ -412,39 +503,60 @@ class FirstRunWizard(QtWidgets.QWizard):
         self.setPage(_MACHINE, self.machine)
         self.setPage(_CAMERA, self.camera)
         self.setPage(_FINISH, self.finish)
+        if self.recovery_choice is not None:
+            self.setPage(_RECOVERY_CHOICE, self.recovery_choice)
         self.setStartId(_WELCOME)
 
     @property
     def open_machine_setup(self) -> bool:
-        return not self.profile.is_simulator()
+        return True
 
     def accept(self) -> None:
+        if self.recovery_choice is not None:
+            selected_machine_id = self.recovery_choice.selected_machine_id
+            if selected_machine_id is not None:
+                try:
+                    self.saved_config = save_simulator_recovery_selection(
+                        self.recovery_choice.recovery,
+                        selected_machine_id,
+                    )
+                except Exception as exc:
+                    QtWidgets.QMessageBox.critical(self, "E3 Setup", str(exc))
+                    return
+                super().accept()
+                return
+            if not self.recovery_choice.creating_new_machine:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "E3 Setup",
+                    "Choose an existing physical machine or configure a new one.",
+                )
+                return
         machine_profile_id = str(
             self.profile.machine_profile.currentData()
         )
         tool_head_profile_id = str(
             self.profile.tool_head_profile.currentData()
         )
-        options: dict[str, object] = {}
-        if not self.profile.is_simulator():
-            options = {
-                "bridge_token": self.connection.token.text(),
-                "host": self.connection.host.text(),
-                "controller_port": self.connection.controller_port.value(),
-                "camera_port": self.connection.camera_port.value(),
-                "width_mm": self.machine.width.value(),
-                "height_mm": self.machine.height.value(),
-                "camera_width": self.camera.width.value(),
-                "camera_height": self.camera.height.value(),
-                "autofocus": self.camera.autofocus.isChecked(),
-                "focus_value": self.camera.focus.value(),
-            }
+        options: dict[str, object] = {
+            "bridge_token": self.connection.token.text(),
+            "host": self.connection.host.text(),
+            "controller_port": self.connection.controller_port.value(),
+            "camera_port": self.connection.camera_port.value(),
+            "width_mm": self.machine.width.value(),
+            "height_mm": self.machine.height.value(),
+            "camera_width": self.camera.width.value(),
+            "camera_height": self.camera.height.value(),
+            "autofocus": self.camera.autofocus.isChecked(),
+            "focus_value": self.camera.focus.value(),
+        }
         try:
             self.saved_config = save_profile_setup(
                 self.template_config,
                 machine_name=self.profile.machine_name.text(),
                 machine_profile_id=machine_profile_id,
                 tool_head_profile_id=tool_head_profile_id,
+                simulator_recovery=self.recovery,
                 **options,
             )
         except Exception as exc:
@@ -463,6 +575,28 @@ def run_first_run_setup(
         else _default_template_config()
     )
     wizard = FirstRunWizard(template, parent)
+    try:
+        if wizard.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return None
+        if wizard.saved_config is None:
+            return None
+        return FirstRunResult(
+            wizard.saved_config,
+            wizard.open_machine_setup,
+        )
+    finally:
+        wizard.deleteLater()
+
+
+def run_simulator_recovery(
+    recovery: SimulatorRecoveryPlan,
+    parent: QtWidgets.QWidget | None = None,
+) -> FirstRunResult | None:
+    wizard = FirstRunWizard(
+        recovery.source_config_path,
+        parent,
+        recovery=recovery,
+    )
     try:
         if wizard.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return None
@@ -508,12 +642,8 @@ def install_first_run_menu(
             return
         action.setEnabled(False)
         next_step = (
-            "The simulator will be used after restart."
-            if not result.open_machine_setup
-            else (
-                "After restart, review this machine in Machine Setup before "
-                "enabling motion or output."
-            )
+            "After restart, review this machine in Machine Setup before "
+            "enabling motion or output."
         )
         QtWidgets.QMessageBox.information(
             window,

@@ -330,9 +330,6 @@ class AppRequestHandler(BaseHTTPRequestHandler):
                         "skipped": result.skipped,
                     }
                 )
-            elif path == "/api/camera/synthetic-scene":
-                self.context.synthetic_scene(str(payload.get("scene", "bed")))
-                self._send_json({"ok": True})
             elif path == "/api/calibration/lens/capture":
                 self._send_json(
                     {"ok": True, **self.context.capture_lens_calibration()}

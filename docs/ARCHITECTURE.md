@@ -10,7 +10,10 @@ Browser entry point                     Desktop entry point
 laser_aligner.__main__                  laser_aligner.desktop.main
           |                                       |
           v                                       v
-      AppContext <--------------------------- CoreRuntime
+      CoreRuntime                             CoreRuntime
+          |                                       |
+          v                                       v
+      AppContext                              AppContext
           |                                       |
           v                                       v
   AppHTTPServer + web UI                  DesktopController
@@ -33,16 +36,18 @@ laser_aligner.__main__                  laser_aligner.desktop.main
                 v                           v
        machine transport factory     controller-dialect registry
                 |                    (immutable GRBL / Marlin policy)
-       +--------+--------+
-       v        v        v
-   simulator  local    e3bridge
-              POSIX     network
-              serial    transport
+       +-----------------+
+       v                 v
+     local            e3bridge
+     POSIX             network
+     serial            transport
 ```
 
-The browser uses `AppContext` directly. The desktop uses `CoreRuntime` as a
-UI-neutral lifecycle wrapper around the same context and performs blocking
-camera/controller work through `DesktopController` worker tasks.
+Both entry points use `CoreRuntime` as the UI-neutral lifecycle and active
+saved-machine authority around `AppContext`. The browser passes the runtime's
+context to `AppHTTPServer`; the desktop performs blocking camera/controller work
+through `DesktopController` worker tasks. Neither entry point substitutes raw
+configuration machine values for an existing active saved-machine snapshot.
 
 For a network-attached machine, `MachineService` remains on the desktop and
 selects `NetworkSerialTransport` when `machine.port` uses `e3bridge://`. The Pi
@@ -58,17 +63,17 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 |---|---|
 | `config.py` | JSON defaults, merging, validation, and resolved paths |
 | `storage.py` | Atomic JSON persistence used by calibration |
-| `camera/` | OpenCV/V4L2 capture, camera controls, synthetic scenes, and portable corrected-test-image validation |
+| `camera/` | OpenCV/V4L2 and remote camera capture plus camera controls |
 | `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets, bounded fine registration, holdout accuracy scoring, and Qt-free read-only coordinate auditing |
 | `vision/` | Workpiece, fiducial, crosshair-grid, and camera-object detection |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
 | `planning/` | Qt-free stage identities, coordinate-domain contracts, artifact provenance, and shared planner payload models |
-| `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, rigid instantiation, and deterministic test-frame generation |
+| `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, and rigid instantiation |
 | `materials/` | SQLite material-recipe library, scoped compatibility, and legacy database migration |
 | `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
-| `machine/` | MachineService safety/orchestration, neutral transports and their construction factory, immutable controller dialects, simulator/controller peers, and the versioned saved-machine/profile registry |
+| `machine/` | MachineService safety/orchestration, real neutral transports and their construction factory, immutable controller dialects, and the versioned saved-machine/profile registry |
 | `server.py` + `web/` | Local HTTP API and browser UI |
 | `core/` | Shared runtime lifecycle for non-HTTP consumers |
 | `desktop/` | PySide6 window, workspace, panels, tasks, and presentation logic |
@@ -79,7 +84,7 @@ vision, G-code, or machine models.
 ## Camera and calibration flow
 
 ```text
-CameraService or SyntheticCameraService
+CameraService or RemoteCameraService
   -> sequence-numbered raw OpenCV BGR frame
   -> immediate snapshot for live preview, five-frame sharpest interactive still,
      or 45-frame parked-bed FrameBurst for calibration analysis
@@ -95,7 +100,7 @@ CameraService or SyntheticCameraService
 ```
 
 The background reader is the sole owner of `VideoCapture.read()`. Camera start,
-restart, V4L2 control changes, synthetic-scene changes, and precision bursts use
+restart, V4L2 control changes, and precision bursts use
 one bounded exclusive-operation contract. Shutdown invalidates the current
 camera generation and releases the backend before joining its reader, so a
 burst or control request cannot publish state after teardown. Preview snapshots
@@ -177,19 +182,6 @@ sharpest image and do not run calibration mark statistics. The 45-frame burst
 is reserved for parked-bed fine registration, dense fit/validation/
 confirmation, and accuracy validation.
 
-In safe simulation only, `AppContext` can replace the final corrected frame
-with a thread-safe, memory-only override. The source is either a validated
-top-down full-bed PNG/JPEG or a deterministic frame generated from template
-features at a known pose. `rectified_frame()` then exposes that same frozen
-frame to the workspace, object tracer, and template matcher. Source-generation
-tokens reject stale live-camera results, and clearing the override restores the
-synthetic camera. Template and trace review holds compose independently: either
-one prevents a live refresh from replacing the exact frame under review. Trace
-request tokens also reject late detection callbacks after a new request, clear,
-source change, or shutdown. The override is never written to the capture cache
-or project file and is unavailable when hardware access or a non-simulator
-machine backend is enabled.
-
 `LensCalibrator` stores captured checkerboard images, a detection cache, and the
 solved camera model. Cold status reads image headers but not pixel bodies. Owned
 index and solve operations instead load size-capped immutable encoded payloads,
@@ -212,8 +204,6 @@ checks inlier count, bed coverage, residual, orientation, scale, and modeled
 whole-bed displacement, then retains the previous solved map as a rollback
 snapshot. A new full solve clears both refinements. The Qt-independent
 registration model owns those gates; Qt only presents review and confirmation.
-Simulation startup creates a synthetic perspective scene and a known mapping
-automatically.
 
 The same Qt-independent model defines five accuracy-validation holdouts and
 fixed pass/fail limits. `AppContext` binds every fine-registration and
@@ -247,8 +237,7 @@ should own a physical camera at a time.
 - Live desktop trace capture establishes the photography pose rather than
   trusting prior machine state: temporary hold encloses Home / park and the
   stable camera frame set, while rectification and vision analysis run only
-  after the controller's original idle behavior has been restored. Frozen
-  simulator frames bypass machine operations.
+  after the controller's original idle behavior has been restored.
 - Rounded-rectangle output fits center, dimensions, rotation, and radius and
   emits an analytic rounded vector. Simplified and exact modes preserve
   pixel-derived contours; simplification is a bounded polygon reduction, not a
@@ -665,12 +654,11 @@ execution authority:
 | `MachineService` | Safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data or delegating authority to a transport or dialect |
 
 `create_machine_transport(backend, port, baudrate)` is the single explicit,
-construction-only transport factory. It returns a fresh unopened simulator for
-the existing `simulator` backend, or delegates the existing `serial` backend to
-the serial selector. That selector recognizes `e3bridge://` before applying the
+construction-only transport factory. It accepts the real `serial` backend and
+delegates to the serial selector. That selector recognizes `e3bridge://` before applying the
 local platform gate, so authenticated bridge transport remains available on
 Windows while local POSIX serial remains unavailable there with the same clear
-failure. POSIX serial, network transport, and simulator implementations remain
+failure. POSIX serial and network transport implementations remain
 lazy imports. The former `machine.serial_backend` protocol and factory imports
 remain compatibility entry points. Protocol is deliberately not a factory
 input: choosing a byte/line carrier cannot select controller semantics.
@@ -683,12 +671,6 @@ then `M115` with a 1.5-second response window, using the existing accepted
 identity markers and fail-closed result. The dialect values describe those
 semantics; `MachineService` decides when each probe may be written and owns the
 exchange. No additional probe or controller command was introduced.
-
-The simulator follows the same separation in process. `SimulatedTransport`
-keeps queueing and line/byte transport mechanics while a stateful
-`SimulatedController` peer interprets commands and produces responses. The
-existing `SimulatedTransport` import path, hooks, observable state, and behavior
-remain compatible.
 
 A saved machine profile supplies reusable physical motion-platform defaults,
 including backend, protocol, connection, envelope, homing, and feed settings. A
@@ -724,9 +706,9 @@ explicitly persist the active optical/calibration profile IDs onto the running
 saved instance for a future launch, but the frozen current runtime identity is
 not rewritten and existing calibration/support validity gates still apply.
 
-First-run uses the same built-in profiles and schema-1 `MachineRegistry`. It
-defaults to the simulator; choosing physical hardware stores a safe-off profile
-snapshot and existing bridge/camera endpoints without contacting either one.
+First-run uses the same built-in physical profiles and schema-1 `MachineRegistry`.
+It stores a safe-off real profile snapshot and existing bridge/camera endpoints
+without contacting either one.
 This adds no controller compatibility beyond the existing GRBL and Marlin
 dialects.
 
@@ -750,7 +732,9 @@ controller support is claimed.
 
 `MachineService` is the only normal path to the controller. It:
 
-- blocks serial access unless the process is hardware-enabled;
+- requires process hardware authority before serial access; every normal product
+  launcher grants that authority, while the internal guard remains available to
+  reject unauthorized callers and tests;
 - blocks motion until configuration allows it;
 - blocks serial motion and arming until homing/parking establishes the current
   connection's absolute coordinate reference;
@@ -785,8 +769,7 @@ completion timeout because GRBL can delay `ok` while its planner drains; the
 short interactive-command timeout is not evidence that a queued job failed.
 Zero-power jobs and stop, failure, emergency, or disconnect paths do not request this
 completion motion. Controller reset, reconnect, emergency stop, motor release,
-or job failure invalidates the session reference. Simulation does not require a
-hardware homing preflight. Connection status remains non-ready throughout
+or job failure invalidates the session reference. Connection status remains non-ready throughout
 protocol detection and GRBL startup cleanup. GRBL startup cleanup ordinarily
 requires an acknowledged `M5`; only the exact consumed alarm-lock rejection
 `error:9`, with mandatory Home / park configured, permits `$X` followed by a
@@ -809,7 +792,6 @@ This is an accidental-command boundary, not functional safety.
 | Autosaves | OS-native per-user data root under `backups/` by default |
 | Material recipes | OS-native per-user data root as `materials.sqlite` by default |
 | Cutting templates | configured application data directory under `templates/` |
-| Active alignment test image | memory only; never persisted automatically |
 | Window geometry, dock topology, and active desktop tabs | Qt `QSettings`; dock topology is versioned independently from compatible geometry/tab fallbacks |
 
 Autosaves, packaged-config fallback data, and material recipes share the
@@ -821,11 +803,11 @@ to that source so existing operator data does not disappear.
 
 ## Platform boundary
 
-The portable core, simulator, and authenticated `e3bridge://` client run on
+The portable core and authenticated `e3bridge://` client run on
 Windows and Linux. Direct local serial and camera hardware remain Linux-only:
 
 - `machine.transport` exposes the neutral byte/line protocol.
-- `machine.transport_factory` constructs simulator or serial-family transports;
+- `machine.transport_factory` constructs serial-family transports;
   the serial selector checks bridge URIs before the local POSIX platform gate.
 - `machine.serial_backend` retains its compatibility exports and imports the
   POSIX implementation only when local serial hardware is selected.
@@ -842,5 +824,5 @@ Windows and Linux. Direct local serial and camera hardware remain Linux-only:
   dispatch.
 
 Platform implementations must remain lazy so unavailable hardware backends do
-not prevent the simulator or portable libraries from importing. See
+not prevent portable libraries from importing. See
 `CURRENT_STATE.md` for the verification record and recommended repair order.

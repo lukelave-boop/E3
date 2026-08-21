@@ -15,7 +15,7 @@ from typing import Any
 import cv2
 import numpy as np
 
-from ..config import CameraSettings, PrecisionCaptureSettings, WorkArea
+from ..config import CameraSettings, PrecisionCaptureSettings
 from ..errors import CameraError
 from .controls import ControlResult, validate_control_request
 from .controls import apply_controls as apply_v4l2_controls
@@ -56,7 +56,6 @@ class CameraStatus:
     fps: float
     frames_read: int
     last_error: str | None
-    synthetic: bool = False
     frame_age_seconds: float | None = None
     controls_verified: dict[str, int] = field(default_factory=dict)
     controls_satisfied: dict[str, str] = field(default_factory=dict)
@@ -97,35 +96,21 @@ class FrameBurst:
             "discarded_frames": int(self.discarded_frames),
             "settle_seconds": float(self.settle_seconds),
             "elapsed_seconds": float(self.elapsed_seconds),
-            "timeout_seconds": (
-                None if self.timeout_seconds is None else float(self.timeout_seconds)
-            ),
-            "observed_fps": (
-                None if self.observed_fps is None else float(self.observed_fps)
-            ),
-            "negotiated_fps": (
-                None if self.negotiated_fps is None else float(self.negotiated_fps)
-            ),
+            "timeout_seconds": (None if self.timeout_seconds is None else float(self.timeout_seconds)),
+            "observed_fps": (None if self.observed_fps is None else float(self.observed_fps)),
+            "negotiated_fps": (None if self.negotiated_fps is None else float(self.negotiated_fps)),
             "sequence_gaps": int(self.sequence_gaps),
             "camera_generation": self.camera_generation,
-            "sequence_start": (
-                int(self.sequence_numbers[0]) if self.sequence_numbers else None
-            ),
-            "sequence_end": (
-                int(self.sequence_numbers[-1]) if self.sequence_numbers else None
-            ),
-            "sharpest_index": (
-                int(self.sharpest_index) if self.sharpness_scores else None
-            ),
+            "sequence_start": (int(self.sequence_numbers[0]) if self.sequence_numbers else None),
+            "sequence_end": (int(self.sequence_numbers[-1]) if self.sequence_numbers else None),
+            "sharpest_index": (int(self.sharpest_index) if self.sharpness_scores else None),
             "analysis_complete": bool(self.sharpness_scores),
             "sharpness_scores": [float(value) for value in self.sharpness_scores],
             "controls_applied": dict(self.controls.applied),
             "controls_skipped": dict(self.controls.skipped),
             "controls_verified": dict(self.controls.verified),
             "controls_satisfied": dict(self.controls.satisfied),
-            "controls_critical_unverified": dict(
-                self.controls.critical_unverified
-            ),
+            "controls_critical_unverified": dict(self.controls.critical_unverified),
         }
 
 
@@ -468,9 +453,7 @@ class CameraService:
             negotiated_fps = 0.0
         return frame, None, warmup_count, controls, negotiated_fps, False
 
-    def _decode_direct_mjpeg(
-        self, candidate: object
-    ) -> tuple[bytes, np.ndarray] | None:
+    def _decode_direct_mjpeg(self, candidate: object) -> tuple[bytes, np.ndarray] | None:
         if isinstance(candidate, bytes):
             jpeg = candidate
         elif isinstance(candidate, np.ndarray) and candidate.dtype == np.uint8:
@@ -547,11 +530,7 @@ class CameraService:
             now = time.monotonic()
             delta = max(now - previous, 1e-6)
             instant_fps = 1.0 / delta
-            smoothed_fps = (
-                instant_fps
-                if smoothed_fps == 0
-                else 0.9 * smoothed_fps + 0.1 * instant_fps
-            )
+            smoothed_fps = instant_fps if smoothed_fps == 0 else 0.9 * smoothed_fps + 0.1 * instant_fps
             previous = now
             with self._frame_condition:
                 if generation != self._generation or capture is not self._capture:
@@ -600,11 +579,7 @@ class CameraService:
                         capture.release()
                     except Exception:
                         LOGGER.exception("Could not release camera during shutdown")
-                if (
-                    thread is not None
-                    and thread is not threading.current_thread()
-                    and thread.is_alive()
-                ):
+                if thread is not None and thread is not threading.current_thread() and thread.is_alive():
                     thread.join(timeout=_READER_JOIN_SECONDS)
                     if thread.is_alive():
                         with self._frame_condition:
@@ -657,9 +632,7 @@ class CameraService:
         with self._lock:
             return self._frames_read
 
-    def direct_mjpeg_after(
-        self, sequence: int, *, timeout: float = 6.0
-    ) -> CompressedCameraFrame:
+    def direct_mjpeg_after(self, sequence: int, *, timeout: float = 6.0) -> CompressedCameraFrame:
         """Return the newest validated source JPEG without copying or encoding it."""
         deadline = time.monotonic() + float(timeout)
         with self._frame_condition:
@@ -668,11 +641,7 @@ class CameraService:
                 compressed = self._compressed_frame
                 if not self._direct_mjpeg:
                     raise CameraError("Native direct MJPEG capture is unavailable")
-                if (
-                    compressed is not None
-                    and compressed.sequence > sequence
-                    and compressed.generation == generation
-                ):
+                if compressed is not None and compressed.sequence > sequence and compressed.generation == generation:
                     return compressed
                 if generation != self._generation or not self._connected:
                     raise CameraError("Camera stopped while waiting for direct MJPEG")
@@ -709,8 +678,7 @@ class CameraService:
                 if remaining <= 0:
                     detail = f" ({self._last_error})" if self._last_error else ""
                     raise CameraError(
-                        "Camera did not provide a fresh frame within "
-                        f"{timeout_seconds:g} seconds{detail}"
+                        f"Camera did not provide a fresh frame within {timeout_seconds:g} seconds{detail}"
                     )
                 self._frame_condition.wait(timeout=remaining)
             frame = self._frame
@@ -738,15 +706,8 @@ class CameraService:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     detail = f" ({self._last_error})" if self._last_error else ""
-                    raise CameraError(
-                        "Timed out waiting for fresh camera frames during precision "
-                        f"capture{detail}"
-                    )
-                if (
-                    stop_event.is_set()
-                    or generation != self._generation
-                    or not self._connected
-                ):
+                    raise CameraError(f"Timed out waiting for fresh camera frames during precision capture{detail}")
+                if stop_event.is_set() or generation != self._generation or not self._connected:
                     raise CameraError("Camera stopped during precision capture")
                 self._frame_condition.wait(timeout=remaining)
             if stop_event.is_set() or generation != self._generation:
@@ -811,12 +772,7 @@ class CameraService:
                 value = float(raw_value)
             except (TypeError, ValueError) as exc:
                 raise CameraError(f"Precision capture {label} must be finite") from exc
-            if (
-                type(raw_value) is bool
-                or not math.isfinite(value)
-                or value < 0
-                or (not allow_zero and value == 0)
-            ):
+            if type(raw_value) is bool or not math.isfinite(value) or value < 0 or (not allow_zero and value == 0):
                 qualifier = "non-negative" if allow_zero else "positive"
                 raise CameraError(f"Precision capture {label} must be finite and {qualifier}")
         if profile.coordinate_strategy not in {
@@ -924,15 +880,12 @@ class CameraService:
         sharpness = tuple(sharpness_values)
         observed_fps: float | None = None
         if len(frame_times) >= 2 and frame_times[-1] > frame_times[0]:
-            observed_fps = (sequences[-1] - sequences[0]) / (
-                frame_times[-1] - frame_times[0]
-            )
+            observed_fps = (sequences[-1] - sequences[0]) / (frame_times[-1] - frame_times[0])
         elif frames:
             with self._lock:
                 observed_fps = self._actual_fps or negotiated_fps or None
         sequence_gaps = sum(
-            max(0, current - previous - 1)
-            for previous, current in zip(sequences, sequences[1:], strict=False)
+            max(0, current - previous - 1) for previous, current in zip(sequences, sequences[1:], strict=False)
         )
         return FrameBurst(
             frames=tuple(frames),
@@ -1008,14 +961,10 @@ class CameraService:
                 ),
                 controls_verified=dict(self._control_result.verified),
                 controls_satisfied=dict(self._control_result.satisfied),
-                controls_critical_unverified=dict(
-                    self._control_result.critical_unverified
-                ),
+                controls_critical_unverified=dict(self._control_result.critical_unverified),
                 negotiated_fps=round(self._negotiated_fps, 1),
                 operation=self._operation,
-                monitor_source_mode=(
-                    "direct_mjpeg" if self._direct_mjpeg else "transcoded"
-                ),
+                monitor_source_mode=("direct_mjpeg" if self._direct_mjpeg else "transcoded"),
             )
 
     def _apply_controls_to_device(
@@ -1152,342 +1101,3 @@ class CameraService:
 
     def apply_configured_controls(self) -> ControlResult:
         return self.apply_controls(self.settings.controls)
-
-
-class SyntheticCameraService(CameraService):
-    """Stable simulated overhead camera used for development without hardware."""
-
-    def __init__(self, settings: CameraSettings, work_area: WorkArea):
-        super().__init__(settings)
-        self.work_area = work_area
-        self._scene = "bed"
-
-    def _start_owned(self, generation: int) -> None:
-        session_stop = threading.Event()
-        frame = self._render_scene()
-        thread = threading.Thread(
-            target=self._synthetic_loop,
-            args=(session_stop, generation),
-            daemon=True,
-            name="synthetic-camera",
-        )
-        with self._frame_condition:
-            if generation != self._generation:
-                raise CameraError("Camera start was cancelled")
-            self._stop = session_stop
-            self._capture = None
-            self._thread = thread
-            self._connected = True
-            self._last_error = None
-            self._frame = frame
-            self._frame_time = time.time()
-            self._frame_monotonic = time.monotonic()
-            self._frames_read += 1
-            self._actual_fps = 0.0
-            self._negotiated_fps = float(max(1, min(self.settings.fps, 10)))
-            self._frame_condition.notify_all()
-        thread.start()
-        if self._is_cancelled(generation, session_stop):
-            raise CameraError("Camera start was cancelled")
-
-    def _synthetic_loop(
-        self,
-        stop_event: threading.Event,
-        generation: int,
-    ) -> None:
-        delay = 1.0 / max(1, min(self.settings.fps, 10))
-        while not stop_event.is_set():
-            frame = self._render_scene()
-            with self._frame_condition:
-                if generation != self._generation or stop_event is not self._stop:
-                    break
-                self._frame = frame
-                self._frame_time = time.time()
-                self._frame_monotonic = time.monotonic()
-                self._frames_read += 1
-                self._actual_fps = 1.0 / delay
-                self._last_error = None
-                self._frame_condition.notify_all()
-            stop_event.wait(delay)
-
-    def capture_burst(
-        self,
-        settings: PrecisionCaptureSettings | None = None,
-        *,
-        reapply_controls: bool = True,
-        score_frames: bool = True,
-    ) -> FrameBurst:
-        """Generate distinct deterministic samples without real-time waiting."""
-
-        profile = settings or self.settings.precision_capture
-        self._validate_capture_profile(profile)
-        request_generation = self._current_generation()
-        frames: list[np.ndarray] = []
-        sequences: list[int] = []
-        with self._exclusive_operation(
-            "precision capture",
-            request_generation=request_generation,
-        ):
-            with self._lock:
-                if not self._connected:
-                    raise CameraError("Camera is not connected")
-                generation = self._generation
-                stop_event = self._stop
-                negotiated_fps = self._negotiated_fps
-            started = time.monotonic()
-            controls = (
-                self._apply_controls_owned(
-                    self.settings.controls,
-                    generation,
-                    stop_event,
-                    timeout_seconds=profile.timeout_seconds,
-                )
-                if reapply_controls
-                else ControlResult({}, {}, {})
-            )
-            for _ in range(profile.discard_frames):
-                if self._is_cancelled(generation, stop_event):
-                    raise CameraError("Camera stopped during precision capture")
-                frame = self._render_scene()
-                with self._frame_condition:
-                    if generation != self._generation:
-                        raise CameraError("Camera stopped during precision capture")
-                    self._frame = frame
-                    self._frame_time = time.time()
-                    self._frame_monotonic = time.monotonic()
-                    self._frames_read += 1
-                    self._frame_condition.notify_all()
-            for _ in range(profile.sample_frames):
-                if self._is_cancelled(generation, stop_event):
-                    raise CameraError("Camera stopped during precision capture")
-                frame = self._render_scene()
-                with self._frame_condition:
-                    if generation != self._generation:
-                        raise CameraError("Camera stopped during precision capture")
-                    self._frame = frame
-                    self._frame_time = time.time()
-                    self._frame_monotonic = time.monotonic()
-                    self._frames_read += 1
-                    sequence = self._frames_read
-                    self._frame_condition.notify_all()
-                frames.append(frame.copy())
-                sequences.append(sequence)
-            elapsed_seconds = time.monotonic() - started
-        sharpness_values: list[float] = []
-        if score_frames:
-            for frame in frames:
-                sharpness_values.append(self._sharpness_score(frame))
-                if self._is_cancelled(generation, stop_event):
-                    raise CameraError("Camera stopped during precision-capture analysis")
-        sharpness = tuple(sharpness_values)
-        return FrameBurst(
-            frames=tuple(frames),
-            sequence_numbers=tuple(sequences),
-            discarded_frames=profile.discard_frames,
-            settle_seconds=0.0,
-            elapsed_seconds=elapsed_seconds,
-            sharpness_scores=sharpness,
-            controls=controls,
-            timeout_seconds=profile.timeout_seconds,
-            observed_fps=negotiated_fps,
-            negotiated_fps=negotiated_fps,
-            camera_generation=generation,
-        )
-
-    def set_scene(self, scene: str) -> None:
-        if scene not in {"bed", "checkerboard"}:
-            raise CameraError(f"Unknown synthetic scene: {scene}")
-        request_generation = self._current_generation()
-        with self._exclusive_operation(
-            "synthetic scene change",
-            request_generation=request_generation,
-        ):
-            with self._lock:
-                if not self._connected:
-                    raise CameraError("Camera is not connected")
-                self._scene = scene
-            frame = self._render_scene()
-            with self._frame_condition:
-                if request_generation != self._generation:
-                    raise CameraError("Synthetic scene change was cancelled")
-                self._frame = frame
-                self._frames_read += 1
-                self._frame_time = time.time()
-                self._frame_monotonic = time.monotonic()
-                self._frame_condition.notify_all()
-
-    def _render_scene(self) -> np.ndarray:
-        width = max(640, self.settings.width)
-        height = max(480, self.settings.height)
-        if self._scene == "checkerboard":
-            return self._render_checkerboard(width, height)
-        return self._render_bed(width, height)
-
-    def calibration_correspondences(self) -> list[tuple[float, float, float, float, str]]:
-        """Return exact synthetic image/machine points for automatic demo setup."""
-        width = max(640, self.settings.width)
-        height = max(480, self.settings.height)
-        margin_x = width * 0.12
-        margin_y = height * 0.08
-        corners = np.array(
-            [
-                [margin_x + width * 0.08, margin_y],
-                [width - margin_x, margin_y + height * 0.035],
-                [width - margin_x + width * 0.055, height - margin_y],
-                [margin_x - width * 0.06, height - margin_y - height * 0.025],
-            ],
-            dtype=np.float32,
-        )
-        machine = np.array(
-            [
-                [self.work_area.x_min, self.work_area.y_max],
-                [self.work_area.x_max, self.work_area.y_max],
-                [self.work_area.x_max, self.work_area.y_min],
-                [self.work_area.x_min, self.work_area.y_min],
-            ],
-            dtype=np.float32,
-        )
-        matrix = cv2.getPerspectiveTransform(machine, corners)
-        points = self._calibration_machine_points()
-        source = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
-        image = cv2.perspectiveTransform(source, matrix).reshape(-1, 2)
-        return [
-            (float(pixel[0]), float(pixel[1]), float(machine_point[0]), float(machine_point[1]), f"Synthetic {index}")
-            for index, (pixel, machine_point) in enumerate(zip(image, points, strict=True), start=1)
-        ]
-
-    def _calibration_machine_points(self) -> list[tuple[float, float]]:
-        area = self.work_area
-
-        def x(fraction: float) -> float:
-            return float(area.x_min + area.width * fraction)
-
-        def y(fraction: float) -> float:
-            return float(area.y_min + area.height * fraction)
-
-        return [
-            (x(0.05), y(0.05)),
-            (x(0.95), y(0.05)),
-            (x(0.95), y(0.95)),
-            (x(0.05), y(0.95)),
-            (x(0.50), y(0.50)),
-            (x(0.20), y(0.50)),
-            (x(0.80), y(0.50)),
-            (x(0.50), y(0.20)),
-            (x(0.50), y(0.80)),
-        ]
-
-    def _render_checkerboard(self, width: int, height: int) -> np.ndarray:
-        frame = np.full((height, width, 3), 215, dtype=np.uint8)
-        squares_x, squares_y = 10, 7
-        square = int(min(width * 0.075, height * 0.1))
-        board_w, board_h = squares_x * square, squares_y * square
-        x0 = (width - board_w) // 2
-        y0 = (height - board_h) // 2
-        for row in range(squares_y):
-            for col in range(squares_x):
-                value = 25 if (row + col) % 2 == 0 else 245
-                cv2.rectangle(
-                    frame,
-                    (x0 + col * square, y0 + row * square),
-                    (x0 + (col + 1) * square, y0 + (row + 1) * square),
-                    (value, value, value),
-                    -1,
-                )
-        cv2.putText(frame, "Synthetic 9 x 6 inner-corner calibration board", (35, 55), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (40, 40, 40), 2, cv2.LINE_AA)
-        return frame
-
-    def _render_bed(self, width: int, height: int) -> np.ndarray:
-        frame = np.zeros((height, width, 3), dtype=np.uint8)
-        frame[:] = (58, 61, 64)
-        margin_x = width * 0.12
-        margin_y = height * 0.08
-        corners = np.array(
-            [
-                [margin_x + width * 0.08, margin_y],
-                [width - margin_x, margin_y + height * 0.035],
-                [width - margin_x + width * 0.055, height - margin_y],
-                [margin_x - width * 0.06, height - margin_y - height * 0.025],
-            ],
-            dtype=np.float32,
-        )
-        machine = np.array(
-            [
-                [self.work_area.x_min, self.work_area.y_max],
-                [self.work_area.x_max, self.work_area.y_max],
-                [self.work_area.x_max, self.work_area.y_min],
-                [self.work_area.x_min, self.work_area.y_min],
-            ],
-            dtype=np.float32,
-        )
-        machine_to_image = cv2.getPerspectiveTransform(machine, corners)
-        bed_mask = np.zeros((height, width), dtype=np.uint8)
-        cv2.fillConvexPoly(bed_mask, corners.astype(np.int32), 255)
-        bed_color = np.full_like(frame, (112, 117, 119))
-        frame[bed_mask > 0] = bed_color[bed_mask > 0]
-
-        def project(points: list[tuple[float, float]]) -> np.ndarray:
-            source = np.asarray(points, dtype=np.float32).reshape(-1, 1, 2)
-            return cv2.perspectiveTransform(source, machine_to_image).reshape(-1, 2)
-
-        for x in np.linspace(self.work_area.x_min, self.work_area.x_max, 12):
-            line = project([(float(x), self.work_area.y_min), (float(x), self.work_area.y_max)]).astype(np.int32)
-            cv2.line(frame, tuple(line[0]), tuple(line[1]), (89, 94, 97), 1, cv2.LINE_AA)
-        for y in np.linspace(self.work_area.y_min, self.work_area.y_max, 12):
-            line = project([(self.work_area.x_min, float(y)), (self.work_area.x_max, float(y))]).astype(np.int32)
-            cv2.line(frame, tuple(line[0]), tuple(line[1]), (89, 94, 97), 1, cv2.LINE_AA)
-
-        # A rotated rectangular test workpiece, drawn in machine coordinates.
-        center = np.array(
-            [
-                self.work_area.x_min + self.work_area.width * 0.536,
-                self.work_area.y_min + self.work_area.height * 0.473,
-            ]
-        )
-        size = np.array(
-            [self.work_area.width * 0.477, self.work_area.height * 0.282]
-        )
-        angle = np.deg2rad(11.0)
-        rotation = np.array([[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]])
-        local = np.array([[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]) * size
-        board_mm = local @ rotation.T + center
-        board_px = project([tuple(point) for point in board_mm]).astype(np.int32)
-        cv2.fillConvexPoly(frame, board_px, (154, 184, 206), cv2.LINE_AA)
-        cv2.polylines(frame, [board_px], True, (50, 66, 78), 4, cv2.LINE_AA)
-
-        calibration_points = self._calibration_machine_points()
-        for index, point in enumerate(calibration_points, start=1):
-            px = project([point])[0].astype(int)
-            cv2.drawMarker(frame, tuple(px), (20, 20, 230), cv2.MARKER_CROSS, 24, 3, cv2.LINE_AA)
-            cv2.putText(frame, str(index), (int(px[0] + 9), int(px[1] - 9)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (240, 240, 240), 2, cv2.LINE_AA)
-
-        cv2.polylines(frame, [corners.astype(np.int32)], True, (210, 215, 220), 3, cv2.LINE_AA)
-        cv2.putText(frame, "SIMULATION - no hardware commands are sent", (32, 48), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (245, 245, 245), 2, cv2.LINE_AA)
-        cv2.putText(frame, "Red crosses are known bed-calibration points", (32, height - 28), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (240, 240, 240), 2, cv2.LINE_AA)
-        return frame
-
-    def status(self) -> CameraStatus:
-        status = super().status()
-        status.synthetic = True
-        status.device = "synthetic"
-        return status
-
-    def _apply_controls_to_device(
-        self,
-        requested: Mapping[str, int | bool],
-        *,
-        timeout_seconds: float,
-        cancelled: Callable[[], bool],
-    ) -> ControlResult:
-        del timeout_seconds
-        reason = (
-            "camera-control operation was cancelled"
-            if cancelled()
-            else "synthetic camera"
-        )
-        return ControlResult(
-            dict(requested),
-            {},
-            {"all": reason},
-            satisfied={"simulation": "synthetic camera"},
-        )

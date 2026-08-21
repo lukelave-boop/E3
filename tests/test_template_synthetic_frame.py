@@ -3,15 +3,15 @@ import math
 import numpy as np
 import pytest
 
-import laser_aligner.templates.synthetic as synthetic_renderer
 from laser_aligner.config import WorkArea
 from laser_aligner.templates import (
     RectangleGridSpec,
-    generate_template_test_frame,
     template_from_rectangle_grid,
 )
 from laser_aligner.vision.object_trace import TraceOptions, detect_objects
 from laser_aligner.vision.template_alignment import align_template
+from tests.fakes import template_frame as synthetic_renderer
+from tests.fakes.template_frame import generate_template_test_frame
 
 
 def _grid_template(*, detection_mode: str = "color"):

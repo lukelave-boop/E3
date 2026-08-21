@@ -13,6 +13,7 @@ from typing import Any
 from ..calibration.profiles import signature_from_camera_settings
 from ..config import (
     DEFAULT_CONFIG,
+    UNCONFIGURED_CONTROLLER_PORT,
     LaserSettings,
     MachineSettings,
     Settings,
@@ -21,6 +22,7 @@ from ..config import (
     _validate,
     _validate_override_keys,
 )
+from ..errors import RealMachineSetupRequired
 from ..storage import (
     atomic_write_bytes_if_absent,
     atomic_write_json,
@@ -29,12 +31,28 @@ from ..storage import (
 
 MACHINE_REGISTRY_FILENAME = "machines.json"
 MACHINE_REGISTRY_SCHEMA_VERSION = 1
+REMOVED_SIMULATOR_BACKUP_SUFFIX = ".before-simulator-removal.bak"
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,79}$")
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 
 
 class MachineRegistryError(ValueError):
     """Raised when saved machine data is malformed or inconsistent."""
+
+
+class MachineSetupRequired(MachineRegistryError, RealMachineSetupRequired):
+    """Saved-machine authority requires explicit real-machine setup."""
+
+
+def _is_removed_simulator_entry(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    machine = value.get("machine")
+    return bool(
+        value.get("machine_profile_id") == "simulator"
+        or value.get("tool_head_profile_id") == "simulated-laser-head"
+        or (isinstance(machine, Mapping) and machine.get("backend") == "simulator")
+    )
 
 
 def _identifier(value: object, label: str) -> str:
@@ -238,9 +256,9 @@ def _validation_machine(laser: LaserSettings) -> MachineSettings:
         laser.engrave_feed_mm_min,
     )
     return MachineSettings(
-        backend="simulator",
+        backend="serial",
         protocol="auto",
-        port="simulator",
+        port="SELECT_CONTROLLER_PORT",
         work_area=WorkArea(0.0, 1000.0, 0.0, 1000.0),
         photo_x=500.0,
         photo_y=500.0,
@@ -458,11 +476,7 @@ def _machine_defaults(
     return MachineSettings(
         backend=backend,
         protocol=protocol,
-        port=(
-            "simulator"
-            if backend == "simulator"
-            else "SELECT_CONTROLLER_PORT"
-        ),
+        port=UNCONFIGURED_CONTROLLER_PORT,
         work_area=WorkArea(0.0, 220.0, 0.0, 220.0),
         photo_x=110.0,
         photo_y=110.0,
@@ -474,15 +488,6 @@ def _machine_defaults(
 
 def builtin_machine_profiles() -> dict[str, MachineProfile]:
     profiles = (
-        MachineProfile(
-            "simulator",
-            "Simulator",
-            _machine_defaults("simulator", "auto"),
-            description=(
-                "Software-only machine used for safe design and testing."
-            ),
-            capabilities=("gcode", "homing", "xy-motion", "simulation"),
-        ),
         MachineProfile(
             "generic-grbl",
             "Generic GRBL laser",
@@ -529,7 +534,7 @@ def builtin_machine_profiles() -> dict[str, MachineProfile]:
 
 
 def builtin_tool_head_profiles() -> dict[str, ToolHeadProfile]:
-    defaults = _safe_laser(_machine_defaults("simulator", "auto"))
+    defaults = _safe_laser(_machine_defaults("serial", "auto"))
     profiles = (
         ToolHeadProfile(
             "generic-diode-10w",
@@ -551,15 +556,6 @@ def builtin_tool_head_profiles() -> dict[str, ToolHeadProfile]:
             ),
             capabilities=("laser",),
         ),
-        ToolHeadProfile(
-            "simulated-laser-head",
-            "Simulated laser head",
-            defaults,
-            description=(
-                "Non-physical head used only with the simulator profile."
-            ),
-            capabilities=("laser", "simulation"),
-        ),
     )
     return {profile.id: profile for profile in profiles}
 
@@ -575,17 +571,12 @@ def _slug(value: str) -> str:
 
 def _migrated_machine(settings: Settings) -> MachineInstance:
     optical_profile_id = signature_from_camera_settings(settings.camera).key
-    if settings.machine.backend == "simulator":
-        profile_id = "simulator"
-        head_id = "simulated-laser-head"
-        name = "Existing simulator"
-    else:
-        profile_id = {
-            "grbl": "generic-grbl",
-            "marlin": "generic-marlin",
-        }.get(settings.machine.protocol, "custom-machine")
-        head_id = "custom-laser-head"
-        name = "Current configured machine"
+    profile_id = {
+        "grbl": "generic-grbl",
+        "marlin": "generic-marlin",
+    }.get(settings.machine.protocol, "custom-machine")
+    head_id = "custom-laser-head"
+    name = "Current configured machine"
     return MachineInstance(
         id="existing-machine",
         name=name,
@@ -597,6 +588,48 @@ def _migrated_machine(settings: Settings) -> MachineInstance:
         camera_profile_id=optical_profile_id,
         created_from="legacy-config",
     )
+
+
+@dataclass(slots=True)
+class MachineRegistryRecoveryState:
+    """Read-only legacy-registry state used before a product runtime exists."""
+
+    registry: MachineRegistry
+    original_bytes: bytes | None
+    raw_physical_machines: tuple[dict[str, Any], ...]
+    simulator_machine_ids: tuple[str, ...]
+    original_active_machine_id: str | None
+
+    @property
+    def physical_machines(self) -> tuple[MachineInstance, ...]:
+        return self.registry.machines()
+
+    def recovered_payload(self) -> dict[str, Any]:
+        """Filter simulators while preserving raw physical machine values."""
+
+        current = {machine.id: machine for machine in self.registry.machines()}
+        original_ids: list[str] = []
+        machines: list[dict[str, Any]] = []
+        for raw in self.raw_physical_machines:
+            machine_id = _identifier(raw.get("id"), "machine.id")
+            original_ids.append(machine_id)
+            if machine_id not in current:
+                raise MachineRegistryError(
+                    "Simulator recovery cannot remove a physical saved machine"
+                )
+            original = MachineInstance.from_dict(raw)
+            if current[machine_id].to_dict() != original.to_dict():
+                raise MachineRegistryError(
+                    "Simulator recovery cannot modify an existing physical saved machine"
+                )
+            machines.append(copy.deepcopy(raw))
+        for machine_id in sorted(set(current) - set(original_ids)):
+            machines.append(current[machine_id].to_dict())
+        return {
+            "schema_version": MACHINE_REGISTRY_SCHEMA_VERSION,
+            "active_machine_id": self.registry.active_machine_id,
+            "machines": machines,
+        }
 
 
 class MachineRegistry:
@@ -618,6 +651,7 @@ class MachineRegistry:
         self._heads = builtin_tool_head_profiles()
         self._machines: dict[str, MachineInstance] = {}
         self._active_machine_id: str | None = None
+        self._reserved_machine_ids: set[str] = set()
         self._lock = threading.RLock()
 
     @classmethod
@@ -643,6 +677,104 @@ class MachineRegistry:
             return registry
         registry.load()
         return registry
+
+    @classmethod
+    def load_for_recovery(
+        cls,
+        path: Path,
+        *,
+        machine_state_root: Path | None = None,
+    ) -> MachineRegistryRecoveryState:
+        """Read physical candidates without accepting or rewriting simulators."""
+
+        registry = cls(path, machine_state_root=machine_state_root)
+        if not registry.path.exists():
+            return MachineRegistryRecoveryState(
+                registry=registry,
+                original_bytes=None,
+                raw_physical_machines=(),
+                simulator_machine_ids=(),
+                original_active_machine_id=None,
+            )
+        try:
+            original_bytes = registry.path.read_bytes()
+            value = strict_json_loads(original_bytes.decode("utf-8"))
+        except UnicodeError as exc:
+            raise MachineRegistryError(
+                f"Machine registry is not valid UTF-8: {registry.path}"
+            ) from exc
+        except (OSError, ValueError, RecursionError) as exc:
+            raise MachineRegistryError(
+                f"Invalid machine registry {registry.path}: {exc}"
+            ) from exc
+        if not isinstance(value, Mapping):
+            raise MachineRegistryError("Machine registry must be a JSON object")
+        allowed = {"schema_version", "active_machine_id", "machines"}
+        unknown = sorted(str(key) for key in value if key not in allowed)
+        if unknown:
+            raise MachineRegistryError(
+                f"Unknown machine registry key(s): {', '.join(unknown)}"
+            )
+        version = value.get("schema_version")
+        if type(version) is not int:
+            raise MachineRegistryError(
+                "machine_registry.schema_version must be a JSON integer"
+            )
+        if version != MACHINE_REGISTRY_SCHEMA_VERSION:
+            raise MachineRegistryError(
+                f"Unsupported machine registry schema {version}; expected "
+                f"{MACHINE_REGISTRY_SCHEMA_VERSION}"
+            )
+        items = value.get("machines")
+        if not isinstance(items, list):
+            raise MachineRegistryError(
+                "machine_registry.machines must be a JSON array"
+            )
+        if not items:
+            raise MachineRegistryError(
+                "Machine registry must contain at least one saved machine"
+            )
+
+        all_ids: set[str] = set()
+        simulator_ids: set[str] = set()
+        raw_physical: list[dict[str, Any]] = []
+        physical: dict[str, MachineInstance] = {}
+        for item in items:
+            if not isinstance(item, Mapping):
+                raise MachineRegistryError("machine must be a JSON object")
+            machine_id = _identifier(item.get("id"), "machine.id")
+            if machine_id in all_ids:
+                raise MachineRegistryError(
+                    f"Duplicate saved machine ID: {machine_id}"
+                )
+            all_ids.add(machine_id)
+            if _is_removed_simulator_entry(item):
+                simulator_ids.add(machine_id)
+                continue
+            machine = MachineInstance.from_dict(item)
+            registry._validate_references(machine)
+            physical[machine.id] = machine
+            raw_physical.append(copy.deepcopy(dict(item)))
+        active = _identifier(
+            value.get("active_machine_id"),
+            "machine_registry.active_machine_id",
+        )
+        if active not in all_ids:
+            raise MachineRegistryError(
+                "machine_registry.active_machine_id does not reference a "
+                "saved machine"
+            )
+        registry._machines = physical
+        # Deliberately require the recovery UI to make a new explicit choice.
+        registry._active_machine_id = None
+        registry._reserved_machine_ids = set(simulator_ids)
+        return MachineRegistryRecoveryState(
+            registry=registry,
+            original_bytes=original_bytes,
+            raw_physical_machines=tuple(raw_physical),
+            simulator_machine_ids=tuple(sorted(simulator_ids)),
+            original_active_machine_id=active,
+        )
 
     @property
     def active_machine_id(self) -> str:
@@ -736,6 +868,7 @@ class MachineRegistry:
     def _machine_id_is_available(self, machine_id: str) -> bool:
         return (
             machine_id not in self._machines
+            and machine_id not in self._reserved_machine_ids
             and not self._machine_state_scope_exists(machine_id)
         )
 
@@ -768,6 +901,11 @@ class MachineRegistry:
                 if candidate_id in self._machines:
                     raise MachineRegistryError(
                         f"Saved machine ID already exists: {candidate_id}"
+                    )
+                if candidate_id in self._reserved_machine_ids:
+                    raise MachineRegistryError(
+                        "Saved machine ID belongs to a retired simulator: "
+                        f"{candidate_id}; choose a different ID"
                     )
                 if self._machine_state_scope_exists(candidate_id):
                     raise MachineRegistryError(
@@ -907,9 +1045,8 @@ class MachineRegistry:
 
     def load(self) -> None:
         try:
-            value = strict_json_loads(
-                self.path.read_text(encoding="utf-8")
-            )
+            original_bytes = self.path.read_bytes()
+            value = strict_json_loads(original_bytes.decode("utf-8"))
         except FileNotFoundError as exc:
             raise MachineRegistryError(
                 f"Machine registry does not exist: {self.path}"
@@ -947,6 +1084,27 @@ class MachineRegistry:
             raise MachineRegistryError(
                 "machine_registry.machines must be a JSON array"
             )
+        removed_ids = {
+            str(item.get("id"))
+            for item in items
+            if isinstance(item, Mapping) and _is_removed_simulator_entry(item)
+        }
+        active_value = value.get("active_machine_id")
+        if removed_ids and active_value in removed_ids:
+            raise MachineSetupRequired(
+                "The active saved machine used the removed E3 simulator. "
+                "Configure and explicitly select a real machine before continuing."
+            )
+        migrated_items = [
+            item for item in items if not _is_removed_simulator_entry(item)
+        ]
+        if removed_ids:
+            if not migrated_items:
+                raise MachineSetupRequired(
+                    "The saved-machine registry contains only the removed E3 "
+                    "simulator. Configure a real machine before continuing."
+                )
+            items = migrated_items
         machines: dict[str, MachineInstance] = {}
         for item in items:
             machine = MachineInstance.from_dict(item)
@@ -972,6 +1130,12 @@ class MachineRegistry:
         with self._lock:
             self._machines = machines
             self._active_machine_id = active
+        if removed_ids:
+            backup_path = self.path.with_name(
+                self.path.name + REMOVED_SIMULATOR_BACKUP_SUFFIX
+            )
+            atomic_write_bytes_if_absent(backup_path, original_bytes)
+            self.save()
 
     def save(self) -> None:
         with self._lock:
@@ -1022,10 +1186,13 @@ class MachineRegistry:
 __all__ = [
     "MACHINE_REGISTRY_FILENAME",
     "MACHINE_REGISTRY_SCHEMA_VERSION",
+    "REMOVED_SIMULATOR_BACKUP_SUFFIX",
     "MachineInstance",
     "MachineProfile",
     "MachineRegistry",
     "MachineRegistryError",
+    "MachineRegistryRecoveryState",
+    "MachineSetupRequired",
     "ResolvedMachineConfig",
     "ToolHeadProfile",
     "builtin_machine_profiles",

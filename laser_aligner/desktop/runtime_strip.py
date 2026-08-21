@@ -127,11 +127,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         hardware_enabled = bool(machine.get("hardware_enabled", False))
         laser_lockout = bool(machine.get("laser_lockout", False))
 
-        if backend == "simulator":
-            self._mode_text = "SIMULATION"
-            self._mode_style = "statusGood"
-            self._mode_description = "Simulator backend; serial hardware is not in use."
-        elif hardware_enabled and laser_lockout:
+        if hardware_enabled and laser_lockout:
             self._mode_text = "LASER LOCKOUT"
             self._mode_style = "statusWarning"
             self._mode_description = (
@@ -152,7 +148,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self._connected = bool(machine.get("connected", False))
         self._motion_enabled = bool(machine.get("allow_motion", False))
         self._coordinate_reference_ready = bool(
-            machine.get("coordinate_reference_ready", backend == "simulator")
+            machine.get("coordinate_reference_ready", False)
         )
         self._reconnect_required = bool(
             machine.get("controller_reconnect_required", False)
@@ -179,7 +175,6 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         mode_text = self._mode_text
         if self._chrome_mode:
             mode_text = {
-                "SIMULATION": "SIM",
                 "HARDWARE LOCKED": "HW LOCKED",
                 "HARDWARE ENABLED": "HW ENABLED",
                 "LASER LOCKOUT": "LASER LOCKOUT",

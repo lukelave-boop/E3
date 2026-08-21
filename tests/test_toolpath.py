@@ -155,8 +155,11 @@ def test_vector_power_correction_emits_local_bounded_inline_s_without_m3(
     assert all(0 <= value <= 1000 for value in inline)
     assert job.text.splitlines()[-2] == "M5"
     MachineService(
-        MachineSettings(backend="simulator", work_area=Bounds(0, 0, 100, 100)),
+        MachineSettings(
+            backend="serial", allow_motion=True, work_area=Bounds(0, 0, 100, 100)
+        ),
         LaserSettings(power_max=1000, boundary_margin_mm=0),
+        hardware_enabled=True,
     ).validate_program(job.text)
 
 
@@ -426,8 +429,9 @@ def test_honeycomb_local_vector_uses_same_explicit_polygon_as_machine_preflight(
         start_position=(28, 40),
     )
     preflight = MachineService(
-        MachineSettings(backend="simulator", work_area=machine_area),
+        MachineSettings(backend="serial", allow_motion=True, work_area=machine_area),
         laser,
+        hardware_enabled=True,
     ).preflight_program(
         job.text,
         guarded_output_polygon_mm=polygon,
@@ -748,9 +752,9 @@ def test_image_raster_uses_contiguous_serpentine_rows_and_off_overscan(
         if move.end_x < 48.0 or move.end_x > 52.0
     )
     preflight = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial", allow_motion=True),
         laser,
-        hardware_enabled=False,
+        hardware_enabled=True,
     ).preflight_program(job.text)
     assert preflight.requires_laser_authorization
     assert preflight.lines[-1] == "M5"

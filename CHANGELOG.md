@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+- Removed the reduced-capability `--hardware` product launch mode. Normal
+  browser and desktop startup now always grants process hardware authority
+  without eagerly connecting to a controller; disconnected controllers report
+  their real connection failures. Historical hardware-named shell entry points
+  are compatibility aliases to the same normal launch behavior, and desktop
+  installation exposes one application entry. The internal `MachineService`
+  hardware-authority guard, `--laser-lockout`, motion permission, coordinate
+  trust, preflight, exact-program authorization, temporary arming, bounds,
+  STOP, and `M5` behavior remain intact.
+
+- Completed removal recovery for legacy simulator configuration and saved
+  registries. Desktop startup now requires an explicit physical saved-machine
+  choice before credentials or runtime construction, performs no writes on
+  cancel, preserves raw physical records, and transactionally rolls back the
+  replacement configuration, exact simulator backup, registry, credential, and
+  completion marker on failure. Browser and desktop startup now share
+  `CoreRuntime` saved-machine authority; unconfigured controller placeholders
+  fail closed, while an explicitly saved physical `/dev/ttyUSB0` endpoint
+  remains valid. Packaged legacy fallback recovery writes to upgrade-preserved
+  user state, while explicit configs are repaired in place, and recovery exposes
+  no pre-Finish reachability probe. Removed the remaining production camera
+  test-frame helper and export. No controller, camera, motion, arming,
+  laser-output, or physical verification behavior was added or claimed.
+
 - Made first-run, Machine Manager, and Machine Setup generic across the existing
   simulator, GRBL, and Marlin profiles without adding controller support or a
   second profile model. Profile-created machines are validated concrete

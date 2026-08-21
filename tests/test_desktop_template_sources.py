@@ -19,7 +19,7 @@ def test_controller_matches_templates_off_thread_and_ignores_stale_results() -> 
     assert "templateMatchReady = QtCore.Signal(dict)" in controller
     assert "def match_cut_templates(" in controller
     assert "def _match_cut_templates_once(" in controller
-    assert "context.rectified_frame(refresh=True)" in controller
+    assert "refresh=True," in controller
     assert "_usable_template_detections(trace_result.detections)" in controller
     assert "rank_templates(grouped_templates, usable_detections)" in controller
     assert "CutTemplate.from_dict(template.to_dict())" in controller
@@ -81,17 +81,19 @@ def test_main_window_wires_template_review_and_one_batch_application() -> None:
     assert "regenerate the toolpath before running" in window
 
 
-def test_desktop_wires_simulation_test_images_into_the_shared_camera_pipeline() -> None:
+def test_desktop_has_no_generated_test_image_camera_pipeline() -> None:
     window = source("main_window.py")
     controller = source("controller.py")
 
-    assert "self.template_panel.loadTestImageRequested.connect(" in window
-    assert "self.template_panel.generateTestImageRequested.connect(" in window
-    assert "self.template_panel.returnToCameraRequested.connect(" in window
-    assert "self.controller.simulationFrameChanged.connect(" in window
-    assert "load_corrected_test_image(" in window
-    assert "generate_template_test_frame(" in window
-    assert "submit_handler=submit" in window
-    assert "def activate_simulation_workspace_frame(" in controller
-    assert "def return_to_synthetic_camera(" in controller
-    assert "self.runtime.context.rectified_frame(refresh=True)" in controller
+    for removed in (
+        "loadTestImageRequested",
+        "generateTestImageRequested",
+        "returnToCameraRequested",
+        "simulationFrameChanged",
+        "load_corrected_test_image",
+        "generate_template_test_frame",
+        "activate_simulation_workspace_frame",
+        "return_to_synthetic_camera",
+    ):
+        assert removed not in window
+        assert removed not in controller

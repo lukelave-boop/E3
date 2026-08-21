@@ -7,10 +7,10 @@ an **Ender-3 S1 Pro**, a **Creality 10 W blue-diode laser module**, and a
 stationary overhead **Logitech C920**.
 
 > **Project status: early alpha.** The portable geometry, calibration, project,
-> tracing, and G-code layers are under active development. Linux is the only
-> current hardware platform. Windows supports safe browser and desktop
-> simulation for UI development, but not serial hardware or Linux-specific
-> camera controls. Powered alignment experiments are recorded in
+> tracing, and G-code layers are under active development. Windows supports the
+> authenticated Raspberry Pi controller/camera bridge; direct local serial and
+> Linux-specific camera controls remain Linux-only. E3 has no simulated hardware
+> runtime: unavailable hardware remains unavailable. Powered alignment experiments are recorded in
 > `CURRENT_STATE.md`, but the controller/profile and final physical accuracy
 > are not yet verified configurations.
 
@@ -41,7 +41,6 @@ Shared core and browser workflow:
 - Precision analysis capture that settles, discards buffered frames, measures a
   configurable fresh-frame burst, rejects temporal outliers, and reports mark
   jitter plus camera-control readback
-- Synthetic camera and GRBL-like controller for development without hardware
 - Multi-image checkerboard lens calibration
 - Multi-point image-pixel to machine-XY homography with RANSAC and residual error reporting
 - Perspective-corrected, top-down bed photograph
@@ -51,7 +50,7 @@ Shared core and browser workflow:
 - Path flattening, nearest-path ordering, design bounds checks, zero-power framing, and vector G-code generation
 - Linux serial communication without a mandatory pyserial dependency
 - GRBL/Marlin identification probes and a read-only diagnostic command console (`M5` is the only actuator command accepted there)
-- Temporary laser arming, automatic disarming, software stop, and simulation-first defaults
+- Temporary laser arming, automatic disarming, and software stop
 - Unit tests and GitHub Actions configuration
 
 Native desktop workflow:
@@ -124,8 +123,6 @@ Native desktop workflow:
 - Dedicated regular-grid template designer with a live preview, editable cut
   size/radius, rows, columns, edge-gap or center-pitch spacing, and direct
   template-library or project-object creation
-- Simulation-only frozen alignment images loaded from PNG/JPEG or generated
-  deterministically from a selected template at a known pose
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop; successful powered jobs drain queued motion, Home/park, and
   only then release the motors, with visible completion phases and failure alert
@@ -140,7 +137,7 @@ program subset, layer reconstruction, and review boundary.
 See [Power Correction](docs/POWER_CORRECTION.md) for its mapping, motion model,
 overscan interaction, limitations, and tuning guidance.
 
-The desktop branch also contains a synthetically and behaviorally tested
+The desktop branch also contains an automated and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable
 project objects or one construction-only Stock boundary. Rounded-label output
 previews the same fitted vector that will be created. A Stock boundary persists
@@ -174,25 +171,15 @@ placement but cannot pass automatic matching. Automatic matching does not
 compare corner radius, so templates that differ only by radius must be selected
 manually.
 
-In safe simulation, the Templates panel can exercise the same detection and
-alignment path without a physical camera. Choose **Load test image…** for an
-already corrected, top-down image of the complete work area, or select a
-template and choose **Generate from selected template…**. Generated images
-provide known center X/Y and rotation controls plus deterministic noise and a
-missing-label count. The chosen image remains frozen while **Auto identify and
-align** or **Align selected template** runs. Choose **Return to synthetic
-camera** to clear the override and resume the normal simulated camera feed.
-Loaded-image dimensions must describe the configured full bed at one uniform
-pixel scale; images are resized to the configured corrected-frame resolution
-but are not lens-corrected, perspective-rectified, cropped, or calibrated by
-the loader. See
-[docs/CUT_TEMPLATES.md](docs/CUT_TEMPLATES.md#testing-alignment-without-hardware).
-
 ## Deliberately disabled by default
 
-The shipped configuration uses a synthetic camera and controller. In a real-hardware profile:
+The packaged default is a setup template, not a runnable machine. Its controller
+port is the explicit `SELECT_CONTROLLER_PORT` placeholder; the former implicit
+`/dev/ttyUSB0` default is not treated as a configured machine. First-run must
+save a real machine before `CoreRuntime` is created. In every configured profile:
 
-- Serial access requires the `--hardware` command-line flag.
+- Every normal browser and desktop launch is hardware-capable, but startup does
+  not automatically connect to the configured controller.
 - Motion remains blocked until `machine.allow_motion` is explicitly changed.
 - Positive laser commands receive a one-use, time-limited authorization for the
   exact prepared program when Preview's **START JOB** enters the guarded run path.
@@ -218,10 +205,8 @@ cd laser-camera-aligner
 ./run.sh
 ```
 
-The browser opens to `http://127.0.0.1:8080`. Simulation mode starts with an automatically mapped perspective bed, a test workpiece, and a simulated controller.
-
-Load `sample_data/sample_design.svg`, drag it over the simulated workpiece,
-generate G-code, review the Preview, and run it against the simulator.
+The browser opens to `http://127.0.0.1:8080`. A configured but unreachable
+controller or camera is shown as offline; E3 never substitutes fake hardware.
 
 For the native desktop after the base installation:
 
@@ -235,8 +220,8 @@ uses the same calibration files and remains available as a legacy alternative.
 
 ## Windows development status
 
-The browser and native desktop applications run on Windows with the synthetic
-camera and simulated controller. The CI matrix collects and runs the portable
+The browser and native desktop applications run on Windows with real configured
+`e3bridge://` and `e3camera://` endpoints. The CI matrix collects and runs the portable
 suite on Windows as well as Linux. POSIX serial code is imported only if the
 serial backend is selected; Windows serial hardware, V4L2 camera controls, and
 install/launch scripts are not implemented. Autosaves and material recipes use
@@ -251,23 +236,31 @@ Python 3.10/3.11/3.12 and Windows Python 3.10/3.12, including desktop coverage
 on Python 3.12. The full compatibility jobs intentionally run pytest serially.
 Each major CI phase records its duration in the job summary.
 
-From an existing desktop-enabled virtual environment, launch the native UI in
-safe simulation mode:
+From an existing desktop-enabled virtual environment, launch the native UI with
+a completed real-machine configuration:
 
 ```powershell
 .\.venv\Scripts\python.exe -m laser_aligner.desktop.main `
-  --safe `
-  --config config\default.json
+  --config path\to\configured-machine.json
 ```
 
-Launch the browser simulator with:
+Launch the browser with:
 
 ```powershell
 .\.venv\Scripts\python.exe -m laser_aligner `
-  --config config\default.json
+  --config path\to\configured-machine.json
 ```
 
-These commands do not enable real serial hardware.
+The browser and desktop both resolve the active saved machine through
+`CoreRuntime`; raw JSON machine/laser values cannot override an existing
+registry selection. Legacy simulator or unconfigured-placeholder state fails
+closed with real-machine setup instructions. Desktop legacy recovery runs before
+credentials or runtime services and requires an explicit physical-machine
+selection; cancel performs no migration and exits. A normal packaged legacy
+fallback is repaired into upgrade-preserved user state, while an explicit
+`--config` is repaired in place. Normal startup is
+hardware-capable, while the existing motion, arming, coordinate, bounds, and
+exact-program gates remain authoritative.
 
 ## Moving to the real C920
 
@@ -285,7 +278,7 @@ These commands do not enable real serial hardware.
    ```
 
 3. Replace the camera device placeholder in `config/local.json`.
-4. Keep the controller backend set to `simulator` during camera and calibration work, or leave serial motion disabled.
+4. Keep serial motion disabled during camera and calibration work.
 5. Start with:
 
    ```bash
@@ -304,10 +297,12 @@ Do not guess whether the Creality conversion is speaking GRBL or Marlin. With la
 
 The probe only sends identity/configuration requests (`$I`, `$$`, and `M115`); it does not send motion or laser-enable commands. Record the output in a GitHub issue or commit it to a local bring-up note with secrets removed.
 
-Only after the port, protocol, coordinate system, reachable laser work area, power scale, and framing behavior are verified should `machine.allow_motion` be changed to `true` and the application started with:
+Only after the port, protocol, coordinate system, reachable laser work area,
+power scale, and framing behavior are verified should `machine.allow_motion` be
+changed to `true` and the normal application restarted with:
 
 ```bash
-./run-hardware.sh
+./run.sh
 ```
 
 See [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md).
@@ -316,19 +311,19 @@ See [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md).
 
 ```text
 laser_aligner/
-  camera/        C920/V4L2 and synthetic capture
+  camera/        local C920/V4L2 and remote camera capture
   calibration/   lens model, bed mapping, printable target generation
   core/          UI-neutral runtime lifecycle
   desktop/       native PySide6 project workspace
   geometry/      SVG parsing, curves, transforms, units
   gcode/         placement, validation, generation, preview parsing
-  machine/       POSIX serial, simulator, controller safety service
+  machine/       POSIX/network serial and controller safety service
   materials/     SQLite material-recipe library and compatibility model
   project/       project model, history, persistence, alignment, toolpaths
   templates/     reusable templates, grid authoring, library, and rigid placement
   vision/        workpiece, fiducial, object tracing, and template alignment
   web/           dependency-free browser interface
-config/          simulation and hardware examples
+config/          setup template and hardware examples
 docs/            setup, calibration, safety, and architecture notes
 targets/         exact-size SVG calibration targets
 tools/           camera/controller probes and release tooling
@@ -375,8 +370,8 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 
 ## Current limitations
 
-- Linux is the only current hardware platform. Windows is limited to the
-  synthetic camera and simulated controller.
+- Direct local serial/camera hardware remains Linux-only; Windows uses the
+  authenticated Raspberry Pi controller/camera bridge.
 - Line vectors, generated vector text, closed-vector fills, binary vector
   rasters, and imported grayscale images with deterministic ordered dithering
   are supported. Existing generated text cannot yet be reopened for editable
@@ -389,10 +384,9 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   geometry-changing CSS are not supported and are explicitly rejected rather
   than imported with a mismatched cut path.
 - The camera mapping assumes the material top surface is on the calibration plane. Height/parallax compensation is planned but not yet implemented.
-- Cutting-template identification and alignment have synthetic coverage but
-  have not been verified with real corrected label-sheet images. The desktop's
-  loaded/generated test-frame workflow verifies software behavior only; it
-  cannot validate lens/bed calibration, parallax, camera pose, material height,
+- Cutting-template identification and alignment have automated coverage but
+  have not been verified with real corrected label-sheet images. Automated
+  tests cannot validate lens/bed calibration, parallax, camera pose, material height,
   controller motion, or laser accuracy. Placement is rigid translation/rotation
   only, and `marker_id` is currently metadata rather than an active marker
   detector.

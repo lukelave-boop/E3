@@ -69,7 +69,6 @@ main { min-width: 0; padding: clamp(1.2rem, 3vw, 3rem); }
 .media-layout { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(280px, .8fr); gap: 1rem; align-items: start; }
 .image-panel, .canvas-panel { padding: .55rem; border: 1px solid var(--line); background: #090d11; border-radius: 1rem; overflow: hidden; box-shadow: var(--shadow); }
 .image-panel img, .canvas-panel canvas { display: block; width: 100%; height: auto; border-radius: .65rem; }
-.synthetic-controls { margin-top: 1rem; }
 label { display: block; color: var(--muted); font-size: .82rem; margin: .8rem 0; }
 input, select, textarea { width: 100%; margin-top: .35rem; background: #0e141a; color: var(--text); border: 1px solid var(--line); border-radius: .55rem; padding: .67rem .72rem; outline: none; }
 input:focus, select:focus, textarea:focus { border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(103, 174, 242, .12); }

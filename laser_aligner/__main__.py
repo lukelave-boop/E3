@@ -8,17 +8,18 @@ import threading
 import webbrowser
 from pathlib import Path
 
-from .app import AppContext
 from .calibration.targets import write_default_targets
 from .config import ConfigError, load_settings, validate_http_bind_host, validate_http_port
+from .core.runtime import CoreRuntime
+from .errors import RealMachineSetupRequired
 from .logging_setup import configure_logging
+from .machine.profiles import MachineRegistryError
 from .server import AppHTTPServer
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Camera-assisted laser positioning and SVG placement")
     parser.add_argument("--config", type=Path, help="Path to a JSON configuration file")
-    parser.add_argument("--hardware", action="store_true", help="Permit opening the configured serial controller")
     parser.add_argument(
         "--laser-lockout",
         action="store_true",
@@ -40,6 +41,13 @@ def main(argv: list[str] | None = None) -> int:
             settings.app.host = validate_http_bind_host(args.host)
         if args.port is not None:
             settings.app.port = validate_http_port(args.port)
+    except RealMachineSetupRequired as exc:
+        print(
+            f"Real-machine setup required: {exc}\n"
+            "Run e3-positioning-system and complete real-machine setup, then retry.",
+            file=sys.stderr,
+        )
+        return 2
     except ConfigError as exc:
         print(f"Configuration error: {exc}", file=sys.stderr)
         return 2
@@ -55,17 +63,30 @@ def main(argv: list[str] | None = None) -> int:
             print(path)
         return 0
 
-    if settings.machine.backend == "serial" and not args.hardware:
-        logger.warning("Serial backend is configured, but --hardware was not supplied; connection attempts will be blocked")
-    context = AppContext(
-        settings,
-        hardware_enabled=args.hardware,
-        laser_lockout=args.laser_lockout,
-    )
+    try:
+        runtime = CoreRuntime(
+            settings,
+            hardware_enabled=True,
+            laser_lockout=args.laser_lockout,
+        )
+    except RealMachineSetupRequired as exc:
+        print(
+            f"Real-machine setup required: {exc}\n"
+            "Run e3-positioning-system and complete real-machine setup, then retry.",
+            file=sys.stderr,
+        )
+        return 2
+    except MachineRegistryError as exc:
+        print(f"Saved-machine error: {exc}", file=sys.stderr)
+        return 2
+
     server: AppHTTPServer | None = None
     try:
-        context.start()
-        server = AppHTTPServer((settings.app.host, settings.app.port), context)
+        runtime.start()
+        server = AppHTTPServer(
+            (settings.app.host, settings.app.port),
+            runtime.context,
+        )
         url = f"http://{settings.app.host if settings.app.host != '0.0.0.0' else '127.0.0.1'}:{settings.app.port}/"
         logger.info("Laser Camera Aligner running at %s", url)
 
@@ -89,7 +110,7 @@ def main(argv: list[str] | None = None) -> int:
             if server is not None:
                 server.server_close()
         finally:
-            context.stop()
+            runtime.stop()
     return 0
 
 

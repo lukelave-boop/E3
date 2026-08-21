@@ -32,13 +32,13 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
             {
                 "runtime_state": "running",
                 "machine": {
-                    "backend": "simulator",
+                    "backend": "serial",
                     "hardware_enabled": False,
                     "connected": True,
                     "allow_motion": False,
                 },
             },
-            "SIMULATION",
+            "HARDWARE LOCKED",
             "Connected",
             "Motion blocked",
         ),
@@ -273,7 +273,7 @@ def test_chrome_mode_is_one_line_compact_and_keeps_safety_meaning(
     strip.set_chrome_mode(True)
     strip.set_status(
         {
-            "backend": "simulator",
+            "backend": "serial",
             "connected": True,
             "allow_motion": False,
         }
@@ -284,7 +284,7 @@ def test_chrome_mode_is_one_line_compact_and_keeps_safety_meaning(
 
     assert strip.chrome_mode
     assert not strip.heading.isVisible()
-    assert strip.mode_label.text() == "SIM"
+    assert strip.mode_label.text() == "HW LOCKED"
     assert strip.connection_label.text() == "ONLINE"
     assert strip.motion_label.text() == "MOTION OFF"
     assert strip.stop_button.text() == "STOP / LASER OFF"

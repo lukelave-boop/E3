@@ -55,9 +55,6 @@ class TemplatePanel(QtWidgets.QWidget):
     templateSelected = QtCore.Signal(str)
     autoMatchRequested = QtCore.Signal()
     matchSelectedRequested = QtCore.Signal(str)
-    loadTestImageRequested = QtCore.Signal()
-    generateTestImageRequested = QtCore.Signal()
-    returnToCameraRequested = QtCore.Signal()
     placementChanged = QtCore.Signal(dict)
     applyRequested = QtCore.Signal(dict)
     clearRequested = QtCore.Signal()
@@ -73,8 +70,6 @@ class TemplatePanel(QtWidgets.QWidget):
         self._busy = False
         self._camera_match_summary: str | None = None
         self._camera_match_adjusted = False
-        self._test_image_available = False
-        self._test_image_active = False
 
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(10, 10, 10, 12)
@@ -141,52 +136,6 @@ class TemplatePanel(QtWidgets.QWidget):
 
         match_group = QtWidgets.QGroupBox("Camera match")
         match_layout = QtWidgets.QVBoxLayout(match_group)
-
-        self.test_image_group = QtWidgets.QGroupBox("Test image")
-        test_image_layout = QtWidgets.QVBoxLayout(self.test_image_group)
-        test_image_layout.setSpacing(8)
-        test_image_layout.addWidget(
-            _muted(
-                "Load a corrected full-bed image, or generate one from the selected "
-                "template. The image stays frozen while you run the normal alignment."
-            )
-        )
-        self.test_image_source = QtWidgets.QLabel("Synthetic camera")
-        self.test_image_source.setObjectName("statusCard")
-        self.test_image_source.setWordWrap(True)
-        self.test_image_source.setMinimumWidth(0)
-        self.test_image_source.setSizePolicy(
-            QtWidgets.QSizePolicy.Policy.Ignored,
-            QtWidgets.QSizePolicy.Policy.Preferred,
-        )
-        test_image_layout.addWidget(self.test_image_source)
-        self.load_test_image_button = _ResponsiveActionButton(
-            "Load test image…",
-            "Load image…",
-            tool_tip=(
-                "Choose a top-down image representing the complete corrected work area."
-            ),
-        )
-        self.generate_test_image_button = _ResponsiveActionButton(
-            "Generate from selected template…",
-            "Generate test…",
-            tool_tip=(
-                "Create a deterministic simulated label sheet from the selected template."
-            ),
-        )
-        self.return_to_camera_button = _ResponsiveActionButton(
-            "Return to synthetic camera",
-            "Use camera",
-            tool_tip="Stop using the frozen test image and restore the synthetic camera.",
-        )
-        for button in (
-            self.load_test_image_button,
-            self.generate_test_image_button,
-            self.return_to_camera_button,
-        ):
-            test_image_layout.addWidget(button)
-        self.test_image_group.setVisible(False)
-        match_layout.addWidget(self.test_image_group)
 
         self.auto_button = _ResponsiveActionButton(
             "Auto identify and align",
@@ -292,13 +241,6 @@ class TemplatePanel(QtWidgets.QWidget):
         self.delete_button.clicked.connect(self._delete_clicked)
         self.auto_button.clicked.connect(self.autoMatchRequested.emit)
         self.match_selected_button.clicked.connect(self._match_selected)
-        self.load_test_image_button.clicked.connect(self.loadTestImageRequested.emit)
-        self.generate_test_image_button.clicked.connect(
-            self.generateTestImageRequested.emit
-        )
-        self.return_to_camera_button.clicked.connect(
-            self.returnToCameraRequested.emit
-        )
         self.apply_button.clicked.connect(self._apply_clicked)
         self.clear_button.clicked.connect(self.clearRequested.emit)
         self.x_spin.valueChanged.connect(self._emit_placement)
@@ -341,9 +283,6 @@ class TemplatePanel(QtWidgets.QWidget):
             self.save_button,
             self.auto_button,
             self.match_selected_button,
-            self.load_test_image_button,
-            self.generate_test_image_button,
-            self.return_to_camera_button,
             self.apply_button,
             self.clear_button,
         ):
@@ -548,30 +487,6 @@ class TemplatePanel(QtWidgets.QWidget):
                 "Templates can still be saved and positioned manually."
             )
 
-    def set_test_image_available(self, available: bool) -> None:
-        """Show test-image controls only for a simulation-capable runtime."""
-
-        self._test_image_available = bool(available)
-        if not self._test_image_available:
-            self._test_image_active = False
-            self.test_image_source.setText("Synthetic camera")
-            self.test_image_source.setToolTip("")
-        self.test_image_group.setVisible(self._test_image_available)
-        self._update_enabled()
-
-    def set_test_image_source(self, active: bool, label: str = "") -> None:
-        """Describe the frozen alignment source without changing camera state."""
-
-        self._test_image_active = bool(active and self._test_image_available)
-        if self._test_image_active:
-            description = str(label).strip() or "Alignment test image"
-            self.test_image_source.setText(f"TEST IMAGE · FROZEN\n{description}")
-            self.test_image_source.setToolTip(description)
-        else:
-            self.test_image_source.setText("Synthetic camera")
-            self.test_image_source.setToolTip("")
-        self._update_enabled()
-
     def _show_template_summary(self) -> None:
         template_id = self.current_template_id()
         item = self._templates.get(template_id or "")
@@ -616,14 +531,6 @@ class TemplatePanel(QtWidgets.QWidget):
         can_match = available and self._calibration_ready and not self._busy
         self.auto_button.setEnabled(can_match)
         self.match_selected_button.setEnabled(can_match)
-        can_change_test_source = self._test_image_available and not self._busy
-        self.load_test_image_button.setEnabled(can_change_test_source)
-        self.generate_test_image_button.setEnabled(
-            can_change_test_source and selected is not None
-        )
-        self.return_to_camera_button.setEnabled(
-            can_change_test_source and self._test_image_active
-        )
         self.apply_button.setEnabled(
             available and self._placement_valid and not self._busy
         )

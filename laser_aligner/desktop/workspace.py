@@ -1432,15 +1432,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._camera_backing_item.setVisible(False)
         self.workspace_scene.addItem(self._camera_backing_item)
         self._camera_image_area: Bounds | None = None
-        self._test_frame_badge = QtWidgets.QLabel("TEST IMAGE · FROZEN", self.viewport())
-        self._test_frame_badge.setObjectName("testImageBadge")
-        self._test_frame_badge.setAttribute(
-            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents,
-            True,
-        )
-        self._test_frame_badge.setToolTip("Frozen corrected simulation frame")
-        self._test_frame_badge.adjustSize()
-        self._test_frame_badge.hide()
         self._overlay_legend = _WorkspaceOverlayLegend(self.viewport())
         self._overlay_entries: dict[
             str,
@@ -1623,21 +1614,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._fit_to_work_area = False
         self.zoomChanged.emit(abs(self.transform().m11()))
 
-    def set_test_frame_source(self, active: bool, label: str = "") -> None:
-        """Keep the frozen-source warning visible even when inspector docks are hidden."""
-
-        description = str(label).strip() or "Frozen corrected simulation frame"
-        self._test_frame_badge.setToolTip(description)
-        self._test_frame_badge.setVisible(bool(active))
-        if active:
-            self._test_frame_badge.adjustSize()
-            self._position_test_frame_badge()
-            self._test_frame_badge.raise_()
-
-    def _position_test_frame_badge(self) -> None:
-        badge = self._test_frame_badge
-        badge.move(max(12, self.viewport().width() - badge.width() - 12), 12)
-
     def _position_overlay_legend(self) -> None:
         if not hasattr(self, "_overlay_legend"):
             return
@@ -1659,7 +1635,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._position_test_frame_badge()
         self._position_overlay_legend()
         # Initial construction and dock restoration can resize the viewport
         # after the first fit. Refit on the next event turn while the user is
@@ -1671,7 +1646,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         """Keep viewport overlays fixed when QGraphicsView scrolls its children."""
 
         super().scrollContentsBy(dx, dy)
-        self._position_test_frame_badge()
         self._position_overlay_legend()
 
     def _refit_after_resize(self) -> None:

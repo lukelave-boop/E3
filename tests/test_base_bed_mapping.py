@@ -19,6 +19,7 @@ from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.service import FrameBurst
 from laser_aligner.config import WorkArea, load_settings
 from laser_aligner.errors import CalibrationError
+from tests.fakes.simulator_transport import SimulatedTransport
 
 
 def _run_prepared_job(context: AppContext, job: object) -> None:
@@ -36,10 +37,11 @@ def _context(tmp_path: Path) -> AppContext:
     config_path.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "app": {"data_dir": "data", "open_browser": False},
                 "camera": {"width": 1200, "height": 900},
                 "machine": {
-                    "backend": "simulator",
+                    "backend": "serial",
+                    "allow_motion": True,
                     "work_area": {"x_min": 10, "x_max": 210, "y_min": 10, "y_max": 210},
                 },
                 "laser": {"boundary_margin_mm": 5},
@@ -47,7 +49,14 @@ def _context(tmp_path: Path) -> AppContext:
         ),
         encoding="utf-8",
     )
-    return AppContext(load_settings(config_path))
+    context = AppContext(load_settings(config_path), hardware_enabled=True)
+    transport = SimulatedTransport()
+    transport.open()
+    context.machine._transport = transport
+    context.machine._connected = True
+    context.machine._protocol = "marlin"
+    context.machine._coordinate_reference_ready = True
+    return context
 
 
 def _keyed_grid_image() -> np.ndarray:
@@ -312,6 +321,16 @@ def test_keyed_detection_installs_fresh_map_and_clears_old_refinements(tmp_path:
     context = _context(tmp_path)
     context.start()
     try:
+        context.bed.replace_points_and_solve(
+            [
+                BedPoint(0.0, 899.0, 10.0, 10.0),
+                BedPoint(1199.0, 899.0, 210.0, 10.0),
+                BedPoint(1199.0, 0.0, 210.0, 210.0),
+                BedPoint(0.0, 0.0, 10.0, 210.0),
+            ],
+            1200,
+            900,
+        )
         context.bed.apply_registration_translation(0.2, -0.1)
         nodes = np.asarray([40, 75, 110, 145, 180], dtype=np.float64)
         context.bed.apply_residual_mesh(
@@ -402,6 +421,11 @@ def test_base_capture_holds_home_parks_and_releases_before_detection(
             return burst
 
         monkeypatch.setattr(context, "precision_camera_burst", capture_burst)
+        monkeypatch.setattr(
+            context,
+            "camera_calibration_readiness",
+            lambda: {"state": "READY", "reasons": []},
+        )
         previous_points = [asdict(point) for point in context.bed.points]
 
         captured, detection = context.capture_base_bed_mapping()
@@ -436,6 +460,16 @@ def test_failed_transaction_restores_previous_points_and_model(
     context = _context(tmp_path)
     context.start()
     try:
+        context.bed.replace_points_and_solve(
+            [
+                BedPoint(0.0, 899.0, 10.0, 10.0),
+                BedPoint(1199.0, 899.0, 210.0, 10.0),
+                BedPoint(1199.0, 0.0, 210.0, 210.0),
+                BedPoint(0.0, 0.0, 10.0, 210.0),
+            ],
+            1200,
+            900,
+        )
         old_points = [asdict(point) for point in context.bed.points]
         old_model = json.loads(context.bed.model_path.read_text(encoding="utf-8"))
         replacement = [

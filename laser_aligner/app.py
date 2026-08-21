@@ -63,7 +63,6 @@ from .calibration.support import (
 from .camera.service import (
     CameraService,
     FrameBurst,
-    SyntheticCameraService,
     list_video_devices,
 )
 from .config import Settings, WorkArea
@@ -327,15 +326,12 @@ class AppContext:
         settings.app.data_dir.mkdir(parents=True, exist_ok=True)
         for directory in ("captures", "calibration", "generated", "logs"):
             (settings.app.data_dir / directory).mkdir(parents=True, exist_ok=True)
-        if settings.app.simulation:
-            self.camera: CameraService = SyntheticCameraService(settings.camera, settings.machine.work_area)
-        else:
-            if settings.camera.device.lower().startswith("e3camera://"):
-                from .camera.remote import RemoteCameraService
+        if settings.camera.device.lower().startswith("e3camera://"):
+            from .camera.remote import RemoteCameraService
 
-                self.camera = RemoteCameraService(settings.camera)
-            else:
-                self.camera = CameraService(settings.camera)
+            self.camera: CameraService = RemoteCameraService(settings.camera)
+        else:
+            self.camera = CameraService(settings.camera)
         self.calibration_profiles = CalibrationProfileStore(
             settings.app.data_dir,
             signature_from_camera_settings(settings.camera),
@@ -382,9 +378,6 @@ class AppContext:
         self.dense_confirmation_path = calibration_dir / "dense_confirmation.json"
         self._migrate_legacy_dense_session()
         self._camera_start_error: str | None = None
-        self._simulation_workspace_lock = threading.RLock()
-        self._simulation_workspace_image: np.ndarray | None = None
-        self._simulation_workspace_info: dict[str, Any] | None = None
         self._lens_workflow_lock = threading.RLock()
         self._workspace_lock = threading.RLock()
         self._workspace_image: np.ndarray | None = None
@@ -429,7 +422,6 @@ class AppContext:
             "lens_model_id": current_lens_model_id,
             "camera": {
                 "device": str(camera_settings.device),
-                "synthetic": bool(self.settings.app.simulation),
                 "width": width,
                 "height": height,
                 "fourcc": str(self.settings.camera.fourcc),
@@ -490,12 +482,6 @@ class AppContext:
         reasons: list[str] = []
         if not status.connected:
             reasons.append("Camera is not connected")
-        if status.synthetic:
-            return {
-                "state": "READY" if status.connected else "BLOCKED",
-                "reasons": reasons,
-                "synthetic": True,
-            }
         expected = (int(self.settings.camera.width), int(self.settings.camera.height))
         actual = (int(status.width), int(status.height))
         if actual != expected:
@@ -514,7 +500,6 @@ class AppContext:
         return {
             "state": "READY" if not reasons else "BLOCKED",
             "reasons": reasons,
-            "synthetic": False,
             "expected_resolution": list(expected),
             "actual_resolution": list(actual),
             "controls_verified": dict(status.controls_verified),
@@ -750,30 +735,11 @@ class AppContext:
         if self.settings.camera.autostart:
             try:
                 self.camera.start()
-                if isinstance(self.camera, SyntheticCameraService) and self.bed.calibration is None:
-                    self.capture_bed_reference(precision=False)
-                    points = [
-                        BedPoint(image_x=u, image_y=v, machine_x=x, machine_y=y, label=label)
-                        for u, v, x, y, label in self.camera.calibration_correspondences()
-                    ]
-                    self.bed.replace_points(points)
-                    image = self.bed_reference()
-                    self.bed.solve(
-                        image.shape[1],
-                        image.shape[0],
-                        provenance=self._bed_provenance(),
-                    )
             except Exception as exc:
                 self._camera_start_error = str(exc)
                 LOGGER.error("Camera did not start: %s", exc)
-        if self.settings.machine.backend == "simulator":
-            try:
-                self.machine.connect()
-            except Exception as exc:
-                LOGGER.error("Simulator did not connect: %s", exc)
 
     def stop(self) -> None:
-        self.clear_simulation_workspace_frame()
         try:
             self.machine.disconnect()
         finally:
@@ -1100,9 +1066,6 @@ class AppContext:
         work_area: WorkArea | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
     ) -> np.ndarray:
-        with self._simulation_workspace_lock:
-            if self._simulation_workspace_image is not None:
-                return self._simulation_workspace_image.copy()
         self._require_valid_bed_calibration()
         configured = self.settings.machine.work_area
         uses_configured_area = coordinate_frame is None and (
@@ -1148,9 +1111,6 @@ class AppContext:
     ) -> np.ndarray:
         """Home, park, hold, and capture the frame used for object tracing."""
 
-        with self._simulation_workspace_lock:
-            if self._simulation_workspace_image is not None:
-                return self._simulation_workspace_image.copy()
         self._require_valid_bed_calibration()
         with self.machine.temporary_stepper_hold():
             self.machine.prepare_photo_position()
@@ -2108,14 +2068,6 @@ class AppContext:
         """
 
         configured = self.settings.machine.work_area
-        with self._simulation_workspace_lock:
-            if self._simulation_workspace_image is not None:
-                return WorkArea(
-                    configured.x_min,
-                    configured.x_max,
-                    configured.y_min,
-                    configured.y_max,
-                )
         support = self._current_honeycomb_support()
         if support is None:
             return WorkArea(
@@ -2532,96 +2484,6 @@ class AppContext:
             y_min=float(y_nodes[0] - 0.15 * height),
             y_max=float(y_nodes[-1] + 0.15 * height),
         )
-
-    @property
-    def simulation_workspace_frame_supported(self) -> bool:
-        """Whether a memory-only corrected test frame is safe in this process."""
-
-        return bool(
-            self.settings.app.simulation and self.settings.machine.backend == "simulator" and not self.hardware_enabled
-        )
-
-    @property
-    def has_simulation_workspace_frame(self) -> bool:
-        with self._simulation_workspace_lock:
-            return self._simulation_workspace_image is not None
-
-    def simulation_workspace_frame_info(self) -> dict[str, Any] | None:
-        with self._simulation_workspace_lock:
-            return copy.deepcopy(self._simulation_workspace_info)
-
-    def simulation_workspace_frame_status(self) -> dict[str, Any] | None:
-        """Return lightweight source state for frequently-polled status payloads."""
-
-        with self._simulation_workspace_lock:
-            if self._simulation_workspace_info is None:
-                return None
-            return {
-                key: self._simulation_workspace_info[key]
-                for key in (
-                    "active",
-                    "source_name",
-                    "width",
-                    "height",
-                    "pixels_per_mm",
-                )
-            }
-
-    def set_simulation_workspace_frame(
-        self,
-        image: np.ndarray,
-        *,
-        source_name: str,
-        metadata: Mapping[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """Freeze one corrected full-bed frame for safe simulation workflows."""
-
-        if not self.simulation_workspace_frame_supported:
-            raise RuntimeError(
-                "Test images require simulation mode, the simulator machine backend, "
-                "and a process without hardware access"
-            )
-        if not isinstance(image, np.ndarray) or image.size == 0:
-            raise ValueError("The corrected test image is empty")
-        if image.ndim != 3 or image.shape[2] != 3 or image.dtype != np.uint8:
-            raise ValueError("The corrected test image must be an 8-bit BGR image")
-        work_area = self.settings.machine.work_area
-        pixels_per_mm = float(self.settings.calibration.bed.pixels_per_mm)
-        expected_width = max(1, int(round(work_area.width * pixels_per_mm)))
-        expected_height = max(1, int(round(work_area.height * pixels_per_mm)))
-        actual_height, actual_width = image.shape[:2]
-        if (actual_width, actual_height) != (expected_width, expected_height):
-            raise ValueError(
-                "The corrected test image must cover the complete work area at "
-                f"{pixels_per_mm:g} px/mm: expected {expected_width}x{expected_height}, "
-                f"got {actual_width}x{actual_height}"
-            )
-        label = str(source_name).strip()
-        if not label:
-            raise ValueError("The test-image source name must not be empty")
-        info = {
-            "active": True,
-            "source_name": label,
-            "width": expected_width,
-            "height": expected_height,
-            "pixels_per_mm": pixels_per_mm,
-            "metadata": copy.deepcopy(dict(metadata or {})),
-        }
-        replacement = np.ascontiguousarray(image).copy()
-        with self._simulation_workspace_lock:
-            self._simulation_workspace_image = replacement
-            self._simulation_workspace_info = info
-        return copy.deepcopy(info)
-
-    def clear_simulation_workspace_frame(self) -> None:
-        with self._simulation_workspace_lock:
-            self._simulation_workspace_image = None
-            self._simulation_workspace_info = None
-
-    def synthetic_scene(self, scene: str) -> None:
-        if not isinstance(self.camera, SyntheticCameraService):
-            raise ValueError("Synthetic scenes are available only in simulation mode")
-        self.camera.set_scene(scene)
 
     def add_bed_point(self, payload: dict[str, Any]) -> int:
         point = BedPoint(
@@ -4243,7 +4105,6 @@ class AppContext:
             "calibration_profile": self.calibration_profiles.status(),
             "lens": lens_status,
             "bed": self.bed_status(lens_model_id=lens_model_id),
-            "simulation_workspace_frame": self.simulation_workspace_frame_status(),
             "machine": self.machine.status(),
             "devices": {
                 "cameras": list_video_devices(),

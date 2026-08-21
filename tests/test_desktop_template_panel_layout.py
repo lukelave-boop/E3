@@ -61,18 +61,11 @@ def test_template_panel_actions_fit_360px_with_large_windows_text(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     host, scroll, panel = _show_panel(qt_application, width=360)
-    panel.set_test_image_available(True)
-    long_source = (
-        "Loaded: "
-        "warehouse-label-sheet-red-rounded-rectangles-revision-2026-08-06.png"
-    )
-    panel.set_test_image_source(True, long_source)
     qt_application.processEvents()
     qt_application.processEvents()
 
     assert scroll.horizontalScrollBar().maximum() == 0
     assert panel.width() <= scroll.viewport().width()
-    assert panel.test_image_source.toolTip() == long_source
     assert (
         panel.designer_buttons.direction()
         == QtWidgets.QBoxLayout.Direction.TopToBottom
@@ -81,18 +74,12 @@ def test_template_panel_actions_fit_360px_with_large_windows_text(
         panel.save_button.text(),
         panel.auto_button.text(),
         panel.match_selected_button.text(),
-        panel.load_test_image_button.text(),
-        panel.generate_test_image_button.text(),
-        panel.return_to_camera_button.text(),
         panel.apply_button.text(),
         panel.clear_button.text(),
     ] == [
         "Save project",
         "Auto align",
         "Align selected",
-        "Load image…",
-        "Generate test…",
-        "Use camera",
         "Create cuts",
         "Clear preview",
     ]
@@ -114,7 +101,6 @@ def test_template_panel_restores_full_actions_when_space_is_available(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     host, scroll, panel = _show_panel(qt_application, width=700)
-    panel.set_test_image_available(True)
     qt_application.processEvents()
     qt_application.processEvents()
 
@@ -126,12 +112,6 @@ def test_template_panel_restores_full_actions_when_space_is_available(
     assert panel.save_button.text() == "From current project…"
     assert panel.auto_button.text() == "Auto identify and align"
     assert panel.match_selected_button.text() == "Align selected template"
-    assert panel.load_test_image_button.text() == "Load test image…"
-    assert (
-        panel.generate_test_image_button.text()
-        == "Generate from selected template…"
-    )
-    assert panel.return_to_camera_button.text() == "Return to synthetic camera"
     assert panel.apply_button.text() == "Create aligned cut objects"
     assert panel.clear_button.text() == "Clear template preview"
 

@@ -5,7 +5,10 @@ import pytest
 
 from laser_aligner import config as config_module
 from laser_aligner.config import (
+    DEFAULT_CONFIG,
+    UNCONFIGURED_CONTROLLER_PORT,
     ConfigError,
+    MachineSettings,
     PrecisionCaptureSettings,
     WorkArea,
     effective_laser_output_area,
@@ -65,7 +68,7 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     config.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "runtime", "simulation": True},
+                "app": {"data_dir": "runtime", "simulation": False},
                 "camera": {"width": 1280, "height": 720},
                 "machine": {"work_area": {"x_min": 5, "x_max": 205, "y_min": 10, "y_max": 210}},
             }
@@ -73,6 +76,7 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     settings = load_settings(config)
+    assert not hasattr(settings.app, "simulation")
     assert settings.app.data_dir == (tmp_path / "runtime").resolve()
     assert settings.camera.width == 1280
     assert settings.camera.view_rotation_degrees == 0
@@ -84,6 +88,23 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     assert settings.laser.spot_offset_x_mm == 0.0
     assert settings.laser.spot_offset_y_mm == 0.0
     assert (settings.app.data_dir / "captures").is_dir()
+
+
+def test_all_python_and_packaged_defaults_require_controller_selection(
+    tmp_path: Path,
+) -> None:
+    sparse = tmp_path / "sparse.json"
+    sparse.write_text("{}", encoding="utf-8")
+    packaged = json.loads(
+        (Path(__file__).resolve().parents[1] / "config" / "default.json").read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert MachineSettings().port == UNCONFIGURED_CONTROLLER_PORT
+    assert DEFAULT_CONFIG["machine"]["port"] == UNCONFIGURED_CONTROLLER_PORT
+    assert packaged["machine"]["port"] == UNCONFIGURED_CONTROLLER_PORT
+    assert load_settings(sparse).machine.port == UNCONFIGURED_CONTROLLER_PORT
 
 
 def test_guarded_output_polygon_loads_as_exact_four_point_authority(
@@ -324,6 +345,19 @@ def test_string_booleans_are_rejected(
     )
 
     with pytest.raises(ConfigError, match=rf"{section}\.{key} must be a JSON boolean"):
+        load_settings(config)
+
+
+def test_legacy_enabled_simulation_requires_explicit_real_setup(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "legacy-simulation.json"
+    config.write_text(
+        json.dumps({"app": {"simulation": True}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="removed E3 simulation mode"):
         load_settings(config)
 
 

@@ -16,7 +16,9 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from laser_aligner.calibration.bed import BedPoint
 from laser_aligner.calibration.support import HoneycombSupportReference
+from laser_aligner.camera.service import CameraStatus
 from laser_aligner.config import WorkArea
 from laser_aligner.core import CoreRuntime
 from laser_aligner.desktop.controller import (
@@ -52,10 +54,38 @@ def _runtime(
     payload = json.loads((root / "config" / "default.json").read_text(encoding="utf-8"))
     payload["app"]["data_dir"] = str(tmp_path / "data")
     payload["app"]["open_browser"] = False
+    payload["camera"]["autostart"] = False
+    payload["machine"]["port"] = "e3bridge://127.0.0.1:9"
+    payload["machine"]["allow_motion"] = True
     payload["machine"]["honeycomb_span_mm"] = honeycomb_span_mm
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     runtime = CoreRuntime.from_config(path, hardware_enabled=False)
+    runtime.context.camera.status = lambda: CameraStatus(  # type: ignore[method-assign]
+        connected=True,
+        device="test-camera",
+        width=runtime.settings.camera.width,
+        height=runtime.settings.camera.height,
+        fps=float(runtime.settings.camera.fps),
+        frames_read=1,
+        last_error=None,
+        frame_age_seconds=0.1,
+    )
+    runtime.context.bed_reference = lambda: np.zeros(  # type: ignore[method-assign]
+        (runtime.settings.camera.height, runtime.settings.camera.width, 3),
+        dtype=np.uint8,
+    )
+    runtime.context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 1079.0, 0.0, 0.0),
+            BedPoint(1919.0, 1079.0, 220.0, 0.0),
+            BedPoint(1919.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        1920,
+        1080,
+        provenance=runtime.context._bed_provenance(),
+    )
     runtime.start()
     return runtime
 
@@ -88,11 +118,11 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             "5 · Accuracy validation",
             "6 · Coordinate audit",
         ]
-        assert dialog.synthetic_scene.isEnabled()
+        assert not hasattr(dialog, "synthetic_scene")
         assert dialog.runtime.hardware_enabled is False
         assert "Running now:" in dialog.runtime_identity_status.text()
-        assert "machine profile simulator" in dialog.runtime_identity_status.text()
-        assert "tool head simulated-laser-head" in dialog.runtime_identity_status.text()
+        assert "machine profile custom-machine" in dialog.runtime_identity_status.text()
+        assert "tool head custom-laser-head" in dialog.runtime_identity_status.text()
         assert "active calibration profile" in dialog.runtime_identity_status.text()
         assert dialog.work_area_reference_button.text() == "Capture ruler"
         assert "Home / park" in dialog.work_area_reference_button.toolTip()
@@ -151,9 +181,9 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert dialog.registration_recapture_button.isEnabled()
         assert dialog.validation_recapture_button.isEnabled()
         assert dialog.reverse_x.text() == "Reverse X mapping — OFF"
-        assert "saved in the bed calibration" in dialog.axis_mapping_status.text()
-        assert dialog.machine_connection_status.text().startswith("Machine connected")
-        assert dialog.machine_connection_button.text() == "Disconnect machine"
+        assert "not operator-confirmed" in dialog.axis_mapping_status.text()
+        assert dialog.machine_connection_status.text().startswith("Machine offline")
+        assert dialog.machine_connection_button.text() == "Connect machine"
         camera = runtime.context.camera.status()
         assert f"{camera.negotiated_fps:.1f} fps negotiated" in dialog.camera_status.text()
         assert dialog.base_grid_power.value() == 0
@@ -209,10 +239,12 @@ def test_machine_setup_explicit_binding_is_persisted_for_later_launch_only(
 ) -> None:
     seed_runtime = _runtime(tmp_path)
     created = seed_runtime.machine_registry.create_machine(
-        "Unbound simulator",
-        "simulator",
-        "simulated-laser-head",
+        "Unbound physical machine",
+        "generic-marlin",
+        "custom-laser-head",
     )
+    created.machine.port = "e3bridge://127.0.0.1:9"
+    seed_runtime.machine_registry.update_machine(created)
     seed_runtime.machine_registry.set_active(created.id)
     seed_runtime.stop()
 
@@ -370,6 +402,7 @@ def test_coordinate_audit_new_capture_clears_clicked_point_and_copied_report(
     capture_started = threading.Event()
     release_capture = threading.Event()
     try:
+        monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
         calibration = runtime.context.bed.calibration
         assert calibration is not None
         old_image = np.zeros(
@@ -489,6 +522,7 @@ def test_coordinate_audit_capture_reuses_work_area_home_park_capture(
         return image.copy()
 
     try:
+        monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
         monkeypatch.setattr(
             runtime.context,
             "capture_parked_work_area_reference",
@@ -1198,10 +1232,17 @@ def test_machine_setup_guide_opens_at_the_current_numbered_step(
 def test_machine_setup_surfaces_controller_reconnect_requirement(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
     dialog = MachineSetupDialog(runtime)
     try:
+        status = runtime.context.machine.status
+        monkeypatch.setattr(
+            runtime.context.machine,
+            "status",
+            lambda: {**status(), "connected": True},
+        )
         runtime.context.machine._controller_reconnect_required = True
         dialog.refresh_all()
 
@@ -1216,11 +1257,31 @@ def test_machine_setup_surfaces_controller_reconnect_requirement(
 
 
 def test_machine_setup_can_disconnect_and_reconnect_machine(
-    qt_application: QtWidgets.QApplication, tmp_path: Path
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
     dialog = MachineSetupDialog(runtime)
+    connected = {"value": True}
+    status = runtime.context.machine.status
+    monkeypatch.setattr(
+        runtime.context.machine,
+        "status",
+        lambda: {**status(), "connected": connected["value"]},
+    )
+    monkeypatch.setattr(
+        runtime.context.machine,
+        "disconnect",
+        lambda: connected.__setitem__("value", False),
+    )
+    monkeypatch.setattr(
+        runtime.context.machine,
+        "connect",
+        lambda: connected.__setitem__("value", True) or runtime.context.machine.status(),
+    )
     try:
+        dialog.refresh_all()
         dialog.toggle_machine_connection()
         assert not runtime.context.machine.status()["connected"]
         assert dialog.machine_connection_button.text() == "Connect machine"
@@ -1241,6 +1302,12 @@ def test_machine_setup_reconnect_uses_safe_connection_replacement(
     runtime = _runtime(tmp_path)
     dialog = MachineSetupDialog(runtime)
     replacement_calls: list[bool] = []
+    status = runtime.context.machine.status
+    monkeypatch.setattr(
+        runtime.context.machine,
+        "status",
+        lambda: {**status(), "connected": True},
+    )
 
     def replace_connection() -> dict[str, object]:
         replacement_calls.append(True)
@@ -1282,6 +1349,7 @@ def test_machine_setup_home_park_keeps_stop_live_and_blocks_close_until_cleanup(
         assert release.wait(3.0)
         return {"position": {"x": 100.0, "y": 100.0}}
 
+    monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
     monkeypatch.setattr(runtime.context.machine, "prepare_photo_position", park)
     monkeypatch.setattr(
         runtime.context.machine,
@@ -1456,6 +1524,7 @@ def test_machine_setup_busy_stop_and_progress_fit_at_large_text(
         assert release.wait(3.0)
         return {"position": {"x": 100.0, "y": 100.0}}
 
+    monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
     monkeypatch.setattr(runtime.context.machine, "prepare_photo_position", park)
     monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *args, **kwargs: None)
 
@@ -1605,6 +1674,7 @@ def test_machine_setup_precision_operations_run_outside_the_gui_thread(
         assert release.wait(3.0)
         raise RuntimeError("expected background failure")
 
+    monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
     monkeypatch.setattr(runtime.context, context_method, operation)
     monkeypatch.setattr(QtWidgets.QMessageBox, "critical", lambda *args, **kwargs: None)
     try:
@@ -1642,6 +1712,7 @@ def test_machine_setup_failed_precision_capture_discards_prior_review_state(
         assert release.wait(3.0)
         raise RuntimeError("camera timeout")
 
+    monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
     monkeypatch.setattr(runtime.context, "capture_fine_registration", capture)
     monkeypatch.setattr(QtWidgets.QMessageBox, "critical", lambda *args, **kwargs: None)
     dialog._fine_registration_analysis = {"can_apply_translation": True}
@@ -1759,10 +1830,17 @@ def test_shifted_confirmation_preparation_uses_confirmation_session_only(
 
 
 def test_machine_setup_refreshes_raw_camera_and_lens_previews(
-    qt_application: QtWidgets.QApplication, tmp_path: Path
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
     dialog = MachineSetupDialog(runtime)
+    monkeypatch.setattr(
+        runtime.context,
+        "camera_frame",
+        lambda *, undistort: np.zeros((120, 160, 3), dtype=np.uint8),
+    )
     try:
         dialog.refresh_camera()
         dialog.refresh_lens_preview()
@@ -1833,15 +1911,24 @@ def test_machine_setup_can_add_and_delete_manual_bed_point(
 
 
 def test_machine_setup_prepares_dry_registration_through_main_job_signal(
-    qt_application: QtWidgets.QApplication, tmp_path: Path
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    runtime.context.machine.hardware_enabled = True
     dialog = MachineSetupDialog(runtime)
     prepared = []
+    errors: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "critical",
+        lambda _parent, _title, message: errors.append(str(message)),
+    )
     dialog.registrationJobPrepared.connect(prepared.append)
     try:
         dialog.prepare_registration_job(False)
-        assert len(prepared) == 1
+        assert len(prepared) == 1, errors
         job = prepared[0]
         assert job.powered is False
         assert len(job.targets) == 8
@@ -1857,6 +1944,7 @@ def test_machine_setup_prepares_dry_base_map_through_main_job_signal(
     qt_application: QtWidgets.QApplication, tmp_path: Path
 ) -> None:
     runtime = _runtime(tmp_path)
+    runtime.context.machine.hardware_enabled = True
     dialog = MachineSetupDialog(runtime)
     prepared = []
     dialog.registrationJobPrepared.connect(prepared.append)
@@ -1879,6 +1967,7 @@ def test_machine_setup_prepares_dry_validation_through_main_job_signal(
     qt_application: QtWidgets.QApplication, tmp_path: Path
 ) -> None:
     runtime = _runtime(tmp_path)
+    runtime.context.machine.hardware_enabled = True
     dialog = MachineSetupDialog(runtime)
     prepared = []
     dialog.validationJobPrepared.connect(prepared.append)
@@ -1944,7 +2033,6 @@ def test_machine_setup_source_covers_browser_only_shared_operations() -> None:
         "solve_bed",
         "detect_workpiece",
         "detect_fiducials",
-        "synthetic_scene",
     ):
         assert operation in source
 
@@ -1984,6 +2072,7 @@ def test_machine_setup_reopens_with_saved_reversed_axis_highlighted(
 ) -> None:
     runtime = _runtime(tmp_path)
     runtime.context.bed.set_machine_axis_reversed("x", True)
+    runtime.context.bed.set_machine_axis_reversed("y", False)
     first = MachineSetupDialog(runtime)
     try:
         assert first.reverse_x.isChecked()

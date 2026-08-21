@@ -86,52 +86,6 @@ it does not compare rounded-rectangle corner radius. Two templates that differ
 only in corner radius are therefore indistinguishable to automatic matching.
 Select the intended template manually and review its cut overlay in that case.
 
-## Testing alignment without hardware
-
-The Templates panel exposes a **Test image** section only in safe simulation.
-It replaces the simulated camera's corrected workspace frame temporarily; it
-does not change project objects, template files, machine settings, or hardware
-state.
-
-Two test sources are available:
-
-- **Load test image…** accepts a PNG or JPEG that already represents a
-  top-down, corrected view of the complete configured work area. The left and
-  right edges correspond to `x_min` and `x_max`; the top and bottom correspond
-  to `y_max` and `y_min`. Its integer dimensions must be consistent with the
-  full work area at one uniform pixel scale; only the half-pixel uncertainty
-  caused by rounding image dimensions is accepted. The loader resizes it to
-  `work_area.width × pixels_per_mm` by
-  `work_area.height × pixels_per_mm`, but does not undistort, rectify, crop,
-  infer bed boundaries, or assign physical calibration to an ordinary photo.
-- **Generate from selected template…** creates a deterministic full-bed image
-  from the selected template's matching features and trace options. Enter the
-  known Center X, Center Y, and Rotation, optionally add pixel-noise strength,
-  and choose how many labels to omit. The same settings produce the same image,
-  making the matcher's reported pose directly comparable with the known input.
-  Generation is rejected if the requested pose clips a visible label outside
-  the configured work area. Leaving fewer than three visible features cannot
-  satisfy automatic matching, although manual placement remains available.
-
-After loading or generating an image, its status reads **TEST IMAGE · FROZEN**.
-Run **Auto identify and align** to rank the library, or choose a template and run
-**Align selected template**. Detection, matching, acceptance gates, overlay
-review, direct canvas adjustment, and object creation use the normal desktop
-workflow. The frozen source prevents a later simulated camera frame from
-replacing the image during review. Choose **Return to synthetic camera** to
-discard the temporary override and resume the ordinary simulated feed.
-Starting a new project or opening another project also ends the temporary test
-image session so a full-bed image cannot retain an obsolete canvas transform.
-
-This workflow can expose software regressions in trace settings, template
-ranking, rigid-pose recovery, missing-label inference, and review controls. A
-generated image is derived from the same ideal geometry that the matcher is
-asked to recover, and a loaded image is only as physically meaningful as its
-prior correction. Neither is evidence that a real lens model, bed homography,
-camera pose, material height, parallax, controller, motion system, or powered
-laser is correct. Physical validation still requires a recorded real-camera
-and zero-power motion-review procedure.
-
 ## Template format
 
 Templates are versioned JSON files with the `.e3template` extension. The
@@ -225,7 +179,7 @@ RMS residual or 2.0 mm worst-point residual, and no more than 3.5% reported
 center-spacing or feature-dimension scale mismatch. An unresolved
 look-alike-template choice or directional
 half-turn pose also prevents automatic acceptance. These are provisional
-software gates backed by synthetic tests; they are not measured physical
+software gates backed by automated tests; they are not measured physical
 accuracy limits.
 
 Automatic matching requires rectified, machine-coordinate detections from a
@@ -240,7 +194,7 @@ stale generated output is refused before machine access.
 
 The template model, versioned round trip, atomic and resilient library behavior,
 normalization, compound-path features, rigid instantiation, malformed-schema
-rejection, and geometric alignment/ranking have synthetic automated coverage.
+rejection, and geometric alignment/ranking have automated coverage.
 The controller, widgets, frozen-frame review, transient overlay, direct-canvas
 drag/rotation, object application/undo, cancellation, and stale-job guards have
 offscreen behavioral coverage. An actual offscreen desktop window also completed a template
@@ -251,11 +205,6 @@ replacement, work-area/object-count rejection, dedicated designer controls,
 live preview calculations, and ordinary rectangle size/radius editing also
 have focused model, history, and offscreen-widget coverage. This is automated
 software evidence, not an interactive usability or physical alignment result.
-
-The safe-simulation test-image path has automated coverage for full-bed image
-validation and resizing, deterministic known-pose generation, color and
-contrast tracing, frozen-frame activation, restoration of the synthetic camera,
-and desktop control wiring. This remains synthetic software evidence.
 
 It has not yet been verified with a real corrected C920 image, a physically
 measured label sheet, controller motion, or powered laser output. Marker-based

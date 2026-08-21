@@ -2,6 +2,10 @@ class LaserAlignerError(Exception):
     """Base application exception."""
 
 
+class RealMachineSetupRequired(ValueError):
+    """A product runtime cannot start until a real saved machine is selected."""
+
+
 class CameraError(LaserAlignerError):
     """Camera could not be opened or read."""
 
