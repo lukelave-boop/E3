@@ -54,6 +54,46 @@ class _Controller(QtCore.QObject):
         return self.active
 
 
+class _TerminalController:
+    def __init__(self) -> None:
+        self.begin_shutdown_calls = 0
+        self.stop_calls = 0
+
+    def begin_shutdown(self) -> None:
+        self.begin_shutdown_calls += 1
+
+    def stop(self) -> None:
+        self.stop_calls += 1
+
+
+class _TerminalWindow(_Window):
+    """Faithful final-close state without constructing the full desktop."""
+
+    def __init__(self, *, accept_close: bool = True) -> None:
+        super().__init__(accept_close=accept_close)
+        self.controller = _TerminalController()
+        self._close_requested = False
+        self._closing = False
+
+    def closeEvent(self, event) -> None:
+        self.events.append("close")
+        if not self.accept_close:
+            event.ignore()
+            return
+        if not self._close_requested:
+            self._close_requested = True
+            self.controller.begin_shutdown()
+        self.controller.stop()
+        self._closing = True
+        self.events.append("terminal-stop")
+        event.accept()
+
+    def showEvent(self, event) -> None:
+        if self._closing:
+            self.events.append("terminal-reshow")
+        super().showEvent(event)
+
+
 class _PreparedWindow(_Window):
     def __init__(
         self,
@@ -102,7 +142,7 @@ def test_handoff_launches_after_close_without_last_window_exit(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    window = _Window()
+    window = _TerminalWindow()
     window.show()
     qt_application.processEvents()
     window.events.clear()
@@ -118,10 +158,16 @@ def test_handoff_launches_after_close_without_last_window_exit(
         launches.append(path)
 
     monkeypatch.setattr(update_ui, "launch_downloaded_update", launch)
+    monkeypatch.setattr(
+        qt_application,
+        "quit",
+        lambda: window.events.append("quit"),
+    )
 
     assert update_ui._handoff_downloaded_update(window, package) is True
     assert launches == [package]
-    assert window.events[:2] == ["close", "launch"]
+    assert window.controller.stop_calls == 1
+    assert window.events == ["close", "terminal-stop", "launch", "quit"]
 
 
 def test_handoff_rejected_close_never_launches(
@@ -129,15 +175,17 @@ def test_handoff_rejected_close_never_launches(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    window = _Window(accept_close=False)
+    window = _TerminalWindow(accept_close=False)
     window.show()
     qt_application.processEvents()
+    quits: list[str] = []
 
     monkeypatch.setattr(
         update_ui,
         "launch_downloaded_update",
         lambda _path: pytest.fail("installer launched after rejected close"),
     )
+    monkeypatch.setattr(qt_application, "quit", lambda: quits.append("quit"))
 
     assert (
         update_ui._handoff_downloaded_update(
@@ -147,31 +195,60 @@ def test_handoff_rejected_close_never_launches(
         is False
     )
     assert window.isVisible()
+    assert window.controller.begin_shutdown_calls == 0
+    assert window.controller.stop_calls == 0
+    assert window._closing is False
+    assert quits == []
     assert qt_application.quitOnLastWindowClosed() is True
 
 
-def test_failed_installer_launch_restores_e3_window(
+def test_failed_installer_launch_after_terminal_close_reports_path_and_quits(
     qt_application,
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    window = _Window()
+    window = _TerminalWindow()
     window.show()
     qt_application.processEvents()
+    window.events.clear()
+    package = tmp_path / "E3-Setup.exe"
+    dialogs: list[tuple[object, str, str]] = []
+    lifecycle: list[str] = []
 
     def fail(_path: Path) -> None:
         raise OSError("simulated installer launch failure")
 
+    def show_critical(parent, title, message) -> None:
+        lifecycle.append("dialog")
+        dialogs.append((parent, title, message))
+
     monkeypatch.setattr(update_ui, "launch_downloaded_update", fail)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "critical",
+        show_critical,
+    )
+    monkeypatch.setattr(
+        qt_application,
+        "quit",
+        lambda: lifecycle.append("quit"),
+    )
 
-    with pytest.raises(OSError, match="simulated installer launch failure"):
-        update_ui._handoff_downloaded_update(
-            window,
-            tmp_path / "E3-Setup.exe",
-        )
+    assert update_ui._handoff_downloaded_update(window, package) is False
 
-    assert window.isVisible()
-    assert qt_application.quitOnLastWindowClosed() is True
+    assert window.controller.stop_calls == 1
+    assert window._closing is True
+    assert not window.isVisible()
+    assert "terminal-reshow" not in window.events
+    assert lifecycle == ["dialog", "quit"]
+    assert len(dialogs) == 1
+    parent, title, message = dialogs[0]
+    assert parent is None
+    assert title == "E3 Update"
+    assert "could not start the verified installer" in message
+    assert str(package.resolve()) in message
+    assert "Run that installer manually" in message
+    assert "simulated installer launch failure" in message
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher boundary")
@@ -212,6 +289,53 @@ def test_handoff_reaches_real_windows_launcher_boundary(
     assert events[1][:2] == ("dll", None)
     assert events[2][0] == "popen"
     assert events[3][:2] == ("dll", r"C:\E3\_internal")
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows launcher boundary")
+def test_successful_createprocess_with_restore_failure_remains_handoff_success(
+    qt_application,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    window = _TerminalWindow()
+    window.show()
+    qt_application.processEvents()
+    package = tmp_path / "E3-Setup.exe"
+    package.write_bytes(b"installer")
+    popen_calls: list[list[str]] = []
+    lifecycle: list[str] = []
+
+    monkeypatch.setattr(
+        updates,
+        "_get_windows_dll_directory",
+        lambda: r"C:\E3\_internal",
+    )
+
+    def set_directory(value, *, operation):
+        if value is not None:
+            raise updates.UpdateError(f"simulated {operation} failure")
+
+    def popen(argv, **_kwargs):
+        popen_calls.append(list(argv))
+        lifecycle.append("popen")
+        return object()
+
+    monkeypatch.setattr(updates, "_set_windows_dll_directory", set_directory)
+    monkeypatch.setattr(updates.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        update_ui,
+        "_show_terminal_handoff_failure",
+        lambda _path, _error: pytest.fail("successful child was called a failure"),
+    )
+    monkeypatch.setattr(
+        qt_application,
+        "quit",
+        lambda: lifecycle.append("quit"),
+    )
+
+    assert update_ui._handoff_downloaded_update(window, package) is True
+    assert len(popen_calls) == 1
+    assert lifecycle == ["popen", "quit"]
 
 
 def test_requested_handoff_waits_for_controller_tasks_to_drain(
@@ -341,7 +465,8 @@ def test_failed_deferred_launch_is_not_closed_by_background_drain_timer(
     window.show()
     qt_application.processEvents()
     window.events.clear()
-    errors: list[Exception] = []
+    dialogs: list[tuple[Path, Exception]] = []
+    quits: list[str] = []
 
     def fail(_path: Path) -> None:
         raise OSError("simulated deferred installer launch failure")
@@ -349,9 +474,10 @@ def test_failed_deferred_launch_is_not_closed_by_background_drain_timer(
     monkeypatch.setattr(update_ui, "launch_downloaded_update", fail)
     monkeypatch.setattr(
         update_ui,
-        "_show_handoff_failure",
-        lambda _window, error: errors.append(error),
+        "_show_terminal_handoff_failure",
+        lambda path, error: dialogs.append((path, error)),
     )
+    monkeypatch.setattr(qt_application, "quit", lambda: quits.append("quit"))
 
     update_ui._request_downloaded_update_handoff(
         window,
@@ -366,6 +492,8 @@ def test_failed_deferred_launch_is_not_closed_by_background_drain_timer(
         "auto-close-suppressed",
         "close",
     ]
-    assert window.isVisible()
-    assert len(errors) == 1
-    assert "simulated deferred installer launch failure" in str(errors[0])
+    assert not window.isVisible()
+    assert quits == ["quit"]
+    assert len(dialogs) == 1
+    assert dialogs[0][0] == tmp_path / "E3-Setup.exe"
+    assert "simulated deferred installer launch failure" in str(dialogs[0][1])

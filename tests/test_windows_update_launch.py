@@ -154,6 +154,49 @@ def test_external_windows_process_clears_dll_search_before_exact_popen(
     ]
 
 
+def test_created_process_remains_success_when_parent_dll_restore_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    previous_directory = r"C:\Program Files\E3\_internal"
+    process = object()
+    popen_calls: list[list[str]] = []
+    warnings: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        updates,
+        "_get_windows_dll_directory",
+        lambda: previous_directory,
+    )
+
+    def set_directory(value: str | None, *, operation: str) -> None:
+        if value == previous_directory:
+            raise UpdateError(f"Could not {operation} the Win32 DLL search directory")
+
+    def popen(argv: list[str], **_kwargs: object) -> object:
+        popen_calls.append(list(argv))
+        return process
+
+    monkeypatch.setattr(updates, "_set_windows_dll_directory", set_directory)
+    monkeypatch.setattr(updates.subprocess, "Popen", popen)
+    monkeypatch.setattr(
+        updates.LOGGER,
+        "warning",
+        lambda *args: warnings.append(args),
+    )
+
+    result = updates._start_external_windows_process(
+        [r"C:\Downloads\E3-Setup.exe"],
+        cwd=tmp_path,
+        environment={},
+        description="Windows update installer",
+    )
+
+    assert result is process
+    assert popen_calls == [[r"C:\Downloads\E3-Setup.exe"]]
+    assert len(warnings) == 1
+    assert "process was created" in str(warnings[0][0])
+
+
 def test_popen_failure_restores_dll_search_and_becomes_update_error(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

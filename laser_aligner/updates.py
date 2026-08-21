@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import logging
 import ntpath
 import os
 import re
@@ -11,8 +12,7 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +24,7 @@ _MAX_MANIFEST_BYTES = 1_048_576
 _DOWNLOAD_CHUNK_BYTES = 1_048_576
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{7,64}$")
+LOGGER = logging.getLogger(__name__)
 _WINDOWS_DETACHED_PROCESS = 0x00000008
 _WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
 # Inno Setup is a GUI executable. DETACHED_PROCESS prevents console inheritance;
@@ -351,16 +352,31 @@ def _set_windows_dll_directory(value: str | None, *, operation: str) -> None:
     )
 
 
-@contextmanager
-def _default_windows_dll_search() -> Iterator[None]:
+def _start_external_windows_process(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    description: str,
+) -> subprocess.Popen[bytes]:
     previous = _get_windows_dll_directory()
     _set_windows_dll_directory(
         None,
         operation="clear for external installer launch",
     )
     try:
-        yield
-    except BaseException as launch_error:
+        process = subprocess.Popen(
+            list(argv),
+            cwd=str(cwd),
+            env=dict(environment),
+            close_fds=True,
+            shell=False,
+            creationflags=_WINDOWS_EXTERNAL_PROCESS_CREATION_FLAGS,
+        )
+    except OSError as exc:
+        launch_error = UpdateError(
+            f"Could not create the {description} process: {exc}"
+        )
         try:
             _set_windows_dll_directory(
                 previous,
@@ -369,36 +385,25 @@ def _default_windows_dll_search() -> Iterator[None]:
         except UpdateError as restore_error:
             raise UpdateError(
                 f"{launch_error}; additionally, {restore_error}"
-            ) from (launch_error.__cause__ or launch_error)
-        raise
-    else:
+            ) from exc
+        raise launch_error from exc
+
+    try:
         _set_windows_dll_directory(
             previous,
             operation="restore after external installer launch",
         )
-
-
-def _start_external_windows_process(
-    argv: Sequence[str],
-    *,
-    cwd: Path,
-    environment: Mapping[str, str],
-    description: str,
-) -> subprocess.Popen[bytes]:
-    with _default_windows_dll_search():
-        try:
-            return subprocess.Popen(
-                list(argv),
-                cwd=str(cwd),
-                env=dict(environment),
-                close_fds=True,
-                shell=False,
-                creationflags=_WINDOWS_EXTERNAL_PROCESS_CREATION_FLAGS,
-            )
-        except OSError as exc:
-            raise UpdateError(
-                f"Could not create the {description} process: {exc}"
-            ) from exc
+    except UpdateError as restore_error:
+        # CreateProcess success is authoritative. The installer is independent
+        # and E3 exits immediately after this handoff, so a dying parent must
+        # not misreport the successfully created child as a launch failure.
+        LOGGER.warning(
+            "The external %s process was created, but E3 could not restore "
+            "its Win32 DLL search directory before exit: %s",
+            description,
+            restore_error,
+        )
+    return process
 
 
 def _launch_windows_installer(path: Path) -> None:

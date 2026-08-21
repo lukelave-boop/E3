@@ -30,9 +30,14 @@
   launcher now gives the installer standard Windows DLL resolution, removes
   only PyInstaller-bundle entries from a copied child `PATH`, starts a detached
   process with explicit arguments and working directory, and restores E3's DLL
-  search state on both success and failure. The desktop also performs the normal
+  search state after failed process creation. Once Windows creates the child,
+  that installer handoff remains successful even if the exiting parent cannot
+  restore its own DLL state. The desktop also performs the normal
   close approval once, stops periodic task producers, and waits/rechecks owned
-  background work before the final close-and-launch sequence.
+  background work before the final close-and-launch sequence. A CreateProcess
+  failure after terminal shutdown now presents a standalone error with the
+  verified installer path for manual launch and then exits; it no longer
+  re-shows a stopped E3 window.
   Focused Windows automation covers the real launcher boundary; an installed
   PyInstaller `E3.exe` to visible Inno wizard handoff still requires packaged
   verification.
