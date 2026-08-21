@@ -108,7 +108,6 @@ def test_cli_uses_active_saved_machine_through_core_runtime(
         [
             "--config",
             str(config_path),
-            "--hardware",
             "--laser-lockout",
         ]
     )
@@ -125,6 +124,14 @@ def test_cli_uses_active_saved_machine_through_core_runtime(
     assert observed["context_started"] is True
     assert observed["context_stopped"] is True
     assert observed["server_closed"] is True
+
+
+def test_product_cli_has_no_hardware_mode_option() -> None:
+    parser = browser_main.build_parser()
+
+    assert all(action.dest != "hardware" for action in parser._actions)
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--hardware"])
 
 
 @pytest.mark.parametrize(

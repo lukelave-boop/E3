@@ -732,7 +732,9 @@ controller support is claimed.
 
 `MachineService` is the only normal path to the controller. It:
 
-- blocks serial access unless the process is hardware-enabled;
+- requires process hardware authority before serial access; every normal product
+  launcher grants that authority, while the internal guard remains available to
+  reject unauthorized callers and tests;
 - blocks motion until configuration allows it;
 - blocks serial motion and arming until homing/parking establishes the current
   connection's absolute coordinate reference;

@@ -176,7 +176,7 @@ Tool-head profiles:
 
 These profiles are starting points, not verified declarations about an attached
 machine. A profile-derived physical machine still requires an explicit
-controller port, reviewed limits, calibration, hardware-enabled startup, motion
+controller port, reviewed limits, calibration, normal hardware-capable startup, motion
 gate, homing/reference establishment, exact Preview, and ordinary temporary
 laser arming before output.
 

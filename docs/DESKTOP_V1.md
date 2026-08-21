@@ -293,18 +293,16 @@ From the repository root:
 ```
 
 The desktop installer adds PySide6 to the existing virtual environment and
-creates two application entries:
-
-- **E3 Positioning System** — serial hardware can be opened after local safety
-  checks.
-- **E3 Positioning System (Safe)** — serial hardware is locked for design,
-  camera work.
+creates one **E3 Positioning System** application entry. The normal desktop is
+hardware-capable, but startup itself does not open the controller. Rerun the
+installer after a source upgrade so it removes the obsolete application entry
+previously labeled **E3 Positioning System (Safe)**; that old label no longer
+describes a supported launch mode.
 
 Direct launch commands:
 
 ```bash
 ./run-desktop.sh
-./run-desktop-hardware.sh
 ```
 
 ## Project format
@@ -351,7 +349,8 @@ Existing camera and machine calibration data continues to use the configured
 
 The desktop shell does not relax the existing machine controls:
 
-- serial access still requires a hardware-enabled process;
+- serial access still requires process hardware authority, which the one normal
+  desktop launcher explicitly grants;
 - motion must still be enabled in the local configuration;
 - powered G-code still requires exact-program, one-use authorization, created
   internally when Preview's **START JOB** submits it through the guarded path;

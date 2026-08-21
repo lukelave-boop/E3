@@ -178,7 +178,8 @@ port is the explicit `SELECT_CONTROLLER_PORT` placeholder; the former implicit
 `/dev/ttyUSB0` default is not treated as a configured machine. First-run must
 save a real machine before `CoreRuntime` is created. In every configured profile:
 
-- Serial access requires the `--hardware` command-line flag.
+- Every normal browser and desktop launch is hardware-capable, but startup does
+  not automatically connect to the configured controller.
 - Motion remains blocked until `machine.allow_motion` is explicitly changed.
 - Positive laser commands receive a one-use, time-limited authorization for the
   exact prepared program when Preview's **START JOB** enters the guarded run path.
@@ -296,10 +297,12 @@ Do not guess whether the Creality conversion is speaking GRBL or Marlin. With la
 
 The probe only sends identity/configuration requests (`$I`, `$$`, and `M115`); it does not send motion or laser-enable commands. Record the output in a GitHub issue or commit it to a local bring-up note with secrets removed.
 
-Only after the port, protocol, coordinate system, reachable laser work area, power scale, and framing behavior are verified should `machine.allow_motion` be changed to `true` and the application started with:
+Only after the port, protocol, coordinate system, reachable laser work area,
+power scale, and framing behavior are verified should `machine.allow_motion` be
+changed to `true` and the normal application restarted with:
 
 ```bash
-./run-hardware.sh
+./run.sh
 ```
 
 See [docs/HARDWARE_BRINGUP.md](docs/HARDWARE_BRINGUP.md).

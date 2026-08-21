@@ -44,12 +44,25 @@ errors; E3 does not create a plausible machine from either. An explicitly saved
 physical `/dev/ttyUSB0` endpoint remains valid. Project, machine-registry, and
 material schemas remain unchanged.
 
+Every normal browser and desktop product entry point now grants process hardware
+authority unconditionally. The browser parser no longer exposes `--hardware`,
+and the normal shell/service entry points require no mode flag. The longstanding
+`run-hardware.sh` and `run-desktop-hardware.sh` filenames remain only as exact
+aliases to their normal launchers for compatibility; they cannot select a
+different runtime. Desktop installation creates one normal application entry.
+Hardware capability does not eagerly connect, move, Home, arm, or emit output;
+`machine.allow_motion`, coordinate trust, preflight, exact-program authority,
+temporary arming, bounds, STOP, and `M5` remain unchanged. Dedicated Pi
+controller-owner services retain their separate explicit hardware gate.
+
 Focused simulator-recovery, saved-machine authority, desktop startup, CLI,
-camera-boundary, configuration, and first-run verification passed. A separate
-focused safety/toolpath run passed **434 tests** across `MachineService`, strict
-controller transcripts and dialects, transport selection, G-code scanning,
-toolpath generation, exact job plans, and preflight. The complete Windows
-Python 3.14 suite passed **2,345 tests** with **14 expected platform skips**.
+camera-boundary, configuration, and first-run verification passed. The final
+launch-authority follow-up passed **104 focused CLI/runtime/launcher tests** and
+**284 focused machine-safety/runtime tests** across the internal hardware gate,
+real disconnected-controller failures, strict GRBL/Marlin transcripts and
+dialects, transport selection, and saved-machine authority. The complete
+Windows Python 3.14 suite passed **2,352 tests** with **14 expected platform
+skips**.
 Repository-wide Ruff, `compileall -q laser_aligner`, and `git diff --check` also
 passed. No physical controller, camera, motion, arming, or laser-output test was
 performed or is claimed; unavailable hardware remains honestly offline while a

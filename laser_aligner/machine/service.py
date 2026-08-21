@@ -272,7 +272,8 @@ class MachineService:
                 return self.status()
             if self.hardware_enabled is not True:
                 raise SafetyError(
-                    "Serial hardware is disabled for this process. Start with --hardware after reviewing the configuration."
+                    "The current process was not granted hardware authority "
+                    "and cannot open the configured controller."
                 )
             selected_protocol = self.settings.protocol if protocol is None else protocol
             if type(selected_protocol) is not str:

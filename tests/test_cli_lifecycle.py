@@ -36,6 +36,7 @@ def _patch_runtime(
             hardware_enabled: bool,
             laser_lockout: bool,
         ) -> None:
+            assert hardware_enabled is True
             self.settings = settings
             self.context = context_type(
                 settings,

@@ -82,6 +82,28 @@ def wait_for_job(machine: MachineService, timeout: float = 3.0) -> None:
         time.sleep(0.01)
 
 
+def test_connect_hardware_gate_rejects_internal_disabled_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda *_args, **_kwargs: pytest.fail(
+            "disabled process attempted transport construction"
+        ),
+    )
+    machine = MachineService(
+        MachineSettings(backend="serial"),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+
+    with pytest.raises(SafetyError, match="not granted hardware authority") as error:
+        machine.connect()
+
+    assert "--hardware" not in str(error.value)
+    assert machine.connected is False
+
+
 def test_grbl_realtime_status_parses_and_derives_position_vectors() -> None:
     complete = MachineService._parse_grbl_realtime_status(
         "<Idle|MPos:10.000,20.000,3.000|WPos:9.000,18.000,3.000|WCO:1.000,2.000,0.000>"
@@ -5010,7 +5032,7 @@ def test_initial_transient_connect_failure_retries_once(
     assert machine.connected
 
 
-def test_initial_connection_retries_at_most_once_and_not_validation_errors(
+def test_initial_connection_to_disconnected_controller_reports_real_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     attempts = 0
@@ -5033,7 +5055,10 @@ def test_initial_connection_retries_at_most_once_and_not_validation_errors(
         LaserSettings(),
         hardware_enabled=True,
     )
-    with pytest.raises(TransientConnectionError):
+    with pytest.raises(
+        TransientConnectionError,
+        match="temporary network failure",
+    ):
         machine.connect()
     assert attempts == 2
 

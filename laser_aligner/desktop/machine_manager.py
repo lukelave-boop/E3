@@ -475,7 +475,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
             "Allow motion when this machine is running"
         )
         self.allow_motion.setToolTip(
-            "This saved permission is separate from hardware-enabled startup, "
+            "This saved permission is separate from process hardware authority, "
             "controller connection, Home/reference trust, and every job safety gate."
         )
 

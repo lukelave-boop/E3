@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Removed the reduced-capability `--hardware` product launch mode. Normal
+  browser and desktop startup now always grants process hardware authority
+  without eagerly connecting to a controller; disconnected controllers report
+  their real connection failures. Historical hardware-named shell entry points
+  are compatibility aliases to the same normal launch behavior, and desktop
+  installation exposes one application entry. The internal `MachineService`
+  hardware-authority guard, `--laser-lockout`, motion permission, coordinate
+  trust, preflight, exact-program authorization, temporary arming, bounds,
+  STOP, and `M5` behavior remain intact.
+
 - Completed removal recovery for legacy simulator configuration and saved
   registries. Desktop startup now requires an explicit physical saved-machine
   choice before credentials or runtime construction, performs no writes on

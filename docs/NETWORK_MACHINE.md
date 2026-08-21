@@ -106,9 +106,10 @@ an observed active transition is not proof of homing. Alarm, error, STOP,
 disconnect, or timeout prevents the park move and invalidates the coordinate
 reference.
 
-The first physical bring-up must use `--laser-lockout` on the Windows desktop
-and should also physically disable laser output when practical. Validate
-identity, disconnect behavior, homing, jogging, camera capture, and calibration
+The first physical bring-up should physically disable laser output when
+practical. When using the legacy browser entry point, `--laser-lockout` remains
+available as an additional process-level safety override. Validate identity,
+disconnect behavior, homing, jogging, camera capture, and calibration
 repeatability before any powered test.
 
 ## Network trust
@@ -182,14 +183,14 @@ On the Windows copy, change only the hardware endpoints:
 These snippets are partial overrides, not a complete hardware configuration.
 The remaining values must come from the current machine profile.
 
-In PowerShell, set the secret for the E3 process and start the desktop in
-hardware mode with laser output locked out for bring-up:
+In PowerShell, set the secret for the E3 process and start the one normal,
+hardware-capable desktop. Startup does not connect automatically; keep motion
+disabled and laser output physically disconnected when practical during
+bring-up:
 
 ```powershell
 $env:E3_BRIDGE_TOKEN = '<secret>'
 .\.venv\Scripts\python.exe -m laser_aligner.desktop.main `
-  --hardware `
-  --laser-lockout `
   --config .\config\network-local.json
 ```
 
@@ -247,8 +248,9 @@ control values, and precision-capture settings; only `camera.device` differs.
 
 ## Physical acceptance sequence
 
-1. Keep laser output physically disabled when practical and launch the Windows
-   desktop with `--laser-lockout`.
+1. Keep laser output physically disabled when practical and launch the normal
+   Windows desktop. If using the legacy browser instead, also pass its retained
+   `--laser-lockout` safety override.
 2. Verify the Pi sees persistent controller and camera device paths.
 3. Connect E3 and confirm controller identity/settings queries only.
 4. Break the Windows network connection during an idle controller session and

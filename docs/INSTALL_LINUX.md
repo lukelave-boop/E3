@@ -54,6 +54,12 @@ ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null
 
 The current user should normally be a member of `video` for the camera and `dialout` for the serial controller.
 
+After updating an existing source installation, rerun `./install-desktop.sh`.
+It removes the obsolete **E3 Positioning System (Safe)** desktop entry. Do not
+rely on an old launcher carrying that label: E3 now has one normal,
+hardware-capable application launch, with motion and output controlled by the
+separate safety gates described below.
+
 ## 5. Optional service installation
 
 The included systemd unit is only an example. Replace the user and paths first:
@@ -65,4 +71,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now laser-camera-aligner.service
 ```
 
-Do not add `--hardware` to an unattended service during initial bring-up. Laser jobs must remain attended.
+The normal service process is hardware-capable, but it does not connect merely
+because it started. Keep `machine.allow_motion` disabled during bring-up and do
+not use an unattended service to operate a laser; laser jobs must remain
+attended.

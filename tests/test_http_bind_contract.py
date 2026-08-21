@@ -125,6 +125,7 @@ def test_cli_host_override_uses_the_same_normalized_bind_contract(
             hardware_enabled: bool,
             laser_lockout: bool,
         ) -> None:
+            assert hardware_enabled is True
             self.settings = settings
             self.context = FakeContext(
                 settings,

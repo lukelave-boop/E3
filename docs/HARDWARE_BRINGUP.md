@@ -87,10 +87,11 @@ recorded.
 
 ## Phase 4: direction and coordinate check
 
-Set `machine.allow_motion` to `true` and start with `./run-hardware.sh`. Use
-laser-off Jog to check that every UI direction, camera direction, and physical
-axis direction agrees. After configuring a spot offset, verify it with a
-minimum-power mark at a measured interior point before normal production.
+Set `machine.allow_motion` to `true` and restart the normal desktop with
+`./run-desktop.sh`. Use laser-off Jog to check that every UI direction, camera
+direction, and physical axis direction agrees. After configuring a spot offset,
+verify it with a minimum-power mark at a measured interior point before normal
+production.
 
 The desktop automatically runs `M5`, homes, parks at the configured camera
 pose, waits for idle, and only then arms and starts each hardware job. The core

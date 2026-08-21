@@ -20,7 +20,6 @@ from .server import AppHTTPServer
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Camera-assisted laser positioning and SVG placement")
     parser.add_argument("--config", type=Path, help="Path to a JSON configuration file")
-    parser.add_argument("--hardware", action="store_true", help="Permit opening the configured serial controller")
     parser.add_argument(
         "--laser-lockout",
         action="store_true",
@@ -67,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         runtime = CoreRuntime(
             settings,
-            hardware_enabled=args.hardware,
+            hardware_enabled=True,
             laser_lockout=args.laser_lockout,
         )
     except RealMachineSetupRequired as exc:
@@ -81,8 +80,6 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Saved-machine error: {exc}", file=sys.stderr)
         return 2
 
-    if runtime.settings.machine.backend == "serial" and not args.hardware:
-        logger.warning("Serial backend is configured, but --hardware was not supplied; connection attempts will be blocked")
     server: AppHTTPServer | None = None
     try:
         runtime.start()
