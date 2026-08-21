@@ -10,7 +10,10 @@ Browser entry point                     Desktop entry point
 laser_aligner.__main__                  laser_aligner.desktop.main
           |                                       |
           v                                       v
-      AppContext <--------------------------- CoreRuntime
+      CoreRuntime                             CoreRuntime
+          |                                       |
+          v                                       v
+      AppContext                              AppContext
           |                                       |
           v                                       v
   AppHTTPServer + web UI                  DesktopController
@@ -40,9 +43,11 @@ laser_aligner.__main__                  laser_aligner.desktop.main
      serial            transport
 ```
 
-The browser uses `AppContext` directly. The desktop uses `CoreRuntime` as a
-UI-neutral lifecycle wrapper around the same context and performs blocking
-camera/controller work through `DesktopController` worker tasks.
+Both entry points use `CoreRuntime` as the UI-neutral lifecycle and active
+saved-machine authority around `AppContext`. The browser passes the runtime's
+context to `AppHTTPServer`; the desktop performs blocking camera/controller work
+through `DesktopController` worker tasks. Neither entry point substitutes raw
+configuration machine values for an existing active saved-machine snapshot.
 
 For a network-attached machine, `MachineService` remains on the desktop and
 selects `NetworkSerialTransport` when `machine.port` uses `e3bridge://`. The Pi

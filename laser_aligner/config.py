@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .errors import RealMachineSetupRequired
 from .storage import default_user_data_dir, strict_json_loads
 
 
@@ -15,8 +16,14 @@ class ConfigError(ValueError):
     """Raised when a configuration file contains an invalid value."""
 
 
+class RemovedSimulationConfigError(ConfigError, RealMachineSetupRequired):
+    """A legacy simulation-enabled configuration requires real setup."""
+
+
 _SUPPORTED_HTTP_BIND_HOSTS = frozenset({"127.0.0.1", "localhost", "0.0.0.0"})
 _MAX_ARM_TIMEOUT_SECONDS = 600
+UNCONFIGURED_CONTROLLER_PORT = "SELECT_CONTROLLER_PORT"
+LEGACY_IMPLICIT_CONTROLLER_PORT = "/dev/ttyUSB0"
 
 
 def validate_http_bind_host(value: object) -> str:
@@ -218,7 +225,7 @@ def effective_laser_output_area(
 class MachineSettings:
     backend: str = "serial"
     protocol: str = "auto"
-    port: str = "/dev/ttyUSB0"
+    port: str = UNCONFIGURED_CONTROLLER_PORT
     baudrate: int = 115200
     read_timeout: float = 2.0
     work_area: WorkArea = field(default_factory=WorkArea)
@@ -434,7 +441,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "machine": {
         "backend": "serial",
         "protocol": "auto",
-        "port": "/dev/ttyUSB0",
+        "port": UNCONFIGURED_CONTROLLER_PORT,
         "baudrate": 115200,
         "read_timeout": 2.0,
         "work_area": {"x_min": 0.0, "x_max": 220.0, "y_min": 0.0, "y_max": 220.0},
@@ -682,6 +689,11 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("machine.work_area.x_max must be greater than x_min")
     if float(area["y_max"]) <= float(area["y_min"]):
         raise ConfigError("machine.work_area.y_max must be greater than y_min")
+    if str(raw["machine"]["backend"]) == "simulator":
+        raise RemovedSimulationConfigError(
+            "This configuration used the removed E3 simulator backend. "
+            "Configure a real machine before continuing."
+        )
     if str(raw["machine"]["backend"]) != "serial":
         raise ConfigError("machine.backend must be 'serial'")
     if str(raw["machine"]["protocol"]) not in {"auto", "grbl", "marlin"}:
@@ -784,7 +796,7 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             if type(legacy_simulation) is not bool:
                 raise ConfigError("app.simulation must be a JSON boolean")
             if legacy_simulation:
-                raise ConfigError(
+                raise RemovedSimulationConfigError(
                     "This configuration used the removed E3 simulation mode. "
                     "Configure a real machine before continuing."
                 )

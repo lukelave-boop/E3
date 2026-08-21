@@ -28,7 +28,28 @@ def _patch_runtime(
     context_type: type,
     server_type: type,
 ) -> None:
-    monkeypatch.setattr(browser_main, "AppContext", context_type)
+    class FakeRuntime:
+        def __init__(
+            self,
+            settings: Any,
+            *,
+            hardware_enabled: bool,
+            laser_lockout: bool,
+        ) -> None:
+            self.settings = settings
+            self.context = context_type(
+                settings,
+                hardware_enabled=hardware_enabled,
+                laser_lockout=laser_lockout,
+            )
+
+        def start(self) -> None:
+            self.context.start()
+
+        def stop(self) -> None:
+            self.context.stop()
+
+    monkeypatch.setattr(browser_main, "CoreRuntime", FakeRuntime)
     monkeypatch.setattr(browser_main, "AppHTTPServer", server_type)
     monkeypatch.setattr(browser_main, "configure_logging", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(browser_main.signal, "signal", lambda *_args: None)

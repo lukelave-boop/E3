@@ -6,10 +6,19 @@ from typing import Any
 
 import pytest
 
-from laser_aligner.config import load_settings
+from laser_aligner.config import (
+    LEGACY_IMPLICIT_CONTROLLER_PORT,
+    UNCONFIGURED_CONTROLLER_PORT,
+    load_settings,
+)
 from laser_aligner.core import runtime as runtime_module
 from laser_aligner.core.runtime import CoreRuntime
-from laser_aligner.machine.profiles import MachineRegistryError
+from laser_aligner.machine import service as service_module
+from laser_aligner.machine.profiles import (
+    MachineRegistryError,
+    MachineSetupRequired,
+)
+from laser_aligner.project import ProjectDocument
 
 
 def _settings(tmp_path: Path):
@@ -167,3 +176,121 @@ def test_runtime_uses_registry_active_machine_on_next_launch(
     assert received[0][0].machine.port == "e3bridge://second-controller:8765"
     assert received[0][1].machine_id == created.id
     assert received[0][1].created_from == "profile"
+
+
+@pytest.mark.parametrize(
+    "unconfigured_port",
+    [UNCONFIGURED_CONTROLLER_PORT, LEGACY_IMPLICIT_CONTROLLER_PORT],
+)
+def test_runtime_refuses_placeholder_registry_bootstrap_before_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    unconfigured_port: str,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.machine.port = unconfigured_port
+    registry_path = settings.app.data_dir / "machines.json"
+
+    monkeypatch.setattr(
+        runtime_module,
+        "AppContext",
+        lambda *_args, **_kwargs: pytest.fail(
+            "placeholder configuration reached AppContext"
+        ),
+    )
+
+    with pytest.raises(MachineSetupRequired, match="real machine"):
+        CoreRuntime(settings)
+
+    assert not registry_path.exists()
+
+
+def test_existing_registry_outranks_raw_placeholder_configuration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = runtime_module.MachineRegistry.load_or_migrate(settings)
+    expected_port = registry.active_machine.machine.port
+    settings.machine.port = UNCONFIGURED_CONTROLLER_PORT
+    received: list[str] = []
+
+    class FakeContext:
+        def __init__(self, received_settings: Any, **_kwargs: Any) -> None:
+            received.append(received_settings.machine.port)
+
+    monkeypatch.setattr(runtime_module, "AppContext", FakeContext)
+
+    runtime = CoreRuntime(settings)
+
+    assert runtime.running_machine_id == registry.active_machine_id
+    assert received == [expected_port]
+
+
+def test_active_saved_placeholder_is_rejected_before_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = runtime_module.MachineRegistry.load_or_migrate(settings)
+    active = registry.active_machine
+    active.machine.port = UNCONFIGURED_CONTROLLER_PORT
+    registry.update_machine(active)
+    monkeypatch.setattr(
+        runtime_module,
+        "AppContext",
+        lambda *_args, **_kwargs: pytest.fail(
+            "saved placeholder reached AppContext"
+        ),
+    )
+
+    with pytest.raises(MachineSetupRequired, match="no selected controller port"):
+        CoreRuntime(settings)
+
+
+def test_existing_saved_dev_ttyusb0_remains_valid_explicit_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = runtime_module.MachineRegistry.load_or_migrate(settings)
+    active = registry.active_machine
+    active.machine.port = LEGACY_IMPLICIT_CONTROLLER_PORT
+    registry.update_machine(active)
+    received: list[str] = []
+
+    class FakeContext:
+        def __init__(self, received_settings: Any, **_kwargs: Any) -> None:
+            received.append(received_settings.machine.port)
+
+    monkeypatch.setattr(runtime_module, "AppContext", FakeContext)
+
+    CoreRuntime(settings)
+
+    assert received == [LEGACY_IMPLICIT_CONTROLLER_PORT]
+
+
+def test_unreachable_saved_machine_still_supports_offline_authoring(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(tmp_path)
+    settings.camera.autostart = False
+    runtime_module.MachineRegistry.load_or_migrate(settings)
+    monkeypatch.setattr(
+        service_module,
+        "create_machine_transport",
+        lambda *_args, **_kwargs: pytest.fail(
+            "offline startup attempted a controller connection"
+        ),
+    )
+
+    runtime = CoreRuntime(settings, hardware_enabled=True)
+    runtime.start()
+    try:
+        project = ProjectDocument.new("Offline project")
+        assert project.name == "Offline project"
+        assert project.layers
+        assert runtime.context.machine.connected is False
+    finally:
+        runtime.stop()

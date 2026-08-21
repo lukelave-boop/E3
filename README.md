@@ -173,7 +173,9 @@ manually.
 
 ## Deliberately disabled by default
 
-The packaged default is a setup template, not a runnable machine. First-run must
+The packaged default is a setup template, not a runnable machine. Its controller
+port is the explicit `SELECT_CONTROLLER_PORT` placeholder; the former implicit
+`/dev/ttyUSB0` default is not treated as a configured machine. First-run must
 save a real machine before `CoreRuntime` is created. In every configured profile:
 
 - Serial access requires the `--hardware` command-line flag.
@@ -248,8 +250,16 @@ Launch the browser with:
   --config path\to\configured-machine.json
 ```
 
-The desktop normal startup is hardware-capable, while the existing motion,
-arming, coordinate, bounds, and exact-program gates remain authoritative.
+The browser and desktop both resolve the active saved machine through
+`CoreRuntime`; raw JSON machine/laser values cannot override an existing
+registry selection. Legacy simulator or unconfigured-placeholder state fails
+closed with real-machine setup instructions. Desktop legacy recovery runs before
+credentials or runtime services and requires an explicit physical-machine
+selection; cancel performs no migration and exits. A normal packaged legacy
+fallback is repaired into upgrade-preserved user state, while an explicit
+`--config` is repaired in place. Normal startup is
+hardware-capable, while the existing motion, arming, coordinate, bounds, and
+exact-program gates remain authoritative.
 
 ## Moving to the real C920
 

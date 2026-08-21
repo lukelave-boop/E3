@@ -117,7 +117,28 @@ def test_cli_host_override_uses_the_same_normalized_bind_contract(
         def server_close(self) -> None:
             observed["server_closed"] = True
 
-    monkeypatch.setattr(browser_main, "AppContext", FakeContext)
+    class FakeRuntime:
+        def __init__(
+            self,
+            settings: Any,
+            *,
+            hardware_enabled: bool,
+            laser_lockout: bool,
+        ) -> None:
+            self.settings = settings
+            self.context = FakeContext(
+                settings,
+                hardware_enabled=hardware_enabled,
+                laser_lockout=laser_lockout,
+            )
+
+        def start(self) -> None:
+            self.context.start()
+
+        def stop(self) -> None:
+            self.context.stop()
+
+    monkeypatch.setattr(browser_main, "CoreRuntime", FakeRuntime)
     monkeypatch.setattr(browser_main, "AppHTTPServer", FakeServer)
     monkeypatch.setattr(browser_main, "configure_logging", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(browser_main.signal, "signal", lambda *_args: None)
@@ -151,7 +172,7 @@ def test_cli_host_override_rejects_unsupported_binds_before_startup(
     def fail_context(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("invalid bind reached application startup")
 
-    monkeypatch.setattr(browser_main, "AppContext", fail_context)
+    monkeypatch.setattr(browser_main, "CoreRuntime", fail_context)
 
     result = browser_main.main(
         ["--config", str(_write_config(tmp_path)), "--host", override]
@@ -171,7 +192,7 @@ def test_cli_port_override_rejects_invalid_range_before_startup(
     def fail_context(*_args: object, **_kwargs: object) -> None:
         raise AssertionError("invalid port reached application startup")
 
-    monkeypatch.setattr(browser_main, "AppContext", fail_context)
+    monkeypatch.setattr(browser_main, "CoreRuntime", fail_context)
 
     result = browser_main.main(
         ["--config", str(_write_config(tmp_path)), "--port", override]

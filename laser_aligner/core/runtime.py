@@ -7,8 +7,17 @@ from pathlib import Path
 from typing import Any
 
 from ..app import AppContext, RunningMachineIdentity
-from ..config import Settings, load_settings
-from ..machine.profiles import MachineRegistry
+from ..config import (
+    LEGACY_IMPLICIT_CONTROLLER_PORT,
+    UNCONFIGURED_CONTROLLER_PORT,
+    Settings,
+    load_settings,
+)
+from ..machine.profiles import (
+    MACHINE_REGISTRY_FILENAME,
+    MachineRegistry,
+    MachineSetupRequired,
+)
 
 
 class RuntimeState(str, Enum):
@@ -49,8 +58,33 @@ class CoreRuntime:
         self.settings = settings
         self.hardware_enabled = hardware_enabled
         self.laser_lockout = laser_lockout
+        registry_path = settings.app.data_dir / MACHINE_REGISTRY_FILENAME
+        configured_port = settings.machine.port
+        if not registry_path.exists() and (
+            type(configured_port) is not str
+            or not configured_port.strip()
+            or configured_port.strip()
+            in {
+                UNCONFIGURED_CONTROLLER_PORT,
+                LEGACY_IMPLICIT_CONTROLLER_PORT,
+            }
+        ):
+            raise MachineSetupRequired(
+                "No saved real machine is configured. Complete real-machine "
+                "setup before starting E3."
+            )
         self.machine_registry = MachineRegistry.load_or_migrate(settings)
         resolved_machine = self.machine_registry.resolve_machine()
+        resolved_port = resolved_machine.machine.port
+        if (
+            type(resolved_port) is not str
+            or not resolved_port.strip()
+            or resolved_port.strip() == UNCONFIGURED_CONTROLLER_PORT
+        ):
+            raise MachineSetupRequired(
+                "The active saved machine has no selected controller port. "
+                "Complete real-machine setup before starting E3."
+            )
         self.running_machine_id = resolved_machine.machine_id
         settings.machine = resolved_machine.machine
         settings.laser = resolved_machine.laser

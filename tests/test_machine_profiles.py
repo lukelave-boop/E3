@@ -195,6 +195,66 @@ def test_active_legacy_simulator_requires_explicit_selection_without_rewrite(
     ).exists()
 
 
+def test_recovery_load_is_read_only_unselected_and_reserves_simulator_ids(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    path = MachineRegistry.load_or_migrate(settings).path
+    legacy_bytes = _append_legacy_simulator(path, active=True)
+
+    state = MachineRegistry.load_for_recovery(
+        path,
+        machine_state_root=settings.app.data_dir / "machine_state",
+    )
+
+    assert state.original_bytes == legacy_bytes
+    assert state.simulator_machine_ids == ("legacy-simulator",)
+    assert state.original_active_machine_id == "legacy-simulator"
+    assert [machine.id for machine in state.physical_machines] == [
+        "existing-machine"
+    ]
+    with pytest.raises(MachineRegistryError, match="no active machine"):
+        _ = state.registry.active_machine_id
+    with pytest.raises(MachineRegistryError, match="retired simulator"):
+        state.registry.create_machine(
+            "Replacement",
+            "generic-grbl",
+            "custom-laser-head",
+            machine_id="legacy-simulator",
+            persist=False,
+        )
+
+    created = state.registry.create_machine(
+        "Legacy simulator",
+        "generic-grbl",
+        "custom-laser-head",
+        persist=False,
+    )
+    assert created.id == "legacy-simulator-2"
+    assert path.read_bytes() == legacy_bytes
+
+
+def test_recovery_load_accepts_simulator_only_without_selecting_it(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    path = MachineRegistry.load_or_migrate(settings).path
+    _append_legacy_simulator(path, active=True)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["machines"] = [
+        machine
+        for machine in payload["machines"]
+        if machine["id"] == "legacy-simulator"
+    ]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    state = MachineRegistry.load_for_recovery(path)
+
+    assert state.physical_machines == ()
+    assert state.simulator_machine_ids == ("legacy-simulator",)
+    assert state.original_active_machine_id == "legacy-simulator"
+
+
 def test_auto_protocol_physical_migration_stays_custom(
     tmp_path: Path,
 ) -> None:

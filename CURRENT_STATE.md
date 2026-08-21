@@ -5,7 +5,7 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-20**
+Snapshot: **2026-08-21**
 
 ## Active remove-simulation-mode milestone
 
@@ -16,18 +16,44 @@ machine and exits when canceled. `AppContext` constructs only local or remote
 real camera services. Missing controllers and cameras remain offline and expose
 their real errors rather than producing fake success or image state.
 
-The former controller peer, transport, and generated template-frame helpers now
-live under `tests/fakes/` and are injected only by tests. The product package no
-longer contains those modules or the generated/frozen camera UI. Legacy
-`simulation: false` configuration is normalized away, while `simulation: true`
-is rejected with a real-machine setup error. Schema-1 saved registries retire
-inactive legacy simulator entries atomically with a one-time backup; an active
-legacy simulator is rejected without silently selecting a physical machine.
-Project, machine-registry, and material schemas remain unchanged.
+The former controller peer and transport live under `tests/fakes/` and are
+injected only by tests. The product package no longer contains simulator camera
+or generated-frame helpers, generated/frozen camera UI, or a camera test-frame
+API. Legacy `simulation: false` configuration is normalized away. Before any
+desktop runtime, credential, camera, or controller service is constructed,
+`simulation: true`, a legacy simulator backend, an active saved simulator, or a
+simulator-only registry opens an explicit recovery wizard. Recovery initially
+selects nothing: the operator must select a configured physical machine or
+create a new safe physical snapshot. Finish atomically replaces configuration,
+retires simulator records with an exact one-time backup, and rolls back the
+configuration, registry, credential, backup, and completion marker together on
+failure. Cancel leaves those files untouched and exits without constructing a
+runtime. Inactive simulator entries beside an active physical machine retain
+their existing automatic atomic retirement behavior.
 
-Verification for this active milestone is in progress. No physical hardware
-test is claimed; the intended acceptance evidence is that unavailable hardware
-stays honestly unavailable while offline authoring remains usable.
+Normal recovery from a legacy configuration in the replaceable application
+directory writes the repaired configuration into the upgrade-preserved user
+state; an explicitly supplied `--config` is repaired in place. Both destinations
+are stale-checked before the transaction writes. Both browser and desktop entry
+points now construct `CoreRuntime`, whose active
+saved-machine snapshot is the controller/work-area/laser and running-identity
+authority passed to `AppContext`. The packaged and Python controller-port
+defaults use the explicit `SELECT_CONTROLLER_PORT` sentinel. With no saved
+registry, that sentinel and the former implicit `/dev/ttyUSB0` default are setup
+errors; E3 does not create a plausible machine from either. An explicitly saved
+physical `/dev/ttyUSB0` endpoint remains valid. Project, machine-registry, and
+material schemas remain unchanged.
+
+Focused simulator-recovery, saved-machine authority, desktop startup, CLI,
+camera-boundary, configuration, and first-run verification passed. A separate
+focused safety/toolpath run passed **434 tests** across `MachineService`, strict
+controller transcripts and dialects, transport selection, G-code scanning,
+toolpath generation, exact job plans, and preflight. The complete Windows
+Python 3.14 suite passed **2,345 tests** with **14 expected platform skips**.
+Repository-wide Ruff, `compileall -q laser_aligner`, and `git diff --check` also
+passed. No physical controller, camera, motion, arming, or laser-output test was
+performed or is claimed; unavailable hardware remains honestly offline while a
+valid saved machine retains offline authoring and project editing.
 
 ## Historical verification record
 
