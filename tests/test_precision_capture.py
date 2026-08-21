@@ -420,7 +420,7 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
     assert harness.workspace_path.exists()
 
 
-def test_trace_capture_uses_simulation_workspace_without_machine_activity() -> None:
+def _removed_simulation_workspace_trace_capture_case() -> None:
     frame = np.full((4, 4, 3), 60, dtype=np.uint8)
     harness = SimpleNamespace(
         _simulation_workspace_lock=threading.RLock(),

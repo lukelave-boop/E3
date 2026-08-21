@@ -7,6 +7,34 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-20**
 
+## Active remove-simulation-mode milestone
+
+Production simulation has been removed as a runtime and user capability. The
+current configuration model and packaged default template accept only the real
+serial-family transport boundary; first-run requires an explicitly saved real
+machine and exits when canceled. `AppContext` constructs only local or remote
+real camera services. Missing controllers and cameras remain offline and expose
+their real errors rather than producing fake success or image state.
+
+The former controller peer, transport, and generated template-frame helpers now
+live under `tests/fakes/` and are injected only by tests. The product package no
+longer contains those modules or the generated/frozen camera UI. Legacy
+`simulation: false` configuration is normalized away, while `simulation: true`
+is rejected with a real-machine setup error. Schema-1 saved registries retire
+inactive legacy simulator entries atomically with a one-time backup; an active
+legacy simulator is rejected without silently selecting a physical machine.
+Project, machine-registry, and material schemas remain unchanged.
+
+Verification for this active milestone is in progress. No physical hardware
+test is claimed; the intended acceptance evidence is that unavailable hardware
+stays honestly unavailable while offline authoring remains usable.
+
+## Historical verification record
+
+The entries below record earlier milestones and may mention product simulation
+that existed at the time. Those statements are historical evidence, not current
+operator guidance or current functionality.
+
 The desktop machine-configuration workflow is now generic across the existing
 simulator, GRBL, and Marlin profiles without adding a controller dialect or a
 second profile model. `MachineProfile` remains reusable motion-platform and

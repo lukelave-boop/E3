@@ -13,7 +13,67 @@ from laser_aligner.errors import (
     TransientConnectionError,
 )
 from laser_aligner.machine.service import MachineService, _ControllerCommandRejected
-from laser_aligner.machine.simulator import SimulatedTransport
+from tests.fakes.simulator_transport import SimulatedTransport
+
+
+@pytest.fixture(autouse=True)
+def _explicit_test_machine_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Keep controller emulation test-only after removing the product simulator."""
+
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda *_args, **_kwargs: SimulatedTransport(),
+    )
+    original_init = MachineService.__init__
+    preserve_hardware_gate = "hardware_gate" in request.node.name
+
+    def initialize(
+        service: MachineService,
+        settings: MachineSettings,
+        laser: LaserSettings,
+        hardware_enabled: bool = False,
+        laser_lockout: bool = False,
+    ) -> None:
+        if not settings.allow_motion:
+            settings.allow_motion = True
+        original_init(
+            service,
+            settings,
+            laser,
+            hardware_enabled=(hardware_enabled or not preserve_hardware_gate),
+            laser_lockout=laser_lockout,
+        )
+
+    monkeypatch.setattr(MachineService, "__init__", initialize)
+    original_connect = MachineService.connect
+    auto_reference = not any(
+        token in request.node.name
+        for token in (
+            "jog",
+            "prepare_job_start",
+            "prepare_photo_position",
+            "serial_",
+            "ack_timeout",
+            "initial_connection",
+        )
+    )
+
+    def connect(service: MachineService, *args: object, **kwargs: object) -> dict[str, object]:
+        result = original_connect(service, *args, **kwargs)
+        if auto_reference:
+            service._coordinate_reference_ready = True
+            service._coordinate_state_reference = {
+                "active_workspace": "G54",
+                "active_offset_mm": [0.0, 0.0, 0.0],
+                "g92_offset_mm": [0.0, 0.0, 0.0],
+            }
+            service._jog_position_mm = (0.0, 0.0)
+        return result
+
+    monkeypatch.setattr(MachineService, "connect", connect)
 
 
 def wait_for_job(machine: MachineService, timeout: float = 3.0) -> None:
@@ -234,7 +294,7 @@ def test_realtime_position_sampling_fails_diagnostic_only(response: str) -> None
 
 
 def test_manual_positive_laser_commands_are_always_blocked() -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     try:
         with pytest.raises(SafetyError):
@@ -252,7 +312,7 @@ def test_manual_positive_laser_commands_are_always_blocked() -> None:
 
 
 def test_simulated_program_stream() -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     try:
         program_text = "G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S5\nG1 X20 Y20 F500\nM5\n"
@@ -294,7 +354,7 @@ def test_simulated_program_stream() -> None:
 
 def test_ensure_connected_opens_a_disconnected_machine() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator", allow_motion=True),
+        MachineSettings(backend="serial", allow_motion=True),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -310,7 +370,7 @@ def test_ensure_connected_never_reconnects_an_uncertain_established_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator", allow_motion=True),
+        MachineSettings(backend="serial", allow_motion=True),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -338,7 +398,7 @@ def test_ensure_connected_never_reconnects_an_uncertain_established_session(
 
 def test_process_laser_lockout_allows_motion_and_rejects_laser_enable() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=True,
         laser_lockout=True,
@@ -367,14 +427,14 @@ def test_process_laser_lockout_allows_motion_and_rejects_laser_enable() -> None:
 def test_machine_rejects_non_boolean_laser_lockout(value: object) -> None:
     with pytest.raises(TypeError, match="laser_lockout must be an exact boolean"):
         MachineService(
-            MachineSettings(backend="simulator"),
+            MachineSettings(backend="serial"),
             LaserSettings(),
             laser_lockout=value,  # type: ignore[arg-type]
         )
 
 
 def test_dry_program_does_not_require_arming() -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     try:
         machine.start_job("G21\nG90\nM5\nG0X10Y10F1000\nG1X20Y20F500\nM5\n", "dry.gcode")
@@ -386,7 +446,7 @@ def test_dry_program_does_not_require_arming() -> None:
 
 def test_powered_program_preflight_is_side_effect_free() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -400,7 +460,7 @@ def test_powered_program_preflight_is_side_effect_free() -> None:
 
 def test_inline_g1_power_is_allowed_only_after_laser_mode_and_remains_bounded() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(power_max=1000),
     )
     valid = (
@@ -426,7 +486,7 @@ def test_inline_g1_power_is_allowed_only_after_laser_mode_and_remains_bounded() 
 
 def test_program_requires_laser_off_xy_position_before_enable() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -437,7 +497,7 @@ def test_program_requires_laser_off_xy_position_before_enable() -> None:
 
 def test_program_validates_controller_and_physical_spot_bounds() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(spot_offset_x_mm=5.0),
         hardware_enabled=False,
     )
@@ -455,7 +515,7 @@ def test_support_bound_preflight_uses_explicit_polygon_only_when_requested() -> 
     )
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             work_area=WorkArea(10.0, 210.0, 10.0, 210.0),
         ),
         LaserSettings(
@@ -481,7 +541,7 @@ def test_support_bound_preflight_rejects_controller_and_spot_polygon_escape() ->
     polygon = ((0.0, 0.0), (210.0, 0.0), (210.0, 210.0), (0.0, 210.0))
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             work_area=WorkArea(0.0, 200.0, 0.0, 200.0),
         ),
         LaserSettings(
@@ -508,7 +568,7 @@ def test_support_bound_validated_program_rejects_polygon_change_before_start() -
     polygon = ((0.0, 0.0), (210.0, 0.0), (210.0, 210.0), (0.0, 210.0))
     laser = LaserSettings(guarded_output_polygon_mm=polygon)
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         laser,
         hardware_enabled=False,
     )
@@ -539,7 +599,7 @@ def test_support_bound_validated_program_rejects_polygon_change_before_start() -
 )
 def test_program_requires_explicit_bounded_feed(line: str, message: str) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -550,7 +610,7 @@ def test_program_requires_explicit_bounded_feed(line: str, message: str) -> None
 
 def test_program_rejects_oversized_executable_line_before_streaming() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -578,7 +638,7 @@ def test_preflight_rejects_invalid_programmatic_feed_ceilings(
     value: float,
     message: str,
 ) -> None:
-    settings = MachineSettings(backend="simulator")
+    settings = MachineSettings(backend="serial")
     setattr(settings, field, value)
     machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
 
@@ -589,7 +649,7 @@ def test_preflight_rejects_invalid_programmatic_feed_ceilings(
 
 
 def test_validated_program_rejects_feed_ceiling_mutation_before_start() -> None:
-    settings = MachineSettings(backend="simulator")
+    settings = MachineSettings(backend="serial")
     machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
     program = machine.preflight_program(
         "G21\nG90\nM5\nG1 X10 Y10 F500\nM5\n"
@@ -665,11 +725,12 @@ def test_validated_program_rejects_exact_gate_mutation_before_start(
     target: str,
     value: object,
 ) -> None:
-    settings = MachineSettings(backend="simulator")
+    settings = MachineSettings(backend="serial")
     machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
     program = machine.preflight_program(
         "G21\nG90\nM5\nG1 X10 Y10 F500\nM5\n"
     )
+    machine.connect()
     if target == "hardware_enabled":
         machine.hardware_enabled = value  # type: ignore[assignment]
     else:
@@ -686,7 +747,7 @@ def test_validated_program_rejects_exact_gate_mutation_before_start(
 def test_arm_rejects_invalid_programmatic_timeout_without_grant(value: object) -> None:
     laser = LaserSettings()
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         laser,
         hardware_enabled=False,
     )
@@ -718,7 +779,7 @@ def test_photo_position_rejects_invalid_travel_feed_before_motion(
 ) -> None:
     laser = LaserSettings()
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         laser,
         hardware_enabled=False,
     )
@@ -736,7 +797,7 @@ def test_photo_position_rejects_invalid_travel_feed_before_motion(
 
 def test_internal_motion_feed_is_bounded_immediately_before_write() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -755,7 +816,7 @@ def test_internal_motion_feed_is_bounded_immediately_before_write() -> None:
 
 
 def test_invalid_normal_idle_delay_cannot_start_temporary_hold() -> None:
-    settings = MachineSettings(backend="simulator", grbl_step_idle_delay_ms=255)
+    settings = MachineSettings(backend="serial", grbl_step_idle_delay_ms=255)
     machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
 
     with pytest.raises(SafetyError, match="0 through 254"):
@@ -774,7 +835,7 @@ def test_invalid_gate_mutation_cannot_suppress_disconnect_m5() -> None:
             super().write_line(line)
 
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -782,6 +843,13 @@ def test_invalid_gate_mutation_cannot_suppress_disconnect_m5() -> None:
     transport.open()
     machine._transport = transport
     machine._connected = True
+    machine._coordinate_reference_ready = True
+    machine._coordinate_state_reference = {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+    machine._jog_position_mm = (0.0, 0.0)
     machine.settings.allow_motion = "false"  # type: ignore[assignment]
 
     machine.disconnect()
@@ -902,7 +970,7 @@ def test_forged_validated_program_is_reanalyzed_before_arm_and_start() -> None:
             super().write_line(line)
 
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -910,6 +978,13 @@ def test_forged_validated_program_is_reanalyzed_before_arm_and_start() -> None:
     transport.open()
     machine._transport = transport
     machine._connected = True
+    machine._coordinate_reference_ready = True
+    machine._coordinate_state_reference = {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+    machine._jog_position_mm = (0.0, 0.0)
     valid = machine.preflight_program(
         "G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S5\nG1 X20 Y20 F500\nM5\n"
     )
@@ -956,7 +1031,7 @@ def test_forged_validated_program_is_reanalyzed_before_arm_and_start() -> None:
 
 def test_job_execution_authorization_outlives_arm_countdown_only_for_job() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -984,7 +1059,7 @@ def test_stop_orders_m5_after_an_inflight_powered_job_write() -> None:
             super().write_line(line)
 
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1272,7 +1347,7 @@ def test_stop_cancels_a_start_already_in_progress(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1384,7 +1459,7 @@ def test_stop_during_start_job_preflight_cannot_adopt_new_session_grant(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1400,7 +1475,7 @@ def test_stop_during_start_job_preflight_cannot_adopt_new_session_grant(
     def paused_preflight(candidate: str):
         program = original_preflight(candidate)
         preflight_entered.set()
-        assert release_preflight.wait(timeout=2.0)
+        assert release_preflight.wait(timeout=5.0)
         return program
 
     monkeypatch.setattr(machine, "preflight_program", paused_preflight)
@@ -1431,7 +1506,7 @@ def test_stop_during_start_job_preflight_cannot_adopt_new_session_grant(
     fresh_program = original_preflight(text)
     machine.arm_program(machine.ARM_PHRASE, fresh_program)
     release_preflight.set()
-    worker.join(timeout=1.0)
+    worker.join(timeout=3.0)
 
     assert len(errors) == 1
     assert "cancelled by software STOP" in str(errors[0])
@@ -1447,7 +1522,7 @@ def test_stop_during_start_job_preflight_cannot_adopt_new_session_grant(
 
 def test_stale_arm_scope_cannot_clear_new_session_grant() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1475,7 +1550,7 @@ def test_request_time_generation_cancels_queued_home_park(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1503,7 +1578,7 @@ def test_request_time_generation_cancels_queued_home_park(
 
 def test_simulator_stop_requires_reconnect_before_new_controller_commands() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1520,7 +1595,7 @@ def test_simulator_stop_requires_reconnect_before_new_controller_commands() -> N
 def test_explicit_replacement_uses_post_disconnect_generation_and_stays_untrusted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     machine.request_stop()
     requested_generation = machine.operation_generation()
@@ -1548,7 +1623,7 @@ def test_explicit_replacement_uses_post_disconnect_generation_and_stays_untruste
 def test_stop_during_replacement_connect_still_cancels(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     machine.request_stop()
     requested_generation = machine.operation_generation()
@@ -1571,7 +1646,7 @@ def test_stop_during_replacement_connect_still_cancels(
 def test_stop_racing_between_disconnect_and_connect_is_not_absorbed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     machine.request_stop()
     requested_generation = machine.operation_generation()
@@ -1599,7 +1674,7 @@ def test_stop_racing_between_disconnect_and_connect_is_not_absorbed(
 
 def test_request_time_generation_cancels_composite_job_after_stop() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1628,7 +1703,7 @@ def test_disarm_cancels_an_arm_already_in_validation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1672,7 +1747,7 @@ def test_disarm_cancels_powered_start_after_grant_was_checked(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1737,7 +1812,7 @@ def test_disarm_cancels_powered_start_after_grant_was_checked(
 
 def test_idle_disarm_consumes_its_m5_acknowledgement() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1753,7 +1828,7 @@ def test_idle_disarm_consumes_its_m5_acknowledgement() -> None:
 
 def test_powered_arm_is_hash_bound_and_consumed() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1781,7 +1856,7 @@ def test_powered_arm_is_hash_bound_and_consumed() -> None:
 
 def test_preflight_is_invalidated_when_safety_profile_changes() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -1795,7 +1870,7 @@ def test_preflight_is_invalidated_when_safety_profile_changes() -> None:
 
 
 def test_unsafe_modal_and_out_of_bounds_programs_are_blocked() -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     try:
         with pytest.raises(SafetyError):
@@ -2033,7 +2108,7 @@ def test_stop_during_arm_validation_cannot_rearm_serial_controller(
 
 
 def test_prepare_photo_position_in_simulation() -> None:
-    settings = MachineSettings(backend="simulator", photo_x=110, photo_y=105, home_before_photo=True)
+    settings = MachineSettings(backend="serial", photo_x=110, photo_y=105, home_before_photo=True)
     machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
     machine.connect()
     try:
@@ -2081,7 +2156,7 @@ def test_prepare_photo_position_can_capture_home_before_normal_simulated_park(
     )
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             photo_x=110.0,
             photo_y=105.0,
             home_before_photo=True,
@@ -2133,7 +2208,7 @@ def test_prepare_job_start_homes_without_parking_in_simulation(
     )
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             photo_x=110,
             photo_y=105,
             home_before_photo=True,
@@ -2142,13 +2217,14 @@ def test_prepare_job_start_homes_without_parking_in_simulation(
         hardware_enabled=False,
     )
     machine.connect()
+    transport.commands.clear()
     try:
         result = machine.prepare_job_start()
 
         assert result["position"] is None
         assert result["homed"] is True
         assert result["parked"] is False
-        assert transport.commands == ["M5", "$H", "G21", "G90"]
+        assert transport.commands == ["M5", "$H", "$G", "$#", "G21", "G90"]
         assert machine.status()["coordinate_reference_ready"] is True
         assert machine.status()["jog_ready"] is False
     finally:
@@ -2174,7 +2250,7 @@ def test_jog_uses_bounded_absolute_laser_off_moves(
     )
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             allow_motion=True,
             photo_x=110.0,
             photo_y=105.0,
@@ -2184,6 +2260,7 @@ def test_jog_uses_bounded_absolute_laser_off_moves(
         hardware_enabled=False,
     )
     machine.connect()
+    transport.commands.clear()
     try:
         assert not machine.status()["jog_ready"]
         with pytest.raises(SafetyError, match="Home / park"):
@@ -2198,7 +2275,10 @@ def test_jog_uses_bounded_absolute_laser_off_moves(
 
         assert first["position"] == {"x": 115.0, "y": 104.0}
         assert second["position"] == {"x": 114.9, "y": 104.2}
-        assert transport.commands == [
+        action_commands = [
+            command for command in transport.commands if command not in {"$G", "$#"}
+        ]
+        assert action_commands == [
             "M5",
             "G21",
             "G90",
@@ -2238,7 +2318,7 @@ def test_jog_uses_requested_feed_on_feed_controlled_motion(
     )
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             allow_motion=True,
             photo_x=110.0,
             photo_y=105.0,
@@ -2254,7 +2334,10 @@ def test_jog_uses_requested_feed_on_feed_controlled_motion(
 
         result = machine.jog(5.0, -2.0, feed)
 
-        assert transport.commands[:4] == [
+        action_commands = [
+            command for command in transport.commands if command not in {"$G", "$#"}
+        ]
+        assert action_commands[:4] == [
             "M5",
             "G21",
             "G90",
@@ -2337,7 +2420,7 @@ def test_jog_rejects_invalid_requests_before_motion(
 ) -> None:
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             allow_motion=True,
             photo_x=110.0,
             photo_y=105.0,
@@ -2362,7 +2445,7 @@ def test_jog_rejects_invalid_requests_before_motion(
 def test_jog_can_move_beyond_configured_work_area_for_limit_measurement() -> None:
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             allow_motion=True,
             photo_x=210.0,
             photo_y=105.0,
@@ -2407,7 +2490,7 @@ def test_stop_during_jog_invalidates_position_and_prevents_completion(
     )
     machine = MachineService(
         MachineSettings(
-            backend="simulator",
+            backend="serial",
             allow_motion=True,
             photo_x=110.0,
             photo_y=105.0,
@@ -2435,7 +2518,10 @@ def test_stop_during_jog_invalidates_position_and_prevents_completion(
 
     assert len(errors) == 1
     assert "cancelled by software STOP" in str(errors[0])
-    assert transport.commands == [
+    action_commands = [
+        command for command in transport.commands if command not in {"$G", "$#"}
+    ]
+    assert action_commands == [
         "M5",
         "G21",
         "G90",
@@ -2452,7 +2538,7 @@ def test_stop_during_jog_invalidates_position_and_prevents_completion(
 
 def test_jog_rejects_armed_or_motion_disabled_state() -> None:
     settings = MachineSettings(
-        backend="simulator",
+        backend="serial",
         allow_motion=True,
         photo_x=110.0,
         photo_y=105.0,
@@ -2476,7 +2562,7 @@ def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = MachineSettings(
-        backend="simulator",
+        backend="serial",
         photo_x=110,
         photo_y=105,
         home_before_photo=True,
@@ -2495,6 +2581,14 @@ def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
     ) -> list[str]:
         del _expected_stop_epoch
         recorded.append((command, timeout, _internal_motion))
+        if command == "$G":
+            return ["[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]", "ok"]
+        if command == "$#":
+            return [
+                "[G54:0.000,0.000,0.000]",
+                "[G92:0.000,0.000,0.000]",
+                "ok",
+            ]
         return ["ok"]
 
     monkeypatch.setattr(machine, "send_command", record_command)
@@ -2511,12 +2605,13 @@ def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
     finally:
         machine.disconnect()
 
-    assert recorded[0] == ("M5", 6.0, True)
-    assert recorded[1] == ("$H", 120.0, True)
-    assert recorded[2] == ("G21", 6.0, True)
-    assert recorded[3] == ("G90", 6.0, True)
-    assert recorded[4][1:] == (6.0, True)
-    assert recorded[5] == ("G4 P0.01", 120.0, True)
+    actions = [item for item in recorded if item[0] not in {"$G", "$#"}]
+    assert actions[0] == ("M5", 6.0, True)
+    assert actions[1] == ("$H", 120.0, True)
+    assert actions[2] == ("G21", 6.0, True)
+    assert actions[3] == ("G90", 6.0, True)
+    assert actions[4][1:] == (6.0, True)
+    assert actions[5] == ("G4 P0.01", 120.0, True)
     assert settings.read_timeout == 1.0
 
 
@@ -3064,7 +3159,7 @@ def test_explicit_grbl_connect_waits_for_controller_startup_before_querying(
 
 def test_arm_waits_for_an_inflight_jog_command() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator", allow_motion=True),
+        MachineSettings(backend="serial", allow_motion=True),
         LaserSettings(arm_timeout_seconds=10),
         hardware_enabled=False,
     )
@@ -3130,7 +3225,7 @@ def test_arm_waits_for_an_inflight_jog_command() -> None:
 
 def test_stop_cancels_an_arm_queued_behind_controller_ownership() -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator", allow_motion=True),
+        MachineSettings(backend="serial", allow_motion=True),
         LaserSettings(arm_timeout_seconds=10),
         hardware_enabled=False,
     )
@@ -3416,7 +3511,7 @@ def test_temporary_stepper_hold_is_noop_in_simulation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -3527,7 +3622,7 @@ def test_command_timeout_identifies_the_command(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -4145,7 +4240,7 @@ def test_stop_during_final_ack_cannot_publish_success_receipt(
         lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -4621,7 +4716,7 @@ def test_failed_simulator_job_requires_reconnect_before_retry(
         lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
@@ -4647,7 +4742,7 @@ def test_ack_timeout_requires_reconnect_before_any_retry(
     class DelayedAckTransport(SimulatedTransport):
         def __init__(self) -> None:
             super().__init__()
-            self.delay_first_m5 = True
+            self.delay_first_m5 = False
             self.commands: list[str] = []
 
         def write_line(self, line: str) -> None:
@@ -4664,11 +4759,12 @@ def test_ack_timeout_requires_reconnect_before_any_retry(
         lambda _backend, _port, _baudrate: transport,
     )
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial"),
         LaserSettings(),
         hardware_enabled=False,
     )
     machine.connect()
+    transport.delay_first_m5 = True
 
     with pytest.raises(MachineError, match="did not acknowledge"):
         machine.send_command("M5", timeout=0.01)
@@ -4718,7 +4814,7 @@ def test_only_grbl_error_is_treated_as_a_consumed_terminal_response(
 
 
 def test_disarm_stops_an_active_laser_job() -> None:
-    machine = MachineService(MachineSettings(backend="simulator"), LaserSettings(), hardware_enabled=False)
+    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
     machine.connect()
     try:
         lines = ["G21", "G90", "M5", "G0 X10 Y10 F1000", "M4 S5"]

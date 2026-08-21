@@ -34,7 +34,7 @@ def _runtime(tmp_path: Path):
     config.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "data", "simulation": False},
+                "app": {"data_dir": "data"},
                 "camera": {
                     "device": "e3camera://192.168.5.18:8766",
                     "width": 1920,
@@ -267,7 +267,7 @@ def test_machine_manager_profile_help_explains_what_e3_uses(
     dialog.close()
 
 
-def test_new_machine_dialog_starts_with_safe_simulator_profiles(
+def test_new_machine_dialog_starts_with_physical_profiles_only(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
 ) -> None:
@@ -275,194 +275,13 @@ def test_new_machine_dialog_starts_with_safe_simulator_profiles(
     dialog = _NewMachineDialog(runtime.machine_registry)
     qt_application.processEvents()
 
-    assert dialog.machine_profile.currentData() == "simulator"
-    assert dialog.tool_head_profile.currentData() == "simulated-laser-head"
-    assert "simulator backend" in dialog.machine_profile_info.text()
+    assert dialog.machine_profile.currentData() == "generic-grbl"
+    assert dialog.tool_head_profile.currentData() == "custom-laser-head"
+    assert dialog.machine_profile.findData("simulator") == -1
+    assert dialog.tool_head_profile.findData("simulated-laser-head") == -1
+    assert "serial backend" in dialog.machine_profile_info.text()
     assert "copied as the starting settings" in dialog.machine_profile_info.text()
 
-    dialog.close()
-
-
-def test_new_machine_dialog_keeps_simulated_and_physical_profiles_separate(
-    qt_application: QtWidgets.QApplication,
-    tmp_path: Path,
-) -> None:
-    runtime = _runtime(tmp_path)
-    dialog = _NewMachineDialog(runtime.machine_registry)
-
-    assert dialog.machine_profile.currentData() == "simulator"
-    assert dialog.tool_head_profile.count() == 1
-    assert dialog.tool_head_profile.currentData() == "simulated-laser-head"
-
-    dialog.machine_profile.setCurrentIndex(
-        dialog.machine_profile.findData("generic-marlin")
-    )
-    qt_application.processEvents()
-
-    physical_ids = {
-        dialog.tool_head_profile.itemData(index)
-        for index in range(dialog.tool_head_profile.count())
-    }
-    assert physical_ids == {"custom-laser-head", "generic-diode-10w"}
-    assert dialog.tool_head_profile.currentData() == "custom-laser-head"
-
-    dialog.machine_profile.setCurrentIndex(
-        dialog.machine_profile.findData("simulator")
-    )
-    qt_application.processEvents()
-    assert dialog.tool_head_profile.count() == 1
-    assert dialog.tool_head_profile.currentData() == "simulated-laser-head"
-    dialog.close()
-
-
-@pytest.mark.parametrize(
-    ("machine_profile_id", "tool_head_profile_id"),
-    (
-        ("generic-grbl", "simulated-laser-head"),
-        ("simulator", "generic-diode-10w"),
-    ),
-)
-def test_manager_rejects_programmatic_incompatible_profile_pair(
-    qt_application: QtWidgets.QApplication,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    machine_profile_id: str,
-    tool_head_profile_id: str,
-) -> None:
-    runtime = _runtime(tmp_path)
-    before = [machine.to_dict() for machine in runtime.machine_registry.machines()]
-    warnings: list[str] = []
-    monkeypatch.setattr(
-        _NewMachineDialog,
-        "exec",
-        lambda _self: QtWidgets.QDialog.DialogCode.Accepted,
-    )
-    monkeypatch.setattr(
-        _NewMachineDialog,
-        "values",
-        lambda _self: (
-            "Invalid profile pair",
-            machine_profile_id,
-            tool_head_profile_id,
-        ),
-    )
-    monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "warning",
-        lambda _parent, _title, message: warnings.append(str(message)),
-    )
-    dialog = MachineManagerDialog(runtime)
-
-    dialog._add_machine()
-
-    assert [
-        machine.to_dict() for machine in runtime.machine_registry.machines()
-    ] == before
-    assert warnings
-    assert "simulated laser head" in warnings[-1].casefold()
-    dialog.close()
-
-
-@pytest.mark.parametrize(
-    ("machine_profile_id", "tool_head_profile_id"),
-    (
-        ("simulator", "generic-diode-10w"),
-        ("generic-grbl", "simulated-laser-head"),
-    ),
-)
-def test_manager_rejects_incompatible_profile_pair_when_editing(
-    qt_application: QtWidgets.QApplication,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    machine_profile_id: str,
-    tool_head_profile_id: str,
-) -> None:
-    runtime = _runtime(tmp_path)
-    registry = runtime.machine_registry
-    before_machine = registry.active_machine.to_dict()
-    before_active_id = registry.active_machine_id
-    warnings: list[str] = []
-    dialog = MachineManagerDialog(runtime)
-    assert dialog._working_machine is not None
-    before_working = dialog._working_machine.to_dict()
-    dialog.machine_profile.setCurrentIndex(
-        dialog.machine_profile.findData(machine_profile_id)
-    )
-    dialog.tool_head_profile.setCurrentIndex(
-        dialog.tool_head_profile.findData(tool_head_profile_id)
-    )
-    monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "warning",
-        lambda _parent, _title, message: warnings.append(str(message)),
-    )
-    monkeypatch.setattr(
-        registry,
-        "update_machine",
-        lambda *_args, **_kwargs: pytest.fail(
-            "Invalid profile pair reached registry mutation"
-        ),
-    )
-
-    assert dialog._save_selected() is False
-
-    assert registry.active_machine.to_dict() == before_machine
-    assert registry.active_machine_id == before_active_id
-    assert dialog._working_machine.to_dict() == before_working
-    assert warnings
-    assert "simulated laser head" in warnings[-1].casefold()
-    dialog.close()
-
-
-def test_manager_rejects_incompatible_profile_pair_before_next_launch_selection(
-    qt_application: QtWidgets.QApplication,
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    runtime = _runtime(tmp_path)
-    registry = runtime.machine_registry
-    original_active_id = registry.active_machine_id
-    created = registry.create_machine(
-        "Second physical machine",
-        "generic-grbl",
-        "generic-diode-10w",
-    )
-    before_machine = registry.get_machine(created.id).to_dict()
-    warnings: list[str] = []
-    dialog = MachineManagerDialog(runtime)
-    dialog._reload_list(created.id)
-    dialog.machine_profile.setCurrentIndex(
-        dialog.machine_profile.findData("simulator")
-    )
-    dialog.tool_head_profile.setCurrentIndex(
-        dialog.tool_head_profile.findData("generic-diode-10w")
-    )
-    monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "warning",
-        lambda _parent, _title, message: warnings.append(str(message)),
-    )
-    monkeypatch.setattr(
-        registry,
-        "update_machine",
-        lambda *_args, **_kwargs: pytest.fail(
-            "Invalid profile pair reached registry mutation"
-        ),
-    )
-    monkeypatch.setattr(
-        registry,
-        "set_active",
-        lambda *_args, **_kwargs: pytest.fail(
-            "Invalid profile pair reached next-launch selection"
-        ),
-    )
-
-    dialog._set_active_selected()
-
-    assert registry.get_machine(created.id).to_dict() == before_machine
-    assert registry.active_machine_id == original_active_id
-    assert warnings
-    assert "simulated laser head" in warnings[-1].casefold()
     dialog.close()
 
 
@@ -506,10 +325,7 @@ def test_manager_connection_fields_follow_backend_and_protocol(
     assert not dialog.grbl_idle_delay.isHidden()
     assert "if detected" in dialog.grbl_idle_label.text()
 
-    dialog.backend.setCurrentIndex(dialog.backend.findData("simulator"))
-    assert dialog.port.isHidden()
-    assert dialog.baudrate.isHidden()
-    assert not dialog.protocol.isHidden()
+    assert dialog.backend.findData("simulator") == -1
 
     dialog.close()
 
@@ -521,8 +337,8 @@ def test_manager_profile_defaults_update_backend_and_keep_motion_disabled(
 ) -> None:
     runtime = _runtime(tmp_path)
     dialog = MachineManagerDialog(runtime)
-    simulator_index = dialog.machine_profile.findData("simulator")
-    dialog.machine_profile.setCurrentIndex(simulator_index)
+    marlin_index = dialog.machine_profile.findData("generic-marlin")
+    dialog.machine_profile.setCurrentIndex(marlin_index)
     monkeypatch.setattr(
         QtWidgets.QMessageBox,
         "question",
@@ -531,10 +347,10 @@ def test_manager_profile_defaults_update_backend_and_keep_motion_disabled(
 
     dialog._apply_machine_profile_defaults()
 
-    assert dialog.backend.currentData() == "simulator"
-    assert dialog.protocol.currentData() == "auto"
-    assert dialog.port.text() == "simulator"
-    assert dialog.port.isHidden()
+    assert dialog.backend.currentData() == "serial"
+    assert dialog.protocol.currentData() == "marlin"
+    assert dialog.port.text() == "SELECT_CONTROLLER_PORT"
+    assert not dialog.port.isHidden()
     assert not dialog.allow_motion.isChecked()
     assert runtime.machine_registry.active_machine.machine.backend == "serial"
     assert runtime.machine_registry.active_machine.machine.allow_motion is True
@@ -658,7 +474,6 @@ def test_manager_saves_backend_and_explicit_motion_permission_across_reopen(
 ) -> None:
     runtime = _runtime(tmp_path)
     dialog = MachineManagerDialog(runtime)
-    dialog.backend.setCurrentIndex(dialog.backend.findData("simulator"))
     dialog.protocol.setCurrentIndex(dialog.protocol.findData("marlin"))
     dialog.allow_motion.setChecked(False)
 
@@ -666,16 +481,16 @@ def test_manager_saves_backend_and_explicit_motion_permission_across_reopen(
     dialog.close()
 
     saved = runtime.machine_registry.active_machine
-    assert saved.machine.backend == "simulator"
+    assert saved.machine.backend == "serial"
     assert saved.machine.protocol == "marlin"
     assert saved.machine.allow_motion is False
 
     reopened = MachineManagerDialog(runtime)
     qt_application.processEvents()
-    assert reopened.backend.currentData() == "simulator"
+    assert reopened.backend.currentData() == "serial"
     assert reopened.protocol.currentData() == "marlin"
     assert not reopened.allow_motion.isChecked()
-    assert reopened.port.isHidden()
+    assert not reopened.port.isHidden()
     assert reopened.grbl_idle_delay.isHidden()
     reopened.close()
 

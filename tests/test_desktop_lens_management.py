@@ -16,7 +16,9 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from laser_aligner.calibration.bed import BedPoint
 from laser_aligner.calibration.lens import LensModel
+from laser_aligner.camera.service import CameraStatus
 from laser_aligner.core import CoreRuntime
 from laser_aligner.desktop.machine_setup import MachineSetupDialog
 from laser_aligner.desktop.qt import require_qt
@@ -50,10 +52,33 @@ def _runtime(tmp_path: Path) -> CoreRuntime:
     payload = json.loads((root / "config" / "default.json").read_text(encoding="utf-8"))
     payload["app"]["data_dir"] = str(tmp_path / "data")
     payload["app"]["open_browser"] = False
+    payload["camera"]["autostart"] = False
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     runtime = CoreRuntime.from_config(path, hardware_enabled=False)
     runtime.start()
+    runtime.context.camera.status = lambda: CameraStatus(  # type: ignore[method-assign]
+        connected=True,
+        device="test-camera",
+        width=runtime.settings.camera.width,
+        height=runtime.settings.camera.height,
+        fps=float(runtime.settings.camera.fps),
+        frames_read=1,
+        last_error=None,
+        frame_age_seconds=0.1,
+    )
+    runtime.context.bed_reference = lambda: np.zeros(  # type: ignore[method-assign]
+        (runtime.settings.camera.height, runtime.settings.camera.width, 3),
+        dtype=np.uint8,
+    )
+    runtime.context.bed.replace_points(
+        [
+            BedPoint(0.0, 1079.0, 0.0, 0.0),
+            BedPoint(1919.0, 1079.0, 220.0, 0.0),
+            BedPoint(1919.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ]
+    )
     return runtime
 
 

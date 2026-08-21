@@ -12,9 +12,6 @@ from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
 
-_SIMULATED_TOOL_HEAD_PROFILE_ID = "simulated-laser-head"
-
-
 def _double_spin(
     minimum: float,
     maximum: float,
@@ -39,15 +36,8 @@ def _validate_machine_tool_pair(
     machine_profile_id: str,
     tool_head_profile_id: str,
 ) -> None:
-    machine = registry.get_machine_profile(machine_profile_id)
-    head = registry.get_tool_head_profile(tool_head_profile_id)
-    machine_is_simulated = machine.machine_defaults.backend == "simulator"
-    head_is_simulated = "simulation" in head.capabilities
-    if machine_is_simulated != head_is_simulated:
-        raise MachineRegistryError(
-            "The Simulator machine profile requires the Simulated Laser Head; "
-            "physical machine profiles require a physical tool-head profile"
-        )
+    registry.get_machine_profile(machine_profile_id)
+    registry.get_tool_head_profile(tool_head_profile_id)
 
 
 def _machine_profile_text(profile: Any, *, new_machine: bool) -> str:
@@ -126,12 +116,11 @@ class _NewMachineDialog(QtWidgets.QDialog):
         self.tool_head_profile = QtWidgets.QComboBox()
         for profile in registry.tool_head_profiles():
             self.tool_head_profile.addItem(profile.name, profile.id)
-        self._preferred_physical_tool_head_id = "custom-laser-head"
         self.machine_profile.setCurrentIndex(
-            max(0, self.machine_profile.findData("simulator"))
+            max(0, self.machine_profile.findData("generic-grbl"))
         )
         self.tool_head_profile.setCurrentIndex(
-            max(0, self.tool_head_profile.findData("simulated-laser-head"))
+            max(0, self.tool_head_profile.findData("custom-laser-head"))
         )
         form.addRow("Machine name", self.name)
         form.addRow("Motion-platform profile", self.machine_profile)
@@ -176,30 +165,13 @@ class _NewMachineDialog(QtWidgets.QDialog):
 
     def _machine_profile_changed(self) -> None:
         current_tool_id = self.tool_head_profile.currentData()
-        if (
-            current_tool_id is not None
-            and current_tool_id != _SIMULATED_TOOL_HEAD_PROFILE_ID
-        ):
-            self._preferred_physical_tool_head_id = str(current_tool_id)
-        machine = self.registry.get_machine_profile(
-            str(self.machine_profile.currentData())
-        )
-        require_simulated_head = machine.machine_defaults.backend == "simulator"
-        heads = [
-            head
-            for head in self.registry.tool_head_profiles()
-            if ("simulation" in head.capabilities) == require_simulated_head
-        ]
+        preferred_id = str(current_tool_id or "custom-laser-head")
+        heads = list(self.registry.tool_head_profiles())
         self.tool_head_profile.blockSignals(True)
         try:
             self.tool_head_profile.clear()
             for head in heads:
                 self.tool_head_profile.addItem(head.name, head.id)
-            preferred_id = (
-                _SIMULATED_TOOL_HEAD_PROFILE_ID
-                if require_simulated_head
-                else self._preferred_physical_tool_head_id
-            )
             preferred_index = self.tool_head_profile.findData(preferred_id)
             self.tool_head_profile.setCurrentIndex(max(0, preferred_index))
         finally:
@@ -421,7 +393,6 @@ class MachineManagerDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout(group)
         self.connection_form = form
         self.backend = QtWidgets.QComboBox()
-        self.backend.addItem("Simulator", "simulator")
         self.backend.addItem("Serial / e3bridge", "serial")
         self.protocol = QtWidgets.QComboBox()
         self.protocol.addItem("AUTO (detect GRBL or Marlin)", "auto")

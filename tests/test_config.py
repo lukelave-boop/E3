@@ -65,7 +65,7 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     config.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "runtime", "simulation": True},
+                "app": {"data_dir": "runtime", "simulation": False},
                 "camera": {"width": 1280, "height": 720},
                 "machine": {"work_area": {"x_min": 5, "x_max": 205, "y_min": 10, "y_max": 210}},
             }
@@ -73,6 +73,7 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     settings = load_settings(config)
+    assert not hasattr(settings.app, "simulation")
     assert settings.app.data_dir == (tmp_path / "runtime").resolve()
     assert settings.camera.width == 1280
     assert settings.camera.view_rotation_degrees == 0
@@ -324,6 +325,19 @@ def test_string_booleans_are_rejected(
     )
 
     with pytest.raises(ConfigError, match=rf"{section}\.{key} must be a JSON boolean"):
+        load_settings(config)
+
+
+def test_legacy_enabled_simulation_requires_explicit_real_setup(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "legacy-simulation.json"
+    config.write_text(
+        json.dumps({"app": {"simulation": True}}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match="removed E3 simulation mode"):
         load_settings(config)
 
 

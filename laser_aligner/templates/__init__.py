@@ -21,12 +21,6 @@ from .model import (
     template_from_project,
 )
 from .shapes import SHAPE_METADATA_KEY, ShapeKind, build_shape_object, semantic_shape_kind, shape_polylines
-from .synthetic import (
-    SyntheticFeatureGroundTruth,
-    SyntheticTemplateFrame,
-    SyntheticTemplateGroundTruth,
-    generate_template_test_frame,
-)
 
 __all__ = [
     "TEMPLATE_EXTENSION",
@@ -45,13 +39,9 @@ __all__ = [
     "TemplateCatalog",
     "TemplateDiagnostic",
     "TemplateLibrary",
-    "SyntheticFeatureGroundTruth",
-    "SyntheticTemplateFrame",
-    "SyntheticTemplateGroundTruth",
     "build_rectangle_grid_objects",
     "build_shape_grid_objects",
     "build_shape_object",
-    "generate_template_test_frame",
     "instantiate_template",
     "template_from_rectangle_grid",
     "template_from_shape_grid",

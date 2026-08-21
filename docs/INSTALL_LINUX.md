@@ -2,8 +2,8 @@
 
 The supported starting point is a normal graphical Linux Mint, Ubuntu, or Debian installation on a 64-bit Intel/AMD computer.
 
-Linux is currently the only intended hardware platform. Safe application
-simulation also runs on Windows; the remaining platform boundary is recorded in
+Linux supports direct local hardware. Windows supports authenticated Raspberry
+Pi bridge endpoints; the remaining platform boundary is recorded in
 [../CURRENT_STATE.md](../CURRENT_STATE.md). It does not change these Linux
 installation instructions.
 
@@ -28,19 +28,21 @@ cd laser-camera-aligner
 ./install.sh
 ```
 
-The installer creates an isolated `.venv`, installs the tested Python dependencies (including the OpenCV contrib build needed for ArUco support), installs this repository in editable mode, runs the test suite, creates `config/local.json` in simulation mode, and adds the current user to the `video` and `dialout` groups.
+The installer creates an isolated `.venv`, installs the tested Python dependencies (including the OpenCV contrib build needed for ArUco support), installs this repository in editable mode, runs the test suite, creates a real-machine setup template at `config/local.json`, and adds the current user to the `video` and `dialout` groups.
 
 Python 3.10 or newer is required. The installer stops with a clear message rather than partially installing on an older Linux release.
 
 Log out and back in after a group change.
 
-## 3. Test simulation
+## 3. Configure and start E3
 
 ```bash
 ./run.sh
 ```
 
-Open `http://127.0.0.1:8080` if the browser does not open automatically. Load `sample_data/sample_design.svg` and exercise the placement and simulated-controller flow.
+Complete real machine/controller and camera endpoint configuration before
+starting. Open `http://127.0.0.1:8080` if the browser does not open automatically.
+Unavailable hardware remains visibly offline; E3 does not substitute fake devices.
 
 ## 4. Common permission checks
 

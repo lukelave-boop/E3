@@ -22,9 +22,6 @@ geometry, G-code, safety and controller services.
   zoom and selectable snap spacing. Machine projects use machine coordinates;
   current honeycomb-local projects use the detected support's rigid X0/Y0 frame.
 - Corrected camera image behind the workspace with adjustable opacity
-- Safe-simulation controls to load a corrected full-bed test image or generate
-  one from a selected cutting template, with a persistent frozen-source badge,
-  then restore the synthetic camera
 - Selection, drag movement, direct corner resize and rotation handles, numeric
   size/position/rotation, mirror, duplicate, delete, group/ungroup, alignment,
   distribution and z-order controls
@@ -69,8 +66,8 @@ without copying LightBurn branding or changing the E3 machine-control model:
    retain every existing command.
 2. Original icon-only File/Edit/Arrange/Job controls share one compact command
    row above the workspace.
-3. A non-hideable runtime strip always reports simulation or hardware
-   authority, controller connection, and motion permission. Its software-stop
+3. A non-hideable runtime strip always reports hardware authority, controller
+   connection, and motion permission. Its software-stop
    action remains enabled during ordinary background work. It stays inline on
    wide windows and moves to its own row below 1100 logical pixels so STOP can
    never disappear into toolbar overflow.
@@ -243,7 +240,7 @@ move, resume, or arm. Desktop modal message boxes use a shared queued first-show
 polish and repaint so Linux compositors receive complete dark-theme contents on
 the initial exposure without blocking the GUI event loop.
 
-Native Machine Setup exposes raw camera preview and controls, synthetic scenes,
+Native Machine Setup exposes raw camera preview and controls,
 checkerboard capture/solve, a no-prior-map keyed 5×5 base job with automatic
 rotation/reflection resolution and transactional application, manual and
 CSV-assisted fallback points, seeded grid refinement, residual review, eight-point fine registration, workpiece
@@ -301,7 +298,7 @@ creates two application entries:
 - **E3 Positioning System** — serial hardware can be opened after local safety
   checks.
 - **E3 Positioning System (Safe)** — serial hardware is locked for design,
-  camera and simulation work.
+  camera work.
 
 Direct launch commands:
 
@@ -394,7 +391,7 @@ The Qt windows themselves must still be exercised on the Linux Mint workstation
 because PySide6 and a graphical display are not present in the build environment.
 
 The complete desktop application has since started, run its event loop, and
-shut down under Qt's offscreen backend on Windows with the synthetic camera and
+shut down under Qt's offscreen backend on Windows with injected test doubles and
 simulated controller. This remains a smoke test rather than an interactive GUI
 test. POSIX serial is selected lazily; Linux remains the only hardware platform.
 

@@ -16,16 +16,12 @@ def create_machine_transport(
     input because transport selection has no controller-command semantics.
     """
 
-    if backend == "simulator":
-        from .simulator import SimulatedTransport
-
-        return SimulatedTransport()
     if backend == "serial":
         from .serial_backend import create_serial_transport
 
         return create_serial_transport(port, baudrate)
     raise MachineError(
-        "Machine transport backend must be exactly 'simulator' or 'serial'"
+        "Machine transport backend must be exactly 'serial'"
     )
 
 

@@ -9,10 +9,10 @@ from typing import Any
 import cv2
 import numpy as np
 
-from ..config import WorkArea
-from ..vision.object_trace import TraceOptions
-from .model import CutTemplate, TemplateFeature
-from .shapes import ShapeKind, shape_polylines
+from laser_aligner.config import WorkArea
+from laser_aligner.templates.model import CutTemplate, TemplateFeature
+from laser_aligner.templates.shapes import ShapeKind, shape_polylines
+from laser_aligner.vision.object_trace import TraceOptions
 
 
 @dataclass(slots=True, frozen=True)

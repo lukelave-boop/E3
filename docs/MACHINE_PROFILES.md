@@ -131,7 +131,8 @@ or migration metadata blocks migration without guessing or overwriting data.
 
 Migration deliberately makes only conservative classifications:
 
-- simulator configurations use the simulator machine and simulated head;
+- legacy simulator configurations are rejected or retired by the dedicated
+  removal migration and are never converted into physical identity;
 - explicit GRBL configurations use the Generic GRBL profile;
 - explicit Marlin configurations use the Generic Marlin profile;
 - serial configurations using protocol auto remain Custom Machine;
@@ -147,7 +148,6 @@ authority because the registry is not yet connected to execution.
 
 Machine profiles:
 
-- Simulator
 - Generic GRBL Laser
 - Generic Marlin Laser
 - Creality Ender-3 S1 Pro
@@ -157,7 +157,6 @@ Tool-head profiles:
 
 - Generic 10 W Diode Laser
 - Custom Laser Head
-- Simulated Laser Head
 
 These profiles are starting points, not verified declarations about an attached
 machine. A profile-derived physical machine still requires an explicit
@@ -194,7 +193,7 @@ and machine-neutral.
 ## Verification for this increment
 
 Focused portable tests cover exact legacy migration, conservative profile
-classification, simulator migration, safe profile-derived defaults, multiple
+classification, retired-simulator migration, safe profile-derived defaults, multiple
 saved machines, active selection, update and reload, detached resolved values,
 duplicate and unknown JSON rejection, future-schema rejection, invalid
 machine/head pair rejection, guarded-polygon validation, removal rules,

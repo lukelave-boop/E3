@@ -39,12 +39,7 @@ python3 -m venv .venv
 .venv/bin/python -m pip check
 .venv/bin/python -m compileall -q laser_aligner
 
-if [[ ! -f config/local.json ]]; then
-  cp config/default.json config/local.json
-  echo "Created config/local.json in simulation mode."
-fi
-
-.venv/bin/python -m laser_aligner --config config/local.json --generate-targets
+.venv/bin/python -m laser_aligner --config config/default.json --generate-targets
 
 for group in video dialout; do
   if getent group "$group" >/dev/null 2>&1; then
@@ -60,12 +55,11 @@ cat <<'EOF'
 
 Installation complete.
 
-  Run simulation:  ./run.sh
+  Configure a real machine through the E3 first-run setup before normal use.
   Camera probe:    .venv/bin/python tools/camera_probe.py
   Controller probe (laser power physically disconnected where practical):
                    .venv/bin/python tools/controller_probe.py --port /dev/serial/by-id/YOUR_CONTROLLER
 
 Log out and back in if your user was newly added to the video or dialout group.
-Real serial hardware remains locked unless the application is started with ./run-hardware.sh,
-and motion remains blocked until machine.allow_motion is deliberately enabled in config/local.json.
+Motion remains blocked until machine.allow_motion is deliberately enabled for the saved machine.
 EOF

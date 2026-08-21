@@ -148,9 +148,9 @@ def test_start_here_records_park_pose_and_previews_exact_spot_approach() -> None
     assert selected.laser_on
     assert (selected.start_x, selected.start_y) == pytest.approx((20.0, 10.0))
     machine = MachineService(
-        MachineSettings(backend="simulator"),
+        MachineSettings(backend="serial", allow_motion=True),
         LaserSettings(spot_offset_x_mm=-2.0, spot_offset_y_mm=-3.0),
-        hardware_enabled=False,
+        hardware_enabled=True,
     )
     preflight = machine.preflight_program(text)
     assert preflight.requires_motion

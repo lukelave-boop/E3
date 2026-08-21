@@ -20,8 +20,6 @@ _CONNECTION = 2
 _MACHINE = 3
 _CAMERA = 4
 _FINISH = 5
-_SIMULATOR_PROFILE_ID = "simulator"
-_SIMULATOR_TOOL_HEAD_ID = "simulated-laser-head"
 
 
 @dataclass(frozen=True, slots=True)
@@ -44,7 +42,7 @@ class _WelcomePage(QtWidgets.QWizardPage):
     def __init__(self) -> None:
         super().__init__()
         self.setTitle("Welcome to E3")
-        self.setSubTitle("Choose a safe simulator or configure a saved machine.")
+        self.setSubTitle("Configure a real saved machine.")
         layout = QtWidgets.QVBoxLayout(self)
         intro = QtWidgets.QLabel(
             "This guided setup creates machine-specific files that E3 keeps "
@@ -74,13 +72,7 @@ class _ProfilePage(QtWidgets.QWizardPage):
         layout = QtWidgets.QFormLayout(self)
         self.machine_name = QtWidgets.QLineEdit("My E3 machine")
         self.machine_profile = QtWidgets.QComboBox()
-        ordered_machine_ids = (_SIMULATOR_PROFILE_ID,) + tuple(
-            sorted(
-                profile_id
-                for profile_id in self._machine_profiles
-                if profile_id != _SIMULATOR_PROFILE_ID
-            )
-        )
+        ordered_machine_ids = tuple(sorted(self._machine_profiles))
         for profile_id in ordered_machine_ids:
             profile = self._machine_profiles[profile_id]
             self.machine_profile.addItem(profile.name, profile.id)
@@ -110,9 +102,6 @@ class _ProfilePage(QtWidgets.QWizardPage):
         )
         self._machine_profile_changed()
 
-    def is_simulator(self) -> bool:
-        return self.machine_profile.currentData() == _SIMULATOR_PROFILE_ID
-
     def isComplete(self) -> bool:
         return bool(self.machine_name.text().strip())
 
@@ -127,34 +116,27 @@ class _ProfilePage(QtWidgets.QWizardPage):
         return True
 
     def nextId(self) -> int:
-        return _FINISH if self.is_simulator() else _CONNECTION
+        return _CONNECTION
 
     def _machine_profile_changed(self) -> None:
         selected_tool = self.tool_head_profile.currentData()
-        if selected_tool and selected_tool != _SIMULATOR_TOOL_HEAD_ID:
+        if selected_tool:
             self._hardware_tool_head_id = str(selected_tool)
         self.tool_head_profile.blockSignals(True)
         self.tool_head_profile.clear()
-        if self.is_simulator():
-            profile = self._tool_head_profiles[_SIMULATOR_TOOL_HEAD_ID]
+        for profile_id in ("custom-laser-head", "generic-diode-10w"):
+            profile = self._tool_head_profiles[profile_id]
             self.tool_head_profile.addItem(profile.name, profile.id)
-            self.tool_head_profile.setEnabled(False)
-        else:
-            for profile_id in ("custom-laser-head", "generic-diode-10w"):
-                profile = self._tool_head_profiles[profile_id]
-                self.tool_head_profile.addItem(profile.name, profile.id)
-            index = self.tool_head_profile.findData(
-                self._hardware_tool_head_id
-            )
-            self.tool_head_profile.setCurrentIndex(max(index, 0))
-            self.tool_head_profile.setEnabled(True)
+        index = self.tool_head_profile.findData(self._hardware_tool_head_id)
+        self.tool_head_profile.setCurrentIndex(max(index, 0))
+        self.tool_head_profile.setEnabled(True)
         self.tool_head_profile.blockSignals(False)
         self._refresh_summary()
         self.completeChanged.emit()
 
     def _tool_head_changed(self) -> None:
         selected = self.tool_head_profile.currentData()
-        if selected and selected != _SIMULATOR_TOOL_HEAD_ID:
+        if selected:
             self._hardware_tool_head_id = str(selected)
         self._refresh_summary()
 
@@ -167,13 +149,10 @@ class _ProfilePage(QtWidgets.QWizardPage):
         machine = self._machine_profiles[str(machine_id)]
         tool = self._tool_head_profiles[str(tool_id)]
         area = machine.machine_defaults.work_area
-        if self.is_simulator():
-            mode = "Software-only simulator; no hardware endpoint is used."
-        else:
-            mode = (
-                f"{machine.machine_defaults.protocol.upper()} controller "
-                "policy over the existing E3 bridge transport."
-            )
+        mode = (
+            f"{machine.machine_defaults.protocol.upper()} controller "
+            "policy over the existing E3 bridge transport."
+        )
         self.profile_summary.setText(
             f"<b>{machine.name}</b> + <b>{tool.name}</b><br>"
             f"{mode}<br>Starting work area: {area.width:g} × "
@@ -373,19 +352,11 @@ class _FinishPage(QtWidgets.QWizardPage):
         layout.addStretch(1)
 
     def initializePage(self) -> None:
-        wizard = self.wizard()
-        profile_page = getattr(wizard, "profile", None)
-        if profile_page is not None and profile_page.is_simulator():
-            self.message.setText(
-                "Click Finish to save and select the software-only simulator. "
-                "No hardware endpoint will be contacted."
-            )
-        else:
-            self.message.setText(
-                "Click Finish to save and select this machine for the next E3 "
-                "launch. Motion and laser output remain disabled. No connection, "
-                "Home, jog, arming, output, or physical verification is performed."
-            )
+        self.message.setText(
+            "Click Finish to save and select this machine for the next E3 "
+            "launch. Motion and laser output remain disabled. No connection, "
+            "Home, jog, arming, output, or physical verification is performed."
+        )
 
 
 class FirstRunWizard(QtWidgets.QWizard):
@@ -416,7 +387,7 @@ class FirstRunWizard(QtWidgets.QWizard):
 
     @property
     def open_machine_setup(self) -> bool:
-        return not self.profile.is_simulator()
+        return True
 
     def accept(self) -> None:
         machine_profile_id = str(
@@ -425,20 +396,18 @@ class FirstRunWizard(QtWidgets.QWizard):
         tool_head_profile_id = str(
             self.profile.tool_head_profile.currentData()
         )
-        options: dict[str, object] = {}
-        if not self.profile.is_simulator():
-            options = {
-                "bridge_token": self.connection.token.text(),
-                "host": self.connection.host.text(),
-                "controller_port": self.connection.controller_port.value(),
-                "camera_port": self.connection.camera_port.value(),
-                "width_mm": self.machine.width.value(),
-                "height_mm": self.machine.height.value(),
-                "camera_width": self.camera.width.value(),
-                "camera_height": self.camera.height.value(),
-                "autofocus": self.camera.autofocus.isChecked(),
-                "focus_value": self.camera.focus.value(),
-            }
+        options: dict[str, object] = {
+            "bridge_token": self.connection.token.text(),
+            "host": self.connection.host.text(),
+            "controller_port": self.connection.controller_port.value(),
+            "camera_port": self.connection.camera_port.value(),
+            "width_mm": self.machine.width.value(),
+            "height_mm": self.machine.height.value(),
+            "camera_width": self.camera.width.value(),
+            "camera_height": self.camera.height.value(),
+            "autofocus": self.camera.autofocus.isChecked(),
+            "focus_value": self.camera.focus.value(),
+        }
         try:
             self.saved_config = save_profile_setup(
                 self.template_config,
@@ -508,12 +477,8 @@ def install_first_run_menu(
             return
         action.setEnabled(False)
         next_step = (
-            "The simulator will be used after restart."
-            if not result.open_machine_setup
-            else (
-                "After restart, review this machine in Machine Setup before "
-                "enabling motion or output."
-            )
+            "After restart, review this machine in Machine Setup before "
+            "enabling motion or output."
         )
         QtWidgets.QMessageBox.information(
             window,

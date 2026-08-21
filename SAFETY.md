@@ -122,8 +122,9 @@ emission has stopped or that the area is safe to enter.
 
 ## Software guardrails in this repository
 
-The default project profile is simulation-only. Real serial access requires
-the exact boolean `--hardware` gate; real motion requires the exact boolean
+E3 has no simulated machine or camera runtime. A configured but unavailable
+controller or camera remains honestly offline. Real serial access requires the
+exact boolean hardware gate; real motion requires the exact boolean
 `machine.allow_motion` gate and a successfully
 homed coordinate reference for the current connection; the desktop performs one
 laser-off Home before each hardware job, then arms only after that preflight. Positive

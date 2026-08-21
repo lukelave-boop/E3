@@ -26,8 +26,6 @@ _SETUP_STATE_FILENAME = "first-run.json"
 _MINIMUM_BRIDGE_TOKEN_LENGTH = 24
 _DEFAULT_HARDWARE_MACHINE_PROFILE_ID = "generic-grbl"
 _DEFAULT_HARDWARE_TOOL_HEAD_PROFILE_ID = "custom-laser-head"
-_SIMULATOR_MACHINE_PROFILE_ID = "simulator"
-_SIMULATOR_TOOL_HEAD_PROFILE_ID = "simulated-laser-head"
 
 
 def setup_state_path() -> Path:
@@ -76,27 +74,6 @@ def _profile_payload(
     return snapshot["machine"], snapshot["laser"]
 
 
-def build_simulator_config(template_path: Path) -> dict[str, Any]:
-    """Build a simulation-only first-run configuration with output disabled."""
-
-    payload = _template_payload(template_path)
-    machine, laser = _profile_payload(
-        _SIMULATOR_MACHINE_PROFILE_ID,
-        _SIMULATOR_TOOL_HEAD_PROFILE_ID,
-    )
-    machine["allow_motion"] = False
-    laser["default_power"] = 0
-    laser["frame_power"] = 0
-    laser["allow_low_power_frame"] = False
-    payload["machine"] = machine
-    payload["laser"] = laser
-    app = payload.setdefault("app", {})
-    app["simulation"] = True
-    app["open_browser"] = False
-    app["data_dir"] = "../data"
-    return payload
-
-
 def build_hardware_config(
     template_path: Path,
     *,
@@ -136,8 +113,6 @@ def build_hardware_config(
         ) from exc
     if selected_machine_profile.machine_defaults.backend != "serial":
         raise ValueError("Hardware setup requires a serial machine profile")
-    if tool_head_profile_id == _SIMULATOR_TOOL_HEAD_PROFILE_ID:
-        raise ValueError("Hardware setup requires a physical tool-head profile")
 
     payload = _template_payload(template_path)
     machine, laser = _profile_payload(
@@ -145,7 +120,6 @@ def build_hardware_config(
         tool_head_profile_id,
     )
     app = payload.setdefault("app", {})
-    app["simulation"] = False
     app["open_browser"] = False
     app["data_dir"] = "../data"
 
@@ -335,28 +309,18 @@ def save_profile_setup(
 ) -> Path:
     """Save a safe first-run config and select its profile snapshot."""
 
-    if machine_profile_id == _SIMULATOR_MACHINE_PROFILE_ID:
-        if tool_head_profile_id != _SIMULATOR_TOOL_HEAD_PROFILE_ID:
-            raise ValueError(
-                "The simulator machine requires the simulated tool head"
-            )
-        if configuration:
-            raise ValueError("Simulator setup does not accept hardware settings")
-        payload = build_simulator_config(template_path)
-        token: str | None = None
-    else:
-        token = str(bridge_token or "").strip()
-        if len(token) < _MINIMUM_BRIDGE_TOKEN_LENGTH:
-            raise ValueError(
-                "Bridge credential must contain at least "
-                f"{_MINIMUM_BRIDGE_TOKEN_LENGTH} characters"
-            )
-        payload = build_hardware_config(
-            template_path,
-            machine_profile_id=machine_profile_id,
-            tool_head_profile_id=tool_head_profile_id,
-            **configuration,
+    token = str(bridge_token or "").strip()
+    if len(token) < _MINIMUM_BRIDGE_TOKEN_LENGTH:
+        raise ValueError(
+            "Bridge credential must contain at least "
+            f"{_MINIMUM_BRIDGE_TOKEN_LENGTH} characters"
         )
+    payload = build_hardware_config(
+        template_path,
+        machine_profile_id=machine_profile_id,
+        tool_head_profile_id=tool_head_profile_id,
+        **configuration,
+    )
 
     config_path = user_config_path()
     _settings, registry = _validate_profile_setup(

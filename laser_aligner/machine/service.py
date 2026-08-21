@@ -162,14 +162,14 @@ class MachineService:
         self.hardware_enabled = hardware_enabled
         self.laser_lockout = laser_lockout
         self._transport: MachineTransport | None = None
-        self._protocol = "simulator" if settings.backend == "simulator" else settings.protocol
+        self._protocol = settings.protocol
         self._active_port = settings.port
         self._active_baudrate = settings.baudrate
         self._connected = False
         self._connecting = False
         self._trusted_controller_session_established = False
         self._controller_reconnect_required = False
-        self._coordinate_reference_ready = settings.backend == "simulator"
+        self._coordinate_reference_ready = False
         self._coordinate_state_reference: dict[str, Any] | None = None
         # Incremental UI jogging is translated to absolute moves.  This
         # position is published only by Home / park or a completed jog and is
@@ -270,7 +270,7 @@ class MachineService:
         with self._command_lock, self._lock:
             if self._connected:
                 return self.status()
-            if self.settings.backend == "serial" and self.hardware_enabled is not True:
+            if self.hardware_enabled is not True:
                 raise SafetyError(
                     "Serial hardware is disabled for this process. Start with --hardware after reviewing the configuration."
                 )
@@ -317,15 +317,13 @@ class MachineService:
                     self._transport = transport
                     self._connected = True
                     self._controller_reconnect_required = False
-                self._active_port = "simulator" if self.settings.backend == "simulator" else active_port
+                self._active_port = active_port
                 self._active_baudrate = active_baudrate
-                self._coordinate_reference_ready = self.settings.backend == "simulator"
+                self._coordinate_reference_ready = False
                 self._coordinate_state_reference = None
                 self._jog_position_mm = None
                 self._clear_arm_authorization()
-                if self.settings.backend == "simulator":
-                    self._protocol = "grbl"
-                elif selected == "auto":
+                if selected == "auto":
                     self._protocol = self._identify_protocol(
                         expected_stop_epoch=connect_stop_epoch
                     )
@@ -708,9 +706,7 @@ class MachineService:
         )
         if requests_laser and not laser_authorized:
             raise SafetyError("Laser-enable or positive-power command blocked because control is not armed")
-        if requests_motion and not (
-            self.settings.allow_motion is True or self.settings.backend == "simulator"
-        ):
+        if requests_motion and self.settings.allow_motion is not True:
             raise SafetyError("Motion commands are disabled in machine.allow_motion")
         if (
             (requests_laser or requests_motion)
@@ -856,9 +852,8 @@ class MachineService:
         raise MachineError(f"Controller did not acknowledge command within {timeout:g} seconds")
 
     def query_identity(self) -> list[str]:
-        # Preserve the pre-connection failure path: unresolved ``auto`` and
-        # simulator services historically selected M115, then failed through
-        # the ordinary connection gate rather than a protocol-resolution gate.
+        # Preserve the pre-connection failure path: unresolved ``auto`` uses
+        # M115 and then fails through the ordinary connection gate.
         dialect = self._dialect or MARLIN_DIALECT
         return self.send_command(dialect.identity_query_command, timeout=3.0)
 
@@ -1513,7 +1508,7 @@ class MachineService:
             transcript.append({"command": command, "responses": responses})
             return responses
 
-        self._coordinate_reference_ready = self.settings.backend == "simulator"
+        self._coordinate_reference_ready = False
         self._coordinate_state_reference = None
         self._jog_position_mm = None
         dialect = self._require_resolved_dialect()
@@ -1993,11 +1988,8 @@ class MachineService:
         return lines, requires_laser_authorization
 
     def _require_safety_configuration(self) -> None:
-        if type(self.settings.backend) is not str or self.settings.backend not in {
-            "simulator",
-            "serial",
-        }:
-            raise SafetyError("Machine backend must be exactly 'simulator' or 'serial'")
+        if type(self.settings.backend) is not str or self.settings.backend != "serial":
+            raise SafetyError("Machine backend must be exactly 'serial'")
         if type(self.settings.protocol) is not str or self.settings.protocol not in {
             "auto",
             "grbl",
@@ -2566,8 +2558,8 @@ class MachineService:
             error = str(exc)
             # After any failed streamed command, the controller's receive queue
             # and planner acknowledgement position are not provable. Keep the
-            # simulator subject to the same reconnect boundary so it remains a
-            # useful ordering oracle rather than hiding stale-ACK defects.
+            # transport subject to a reconnect boundary so stale acknowledgements
+            # cannot be mistaken for later command responses.
             self._mark_controller_command_state_untrusted()
             LOGGER.error("Controller job failed: %s", exc)
             self._append_log("ERROR", f"Controller job failed: {exc}")
@@ -2622,9 +2614,8 @@ class MachineService:
             stop_dialect = self._dialect
             if transport is not None:
                 # STOP injects an unacknowledged M5 into the controller stream.
-                # Even the simulator must reconnect before any later command,
-                # otherwise that `ok` can counterfeit a homing acknowledgement
-                # and hide exactly the ordering bugs simulation is meant to catch.
+                # Reconnect before any later command so that an unconsumed `ok`
+                # cannot counterfeit a later homing acknowledgement.
                 self._controller_reconnect_required = True
                 self._coordinate_reference_ready = False
                 self._coordinate_state_reference = None

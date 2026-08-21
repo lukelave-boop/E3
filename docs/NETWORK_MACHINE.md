@@ -23,13 +23,12 @@ path.
 ## Transport, dialect, and profile separation
 
 The desktop uses one construction-only
-`create_machine_transport(backend, port, baudrate)` factory for the existing
-simulator and serial backend choices. A simulator setting constructs a fresh
-in-process transport. For the serial backend, an `e3bridge://` port selects the
+`create_machine_transport(backend, port, baudrate)` factory for the real serial
+backend. An `e3bridge://` port selects the
 authenticated network transport before the local POSIX platform check; any
 other port follows the existing local serial path. This preserves bridge access
 on Windows while direct local serial remains unavailable there. Concrete
-simulator, network, and POSIX implementations are imported lazily, and the
+network and POSIX implementations are imported lazily, and the
 existing `machine.serial_backend` imports remain available for compatibility.
 The factory only constructs an unopened transport and receives no controller
 protocol input.
@@ -59,7 +58,7 @@ instance retains the complete validated configuration. None of these profiles
 grants connection, motion, arming, laser output, or execution authority.
 
 Desktop first-run and Machine Manager now select from those same existing
-profiles. First-run defaults to Simulator. A physical choice may store an
+profiles. First-run requires a physical choice and may store an
 `e3bridge://` controller endpoint and `e3camera://` camera endpoint, but saving
 only creates a motion-disabled, zero-default/frame-power machine snapshot with
 no inherited calibration binding; it sends no network or controller command.

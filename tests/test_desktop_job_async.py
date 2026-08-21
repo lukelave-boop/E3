@@ -54,9 +54,10 @@ def _runtime(tmp_path: Path) -> CoreRuntime:
     payload = json.loads((root / "config" / "default.json").read_text())
     payload["app"]["data_dir"] = str(tmp_path / "data")
     payload["app"]["open_browser"] = False
+    payload["camera"]["autostart"] = False
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
-    return CoreRuntime.from_config(path, hardware_enabled=False)
+    return CoreRuntime.from_config(path, hardware_enabled=True)
 
 
 def _job(move_count: int = 2) -> ProjectJob:
@@ -603,7 +604,7 @@ def test_local_run_passes_exact_prepared_output_authority() -> None:
                 machine=SimpleNamespace(
                     work_area=WorkArea(10.0, 210.0, 10.0, 210.0),
                     allow_motion=True,
-                    backend="simulator",
+                    backend="serial",
                 )
             ),
             context=SimpleNamespace(
@@ -969,7 +970,7 @@ def _dispose(
     application.processEvents()
 
 
-def test_next_launch_ender_selection_preserves_running_simulator_authority(
+def test_next_launch_ender_selection_preserves_running_machine_authority(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -989,10 +990,10 @@ def test_next_launch_ender_selection_preserves_running_simulator_authority(
             running_area.x_max,
             running_area.y_max,
         )
-        assert window.runtime.context.machine_identity.machine_profile_id == "simulator"
+        assert window.runtime.context.machine_identity.machine_profile_id == "custom-machine"
         assert (
             window.runtime.context.machine_identity.tool_head_profile_id
-            == "simulated-laser-head"
+            == "custom-laser-head"
         )
         assert window._new_project_defaults_source == "safe_neutral"
         assert len(window.document.layers) == 1
@@ -1006,12 +1007,12 @@ def test_next_launch_ender_selection_preserves_running_simulator_authority(
         immutable_running_name = (
             window.runtime.context.machine_identity.machine_name
         )
-        running_saved.name = "Renamed simulator for next launch"
+        running_saved.name = "Renamed machine for next launch"
         registry.update_machine(running_saved)
         window._refresh_machine_selector(running_machine_id)
         running_index = window.machine_selector.findData(running_machine_id)
         running_text = window.machine_selector.itemText(running_index)
-        assert "Renamed simulator for next launch" in running_text
+        assert "Renamed machine for next launch" in running_text
         assert f"running as {immutable_running_name}" in running_text
         assert (
             window.runtime.context.machine_identity.machine_name
@@ -1032,10 +1033,10 @@ def test_next_launch_ender_selection_preserves_running_simulator_authority(
 
         assert registry.active_machine_id == next_launch.id
         assert window.runtime.running_machine_id == running_machine_id
-        assert window.runtime.context.machine_identity.machine_profile_id == "simulator"
+        assert window.runtime.context.machine_identity.machine_profile_id == "custom-machine"
         assert (
             window.runtime.context.machine_identity.tool_head_profile_id
-            == "simulated-laser-head"
+            == "custom-laser-head"
         )
 
         window.new_project()
@@ -2641,6 +2642,7 @@ def test_start_here_preserves_exact_raster_identities(
         assert approach.rapid and not approach.laser_on
         assert (approach.start_x, approach.start_y) == pytest.approx((110.0, 110.0))
         assert (approach.end_x, approach.end_y) == pytest.approx((0.0, 0.0))
+        window.runtime.context.machine.settings.allow_motion = True
         preflight = window.runtime.context.machine.preflight_program(
             window.last_job.text
         )

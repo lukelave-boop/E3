@@ -29,9 +29,9 @@ Restart E3 to run another saved instance.
 
 Connection fields are conditional: endpoint and baud apply to the serial/
 `e3bridge://` backend, while GRBL step-idle applies only to GRBL or an automatic
-selection that may resolve to GRBL. The current built-ins remain Simulator,
-Generic GRBL, Generic Marlin, Ender-3 S1 Pro, and Custom Machine, with Generic
-10 W Diode, Custom Laser Head, and Simulated Laser Head tool profiles. This UI
+selection that may resolve to GRBL. The current built-ins are Generic GRBL,
+Generic Marlin, Ender-3 S1 Pro, and Custom Machine, with Generic 10 W Diode and
+Custom Laser Head tool profiles. This UI
 does not claim compatibility with an untested printer or controller.
 
 New profile-created machines start with motion permission off, default and frame
@@ -45,8 +45,8 @@ assert that calibration evidence is valid. Restart and satisfy the ordinary
 bed/support validity checks before honeycomb-local coordinate authority can be
 used.
 
-The first-run wizard uses these same profiles and defaults to Simulator. A
-physical selection stores the bridge/camera endpoints and a safe-off saved
+The first-run wizard requires one of these physical profiles. It stores the
+bridge/camera endpoints and a safe-off saved
 snapshot; its optional network test is reachability-only. First-run never
 connects, Homes, jogs, arms, moves, emits, or physically verifies the machine.
 
@@ -106,13 +106,12 @@ does not connect, home, move, arm, or enable output; the running settings and
 `MachineService` safety gates remain authoritative.
 
 At connection time, one construction-only factory maps the saved `backend`,
-`port`, and `baudrate` to the existing simulator, local POSIX serial, or
+`port`, and `baudrate` to local POSIX serial or
 authenticated `e3bridge://` network transport. Transport objects carry only raw
 bytes and lines; they do not interpret commands or grant controller access. The
 bridge URI is recognized before the local-platform check, so Windows can use an
 authenticated bridge while direct local serial remains unavailable there.
-Platform transports are imported lazily, preserving simulator and portable
-imports on Windows.
+Platform transports are imported lazily, preserving portable imports on Windows.
 
 GRBL and Marlin behavior is described by immutable, UI-neutral dialect policy,
 but `MachineService` still owns connection timing, command writes, response
@@ -152,7 +151,6 @@ physical evidence.
   cancels that owner and clears the cached frame. The profile timeout covers
   control reapplication, settling, discards, and sample acquisition after the
   action gains ownership.
-- In simulation, select the perspective-bed, checkerboard, or workpiece scene.
 
 If another application has exclusive camera access, the desktop presents one
 acknowledgeable **Camera unavailable** message. Repeated live-refresh failures
@@ -371,8 +369,8 @@ check before confirming or changing either state. A stale bed map still reports
 its saved orientation accurately, while keeping the orientation controls disabled
 until the map is valid again.
 
-Machine Setup also remembers its window geometry, selected tab, simulation
-scene, cross sizes, and marking speeds in the active application data directory.
+Machine Setup also remembers its window geometry, selected tab, cross sizes,
+and marking speeds in the active application data directory.
 Verified marking power deliberately returns to `0%` on every open so a previous
 powered calibration value is never silently carried into another session.
 
@@ -577,7 +575,7 @@ authority.
 ## Browser parity
 
 The desktop is the primary operator UI. It now exposes the browser's camera
-controls, still capture, synthetic scenes, lens calibration, manual/CSV/5×5
+controls, still capture, lens calibration, manual/CSV/5×5
 bed mapping, workpiece detection, fiducial detection, SVG import/placement,
 G-code generation/export, controller connection, diagnostics,
 camera-pose parking, guarded execution, software stop, fine registration, and

@@ -20,12 +20,11 @@ def _settings(tmp_path: Path):
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600, "fps": 2},
                 "calibration": {"bed": {"pixels_per_mm": 2}},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -49,9 +48,31 @@ def _lens(distortion: float) -> LensModel:
     )
 
 
+def _install_test_bed(context: AppContext) -> None:
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 599.0, 0.0, 0.0),
+            BedPoint(799.0, 599.0, 220.0, 0.0),
+            BedPoint(799.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        800,
+        600,
+        provenance=context._bed_provenance(),
+    )
+
+
+def _context(tmp_path: Path) -> AppContext:
+    context = AppContext(_settings(tmp_path))
+    _install_test_bed(context)
+    context.bed_reference = lambda: np.zeros((600, 800, 3), dtype=np.uint8)  # type: ignore[method-assign]
+    return context
+
+
 def test_bed_provenance_survives_unchanged_restart(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     first = AppContext(settings)
+    _install_test_bed(first)
     first.start()
     try:
         assert first.bed_calibration_validity() == {"state": "VALID", "reasons": []}
@@ -62,13 +83,13 @@ def test_bed_provenance_survives_unchanged_restart(tmp_path: Path) -> None:
     second.start()
     try:
         assert second.bed_calibration_validity() == {"state": "VALID", "reasons": []}
-        assert second.rectified_frame(refresh=True).shape[:2] == (440, 440)
     finally:
         second.stop()
 
 
 def test_edited_bed_points_report_stale_model_until_resolved(tmp_path: Path) -> None:
-    context = AppContext(_settings(tmp_path))
+    context = _context(tmp_path)
+    _install_test_bed(context)
     context.start()
     try:
         first = context.bed.points[0]
@@ -98,7 +119,8 @@ def test_edited_bed_points_report_stale_model_until_resolved(tmp_path: Path) -> 
 
 
 def test_lens_or_focus_change_marks_same_resolution_bed_stale(tmp_path: Path) -> None:
-    context = AppContext(_settings(tmp_path))
+    context = _context(tmp_path)
+    _install_test_bed(context)
     context.start()
     try:
         context.lens._model = _lens(0.0)
@@ -124,7 +146,8 @@ def test_lens_or_focus_change_marks_same_resolution_bed_stale(tmp_path: Path) ->
 
 
 def test_clearing_lens_blocks_bed_map_bound_to_that_model(tmp_path: Path) -> None:
-    context = AppContext(_settings(tmp_path))
+    context = _context(tmp_path)
+    _install_test_bed(context)
     context.start()
     try:
         context.lens._model = _lens(0.0)
@@ -139,6 +162,7 @@ def test_clearing_lens_blocks_bed_map_bound_to_that_model(tmp_path: Path) -> Non
 def test_legacy_bed_map_is_provenance_unknown_and_blocked(tmp_path: Path) -> None:
     settings = _settings(tmp_path)
     first = AppContext(settings)
+    _install_test_bed(first)
     first.start()
     first.stop()
     payload = json.loads(first.bed.model_path.read_text(encoding="utf-8"))
@@ -175,7 +199,7 @@ def test_bed_calibration_load_rejects_malformed_models(
     tmp_path: Path,
     mutation: str,
 ) -> None:
-    context = AppContext(_settings(tmp_path))
+    context = _context(tmp_path)
     context.start()
     try:
         assert context.bed.calibration is not None
@@ -253,7 +277,7 @@ def test_bed_calibration_rejects_coerced_integer_metadata(
     field: str,
     value: object,
 ) -> None:
-    context = AppContext(_settings(tmp_path))
+    context = _context(tmp_path)
     context.start()
     try:
         assert context.bed.calibration is not None
@@ -267,7 +291,7 @@ def test_bed_calibration_rejects_coerced_integer_metadata(
 
 
 def test_bed_calibration_rejects_nonfinite_provenance(tmp_path: Path) -> None:
-    context = AppContext(_settings(tmp_path))
+    context = _context(tmp_path)
     context.start()
     try:
         assert context.bed.calibration is not None
@@ -294,7 +318,7 @@ def test_bed_calibration_rejects_malformed_residual_mesh_schema(
     value: object,
     message: str,
 ) -> None:
-    context = AppContext(_settings(tmp_path))
+    context = _context(tmp_path)
     context.start()
     try:
         assert context.bed.calibration is not None

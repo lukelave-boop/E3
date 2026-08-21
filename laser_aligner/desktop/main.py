@@ -76,16 +76,16 @@ def main(argv: list[str] | None = None) -> int:
         config = resolve_launch_profile().config_path
 
     open_first_run_machine_setup = False
-    if (
-        config is not None
-        and Path(config).name == "default.json"
-        and not user_config_path().is_file()
-    ):
-        first_run = run_first_run_setup(Path(config))
-        if first_run is None:
-            return 0
-        config = first_run.config_path
-        open_first_run_machine_setup = first_run.open_machine_setup
+    if config is not None and Path(config).name == "default.json":
+        existing_user_config = user_config_path()
+        if existing_user_config.is_file():
+            config = existing_user_config
+        else:
+            first_run = run_first_run_setup(Path(config))
+            if first_run is None:
+                return 0
+            config = first_run.config_path
+            open_first_run_machine_setup = first_run.open_machine_setup
 
     token = read_bridge_token()
     if token:

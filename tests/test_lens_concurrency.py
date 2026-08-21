@@ -1003,11 +1003,10 @@ def test_app_status_binds_bed_validity_to_its_lens_snapshot(
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 160, "height": 120, "autostart": False},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",

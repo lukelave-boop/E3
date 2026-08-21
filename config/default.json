@@ -3,7 +3,6 @@
     "host": "127.0.0.1",
     "port": 8080,
     "data_dir": "../data",
-    "simulation": true,
     "open_browser": true,
     "allow_remote_control": false,
     "max_request_bytes": 10000000
@@ -43,9 +42,9 @@
     }
   },
   "machine": {
-    "backend": "simulator",
+    "backend": "serial",
     "protocol": "auto",
-    "port": "/dev/ttyUSB0",
+    "port": "SELECT_CONTROLLER_PORT",
     "baudrate": 115200,
     "read_timeout": 2.0,
     "work_area": {

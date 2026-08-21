@@ -226,7 +226,7 @@ def wait_for_job(machine: MachineService) -> dict[str, object]:
 @pytest.mark.parametrize(
     "settings",
     [
-        MachineSettings(backend="simulator", protocol="auto"),
+        MachineSettings(backend="serial", protocol="auto"),
         MachineSettings(backend="serial", protocol="auto"),
     ],
     ids=["simulator", "serial-auto"],

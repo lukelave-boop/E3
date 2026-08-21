@@ -15,7 +15,6 @@ def _settings(tmp_path: Path):
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "machine": {

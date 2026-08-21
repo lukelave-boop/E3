@@ -25,37 +25,6 @@ from laser_aligner.imaging import write_image_atomic
 from laser_aligner.vision.ruler import HoneycombRulerDetection, RulerAxisDetection
 
 
-def test_simulation_auto_maps_bed_and_generates_workspace(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
-                "camera": {"width": 800, "height": 600, "fps": 2},
-                "calibration": {"bed": {"pixels_per_mm": 2}},
-                "machine": {"backend": "simulator"},
-            }
-        ),
-        encoding="utf-8",
-    )
-    settings = load_settings(config_path)
-    context = AppContext(settings)
-    context.start()
-    try:
-        assert context.bed.calibration is not None
-        assert context.machine.connected
-        image = context.rectified_frame(refresh=True)
-        assert image.shape[:2] == (440, 440)
-        assert not context.workspace_path.exists()
-        persisted = context.rectified_frame(refresh=True, precision=True, persist=True)
-        assert persisted.shape == image.shape
-        assert context.workspace_path.exists()
-        detection = context.detect_workpiece()
-        assert detection["detected"]
-    finally:
-        context.stop()
-
-
 def test_expanded_rectified_frame_does_not_replace_configured_workspace_cache(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -157,10 +126,10 @@ def test_browser_generation_uses_configured_photo_pose_for_exact_preview(
     config_path.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "data", "simulation": True},
+                "app": {"data_dir": "data"},
                 "camera": {"autostart": False},
                 "machine": {
-                    "backend": "simulator",
+                    "backend": "serial",
                     "photo_position": {"x": 73, "y": 91, "z": None},
                 },
                 "laser": {"spot_offset_x_mm": -2, "spot_offset_y_mm": 3},
@@ -361,13 +330,12 @@ def test_raw_to_bed_composition_uses_one_remap_and_reduces_resampling_error(
             {
                 "app": {
                     "data_dir": "composed-data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 128, "height": 128, "autostart": False},
                 "calibration": {"bed": {"pixels_per_mm": 1}},
-                "machine": {
-                    "backend": "simulator",
+                    "machine": {
+                        "backend": "serial",
                     "work_area": {
                         "x_min": 0,
                         "x_max": 64,
@@ -492,19 +460,6 @@ def test_raw_to_bed_composition_uses_one_remap_and_reduces_resampling_error(
         context._rectify_camera_image(raw)
 
 
-def test_camera_calibration_readiness_accepts_connected_simulator(tmp_path: Path) -> None:
-    context = AppContext(_settings(tmp_path))
-    context.camera.start()
-    try:
-        assert context.camera_calibration_readiness() == {
-            "state": "READY",
-            "reasons": [],
-            "synthetic": True,
-        }
-    finally:
-        context.camera.stop()
-
-
 def test_camera_calibration_readiness_rejects_geometry_and_control_drift(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -540,71 +495,11 @@ def test_camera_calibration_readiness_rejects_geometry_and_control_drift(
     )
 
 
-def test_simulation_and_legacy_grid_follow_nonzero_configured_area(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    config_path = tmp_path / "centered-area.json"
-    config_path.write_text(
-        json.dumps(
-            {
-                "app": {
-                    "data_dir": "centered-data",
-                    "simulation": True,
-                    "open_browser": False,
-                },
-                "camera": {"width": 800, "height": 600, "fps": 2},
-                "calibration": {"bed": {"pixels_per_mm": 2}},
-                "machine": {
-                    "backend": "simulator",
-                    "work_area": {
-                        "x_min": 10,
-                        "x_max": 210,
-                        "y_min": 20,
-                        "y_max": 220,
-                    },
-                },
-                "laser": {"boundary_margin_mm": 5},
-            }
-        ),
-        encoding="utf-8",
-    )
-    context = AppContext(load_settings(config_path))
-    context.start()
-    captured: list[dict[str, float]] = []
-
-    def record_expected(
-        _image: np.ndarray,
-        expected: list[dict[str, float]],
-        *,
-        search_radius_px: int,
-    ) -> dict[str, object]:
-        assert search_radius_px == 65
-        captured.extend(expected)
-        return {"detected": True, "points": expected}
-
-    monkeypatch.setattr("laser_aligner.app.detect_crosshairs_near", record_expected)
-    try:
-        correspondences = context.camera.calibration_correspondences()  # type: ignore[attr-defined]
-        assert all(10.0 <= point[2] <= 210.0 for point in correspondences)
-        assert all(20.0 <= point[3] <= 220.0 for point in correspondences)
-        assert context.rectified_frame(refresh=True).shape[:2] == (400, 400)
-
-        context.detect_bed_cross_grid()
-        assert len(captured) == 25
-        assert min(point["machine_x"] for point in captured) == pytest.approx(19.75)
-        assert max(point["machine_x"] for point in captured) == pytest.approx(200.25)
-        assert min(point["machine_y"] for point in captured) == pytest.approx(29.75)
-        assert max(point["machine_y"] for point in captured) == pytest.approx(210.25)
-    finally:
-        context.stop()
-
-
 def _settings(
     tmp_path: Path,
     *,
-    simulation: bool = True,
-    machine_backend: str = "simulator",
+    simulation: bool = False,
+    machine_backend: str = "serial",
 ):
     config_path = tmp_path / f"config-{simulation}-{machine_backend}.json"
     config_path.write_text(
@@ -612,7 +507,6 @@ def _settings(
             {
                 "app": {
                     "data_dir": f"data-{simulation}-{machine_backend}",
-                    "simulation": simulation,
                     "open_browser": False,
                 },
                 "camera": {"autostart": False},
@@ -1640,46 +1534,6 @@ def test_honeycomb_detection_rejects_mapped_span_error_without_replacing_referen
     assert context.honeycomb_support.reference == existing
 
 
-def test_simulation_workspace_frame_is_memory_only_and_copy_isolated(
-    tmp_path: Path,
-) -> None:
-    context = AppContext(_settings(tmp_path))
-    image = np.full((440, 440, 3), (25, 80, 210), dtype=np.uint8)
-
-    info = context.set_simulation_workspace_frame(
-        image,
-        source_name="generated Alpha labels",
-        metadata={"center_x_mm": 117.0, "rotation_deg": 8.0},
-    )
-    image[:] = 0
-    first = context.rectified_frame(refresh=True)
-    first[:] = 1
-    second = context.rectified_frame(refresh=False)
-
-    assert info["source_name"] == "generated Alpha labels"
-    assert info["width"] == 440
-    assert context.has_simulation_workspace_frame
-    assert tuple(second[0, 0]) == (25, 80, 210)
-    assert context.simulation_workspace_frame_info()["metadata"] == {
-        "center_x_mm": 117.0,
-        "rotation_deg": 8.0,
-    }
-    assert context.simulation_workspace_frame_status() == {
-        "active": True,
-        "source_name": "generated Alpha labels",
-        "width": 440,
-        "height": 440,
-        "pixels_per_mm": 2.0,
-    }
-    assert "metadata" not in context.status()["simulation_workspace_frame"]
-    assert not context.workspace_path.exists()
-
-    context.clear_simulation_workspace_frame()
-    assert not context.has_simulation_workspace_frame
-    assert context.simulation_workspace_frame_info() is None
-    assert context.simulation_workspace_frame_status() is None
-
-
 def test_bed_reference_prefers_lossless_png_but_reads_legacy_jpeg(tmp_path: Path) -> None:
     context = AppContext(_settings(tmp_path))
     legacy = np.full((20, 30, 3), 45, dtype=np.uint8)
@@ -1693,47 +1547,6 @@ def test_bed_reference_prefers_lossless_png_but_reads_legacy_jpeg(tmp_path: Path
     assert float(np.mean(first)) == pytest.approx(45.0, abs=2.0)
     assert np.array_equal(second, lossless)
 
-
-@pytest.mark.parametrize(
-    ("simulation", "machine_backend", "hardware_enabled"),
-    (
-        (False, "simulator", False),
-        (True, "serial", False),
-        (True, "simulator", True),
-    ),
-)
-def test_simulation_workspace_frame_enforces_the_full_safety_gate(
-    tmp_path: Path,
-    simulation: bool,
-    machine_backend: str,
-    hardware_enabled: bool,
-) -> None:
-    context = AppContext(
-        _settings(
-            tmp_path,
-            simulation=simulation,
-            machine_backend=machine_backend,
-        ),
-        hardware_enabled=hardware_enabled,
-    )
-
-    with pytest.raises(RuntimeError, match="Test images require simulation mode"):
-        context.set_simulation_workspace_frame(
-            np.zeros((440, 440, 3), dtype=np.uint8),
-            source_name="unsafe",
-        )
-
-
-def test_simulation_workspace_frame_rejects_wrong_corrected_dimensions(
-    tmp_path: Path,
-) -> None:
-    context = AppContext(_settings(tmp_path))
-
-    with pytest.raises(ValueError, match="expected 440x440, got 640x480"):
-        context.set_simulation_workspace_frame(
-            np.zeros((480, 640, 3), dtype=np.uint8),
-            source_name="wrong size",
-        )
 
 def test_remote_bed_provenance_accepts_legacy_pi_device_name() -> None:
     from laser_aligner.app import _camera_provenance_matches

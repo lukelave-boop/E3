@@ -6,12 +6,7 @@ machine configuration exists.
 
 ## Choose a saved machine
 
-The default choice is **Simulator**. It creates a software-only saved machine
-from the built-in Simulator and Simulated Laser Head profiles and skips every
-hardware page. Choose this when hardware setup should be deferred. A physical
-machine can be added later with **Tools > Manage machines…**.
-
-The hardware choice creates one concrete saved machine from the selected
+First-run requires one concrete saved machine from the selected
 built-in machine and physical tool-head profiles. Profiles are reviewed starting
 values, not a claim that a controller, machine, laser, or accessory is compatible
 or physically verified. The hardware path asks for:
@@ -30,7 +25,7 @@ verification of the machine, motion envelope, camera, calibration, or laser.
 
 ## Safe saved state
 
-Finishing either path writes the ordinary configuration and the existing
+Finishing setup writes the ordinary configuration and the existing
 schema-1 saved-machine registry; first-run adds no separate project or machine
 schema. The newly created profile snapshot is selected and starts with:
 
@@ -81,8 +76,8 @@ projects remain outside the replaceable application directory and survive
 normal E3 updates. Keep the state root private because the hardware credential
 is a secret.
 
-Canceling before **Finish** leaves first-run configuration absent; launch E3
-again to retry. Invalid settings or a malformed bridge address are rejected
+Canceling before **Finish** leaves first-run configuration absent and exits E3;
+launch E3 again to retry. Invalid settings or a malformed bridge address are rejected
 before the canonical configuration, registry, credential, or completion marker
 is written. After a configuration has been saved, use **Tools > Manage
 machines…** for saved profile/endpoint/work-area changes and **Tools > Machine

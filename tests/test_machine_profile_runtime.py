@@ -19,7 +19,6 @@ def _settings(tmp_path: Path):
             {
                 "app": {
                     "data_dir": "runtime",
-                    "simulation": False,
                 },
                 "machine": {
                     "backend": "serial",

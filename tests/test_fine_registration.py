@@ -35,9 +35,23 @@ from laser_aligner.config import (
     load_settings,
 )
 from laser_aligner.errors import CalibrationError
+from tests.fakes.simulator_transport import SimulatedTransport
 
 
 def _run_prepared_job(context: AppContext, job: object) -> None:
+    if not context.machine.connected:
+        transport = SimulatedTransport()
+        transport.open()
+        context.machine._transport = transport
+        context.machine._connected = True
+        context.machine._protocol = "grbl"
+        context.machine._coordinate_reference_ready = True
+        context.machine._coordinate_state_reference = {
+            "active_workspace": "G54",
+            "active_offset_mm": [0.0, 0.0, 0.0],
+            "g92_offset_mm": [0.0, 0.0, 0.0],
+        }
+        context.machine._jog_position_mm = (0.0, 0.0)
     program = context.machine.preflight_program(job.program.text)
     context.machine.arm_program(context.machine.ARM_PHRASE, program)
     context.machine.start_validated_program(program, job.filename)
@@ -50,6 +64,7 @@ def _run_prepared_job(context: AppContext, job: object) -> None:
 def _save_execution_support(context: AppContext) -> HoneycombSupportReference:
     """Store an automatic four-corner support inside the guarded machine area."""
 
+    _install_test_bed(context)
     calibration = context.bed.calibration
     assert calibration is not None
     area = context.settings.machine.work_area
@@ -73,6 +88,28 @@ def _save_execution_support(context: AppContext) -> HoneycombSupportReference:
     return reference
 
 
+def _install_test_bed(context: AppContext) -> None:
+    """Install explicit physical-coordinate evidence for this test fixture."""
+
+    context.machine.hardware_enabled = True
+    context.machine.settings.allow_motion = True
+    if context.bed.calibration is not None:
+        return
+    area = context.settings.machine.work_area
+    width = context.settings.camera.width
+    height = context.settings.camera.height
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0, height - 1, area.x_min, area.y_min),
+            BedPoint(width - 1, height - 1, area.x_max, area.y_min),
+            BedPoint(width - 1, 0, area.x_max, area.y_max),
+            BedPoint(0, 0, area.x_min, area.y_max),
+        ],
+        width,
+        height,
+    )
+
+
 def test_dense_mesh_targets_form_complete_five_by_five_grid() -> None:
     targets = dense_mesh_targets(WorkArea(x_min=10, x_max=210, y_min=10, y_max=210))
     assert len(targets) == 25
@@ -87,9 +124,9 @@ def test_powered_dense_fit_spans_180mm_when_support_polygon_authorizes_it(
     config_path.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "app": {"data_dir": "data", "open_browser": False},
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
                 "laser": {
                     "guarded_output_polygon_mm": [
                         [0.0, 0.0],
@@ -140,9 +177,9 @@ def test_dense_fit_and_validation_sessions_do_not_overwrite_each_other(tmp_path:
     config_path.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "app": {"data_dir": "data", "open_browser": False},
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -196,7 +233,7 @@ def test_dense_fit_and_validation_sessions_do_not_overwrite_each_other(tmp_path:
             match="These 16 interstitial marks belong.*before the validation refinement",
         ):
             context.analyze_dense_calibration_image(
-                context.camera_frame(undistort=True),
+                    np.zeros((600, 800, 3), dtype=np.uint8),
                 validation=True,
             )
     finally:
@@ -206,7 +243,7 @@ def test_dense_fit_and_validation_sessions_do_not_overwrite_each_other(tmp_path:
 def test_legacy_shared_dense_validation_session_is_preserved(tmp_path: Path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(
-        json.dumps({"app": {"data_dir": "data", "simulation": True, "open_browser": False}}),
+        json.dumps({"app": {"data_dir": "data", "open_browser": False}}),
         encoding="utf-8",
     )
     settings = load_settings(config_path)
@@ -234,7 +271,7 @@ def test_malformed_confirmation_session_is_repaired_before_capture(
 ) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(
-        json.dumps({"app": {"data_dir": "data", "simulation": True, "open_browser": False}}),
+        json.dumps({"app": {"data_dir": "data", "open_browser": False}}),
         encoding="utf-8",
     )
     context = AppContext(load_settings(config_path))
@@ -283,14 +320,14 @@ def test_malformed_confirmation_session_is_repaired_before_capture(
             return {"detected": False, "reason": "fixture", "points": []}
 
         monkeypatch.setattr("laser_aligner.app.detect_crosshairs_near", detect)
-        image = context.camera_frame(undistort=True)
+        image = np.zeros((600, 800, 3), dtype=np.uint8)
         context.analyze_dense_calibration_image(image, confirmation=True)
 
         repaired = json.loads(context.dense_confirmation_path.read_text(encoding="utf-8"))
         assert repaired["validation"] is False
         assert repaired["confirmation"] is True
-        # The active mapping projects the Step 5 machine-space 2 mm gate to 15 px.
-        assert observed["search_radius_px"] == 15
+        # The explicit test mapping projects the Step 5 machine-space gate to 18 px.
+        assert observed["search_radius_px"] == 18
     finally:
         context.stop()
 
@@ -765,9 +802,9 @@ def test_reset_fine_registration_recovers_saved_review_after_dialog_restart(
     config_path.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "app": {"data_dir": "data", "open_browser": False},
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -951,11 +988,10 @@ def test_dry_registration_session_cannot_be_analyzed_as_burned_marks(
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -963,6 +999,7 @@ def test_dry_registration_session_cannot_be_analyzed_as_burned_marks(
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _install_test_bed(context)
         context.prepare_fine_registration_job(
             powered=False,
             power_percent=0,
@@ -970,7 +1007,7 @@ def test_dry_registration_session_cannot_be_analyzed_as_burned_marks(
             speed_mm_min=1200,
         )
         with pytest.raises(CalibrationError, match="laser power 0%"):
-            context.analyze_fine_registration_image(context.camera_frame(undistort=True))
+            context.analyze_fine_registration_image(np.zeros((600, 800, 3), dtype=np.uint8))
     finally:
         context.stop()
 
@@ -982,14 +1019,16 @@ def test_powered_registration_is_rechecked_against_detected_support_at_start(
     config_path.write_text(
         json.dumps(
             {
-                "app": {"data_dir": "data", "simulation": True, "open_browser": False},
+                "app": {"data_dir": "data", "open_browser": False},
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
     )
     context = AppContext(load_settings(config_path))
+    context.machine.hardware_enabled = True
+    context.machine.settings.allow_motion = True
     area = context.settings.machine.work_area
     context.bed.replace_points_and_solve(
         [
@@ -1040,11 +1079,10 @@ def test_fine_registration_session_is_bound_to_the_active_bed_map(
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -1090,7 +1128,7 @@ def test_fine_registration_session_is_bound_to_the_active_bed_map(
         )
         with pytest.raises(CalibrationError, match="bed map changed"):
             context.analyze_fine_registration_image(
-                context.camera_frame(undistort=True)
+                    np.zeros((600, 800, 3), dtype=np.uint8)
             )
     finally:
         context.stop()
@@ -1106,11 +1144,10 @@ def test_stale_fine_registration_capture_fails_before_motor_hold(
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -1148,11 +1185,10 @@ def test_legacy_fine_registration_session_without_map_identity_is_rejected(
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -1180,7 +1216,7 @@ def test_legacy_fine_registration_session_without_map_identity_is_rejected(
 
         with pytest.raises(CalibrationError, match="bed map changed"):
             context.analyze_fine_registration_image(
-                context.camera_frame(undistort=True)
+                    np.zeros((600, 800, 3), dtype=np.uint8)
             )
     finally:
         context.stop()
@@ -1195,11 +1231,10 @@ def test_fine_registration_apply_rejects_modified_and_stale_analysis(
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -1207,6 +1242,7 @@ def test_fine_registration_apply_rejects_modified_and_stale_analysis(
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _install_test_bed(context)
         current = context._seal_analysis(
             {
                 "can_apply_translation": True,
@@ -1250,11 +1286,10 @@ def test_bed_map_corrections_clear_honeycomb_pose(tmp_path: Path) -> None:
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -1262,6 +1297,7 @@ def test_bed_map_corrections_clear_honeycomb_pose(tmp_path: Path) -> None:
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _install_test_bed(context)
         calibration = context.bed.calibration
         assert calibration is not None
         context.honeycomb_support.save(
@@ -1304,11 +1340,10 @@ def test_dry_accuracy_validation_cannot_be_analyzed_as_burned_holdouts(
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",
@@ -1316,6 +1351,7 @@ def test_dry_accuracy_validation_cannot_be_analyzed_as_burned_holdouts(
     context = AppContext(load_settings(config_path))
     context.start()
     try:
+        _install_test_bed(context)
         job = context.prepare_accuracy_validation_job(
             powered=False,
             power_percent=0,
@@ -1326,7 +1362,9 @@ def test_dry_accuracy_validation_cannot_be_analyzed_as_burned_holdouts(
         assert "M3 " not in job.program.text
         assert "M4 " not in job.program.text
         with pytest.raises(CalibrationError, match="laser power 0%"):
-            context.analyze_accuracy_validation_image(context.camera_frame(undistort=True))
+            context.analyze_accuracy_validation_image(
+                np.zeros((600, 800, 3), dtype=np.uint8)
+            )
     finally:
         context.stop()
 
@@ -1340,11 +1378,10 @@ def test_powered_accuracy_validation_scores_synthetic_holdouts_and_rejects_stale
             {
                 "app": {
                     "data_dir": "data",
-                    "simulation": True,
                     "open_browser": False,
                 },
                 "camera": {"width": 800, "height": 600},
-                "machine": {"backend": "simulator"},
+                "machine": {"backend": "serial"},
             }
         ),
         encoding="utf-8",

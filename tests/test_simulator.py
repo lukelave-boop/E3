@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from laser_aligner.machine.simulator import SimulatedTransport
-from laser_aligner.machine.simulator_controller import SimulatedController
+from tests.fakes.simulator_controller import SimulatedController
+from tests.fakes.simulator_transport import SimulatedTransport
 
 
 def test_simulated_controller_exposes_semantics_without_transport_authority() -> None:

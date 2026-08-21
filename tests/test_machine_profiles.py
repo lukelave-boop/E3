@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from laser_aligner.config import (
 from laser_aligner.machine import profiles as profiles_module
 from laser_aligner.machine.profiles import (
     MACHINE_REGISTRY_SCHEMA_VERSION,
+    REMOVED_SIMULATOR_BACKUP_SUFFIX,
     MachineInstance,
     MachineProfile,
     MachineRegistry,
@@ -134,7 +136,6 @@ def test_builtin_profile_ids_are_stable_and_complete(tmp_path: Path) -> None:
     registry = MachineRegistry.load_or_migrate(_settings(tmp_path))
 
     assert {profile.id for profile in registry.machine_profiles()} == {
-        "simulator",
         "generic-grbl",
         "generic-marlin",
         "ender-3-s1-pro",
@@ -143,21 +144,55 @@ def test_builtin_profile_ids_are_stable_and_complete(tmp_path: Path) -> None:
     assert {profile.id for profile in registry.tool_head_profiles()} == {
         "generic-diode-10w",
         "custom-laser-head",
-        "simulated-laser-head",
     }
 
 
-def test_simulator_migration_does_not_infer_a_physical_machine(
+def _append_legacy_simulator(path: Path, *, active: bool) -> bytes:
+    original = json.loads(path.read_text(encoding="utf-8"))
+    legacy = copy.deepcopy(original["machines"][0])
+    legacy["id"] = "legacy-simulator"
+    legacy["name"] = "Legacy simulator"
+    legacy["machine_profile_id"] = "simulator"
+    legacy["tool_head_profile_id"] = "simulated-laser-head"
+    legacy["machine"]["backend"] = "simulator"
+    legacy["machine"]["port"] = "simulator"
+    original["machines"].append(legacy)
+    if active:
+        original["active_machine_id"] = legacy["id"]
+    encoded = (json.dumps(original, indent=2, sort_keys=True) + "\n").encode()
+    path.write_bytes(encoded)
+    return encoded
+
+
+def test_inactive_legacy_simulator_is_removed_with_atomic_backup(
     tmp_path: Path,
 ) -> None:
-    registry = MachineRegistry.load_or_migrate(
-        _settings(tmp_path, simulator=True)
-    )
+    settings = _settings(tmp_path)
+    path = MachineRegistry.load_or_migrate(settings).path
+    legacy_bytes = _append_legacy_simulator(path, active=False)
 
-    machine = registry.active_machine
-    assert machine.name == "Existing simulator"
-    assert machine.machine_profile_id == "simulator"
-    assert machine.tool_head_profile_id == "simulated-laser-head"
+    registry = MachineRegistry.load_or_migrate(settings)
+
+    assert registry.active_machine_id == "existing-machine"
+    assert [machine.id for machine in registry.machines()] == ["existing-machine"]
+    backup = path.with_name(path.name + REMOVED_SIMULATOR_BACKUP_SUFFIX)
+    assert backup.read_bytes() == legacy_bytes
+
+
+def test_active_legacy_simulator_requires_explicit_selection_without_rewrite(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    path = MachineRegistry.load_or_migrate(settings).path
+    legacy_bytes = _append_legacy_simulator(path, active=True)
+
+    with pytest.raises(MachineRegistryError, match="explicitly select a real machine"):
+        MachineRegistry.load_or_migrate(settings)
+
+    assert path.read_bytes() == legacy_bytes
+    assert not path.with_name(
+        path.name + REMOVED_SIMULATOR_BACKUP_SUFFIX
+    ).exists()
 
 
 def test_auto_protocol_physical_migration_stays_custom(

@@ -5,7 +5,7 @@ camera image and converts reviewed outlines into either normal E3 vector objects
 or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 
 > **Verification status:** the detector, proposed-vector preview, frozen-frame
-> review lifecycle, object placement, and batch undo behavior pass synthetic
+> review lifecycle, object placement, and batch undo behavior pass automated
 > and offscreen tests on Windows and Linux. A 2026-08-09 C920 capture exposed a
 > false high-confidence trace of the bright seams between dark labels. The exact
 > saved frame now replays as 14 observed full label bodies plus the two genuinely
@@ -18,9 +18,8 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 
 ## Recommended Trace workflow
 
-1. On the real machine, home and park at the saved camera pose. Keep the sheet
-   or stock flat and use even lighting. In safe simulation, load or generate a
-   frozen test image instead.
+1. Home and park at the saved camera pose. Keep the sheet or stock flat and use
+   even lighting.
 2. Open **Trace** in the Inspector.
 3. Choose **Purpose**:
    - **Cut geometry** creates ordinary project objects that may be assigned to
@@ -270,7 +269,7 @@ coordinate system from the detector.
 Trace captures one corrected frame for a detection request. Live camera updates
 are held while that result is being reviewed, so the displayed pixels remain
 the pixels that produced the vectors. Clearing the preview, creating the
-objects, changing the simulation image source, or stopping the controller
+objects, changing the camera/calibration evidence, or stopping the controller
 invalidates outstanding trace work. Late results from an older request are
 ignored.
 

@@ -528,7 +528,7 @@ def test_template_panel_rejects_unknown_or_deleted_match_ids(
     qt_application.processEvents()
 
 
-def test_template_panel_simulation_test_image_controls_are_stateful(
+def _removed_template_panel_test_image_controls(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     panel = TemplatePanel()
@@ -1147,7 +1147,7 @@ def test_main_window_applies_template_as_one_undoable_batch(
     assert [item.id for item in window.document.objects] == created_ids
 
 
-def test_test_image_source_changes_clear_only_frame_specific_review_state() -> None:
+def _removed_test_image_source_change_harness() -> None:
     document = ProjectDocument.new(
         work_area=Bounds(0.0, 0.0, 220.0, 220.0)
     )
@@ -1475,7 +1475,7 @@ def test_workspace_template_drag_moves_the_whole_preview(
     qt_application.processEvents()
 
 
-def test_overlay_key_moves_only_when_dragged_directly(
+def _removed_test_frame_overlay_key_case(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
