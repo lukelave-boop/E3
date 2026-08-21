@@ -68,6 +68,36 @@ passed. No physical controller, camera, motion, arming, or laser-output test was
 performed or is claimed; unavailable hardware remains honestly offline while a
 valid saved machine retains offline authoring and project editing.
 
+## Active Windows updater hardening
+
+The packaged Windows updater now crosses an explicit external-process boundary
+before launching the verified Inno Setup executable. E3 temporarily restores
+standard Win32 DLL resolution, filters only `sys._MEIPASS`-rooted entries from a
+copied child `PATH`, creates a detached process with the existing explicit Inno
+arguments and installer-directory working directory, and then restores its own
+DLL search state. Successful process creation is authoritative: if restoring
+the dying parent's DLL state fails after the child exists, E3 logs that parent
+cleanup failure and completes the handoff instead of claiming the installer did
+not start. The desktop waits for controller task ownership to drain
+after the normal unsaved-project approval and existing shutdown preparation;
+periodic producers are stopped and newly observed owned work is rechecked before
+the final close. The updater's drain callback runs in the GUI-thread cleanup
+before MainWindow's queued close-after-drain timer, so that timer cannot end E3
+before launch. A process-creation failure after accepted terminal shutdown shows
+a standalone error containing the verified installer path for manual launch,
+then exits rather than presenting the stopped desktop as usable.
+
+After rebasing this updater work onto the completed simulation-removal main,
+focused updater, installer, offscreen Qt handoff, and real MainWindow drain
+coverage passed **29 tests**. Focused no-simulation/runtime-authority,
+`MachineService`, and exact controller-transcript regressions passed **61
+tests**. The complete Windows Python 3.14 suite passed **2,368 tests** with **14
+expected platform skips**; repository-wide Ruff, `compileall -q laser_aligner`,
+and `git diff --check` also passed. The original installed PyInstaller
+`--windowed --onedir` E3-to-visible-installer scenario has not been repeated and
+is not package-verified. No physical controller, camera, motion, arming, or laser
+verification was performed or is claimed.
+
 ## Historical verification record
 
 The entries below record earlier milestones and may mention product simulation

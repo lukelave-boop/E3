@@ -203,23 +203,103 @@ def _handoff_downloaded_update(
 
         try:
             launch_downloaded_update(path)
-        except Exception:
-            # A launch failure should leave E3 usable instead of silently
-            # disappearing after the user already approved the update.
-            window.show()
-            window.raise_()
-            window.activateWindow()
-            raise
+        except Exception as exc:
+            # E3MainWindow.closeEvent has already stopped the controller and
+            # runtime. Do not present that terminal window as usable again.
+            try:
+                _show_terminal_handoff_failure(path, exc)
+            finally:
+                application.quit()
+            return False
 
         application.quit()
         return True
     finally:
-        # Restore the application's normal behavior for both rejected closes
-        # and installer-launch failures.
-        if not closed or window.isVisible():
+        # Only a rejected close leaves the current E3 runtime alive.
+        if not closed:
             application.setQuitOnLastWindowClosed(
                 previous_quit_on_last_window
             )
+
+
+def _show_handoff_failure(
+    window: QtWidgets.QMainWindow,
+    error: Exception,
+) -> None:
+    QtWidgets.QMessageBox.critical(
+        window if window.isVisible() else None,
+        "E3 Update",
+        "The verified package was downloaded, but could not be started.\n\n"
+        f"{error}",
+    )
+
+
+def _show_terminal_handoff_failure(path: Path, error: Exception) -> None:
+    installer_path = path.expanduser().resolve()
+    QtWidgets.QMessageBox.critical(
+        None,
+        "E3 Update",
+        "E3 could not start the verified installer after shutting down.\n\n"
+        f"Installer:\n{installer_path}\n\n"
+        "Run that installer manually to complete the update. "
+        "E3 will now exit.\n\n"
+        f"Details:\n{error}",
+    )
+
+
+def _perform_downloaded_update_handoff(
+    window: QtWidgets.QMainWindow,
+    path: Path,
+) -> None:
+    try:
+        _handoff_downloaded_update(window, path)
+    except Exception as exc:
+        _show_handoff_failure(window, exc)
+
+
+def _request_downloaded_update_handoff(
+    window: QtWidgets.QMainWindow,
+    path: Path,
+) -> None:
+    """Wait for controller task ownership to drain before closing E3."""
+
+    controller = window.controller
+    previous = getattr(window, "_e3_update_idle_handoff", None)
+    if previous is not None:
+        try:
+            controller.tasksDrained.disconnect(previous)
+        except (RuntimeError, TypeError):
+            pass
+        window._e3_update_idle_handoff = None  # type: ignore[attr-defined]
+
+    prepare_close = getattr(window, "_prepare_close_request", None)
+    if callable(prepare_close) and not prepare_close():
+        return
+
+    def attempt() -> None:
+        if getattr(window, "_e3_update_idle_handoff", None) is not attempt:
+            return
+        if controller.has_active_tasks:
+            return
+        try:
+            controller.tasksDrained.disconnect(attempt)
+        except (RuntimeError, TypeError):
+            pass
+        window._e3_update_idle_handoff = None  # type: ignore[attr-defined]
+        _perform_downloaded_update_handoff(window, path)
+
+    if not controller.has_active_tasks:
+        _perform_downloaded_update_handoff(window, path)
+        return
+
+    window._e3_update_idle_handoff = attempt  # type: ignore[attr-defined]
+    # DesktopController emits tasksDrained from its GUI-thread cleanup slot.
+    # MainWindow suppresses its ordinary close-after-drain timer while this
+    # handler owns the pending updater handoff.
+    controller.tasksDrained.connect(
+        attempt,
+        QtCore.Qt.ConnectionType.DirectConnection,
+    )
 
 
 def _download_complete(
@@ -241,12 +321,4 @@ def _download_complete(
     )
     if answer != QtWidgets.QMessageBox.StandardButton.Yes:
         return
-    try:
-        _handoff_downloaded_update(window, path)
-    except Exception as exc:
-        QtWidgets.QMessageBox.critical(
-            window if window.isVisible() else None,
-            "E3 Update",
-            "The verified package was downloaded, but could not be started.\n\n"
-            f"{exc}",
-        )
+    _request_downloaded_update_handoff(window, path)
