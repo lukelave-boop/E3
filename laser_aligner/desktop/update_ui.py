@@ -222,6 +222,73 @@ def _handoff_downloaded_update(
             )
 
 
+def _show_handoff_failure(
+    window: QtWidgets.QMainWindow,
+    error: Exception,
+) -> None:
+    QtWidgets.QMessageBox.critical(
+        window if window.isVisible() else None,
+        "E3 Update",
+        "The verified package was downloaded, but could not be started.\n\n"
+        f"{error}",
+    )
+
+
+def _perform_downloaded_update_handoff(
+    window: QtWidgets.QMainWindow,
+    path: Path,
+) -> None:
+    try:
+        _handoff_downloaded_update(window, path)
+    except Exception as exc:
+        _show_handoff_failure(window, exc)
+
+
+def _request_downloaded_update_handoff(
+    window: QtWidgets.QMainWindow,
+    path: Path,
+) -> None:
+    """Wait for controller task ownership to drain before closing E3."""
+
+    controller = window.controller
+    previous = getattr(window, "_e3_update_idle_handoff", None)
+    if previous is not None:
+        try:
+            controller.tasksDrained.disconnect(previous)
+        except (RuntimeError, TypeError):
+            pass
+        window._e3_update_idle_handoff = None  # type: ignore[attr-defined]
+
+    prepare_close = getattr(window, "_prepare_close_request", None)
+    if callable(prepare_close) and not prepare_close():
+        return
+
+    def attempt() -> None:
+        if getattr(window, "_e3_update_idle_handoff", None) is not attempt:
+            return
+        if controller.has_active_tasks:
+            return
+        try:
+            controller.tasksDrained.disconnect(attempt)
+        except (RuntimeError, TypeError):
+            pass
+        window._e3_update_idle_handoff = None  # type: ignore[attr-defined]
+        _perform_downloaded_update_handoff(window, path)
+
+    if not controller.has_active_tasks:
+        _perform_downloaded_update_handoff(window, path)
+        return
+
+    window._e3_update_idle_handoff = attempt  # type: ignore[attr-defined]
+    # DesktopController emits tasksDrained from its GUI-thread cleanup slot.
+    # MainWindow suppresses its ordinary close-after-drain timer while this
+    # handler owns the pending updater handoff.
+    controller.tasksDrained.connect(
+        attempt,
+        QtCore.Qt.ConnectionType.DirectConnection,
+    )
+
+
 def _download_complete(
     window: QtWidgets.QMainWindow,
     action: QtGui.QAction,
@@ -241,12 +308,4 @@ def _download_complete(
     )
     if answer != QtWidgets.QMessageBox.StandardButton.Yes:
         return
-    try:
-        _handoff_downloaded_update(window, path)
-    except Exception as exc:
-        QtWidgets.QMessageBox.critical(
-            window if window.isVisible() else None,
-            "E3 Update",
-            "The verified package was downloaded, but could not be started.\n\n"
-            f"{exc}",
-        )
+    _request_downloaded_update_handoff(window, path)

@@ -27,6 +27,16 @@ channel, and manifest URL. **Help > Check for Updates…** downloads the channel
 manifest, selects the current platform, and verifies exact size and SHA-256
 before launching the package.
 
+On Windows, the verified Inno Setup executable is an external program rather
+than part of the frozen E3 bundle. Immediately around process creation, E3
+temporarily restores the standard Win32 DLL search directory and gives the
+child a copied environment with only PyInstaller-bundle-rooted `PATH` entries
+removed. The installer is started detached, with its parent directory as the
+working directory, before E3 exits. E3 restores its own DLL search state if
+process creation fails. This boundary is automated-test covered; a newly built
+installed package must still be exercised before calling the handoff
+package-verified.
+
 The development workflow publishes fixed prerelease tag `e3-development` when
 the canonical `main` branch changes. Manual publication is also restricted to
 `main`, so the in-app updater cannot be repointed at a feature branch. It contains:

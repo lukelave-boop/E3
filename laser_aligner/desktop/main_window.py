@@ -5414,20 +5414,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 self.job_tabs.currentIndex(),
             )
 
+    def _prepare_close_request(self) -> bool:
+        if self._close_requested:
+            return True
+        if not self._confirm_discard_changes():
+            return False
+        self._close_requested = True
+        self._save_window_state()
+        self._cancel_job_preparation("Application is closing")
+        self._cancel_job_render()
+        self._invalidate_generated_job(cancel_preparation=False)
+        self.controller.begin_shutdown()
+        return True
+
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         if self._closing:
             event.accept()
             return
-        if not self._close_requested:
-            if not self._confirm_discard_changes():
-                event.ignore()
-                return
-            self._close_requested = True
-            self._save_window_state()
-            self._cancel_job_preparation("Application is closing")
-            self._cancel_job_render()
-            self._invalidate_generated_job(cancel_preparation=False)
-            self.controller.begin_shutdown()
+        if not self._prepare_close_request():
+            event.ignore()
+            return
         if self.controller.has_active_tasks:
             self.statusBar().showMessage(
                 "Closing after background preparation finishes…"
@@ -5439,5 +5445,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         event.accept()
 
     def _background_tasks_drained(self) -> None:
+        if getattr(self, "_e3_update_idle_handoff", None) is not None:
+            return
         if self._close_requested and not self._closing:
             QtCore.QTimer.singleShot(0, self.close)

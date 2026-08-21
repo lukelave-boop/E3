@@ -74,6 +74,21 @@ The entries below record earlier milestones and may mention product simulation
 that existed at the time. Those statements are historical evidence, not current
 operator guidance or current functionality.
 
+The packaged Windows updater now crosses an explicit external-process boundary
+before launching the verified Inno Setup executable. E3 temporarily restores
+standard Win32 DLL resolution, filters only `sys._MEIPASS`-rooted entries from a
+copied child `PATH`, creates a detached process with the existing explicit Inno
+arguments and installer-directory working directory, and then restores its own
+DLL search state. The desktop waits for controller task ownership to drain
+after the normal unsaved-project approval and existing shutdown preparation;
+periodic producers are stopped and newly observed owned work is rechecked before
+the final close. The updater's drain callback runs in the GUI-thread cleanup
+before MainWindow's queued close-after-drain timer, so that timer cannot end E3
+before launch. Focused unit, offscreen Qt, and harmless Windows subprocess
+coverage exercise this boundary; the original installed PyInstaller
+`--windowed --onedir` E3-to-visible-installer scenario has not yet been repeated
+and is not package-verified.
+
 The desktop machine-configuration workflow is now generic across the existing
 simulator, GRBL, and Marlin profiles without adding a controller dialect or a
 second profile model. `MachineProfile` remains reusable motion-platform and

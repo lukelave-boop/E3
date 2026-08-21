@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import ntpath
 import os
 import re
 import shutil
@@ -10,7 +11,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -22,6 +24,13 @@ _MAX_MANIFEST_BYTES = 1_048_576
 _DOWNLOAD_CHUNK_BYTES = 1_048_576
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{7,64}$")
+_WINDOWS_DETACHED_PROCESS = 0x00000008
+_WINDOWS_CREATE_NEW_PROCESS_GROUP = 0x00000200
+# Inno Setup is a GUI executable. DETACHED_PROCESS prevents console inheritance;
+# CREATE_NO_WINDOW would be redundant because Windows ignores it when detached.
+_WINDOWS_EXTERNAL_PROCESS_CREATION_FLAGS = (
+    _WINDOWS_DETACHED_PROCESS | _WINDOWS_CREATE_NEW_PROCESS_GROUP
+)
 
 
 class UpdateError(RuntimeError):
@@ -258,22 +267,160 @@ def download_update(
     return destination
 
 
-def _launch_windows_installer(path: Path) -> None:
-    if path.suffix.lower() != ".exe":
-        raise UpdateError("Windows update package must be an .exe installer")
+def _path_entry_is_in_windows_bundle(entry: str, bundle_root: str) -> bool:
+    candidate = ntpath.expandvars(entry.strip().strip('"'))
+    if not candidate or not ntpath.isabs(candidate) or not ntpath.isabs(bundle_root):
+        return False
     try:
-        subprocess.Popen(
-            [
-                str(path),
-                "/SP-",
-                "/CLOSEAPPLICATIONS",
-                "/RESTARTAPPLICATIONS",
-                "/NORESTART",
-            ],
-            close_fds=True,
+        normalized_candidate = ntpath.normcase(ntpath.normpath(candidate))
+        normalized_root = ntpath.normcase(ntpath.normpath(bundle_root))
+        return (
+            ntpath.commonpath((normalized_candidate, normalized_root))
+            == normalized_root
         )
-    except OSError as exc:
-        raise UpdateError(f"Could not start the Windows update installer: {exc}") from exc
+    except (OSError, ValueError):
+        return False
+
+
+def _windows_installer_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    bundle_value = getattr(sys, "_MEIPASS", None)
+    if bundle_value is None:
+        return environment
+    bundle_root = os.fspath(bundle_value)
+    for key, value in tuple(environment.items()):
+        if key.casefold() != "path":
+            continue
+        environment[key] = ";".join(
+            entry
+            for entry in value.split(";")
+            if not _path_entry_is_in_windows_bundle(entry, bundle_root)
+        )
+    return environment
+
+
+def _windows_dll_api() -> tuple[Any, Any, Any]:
+    if sys.platform != "win32":
+        raise UpdateError("Win32 DLL-search sanitization requires Windows")
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        get_directory = kernel32.GetDllDirectoryW
+        get_directory.argtypes = (wintypes.DWORD, wintypes.LPWSTR)
+        get_directory.restype = wintypes.DWORD
+        set_directory = kernel32.SetDllDirectoryW
+        set_directory.argtypes = (wintypes.LPCWSTR,)
+        set_directory.restype = wintypes.BOOL
+        return ctypes, get_directory, set_directory
+    except (AttributeError, OSError) as exc:
+        raise UpdateError(
+            f"Win32 DLL-search sanitization is unavailable: {exc}"
+        ) from exc
+
+
+def _get_windows_dll_directory() -> str | None:
+    ctypes, get_directory, _set_directory = _windows_dll_api()
+    capacity = 32_768
+    buffer = ctypes.create_unicode_buffer(capacity)
+    ctypes.set_last_error(0)
+    length = int(get_directory(capacity, buffer))
+    if length == 0:
+        error_code = int(ctypes.get_last_error())
+        if error_code:
+            raise UpdateError(
+                "Could not inspect the Win32 DLL search directory "
+                f"(error {error_code})"
+            )
+        return None
+    if length >= capacity:
+        raise UpdateError("The Win32 DLL search directory exceeds its safe bound")
+    return str(buffer.value)
+
+
+def _set_windows_dll_directory(value: str | None, *, operation: str) -> None:
+    ctypes, _get_directory, set_directory = _windows_dll_api()
+    ctypes.set_last_error(0)
+    if set_directory(value):
+        return
+    error_code = int(ctypes.get_last_error())
+    raise UpdateError(
+        f"Could not {operation} the Win32 DLL search directory "
+        f"(error {error_code})"
+    )
+
+
+@contextmanager
+def _default_windows_dll_search() -> Iterator[None]:
+    previous = _get_windows_dll_directory()
+    _set_windows_dll_directory(
+        None,
+        operation="clear for external installer launch",
+    )
+    try:
+        yield
+    except BaseException as launch_error:
+        try:
+            _set_windows_dll_directory(
+                previous,
+                operation="restore after failed external installer launch",
+            )
+        except UpdateError as restore_error:
+            raise UpdateError(
+                f"{launch_error}; additionally, {restore_error}"
+            ) from (launch_error.__cause__ or launch_error)
+        raise
+    else:
+        _set_windows_dll_directory(
+            previous,
+            operation="restore after external installer launch",
+        )
+
+
+def _start_external_windows_process(
+    argv: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+    description: str,
+) -> subprocess.Popen[bytes]:
+    with _default_windows_dll_search():
+        try:
+            return subprocess.Popen(
+                list(argv),
+                cwd=str(cwd),
+                env=dict(environment),
+                close_fds=True,
+                shell=False,
+                creationflags=_WINDOWS_EXTERNAL_PROCESS_CREATION_FLAGS,
+            )
+        except OSError as exc:
+            raise UpdateError(
+                f"Could not create the {description} process: {exc}"
+            ) from exc
+
+
+def _launch_windows_installer(path: Path) -> None:
+    resolved = path.expanduser().resolve()
+    if resolved.suffix.lower() != ".exe":
+        raise UpdateError("Windows update package must be an .exe installer")
+    if not resolved.is_file():
+        raise UpdateError(
+            f"Downloaded Windows update package does not exist: {resolved}"
+        )
+    _start_external_windows_process(
+        [
+            str(resolved),
+            "/SP-",
+            "/CLOSEAPPLICATIONS",
+            "/RESTARTAPPLICATIONS",
+            "/NORESTART",
+        ],
+        cwd=resolved.parent,
+        environment=_windows_installer_environment(),
+        description="Windows update installer",
+    )
 
 
 def _copy_executable(source: Path, destination: Path) -> None:

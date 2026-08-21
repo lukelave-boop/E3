@@ -26,6 +26,17 @@
   test-frame helper and export. No controller, camera, motion, arming,
   laser-output, or physical verification behavior was added or claimed.
 
+- Hardened the packaged Windows updater's external Inno Setup handoff. The
+  launcher now gives the installer standard Windows DLL resolution, removes
+  only PyInstaller-bundle entries from a copied child `PATH`, starts a detached
+  process with explicit arguments and working directory, and restores E3's DLL
+  search state on both success and failure. The desktop also performs the normal
+  close approval once, stops periodic task producers, and waits/rechecks owned
+  background work before the final close-and-launch sequence.
+  Focused Windows automation covers the real launcher boundary; an installed
+  PyInstaller `E3.exe` to visible Inno wizard handoff still requires packaged
+  verification.
+
 - Made first-run, Machine Manager, and Machine Setup generic across the existing
   simulator, GRBL, and Marlin profiles without adding controller support or a
   second profile model. Profile-created machines are validated concrete
