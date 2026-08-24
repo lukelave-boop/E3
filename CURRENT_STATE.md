@@ -68,6 +68,18 @@ passed. No physical controller, camera, motion, arming, or laser-output test was
 performed or is claimed; unavailable hardware remains honestly offline while a
 valid saved machine retains offline authoring and project editing.
 
+The desktop startup-order follow-up inspects an explicitly supplied legacy
+configuration named `default.json` before classifying any configuration as the
+packaged first-run template. The actual packaged template still enters ordinary
+first-run when no preserved configuration exists, and the configuration written
+by first-run is inspected again before bridge credentials or `CoreRuntime` /
+`AppContext` construction. Canceling either setup path exits before runtime
+construction. Focused simulator-recovery and first-run verification passed **36
+tests**. The complete Windows Python 3.14 suite passed **2,358 tests** with **14
+expected platform skips**; repository-wide Ruff, `compileall -q laser_aligner`,
+and `git diff --check` also passed. No physical hardware test was performed or
+is claimed for this startup-only correction.
+
 ## Active Windows updater hardening
 
 The packaged Windows updater now crosses an explicit external-process boundary

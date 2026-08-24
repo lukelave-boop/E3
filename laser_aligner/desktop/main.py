@@ -62,6 +62,7 @@ def _prepare_runtime_startup(
     config: Path,
     *,
     preserved_user_config: Path,
+    explicit_config: bool,
     first_run_runner: Callable[[Path], Any],
     recovery_inspector: Callable[[Path], Any],
     recovery_runner: Callable[[Any], Any],
@@ -71,17 +72,19 @@ def _prepare_runtime_startup(
     """Complete every required setup transaction before runtime construction."""
 
     open_machine_setup = False
-    if config.name == "default.json":
-        if preserved_user_config.is_file():
-            config = preserved_user_config
-        else:
-            first_run = first_run_runner(config)
-            if first_run is None:
-                return None
-            config = Path(first_run.config_path)
-            open_machine_setup = bool(first_run.open_machine_setup)
+    needs_first_run = not explicit_config and config.name == "default.json"
+    if needs_first_run and preserved_user_config.is_file():
+        config = preserved_user_config
+        needs_first_run = False
 
     recovery = recovery_inspector(config)
+    if recovery is None and needs_first_run:
+        first_run = first_run_runner(config)
+        if first_run is None:
+            return None
+        config = Path(first_run.config_path)
+        open_machine_setup = bool(first_run.open_machine_setup)
+        recovery = recovery_inspector(config)
     if recovery is not None:
         recovered = recovery_runner(recovery)
         if recovered is None:
@@ -153,6 +156,7 @@ def main(argv: list[str] | None = None) -> int:
         prepared = _prepare_runtime_startup(
             Path(config),
             preserved_user_config=preserved_config,
+            explicit_config=explicit_config,
             first_run_runner=run_first_run_setup,
             recovery_inspector=inspect_recovery,
             recovery_runner=run_simulator_recovery,
