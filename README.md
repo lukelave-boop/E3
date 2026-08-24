@@ -110,6 +110,11 @@ Native desktop workflow:
   holdout accuracy validation. Registration and validation can use precision
   multi-frame capture and can be repeated without another home cycle to
   separate camera variation from homing variation
+- Profile-driven first-run and Machine Manager for multiple saved GRBL and
+  Marlin machine/tool snapshots. Edits select the next launch without
+  hot-swapping the immutable running identity or contacting hardware; new
+  projects resolve curated operation defaults from that running identity and
+  fall back to a visible 0%-power, output-disabled layer when unmatched
 - A sixth read-only Coordinate Audit tab with running-machine/calibration
   binding checks, immutable capture-time GRBL pose evidence, machine/support
   overlays, and clicked-point tracing across camera, beam, honeycomb, and
@@ -137,7 +142,7 @@ program subset, layer reconstruction, and review boundary.
 See [Power Correction](docs/POWER_CORRECTION.md) for its mapping, motion model,
 overscan interaction, limitations, and tuning guidance.
 
-The desktop branch also contains an automated and behaviorally tested
+The desktop also contains an automated and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable
 project objects or one construction-only Stock boundary. Rounded-label output
 previews the same fitted vector that will be created. A Stock boundary persists
@@ -218,23 +223,31 @@ For the native desktop after the base installation:
 The desktop includes the complete native Machine Setup workflow. The browser
 uses the same calibration files and remains available as a legacy alternative.
 
-## Windows development status
+## Platform and CI status
 
-The browser and native desktop applications run on Windows with real configured
-`e3bridge://` and `e3camera://` endpoints. The CI matrix collects and runs the portable
-suite on Windows as well as Linux. POSIX serial code is imported only if the
-serial backend is selected; Windows serial hardware, V4L2 camera controls, and
-install/launch scripts are not implemented. Autosaves and material recipes use
-a writable OS-native per-user data root.
+The browser and native desktop applications run on Windows as normal
+hardware-capable processes. Windows supports configured `e3bridge://` and
+`e3camera://` endpoints; direct local POSIX serial and V4L2 discovery/control
+remain Linux-specific and are imported lazily. Missing real hardware remains
+offline rather than being replaced with simulation or synthetic camera state.
+Autosaves and material recipes use a writable OS-native per-user data root.
+
+Windows packaging and automatic-update assets are implemented and
+automated-test covered. The installed frozen PyInstaller E3 to visible Inno
+Setup handoff still requires package-level verification in a disposable
+interactive Windows environment.
 
 GitHub Actions has two validation tiers. Pushes to `fix/**`, `feature/**`,
-`agent/**`, and `cleanup/**` run Fast Development CI: Ruff, dependency and
-bytecode validation, and the complete Linux Python 3.12 desktop suite with four
-bounded pytest workers. Pushes to `main` or `desktop-v1`, pull requests targeting
-either branch, and manual dispatch run Full Compatibility CI across Ubuntu
-Python 3.10/3.11/3.12 and Windows Python 3.10/3.12, including desktop coverage
-on Python 3.12. The full compatibility jobs intentionally run pytest serially.
-Each major CI phase records its duration in the job summary.
+`agent/**`, `cleanup/**`, and `architecture/**` run Fast Development CI on
+Windows Python 3.12: repository Ruff, desktop dependency and bytecode
+validation, and the complete desktop-enabled pytest suite with four bounded
+xdist workers. Compatibility CI runs for pushes to `main`, pull requests
+targeting `main`, and manual dispatch. It runs serial core/non-desktop tests on
+Windows Python 3.10, serial desktop-enabled tests on Windows Python 3.12, and
+repository Ruff as a separate Windows Python 3.12 job. Linux/Pi components
+retain focused verification when changed; there is no standing Ubuntu
+compatibility matrix. Each major CI phase records its duration in the job
+summary.
 
 From an existing desktop-enabled virtual environment, launch the native UI with
 a completed real-machine configuration:

@@ -1,167 +1,141 @@
 # Roadmap
 
-This roadmap describes remaining work from the current `desktop-v1` branch. It
-is not a hardware-readiness claim. Active verification state belongs in
-[CURRENT_STATE.md](CURRENT_STATE.md); [PROJECT_STATUS.md](PROJECT_STATUS.md) is
-the retained 2026-08-06 Windows portability snapshot.
+This roadmap describes work after the foundational runtime, machine-profile,
+import, planning, and updater-hardening milestones. Detailed implementation and
+verification evidence belongs in [CURRENT_STATE.md](CURRENT_STATE.md); the dated
+Windows portability snapshot in [PROJECT_STATUS.md](PROJECT_STATUS.md) remains
+historical evidence.
 
-## Foundation already present
+Production simulation is no longer an E3 runtime or product capability. Normal
+browser and desktop launches are hardware-capable, but unavailable controllers
+and cameras remain honestly offline. `MachineService`, motion permission,
+coordinate trust, bounds, exact preflight/program authority, temporary arming,
+STOP, and `M5` remain the execution boundary. GRBL and Marlin are the only
+implemented controller dialects; additional compatibility is not implied.
 
-Original browser/core foundation:
+The physically relevant target remains the Ender-3 S1 Pro, generic 10 W diode
+tool head, overhead C920, and the current direct-or-authenticated-Pi-bridged
+controller/camera path. Current software verification is not physical
+acceptance. Additional named-machine support should wait until matching hardware
+is available for the same recorded acceptance process.
 
-- Simulation camera and controller.
-- C920/V4L2 capture and control locking.
-- Checkerboard lens calibration.
-- Bed homography and rectified view.
-- SVG vector parser and guarded G-code generation.
-- Browser placement/calibration interface.
-- Conservative machine safety service and POSIX transport.
+## Completed foundation
 
-Desktop foundation:
+The following foundations are implemented and automated-test covered:
 
-- Native machine-coordinate workspace and camera overlay, including a
-  70%-opacity photographic default and a draggable overlay key that remains
-  fixed to the viewport during canvas work.
-- Multi-object/layer project model and `.e3laser` persistence.
-- Undo/redo, grouping, alignment, distribution, and ordering.
-- Material presets, multi-layer vector toolpaths, preview, and estimates.
-- Guarded machine controls, including planner-drained post-powered-job
-  Home/park, bounded laser-off incremental jogging, visible completion phases,
-  failure alerts, and motor release; pause/resume remains disabled.
-- Safe browser and desktop simulator startup on Windows, with POSIX serial
-  selected only on supported systems, plus a Windows/Linux CI matrix.
-- Native lens calibration and fresh keyed 5×5 base mapping that does not depend
-  on a prior camera homography; the workflow has been exercised on the current
-  Linux/C920 rig, while named-controller repeatability remains outstanding.
+- deterministic planner behavior with checked-in planning goldens;
+- typed planning stages, stable dependency digests, and bounded selective
+  recomputation;
+- importer registry and immutable bounded-scan manifests;
+- shared desktop pre-import review with blocking findings, bounded rendering,
+  explicit approval, and exact-source binding;
+- SVG, raster-image, LightBurn, and foreign-G-code preflight;
+- structured job readiness preflight before authoritative exact planning;
+- machine-aware material recipes that remain authoring aids rather than
+  execution authority;
+- neutral machine transports separated from immutable GRBL and Marlin dialect
+  policy;
+- profile-driven real-machine first-run and Machine Manager flows with multiple
+  saved physical machine instances;
+- immutable running-versus-next-launch machine identity;
+- machine/tool-aware new-project defaults, including a visible 0%-power,
+  output-disabled fallback for unmatched physical profiles;
+- guarded exact Preview and the existing `MachineService` execution boundary;
+- Windows frozen packaging and automatic-update source boundaries, including
+  the hardened external Inno process handoff.
 
-Current branch feature:
+These items have different automated, offscreen, interactive, and historical
+evidence levels. Completion here means the architecture exists; it does not
+upgrade software verification into a hardware or safety claim.
 
-- Shared importer manifests and bounded scans for SVG, raster images, LightBurn,
-  and foreign G-code, with one native pre-import review gate. Blocked scans
-  cannot proceed; valid and warning-only scans require explicit approval before
-  the existing authoritative importer runs. Review rendering is capped at 200
-  rows/entries per category with exact omitted counts, and strict import verifies
-  the approved source-byte SHA-256 before native project mutation.
-- Machine-aware read-only Coordinate Audit as Machine Setup tab 6, including
-  calibration-binding blockers, machine-specific physical honeycomb span,
-  diagnostic GRBL realtime pose evidence through local or `e3bridge://`
-  transports, and image-bound clicked-point coordinate/containment inspection.
-  Bed Mapping consumes that same saved-machine span read-only; realtime audit
-  sampling is excluded while a streamed job owns the controller. Permanent
-  fixture reach editing and combined-bounds proposals remain later work.
-- Mandatory window-modal exact Preview as the only visible path to
-  **START JOB**, shared by project and prepared Machine Setup programs.
-- Raw Live Monitor diagnostics distinguish Pi usable-frame Capture FPS,
-  desktop socket Network FPS, Qt presentation Display FPS, and source Age while
-  retaining bounded latest-frame replacement.
-- Multi-object camera tracing with color/contrast modes, grid inference,
-  reviewed selection, and conversion to project vectors.
-- Versioned label-sheet cutting templates with manual selection, synthetic
-  geometric ranking, rigid translation/rotation review, and one-step batch
-  insertion into a project.
-- Dedicated regular rounded-rectangle grid authoring with live preview,
-  width/height/radius controls, rows/columns, edge-gap or center-pitch input,
-  editable template metadata, and direct one-step insertion into a project.
-- Numeric rectangle width/height/radius editing as one undoable shape change.
-- Behavioral offscreen coverage for template library controls, one-frame
-  alignment review, stale-result cancellation, object creation, and undo.
+## Near-term hardening
 
-These features have different verification levels; see `CURRENT_STATE.md`.
+### Automated and software verification
 
-## Milestone 1 — trace/template validation and release hardening
+- Keep Fast Development and Compatibility CI aligned with the supported Windows
+  test boundary, while running focused Linux/Pi checks when those components
+  change.
+- Keep repository, dependency, workflow, packaging, launcher, and documentation
+  drift checks clean.
+- Complete the installed frozen PyInstaller E3 -> HTTPS download/verification ->
+  close -> visible Inno -> install -> final-page launch exercise in a disposable
+  interactive Windows environment. This remains intentionally deferred and is
+  not package-verified.
+- Continue focused rejection-path coverage for stale authority, source changes,
+  controller uncertainty, STOP, reconnect, persistence failures, and updater
+  process-creation failures.
+- Exercise remaining desktop authoring and review interactions that currently
+  have only offscreen or source-level coverage.
+- Curate corrected-camera template/Trace fixtures only when they are deliberate,
+  reviewed test evidence rather than personal captures.
+- Preserve deterministic planning goldens; do not regenerate them merely to hide
+  behavior changes.
 
-- Add broader behavioral Qt tests for trace review and general project editing.
-- Exercise tracing against real corrected images at known material heights.
-- Build curated label-sheet captures with measured geometry and establish
-  confidence/residual acceptance thresholds for template alignment.
-- Validate the tested explicit-choice behavior for ambiguous look-alike
-  templates against curated real-camera captures.
-- Include pairs that share centers and dimensions but differ in corner radius;
-  the current matcher intentionally requires manual selection because radius is
-  not part of its observable feature model.
-- Keep local label/trace captures ignored and excluded from release packages.
-- Keep the complete Linux suite and release-package smoke green as the branch
-  evolves.
+### Future physical acceptance
 
-## Milestone 2 — Windows/Linux development consistency
+When the actual target hardware is available, record the controller, firmware,
+configuration, environment, and result for each step:
 
-- Keep the Windows/Linux CI matrix and package-import coverage green.
-- Add PowerShell setup/launch scripts and platform-appropriate CLI messages.
-- Separate portable OpenCV capture from Linux V4L2 discovery/control.
-- Validate the new Windows-to-Pi hardware-node path on the real Pi 3 B+,
-  including controller disconnect behavior, camera controls, precision-burst
-  repeatability, and fresh calibration before declaring Windows network
-  hardware support verified. Direct Windows USB serial remains out of scope.
+1. Confirm controller identity, firmware, protocol, relevant settings, and
+   usable power scale.
+2. Exercise the intended direct or authenticated Pi-bridged connection.
+3. Confirm Home/reference establishment and reset/reconnect behavior.
+4. Confirm coordinate origin, X/Y directions, and active offsets.
+5. Confirm the configured photography park pose and repeatability.
+6. Exercise small conservative laser-off jogs in both directions.
+7. Exercise software STOP while retaining the physical emergency-stop boundary.
+8. Run and review a small centrally located zero-power job.
+9. Only with the required physical safeguards and attending operator, run one
+   supervised low-risk armed test on suitable sacrificial material.
+10. Repeat calibration/alignment measurements to establish repeatability for the
+    accepted camera, work plane, and support.
 
-Windows hardware control is not required to complete the portable simulator
-milestone. If added later, it needs its own serial transport and tests.
+This sequence is not a safety certification. Enclosure, extraction, interlocks,
+hardware emergency stop, fire controls, and an attending operator remain
+physical requirements.
 
-## Milestone 3 — native calibration and camera bring-up
+## Product-feature backlog
 
-- Repeat the physically exercised lens and keyed automatic base-map workflow
-  after a camera remount, including Preview bounds, keyed detection, and axis
-  direction.
-- Validate stable C920 selection on the Linux workstation.
-- Add camera control presets and calibration-image quality guidance.
-- Add coverage visualization and repeatability measurements.
-- Exercise object tracing with real corrected images at known material heights.
-- Exercise selected-template and automatic-template alignment against real
-  corrected sheets without applying scale.
-- Add optional marker identification only after choosing and testing a marker
-  format; the current `marker_id` field is metadata only.
+### Authoring and import
 
-## Milestone 4 — controller profile
+- Shared multi-selection transform boxes, proportional resize, node editing,
+  and smart snap guides.
+- Persistent on-canvas creation for shapes beyond rectangles.
+- DXF import and improved SVG `<use>`, stylesheet, clipping, and text-outline
+  support.
+- Managed or embedded raster assets instead of external absolute paths.
+- Editable regeneration of existing vector text.
+- Optional fiducial/marker identification after selecting and testing a real
+  marker format.
 
-- Capture controller identity and settings.
-- Confirm GRBL versus Marlin behavior.
-- Confirm homing, coordinate origin, X/Y direction, and laser-head offset.
-- Establish verified work-area limits and a safe photo pose.
-- Add a versioned machine profile based on measured results.
-- Record the controller/firmware identity and repeat the observed jog direction
-  and endpoint behavior; physically verify STOP response on that named profile.
-- Test controller-specific realtime pause/resume before enabling it.
+### Camera, calibration, and material height
 
-## Milestone 5 — improved authoring
-
-- Shared multi-selection transform boxes and node editing. Single-object
-  on-canvas resize and rotation handles are implemented.
-- Smart snap guides.
-- DXF import and managed or embedded raster assets.
-- Text-to-outline conversion.
-- Improved SVG `<use>`, stylesheet, and clipping support.
-- Fiducial-based automatic rotation/translation.
-
-Multiple designs, grouping, alignment, layer ordering, and toolpath preview are
-already present in the desktop foundation and are no longer roadmap items.
-Regular rectangle-grid generation and numeric rectangle corner-radius editing
-are also implemented; future authoring work should extend rather than duplicate
-those controls.
-
-## Milestone 6 — height compensation
-
+- Curated real-camera template and Trace datasets with measured geometry.
+- Repeatability and coverage visualization after camera remounting.
 - Material-thickness input connected to calibration profiles.
-- Camera-height and optical-center model.
-- Parallax correction or multiple calibration planes.
-- Optional low-cost distance-sensor integration.
+- Camera-height and optical-center modeling, multiple calibration planes, or
+  bounded parallax compensation.
+- Optional distance-sensor integration only after its accuracy and failure
+  behavior are characterized.
 
-## Milestone 7 — advanced raster and production features
+### Raster and production
 
-- Hatch/fill optimization beyond the existing closed-vector scanline engine.
-- Selectable dither methods and calibrated grayscale power curves beyond the
-  existing area-prefiltered ordered-dither raster engine.
-- Estimated duration refinement and reproducible job manifests.
-- Job history.
-- Recovery and controlled pause/resume where supported.
-- Stable packaging, update checks, and rollback.
+- Selectable dither algorithms and calibrated grayscale power curves.
+- Further fill/hatch optimization without changing guarded motion semantics.
+- Improved duration estimates and reproducible job manifests.
+- Job history and recovery workflows.
+- Controlled pause/resume only for specifically tested controller behavior.
+- Stable update rollback and clean-machine recovery verification.
 
-## v1.0 criteria
+## Release direction
 
-- Repeatable physical alignment performance documented across the work area.
-- Verified controller profile and laser power scale.
-- Hardware interlock integration documented and tested.
-- Installation and recovery tested on a clean supported Linux system.
-- Portable simulator and development suite passing on Windows and Linux.
-- No known path-generation or out-of-bounds defects in the supported SVG and
-  project subsets.
-- Documentation accurately distinguishes automated, interactive, and physical
-  verification.
+A production-oriented release requires:
+
+- documented repeatable physical alignment across the supported work area;
+- a recorded controller/firmware profile and verified power scale;
+- installation, update, rollback, and recovery checks on supported systems;
+- no known path-generation or guarded-bounds defect in supported inputs;
+- physical safeguards and interlock expectations documented without describing
+  software controls as safety-rated;
+- documentation that clearly separates automated, offscreen, interactive,
+  historical, package-level, and physical evidence.

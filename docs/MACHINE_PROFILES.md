@@ -2,10 +2,11 @@
 
 ## Status
 
-This document describes the first multi-machine foundation increment. It adds a
-versioned saved-machine registry and reusable machine/tool-head profiles without
-changing which configuration controls the running camera, controller, motion,
-or laser.
+The versioned saved-machine registry and reusable machine/tool-head profiles are
+now the foundation for first-run setup, Machine Manager, immutable runtime
+identity, material-recipe compatibility, and new-project authoring defaults.
+They do not create a second controller path or replace the existing guarded
+runtime authority.
 
 At browser and desktop startup, `CoreRuntime` creates or loads
 `<data_dir>/machines.json`. When that file does not exist, E3 atomically records
@@ -17,12 +18,11 @@ plausible registry. Once a registry exists, its active saved-machine snapshot is
 the runtime authority passed to `AppContext`; raw JSON machine/laser values do
 not override it.
 
-The registry is intentionally not yet exposed as a Machine Manager, and
-changing the saved active-machine ID does not reconnect, home, move, arm, or
-switch the running controller. Runtime switching is a separate guarded
-lifecycle change. A malformed registry is rejected before the desktop
-constructs `AppContext`; E3 never guesses which saved machine the operator
-intended.
+The desktop exposes the registry through Machine Manager. Changing the saved
+active-machine ID selects the next launch only; it does not reconnect, Home,
+move, arm, or hot-swap the immutable current runtime. A malformed registry is
+rejected before the desktop constructs `AppContext`; E3 never guesses which
+saved machine the operator intended.
 
 ## Data model
 
@@ -67,8 +67,9 @@ number. Built-in profiles, including Creality Ender-3 S1 Pro, leave it `null`.
 Selecting a profile or explicitly applying generic profile defaults never
 invents a nominal span. Applying those defaults preserves an existing measured
 span while replacing the generic controller, work-area, homing, and motion
-values. Duplicating a saved machine copies this configuration value along with
-its other settings.
+values. The low-level registry duplicate is a complete detached snapshot, while
+the Machine Manager duplicate action deliberately clears the camera,
+calibration, and honeycomb-span bindings before saving the new instance.
 
 The complete machine/head pair is validated with the same configuration rules
 as the existing application. For example, a saved laser feed cannot exceed its
@@ -106,8 +107,8 @@ Initial migration uses no-clobber atomic publication. If another process creates
 the registry first, E3 reads and validates that file instead of overwriting it.
 Subsequent changes use the repository's existing atomic JSON replacement helper.
 
-Fixture-reach observations for the future Coordinate Audit are a separate
-diagnostic persistence domain:
+Fixture-reach observations used by the implemented read-only Coordinate Audit
+are a separate diagnostic persistence domain:
 
 ```text
 <data_dir>/machine_state/<stable-machine-id>/fixture_reach.json
@@ -157,8 +158,10 @@ configuration; an explicit `--config` is repaired in place.
 
 The migrated instance preserves the current validated settings exactly,
 including an existing operator-enabled `allow_motion` value or configured
-nonzero default power. This preserves current behavior; it does not grant new
-authority because the registry is not yet connected to execution.
+nonzero default power. `CoreRuntime` resolves the selected instance once at
+startup, but this preserves existing behavior rather than granting new
+authority: the normal hardware, motion, coordinate, preflight, arming, and
+program gates still apply.
 
 ## Built-in starting profiles
 
@@ -192,21 +195,20 @@ power defaults. The one migrated instance is a faithful record of existing
 configuration, not a safety reset and not proof that the recorded values match
 physical hardware.
 
-## Next increments
+## Deferred work
 
-The next guarded increment is a desktop Machine Manager that can create, edit,
-duplicate, and select instances while the current runtime continues to use one
-machine. Runtime machine switching must then be implemented as an explicit
-lifecycle operation that blocks active jobs, issues laser-off cleanup,
-disconnects the old controller, clears arming and coordinate trust, swaps the
-camera/calibration binding, invalidates prepared output, and requires a fresh
-connection and Home before motion.
+Machine Manager can create, edit, duplicate, and choose the next-launch
+instance while the current process continues to use one immutable running
+machine. Runtime hot-swapping is deliberately not implemented. If added, it
+would require an explicit guarded lifecycle that blocks active jobs, issues
+laser-off cleanup, disconnects the old controller, clears arming and coordinate
+trust, swaps camera/calibration binding, invalidates prepared output, and
+requires a fresh connection and Home before motion.
 
-After that foundation is verified, LightBurn `.lbdev` device-profile import can
-populate machine setup, and `.lbrn`/`.lbrn2` project import can remain separate
-and machine-neutral.
+LightBurn `.lbdev` device-profile import remains a possible setup feature;
+`.lbrn`/`.lbrn2` project import remains separate and machine-neutral.
 
-## Verification for this increment
+## Historical verification for the registry increment
 
 Focused portable tests cover exact legacy migration, conservative profile
 classification, retired-simulator migration, safe profile-derived defaults, multiple

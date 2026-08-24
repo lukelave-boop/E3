@@ -6,6 +6,7 @@ __pycache__/
 /.test-temp-*/
 /.pytest-tmp-*/
 /.pytest_tmp/
+/.tmp-pytest-*/
 .ruff_cache/
 .coverage
 htmlcov/
