@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+Entries in this section are chronological. Simulator references in earlier
+entries describe behavior that existed before the removal entries below and are
+not current product capability.
+
 - Removed the reduced-capability `--hardware` product launch mode. Normal
   browser and desktop startup now always grants process hardware authority
   without eagerly connecting to a controller; disconnected controllers report
@@ -176,11 +180,12 @@
   avoid black client areas on affected Linux Qt compositor/backing-store paths.
 
 - GitHub Actions now separates fast development feedback from final compatibility
-  validation. Development branches run one complete Linux Python 3.12 desktop
-  suite with four bounded workers alongside parallel Ruff and dependency/
-  bytecode jobs; `main`, `desktop-v1`, their pull requests, and manual dispatch
-  retain the serial five-environment Ubuntu/Windows matrix. Major phases publish
-  elapsed timing summaries.
+  validation. `fix/**`, `feature/**`, `agent/**`, `cleanup/**`, and
+  `architecture/**` pushes run the complete Windows Python 3.12 desktop suite
+  with four bounded workers alongside parallel Ruff and dependency/bytecode
+  jobs. Pushes and pull requests for `main`, plus manual dispatch, run serial
+  Windows Python 3.10 core/non-desktop and Windows Python 3.12 desktop jobs with
+  separate repository Ruff. Major phases publish elapsed timing summaries.
 
 - GRBL connection normalization can now recover the exact post-reset alarm-lock
   rejection `error:9` with `$X` followed by an acknowledged `M5`, but only when
@@ -234,7 +239,7 @@
 - Powered Machine Setup jobs now transform their machine-coordinate paths into
   the active honeycomb-local canvas for both workspace and popup previews.
 
-## Unreleased — `desktop-v1` / `0.2.0.dev0`
+## Historical `desktop-v1` development — `0.2.0.dev0`
 
 - Trace can now create a locked **Stock boundary** instead of laser-output
   geometry. Stock boundaries remain visible in the camera-aligned project, are

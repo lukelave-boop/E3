@@ -4,9 +4,11 @@ The `desktop-v1` foundation adds a native PySide6 workspace without removing the
 existing browser application. Both interfaces use the same calibrated camera,
 geometry, G-code, safety and controller services.
 
-> This document describes the committed desktop foundation. The branch also
-> contains the camera-object tracing workflow described in
-> [OBJECT_TRACE.md](OBJECT_TRACE.md) and [../CURRENT_STATE.md](../CURRENT_STATE.md).
+> This is a historical milestone record, not the current roadmap or platform
+> boundary. The desktop foundation later gained the tracing workflow and the
+> generic machine/import/planning architecture recorded in
+> [../CURRENT_STATE.md](../CURRENT_STATE.md); current future work is in
+> [../ROADMAP.md](../ROADMAP.md).
 
 ## Implemented in this milestone
 
@@ -386,15 +388,24 @@ physically verified.
 - Editable package installation without desktop dependencies
 - Friendly startup failure when PySide6 has not yet been installed
 
-The Qt windows themselves must still be exercised on the Linux Mint workstation
-because PySide6 and a graphical display are not present in the build environment.
+At this milestone, the Qt windows still needed exercise on the Linux Mint
+workstation because PySide6 and a graphical display were not present in the
+build environment.
 
-The complete desktop application has since started, run its event loop, and
-shut down under Qt's offscreen backend on Windows with injected test doubles and
-simulated controller. This remains a smoke test rather than an interactive GUI
-test. POSIX serial is selected lazily; Linux remains the only hardware platform.
+During the later simulator era, the complete desktop application started, ran
+its event loop, and shut down under Qt's offscreen backend on Windows with
+injected test doubles and a simulated controller. That remains historical smoke
+evidence rather than an interactive GUI test or current product capability.
+Direct local POSIX serial and V4L2 remain Linux-specific; the authenticated
+Windows-to-Pi hardware path is described in
+[NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 
-## Next desktop milestones
+## Historical follow-on list
+
+This list records what was next at the time of the desktop-v1 foundation.
+Several items—including Windows CI, guarded jog, packaging/update work, and
+parts of the authoring backlog—have since been implemented. Use the current
+[roadmap](../ROADMAP.md) rather than this list for planning.
 
 1. Windows launch scripts and CI. OS-native user-data paths and legacy-data
    migration are implemented.

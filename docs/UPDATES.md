@@ -39,7 +39,10 @@ If process creation fails after E3's final close, a standalone error shows the
 verified installer path for manual launch and E3 exits; the stopped desktop is
 not re-shown as if it were usable. This boundary is automated-test covered; a
 newly built installed package must still be exercised before calling the
-handoff package-verified.
+handoff package-verified. That exercise is intentionally deferred until a
+disposable interactive Windows environment is available; it must not repoint or
+replace the public development channel or overwrite the developer's installed
+E3 application.
 
 The development workflow publishes fixed prerelease tag `e3-development` when
 the canonical `main` branch changes. Manual publication is also restricted to

@@ -815,14 +815,20 @@ Windows and Linux. Direct local serial and camera hardware remain Linux-only:
   selection clearly; an authenticated bridge URI remains a supported transport
   selection on Windows.
 - Camera enumeration and controls use `/dev/video*`, V4L2, and `v4l2-ctl`.
-- Launch/install scripts and desktop integration are Linux shell assets.
-- Fast Development CI runs the complete desktop-enabled suite on Ubuntu Python
-  3.12 with four bounded workers, in parallel with Ruff and dependency/bytecode
-  validation. Full Compatibility CI retains serial full-suite coverage on
-  Ubuntu Python 3.10/3.11/3.12 and Windows Python 3.10/3.12; it runs only for
-  `main`, `desktop-v1`, pull requests targeting those branches, or manual
-  dispatch.
+- Linux shell launch/install assets support the direct local-hardware path.
+  Windows packaging and update assets support the normal hardware-capable
+  desktop and authenticated remote-Pi clients; they do not add direct local
+  POSIX serial or V4L2 support. The installed frozen E3-to-visible-Inno handoff
+  remains package-unverified.
+- Fast Development CI runs Windows Python 3.12 Ruff, desktop dependency/
+  bytecode validation, and the complete desktop-enabled suite with four bounded
+  workers for `fix/**`, `feature/**`, `agent/**`, `cleanup/**`, and
+  `architecture/**` pushes. Compatibility CI runs serial pytest on Windows
+  Python 3.10 without desktop extras and Windows Python 3.12 with desktop extras,
+  plus repository Ruff, for `main` pushes, pull requests targeting `main`, and
+  manual dispatch. Linux/Pi components receive focused verification when
+  changed; there is no standing Ubuntu compatibility matrix.
 
 Platform implementations must remain lazy so unavailable hardware backends do
-not prevent portable libraries from importing. See
-`CURRENT_STATE.md` for the verification record and recommended repair order.
+not prevent portable libraries from importing or create fake availability. See
+`CURRENT_STATE.md` for the verification record and recommended next sequence.

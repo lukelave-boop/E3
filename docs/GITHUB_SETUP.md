@@ -31,17 +31,18 @@ The most useful items are a repository ZIP, a public repository link, a unified 
 
 ## CI validation tiers
 
-Fast Development CI runs on pushes to `fix/**`, `feature/**`, `agent/**`, and
-`cleanup/**`. It runs three parallel Ubuntu Python 3.12 desktop jobs: Ruff,
-dependency plus bytecode validation, and the complete pytest suite with four
-bounded xdist workers. It is the normal post-push confidence check after focused
-local testing.
+Fast Development CI runs on pushes to `fix/**`, `feature/**`, `agent/**`,
+`cleanup/**`, and `architecture/**`. It runs three parallel Windows Python 3.12
+jobs: repository Ruff, desktop dependency plus bytecode validation, and the
+complete desktop-enabled pytest suite with four bounded xdist workers. It is the
+normal post-push confidence check after focused local testing.
 
-Full Compatibility CI runs on pushes to `main` and `desktop-v1`, pull requests
-targeting either branch, and manual dispatch. It preserves serial full-suite
-coverage on Ubuntu Python 3.10, 3.11, and desktop-enabled 3.12, plus Windows
-Python 3.10 and desktop-enabled 3.12, with a separate Ruff job. Use this tier
-before merge or release. Do not merge merely to obtain development feedback.
+Compatibility CI runs on pushes to `main`, pull requests targeting `main`, and
+manual dispatch. It runs serial pytest on Windows Python 3.10 without desktop
+extras and Windows Python 3.12 with desktop extras, plus a separate repository
+Ruff job. Use this tier before merge or release. Linux/Pi-specific components
+retain focused verification when changed, but there is no standing Ubuntu
+compatibility matrix. Do not merge merely to obtain development feedback.
 
 Each timed command writes its elapsed duration to the Actions job summary. The
 fast suite uses bounded `pytest -n 4`; the full compatibility matrix remains

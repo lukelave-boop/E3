@@ -5,7 +5,7 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-21**
+Snapshot: **2026-08-24**
 
 ## Active remove-simulation-mode milestone
 
@@ -97,6 +97,25 @@ and `git diff --check` also passed. The original installed PyInstaller
 `--windowed --onedir` E3-to-visible-installer scenario has not been repeated and
 is not package-verified. No physical controller, camera, motion, arming, or laser
 verification was performed or is claimed.
+
+## Current repository validation and deferred package check
+
+Fast Development CI runs Windows Python 3.12 Ruff, desktop dependency/bytecode
+validation, and the complete desktop-enabled suite with four bounded workers for
+`fix/**`, `feature/**`, `agent/**`, `cleanup/**`, and `architecture/**` pushes.
+Compatibility CI runs serial pytest on Windows Python 3.10 without desktop
+extras and Windows Python 3.12 with desktop extras, plus repository Ruff, for
+`main` pushes, pull requests targeting `main`, and manual dispatch. Direct
+Linux/Pi components retain focused verification when changed; there is no
+standing Ubuntu compatibility matrix.
+
+The installed frozen PyInstaller `--windowed --onedir` E3-to-visible-Inno
+handoff remains intentionally package-unverified because no disposable
+interactive Windows environment was available. No lab installer or certificate
+was applied to the development host, and the public update channel was not used
+for the deferred exercise. This does not change the automated updater evidence
+or any hardware, motion, arming, coordinate, bounds, preflight, STOP, or `M5`
+authority.
 
 ## Historical verification record
 
@@ -1022,7 +1041,7 @@ identical-cell grids also repair only the affected center axis when a missed
 edge makes one observed cell materially narrower or shorter than the repeated
 size; unaffected placement and rotation remain independently observed.
 
-Branch: **`desktop-v1`**
+Historical desktop-foundation branch marker: **`desktop-v1`**
 
 The Linux-machine work through **`15c2c7a`** was preserved and pushed before
 the precision-camera feature commit **`99450df`** was integrated by cherry-pick.
