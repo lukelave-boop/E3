@@ -245,16 +245,26 @@ def _camera_provenance_matches(
 ) -> bool:
     if saved == current:
         return True
-    if not str(configured_device).lower().startswith("e3camera://"):
-        return False
     if not isinstance(saved, Mapping) or not isinstance(current, Mapping):
+        return False
+
+    saved_camera = dict(saved)
+    current_camera = dict(current)
+    if (
+        saved_camera.get("synthetic") is False
+        and "synthetic" not in current_camera
+    ):
+        saved_camera.pop("synthetic")
+    if saved_camera == current_camera:
+        return True
+    if not str(configured_device).lower().startswith("e3camera://"):
         return False
 
     # Older remote-camera bed maps recorded the Pi's live /dev/video* name.
     # Current provenance records the stable desktop e3camera:// endpoint.
     # The calibration profile is already scoped by configured camera settings,
     # so a legacy remote device-name difference alone does not invalidate it.
-    saved_device = saved.get("device")
+    saved_device = saved_camera.get("device")
     if not isinstance(saved_device, str):
         return False
 
@@ -265,8 +275,6 @@ def _camera_provenance_matches(
     if not legacy_pi_device:
         return False
 
-    saved_camera = dict(saved)
-    current_camera = dict(current)
     saved_camera["device"] = current_camera.get("device")
     return saved_camera == current_camera
 

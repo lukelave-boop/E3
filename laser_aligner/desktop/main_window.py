@@ -5202,6 +5202,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             else "The corrected overlay needs a new bed map."
         )
         self.statusBar().showMessage(status, 15000)
+        if not camera_online:
+            return
         choice = QtWidgets.QMessageBox.question(
             self,
             "Bed mapping required",

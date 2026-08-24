@@ -1548,25 +1548,42 @@ def test_bed_reference_prefers_lossless_png_but_reads_legacy_jpeg(tmp_path: Path
     assert np.array_equal(second, lossless)
 
 
-def test_remote_bed_provenance_accepts_legacy_pi_device_name() -> None:
-    from laser_aligner.app import _camera_provenance_matches
-
-    current = {
-        "device": "e3camera://192.168.4.50:8766",
-        "synthetic": False,
+def _camera_provenance(device: str) -> dict[str, object]:
+    return {
+        "device": device,
         "width": 1920,
         "height": 1080,
         "fourcc": "MJPG",
         "controls": {"focus_absolute": 40},
     }
-    saved = dict(current)
-    saved["device"] = "/dev/v4l/by-id/usb-camera"
+
+
+def test_local_bed_provenance_accepts_legacy_synthetic_false() -> None:
+    from laser_aligner.app import _camera_provenance_matches
+
+    current = _camera_provenance("/dev/v4l/by-id/usb-camera")
+    saved = {**current, "synthetic": False}
+
+    assert _camera_provenance_matches(saved, current, str(current["device"]))
+    assert saved["synthetic"] is False
+
+
+def test_remote_bed_provenance_accepts_legacy_pi_device_name_and_flag() -> None:
+    from laser_aligner.app import _camera_provenance_matches
+
+    current = _camera_provenance("e3camera://192.168.4.50:8766")
+    saved = {
+        **current,
+        "device": "/dev/v4l/by-id/usb-camera",
+        "synthetic": False,
+    }
 
     assert _camera_provenance_matches(
         saved,
         current,
         "e3camera://192.168.4.50:8766",
     )
+    assert saved["synthetic"] is False
     assert not _camera_provenance_matches(
         saved,
         current,
@@ -1579,3 +1596,34 @@ def test_remote_bed_provenance_accepts_legacy_pi_device_name() -> None:
         current,
         "e3camera://192.168.4.50:8766",
     )
+
+
+@pytest.mark.parametrize("synthetic", (True, 0))
+def test_bed_provenance_rejects_non_legacy_synthetic_values(synthetic: object) -> None:
+    from laser_aligner.app import _camera_provenance_matches
+
+    current = _camera_provenance("/dev/v4l/by-id/usb-camera")
+    saved = {**current, "synthetic": synthetic}
+
+    assert not _camera_provenance_matches(saved, current, str(current["device"]))
+
+
+@pytest.mark.parametrize(
+    ("setting", "legacy_value"),
+    (
+        ("width", 1280),
+        ("height", 720),
+        ("fourcc", "YUYV"),
+        ("controls", {"focus_absolute": 41}),
+    ),
+)
+def test_legacy_synthetic_false_does_not_hide_camera_setting_changes(
+    setting: str,
+    legacy_value: object,
+) -> None:
+    from laser_aligner.app import _camera_provenance_matches
+
+    current = _camera_provenance("/dev/v4l/by-id/usb-camera")
+    saved = {**current, "synthetic": False, setting: legacy_value}
+
+    assert not _camera_provenance_matches(saved, current, str(current["device"]))
