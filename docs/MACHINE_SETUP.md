@@ -164,14 +164,16 @@ a new frame. A successful frame clears the fault latch and reports recovery.
 A stale, legacy, or otherwise untrusted bed map is reported separately as
 **Bed mapping required**. This state does not claim that the camera is
 unavailable. The corrected-overlay refresh is blocked before camera work is
-queued, repeated timer refreshes remain silent, and the dialog opens Machine
-Setup at Lens when no accepted lens model exists or at Bed mapping when the lens
-model is already accepted. The fresh keyed base-map workflow remains automatic;
-it does not require coordinate entry. A corrected-view processing failure while
-the camera remains healthy is likewise reported as an overlay error, not as a
-camera ownership failure. A visible overlay is cleared as soon as its mapping or
-focus provenance changes. In-flight frames are bound to the exact lens and bed
-models that produced them, so a late result from the prior calibration cannot be
+queued, and repeated timer refreshes remain silent. While the camera is offline,
+the desktop reports the mapping requirement in its status bar without opening a
+modal recovery prompt. When the camera is online, the dialog opens Machine Setup
+at Lens when no accepted lens model exists or at Bed mapping when the lens model
+is already accepted. The fresh keyed base-map workflow remains automatic; it
+does not require coordinate entry. A corrected-view processing failure while the
+camera remains healthy is likewise reported as an overlay error, not as a camera
+ownership failure. A visible overlay is cleared as soon as its mapping or focus
+provenance changes. In-flight frames are bound to the exact lens and bed models
+that produced them, so a late result from the prior calibration cannot be
 displayed.
 
 Mount the camera rigidly, independently of the moving bed and gantry. Changing

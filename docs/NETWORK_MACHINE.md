@@ -202,6 +202,13 @@ are requested remotely. Precision-capture sequence numbers, generation,
 control diagnostics, discard/settle metadata, and observed/negotiated FPS are
 returned to the desktop.
 
+For status-wire compatibility only, the desktop accepts the retired
+`synthetic` field from a legacy physical Pi node when its value is the exact
+boolean `false`. It copies the returned mapping and removes that one field before
+constructing the current camera status. Boolean `true`, integer `0`, and every
+other value are rejected; this does not restore a synthetic camera or simulation
+runtime and does not relax validation of any current status field.
+
 Retained frames are JPEG-encoded at high quality for transfer and decoded on
 the desktop. E3 computes sharpness on the frames it actually receives. This
 extra encode/decode generation must be treated as a calibration change until a

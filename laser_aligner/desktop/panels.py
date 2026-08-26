@@ -18,6 +18,13 @@ from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY
 
 QtCore, QtGui, QtWidgets = require_qt()
 
+_CORRECTED_OVERLAY_RATES_FPS = (0.5, 1.0, 2.0, 4.0, 5.0, 10.0, 15.0)
+_DEFAULT_CORRECTED_OVERLAY_RATE_FPS = 2.0
+
+
+def _frame_interval_ms(fps: float) -> int:
+    return round(1000.0 / fps)
+
 
 def _form_row(layout: QtWidgets.QFormLayout, label: str, widget: QtWidgets.QWidget) -> None:
     layout.addRow(label, widget)
@@ -833,10 +840,16 @@ class CameraPanel(QtWidgets.QWidget):
         )
         self.live_check.setChecked(True)
         self.live_rate = QtWidgets.QComboBox()
-        self.live_rate.addItem("0.5 fps", 2000)
-        self.live_rate.addItem("1 fps", 1000)
-        self.live_rate.addItem("2 fps", 500)
-        self.live_rate.setCurrentIndex(self.live_rate.findData(1000))
+        for fps in _CORRECTED_OVERLAY_RATES_FPS:
+            self.live_rate.addItem(
+                f"{fps:g} fps",
+                _frame_interval_ms(fps),
+            )
+        self.live_rate.setCurrentIndex(
+            self.live_rate.findData(
+                _frame_interval_ms(_DEFAULT_CORRECTED_OVERLAY_RATE_FPS)
+            )
+        )
         overlay_layout.addWidget(self.live_check)
         live_rate_row = QtWidgets.QHBoxLayout()
         live_rate_label = QtWidgets.QLabel("Rate")
@@ -1189,6 +1202,7 @@ class TracePanel(QtWidgets.QWidget):
     pickColorRequested = QtCore.Signal()
     clearRequested = QtCore.Signal()
     createRequested = QtCore.Signal(dict)
+    generateRequested = QtCore.Signal()
     selectionChanged = QtCore.Signal(list)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -1200,6 +1214,7 @@ class TracePanel(QtWidgets.QWidget):
         self._sampled_hue: float | None = None
         self._color_pick_active = False
         self._calibration_ready = False
+        self._generate_enabled = True
         self._trace_settings = QtCore.QSettings("E3", "PositioningSystem")
         layout = _panel_layout(self)
 
@@ -1534,6 +1549,10 @@ class TracePanel(QtWidgets.QWidget):
         )
         result_layout.addWidget(self.replace_previous)
         result_layout.addWidget(self.create_button)
+        self.generate_button = QtWidgets.QPushButton("Generate")
+        self.generate_button.setObjectName("traceGenerateButton")
+        self.generate_button.setToolTip("Generate the current project toolpath")
+        result_layout.addWidget(self.generate_button)
         layout.addWidget(result_group)
         layout.addStretch(1)
 
@@ -1545,6 +1564,7 @@ class TracePanel(QtWidgets.QWidget):
         )
         self.clear_button.clicked.connect(self._clear_clicked)
         self.create_button.clicked.connect(self._create_clicked)
+        self.generate_button.clicked.connect(self.generateRequested)
         self.result_tree.itemChanged.connect(self._result_changed)
         self.select_all_checkbox.stateChanged.connect(
             self._select_all_checkbox_changed
@@ -2064,6 +2084,10 @@ class TracePanel(QtWidgets.QWidget):
         self.create_button.setEnabled(False)
         self.status_label.setText("Trace preview cleared.")
 
+    def set_generate_enabled(self, enabled: bool) -> None:
+        self._generate_enabled = bool(enabled)
+        self.generate_button.setEnabled(self._generate_enabled)
+
     def _mark_stale(self, *args: Any) -> None:
         del args
         if self._updating or not self._detections:
@@ -2233,11 +2257,7 @@ class TracePanel(QtWidgets.QWidget):
         )
 
 class MachinePanel(QtWidgets.QWidget):
-    connectRequested = QtCore.Signal()
-    reconnectRequested = QtCore.Signal()
-    disconnectRequested = QtCore.Signal()
     parkRequested = QtCore.Signal()
-    stopRequested = QtCore.Signal()
     jogRequested = QtCore.Signal(float, float, float)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -2256,16 +2276,9 @@ class MachinePanel(QtWidgets.QWidget):
         self.state_label.setWordWrap(True)
         layout.addWidget(self.state_label)
 
-        connection_row = QtWidgets.QHBoxLayout()
-        connection_row.setSpacing(4)
-        self.connect_button = QtWidgets.QPushButton("Connect")
-        self.disconnect_button = QtWidgets.QPushButton("Disconnect")
         self.park_button = QtWidgets.QPushButton("Home / park")
         self.park_button.setToolTip("Home and park at the configured camera pose")
-        connection_row.addWidget(self.connect_button)
-        connection_row.addWidget(self.disconnect_button)
-        connection_row.addWidget(self.park_button)
-        layout.addLayout(connection_row)
+        layout.addWidget(self.park_button)
 
         self.jog_group = QtWidgets.QGroupBox("Jog")
         jog_layout = QtWidgets.QGridLayout(self.jog_group)
@@ -2302,26 +2315,14 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_group.setEnabled(False)
         layout.addWidget(self.jog_group)
 
-        safety_row = QtWidgets.QHBoxLayout()
-        safety_row.setSpacing(6)
         self.safety_note = _muted(
             "Software stop requests feed hold, controller reset, and laser off. "
             "It does not replace the physical emergency stop."
         )
-        self.stop_button = QtWidgets.QPushButton("STOP / LASER OFF")
-        self.stop_button.setObjectName("dangerButton")
-        self.stop_button.setToolTip(
-            "Software stop; use the physical emergency stop in an actual emergency."
-        )
-        safety_row.addWidget(self.safety_note, 1)
-        safety_row.addWidget(self.stop_button)
-        layout.addLayout(safety_row)
+        layout.addWidget(self.safety_note)
         layout.addStretch(1)
 
-        self.connect_button.clicked.connect(self._connect_clicked)
-        self.disconnect_button.clicked.connect(self.disconnectRequested)
         self.park_button.clicked.connect(self.parkRequested)
-        self.stop_button.clicked.connect(self.stopRequested)
         self.jog_up.clicked.connect(lambda: self._jog(0.0, 1.0))
         self.jog_down.clicked.connect(lambda: self._jog(0.0, -1.0))
         self.jog_left.clicked.connect(lambda: self._jog(-1.0, 0.0))
@@ -2340,12 +2341,6 @@ class MachinePanel(QtWidgets.QWidget):
             y_direction * step,
             self.jog_speed.value(),
         )
-
-    def _connect_clicked(self) -> None:
-        if self._connected and self._reconnect_required:
-            self.reconnectRequested.emit()
-        else:
-            self.connectRequested.emit()
 
     def set_status(self, status: dict[str, Any] | None) -> None:
         if not status:
@@ -2397,23 +2392,12 @@ class MachinePanel(QtWidgets.QWidget):
         self._sync_action_buttons()
 
     def set_busy(self, busy: bool) -> None:
-        """Prevent overlapping machine actions while preserving software Stop."""
+        """Prevent overlapping machine actions."""
 
         self._busy = bool(busy)
         self._sync_action_buttons()
 
     def _sync_action_buttons(self) -> None:
-        reconnect_available = self._connected and self._reconnect_required
-        self.connect_button.setText("Reconnect" if reconnect_available else "Connect")
-        self.connect_button.setEnabled(
-            not self._busy and (not self._connected or reconnect_available)
-        )
-        self.connect_button.setToolTip(
-            "Explicitly disconnect this untrusted session and connect again; Home / park will still be required"
-            if reconnect_available
-            else "Connect to the configured controller"
-        )
-        self.disconnect_button.setEnabled(not self._busy and self._connected)
         self.park_button.setEnabled(
             not self._busy
             and self._allow_motion
@@ -2446,11 +2430,6 @@ class MachinePanel(QtWidgets.QWidget):
         else:
             jog_tip = "Laser-off move; configured work-area bounds are not applied"
         self.jog_group.setToolTip(jog_tip)
-        self.disconnect_button.setToolTip(
-            "Disconnect this untrusted controller session before reconnecting"
-            if self._reconnect_required
-            else "Disconnect the controller"
-        )
         self.park_button.setToolTip(
             "Disconnect and reconnect before Home / park"
             if self._reconnect_required
@@ -2499,73 +2478,49 @@ class ConsolePanel(QtWidgets.QWidget):
         self.output.appendPlainText(line)
 
 
-class JobPanel(QtWidgets.QWidget):
-    generateRequested = QtCore.Signal()
-    previewRequested = QtCore.Signal()
-    pauseRequested = QtCore.Signal()
-    stopRequested = QtCore.Signal()
+class JobProgressWidget(QtWidgets.QStackedWidget):
+    """Global preparation/execution progress for the main-window status bar."""
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        layout = _dense_panel_layout(self)
+        self.setObjectName("jobProgressWidget")
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.setMinimumWidth(180)
+        self.setFixedHeight(18)
 
-        self.summary = QtWidgets.QLabel("No job generated")
-        self.summary.setObjectName("statusCard")
-        self.summary.setWordWrap(True)
-        layout.addWidget(self.summary)
+        self._preparation_summary = ""
+        self._prepared_summary = "No job generated"
+        self._execution_summary = "Controller idle · no job started"
+        self._execution_format = "Execution 0%"
         self.preparation_progress = QtWidgets.QProgressBar()
         self.preparation_progress.setObjectName("jobPreparationProgress")
         self.preparation_progress.setFixedHeight(18)
         self.preparation_progress.setTextVisible(True)
-        self.preparation_progress.hide()
-        layout.addWidget(self.preparation_progress)
-        self.execution_label = QtWidgets.QLabel("Controller idle · no job started")
-        self.execution_label.setWordWrap(True)
-        layout.addWidget(self.execution_label)
         self.progress = QtWidgets.QProgressBar()
+        self.progress.setObjectName("jobExecutionProgress")
         self.progress.setRange(0, 1000)
         self.progress.setFixedHeight(18)
-        self.progress.setFormat("Execution 0%")
-        layout.addWidget(self.progress)
-
-        prepare_row = QtWidgets.QHBoxLayout()
-        prepare_row.setSpacing(4)
-        prepare_row.addWidget(QtWidgets.QLabel("Prepare"))
-        self.generate_button = QtWidgets.QPushButton("Generate")
-        self.generate_button.setToolTip("Generate the current project toolpath")
-        prepare_row.addWidget(self.generate_button, 1)
-        layout.addLayout(prepare_row)
-
-        run_row = QtWidgets.QHBoxLayout()
-        run_row.setSpacing(4)
-        run_row.addWidget(QtWidgets.QLabel("Review"))
-        self.preview_button = QtWidgets.QPushButton("Preview Job…")
-        self.preview_button.setToolTip(
-            "Open the exact Preview; START JOB is available only inside it"
-        )
-        self.pause_button = QtWidgets.QPushButton("Pause")
-        self.pause_button.setEnabled(False)
-        self.pause_button.setToolTip(
-            "Disabled until Falcon realtime hold/resume is validated."
-        )
-        self.stop_button = QtWidgets.QPushButton("Stop")
-        self.stop_button.setObjectName("dangerButton")
-        run_row.addWidget(self.preview_button, 1)
-        run_row.addWidget(self.pause_button, 1)
-        run_row.addWidget(self.stop_button, 1)
-        layout.addLayout(run_row)
-        layout.addStretch(1)
-
-        self.generate_button.clicked.connect(self.generateRequested)
-        self.preview_button.clicked.connect(self.previewRequested)
-        self.pause_button.clicked.connect(self.pauseRequested)
-        self.stop_button.clicked.connect(self.stopRequested)
+        self.progress.setFormat(self._execution_format)
+        self.addWidget(self.progress)
+        self.addWidget(self.preparation_progress)
         self._preparing = False
-        self._job_prepared = False
-        self._sync_start_enabled()
+        self.setCurrentWidget(self.progress)
+        self._sync_tooltip()
 
-    def _sync_start_enabled(self) -> None:
-        self.preview_button.setEnabled(self._job_prepared and not self._preparing)
+    def _sync_tooltip(self) -> None:
+        summaries = []
+        if self._preparing and self._preparation_summary:
+            summaries.append(self._preparation_summary)
+        summaries.extend((self._prepared_summary, self._execution_summary))
+        self.setToolTip("\n".join(summaries))
+        self.progress.setToolTip(self.toolTip())
+        self.preparation_progress.setToolTip(self.toolTip())
+
+    def _sync_execution_format(self) -> None:
+        self.progress.setFormat(self._execution_format)
 
     def set_preparing(
         self,
@@ -2576,21 +2531,26 @@ class JobPanel(QtWidgets.QWidget):
         total: int | None = None,
     ) -> None:
         self._preparing = bool(active)
-        self.preparation_progress.setVisible(self._preparing)
         if self._preparing:
+            self._preparation_summary = str(label)
             if completed is None or total is None or total <= 0:
                 self.preparation_progress.setRange(0, 0)
+                visible_label = "Preparing…"
             else:
                 self.preparation_progress.setRange(0, int(total))
                 self.preparation_progress.setValue(
                     max(0, min(int(completed), int(total)))
                 )
-            self.preparation_progress.setFormat(str(label))
+                progress = max(0.0, min(float(completed) / float(total), 1.0))
+                visible_label = f"Preparing {progress * 100:.0f}%"
+            self.preparation_progress.setFormat(visible_label)
+            self.setCurrentWidget(self.preparation_progress)
         else:
+            self._preparation_summary = ""
             self.preparation_progress.setRange(0, 100)
             self.preparation_progress.setValue(0)
-        self.generate_button.setEnabled(not self._preparing)
-        self._sync_start_enabled()
+            self.setCurrentWidget(self.progress)
+        self._sync_tooltip()
 
     def set_job_status(self, job: dict[str, Any] | None) -> None:
         job = job or {}
@@ -2601,14 +2561,16 @@ class JobPanel(QtWidgets.QWidget):
         self.progress.setValue(int(round(progress * 1000)))
         phase = str(job.get("phase", "streaming" if running else "idle"))
         finishing_labels = {
-            "draining": "Finishing · waiting for motion",
+            "draining": "Finishing · motion",
             "homing": "Finishing · homing",
             "parking": "Finishing · parking",
-            "releasing": "Finishing · releasing motors",
+            "releasing": "Finishing · release",
         }
-        self.progress.setFormat(
-            finishing_labels.get(phase, f"Execution {progress * 100:.0f}%")
+        self._execution_format = finishing_labels.get(
+            phase,
+            f"Execution {progress * 100:.0f}%",
         )
+        self._sync_execution_format()
         if running:
             execution_labels = {
                 "draining": "Toolpath sent · waiting for queued motion to finish",
@@ -2616,20 +2578,19 @@ class JobPanel(QtWidgets.QWidget):
                 "parking": "Homing complete · moving to park position",
                 "releasing": "Park complete · releasing motors",
             }
-            self.execution_label.setText(
-                execution_labels.get(
-                    phase,
-                    f"Running {job.get('name', 'job')} · {completed}/{total} lines",
-                )
+            self._execution_summary = execution_labels.get(
+                phase,
+                f"Running {job.get('name', 'job')} · {completed}/{total} lines",
             )
         elif job.get("error"):
-            self.execution_label.setText(f"Controller stopped: {job['error']}")
+            self._execution_summary = f"Controller stopped: {job['error']}"
         elif total:
-            self.execution_label.setText(
+            self._execution_summary = (
                 f"Controller idle · last job {completed}/{total} lines"
             )
         else:
-            self.execution_label.setText("Controller idle · no job started")
+            self._execution_summary = "Controller idle · no job started"
+        self._sync_tooltip()
 
     def set_prepared_job(
         self,
@@ -2638,24 +2599,21 @@ class JobPanel(QtWidgets.QWidget):
         power_percent: float,
         controller_power: float,
     ) -> None:
-        self._job_prepared = True
-        self.summary.setText(
+        self._prepared_summary = (
             f"Prepared · {summary} · max power {power_percent:.1f}% / "
             f"S{controller_power:g}"
         )
-        self._sync_start_enabled()
+        self._sync_execution_format()
+        self._sync_tooltip()
 
     def clear_prepared_job(self) -> None:
-        self._job_prepared = False
-        self.summary.setText("No job generated")
-        self._sync_start_enabled()
+        self._prepared_summary = "No job generated"
+        self._sync_execution_format()
+        self._sync_tooltip()
 
     def set_machine_status(self, machine: dict[str, Any] | None) -> None:
         del machine
-        self._sync_start_enabled()
-        self.preview_button.setToolTip(
-            "Open the exact Preview; START JOB is available only inside it"
-        )
+        self._sync_tooltip()
 
 
 class ObjectPanel(QtWidgets.QWidget):

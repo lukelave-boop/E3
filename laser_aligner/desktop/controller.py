@@ -30,6 +30,9 @@ _MIN_TEMPLATE_CONFIDENCE = 0.55
 _MAX_TEMPLATE_RMS_ERROR_MM = 1.0
 _MAX_TEMPLATE_POINT_ERROR_MM = 2.0
 _MAX_TEMPLATE_SCALE_ERROR = 0.035
+_DEFAULT_LIVE_CAMERA_INTERVAL_MS = round(1000 / 2)
+_MIN_LIVE_CAMERA_INTERVAL_MS = round(1000 / 15)
+_MAX_LIVE_CAMERA_INTERVAL_MS = 10_000
 
 
 def _guarded_output_work_area(runtime: CoreRuntime) -> WorkArea:
@@ -355,7 +358,7 @@ class DesktopController(QtCore.QObject):
         self._template_review_active = False
         self._template_review_signature: tuple[object, ...] | None = None
         self._live_camera_enabled = False
-        self._live_camera_interval_ms = 1000
+        self._live_camera_interval_ms = _DEFAULT_LIVE_CAMERA_INTERVAL_MS
         self._reported_terminal_job: tuple[object, object] | None = None
         self._workspace_coordinate_space = "machine"
         self._shutdown_started = False
@@ -546,6 +549,9 @@ class DesktopController(QtCore.QObject):
                 self.errorOccurred.emit(f"Controller job failed: {job['error']}")
 
     def refresh_camera_image(self) -> None:
+        # Repeating live-overlay timer ticks are intentionally dropped while
+        # correction is in flight. Never overlap rectification jobs or turn a
+        # high requested frame rate into an accumulating work queue.
         if (
             not self.runtime.running
             or self._camera_refresh_in_flight
@@ -767,6 +773,8 @@ class DesktopController(QtCore.QObject):
             or self._camera_refresh_in_flight
             or self._camera_reconnect_in_flight
         ):
+            # A boolean deliberately coalesces any number of explicit refresh
+            # requests into at most one replacement after the current job.
             self._camera_refresh_pending = True
             return
         self._camera_refresh_pending = False
@@ -1087,7 +1095,10 @@ class DesktopController(QtCore.QObject):
             self.refresh_camera_image()
 
     def set_live_camera_interval(self, interval_ms: int) -> None:
-        self._live_camera_interval_ms = max(250, min(10_000, int(interval_ms)))
+        self._live_camera_interval_ms = max(
+            _MIN_LIVE_CAMERA_INTERVAL_MS,
+            min(_MAX_LIVE_CAMERA_INTERVAL_MS, int(interval_ms)),
+        )
         self._camera_live_timer.setInterval(self._live_camera_interval_ms)
         self._sync_camera_timer()
 

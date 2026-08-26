@@ -110,6 +110,55 @@ and `git diff --check` also passed. The original installed PyInstaller
 is not package-verified. No physical controller, camera, motion, arming, or laser
 verification was performed or is claimed.
 
+## Active desktop layout v7 refactor
+
+The desktop's default layout now keeps the canvas open to the status bar instead
+of reserving a lower G-code/job area. Cuts, Camera, Objects, Shape, Templates,
+Trace, Machine, and Material Recipes share one right-hand tabbed sidebar.
+Template and Trace generation controls live beside their respective creation
+workflows, while the persistent runtime strip owns Connect/Reconnect,
+Disconnect, the deliberately disabled Pause control, and software STOP. Job
+preparation, execution, and finishing progress is always represented in the
+global status bar. At compact widths the status bar preserves progress first,
+then exposes runtime, zoom, and edit details only as space allows; omitted
+runtime detail remains available in its tooltip. Saved desktop geometry/state
+is version 7 so older opaque dock layouts cannot recreate the removed panels.
+
+The corrected workspace Live Overlay now offers nominal 0.5, 1, 2, 4, 5, 10,
+and 15 fps selections and defaults to 2 fps. Its controller timer accepts the
+nearest integer 15 fps period of 67 ms. Only one corrected-frame task may be in
+flight: periodic ticks are dropped while it runs, and repeated explicit refresh
+requests coalesce into at most one pending replacement. Slow correction or
+network delivery therefore reduces the displayed frame rate instead of stacking
+work. This is separate from the raw Live Monitor and camera capture rates.
+
+The active UI work is rebased directly on `origin/main` commit
+`e079f37b7b3249ff30b95a99f30fc7199921ea8a`, including PR #36's rule that an
+offline camera reports stale bed-map status without opening the Bed Mapping
+Required modal. Remote camera status parsing also tolerates the obsolete field
+from a legacy physical Pi node only when it is exact boolean `synthetic: false`.
+The returned mapping is copied before that field is removed; boolean `true`,
+integer `0`, and every other value fail closed. Current fields are passed to
+`CameraStatus` unchanged, the source mapping is not mutated, and no simulation
+capability is restored.
+
+The layout portion is presentation/action routing only, and the overlay-rate
+change is camera scheduling only. The existing Preview, preflight, exact-program
+authority, temporary arming, `MachineService`, guarded execution, STOP, and `M5`
+boundaries are unchanged. Offscreen production-theme
+layout checks covered 1600, 1080, and 900 px windows. A genuine 13 pt font audit
+at 900 and 1080 px covered preparation, execution, every finishing state, status
+containment, and mapped runtime-toolbar containment; Connect, Disconnect, Pause,
+and STOP remained ordered and fully visible. Focused corrected-overlay,
+controller scheduling, desktop layout, and async coverage passed **193 tests**.
+Focused offline-camera coverage passed **9 tests**; remote-camera/status coverage
+passed **65 tests** with **2 expected Linux-only V4L2 skips**; and PR #36 camera
+provenance coverage passed **64 tests**. The complete Windows Python 3.14 suite
+passed **2,402 tests** with **14 expected platform/privilege skips**.
+Repository-wide Ruff, `compileall -q laser_aligner`, and `git diff --check`
+passed. No interactive GUI, real camera, physical controller, motion, arming, or
+laser-output test was performed or is claimed.
+
 ## Current repository validation and deferred package check
 
 Fast Development CI runs Windows Python 3.12 Ruff, desktop dependency/bytecode
@@ -1231,19 +1280,22 @@ rejection, UI gating, and a STOP/ACK race. Direction and the selected mechanical
 endpoints were exercised on the active GRBL machine; STOP/reconnect behavior
 was not physically measured during that session.
 
-The native default workspace now gives Cuts/Layers and its related design tabs
-a full-height right column. A short row beneath the canvas places a narrow raw
-G-code dock on the left and the wider Laser/Machine/Material Recipes tabs beside
-it. All three regions remain resizable Qt docks. The dock-state contract is
-versioned as `v6`: compatible older window geometry and active-tab choices may
-migrate, but the obsolete `v5` dock topology is not restored. Raw G-code starts
-visible, Console remains optional in the same compact slot, and Reset workspace
-layout restores the new arrangement. This topology is covered by an offscreen
-production-dock geometry test. Compact `1080x780` and `900x680` layouts with
-13 pt text retain their requested size, keep the canvas and all docks disjoint,
-and expose every inspector without horizontal clipping. Operation numeric
-fields commit once on editing completion instead of rebuilding project panels
-for each typed digit. Interactive desktop review remains pending.
+The native default workspace uses layout `v7`: Cuts/Layers, Camera, Objects,
+Shape, Templates, Trace, Machine, and Material Recipes share one full-height
+right column. The lower raw-G-code and Laser/job docks no longer exist, so the
+bed/camera workspace reaches the bottom palette and global status area. The
+optional Console remains a separate hidden bottom dock. Compatible older window
+geometry and active right-tab choices may migrate, but opaque `v6` dock state is
+not restored. Templates and Trace expose the shared Generate action below their
+Create controls. Preparation and controller execution progress occupy the
+bottom status bar, while Connect/Reconnect, Disconnect, deliberately disabled
+Pause, and always-available software STOP occupy the non-hideable runtime strip.
+The strip reflows at compact widths, and Reset workspace layout recomputes that
+responsive row rather than restoring a clipped toolbar. Offscreen production-
+theme tests cover `1600x900`, `1080x780`, and `900x680`, including status/progress
+containment, compact STOP reachability, zero horizontal inspector overflow, and
+a 420-pixel default sidebar. Operation numeric fields still commit once on edit
+completion. Interactive desktop review remains pending.
 
 The parked-bed default requests 45 unique frames within eight seconds. This
 fits the configured 15 fps deadline (and the 10 fps synthetic source) with
@@ -1564,7 +1616,9 @@ the exclusive-camera warning. Invalid rectification is rejected before worker
 submission, repeats are latched, and the recovery action opens Machine Setup at
 Lens or Bed mapping according to the accepted lens-model state. Corrected-view
 processing failures from an otherwise healthy camera have their own latched
-overlay alert. Visible overlays are invalidated immediately by focus or mapping
+overlay alert. When the camera is offline, a stale map remains visible as a
+status-bar requirement without opening the recovery modal; the prompt is
+online-only. Visible overlays are invalidated immediately by focus or mapping
 changes, and every in-flight result is identity-bound to the exact lens and bed
 models used to produce it; late results are discarded and one replacement is
 queued after calibration review closes.

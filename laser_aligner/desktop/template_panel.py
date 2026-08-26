@@ -57,6 +57,7 @@ class TemplatePanel(QtWidgets.QWidget):
     matchSelectedRequested = QtCore.Signal(str)
     placementChanged = QtCore.Signal(dict)
     applyRequested = QtCore.Signal(dict)
+    generateRequested = QtCore.Signal()
     clearRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -68,6 +69,7 @@ class TemplatePanel(QtWidgets.QWidget):
         self._placement_valid = False
         self._calibration_ready = False
         self._busy = False
+        self._generate_enabled = True
         self._camera_match_summary: str | None = None
         self._camera_match_adjusted = False
 
@@ -225,6 +227,13 @@ class TemplatePanel(QtWidgets.QWidget):
             tool_tip="Remove the current template alignment preview.",
         )
         layout.addWidget(self.apply_button)
+        self.generate_button = _ResponsiveActionButton(
+            "Generate",
+            "Generate",
+            tool_tip="Generate the current project toolpath.",
+        )
+        self.generate_button.setObjectName("templateGenerateButton")
+        layout.addWidget(self.generate_button)
         layout.addWidget(self.clear_button)
         layout.addStretch(1)
 
@@ -242,6 +251,7 @@ class TemplatePanel(QtWidgets.QWidget):
         self.auto_button.clicked.connect(self.autoMatchRequested.emit)
         self.match_selected_button.clicked.connect(self._match_selected)
         self.apply_button.clicked.connect(self._apply_clicked)
+        self.generate_button.clicked.connect(self.generateRequested)
         self.clear_button.clicked.connect(self.clearRequested.emit)
         self.x_spin.valueChanged.connect(self._emit_placement)
         self.y_spin.valueChanged.connect(self._emit_placement)
@@ -284,6 +294,7 @@ class TemplatePanel(QtWidgets.QWidget):
             self.auto_button,
             self.match_selected_button,
             self.apply_button,
+            self.generate_button,
             self.clear_button,
         ):
             available = max(0, button.width())
@@ -478,6 +489,10 @@ class TemplatePanel(QtWidgets.QWidget):
         self._busy = bool(busy)
         self._update_enabled()
 
+    def set_generate_enabled(self, enabled: bool) -> None:
+        self._generate_enabled = bool(enabled)
+        self._update_enabled()
+
     def set_calibration_ready(self, ready: bool) -> None:
         self._calibration_ready = bool(ready)
         self._update_enabled()
@@ -534,6 +549,7 @@ class TemplatePanel(QtWidgets.QWidget):
         self.apply_button.setEnabled(
             available and self._placement_valid and not self._busy
         )
+        self.generate_button.setEnabled(self._generate_enabled)
         for widget in (self.x_spin, self.y_spin, self.rotation_spin, self.nudge_step):
             widget.setEnabled(available and not self._busy)
 

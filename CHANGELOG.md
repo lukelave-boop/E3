@@ -239,6 +239,36 @@ not current product capability.
 - Powered Machine Setup jobs now transform their machine-coordinate paths into
   the active honeycomb-local canvas for both workspace and popup previews.
 
+- Reworked the native desktop shell as layout `v7`. Cuts, Camera, Objects,
+  Shape, Templates, Trace, Machine, and Material Recipes now share one
+  full-height right sidebar; the dedicated lower raw-G-code and Laser/job docks
+  are removed, so the bed/camera workspace extends to the bottom status area.
+  Preparation and controller execution use one global bottom progress widget,
+  while Templates and Trace expose the same existing Generate action directly
+  below their Create controls. Connect/Reconnect and Disconnect now sit beside
+  the deliberately disabled Pause and always-available software STOP in the
+  persistent primary runtime strip. Compact windows give that strip its own
+  toolbar row and a two-row status/control fallback. The optional Console stays
+  hidden by default, and opaque `v6` dock state is not restored into the new
+  topology. Exact Preview remains the only visible **START JOB** gate and still
+  submits through the existing guarded main-window path; `MachineService`,
+  arming, motion, authorization, STOP/`M5`, and all other safety semantics are
+  unchanged.
+
+- Expanded the corrected workspace Live Overlay selector to 0.5, 1, 2, 4, 5,
+  10, and 15 fps, with 2 fps as the default. The desktop controller now permits
+  the approximately 67 ms interval required for 15 fps while retaining one
+  corrected-frame job in flight and at most one coalesced explicit pending
+  refresh; periodic ticks are dropped when correction or network throughput is
+  slower than the selected cadence, so no work backlog accumulates. The separate
+  raw Live Monitor and camera-capture rates are unchanged.
+
+- Restored wire compatibility with legacy physical Pi camera nodes whose status
+  payload contains the retired exact boolean `synthetic: false` field. The
+  desktop copies the received status mapping before removing only that value;
+  `synthetic: true`, integer `0`, and every other value remain invalid, the
+  caller's mapping is not mutated, and no simulation capability is restored.
+
 ## Historical `desktop-v1` development — `0.2.0.dev0`
 
 - Trace can now create a locked **Stock boundary** instead of laser-output

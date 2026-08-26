@@ -4,6 +4,7 @@ import socket
 import threading
 import time
 from collections.abc import Mapping
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import cv2
@@ -560,6 +561,85 @@ def test_raw_monitor_recovers_after_camera_stop_and_restart(monkeypatch) -> None
         stream.close()
         server.stop()
         thread.join(timeout=1)
+
+
+def _current_remote_status_payload() -> dict[str, object]:
+    return {
+        "connected": True,
+        "device": "/dev/v4l/by-id/camera",
+        "width": 1920,
+        "height": 1080,
+        "fps": 14.8,
+        "frames_read": 321,
+        "last_error": None,
+        "frame_age_seconds": 0.025,
+        "controls_verified": {"focus_absolute": 40},
+        "controls_satisfied": {"focus_absolute": "exact"},
+        "controls_critical_unverified": {},
+        "negotiated_fps": 30.0,
+        "operation": "idle",
+        "monitor_source_mode": "direct_mjpeg",
+    }
+
+
+def _fetch_supplied_remote_status(
+    monkeypatch: pytest.MonkeyPatch,
+    raw: dict[str, object],
+) -> CameraStatus:
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://127.0.0.1:65534")
+    )
+    monkeypatch.setattr(
+        remote,
+        "_request",
+        lambda *_args, **_kwargs: ({"status": raw}, ()),
+    )
+    return remote._fetch_status()
+
+
+def test_remote_status_accepts_legacy_synthetic_false_without_mutating_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    current = _current_remote_status_payload()
+    raw = {**current, "synthetic": False}
+    original = dict(raw)
+
+    status = _fetch_supplied_remote_status(monkeypatch, raw)
+
+    assert asdict(status) == current
+    assert raw == original
+    assert raw["synthetic"] is False
+
+
+@pytest.mark.parametrize(
+    "synthetic",
+    (True, 0, None, "false"),
+    ids=("boolean-true", "integer-zero", "none", "string-false"),
+)
+def test_remote_status_rejects_nonlegacy_synthetic_values(
+    monkeypatch: pytest.MonkeyPatch,
+    synthetic: object,
+) -> None:
+    raw = {**_current_remote_status_payload(), "synthetic": synthetic}
+    original = dict(raw)
+
+    with pytest.raises(CameraError, match="invalid legacy synthetic status"):
+        _fetch_supplied_remote_status(monkeypatch, raw)
+
+    assert raw == original
+
+
+def test_remote_status_accepts_current_payload_unchanged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    raw = _current_remote_status_payload()
+    original = dict(raw)
+
+    status = _fetch_supplied_remote_status(monkeypatch, raw)
+
+    assert asdict(status) == original
+    assert raw == original
+
 
 def test_remote_status_is_cached_and_does_not_touch_network(monkeypatch) -> None:
     remote = RemoteCameraService(

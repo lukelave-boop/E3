@@ -45,7 +45,7 @@ def test_runbook_tracks_exact_setup_and_job_handoff_labels() -> None:
     for label in required_labels:
         assert label in RUNBOOK
     assert "timeline **⏮ Start** and **Play** controls animate only" in normalized
-    assert "Do not click the main **Generate** button" in normalized
+    assert "Do not use any main-window **Generate** control" in normalized
     assert "dry run" not in RUNBOOK.lower()
     assert "dry frame" not in RUNBOOK.lower()
     assert "Continue directly to Step 4" in RUNBOOK

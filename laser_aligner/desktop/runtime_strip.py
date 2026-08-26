@@ -23,11 +23,15 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
     """Persistent, presentation-only summary of machine runtime authority.
 
     ``set_status`` accepts either the complete ``CoreRuntime.status()`` payload
-    or its nested machine-status mapping. The widget deliberately emits only a
-    request for software stop; callers retain ownership of the guarded machine
-    action and its connection to ``MachineService``.
+    or its nested machine-status mapping. The widget emits requests for the
+    existing primary machine actions; callers retain ownership of every guarded
+    operation and its connection to ``MachineService``.
     """
 
+    connectRequested = QtCore.Signal()
+    reconnectRequested = QtCore.Signal()
+    disconnectRequested = QtCore.Signal()
+    pauseRequested = QtCore.Signal()
     stopRequested = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -42,29 +46,52 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self._mode_text = "HARDWARE LOCKED"
         self._mode_style = "statusWarning"
         self._mode_description = "Machine backend without process-level hardware access."
+        self._busy = False
+        self._wrapped = False
+        self._connecting = False
         self._connected = False
         self._motion_enabled = False
         self._coordinate_reference_ready = False
         self._reconnect_required = False
         self._serial_backend = False
 
-        layout = QtWidgets.QHBoxLayout(self)
+        layout = QtWidgets.QGridLayout(self)
         self._layout = layout
         layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(10)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(4)
 
         self.heading = QtWidgets.QLabel("Runtime")
         self.heading.setObjectName("runtimeStripHeading")
         self.heading.setAccessibleName("Runtime safety status")
-        layout.addWidget(self.heading)
 
         self.mode_label = self._indicator("Runtime mode")
         self.connection_label = self._indicator("Controller connection")
         self.motion_label = self._indicator("Motion permission")
-        layout.addWidget(self.mode_label)
-        layout.addWidget(self.connection_label)
-        layout.addWidget(self.motion_label)
-        layout.addStretch(1)
+
+        self.connect_button = QtWidgets.QPushButton("Connect")
+        self.connect_button.setObjectName("runtimeConnectButton")
+        self.connect_button.setAccessibleName("Connect machine")
+        self.disconnect_button = QtWidgets.QPushButton("Disconnect")
+        self.disconnect_button.setObjectName("runtimeDisconnectButton")
+        self.disconnect_button.setAccessibleName("Disconnect machine")
+        self.pause_button = QtWidgets.QPushButton("Pause")
+        self.pause_button.setObjectName("runtimePauseButton")
+        self.pause_button.setAccessibleName("Pause or resume machine job")
+        self.pause_button.setToolTip(
+            "Disabled until Falcon realtime hold/resume is validated."
+        )
+        for button in (
+            self.connect_button,
+            self.disconnect_button,
+            self.pause_button,
+        ):
+            button.setAutoDefault(False)
+            button.setDefault(False)
+            button.setSizePolicy(
+                QtWidgets.QSizePolicy.Policy.Preferred,
+                QtWidgets.QSizePolicy.Policy.Fixed,
+            )
 
         self.stop_button = QtWidgets.QPushButton(_COMPACT_STOP_TEXT)
         self.stop_button.setObjectName("dangerButton")
@@ -78,8 +105,11 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Policy.Fixed,
         )
         self._update_stop_minimum_size()
+        self.connect_button.clicked.connect(self._connect_clicked)
+        self.disconnect_button.clicked.connect(self.disconnectRequested)
+        self.pause_button.clicked.connect(self.pauseRequested)
         self.stop_button.clicked.connect(self.stopRequested)
-        layout.addWidget(self.stop_button)
+        self._reflow_layout()
 
         self.set_status(None)
 
@@ -145,6 +175,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             self._mode_description = (
                 f"{backend or 'Machine'} backend without process-level hardware access."
             )
+        self._connecting = bool(machine.get("connecting", False))
         self._connected = bool(machine.get("connected", False))
         self._motion_enabled = bool(machine.get("allow_motion", False))
         self._coordinate_reference_ready = bool(
@@ -158,6 +189,40 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         # Status refreshes, disconnection, and ordinary background work must not
         # hide or disable the software stop request.
         self.stop_button.setEnabled(True)
+
+    def _connect_clicked(self) -> None:
+        if self._connected and self._reconnect_required:
+            self.reconnectRequested.emit()
+        else:
+            self.connectRequested.emit()
+
+    def _sync_primary_controls(self) -> None:
+        reconnect_available = self._connected and self._reconnect_required
+        self.connect_button.setText(
+            "Reconnect" if reconnect_available else "Connect"
+        )
+        self.connect_button.setEnabled(
+            not self._busy
+            and not self._connecting
+            and (not self._connected or reconnect_available)
+        )
+        self.connect_button.setToolTip(
+            "Explicitly disconnect this untrusted session and connect again; "
+            "Home / park will still be required"
+            if reconnect_available
+            else "Connect to the configured controller"
+        )
+        self.disconnect_button.setEnabled(
+            not self._busy and not self._connecting and self._connected
+        )
+        self.disconnect_button.setToolTip(
+            "Disconnect this untrusted controller session before reconnecting"
+            if self._reconnect_required
+            else "Disconnect the controller"
+        )
+        # Pause/resume remains presentation-only and unavailable until the
+        # controller's realtime hold behavior is physically validated.
+        self.pause_button.setEnabled(False)
 
     def _render_status(self) -> None:
         self.heading.setVisible(not self._compact and not self._chrome_mode)
@@ -247,6 +312,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             motion_style,
             motion_description,
         )
+        self._sync_primary_controls()
 
     @property
     def compact(self) -> bool:
@@ -266,20 +332,74 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.setProperty("chromeMode", enabled)
         if enabled:
             self._layout.setContentsMargins(4, 1, 4, 1)
-            self._layout.setSpacing(6)
+            self._layout.setHorizontalSpacing(6)
+            self._layout.setVerticalSpacing(2)
             self.setSizePolicy(
-                QtWidgets.QSizePolicy.Policy.Preferred,
+                QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
         else:
             self._layout.setContentsMargins(8, 4, 8, 4)
-            self._layout.setSpacing(10)
+            self._layout.setHorizontalSpacing(10)
+            self._layout.setVerticalSpacing(4)
             self.setSizePolicy(
                 QtWidgets.QSizePolicy.Policy.Expanding,
                 QtWidgets.QSizePolicy.Policy.Fixed,
             )
         self._render_status()
+        self._set_wrapped(self.width() < _COMPACT_BREAKPOINT_PX)
         self.updateGeometry()
+
+    def _set_wrapped(self, wrapped: bool) -> None:
+        wrapped = bool(wrapped)
+        if wrapped == self._wrapped:
+            return
+        self._wrapped = wrapped
+        self.setProperty("wrapped", wrapped)
+        self._reflow_layout()
+        self.updateGeometry()
+
+    def _reflow_layout(self) -> None:
+        widgets = (
+            self.heading,
+            self.mode_label,
+            self.connection_label,
+            self.motion_label,
+            self.connect_button,
+            self.disconnect_button,
+            self.pause_button,
+            self.stop_button,
+        )
+        for widget in widgets:
+            self._layout.removeWidget(widget)
+        for column in range(12):
+            self._layout.setColumnStretch(column, 0)
+
+        if self._wrapped:
+            # Use independent-looking thirds and quarters for the two rows.
+            # Sharing three label-sized columns with four buttons lets a long
+            # status label force the final STOP control beyond the toolbar at
+            # compact widths and larger accessibility fonts.
+            for column in range(12):
+                self._layout.setColumnStretch(column, 1)
+            self._layout.addWidget(self.mode_label, 0, 0, 1, 4)
+            self._layout.addWidget(self.connection_label, 0, 4, 1, 4)
+            self._layout.addWidget(self.motion_label, 0, 8, 1, 4)
+            self._layout.addWidget(self.connect_button, 1, 0, 1, 3)
+            self._layout.addWidget(self.disconnect_button, 1, 3, 1, 3)
+            self._layout.addWidget(self.pause_button, 1, 6, 1, 3)
+            self._layout.addWidget(self.stop_button, 1, 9, 1, 3)
+            return
+
+        self._layout.addWidget(self.heading, 0, 0)
+        self._layout.addWidget(self.mode_label, 0, 1)
+        self._layout.addWidget(self.connection_label, 0, 2)
+        self._layout.addWidget(self.motion_label, 0, 3)
+        self._layout.setColumnStretch(4, 1)
+        self._layout.addWidget(self.connect_button, 0, 5)
+        self._layout.addWidget(self.disconnect_button, 0, 6)
+        self._layout.addWidget(self.pause_button, 0, 7)
+        self._layout.addWidget(self.stop_button, 0, 8)
 
     def _set_compact(self, compact: bool) -> None:
         compact = bool(compact)
@@ -312,6 +432,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
+        self._set_wrapped(event.size().width() < _COMPACT_BREAKPOINT_PX)
         if not self._chrome_mode:
             self._set_compact(event.size().width() < _COMPACT_BREAKPOINT_PX)
 
@@ -326,5 +447,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
     def set_busy(self, busy: bool) -> None:
         """Record ordinary UI activity without disabling the stop request."""
 
-        self.setProperty("busy", bool(busy))
+        self._busy = bool(busy)
+        self.setProperty("busy", self._busy)
+        self._sync_primary_controls()
         self.stop_button.setEnabled(True)

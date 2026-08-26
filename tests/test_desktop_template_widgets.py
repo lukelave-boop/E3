@@ -222,9 +222,8 @@ class _StaleJobHarness:
         self.refreshes: list[list[str]] = []
         self.machine_status_calls = 0
         self.run_calls: list[tuple[object, ...]] = []
-        self.gcode_preview = SimpleNamespace(clear=lambda: None)
-        self.job_panel = SimpleNamespace(
-            summary=SimpleNamespace(setText=lambda text: None)
+        self.job_progress = SimpleNamespace(
+            clear_prepared_job=lambda: None,
         )
 
         def machine_status() -> dict[str, object]:
@@ -381,6 +380,34 @@ def test_template_panel_gates_matching_and_emits_reviewed_placement(
 
     panel.clear_placement()
     assert not panel.apply_button.isEnabled()
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_template_generate_is_global_and_action_gated(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    requests: list[bool] = []
+    panel.generateRequested.connect(lambda: requests.append(True))
+
+    # Generating applies to the whole project, so it does not require a saved
+    # template or valid template placement.
+    assert panel.generate_button.isEnabled()
+    panel.generate_button.click()
+    qt_application.processEvents()
+    assert requests == [True]
+
+    panel.set_busy(True)
+    assert panel.generate_button.isEnabled()
+    panel.set_generate_enabled(False)
+    assert not panel.generate_button.isEnabled()
+    panel.set_busy(False)
+    assert not panel.generate_button.isEnabled()
+    panel.set_generate_enabled(True)
+    assert panel.generate_button.isEnabled()
+
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()

@@ -59,11 +59,22 @@ Native desktop workflow:
   `1 in`; likewise `mm²`/`in²` and `mm/min`/`in/min`) while project geometry,
   calibration, safety bounds, and generated G-code remain in millimetres
 - LightBurn-inspired compact icon chrome with a bright drafting bed, persistent
-  runtime/safety status, always-present selection properties, split design and
-  laser inspector stacks, and a fixed 30-color operation palette
+  runtime/safety status, always-present selection properties, one full-height
+  right sidebar for Cuts, Camera, Objects, Shape, Templates, Trace, Machine, and
+  Material Recipes, and a fixed 30-color operation palette. The former lower
+  Laser and raw-G-code docks are removed so the workspace extends downward
+- Consolidated primary runtime controls keep Connect/Disconnect and the
+  intentionally disabled Pause beside the always-available software STOP. The
+  strip moves to its own toolbar row and wraps status above controls at compact
+  widths, while global preparation/execution progress remains at the bottom
+- The shared Generate action remains available from the Job toolbar and appears
+  directly below Create cuts in Templates and Create objects in Trace
 - PySide6 machine-coordinate workspace with camera overlay, pan, zoom, grid,
-  rulers, snapping, toolpath preview, a 70%-opacity camera default, and a
-  draggable viewport-fixed overlay key
+  rulers, snapping, toolpath preview, a 70%-opacity camera default, selectable
+  corrected-overlay rates from 0.5 through 15 fps with a 2 fps default, and a
+  draggable viewport-fixed overlay key. These are requested maximum cadences;
+  slow correction or network delivery drops timer ticks instead of queuing
+  overlapping frame work
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
 - Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,

@@ -100,7 +100,7 @@ from .machine_setup import MachineSetupDialog
 from .panels import (
     CameraPanel,
     ConsolePanel,
-    JobPanel,
+    JobProgressWidget,
     LayerPanel,
     MachinePanel,
     MaterialPanel,
@@ -121,8 +121,9 @@ from .workspace import WorkspaceFrame, WorkspaceView
 QtCore, QtGui, QtWidgets = require_qt()
 
 _DESIGN_DOCK_MIN_WIDTH = 360
-_RUNTIME_DOCK_MIN_WIDTH = 320
-_GCODE_DOCK_MIN_WIDTH = 160
+_DESIGN_DOCK_DEFAULT_WIDTH = 420
+_PRIMARY_CONTROLS_INLINE_WIDTH = 1800
+_STATUS_LAYOUT_RESERVE = 56
 
 _AUTHORING_ACTION_KEYS = (
     "new",
@@ -354,13 +355,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._job_render_request_id: int | None = None
         self._job_render_pending: set[str] = set()
         self._job_render_progress: dict[str, float] = {}
-        self._gcode_render_text = ""
-        self._gcode_render_index = 0
-        self._gcode_render_request_id: int | None = None
-        self._gcode_render_cursor: QtGui.QTextCursor | None = None
-        self._gcode_render_timer = QtCore.QTimer(self)
-        self._gcode_render_timer.setInterval(0)
-        self._gcode_render_timer.timeout.connect(self._render_gcode_slice)
         self._authoring_freeze_owner: int | None = None
         self._authoring_action_states: dict[str, bool] = {}
         self._closing = False
@@ -393,7 +387,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._create_status_bar()
         if self._new_project_defaults_notice is not None:
             self.show_notice(self._new_project_defaults_notice)
-        self._default_window_state = self.saveState(6)
+        self._default_window_state = self.saveState(7)
         self._connect_signals()
         self.controller.set_live_camera(
             self.camera_panel.live_enabled(),
@@ -920,18 +914,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             tool_head_profile_id=tool_head_profile_id,
         )
         self.console_panel = ConsolePanel()
-        self.job_panel = JobPanel()
-        self.gcode_preview = QtWidgets.QPlainTextEdit()
-        self.gcode_preview.setReadOnly(True)
-        self.gcode_preview.setUndoRedoEnabled(False)
-        self.gcode_preview.setLineWrapMode(
-            QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap
-        )
-
-        # Keep design/operation inspectors and runtime controls in separate tab
-        # groups. Their docks are arranged below so Cuts / Layers can own the
-        # full-height right column while runtime controls sit beside the compact
-        # raw G-code preview beneath the canvas.
+        # Design, camera, machine, and material controls share one full-height
+        # sidebar so the central bed/camera workspace can use the full window
+        # height. Exact job review remains in its dedicated modal Preview.
         self.inspector_tabs = InspectorTabs(self)
         self.inspector_tabs.setTabPosition(QtWidgets.QTabWidget.TabPosition.South)
         self.inspector_tabs.add_panel(
@@ -946,12 +931,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.inspector_tabs.add_panel("templates", "Templates", self.template_panel)
         self.inspector_tabs.add_panel("trace", "Trace", self.trace_panel)
-
-        self.job_tabs = InspectorTabs(self)
-        self.job_tabs.setTabPosition(QtWidgets.QTabWidget.TabPosition.South)
-        self.job_tabs.add_panel("job", "Laser", self.job_panel)
-        self.job_tabs.add_panel("machine", "Machine", self.machine_panel)
-        self.job_tabs.add_panel("materials", "Material Recipes", self.material_panel)
+        self.inspector_tabs.add_panel("machine", "Machine", self.machine_panel)
+        self.inspector_tabs.add_panel(
+            "materials",
+            "Material Recipes",
+            self.material_panel,
+        )
 
         right = QtCore.Qt.DockWidgetArea.RightDockWidgetArea
         bottom = QtCore.Qt.DockWidgetArea.BottomDockWidgetArea
@@ -965,61 +950,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
             right,
         )
         self.layer_dock.setMinimumWidth(_DESIGN_DOCK_MIN_WIDTH)
-        self.preview_dock = self._dock(
-            "G-code preview",
-            "gcodeDock",
-            self.gcode_preview,
-            bottom,
-        )
-        self.inspector_dock = self._dock(
-            "Laser",
-            "inspectorDock",
-            self.job_tabs,
-            bottom,
-        )
         self.console_dock = self._dock(
             "Console",
             "consoleDock",
             self.console_panel,
             bottom,
         )
-        self.preview_dock.setMinimumWidth(_GCODE_DOCK_MIN_WIDTH)
-        self.preview_dock.setMinimumHeight(80)
-        self.inspector_dock.setMinimumWidth(_RUNTIME_DOCK_MIN_WIDTH)
-
-        self.splitDockWidget(
-            self.preview_dock,
-            self.inspector_dock,
-            QtCore.Qt.Orientation.Horizontal,
-        )
-        # Keep the optional Console in the compact left-hand slot without
-        # letting its hidden default reorder the visible G-code/runtime docks.
-        self.tabifyDockWidget(self.preview_dock, self.console_dock)
         self.resizeDocks(
             [self.layer_dock],
-            [600],
+            [_DESIGN_DOCK_DEFAULT_WIDTH],
             QtCore.Qt.Orientation.Horizontal,
-        )
-        self.resizeDocks(
-            [self.preview_dock, self.inspector_dock],
-            [300, 700],
-            QtCore.Qt.Orientation.Horizontal,
-        )
-        self.resizeDocks(
-            [self.preview_dock, self.inspector_dock],
-            [150, 150],
-            QtCore.Qt.Orientation.Vertical,
         )
         self.layer_dock.raise_()
-        self.inspector_dock.raise_()
-        self.preview_dock.raise_()
         self.console_dock.hide()
 
         for dock in (
             self.layer_dock,
-            self.inspector_dock,
             self.console_dock,
-            self.preview_dock,
         ):
             self.window_menu.addAction(dock.toggleViewAction())
 
@@ -1032,29 +979,21 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.cursor_label = QtWidgets.QLabel("X —  Y —")
         self.selection_label = QtWidgets.QLabel("0 objects selected")
+        self.job_progress = JobProgressWidget(self)
         self.zoom_label = QtWidgets.QLabel("Zoom —")
         self.runtime_label = QtWidgets.QLabel("Starting core services…")
+        self.statusBar().setMinimumHeight(self.job_progress.height() + 6)
         self.statusBar().addWidget(self.direct_edit_label)
         self.statusBar().addWidget(self.cursor_label)
         self.statusBar().addWidget(self.selection_label)
+        self.statusBar().addPermanentWidget(self.job_progress, 1)
         self.statusBar().addPermanentWidget(self.zoom_label)
         self.statusBar().addPermanentWidget(self.runtime_label)
+        self._update_status_bar_layout()
 
     def _connect_signals(self) -> None:
-        self.workspace.cursorPositionChanged.connect(
-            lambda x, y: self.cursor_label.setText(
-                (
-                    "Honeycomb "
-                    if self.document.coordinate_space
-                    is CoordinateSpace.HONEYCOMB_LOCAL
-                    else ""
-                )
-                + f"X {x:8.3f}  Y {y:8.3f} mm"
-            )
-        )
-        self.workspace.zoomChanged.connect(
-            lambda zoom: self.zoom_label.setText(f"Zoom {zoom * 100:.0f}%")
-        )
+        self.workspace.cursorPositionChanged.connect(self._set_cursor_status)
+        self.workspace.zoomChanged.connect(self._set_zoom_status)
         self.workspace.selectionIdsChanged.connect(self._selection_changed)
         self.workspace.objectMoveCommitted.connect(self._object_moved)
         self.workspace.objectTransformCommitted.connect(
@@ -1139,6 +1078,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.createRequested.connect(
             self._create_traced_objects
         )
+        self.trace_panel.generateRequested.connect(self.actions["generate"].trigger)
         self.trace_panel.selectionChanged.connect(
             self._trace_selection_changed
         )
@@ -1163,6 +1103,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._template_placement_changed
         )
         self.template_panel.applyRequested.connect(self._apply_template_objects)
+        self.template_panel.generateRequested.connect(
+            self.actions["generate"].trigger
+        )
         self.template_panel.clearRequested.connect(self._clear_template_preview)
 
         self.camera_panel.refreshRequested.connect(self.controller.retry_camera_image)
@@ -1192,22 +1135,24 @@ class E3MainWindow(QtWidgets.QMainWindow):
             lambda: self.open_machine_setup(2)
         )
 
-        self.machine_panel.connectRequested.connect(self.controller.connect_machine)
-        self.machine_panel.reconnectRequested.connect(self.controller.reconnect_machine)
-        self.machine_panel.disconnectRequested.connect(self.controller.disconnect_machine)
         self.machine_panel.parkRequested.connect(self.controller.park_at_camera_pose)
-        self.machine_panel.stopRequested.connect(self.controller.emergency_stop)
         self.machine_panel.jogRequested.connect(self.controller.jog)
         self.console_panel.commandSubmitted.connect(self.controller.send_diagnostic)
         self.material_panel.applyPresetRequested.connect(self.apply_material_preset)
         self.material_panel.notice.connect(self.show_notice)
         self.material_panel.error.connect(self.show_error)
 
-        self.job_panel.generateRequested.connect(self.generate_toolpath)
-        self.job_panel.previewRequested.connect(self.show_job_preview)
-        self.job_panel.pauseRequested.connect(self.controller.pause_resume)
-        self.job_panel.stopRequested.connect(self.controller.emergency_stop)
+        self.runtime_strip.connectRequested.connect(self.controller.connect_machine)
+        self.runtime_strip.reconnectRequested.connect(
+            self.controller.reconnect_machine
+        )
+        self.runtime_strip.disconnectRequested.connect(
+            self.controller.disconnect_machine
+        )
+        self.runtime_strip.pauseRequested.connect(self.controller.pause_resume)
         self.runtime_strip.stopRequested.connect(self.controller.emergency_stop)
+        self.actions["generate"].changed.connect(self._sync_generate_controls)
+        self._sync_generate_controls()
 
         self.controller.statusChanged.connect(self._runtime_status)
         self.controller.cameraImageReady.connect(self._camera_image_ready)
@@ -1269,6 +1214,19 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._selection_changed(self.workspace.selected_object_ids())
         self._update_title()
 
+    def _set_cursor_status(self, x: float, y: float) -> None:
+        prefix = (
+            "Honeycomb "
+            if self.document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
+            else ""
+        )
+        self.cursor_label.setText(f"{prefix}X {x:8.3f}  Y {y:8.3f} mm")
+        self._update_status_bar_layout()
+
+    def _set_zoom_status(self, zoom: float) -> None:
+        self.zoom_label.setText(f"Zoom {zoom * 100:.0f}%")
+        self._update_status_bar_layout()
+
     def _selection_changed(self, object_ids: list[str]) -> None:
         known = {item.id: item for item in self.document.objects}
         object_ids = [object_id for object_id in object_ids if object_id in known]
@@ -1301,6 +1259,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 f"{bounds.width:.3f} × {bounds.height:.3f} mm"
             )
         self.selection_label.setText(selection_text)
+        self._update_status_bar_layout()
         self.object_panel.set_selection(object_ids)
         self.transform_panel.set_selection(objects, self.document)
         self.context_bar.set_selection(objects, self.document)
@@ -1364,12 +1323,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if preview_dialog is not None:
             preview_dialog.close()
             self._job_preview_dialog = None
-        if hasattr(self, "gcode_preview"):
-            self.gcode_preview.clear()
         if hasattr(self, "workspace"):
             self.workspace.clear_toolpath_preview()
         clear_prepared_job = getattr(
-            getattr(self, "job_panel", None), "clear_prepared_job", None
+            getattr(self, "job_progress", None), "clear_prepared_job", None
         )
         if clear_prepared_job is not None:
             clear_prepared_job()
@@ -1547,15 +1504,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "Drag an object to move it; use its corner and rotation handles "
                 "for direct editing. Hold Shift while rotating for 15-degree snapping."
             )
+        self._update_status_bar_layout()
 
     def _rectangle_draft_changed(self, bounds: Bounds | None) -> None:
         if bounds is None:
             if self.workspace.creation_tool == "rectangle":
                 self.direct_edit_label.setText("Rectangle | drag to draw")
+                self._update_status_bar_layout()
             return
         self.direct_edit_label.setText(
             f"Rectangle | W {bounds.width:.3f}  H {bounds.height:.3f} mm"
         )
+        self._update_status_bar_layout()
 
     def _rectangle_draw_committed(
         self,
@@ -2756,7 +2716,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._cancel_job_render()
         self._job_render_request_id = request_id
         owner = ("render", request_id)
-        self._job_render_pending = {"gcode", "workspace"}
+        self._job_render_pending = {"workspace"}
         if open_preview:
             self._job_render_pending.add("dialog")
         self._job_render_progress = {
@@ -2766,15 +2726,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.actions["export_gcode"].setEnabled(False)
 
         try:
-            self.gcode_preview.clear()
-            self._gcode_render_text = self.last_job.text
-            self._gcode_render_index = 0
-            self._gcode_render_request_id = request_id
-            self._gcode_render_cursor = QtGui.QTextCursor(
-                self.gcode_preview.document()
-            )
-            self._gcode_render_timer.start()
-
             plan = self.last_job.plan
             preview_kwargs = {
                 "on_progress": lambda completed, total, request_id=request_id: (
@@ -2812,43 +2763,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         if open_preview and request_id == self._job_render_request_id:
             self._open_job_preview_dialog(request_id, deferred=True)
-
-    @QtCore.Slot()
-    def _render_gcode_slice(self) -> None:
-        request_id = self._gcode_render_request_id
-        if (
-            request_id is None
-            or request_id != self._job_render_request_id
-            or self._gcode_render_cursor is None
-        ):
-            self._gcode_render_timer.stop()
-            return
-        try:
-            total = len(self._gcode_render_text)
-            start = self._gcode_render_index
-            end = min(total, start + 32_768)
-            if end > start:
-                self._gcode_render_cursor.insertText(
-                    self._gcode_render_text[start:end]
-                )
-            self._gcode_render_index = end
-            self._job_render_progressed(
-                request_id,
-                "gcode",
-                end,
-                max(1, total),
-            )
-            if end >= total:
-                self._gcode_render_timer.stop()
-                self._gcode_render_text = ""
-                self._gcode_render_cursor = None
-                self._gcode_render_request_id = None
-                self._job_render_stage_finished(request_id, "gcode")
-        except Exception as exc:
-            self._job_render_failed(
-                request_id,
-                f"Raw G-code preview failed: {exc}",
-            )
 
     def _open_job_preview_dialog(
         self,
@@ -2995,11 +2909,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._job_render_request_id = None
         self._job_render_pending.clear()
         self._job_render_progress.clear()
-        self._gcode_render_timer.stop()
-        self._gcode_render_text = ""
-        self._gcode_render_index = 0
-        self._gcode_render_request_id = None
-        self._gcode_render_cursor = None
         if hasattr(self, "workspace"):
             self.workspace.clear_toolpath_preview()
         dialog = getattr(self, "_job_preview_dialog", None)
@@ -3332,11 +3241,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
             if plan is None
             else controller_power / max(1, plan.power_max) * 100.0
         )
-        self.job_panel.set_prepared_job(
+        self.job_progress.set_prepared_job(
             summary,
             power_percent=power_percent,
             controller_power=controller_power,
         )
+        self._update_status_bar_layout()
 
     def _verify_prepared_job_assets(self, action: str) -> bool:
         job = self.last_job
@@ -4671,8 +4581,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.runtime_strip.set_status(status)
         if machine:
             self.console_panel.set_lines(list(machine.get("log", [])))
-            self.job_panel.set_machine_status(machine)
-            self.job_panel.set_job_status(machine.get("job"))
+            self.job_progress.set_machine_status(machine)
+            self.job_progress.set_job_status(machine.get("job"))
         if state == "running":
             camera_state = "camera online" if camera and camera.get("connected") else "camera offline"
             machine_state = (
@@ -4685,6 +4595,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.runtime_label.setText(f"Runtime {state}")
         if status.get("runtime_error"):
             self.runtime_label.setText(status["runtime_error"])
+        self._update_status_bar_layout()
         self._maybe_start_calibration_capture(machine)
 
     def _maybe_start_calibration_capture(
@@ -4849,22 +4760,25 @@ class E3MainWindow(QtWidgets.QMainWindow):
         completed: int | None = None,
         total: int | None = None,
     ) -> None:
-        was_busy = self._job_preparation_busy
         self._job_preparation_busy = bool(busy)
         self._job_preparation_label = str(label) if busy else ""
-        if busy and not was_busy:
-            self.job_tabs.select_panel("job")
-        self.job_panel.set_preparing(
+        self.job_progress.set_preparing(
             busy,
             label or "Preparing exact job preview",
             completed=completed,
             total=total,
         )
+        self._update_status_bar_layout()
         self.actions["generate"].setEnabled(not busy)
         ready = self.last_job is not None and not busy
         self.actions["preview_job"].setEnabled(ready)
         self.actions["export_gcode"].setEnabled(ready)
         self._sync_busy_indicators()
+
+    def _sync_generate_controls(self) -> None:
+        enabled = self.actions["generate"].isEnabled()
+        self.template_panel.set_generate_enabled(enabled)
+        self.trace_panel.set_generate_enabled(enabled)
 
     def _sync_busy_indicators(self) -> None:
         busy = self._controller_busy or self._job_preparation_busy
@@ -5316,11 +5230,58 @@ class E3MainWindow(QtWidgets.QMainWindow):
         super().resizeEvent(event)
         if hasattr(self, "safety_toolbar"):
             self._update_chrome_toolbar_layout()
+        if hasattr(self, "job_progress"):
+            self._update_status_bar_layout()
+
+    def _update_status_bar_layout(self) -> None:
+        """Preserve global job progress before lower-priority compact details."""
+
+        detail_labels = (
+            self.direct_edit_label,
+            self.cursor_label,
+            self.selection_label,
+        )
+        progress_width = self.job_progress.minimumWidth()
+        progress_bar = self.job_progress.currentWidget()
+        if isinstance(progress_bar, QtWidgets.QProgressBar):
+            progress_width = max(
+                progress_width,
+                progress_bar.fontMetrics().horizontalAdvance(
+                    progress_bar.format()
+                )
+                + 8,
+            )
+        required_width = progress_width + _STATUS_LAYOUT_RESERVE
+        show_runtime = (
+            required_width + self.runtime_label.sizeHint().width()
+            <= self.width()
+        )
+        self.runtime_label.setVisible(show_runtime)
+        if show_runtime:
+            required_width += self.runtime_label.sizeHint().width()
+
+        show_zoom = (
+            required_width + self.zoom_label.sizeHint().width() <= self.width()
+        )
+        self.zoom_label.setVisible(show_zoom)
+        if show_zoom:
+            required_width += self.zoom_label.sizeHint().width()
+
+        show_details = (
+            required_width
+            + sum(label.sizeHint().width() for label in detail_labels)
+            <= self.width()
+        )
+        for label in detail_labels:
+            label.setVisible(show_details)
+        self.statusBar().setToolTip(
+            "" if show_runtime else f"Runtime: {self.runtime_label.text()}"
+        )
 
     def _update_chrome_toolbar_layout(self, *, force: bool = False) -> None:
         """Keep STOP inline on wide screens and guaranteed visible on narrow ones."""
 
-        own_row = self.width() < 1100
+        own_row = self.width() < _PRIMARY_CONTROLS_INLINE_WIDTH
         if not force and own_row == self._safety_on_own_row:
             return
         self.removeToolBarBreak(self.safety_toolbar)
@@ -5330,6 +5291,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _reset_window_size(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings.remove("mainWindow/geometry-v7")
         settings.remove("mainWindow/geometry-v6")
         settings.remove("mainWindow/geometry-v5")
         settings.remove("mainWindow/geometry-v4")
@@ -5339,41 +5301,47 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _reset_workspace_layout(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
+        settings.remove("mainWindow/state-v7")
         settings.remove("mainWindow/state-v6")
         settings.remove("mainWindow/state-v5")
         settings.remove("mainWindow/state-v4")
         settings.remove("mainWindow/state-v3")
+        settings.remove("mainWindow/inspector-tab-v7")
         settings.remove("mainWindow/inspector-tab-v6")
         settings.remove("mainWindow/inspector-tab-v5")
         settings.remove("mainWindow/inspector-tab-v4")
         settings.remove("mainWindow/inspector-tab-v3")
         settings.remove("mainWindow/job-tab-v6")
         settings.remove("mainWindow/job-tab-v5")
-        self.restoreState(self._default_window_state, 6)
+        self.restoreState(self._default_window_state, 7)
         self.inspector_tabs.setCurrentIndex(0)
-        self.job_tabs.setCurrentIndex(0)
         self.layer_dock.show()
-        self.inspector_dock.show()
-        self.preview_dock.show()
-        self.preview_dock.raise_()
+        self.layer_dock.raise_()
         self.console_dock.hide()
+        # The captured default predates responsive toolbar breaks. Recompute
+        # the non-hideable primary-control row after restoring those dock bytes
+        # so compact Reset Layout cannot clip software STOP.
+        self._update_chrome_toolbar_layout(force=True)
+        self._update_status_bar_layout()
         self.show_notice("Workspace layout reset")
 
     def _restore_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        geometry = settings.value("mainWindow/geometry-v6")
+        geometry = settings.value("mainWindow/geometry-v7")
+        if geometry is None:
+            geometry = settings.value("mainWindow/geometry-v6")
         if geometry is None:
             geometry = settings.value("mainWindow/geometry-v5")
         if geometry is None:
             geometry = settings.value("mainWindow/geometry-v4")
         if geometry is None:
             geometry = settings.value("mainWindow/geometry-v3")
-        # Dock topology changed in v6. Deliberately do not restore opaque v5
-        # dock bytes, which would recreate the obsolete stacked right column.
-        state = settings.value("mainWindow/state-v6")
+        # Dock topology changed in v7. Deliberately do not restore opaque v6
+        # dock bytes, which would recreate the removed bottom panel row.
+        state = settings.value("mainWindow/state-v7")
         restored_geometry = bool(geometry and self.restoreGeometry(geometry))
         if state:
-            self.restoreState(state, 6)
+            self.restoreState(state, 7)
         # The runtime authority and software-stop control are intentionally not
         # user-hideable, including when an older saved layout says otherwise.
         self.safety_toolbar.show()
@@ -5384,36 +5352,24 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 settings.value("mainWindow/inspector-tab-v5", 0),
             )
         )
+        inspector_index = int(
+            settings.value("mainWindow/inspector-tab-v7", inspector_index)
+        )
         if hasattr(self, "inspector_tabs"):
             self.inspector_tabs.setCurrentIndex(
                 max(0, min(inspector_index, self.inspector_tabs.count() - 1))
-            )
-        if hasattr(self, "job_tabs"):
-            job_index = int(
-                settings.value(
-                    "mainWindow/job-tab-v6",
-                    settings.value("mainWindow/job-tab-v5", 0),
-                )
-            )
-            self.job_tabs.setCurrentIndex(
-                max(0, min(job_index, self.job_tabs.count() - 1))
             )
         self._update_chrome_toolbar_layout(force=True)
         self._ensure_window_visible(reset_size=not restored_geometry)
 
     def _save_window_state(self) -> None:
         settings = QtCore.QSettings("E3", "E3 Positioning System")
-        settings.setValue("mainWindow/geometry-v6", self.saveGeometry())
-        settings.setValue("mainWindow/state-v6", self.saveState(6))
+        settings.setValue("mainWindow/geometry-v7", self.saveGeometry())
+        settings.setValue("mainWindow/state-v7", self.saveState(7))
         if hasattr(self, "inspector_tabs"):
             settings.setValue(
-                "mainWindow/inspector-tab-v6",
+                "mainWindow/inspector-tab-v7",
                 self.inspector_tabs.currentIndex(),
-            )
-        if hasattr(self, "job_tabs"):
-            settings.setValue(
-                "mainWindow/job-tab-v6",
-                self.job_tabs.currentIndex(),
             )
 
     def _prepare_close_request(self) -> bool:

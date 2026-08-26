@@ -932,7 +932,6 @@ def _window(
     notices: list[str] = []
     window.show_error = errors.append  # type: ignore[method-assign]
     window.show_notice = notices.append  # type: ignore[method-assign]
-    window.job_tabs.setCurrentIndex(0)
     window.show()
     return window, errors, notices
 
@@ -969,6 +968,117 @@ def _dispose(
     window.close()
     window.deleteLater()
     application.processEvents()
+
+
+def test_sidebar_generate_buttons_share_the_generate_action(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[E3MainWindow] = []
+    monkeypatch.setattr(
+        E3MainWindow,
+        "generate_toolpath",
+        lambda window: calls.append(window),
+    )
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    try:
+        window.template_panel.generate_button.click()
+        window.trace_panel.generate_button.click()
+        qt_application.processEvents()
+
+        assert calls == [window, window]
+        assert errors == []
+
+        window.actions["generate"].setEnabled(False)
+        qt_application.processEvents()
+        assert not window.template_panel.generate_button.isEnabled()
+        assert not window.trace_panel.generate_button.isEnabled()
+
+        window.template_panel.generate_button.click()
+        window.trace_panel.generate_button.click()
+        assert calls == [window, window]
+
+        window.actions["generate"].setEnabled(True)
+        qt_application.processEvents()
+        assert window.template_panel.generate_button.isEnabled()
+        assert window.trace_panel.generate_button.isEnabled()
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_narrow_layout_reset_keeps_stop_and_global_progress_in_bounds(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    try:
+        window.resize(900, 680)
+        qt_application.processEvents()
+        qt_application.processEvents()
+        assert window._safety_on_own_row
+
+        removed_keys: list[str] = []
+        settings = SimpleNamespace(remove=removed_keys.append)
+        with monkeypatch.context() as reset_patch:
+            reset_patch.setattr(
+                main_window_module.QtCore,
+                "QSettings",
+                lambda *_args, **_kwargs: settings,
+            )
+            window._reset_workspace_layout()
+        qt_application.processEvents()
+        qt_application.processEvents()
+
+        window.job_progress.set_prepared_job(
+            "fixture.gcode · 100 commands",
+            power_percent=20.0,
+            controller_power=200.0,
+        )
+        window.job_progress.set_job_status(
+            {
+                "running": True,
+                "name": "fixture.gcode",
+                "total_lines": 100,
+                "completed_lines": 25,
+            }
+        )
+        qt_application.processEvents()
+        stop_top_left = window.runtime_strip.stop_button.mapTo(
+            window,
+            QtCore.QPoint(0, 0),
+        )
+        stop_rect = QtCore.QRect(
+            stop_top_left,
+            window.runtime_strip.stop_button.size(),
+        )
+        status = window.statusBar().geometry()
+        progress_top_left = window.job_progress.mapTo(
+            window,
+            QtCore.QPoint(0, 0),
+        )
+        progress = QtCore.QRect(progress_top_left, window.job_progress.size())
+
+        assert window._safety_on_own_row
+        assert window.contentsRect().contains(stop_rect)
+        assert status.contains(progress)
+        assert progress.width() >= window.width() * 0.25
+        visible_progress_text = window.job_progress.progress.format()
+        assert window.job_progress.progress.width() >= (
+            window.job_progress.progress.fontMetrics().horizontalAdvance(
+                visible_progress_text
+            )
+            + 16
+        )
+        assert "max power 20.0% / S200" in window.job_progress.toolTip()
+        assert not window.direct_edit_label.isVisible()
+        assert not window.cursor_label.isVisible()
+        assert not window.selection_label.isVisible()
+        assert "mainWindow/state-v7" in removed_keys
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
 
 
 def test_next_launch_ender_selection_preserves_running_machine_authority(
@@ -1379,7 +1489,7 @@ def test_generation_keeps_gui_and_stop_live_and_rejects_result(
     timer.start()
     try:
         window.generate_toolpath()
-        assert not window.job_panel.preparation_progress.isHidden()
+        assert window.job_progress.currentWidget() is window.job_progress.preparation_progress
         _wait_until(qt_application, entered.is_set)
         _wait_until(qt_application, lambda: heartbeat >= 5)
 
@@ -1394,7 +1504,7 @@ def test_generation_keeps_gui_and_stop_live_and_rejects_result(
         )
 
         assert window.last_job is None
-        assert window.job_panel.preparation_progress.isHidden()
+        assert window.job_progress.currentWidget() is window.job_progress.progress
         assert not list((tmp_path / "data").rglob("*.gcode"))
         assert errors == []
         assert any("Stop cancelled" in notice for notice in notices)
@@ -1958,17 +2068,16 @@ def test_large_job_text_workspace_and_dialog_render_in_event_loop_slices(
     timer.start()
     try:
         window.generate_toolpath()
-        assert not window.job_panel.preparation_progress.isHidden()
+        assert window.job_progress.currentWidget() is window.job_progress.preparation_progress
         _wait_until(qt_application, lambda: window.last_job is job)
         _wait_until(qt_application, lambda: not window._job_preparation_busy)
 
         assert heartbeat >= 5
-        assert window.gcode_preview.toPlainText() == job.text
         assert not window.last_job_powered
         assert 1 <= len(window.workspace._toolpath_items) <= 3
         assert window._job_preview_dialog is not None
         assert 1 <= len(window._job_preview_dialog.canvas._items) <= 3
-        assert window.job_panel.preparation_progress.isHidden()
+        assert window.job_progress.currentWidget() is window.job_progress.progress
         assert errors == []
     finally:
         timer.stop()
@@ -2054,7 +2163,7 @@ def test_preview_start_job_still_rejects_stale_revision(
         _dispose(qt_application, window)
 
 
-def test_main_job_panel_reopens_preview_instead_of_running(
+def test_preview_action_reopens_preview_instead_of_running(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -2082,8 +2191,8 @@ def test_main_job_panel_reopens_preview_instead_of_running(
         qt_application.processEvents()
 
         assert "run" not in window.actions
-        assert window.job_panel.preview_button.isEnabled()
-        window.job_panel.preview_button.click()
+        assert window.actions["preview_job"].isEnabled()
+        window.actions["preview_job"].trigger()
         _wait_until(
             qt_application,
             lambda: window._job_preview_dialog is not None
@@ -2255,7 +2364,7 @@ def test_generation_failure_clears_busy_state_without_partial_job(
 
         assert window.last_job is None
         assert window.actions["generate"].isEnabled()
-        assert window.job_panel.preparation_progress.isHidden()
+        assert window.job_progress.currentWidget() is window.job_progress.progress
         assert errors == [
             "Toolpath generation failed: deterministic planning failure"
         ]
@@ -2423,7 +2532,7 @@ def test_registration_render_owns_busy_state_against_late_worker(
         _dispose(qt_application, window)
 
 
-@pytest.mark.parametrize("failure_site", ["gcode", "workspace", "dialog"])
+@pytest.mark.parametrize("failure_site", ["workspace", "dialog"])
 def test_render_construction_errors_fail_closed(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
@@ -2436,16 +2545,7 @@ def test_render_construction_errors_fail_closed(
         "generate_project_gcode",
         lambda *args, **kwargs: _job(),
     )
-    if failure_site == "gcode":
-        class FailingCursor:
-            def __init__(self, *args, **kwargs) -> None:
-                del args, kwargs
-
-            def insertText(self, _text: str) -> None:
-                raise RuntimeError("deterministic G-code insertion failure")
-
-        monkeypatch.setattr(main_window_module.QtGui, "QTextCursor", FailingCursor)
-    elif failure_site == "workspace":
+    if failure_site == "workspace":
         monkeypatch.setattr(
             window.workspace,
             "start_toolpath_preview",

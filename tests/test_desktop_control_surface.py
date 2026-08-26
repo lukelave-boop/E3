@@ -34,35 +34,41 @@ def test_inspector_pages_are_opaque_and_scrollable():
     assert "background: #1E1E1E" in theme
 
 
-def test_main_window_uses_lightburn_style_design_and_job_inspector_stacks():
+def test_main_window_uses_unified_sidebar_and_v7_layout_state():
     text = source("main_window.py")
     assert "self.inspector_tabs = InspectorTabs" in text
-    assert "self.job_tabs = InspectorTabs" in text
-    assert 'self.inspector_dock = self._dock(' in text
     assert '"Objects", self.object_panel' in text
     assert '"camera", "Camera", self.camera_panel' in text
     assert '"layers", "Cuts", self.layer_panel' in text
-    assert '"Laser", self.job_panel' in text
+    assert '"machine", "Machine", self.machine_panel' in text
+    assert '"Material Recipes"' in text
     assert "self.object_dock =" not in text
     assert "self.camera_dock =" not in text
-    assert 'state = settings.value("mainWindow/state-v6")' in text
-    assert 'self.saveState(6)' in text
-    assert 'self.restoreState(state, 6)' in text
+    assert "self.job_tabs =" not in text
+    assert "self.inspector_dock =" not in text
+    assert "self.preview_dock =" not in text
+    assert "self.gcode_preview =" not in text
+    assert 'state = settings.value("mainWindow/state-v7")' in text
+    assert 'self.saveState(7)' in text
+    assert 'self.restoreState(state, 7)' in text
+    assert 'state = settings.value("mainWindow/state-v6")' not in text
     assert 'state = settings.value("mainWindow/state-v5")' not in text
 
 
-def test_main_window_default_docks_match_full_height_inspector_layout():
+def test_main_window_has_no_bottom_job_docks_and_uses_status_progress():
     text = source("main_window.py")
+    panels = source("panels.py")
     assert "self.setCorner(QtCore.Qt.Corner.BottomRightCorner, right)" in text
-    assert '"gcodeDock"' in text
-    assert '"inspectorDock"' in text
-    assert "self.preview_dock,\n            self.inspector_dock," in text
-    assert "QtCore.Qt.Orientation.Horizontal" in text
-    assert (
-        "self.layer_dock,\n            self.inspector_dock,\n"
-        "            QtCore.Qt.Orientation.Vertical"
-    ) not in text
-    assert "self.preview_dock.hide()" not in text
+    assert '"layersDock"' in text
+    assert '"consoleDock"' in text
+    assert '"gcodeDock"' not in text
+    assert '"inspectorDock"' not in text
+    assert "self.console_dock.hide()" in text
+    assert "self.job_progress = JobProgressWidget(self)" in text
+    assert "self.statusBar().addPermanentWidget(self.job_progress, 1)" in text
+    assert "class JobProgressWidget" in panels
+    assert 'self.setObjectName("jobProgressWidget")' in panels
+    assert 'self.progress.setObjectName("jobExecutionProgress")' in panels
 
 
 def test_main_window_has_context_properties_and_persistent_safety_strip():
@@ -73,6 +79,9 @@ def test_main_window_has_context_properties_and_persistent_safety_strip():
     assert "self.context_bar = ContextPropertyBar" in text
     assert "self.runtime_strip = RuntimeSafetyStrip" in text
     assert "self.context_bar.set_selection" in text
+    assert "self.runtime_strip.connectRequested.connect" in text
+    assert "self.runtime_strip.disconnectRequested.connect" in text
+    assert "self.runtime_strip.pauseRequested.connect" in text
     assert "self.runtime_strip.stopRequested.connect" in text
     assert "self.safety_toolbar.toggleViewAction().setEnabled(False)" in text
     assert "self.safety_toolbar.show()" in text
@@ -95,10 +104,12 @@ def test_camera_focus_controls_are_present_and_persistent():
 
 def test_machine_controls_expose_guarded_jogging_and_keep_pause_disabled():
     panels = source("panels.py")
+    runtime = source("runtime_strip.py")
     controller = source("controller.py")
     service = (ROOT / "laser_aligner" / "machine" / "service.py").read_text()
     assert "Jogging may move beyond the configured work area" in panels
     assert "self._jog_ready" in panels
     assert "self.runtime.context.machine.jog" in controller
     assert "def jog(" in service
-    assert "self.pause_button.setEnabled(False)" in panels
+    assert "self.pause_button.setEnabled(False)" in runtime
+    assert "self.pause_button" not in panels

@@ -16,7 +16,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for preview tests")
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.desktop.job_preview import JobPreviewDialog
-from laser_aligner.desktop.panels import JobPanel
+from laser_aligner.desktop.panels import JobProgressWidget
 from laser_aligner.desktop.theme import DARK_STYLESHEET
 from laser_aligner.calibration.support import HoneycombCoordinateFrame
 from laser_aligner.gcode.job_plan import build_job_plan, e3_metadata_line
@@ -644,19 +644,19 @@ def test_preview_remains_useful_at_compact_geometry_with_large_text(
 def test_controller_progress_does_not_overwrite_prepared_power(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    panel = JobPanel()
-    panel.set_prepared_job(
+    progress = JobProgressWidget()
+    progress.set_prepared_job(
         "14 paths · estimated 42 s",
         power_percent=20.0,
         controller_power=200.0,
     )
 
-    panel.set_job_status(None)
+    progress.set_job_status(None)
 
-    assert "max power 20.0% / S200" in panel.summary.text()
-    assert panel.execution_label.text() == "Controller idle · no job started"
-    assert panel.progress.format() == "Execution 0%"
-    panel.set_job_status(
+    assert "max power 20.0% / S200" in progress.toolTip()
+    assert "Controller idle · no job started" in progress.toolTip()
+    assert progress.progress.format() == "Execution 0%"
+    progress.set_job_status(
         {
             "running": True,
             "name": "grid.gcode",
@@ -664,11 +664,23 @@ def test_controller_progress_does_not_overwrite_prepared_power(
             "completed_lines": 25,
         }
     )
-    assert "max power 20.0% / S200" in panel.summary.text()
-    assert panel.progress.format() == "Execution 25%"
-    assert "25/100 lines" in panel.execution_label.text()
+    assert "max power 20.0% / S200" in progress.toolTip()
+    assert progress.progress.format() == "Execution 25%"
+    assert "25/100 lines" in progress.toolTip()
 
-    panel.set_job_status(
+    progress.set_job_status(
+        {
+            "running": True,
+            "phase": "draining",
+            "name": "grid.gcode",
+            "total_lines": 100,
+            "completed_lines": 100,
+        }
+    )
+    assert progress.progress.format() == "Finishing · motion"
+    assert "waiting for queued motion to finish" in progress.toolTip()
+
+    progress.set_job_status(
         {
             "running": True,
             "phase": "homing",
@@ -677,11 +689,11 @@ def test_controller_progress_does_not_overwrite_prepared_power(
             "completed_lines": 100,
         }
     )
-    assert panel.progress.format() == "Finishing · homing"
-    assert panel.execution_label.text() == "Toolpath complete · homing machine"
+    assert progress.progress.format() == "Finishing · homing"
+    assert "Toolpath complete · homing machine" in progress.toolTip()
 
-    panel.close()
-    panel.deleteLater()
+    progress.close()
+    progress.deleteLater()
     qt_application.processEvents()
 
 

@@ -569,8 +569,9 @@ def test_runtime_status_refreshes_recipes_from_running_identity(
         machine_panel=Sink(),
         runtime_strip=Sink(),
         console_panel=Sink(),
-        job_panel=Sink(),
+        job_progress=Sink(),
         runtime_label=Sink(),
+        _update_status_bar_layout=lambda: None,
         _maybe_start_calibration_capture=lambda machine: None,
     )
 

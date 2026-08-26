@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -188,3 +189,128 @@ def test_online_stale_bed_map_keeps_recovery_dialog(
     )
     assert args[4] == QtWidgets.QMessageBox.StandardButton.Open
     assert setup_tabs == [2]
+
+
+def test_corrected_overlay_interval_defaults_to_two_fps_and_allows_15_fps(
+    qt_application,
+) -> None:
+    controller = _controller("0")
+    try:
+        assert controller._live_camera_interval_ms == 500
+        assert controller._camera_live_timer.interval() == 500
+
+        for requested, expected in (
+            (1, 67),
+            (66, 67),
+            (67, 67),
+            (68, 68),
+            (20_000, 10_000),
+        ):
+            controller.set_live_camera_interval(requested)
+            assert controller._live_camera_interval_ms == expected
+            assert controller._camera_live_timer.interval() == expected
+    finally:
+        controller.deleteLater()
+        qt_application.processEvents()
+
+
+class _UnfinishedSignal:
+    def __init__(self) -> None:
+        self.callbacks: list[Callable[[], None]] = []
+
+    def connect(
+        self,
+        callback: Callable[[], None],
+        _connection: object,
+    ) -> None:
+        self.callbacks.append(callback)
+
+    def emit(self) -> None:
+        for callback in tuple(self.callbacks):
+            callback()
+
+
+def _hold_camera_refresh_tasks(
+    controller: DesktopController,
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[dict[str, object]]:
+    launches: list[dict[str, object]] = []
+
+    def fake_run(callback: object, **kwargs: object) -> object:
+        finished = _UnfinishedSignal()
+        launches.append(
+            {"callback": callback, "finished": finished, **kwargs}
+        )
+        return SimpleNamespace(
+            signals=SimpleNamespace(finished=finished)
+        )
+
+    monkeypatch.setattr(controller, "_run", fake_run)
+    return launches
+
+
+def _finish_camera_launch(launch: dict[str, object]) -> None:
+    finished = launch["finished"]
+    assert isinstance(finished, _UnfinishedSignal)
+    finished.emit()
+
+
+def test_slow_corrected_overlay_drops_periodic_ticks_without_backlog(
+    qt_application,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller("0")
+    launches = _hold_camera_refresh_tasks(controller, monkeypatch)
+    try:
+        controller.refresh_camera_image()
+
+        for _ in range(20):
+            controller._camera_live_timer.timeout.emit()
+
+        assert len(launches) == 1
+        assert controller._camera_refresh_in_flight
+        assert not controller._camera_refresh_pending
+
+        _finish_camera_launch(launches[0])
+        qt_application.processEvents()
+        assert len(launches) == 1
+
+        controller._camera_live_timer.timeout.emit()
+        assert len(launches) == 2
+        assert controller._camera_refresh_in_flight
+    finally:
+        controller.deleteLater()
+        qt_application.processEvents()
+
+
+def test_explicit_corrected_refresh_requests_coalesce_to_one_pending_job(
+    qt_application,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = _controller("0")
+    launches = _hold_camera_refresh_tasks(controller, monkeypatch)
+    try:
+        controller.refresh_camera_image()
+
+        for _ in range(20):
+            controller.request_camera_refresh()
+
+        assert len(launches) == 1
+        assert controller._camera_refresh_in_flight
+        assert controller._camera_refresh_pending
+
+        _finish_camera_launch(launches[0])
+        qt_application.processEvents()
+
+        assert len(launches) == 2
+        assert controller._camera_refresh_in_flight
+        assert not controller._camera_refresh_pending
+
+        _finish_camera_launch(launches[1])
+        qt_application.processEvents()
+        assert len(launches) == 2
+        assert not controller._camera_refresh_in_flight
+        assert not controller._camera_refresh_pending
+    finally:
+        controller.deleteLater()
+        qt_application.processEvents()
