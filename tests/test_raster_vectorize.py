@@ -1,0 +1,611 @@
+from __future__ import annotations
+
+import dataclasses
+import sys
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+
+import laser_aligner.project.raster_vectorize as raster_vectorize_module
+from laser_aligner.project import (
+    RasterContourOutput,
+    RasterDetectionMode,
+    RasterVectorizationComplexityError,
+    RasterVectorizationError,
+    RasterVectorizationOptions,
+    prepare_raster_vectorization_source,
+    raster_payload_has_usable_alpha,
+    read_raster_asset_payload,
+    vectorize_prepared_raster,
+    vectorize_raster_payload,
+)
+
+
+def _write_payload(path: Path, pixels: np.ndarray):
+    assert cv2.imwrite(str(path), pixels)
+    return read_raster_asset_payload(path)
+
+
+def _manual_options(**changes: object) -> RasterVectorizationOptions:
+    values: dict[str, object] = {
+        "detection_mode": RasterDetectionMode.MANUAL_THRESHOLD,
+        "threshold": 127,
+        "minimum_feature_area_mm2": 0.0,
+        "smoothing_mm": 0.0,
+        "simplification_tolerance_mm": 0.10,
+        "contour_output": RasterContourOutput.ALL_CONTOURS,
+    }
+    values.update(changes)
+    return RasterVectorizationOptions(**values)
+
+
+def _vectorize(
+    payload,
+    options: RasterVectorizationOptions | None = None,
+    *,
+    width_mm: float = 64.0,
+    height_mm: float = 64.0,
+):
+    return vectorize_raster_payload(
+        payload,
+        options or _manual_options(),
+        displayed_width_mm=width_mm,
+        displayed_height_mm=height_mm,
+    )
+
+
+def _normalized_bounds(contour) -> tuple[float, float, float, float]:
+    points = np.asarray(contour.points, dtype=np.float64)
+    return (
+        float(np.min(points[:, 0])),
+        float(np.min(points[:, 1])),
+        float(np.max(points[:, 0])),
+        float(np.max(points[:, 1])),
+    )
+
+
+def test_solid_rectangle_uses_corner_preserving_few_point_geometry(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((64, 64, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (12, 16), (51, 47), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "rectangle.png", pixels)
+
+    result = _vectorize(payload)
+
+    assert len(result.contours) == 1
+    contour = result.contours[0]
+    assert contour.parent_index is None
+    assert not contour.is_hole
+    assert 4 <= contour.final_point_count <= 12
+    assert contour.raw_point_count > contour.final_point_count
+    x_min, y_min, x_max, y_max = _normalized_bounds(contour)
+    assert (x_min, x_max) == pytest.approx((-0.3125, 0.3125), abs=0.012)
+    assert (y_min, y_max) == pytest.approx((-0.25, 0.25), abs=0.012)
+    actual_points = np.asarray(contour.points, dtype=np.float64)
+    for expected_corner in (
+        (-0.3125, -0.25),
+        (0.3125, -0.25),
+        (0.3125, 0.25),
+        (-0.3125, 0.25),
+    ):
+        distances = np.linalg.norm(actual_points - expected_corner, axis=1)
+        assert float(np.min(distances)) < 0.02
+    assert result.raw_contour_point_count == contour.raw_point_count
+    assert result.fitted_segment_count == contour.fitted_segment_count
+    assert result.final_point_count == contour.final_point_count
+    assert result.source_rgba.shape == (64, 64, 4)
+    assert result.foreground_mask.shape == (64, 64)
+    assert result.overlay_rgba.shape == (64, 64, 4)
+    assert np.any(result.overlay_rgba != result.source_rgba)
+
+
+def test_auto_threshold_reports_the_otsu_value_and_foreground(tmp_path: Path) -> None:
+    pixels = np.full((56, 72, 3), 235, dtype=np.uint8)
+    cv2.rectangle(pixels, (16, 12), (55, 43), (24, 24, 24), thickness=-1)
+    payload = _write_payload(tmp_path / "auto-threshold.png", pixels)
+
+    result = _vectorize(
+        payload,
+        RasterVectorizationOptions(
+            detection_mode=RasterDetectionMode.AUTO_THRESHOLD,
+            minimum_feature_area_mm2=0.0,
+            simplification_tolerance_mm=0.1,
+        ),
+        width_mm=36.0,
+        height_mm=28.0,
+    )
+
+    assert result.threshold_used is not None
+    assert 24 <= result.threshold_used < 235
+    assert result.connected_component_count == 1
+    assert len(result.contours) == 1
+
+
+def test_transparent_background_silhouette_uses_exact_alpha_payload(
+    tmp_path: Path,
+) -> None:
+    pixels = np.zeros((48, 64, 4), dtype=np.uint8)
+    pixels[8:40, 14:50, :3] = (40, 120, 210)
+    pixels[8:40, 14:50, 3] = 255
+    payload = _write_payload(tmp_path / "alpha-silhouette.png", pixels)
+    options = RasterVectorizationOptions(
+        detection_mode=RasterDetectionMode.ALPHA,
+        alpha_cutoff=128,
+        minimum_feature_area_mm2=0.0,
+        simplification_tolerance_mm=0.08,
+    )
+
+    assert raster_payload_has_usable_alpha(payload)
+    source = prepare_raster_vectorization_source(payload)
+    result = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=64.0,
+        displayed_height_mm=48.0,
+    )
+
+    assert source.has_usable_alpha
+    assert result.has_usable_alpha
+    assert result.threshold_used is None
+    assert len(result.contours) == 1
+    assert result.source_sha256 == payload.identity.sha256
+
+
+def test_inverted_black_white_artwork_selects_light_foreground(
+    tmp_path: Path,
+) -> None:
+    pixels = np.zeros((60, 80, 3), dtype=np.uint8)
+    cv2.rectangle(pixels, (20, 15), (59, 44), (255, 255, 255), thickness=-1)
+    payload = _write_payload(tmp_path / "inverted.png", pixels)
+
+    result = _vectorize(
+        payload,
+        _manual_options(invert=True),
+        width_mm=80.0,
+        height_mm=60.0,
+    )
+
+    assert len(result.contours) == 1
+    x_min, y_min, x_max, y_max = _normalized_bounds(result.contours[0])
+    assert x_min == pytest.approx(-0.25, abs=0.012)
+    assert x_max == pytest.approx(0.25, abs=0.012)
+    assert y_min == pytest.approx(-0.25, abs=0.012)
+    assert y_max == pytest.approx(0.25, abs=0.012)
+
+
+def test_donut_preserves_hole_hierarchy_and_outer_only_choice(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((96, 96, 3), 255, dtype=np.uint8)
+    cv2.circle(pixels, (48, 48), 34, (0, 0, 0), thickness=-1)
+    cv2.circle(pixels, (48, 48), 15, (255, 255, 255), thickness=-1)
+    payload = _write_payload(tmp_path / "donut.png", pixels)
+
+    all_contours = _vectorize(
+        payload,
+        _manual_options(simplification_tolerance_mm=0.18),
+        width_mm=48.0,
+        height_mm=48.0,
+    )
+    outer_only = _vectorize(
+        payload,
+        _manual_options(
+            contour_output=RasterContourOutput.OUTER_ONLY,
+            simplification_tolerance_mm=0.18,
+        ),
+        width_mm=48.0,
+        height_mm=48.0,
+    )
+
+    assert len(all_contours.contours) == 2
+    outer, hole = all_contours.contours
+    assert outer.parent_index is None and outer.depth == 0 and not outer.is_hole
+    assert hole.parent_index == 0 and hole.depth == 1 and hole.is_hole
+    assert len(all_contours.project_polylines()) == 2
+    assert all(line["closed"] is True for line in all_contours.project_polylines())
+    assert all_contours.metadata()["raster_vectorization_hierarchy"] == [
+        {"parent_index": None, "depth": 0, "is_hole": False},
+        {"parent_index": 0, "depth": 1, "is_hole": True},
+    ]
+    assert len(outer_only.contours) == 1
+    assert not outer_only.contours[0].is_hole
+
+
+def test_letter_like_shape_preserves_multiple_counters(tmp_path: Path) -> None:
+    pixels = np.full((120, 90, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (15, 10), (74, 109), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (35, 25), (61, 48), (255, 255, 255), thickness=-1)
+    cv2.rectangle(pixels, (35, 69), (61, 94), (255, 255, 255), thickness=-1)
+    payload = _write_payload(tmp_path / "letter-b.png", pixels)
+
+    result = _vectorize(
+        payload,
+        width_mm=45.0,
+        height_mm=60.0,
+    )
+
+    assert len(result.contours) == 3
+    assert [contour.depth for contour in result.contours] == [0, 1, 1]
+    assert [contour.parent_index for contour in result.contours] == [None, 0, 0]
+    assert [contour.is_hole for contour in result.contours] == [False, True, True]
+
+
+def test_minimum_feature_area_removes_isolated_speck(tmp_path: Path) -> None:
+    pixels = np.full((100, 100, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (20, 20), (79, 79), (0, 0, 0), thickness=-1)
+    pixels[4, 4] = 0
+    payload = _write_payload(tmp_path / "speck.png", pixels)
+
+    unfiltered = _vectorize(
+        payload,
+        _manual_options(minimum_feature_area_mm2=0.0),
+        width_mm=100.0,
+        height_mm=100.0,
+    )
+    filtered = _vectorize(
+        payload,
+        _manual_options(minimum_feature_area_mm2=2.0),
+        width_mm=100.0,
+        height_mm=100.0,
+    )
+
+    assert unfiltered.connected_component_count == 2
+    assert len(unfiltered.contours) == 2
+    assert filtered.connected_component_count == 1
+    assert len(filtered.contours) == 1
+
+
+def test_minimum_feature_area_removes_tiny_pinhole_but_keeps_larger_hole(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((100, 100, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (10, 10), (89, 89), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (23, 23), (24, 24), (255, 255, 255), thickness=-1)
+    cv2.circle(pixels, (62, 55), 12, (255, 255, 255), thickness=-1)
+    payload = _write_payload(tmp_path / "pinholes.png", pixels)
+
+    unfiltered = _vectorize(
+        payload,
+        _manual_options(minimum_feature_area_mm2=0.0),
+        width_mm=40.0,
+        height_mm=40.0,
+    )
+    filtered = _vectorize(
+        payload,
+        _manual_options(minimum_feature_area_mm2=1.0),
+        width_mm=40.0,
+        height_mm=40.0,
+    )
+
+    assert len(unfiltered.contours) == 3
+    assert len(filtered.contours) == 2
+    assert [contour.is_hole for contour in filtered.contours] == [False, True]
+
+
+def test_smoothing_and_tolerance_reduce_points_while_curves_remain_adaptive(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((128, 128, 3), 255, dtype=np.uint8)
+    center = np.array([64.0, 64.0])
+    polygon = []
+    for index in range(96):
+        angle = 2.0 * np.pi * index / 96.0
+        radius = 42.0 + (2.0 if index % 2 else -2.0)
+        point = center + radius * np.array([np.cos(angle), np.sin(angle)])
+        polygon.append([int(round(point[0])), int(round(point[1]))])
+    cv2.fillPoly(pixels, [np.asarray(polygon, dtype=np.int32)], (0, 0, 0))
+    payload = _write_payload(tmp_path / "rough-circle.png", pixels)
+
+    detailed = _vectorize(
+        payload,
+        _manual_options(simplification_tolerance_mm=0.03),
+        width_mm=64.0,
+        height_mm=64.0,
+    )
+    smoothed = _vectorize(
+        payload,
+        _manual_options(
+            smoothing_mm=0.35,
+            simplification_tolerance_mm=0.30,
+        ),
+        width_mm=64.0,
+        height_mm=64.0,
+    )
+
+    assert smoothed.final_point_count < detailed.final_point_count
+    assert smoothed.raw_contour_point_count == detailed.raw_contour_point_count
+    assert smoothed.fitted_segment_count <= detailed.fitted_segment_count
+    assert smoothed.final_point_count > 8
+    assert smoothed.max_estimated_deviation_mm >= 0.0
+
+
+def test_vectorization_does_not_import_or_depend_on_camera_trace_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels = np.full((40, 40, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (8, 9), (31, 30), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "independent.png", pixels)
+    module_name = "laser_aligner.vision.object_trace"
+    monkeypatch.delitem(sys.modules, module_name, raising=False)
+
+    first = _vectorize(payload, width_mm=20.0, height_mm=20.0)
+    second = _vectorize(payload, width_mm=20.0, height_mm=20.0)
+
+    assert module_name not in sys.modules
+    assert first.contours == second.contours
+    assert first.threshold_used == second.threshold_used
+
+
+def test_source_identity_mismatch_is_rejected_before_decode(tmp_path: Path) -> None:
+    path = tmp_path / "changed.png"
+    first = np.full((32, 32, 3), 255, dtype=np.uint8)
+    cv2.rectangle(first, (6, 6), (25, 25), (0, 0, 0), thickness=-1)
+    payload = _write_payload(path, first)
+    replacement = np.zeros((32, 32, 3), dtype=np.uint8)
+    assert cv2.imwrite(str(path), replacement)
+
+    with pytest.raises(RasterVectorizationError, match="identity mismatch"):
+        _vectorize(payload, width_mm=32.0, height_mm=32.0)
+
+
+def test_bounded_component_complexity_recommends_actionable_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels = np.full((60, 60, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (5, 5), (15, 15), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (40, 40), (50, 50), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "components.png", pixels)
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS",
+        1,
+    )
+
+    with pytest.raises(RasterVectorizationComplexityError) as captured:
+        _vectorize(payload, width_mm=30.0, height_mm=30.0)
+
+    message = str(captured.value).casefold()
+    assert "connected foreground components" in message
+    assert "increase the minimum feature size" in message
+    assert "increase simplification" in message
+    assert "adjust the threshold" in message
+    assert "cleaner source artwork" in message
+
+
+@pytest.mark.parametrize(
+    ("constant_name", "limit", "message"),
+    [
+        ("MAX_RASTER_VECTORIZATION_OVERSAMPLED_PIXELS", 100, "internal limit"),
+        ("MAX_RASTER_VECTORIZATION_CONTOURS", 1, "contour limit"),
+        (
+            "MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION",
+            100,
+            "pre-simplification limit",
+        ),
+        ("MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS", 1, "fitted segments"),
+        (
+            "MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION",
+            2,
+            "final E3 points",
+        ),
+    ],
+)
+def test_each_geometry_complexity_budget_rejects_with_cleanup_guidance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    constant_name: str,
+    limit: int,
+    message: str,
+) -> None:
+    pixels = np.full((64, 64, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (5, 7), (24, 29), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (37, 34), (57, 56), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / f"limit-{constant_name}.png", pixels)
+    monkeypatch.setattr(raster_vectorize_module, constant_name, limit)
+
+    with pytest.raises(RasterVectorizationComplexityError) as captured:
+        _vectorize(payload, width_mm=32.0, height_mm=32.0)
+
+    text = str(captured.value).casefold()
+    assert message.casefold() in text
+    assert "increase the minimum feature size" in text
+    assert "increase simplification" in text
+    assert "adjust the threshold" in text
+    assert "cleaner source artwork" in text
+
+
+def test_raw_edge_preflight_rejects_before_oversampled_contour_allocation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels = np.full((80, 80, 3), 255, dtype=np.uint8)
+    for row in range(8, 72, 4):
+        end = 70 if (row // 4) % 2 else 10
+        cv2.line(pixels, (10, row), (end, row), (0, 0, 0), thickness=2)
+        if row < 68:
+            cv2.line(pixels, (end, row), (end, row + 4), (0, 0, 0), thickness=2)
+    payload = _write_payload(tmp_path / "single-maze.png", pixels)
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION",
+        500,
+    )
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_oversampled_mask",
+        lambda *_args, **_kwargs: pytest.fail(
+            "base edge budget must reject before the 4x allocation"
+        ),
+    )
+
+    with pytest.raises(RasterVectorizationComplexityError, match="4x contour"):
+        _vectorize(payload, width_mm=40.0, height_mm=40.0)
+
+
+def test_corner_suppression_is_bounded_for_a_large_jagged_contour() -> None:
+    count = 20_000
+    points = np.column_stack(
+        (
+            np.arange(count, dtype=np.float64),
+            np.arange(count, dtype=np.float64) % 2.0,
+        )
+    )
+
+    corners = raster_vectorize_module._corner_indices(points)
+
+    assert corners == sorted(set(corners))
+    assert 0 < len(corners) < count // 4
+
+
+def test_rasterized_topology_validation_rejects_a_hole_crossing_its_parent() -> None:
+    contour_type = raster_vectorize_module.RasterVectorizedContour
+    outer = contour_type(
+        points=((-0.4, -0.4), (0.4, -0.4), (0.4, 0.4), (-0.4, 0.4)),
+        parent_index=None,
+        depth=0,
+        is_hole=False,
+        raw_point_count=4,
+        fitted_segment_count=4,
+        final_point_count=4,
+        max_estimated_deviation_mm=0.0,
+    )
+    valid_hole = contour_type(
+        points=((-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)),
+        parent_index=0,
+        depth=1,
+        is_hole=True,
+        raw_point_count=4,
+        fitted_segment_count=4,
+        final_point_count=4,
+        max_estimated_deviation_mm=0.0,
+    )
+    crossing_hole = dataclasses.replace(
+        valid_hole,
+        points=((-0.2, -0.2), (0.48, -0.2), (0.48, 0.2), (-0.2, 0.2)),
+    )
+
+    raster_vectorize_module._validate_rasterized_topology(
+        (outer, valid_hole),
+        (256, 256),
+    )
+    with pytest.raises(RasterVectorizationError, match="topology"):
+        raster_vectorize_module._validate_rasterized_topology(
+            (outer, crossing_hole),
+            (256, 256),
+        )
+
+
+@pytest.mark.parametrize("suffix", [".jpg", ".bmp"])
+def test_vectorization_uses_the_shared_bounded_payload_for_other_raster_formats(
+    tmp_path: Path,
+    suffix: str,
+) -> None:
+    pixels = np.full((40, 56, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (12, 9), (43, 30), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / f"format{suffix}", pixels)
+
+    result = _vectorize(payload, width_mm=28.0, height_mm=20.0)
+
+    assert len(result.contours) == 1
+    assert result.source_identity.format in {"jpeg", "bmp"}
+
+
+def test_partial_alpha_cutoff_selects_only_sufficiently_opaque_features(
+    tmp_path: Path,
+) -> None:
+    pixels = np.zeros((48, 72, 4), dtype=np.uint8)
+    pixels[:, :, :3] = 20
+    cv2.rectangle(pixels, (7, 10), (27, 37), (20, 20, 20, 80), thickness=-1)
+    cv2.rectangle(pixels, (44, 10), (64, 37), (20, 20, 20, 220), thickness=-1)
+    payload = _write_payload(tmp_path / "partial-alpha.png", pixels)
+
+    result = _vectorize(
+        payload,
+        RasterVectorizationOptions(
+            detection_mode=RasterDetectionMode.ALPHA,
+            alpha_cutoff=128,
+            minimum_feature_area_mm2=0.0,
+            simplification_tolerance_mm=0.1,
+        ),
+        width_mm=36.0,
+        height_mm=24.0,
+    )
+
+    assert result.has_usable_alpha
+    assert result.connected_component_count == 1
+    assert len(result.contours) == 1
+
+
+def test_options_payload_and_result_preview_storage_are_not_mutated(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((48, 48, 3), 255, dtype=np.uint8)
+    cv2.circle(pixels, (24, 24), 14, (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "immutable.png", pixels)
+    options = _manual_options(
+        smoothing_mm=0.1,
+        simplification_tolerance_mm=0.12,
+    )
+    options_before = dataclasses.asdict(options)
+    encoded_before = payload.encoded
+    identity_before = payload.identity
+    metadata_before = payload.metadata
+
+    result = _vectorize(payload, options, width_mm=24.0, height_mm=24.0)
+
+    assert dataclasses.asdict(options) == options_before
+    assert payload.encoded is encoded_before
+    assert payload.encoded == encoded_before
+    assert payload.identity == identity_before
+    assert payload.metadata == metadata_before
+    assert not result.source_rgba.flags.writeable
+    assert not result.foreground_mask.flags.writeable
+    assert not result.overlay_rgba.flags.writeable
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        options.threshold = 200  # type: ignore[misc]
+    with pytest.raises(ValueError, match="counts are inconsistent"):
+        dataclasses.replace(result, final_point_count=result.final_point_count + 1)
+    with pytest.raises(ValueError, match="image frame"):
+        dataclasses.replace(
+            result.contours[0],
+            points=((0.75, 0.0), *result.contours[0].points[1:]),
+        )
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"threshold": -1}, "0 through 255"),
+        ({"alpha_cutoff": 256}, "0 through 255"),
+        ({"invert": 1}, "JSON boolean"),
+        ({"minimum_feature_area_mm2": -0.1}, "cannot be negative"),
+        ({"smoothing_mm": float("nan")}, "finite number"),
+        ({"simplification_tolerance_mm": 0.0}, "must be positive"),
+    ],
+)
+def test_options_reject_invalid_values(
+    changes: dict[str, object],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        RasterVectorizationOptions(**changes)
+
+
+def test_alpha_mode_rejects_opaque_source(tmp_path: Path) -> None:
+    pixels = np.full((32, 32, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (8, 8), (23, 23), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "opaque.png", pixels)
+
+    with pytest.raises(RasterVectorizationError, match="alpha tracing is unavailable"):
+        _vectorize(
+            payload,
+            RasterVectorizationOptions(
+                detection_mode=RasterDetectionMode.ALPHA,
+                minimum_feature_area_mm2=0.0,
+            ),
+        )

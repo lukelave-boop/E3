@@ -2619,10 +2619,12 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
 class ObjectPanel(QtWidgets.QWidget):
     selectionRequested = QtCore.Signal(list)
     objectEdited = QtCore.Signal(str, dict)
+    rasterVectorizeRequested = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._updating = False
+        self._object_kinds: dict[str, ObjectKind] = {}
         layout = _panel_layout(self)
         self.tree = QtWidgets.QTreeWidget()
         self.tree.setMinimumHeight(220)
@@ -2646,6 +2648,23 @@ class ObjectPanel(QtWidgets.QWidget):
         self.tree.itemSelectionChanged.connect(self._selection_changed)
         self.tree.itemChanged.connect(self._item_changed)
 
+        self.image_group = QtWidgets.QGroupBox("Image")
+        image_layout = QtWidgets.QVBoxLayout(self.image_group)
+        image_layout.setContentsMargins(8, 8, 8, 8)
+        self.raster_vectorize_button = QtWidgets.QPushButton(
+            "Trace image to vectors\u2026"
+        )
+        self.raster_vectorize_button.setToolTip(
+            "Convert the selected raster image into normal editable E3 paths"
+        )
+        image_layout.addWidget(self.raster_vectorize_button)
+        layout.addWidget(self.image_group)
+        self.raster_vectorize_button.clicked.connect(
+            self._request_raster_vectorization
+        )
+        self.image_group.setVisible(False)
+        self.raster_vectorize_button.setEnabled(False)
+
     def set_document(
         self,
         document: ProjectDocument,
@@ -2653,6 +2672,9 @@ class ObjectPanel(QtWidgets.QWidget):
     ) -> None:
         selected = set(selected_ids or [])
         layers = {layer.id: layer for layer in document.layers}
+        self._object_kinds = {
+            scene_object.id: scene_object.kind for scene_object in document.objects
+        }
         self._updating = True
         try:
             self.tree.clear()
@@ -2686,6 +2708,7 @@ class ObjectPanel(QtWidgets.QWidget):
                 item.setSelected(scene_object.id in selected)
         finally:
             self._updating = False
+        self._sync_image_action()
 
     def set_selection(self, object_ids: list[str]) -> None:
         wanted = set(object_ids)
@@ -2697,16 +2720,42 @@ class ObjectPanel(QtWidgets.QWidget):
                 item.setSelected(object_id in wanted)
         finally:
             self._updating = False
+        self._sync_image_action()
 
     def _selection_changed(self) -> None:
         if self._updating:
             return
-        self.selectionRequested.emit(
-            [
-                str(item.data(0, QtCore.Qt.ItemDataRole.UserRole))
-                for item in self.tree.selectedItems()
-            ]
+        selected = self._selected_ids()
+        self._sync_image_action(selected)
+        self.selectionRequested.emit(selected)
+
+    def _selected_ids(self) -> list[str]:
+        return [
+            str(item.data(0, QtCore.Qt.ItemDataRole.UserRole))
+            for item in self.tree.selectedItems()
+        ]
+
+    def _selected_image_id(self, selected_ids: list[str] | None = None) -> str | None:
+        selected = self._selected_ids() if selected_ids is None else selected_ids
+        if len(selected) != 1:
+            return None
+        object_id = selected[0]
+        return (
+            object_id
+            if self._object_kinds.get(object_id) is ObjectKind.IMAGE
+            else None
         )
+
+    def _sync_image_action(self, selected_ids: list[str] | None = None) -> None:
+        object_id = self._selected_image_id(selected_ids)
+        available = object_id is not None
+        self.image_group.setVisible(available)
+        self.raster_vectorize_button.setEnabled(available)
+
+    def _request_raster_vectorization(self) -> None:
+        object_id = self._selected_image_id()
+        if object_id is not None:
+            self.rasterVectorizeRequested.emit(object_id)
 
     def _item_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
         if self._updating:
