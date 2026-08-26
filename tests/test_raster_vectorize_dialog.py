@@ -88,7 +88,7 @@ def _result(*, has_alpha: bool = True) -> Any:
         has_usable_alpha=has_alpha,
         raw_contour_point_count=96,
         fitted_segment_count=4,
-        final_point_count=5,
+        preview_flattened_point_count=5,
         max_estimated_deviation_mm=0.018,
     )
 
@@ -150,7 +150,8 @@ def test_dialog_previews_controls_stats_and_acceptance_contract(
     assert not dialog.overlay_preview._image.isNull()
     assert "Raw contour points 96" in dialog.stats_label.text()
     assert "fitted segments 4" in dialog.stats_label.text()
-    assert "final E3 points 5" in dialog.stats_label.text()
+    assert "preview-flattened points 5" in dialog.stats_label.text()
+    assert "final E3 points" not in dialog.stats_label.text()
     assert "0.018 mm" in dialog.stats_label.text()
     assert not dialog.threshold_row.isEnabled()
     assert dialog.alpha_row.isEnabled()

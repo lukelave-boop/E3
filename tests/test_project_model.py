@@ -6,7 +6,12 @@ from laser_aligner.project import (
     Bounds,
     CoordinateSpace,
     LayerMode,
+    NativePathGeometry,
     OperationLayer,
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+    PathSubpath,
     ProjectDocument,
     ProjectFormatError,
     SceneObject,
@@ -159,7 +164,7 @@ def test_honeycomb_coordinate_space_round_trips_explicitly():
     payload = document.to_dict()
     restored = ProjectDocument.from_dict(payload)
 
-    assert payload["schema_version"] == 2
+    assert payload["schema_version"] == 3
     assert payload["coordinate_space"] == "honeycomb_local"
     assert restored.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
 
@@ -172,7 +177,7 @@ def test_schema_one_project_migrates_as_machine_coordinates():
     restored = ProjectDocument.from_dict(payload)
 
     assert restored.coordinate_space is CoordinateSpace.MACHINE
-    assert restored.to_dict()["schema_version"] == 2
+    assert restored.to_dict()["schema_version"] == 3
 
 
 def test_schema_one_project_cannot_claim_honeycomb_coordinates():
@@ -187,6 +192,7 @@ def test_schema_one_project_cannot_claim_honeycomb_coordinates():
 
 def test_schema_two_requires_explicit_coordinate_space():
     payload = ProjectDocument.new().to_dict()
+    payload["schema_version"] = 2
     payload.pop("coordinate_space")
 
     with pytest.raises(ProjectFormatError, match="coordinate_space"):
@@ -211,7 +217,8 @@ def test_path_is_normalized_around_its_center():
 
     assert item.transform.width_mm == pytest.approx(20)
     assert item.transform.height_mm == pytest.approx(40)
-    points = item.geometry["polylines"][0]["points"]
+    subpath = item.path_geometry().subpaths[0]
+    points = [subpath.start, *(segment.to for segment in subpath.segments)]
     assert min(point[0] for point in points) == pytest.approx(-0.5)
     assert max(point[0] for point in points) == pytest.approx(0.5)
     assert min(point[1] for point in points) == pytest.approx(-0.5)
@@ -311,8 +318,8 @@ def test_project_string_booleans_are_rejected() -> None:
         document.active_layer_id,
         [{"points": [[0, 0], [1, 1]], "closed": False}],
     ).to_dict()
-    path["geometry"]["polylines"][0]["closed"] = "false"
-    with pytest.raises(ProjectFormatError, match="path.closed must be a JSON boolean"):
+    path["geometry"]["subpaths"][0]["closed"] = "false"
+    with pytest.raises(ProjectFormatError, match="subpath.closed must be a JSON boolean"):
         SceneObject.from_dict(path)
 
 
@@ -351,3 +358,152 @@ def test_group_identity_round_trips_through_project_json():
     restored = ProjectDocument.from_dict(document.to_dict())
 
     assert [item.group_id for item in restored.objects] == ["group-test", "group-test"]
+
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_legacy_project_path_geometry_migrates_to_canonical_native_lines(schema):
+    document = ProjectDocument.new("Legacy path")
+    path = SceneObject.path(
+        document.active_layer_id,
+        [
+            {
+                "points": [[10, 20], [30, 20], [30, 60], [10, 20]],
+                "closed": True,
+            }
+        ],
+        center=(80, 70),
+    )
+    document.add_object(path)
+    payload = document.to_dict()
+    payload["schema_version"] = schema
+    payload["objects"][0]["geometry"] = {
+        "polylines": [
+            {
+                "points": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, -0.5]],
+                "closed": True,
+            }
+        ]
+    }
+    if schema == 1:
+        payload.pop("coordinate_space")
+
+    restored = ProjectDocument.from_dict(payload)
+    geometry = restored.objects[0].path_geometry()
+
+    assert restored.to_dict()["schema_version"] == 3
+    assert restored.coordinate_space is CoordinateSpace.MACHINE
+    assert "polylines" not in restored.objects[0].geometry
+    assert geometry.fill_rule is PathFillRule.EVENODD
+    assert geometry.subpaths[0].closed is True
+    assert [segment.to for segment in geometry.subpaths[0].segments] == [
+        (0.5, -0.5),
+        (0.5, 0.5),
+    ]
+    assert all(
+        isinstance(segment, PathLineSegment)
+        for segment in geometry.subpaths[0].segments
+    )
+
+
+def test_schema_three_rejects_legacy_polyline_geometry():
+    document = ProjectDocument.new("Spoofed current project")
+    item = SceneObject.path(
+        document.active_layer_id,
+        [{"points": [[0, 0], [1, 1]], "closed": False}],
+    )
+    document.add_object(item)
+    payload = document.to_dict()
+    payload["objects"][0]["geometry"] = {
+        "polylines": [{"points": [[-0.5, -0.5], [0.5, 0.5]], "closed": False}]
+    }
+
+    with pytest.raises(ProjectFormatError, match="schema 3.*canonical native"):
+        ProjectDocument.from_dict(payload)
+
+
+def test_native_path_constructor_clone_duplicate_and_group_preserve_exact_geometry():
+    document = ProjectDocument.new("Native curve")
+    geometry = NativePathGeometry(
+        (
+            PathSubpath(
+                (-0.5, 0.0),
+                (
+                    PathCubicSegment(
+                        (-0.25, -0.75),
+                        (0.25, 0.75),
+                        (0.5, 0.0),
+                    ),
+                ),
+                closed=False,
+            ),
+        ),
+        fill_rule=PathFillRule.NONZERO,
+    )
+    first = SceneObject.native_path(
+        document.active_layer_id,
+        geometry,
+        name="Curve one",
+        transform=Transform(20, 30, 40, 50, rotation_deg=15, mirror_x=True),
+    )
+    second = SceneObject.native_path(
+        document.active_layer_id,
+        geometry,
+        name="Curve two",
+        transform=Transform(60, 70, 20, 30, mirror_y=True),
+    )
+    first.group_id = second.group_id = "group-native"
+    document.add_object(first)
+    document.add_object(second)
+
+    before_clone = document.to_dict()
+    clone = document.clone()
+    duplicates = document.duplicate_objects([first.id, second.id])
+
+    assert clone.to_dict() == before_clone
+    assert clone.objects[0].path_geometry() == geometry
+    assert clone.objects[1].path_geometry() == geometry
+    assert duplicates[0].path_geometry() == geometry
+    assert duplicates[1].path_geometry() == geometry
+    assert duplicates[0].group_id == duplicates[1].group_id
+    assert duplicates[0].group_id != "group-native"
+
+
+def test_project_native_segment_limit_rejects_before_partial_add(monkeypatch):
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 1)
+    document = ProjectDocument.new("Bounded paths")
+    geometry = NativePathGeometry(
+        (PathSubpath((0.0, 0.0), (PathLineSegment((1.0, 0.0)),)),)
+    )
+    first = SceneObject.native_path(document.active_layer_id, geometry, name="First")
+    second = SceneObject.native_path(document.active_layer_id, geometry, name="Second")
+    document.add_object(first)
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        document.add_object(second)
+
+    assert [item.id for item in document.objects] == [first.id]
+
+
+def test_project_native_segment_batch_preflight_is_atomic_and_replacement_aware(
+    monkeypatch,
+):
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 1)
+    document = ProjectDocument.new("Bounded path batch")
+    geometry = NativePathGeometry(
+        (PathSubpath((0.0, 0.0), (PathLineSegment((1.0, 0.0)),)),)
+    )
+    first = SceneObject.native_path(document.active_layer_id, geometry, name="First")
+    second = SceneObject.native_path(document.active_layer_id, geometry, name="Second")
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        document.validate_object_additions((first, second))
+    assert document.objects == []
+
+    document.add_object(first)
+    with pytest.raises(ValueError, match="segment project limit"):
+        document.validate_object_additions((second,))
+    document.validate_object_additions((second,), replacing_ids=(first.id,))

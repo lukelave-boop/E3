@@ -6,7 +6,12 @@ from laser_aligner.planning import (
     project_source_digest,
 )
 from laser_aligner.project import toolpath as toolpath_module
-from laser_aligner.project.model import Bounds, ProjectDocument, SceneObject
+from laser_aligner.project.model import Bounds, ProjectDocument, SceneObject, Transform
+from laser_aligner.project.path_geometry import (
+    NativePathGeometry,
+    PathCubicSegment,
+    PathSubpath,
+)
 from laser_aligner.project.toolpath import generate_project_gcode
 
 
@@ -58,6 +63,37 @@ def test_project_source_digest_changes_with_planning_content() -> None:
     before = project_source_digest(document)
 
     document.objects[0].transform.x_mm += 0.25
+
+    assert project_source_digest(document) != before
+
+
+def test_project_source_digest_changes_with_native_curve_controls() -> None:
+    document = ProjectDocument.new("Native digest", Bounds(0, 0, 100, 100))
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (PathCubicSegment((0.2, 0.4), (0.8, 0.4), (1.0, 0.0)),),
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 40.0, 20.0),
+        )
+    )
+    before = project_source_digest(document)
+    segment = document.objects[0].path_geometry().subpaths[0].segments[0]
+    assert isinstance(segment, PathCubicSegment)
+    document.objects[0].geometry = NativePathGeometry(
+        (
+            PathSubpath(
+                (0.0, 0.0),
+                (PathCubicSegment((0.2, 0.45), segment.control_2, segment.to),),
+            ),
+        )
+    ).to_dict()
 
     assert project_source_digest(document) != before
 
@@ -157,6 +193,66 @@ def test_normalized_dependency_digest_survives_revision_only_change() -> None:
         project_scene_revision(document),
     )
     assert third.metadata.dependency_digest != second.metadata.dependency_digest
+
+
+def test_normalized_stage_two_identity_and_statistics_are_explicit() -> None:
+    document = ProjectDocument.new("Native statistics", Bounds(0, 0, 100, 100))
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (PathCubicSegment((0.2, 0.4), (0.8, 0.4), (1.0, 0.0)),),
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 40.0, 20.0),
+        )
+    )
+    artifact = toolpath_module._normalized_layer_geometry(
+        document,
+        document.layers[0],
+        project_scene_revision(document),
+    )
+    statistics = dict(artifact.metadata.statistics)
+
+    assert artifact.metadata.stage_version == 2
+    assert artifact.metadata.artifact_id.endswith(":v2")
+    assert statistics["native_path_count"] == 1
+    assert statistics["native_segment_count"] == 1
+    assert statistics["flattened_path_count"] == 1
+    assert statistics["flattened_point_count"] > 2
+    assert statistics["flattened_point_count"] == statistics["point_count"]
+
+
+def test_normalized_dependency_tracks_flatten_contract(monkeypatch) -> None:
+    document = _document()
+    layer = document.layers[0]
+    first = toolpath_module._normalized_layer_geometry(document, layer)
+
+    monkeypatch.setattr(
+        toolpath_module,
+        "NATIVE_PATH_FLATTEN_TOLERANCE_MM",
+        0.0125,
+    )
+    tolerance_changed = toolpath_module._normalized_layer_geometry(document, layer)
+    monkeypatch.setattr(
+        toolpath_module,
+        "NATIVE_PATH_FLATTEN_ALGORITHM_VERSION",
+        toolpath_module.NATIVE_PATH_FLATTEN_ALGORITHM_VERSION + 1,
+    )
+    algorithm_changed = toolpath_module._normalized_layer_geometry(document, layer)
+
+    assert (
+        tolerance_changed.metadata.dependency_digest
+        != first.metadata.dependency_digest
+    )
+    assert (
+        algorithm_changed.metadata.dependency_digest
+        != tolerance_changed.metadata.dependency_digest
+    )
 
 
 def test_operation_dependency_changes_without_forcing_placement_change() -> None:

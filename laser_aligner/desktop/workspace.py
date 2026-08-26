@@ -19,6 +19,11 @@ from ..project import (
     is_stock_boundary,
     read_raster_asset_payload,
 )
+from ..project.path_geometry import (
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+)
 from .qt import require_qt
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY, DRAFTING_COLORS
 
@@ -394,15 +399,33 @@ class ObjectGraphicsItem(QtWidgets.QGraphicsPathItem):
         elif kind in {ObjectKind.PATH, ObjectKind.POLYGON}:
             width = object_transform.width_mm
             height = object_transform.height_mm
-            for line in scene_object.geometry.get("polylines", []):
-                points = line.get("points", [])
-                if len(points) < 2:
-                    continue
-                first = points[0]
-                path.moveTo(first[0] * width, -first[1] * height)
-                for point in points[1:]:
-                    path.lineTo(point[0] * width, -point[1] * height)
-                if line.get("closed", False):
+            geometry = scene_object.path_geometry()
+            path.setFillRule(
+                QtCore.Qt.FillRule.OddEvenFill
+                if geometry.fill_rule is PathFillRule.EVENODD
+                else QtCore.Qt.FillRule.WindingFill
+            )
+            for subpath in geometry.subpaths:
+                path.moveTo(
+                    subpath.start[0] * width,
+                    -subpath.start[1] * height,
+                )
+                for segment in subpath.segments:
+                    if isinstance(segment, PathLineSegment):
+                        path.lineTo(
+                            segment.to[0] * width,
+                            -segment.to[1] * height,
+                        )
+                    elif isinstance(segment, PathCubicSegment):
+                        path.cubicTo(
+                            segment.control_1[0] * width,
+                            -segment.control_1[1] * height,
+                            segment.control_2[0] * width,
+                            -segment.control_2[1] * height,
+                            segment.to[0] * width,
+                            -segment.to[1] * height,
+                        )
+                if subpath.closed:
                     path.closeSubpath()
         elif kind == ObjectKind.TEXT:
             font = QtGui.QFont(str(scene_object.geometry.get("font_family", "Sans Serif")))

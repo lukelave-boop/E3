@@ -77,6 +77,12 @@ Native desktop workflow:
   overlapping frame work
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
+- Schema-3 native PATH/POLYGON geometry with versioned line and cubic Bézier
+  segments, multiple open or closed subpaths, and explicit even-odd or nonzero
+  fill rules. Curves remain native through project editing, transforms,
+  duplication, grouping, save/reopen, autosave, recovery, and workspace
+  rendering; planning flattens them deterministically in physical millimetres
+  at one controlled boundary
 - Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,
   imported 2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
   output-disabled speed/power layers, vector outline text, and automatically
@@ -91,13 +97,13 @@ Native desktop workflow:
 - A dedicated **Trace image to vectors…** action for exactly one selected raster
   image. Its modal review compares the original, foreground mask, and vector
   overlay, with high-contrast color presets and preview-only opacity; supports
-  automatic, manual, or usable-alpha detection; and creates one normal
-  multi-contour PATH while preserving the image frame, position, rotation, and
-  mirrors. Closed-contour fitting uses a coordinate-canonical seam,
-  physically persistent corner evidence, and smooth tangents at non-corner
-  joins so small raster-phase differences do not invent angular shoulders.
-  Replace, Keep, optional source hiding, safe-layer creation, and vector
-  creation are one undoable operation
+  automatic, manual, or usable-alpha detection; and creates one native
+  multi-contour line/cubic PATH while preserving the image frame, position,
+  rotation, and mirrors. Closed-contour fitting uses full-cycle seam
+  canonicalization, physically persistent corner evidence, generic straight-run
+  anchors, and shared tangents at non-corner joins so raster phase does not
+  invent angular shoulders. Replace, Keep, optional source hiding, safe-layer
+  creation, and vector creation are one undoable operation
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
@@ -171,13 +177,17 @@ yellow, white, or black comparison overlay and adjust its opacity without
 rerunning or changing the trace, then choose whether to replace or retain the
 source. Keeping the source leaves it in place beneath the new, selected vector
 and preserves the hide-source choice. Preserving all contours keeps counters and
-holes as closed child polylines in the same editable PATH. A trace uses an
-existing layer only when it is a visible Line layer already at 0% power with
-output disabled; otherwise E3 creates `<image name> trace` with those safe
-settings and selects both that layer and the vector. Its ordinary layer swatch
-uses the same color picker as other Line layers. This is an offline authoring
-action: it does not generate G-code, enable output, connect, move, Home, arm, or
-start a job.
+closed child subpaths in the same native PATH. The fitted lines and cubic
+Béziers are persisted directly; preview/topology samples are not a second
+authoritative geometry copy. When planning is requested, E3 applies the complete
+object transform and then adaptively flattens the native curve at the fixed
+0.025 mm planning tolerance before the existing G0/G1 pipeline. A trace uses an
+existing layer
+only when it is a visible Line layer already at 0% power with output disabled;
+otherwise E3 creates `<image name> trace` with those safe settings and selects
+both that layer and the vector. Its ordinary layer swatch uses the same color
+picker as other Line layers. This is an offline authoring action: it does not
+generate G-code, enable output, connect, move, Home, arm, or start a job.
 
 The desktop also contains an automated and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable

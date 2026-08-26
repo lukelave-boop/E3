@@ -80,72 +80,95 @@ expected platform skips**; repository-wide Ruff, `compileall -q laser_aligner`,
 and `git diff --check` also passed. No physical hardware test was performed or
 is claimed for this startup-only correction.
 
-## Active imported-raster vectorization
+## Active native cubic Bézier path foundation
 
-The native Objects panel now exposes **Trace image to vectors…** only when
-exactly one imported IMAGE object is selected. Its window-modal Raster
-Vectorization dialog shows the original raster, generated foreground mask, and
-vector overlay. Its magenta, cyan, yellow, white, or black color preset and
-0–100% opacity are preview-only and repaint without rerunning vectorization or
-changing project/output state. Automatic Otsu, manual 0–255, and usable-alpha
-detection are available with inversion, alpha cutoff, physical minimum-feature
-area for isolated foreground specks and enclosed pinholes,
-smoothing, a millimetre fitting/flattening tolerance, outer-only or full
-hierarchy output, and Replace or Keep/optionally-hide source handling. Preview
-work is debounced and coalesced to one running task plus the newest pending
-settings. Cancel performs no project mutation.
+Project schema 3 persists PATH/POLYGON geometry as one validated, Qt-free native
+representation containing line and cubic segments, open or closed subpaths,
+compound paths, and an explicit `evenodd` or `nonzero` fill rule. Coordinates
+remain normalized in object-local space while the existing `Transform` remains
+the authority for size, both mirrors, rotation, and translation. Schema-1 and
+schema-2 `geometry.polylines` load as equivalent native line-only subpaths in
+memory; opening an old file does not rewrite it, and the next explicit save
+writes only canonical schema-3 native geometry. Existing SVG, G-code, and
+LightBurn polyline constructors pass through the same immediate compatibility
+conversion and retain no second legacy geometry copy. Schema 3 is intentionally
+forward-incompatible with older E3 builds, which reject it instead of silently
+discarding native geometry.
 
-The Qt-free `project.raster_vectorize` module consumes the existing bounded
-`RasterAssetPayload`; it validates the payload bytes/metadata and exact source
-SHA-256 rather than opening an independent unbounded decode path. Approval is
-checked against the payload identity again before the document command. The
-quality pipeline extracts contours from an interpolated 4× mask, retains OpenCV
-tree hierarchy, canonicalizes each closed contour's cyclic seam, locks only
-corners supported across physical arc-length scales before optional smoothing,
-fits bounded straight and cubic Bézier segments in physical coordinates with
-shared tangents across non-corner joins, and adaptively flattens only the fitted
-curves into normal E3 PATH polylines. It reports raw
-contour points, fitted segments, final E3 points, and maximum estimated
-deviation. The estimate is relative to the threshold-derived and optionally
-smoothed contour; source sampling and threshold choice still bound real quality.
-Source- and 4×-resolution boundary budgets reject pathological jagged masks
-before full-point contour allocation, corner suppression uses bounded local
-exclusion, and a capped 4× reconstruction must reproduce the complete fitted
-parent/child hierarchy before the result is accepted.
+The workspace builds `QPainterPath` line and cubic elements directly, applies
+the persisted fill rule, and does not flatten native curves for display. Native
+objects continue through project cloning, add/replace/delete, duplication,
+grouping, layer assignment, object-level transforms, save/reopen, recovery, and
+undo/redo as native geometry. Individual anchor/handle editing and native SVG
+curve preservation remain follow-up work.
 
-One compound PATH stores each outer boundary and nested hole as a separate
-closed polyline, with parent/depth/hole provenance in metadata. Its coordinates
-are normalized in the original image frame and its copied Transform preserves
-the exact displayed width/height, center, rotation, and mirrors. Replace or
-Keep/hide, vector insertion, and any safe-layer creation are one undoable
-`FunctionalCommand`, so undo/redo restores raster, vector, visibility, layer,
-and active-layer state together. The active layer is reused only when it is a
-visible Line layer at 0% power with output disabled; otherwise E3 creates a
-visible `<image name> trace` Line layer at 0% power with output disabled. The
-new vector and layer are selected; a retained source keeps its transform and
-remains below the vector. The created layer uses the ordinary editable layer
-color picker, independently of preview-overlay styling.
+The native Objects panel exposes **Trace image to vectors…** only when exactly
+one imported IMAGE object is selected. Its window-modal Raster Vectorization
+dialog shows the original raster, generated foreground mask, and vector overlay.
+Magenta, cyan, yellow, white, and black presets plus 0–100% opacity are
+preview-only and repaint locally without rerunning fitting or changing geometry,
+metadata, layer power, or output authority. Automatic Otsu, manual 0–255, and
+usable-alpha detection are available with inversion, alpha cutoff, physical
+minimum-feature area, smoothing, a millimetre fitting tolerance, outer-only or
+full hierarchy output, and Replace or Keep/optionally-hide source handling.
+Preview work is debounced and coalesced to one running task plus the newest
+pending settings. Cancel performs no project mutation.
 
-Production caps are 67,108,864 pixels in the 4× workspace, 4,096 retained
-connected components, 8,192 contours, 1,000,000 raw pre-simplification points,
-100,000 fitted segments, and 250,000 final E3 points. Limit failures recommend
-increasing minimum feature size or simplification, adjusting threshold, or using
-cleaner source artwork. This first version is for predominantly single-color
-logos, line art, silhouettes, transparent artwork, and stencils. It is not a
-full-color/multi-layer tracer and persists adaptive PATH polylines rather than
-editable Bézier primitives.
+Imported-raster vectorization retains its fitted straight/cubic result instead
+of destroying curves at the former `_fit_and_flatten_contour()` seam. The stages
+canonicalize the complete closed-contour cycle, classify only corners persistent
+across physical scales, add generic straight-run anchors, fit bounded line/cubic
+segments with shared tangents at non-corner joins, validate/convert that fit to
+one authoritative native subpath, and separately flatten bounded transient
+points for topology comparison, overlay preview, diagnostics, and planning-point
+estimation. Source- and 4×-resolution budgets reject pathological masks before
+full allocation, and capped reconstruction must reproduce the fitted contour
+forest. Parent/depth/hole state and quality metrics remain attached to each
+native subpath; no fitted cubic is replaced by persisted polyline samples.
 
-This is offline authoring behavior. It neither changes the existing raster
-importer/engraver nor generates G-code, enables output, connects, Homes, moves,
-arms, or starts a job. Any later output continues through ordinary Generate,
-exact Preview, preflight, and guarded execution. The final feature-focused run
-passes **49 fitting/vectorizer tests** and **39 raster-dialog, layer, and
-workspace tests**; the focused project save/model/history run passes **126
-tests**. The complete Windows run passes **2,466 tests with 14 expected
-platform/capability skips**. Repository-wide Ruff,
-`python -m compileall -q laser_aligner`, and `git diff --check` also pass. This is
-automated and offscreen-widget verification only; no controller, camera, motion,
-arming, laser-output, or physical-quality verification is claimed.
+One compound native path preserves all selected outers and holes in the original
+image-local frame with the source Transform and SHA-256. Replace/Keep/hide,
+vector insertion, and any safe-layer creation are one undoable command. The
+active layer is reused only when it is a visible Line layer at 0% power with
+output disabled; otherwise E3 creates a visible `<image name> trace` Line layer
+with the same safe defaults. The new vector and layer are selected, a retained
+source remains below the vector, and its Transform is preserved. The ordinary
+editable layer color remains independent of preview-overlay styling.
+
+`object_polylines()` is the single native-curve-to-planning boundary. It applies
+the complete object transform to anchors and controls first, then performs
+deterministic recursive de Casteljau flattening in physical project millimetres
+at **0.025 mm** tolerance. The normalized-geometry planning stage is version 2;
+its dependency identity includes the tolerance and flattening algorithm version
+so a stage-1 artifact cannot be reused. Downstream placement, containment,
+preview, preflight, and G0/G1 generation continue to consume ordinary
+`Polyline` values. No controller spline or arc command is introduced.
+
+Before output acceptance, exact derivative-root extrema bound complete cubics in
+rectangular work areas. Convex guarded polygons use recursive Bézier subdivision
+and the convex-hull property, including the 0.025 mm flattening envelope. Those
+checks are applied in project-local, placed machine, and controller-offset
+domains in addition to the existing flattened-path checks. Compound fill
+planning honors even-odd parity or deliberate nonzero winding; containment cut
+ordering remains winding-independent and deepest-first.
+
+Native-path production caps are 8 levels of JSON nesting, 8,192 subpaths per
+object, 100,000 segments per object, 250,000 segments per project, 250,000
+flattened output points, 18 recursive subdivisions, and coordinate magnitude
+1,000,000. Existing raster caps remain 67,108,864 pixels in the 4× workspace,
+4,096 retained connected components, 8,192 contours, 1,000,000 raw
+pre-simplification points, 100,000 fitted segments, and 250,000 transient
+preview-flattened points. Limit failures recommend simplifying or cleaning the
+source artwork.
+
+This remains offline authoring and guarded planning behavior. It does not
+connect, Home, move, arm, enable output, generate a job automatically, or start
+execution. `machine.allow_motion`, coordinate/reference trust, exact program
+authorization, temporary arming, Preview, preflight, START JOB, STOP/immediate
+`M5`, controller dialects, and offline editing remain unchanged. The combined
+rebased implementation is verified after the following native hardening commit.
+No controller, camera, motion, homing, arming, laser-output, physical
+tracing-quality, or physical accuracy verification is performed or claimed.
 
 ## Active Windows updater hardening
 

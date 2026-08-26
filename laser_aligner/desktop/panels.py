@@ -2655,7 +2655,7 @@ class ObjectPanel(QtWidgets.QWidget):
             "Trace image to vectors\u2026"
         )
         self.raster_vectorize_button.setToolTip(
-            "Convert the selected raster image into normal editable E3 paths"
+            "Convert the selected raster image into native E3 line and cubic paths"
         )
         image_layout.addWidget(self.raster_vectorize_button)
         layout.addWidget(self.image_group)

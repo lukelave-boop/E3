@@ -10,6 +10,11 @@ import pytest
 
 import laser_aligner.project.raster_vectorize as raster_vectorize_module
 from laser_aligner.project import (
+    NativePathGeometry,
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+    PathSubpath,
     RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationComplexityError,
@@ -57,12 +62,24 @@ def _vectorize(
 
 
 def _normalized_bounds(contour) -> tuple[float, float, float, float]:
-    points = np.asarray(contour.points, dtype=np.float64)
+    points = np.asarray(contour.preview_points, dtype=np.float64)
     return (
         float(np.min(points[:, 0])),
         float(np.min(points[:, 1])),
         float(np.max(points[:, 0])),
         float(np.max(points[:, 1])),
+    )
+
+
+def _closed_line_subpath(
+    points: tuple[tuple[float, float], ...],
+) -> PathSubpath:
+    return PathSubpath(
+        start=points[0],
+        segments=tuple(
+            PathLineSegment(to=point) for point in (*points[1:], points[0])
+        ),
+        closed=True,
     )
 
 
@@ -79,12 +96,17 @@ def test_solid_rectangle_uses_corner_preserving_few_point_geometry(
     contour = result.contours[0]
     assert contour.parent_index is None
     assert not contour.is_hole
-    assert 4 <= contour.final_point_count <= 12
-    assert contour.raw_point_count > contour.final_point_count
+    assert contour.native_subpath.closed
+    assert all(
+        isinstance(segment, PathLineSegment)
+        for segment in contour.native_subpath.segments
+    )
+    assert 4 <= contour.preview_flattened_point_count <= 12
+    assert contour.raw_point_count > contour.preview_flattened_point_count
     x_min, y_min, x_max, y_max = _normalized_bounds(contour)
     assert (x_min, x_max) == pytest.approx((-0.3125, 0.3125), abs=0.012)
     assert (y_min, y_max) == pytest.approx((-0.25, 0.25), abs=0.012)
-    actual_points = np.asarray(contour.points, dtype=np.float64)
+    actual_points = np.asarray(contour.preview_points, dtype=np.float64)
     for expected_corner in (
         (-0.3125, -0.25),
         (0.3125, -0.25),
@@ -95,7 +117,10 @@ def test_solid_rectangle_uses_corner_preserving_few_point_geometry(
         assert float(np.min(distances)) < 0.02
     assert result.raw_contour_point_count == contour.raw_point_count
     assert result.fitted_segment_count == contour.fitted_segment_count
-    assert result.final_point_count == contour.final_point_count
+    assert (
+        result.preview_flattened_point_count
+        == contour.preview_flattened_point_count
+    )
     assert result.source_rgba.shape == (64, 64, 4)
     assert result.foreground_mask.shape == (64, 64)
     assert result.overlay_rgba.shape == (64, 64, 4)
@@ -204,8 +229,11 @@ def test_donut_preserves_hole_hierarchy_and_outer_only_choice(
     outer, hole = all_contours.contours
     assert outer.parent_index is None and outer.depth == 0 and not outer.is_hole
     assert hole.parent_index == 0 and hole.depth == 1 and hole.is_hole
-    assert len(all_contours.project_polylines()) == 2
-    assert all(line["closed"] is True for line in all_contours.project_polylines())
+    project_path = all_contours.project_path_geometry()
+    assert isinstance(project_path, NativePathGeometry)
+    assert project_path.fill_rule is PathFillRule.EVENODD
+    assert len(project_path.subpaths) == 2
+    assert all(subpath.closed for subpath in project_path.subpaths)
     assert all_contours.metadata()["raster_vectorization_hierarchy"] == [
         {"parent_index": None, "depth": 0, "is_hole": False},
         {"parent_index": 0, "depth": 1, "is_hole": True},
@@ -231,6 +259,92 @@ def test_letter_like_shape_preserves_multiple_counters(tmp_path: Path) -> None:
     assert [contour.depth for contour in result.contours] == [0, 1, 1]
     assert [contour.parent_index for contour in result.contours] == [None, 0, 0]
     assert [contour.is_hole for contour in result.contours] == [False, True, True]
+
+
+@pytest.mark.parametrize(
+    ("glyph", "expected_depths"),
+    [
+        ("A", [0, 1]),
+        ("O", [0, 1]),
+        ("P", [0, 1]),
+        ("R", [0, 1]),
+        ("8", [0, 1, 1]),
+    ],
+)
+def test_letter_like_native_paths_preserve_counter_topology(
+    tmp_path: Path,
+    glyph: str,
+    expected_depths: list[int],
+) -> None:
+    pixels = np.full((128, 128, 3), 255, dtype=np.uint8)
+    if glyph == "A":
+        cv2.fillPoly(
+            pixels,
+            [np.asarray([[64, 8], [112, 116], [16, 116]], dtype=np.int32)],
+            (0, 0, 0),
+        )
+        cv2.fillPoly(
+            pixels,
+            [np.asarray([[64, 42], [78, 78], [50, 78]], dtype=np.int32)],
+            (255, 255, 255),
+        )
+    elif glyph == "O":
+        cv2.circle(pixels, (64, 64), 51, (0, 0, 0), thickness=-1)
+        cv2.circle(pixels, (64, 64), 27, (255, 255, 255), thickness=-1)
+    elif glyph in {"P", "R"}:
+        cv2.rectangle(pixels, (24, 12), (94, 72), (0, 0, 0), thickness=-1)
+        cv2.rectangle(pixels, (24, 12), (45, 116), (0, 0, 0), thickness=-1)
+        cv2.rectangle(pixels, (48, 29), (76, 53), (255, 255, 255), thickness=-1)
+        if glyph == "R":
+            cv2.line(pixels, (66, 66), (104, 116), (0, 0, 0), thickness=20)
+    else:
+        cv2.circle(pixels, (64, 38), 34, (0, 0, 0), thickness=-1)
+        cv2.circle(pixels, (64, 90), 34, (0, 0, 0), thickness=-1)
+        cv2.rectangle(pixels, (30, 38), (98, 90), (0, 0, 0), thickness=-1)
+        cv2.circle(pixels, (64, 38), 15, (255, 255, 255), thickness=-1)
+        cv2.circle(pixels, (64, 90), 15, (255, 255, 255), thickness=-1)
+    payload = _write_payload(tmp_path / f"glyph-{glyph}.png", pixels)
+
+    result = _vectorize(
+        payload,
+        _manual_options(
+            smoothing_mm=0.08,
+            simplification_tolerance_mm=0.12,
+        ),
+        width_mm=64.0,
+        height_mm=64.0,
+    )
+
+    assert [contour.depth for contour in result.contours] == expected_depths
+    assert [contour.parent_index for contour in result.contours] == [
+        None,
+        *([0] * (len(expected_depths) - 1)),
+    ]
+    assert [contour.is_hole for contour in result.contours] == [
+        False,
+        *([True] * (len(expected_depths) - 1)),
+    ]
+    geometry = result.project_path_geometry()
+    assert geometry.fill_rule is PathFillRule.EVENODD
+    assert len(geometry.subpaths) == len(expected_depths)
+    assert all(subpath.closed for subpath in geometry.subpaths)
+
+
+def test_multiple_nested_islands_preserve_three_level_hierarchy(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((128, 128, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (8, 8), (119, 119), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (28, 28), (99, 99), (255, 255, 255), thickness=-1)
+    cv2.rectangle(pixels, (48, 48), (79, 79), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "nested-island.png", pixels)
+
+    result = _vectorize(payload, width_mm=64.0, height_mm=64.0)
+
+    assert [contour.depth for contour in result.contours] == [0, 1, 2]
+    assert [contour.parent_index for contour in result.contours] == [None, 0, 1]
+    assert [contour.is_hole for contour in result.contours] == [False, True, False]
+    assert len(result.project_path_geometry().subpaths) == 3
 
 
 def test_minimum_feature_area_removes_isolated_speck(tmp_path: Path) -> None:
@@ -315,11 +429,76 @@ def test_smoothing_and_tolerance_reduce_points_while_curves_remain_adaptive(
         height_mm=64.0,
     )
 
-    assert smoothed.final_point_count < detailed.final_point_count
+    assert (
+        smoothed.preview_flattened_point_count
+        < detailed.preview_flattened_point_count
+    )
     assert smoothed.raw_contour_point_count == detailed.raw_contour_point_count
     assert smoothed.fitted_segment_count <= detailed.fitted_segment_count
-    assert smoothed.final_point_count > 8
+    assert smoothed.preview_flattened_point_count > 8
     assert smoothed.max_estimated_deviation_mm >= 0.0
+
+
+def test_curved_silhouette_retains_native_cubics_with_fewer_segments(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((128, 128, 3), 255, dtype=np.uint8)
+    cv2.circle(pixels, (64, 64), 43, (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "native-circle.png", pixels)
+
+    result = _vectorize(
+        payload,
+        _manual_options(
+            smoothing_mm=0.10,
+            simplification_tolerance_mm=0.12,
+        ),
+        width_mm=64.0,
+        height_mm=64.0,
+    )
+
+    contour = result.contours[0]
+    assert any(
+        isinstance(segment, PathCubicSegment)
+        for segment in contour.native_subpath.segments
+    )
+    assert (
+        contour.fitted_segment_count * 4
+        < contour.preview_flattened_point_count * 3
+    )
+    assert result.project_path_geometry().segment_count == contour.fitted_segment_count
+
+
+def test_raster_contour_allows_cubic_controls_outside_visible_frame() -> None:
+    preview = ((-0.4, -0.3), (0.4, -0.3), (0.4, 0.3), (-0.4, 0.3))
+    native = PathSubpath(
+        start=(-0.4, 0.0),
+        segments=(
+            PathCubicSegment(
+                control_1=(0.75, -0.5),
+                control_2=(0.75, 0.5),
+                to=(-0.4, 0.0),
+            ),
+        ),
+        closed=True,
+    )
+
+    contour = raster_vectorize_module.RasterVectorizedContour(
+        native_subpath=native,
+        preview_points=preview,
+        parent_index=None,
+        depth=0,
+        is_hole=False,
+        raw_point_count=4,
+        fitted_segment_count=1,
+        preview_flattened_point_count=4,
+        max_fitting_error_mm=0.0,
+        smoothing_displacement_mm=0.0,
+        max_estimated_deviation_mm=0.0,
+    )
+
+    segment = contour.native_subpath.segments[0]
+    assert isinstance(segment, PathCubicSegment)
+    assert segment.control_1[0] > 0.5
 
 
 def test_vectorization_does_not_import_or_depend_on_camera_trace_settings(
@@ -391,7 +570,7 @@ def test_bounded_component_complexity_recommends_actionable_cleanup(
         (
             "MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION",
             2,
-            "final E3 points",
+            "preview-flattened points",
         ),
     ],
 )
@@ -464,29 +643,44 @@ def test_corner_suppression_is_bounded_for_a_large_jagged_contour() -> None:
 
 def test_rasterized_topology_validation_rejects_a_hole_crossing_its_parent() -> None:
     contour_type = raster_vectorize_module.RasterVectorizedContour
+    outer_points = ((-0.4, -0.4), (0.4, -0.4), (0.4, 0.4), (-0.4, 0.4))
     outer = contour_type(
-        points=((-0.4, -0.4), (0.4, -0.4), (0.4, 0.4), (-0.4, 0.4)),
+        native_subpath=_closed_line_subpath(outer_points),
+        preview_points=outer_points,
         parent_index=None,
         depth=0,
         is_hole=False,
         raw_point_count=4,
         fitted_segment_count=4,
-        final_point_count=4,
+        preview_flattened_point_count=4,
+        max_fitting_error_mm=0.0,
+        smoothing_displacement_mm=0.0,
         max_estimated_deviation_mm=0.0,
     )
+    hole_points = ((-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2))
     valid_hole = contour_type(
-        points=((-0.2, -0.2), (0.2, -0.2), (0.2, 0.2), (-0.2, 0.2)),
+        native_subpath=_closed_line_subpath(hole_points),
+        preview_points=hole_points,
         parent_index=0,
         depth=1,
         is_hole=True,
         raw_point_count=4,
         fitted_segment_count=4,
-        final_point_count=4,
+        preview_flattened_point_count=4,
+        max_fitting_error_mm=0.0,
+        smoothing_displacement_mm=0.0,
         max_estimated_deviation_mm=0.0,
+    )
+    crossing_points = (
+        (-0.2, -0.2),
+        (0.48, -0.2),
+        (0.48, 0.2),
+        (-0.2, 0.2),
     )
     crossing_hole = dataclasses.replace(
         valid_hole,
-        points=((-0.2, -0.2), (0.48, -0.2), (0.48, 0.2), (-0.2, 0.2)),
+        native_subpath=_closed_line_subpath(crossing_points),
+        preview_points=crossing_points,
     )
 
     raster_vectorize_module._validate_rasterized_topology(
@@ -569,11 +763,19 @@ def test_options_payload_and_result_preview_storage_are_not_mutated(
     with pytest.raises(dataclasses.FrozenInstanceError):
         options.threshold = 200  # type: ignore[misc]
     with pytest.raises(ValueError, match="counts are inconsistent"):
-        dataclasses.replace(result, final_point_count=result.final_point_count + 1)
+        dataclasses.replace(
+            result,
+            preview_flattened_point_count=(
+                result.preview_flattened_point_count + 1
+            ),
+        )
     with pytest.raises(ValueError, match="image frame"):
         dataclasses.replace(
             result.contours[0],
-            points=((0.75, 0.0), *result.contours[0].points[1:]),
+            preview_points=(
+                (0.75, 0.0),
+                *result.contours[0].preview_points[1:],
+            ),
         )
 
 

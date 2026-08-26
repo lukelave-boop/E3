@@ -2336,14 +2336,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "raster_vectorization_source_handling": handling,
             }
         )
-        vector = SceneObject(
+        vector = SceneObject.native_path(
+            output_layer.id,
+            result.project_path_geometry(),
             name=f"{source.name} trace",
-            kind=ObjectKind.PATH,
-            layer_id=output_layer.id,
             transform=source.transform.copy(),
-            geometry={"polylines": result.project_polylines()},
-            metadata=metadata,
         )
+        vector.metadata.update(metadata)
 
         if handling == "replace":
             object_command: AddObjectCommand | ReplaceObjectsCommand = (
@@ -2408,7 +2407,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.workspace.select_objects([vector.id])
         self.show_notice(
             f"Created {len(result.contours)} contour"
-            f"{'s' if len(result.contours) != 1 else ''} as one editable path on "
+            f"{'s' if len(result.contours) != 1 else ''} as one native path on "
             f"output-disabled 0% layer {output_layer.name}"
         )
         return vector

@@ -2,16 +2,31 @@ import pytest
 
 from laser_aligner.project import (
     AddObjectCommand,
+    AddObjectsCommand,
     CommandStack,
     DuplicateObjectsCommand,
+    NativePathGeometry,
+    PathLineSegment,
+    PathSubpath,
     ProjectDocument,
     ProjectFormatError,
     RemoveObjectsCommand,
+    ReplaceObjectsCommand,
     SceneObject,
     Transform,
     UpdateObjectShapeCommand,
     UpdateTransformCommand,
 )
+
+
+def _one_segment_native_path(document: ProjectDocument, name: str) -> SceneObject:
+    return SceneObject.native_path(
+        document.active_layer_id,
+        NativePathGeometry(
+            (PathSubpath((0.0, 0.0), (PathLineSegment((1.0, 0.0)),)),)
+        ),
+        name=name,
+    )
 
 
 def test_add_undo_redo():
@@ -27,6 +42,52 @@ def test_add_undo_redo():
 
     assert stack.redo()
     assert [obj.id for obj in document.objects] == [item.id]
+
+
+def test_native_batch_add_limit_failure_is_atomic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 1)
+    document = ProjectDocument.new("Atomic native add")
+    first = _one_segment_native_path(document, "First")
+    second = _one_segment_native_path(document, "Second")
+    stack = CommandStack()
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.execute(AddObjectsCommand(document, (first, second)))
+
+    assert document.objects == []
+    assert stack.depth == 0
+
+
+def test_native_replacement_limit_preflights_before_removal_and_round_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 1)
+    document = ProjectDocument.new("Atomic native replace")
+    original = _one_segment_native_path(document, "Original")
+    document.add_object(original)
+    first = _one_segment_native_path(document, "First replacement")
+    second = _one_segment_native_path(document, "Second replacement")
+    stack = CommandStack()
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.execute(
+            ReplaceObjectsCommand(document, (original.id,), (first, second))
+        )
+    assert [item.id for item in document.objects] == [original.id]
+    assert stack.depth == 0
+
+    stack.execute(ReplaceObjectsCommand(document, (original.id,), (first,)))
+    assert [item.id for item in document.objects] == [first.id]
+    assert stack.undo()
+    assert [item.id for item in document.objects] == [original.id]
+    assert stack.redo()
+    assert [item.id for item in document.objects] == [first.id]
 
 
 def test_transform_undo_redo():

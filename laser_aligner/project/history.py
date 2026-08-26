@@ -284,6 +284,7 @@ class AddObjectsCommand(Command):
         else:
             start = max(0, min(self.index, len(self.document.objects)))
             records = [(item, start + offset) for offset, item in enumerate(self.items)]
+        self.document.validate_object_additions(self.items)
         self._indices = []
         for item, index in records:
             self.document.add_object(item, index)
@@ -328,6 +329,7 @@ class RemoveObjectsCommand(Command):
             self.document.remove_object(item.id)
 
     def undo(self) -> None:
+        self.document.validate_object_additions(item for item, _ in self._removed)
         for item, index in self._removed:
             self.document.add_object(item, index)
 
@@ -370,6 +372,10 @@ class ReplaceObjectsCommand(Command):
             self._insertion_index = (
                 self._removed[0][1] if self._removed else len(self.document.objects)
             )
+        self.document.validate_object_additions(
+            self.items,
+            replacing_ids=(item.id for item, _ in self._removed),
+        )
         for item, _ in reversed(self._removed):
             self.document.remove_object(item.id)
         insertion = min(
@@ -380,6 +386,10 @@ class ReplaceObjectsCommand(Command):
             self.document.add_object(item, insertion + offset)
 
     def undo(self) -> None:
+        self.document.validate_object_additions(
+            (item for item, _ in self._removed),
+            replacing_ids=(item.id for item in self.items),
+        )
         for item in reversed(self.items):
             self.document.remove_object(item.id)
         for item, index in self._removed:
@@ -696,6 +706,7 @@ class DuplicateObjectsCommand(Command):
         if not self.duplicates:
             self.duplicates = self.document.duplicate_objects(self.object_ids, self.offset_mm)
         else:
+            self.document.validate_object_additions(self.duplicates)
             for item in self.duplicates:
                 self.document.add_object(item)
 

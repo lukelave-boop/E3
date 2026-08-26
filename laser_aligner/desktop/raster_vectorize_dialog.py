@@ -310,7 +310,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         heading.setObjectName("panelHeading")
         layout.addWidget(heading)
         explanation = QtWidgets.QLabel(
-            "Build ordinary editable E3 path geometry from this single-color "
+            "Build native E3 line and cubic path geometry from this single-color "
             "image. Review the mask and vector overlay before creating anything."
         )
         explanation.setObjectName("mutedLabel")
@@ -349,7 +349,8 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         layout.addWidget(self.status_label)
 
         self.stats_label = QtWidgets.QLabel(
-            "Raw contour points —  ·  fitted segments —  ·  final E3 points —  ·  "
+            "Raw contour points —  ·  fitted segments —  ·  "
+            "preview-flattened points —  ·  "
             "maximum deviation —"
         )
         self.stats_label.setObjectName("mutedLabel")
@@ -462,8 +463,10 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self.simplification_spin.setSuffix(" mm")
         self.simplification_spin.setValue(defaults.simplification_tolerance_mm)
         self.simplification_spin.setToolTip(
-            "Maximum fitting and adaptive-flattening error in millimetres at the "
-            "image's displayed size. Smaller values retain more E3 points."
+            "Maximum raster trace-fitting and preview-flattening error in "
+            "millimetres at the image's displayed size. Smaller values retain "
+            "more native segments and preview detail; machine planning uses its "
+            "separate controlled flattening tolerance."
         )
         form.addRow("Simplification / max fitting error", self.simplification_spin)
         return group
@@ -819,7 +822,8 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self.stats_label.setText(
             f"Raw contour points {result.raw_contour_point_count:,}  ·  "
             f"fitted segments {result.fitted_segment_count:,}  ·  "
-            f"final E3 points {result.final_point_count:,}  ·  "
+            "preview-flattened points "
+            f"{result.preview_flattened_point_count:,}  ·  "
             "maximum estimated deviation "
             f"{result.max_estimated_deviation_mm:.3f} mm"
         )

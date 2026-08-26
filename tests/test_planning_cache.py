@@ -4,9 +4,19 @@ import numpy as np
 
 from laser_aligner.config import LaserSettings
 from laser_aligner.geometry.svg import Polyline
-from laser_aligner.planning import PlanningCache, project_scene_revision
+from laser_aligner.planning import (
+    PlanningCache,
+    PlanningStage,
+    project_scene_revision,
+    stage_dependency_digest,
+)
 from laser_aligner.project import toolpath as toolpath_module
-from laser_aligner.project.model import Bounds, ProjectDocument, SceneObject
+from laser_aligner.project.model import Bounds, ProjectDocument, SceneObject, Transform
+from laser_aligner.project.path_geometry import (
+    NativePathGeometry,
+    PathCubicSegment,
+    PathSubpath,
+)
 from laser_aligner.project.toolpath import generate_project_gcode
 
 
@@ -148,6 +158,57 @@ def test_cache_hit_rehydrates_current_artifact_identity(monkeypatch) -> None:
     assert first.metadata.artifact_id != second.metadata.artifact_id
     assert first.metadata.dependency_digest == second.metadata.dependency_digest
     assert second.metadata.scene_revision.revision == document.revision
+
+
+def test_stage_one_flattened_cache_entry_is_not_reused_for_native_stage_two() -> None:
+    document = ProjectDocument.new("Native cache", Bounds(0, 0, 100, 100))
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (
+                            PathCubicSegment(
+                                (0.25, 0.5),
+                                (0.75, 0.5),
+                                (1.0, 0.0),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 40.0, 20.0),
+        )
+    )
+    layer = document.layers[0]
+    cache = PlanningCache()
+    stale_paths = (
+        Polyline(
+            np.asarray([[99.0, 99.0], [100.0, 100.0]], dtype=np.float64),
+            source_tag="stale-stage-one",
+        ),
+    )
+    stale_digest = stage_dependency_digest(
+        PlanningStage.NORMALIZED_GEOMETRY,
+        1,
+        toolpath_module._normalized_layer_dependency_payload(document, layer),
+    )
+    cache.put_normalized(stale_digest, stale_paths, (99.0, 99.0, 100.0, 100.0))
+
+    artifact = toolpath_module._normalized_layer_geometry(
+        document,
+        layer,
+        project_scene_revision(document),
+        planning_cache=cache,
+    )
+
+    assert artifact.metadata.stage_version == 2
+    assert artifact.metadata.artifact_id.endswith(":v2")
+    assert artifact.paths_for_layer(layer.id)[0].source_tag != "stale-stage-one"
+    assert cache.stats.normalized_hits == 0
+    assert cache.stats.normalized_misses == 1
 
 
 def test_cached_geometry_is_isolated_from_callers() -> None:

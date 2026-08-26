@@ -6,6 +6,24 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added the schema-3 native path foundation. PATH and POLYGON objects now use
+  one versioned canonical geometry containing line and cubic Bézier segments,
+  multiple open or closed subpaths, and an explicit even-odd or nonzero fill
+  rule. Schema-1 and schema-2 polyline projects migrate in memory to native
+  line-only paths and are written as schema 3 only on an explicit later save;
+  their source files are not rewritten by opening. Raster vectorization now
+  retains its fitted straight and cubic segments rather than persisting its
+  preview/topology samples, and the Qt workspace renders cubic segments
+  directly. The existing Polyline planner remains authoritative after one
+  deterministic project-to-planning flattening boundary at 0.025 mm in
+  transformed physical coordinates. The normalized-geometry stage is version
+  2 and includes the flattening contract in its dependency/cache identity.
+  Exact cubic extrema and conservative convex-polygon subdivision protect the
+  full curve in local, placed-beam, and spot-corrected controller coordinates;
+  the existing flattened-path and final program checks still run. No controller
+  spline command, node editor, SVG native-curve import, machine authority, or
+  physical verification is added.
+
 - Added a dedicated imported-raster vectorization workflow without replacing
   raster import or engraving. Exactly one selected IMAGE exposes **Trace image
   to vectors…** in Objects; its modal, coalesced worker preview shows the exact

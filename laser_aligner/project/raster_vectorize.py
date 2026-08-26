@@ -12,6 +12,14 @@ from typing import TypeAlias
 import cv2
 import numpy as np
 
+from .path_geometry import (
+    NativePathGeometry,
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+    PathSubpath,
+    reverse_subpath,
+)
 from .raster_asset import (
     RasterAssetIdentity,
     RasterAssetPayload,
@@ -158,27 +166,38 @@ class RasterVectorizationSource:
 
 @dataclass(frozen=True, slots=True)
 class RasterVectorizedContour:
-    points: tuple[tuple[float, float], ...]
+    native_subpath: PathSubpath
+    preview_points: tuple[tuple[float, float], ...]
     parent_index: int | None
     depth: int
     is_hole: bool
     raw_point_count: int
     fitted_segment_count: int
-    final_point_count: int
+    preview_flattened_point_count: int
+    max_fitting_error_mm: float
+    smoothing_displacement_mm: float
     max_estimated_deviation_mm: float
 
     def __post_init__(self) -> None:
+        if not isinstance(self.native_subpath, PathSubpath):
+            raise TypeError("native_subpath must be a PathSubpath")
+        if not self.native_subpath.closed:
+            raise ValueError("A raster-vectorized native subpath must be closed")
         points = tuple(
             (
                 _finite(point[0], "contour point x"),
                 _finite(point[1], "contour point y"),
             )
-            for point in self.points
+            for point in self.preview_points
         )
         if len(points) < 3:
-            raise ValueError("A vectorized contour requires at least three points")
+            raise ValueError(
+                "A vectorized contour preview requires at least three points"
+            )
         if any(abs(value) > 0.500000001 for point in points for value in point):
-            raise ValueError("Vectorized contour points must remain in the image frame")
+            raise ValueError(
+                "Vectorized contour preview points must remain in the image frame"
+            )
         if self.parent_index is not None and (
             type(self.parent_index) is not int or self.parent_index < 0
         ):
@@ -190,20 +209,62 @@ class RasterVectorizedContour:
         for value, label, minimum in (
             (self.raw_point_count, "raw_point_count", 3),
             (self.fitted_segment_count, "fitted_segment_count", 1),
-            (self.final_point_count, "final_point_count", 3),
+            (
+                self.preview_flattened_point_count,
+                "preview_flattened_point_count",
+                3,
+            ),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"contour {label} must be an integer >= {minimum}")
-        if self.final_point_count != len(points):
-            raise ValueError("contour final_point_count must match its point data")
+        if self.fitted_segment_count != len(self.native_subpath.segments):
+            raise ValueError(
+                "contour fitted_segment_count must match its native subpath"
+            )
+        if self.preview_flattened_point_count != len(points):
+            raise ValueError(
+                "contour preview_flattened_point_count must match its preview data"
+            )
+        fitting_error = _finite(
+            self.max_fitting_error_mm,
+            "contour max_fitting_error_mm",
+        )
+        smoothing_displacement = _finite(
+            self.smoothing_displacement_mm,
+            "contour smoothing_displacement_mm",
+        )
         deviation = _finite(
             self.max_estimated_deviation_mm,
             "contour max_estimated_deviation_mm",
         )
-        if deviation < 0.0:
-            raise ValueError("contour estimated deviation cannot be negative")
-        object.__setattr__(self, "points", points)
+        if fitting_error < 0.0:
+            raise ValueError("contour fitting error cannot be negative")
+        if smoothing_displacement < 0.0:
+            raise ValueError("contour smoothing displacement cannot be negative")
+        if deviation < max(fitting_error, smoothing_displacement):
+            raise ValueError(
+                "contour estimated deviation cannot be smaller than its components"
+            )
+        object.__setattr__(self, "preview_points", points)
+        object.__setattr__(self, "max_fitting_error_mm", fitting_error)
+        object.__setattr__(
+            self,
+            "smoothing_displacement_mm",
+            smoothing_displacement,
+        )
         object.__setattr__(self, "max_estimated_deviation_mm", deviation)
+
+    @property
+    def points(self) -> tuple[tuple[float, float], ...]:
+        """Compatibility view of the ephemeral preview-flattened contour."""
+
+        return self.preview_points
+
+    @property
+    def final_point_count(self) -> int:
+        """Compatibility count for callers predating native path persistence."""
+
+        return self.preview_flattened_point_count
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -219,7 +280,7 @@ class RasterVectorizationResult:
     connected_component_count: int
     raw_contour_point_count: int
     fitted_segment_count: int
-    final_point_count: int
+    preview_flattened_point_count: int
     max_estimated_deviation_mm: float
 
     def __post_init__(self) -> None:
@@ -259,19 +320,23 @@ class RasterVectorizationResult:
             (self.connected_component_count, "connected_component_count", 1),
             (self.raw_contour_point_count, "raw_contour_point_count", 3),
             (self.fitted_segment_count, "fitted_segment_count", 1),
-            (self.final_point_count, "final_point_count", 3),
+            (
+                self.preview_flattened_point_count,
+                "preview_flattened_point_count",
+                3,
+            ),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{label} must be an integer >= {minimum}")
         expected_counts = (
             sum(contour.raw_point_count for contour in contours),
             sum(contour.fitted_segment_count for contour in contours),
-            sum(contour.final_point_count for contour in contours),
+            sum(contour.preview_flattened_point_count for contour in contours),
         )
         if expected_counts != (
             self.raw_contour_point_count,
             self.fitted_segment_count,
-            self.final_point_count,
+            self.preview_flattened_point_count,
         ):
             raise ValueError("Raster vectorization result counts are inconsistent")
         deviation = _finite(
@@ -289,27 +354,18 @@ class RasterVectorizationResult:
         object.__setattr__(self, "max_estimated_deviation_mm", deviation)
 
     @property
-    def polylines(self) -> tuple[dict[str, object], ...]:
-        """Return fresh mappings accepted by ``SceneObject`` PATH geometry."""
+    def final_point_count(self) -> int:
+        """Compatibility count for callers predating native path persistence."""
 
-        return tuple(
-            {
-                "points": [[float(x), float(y)] for x, y in contour.points],
-                "closed": True,
-            }
-            for contour in self.contours
+        return self.preview_flattened_point_count
+
+    def project_path_geometry(self) -> NativePathGeometry:
+        """Return the canonical immutable compound native project path."""
+
+        return NativePathGeometry(
+            subpaths=tuple(contour.native_subpath for contour in self.contours),
+            fill_rule=PathFillRule.EVENODD,
         )
-
-    def project_polylines(self) -> list[dict[str, object]]:
-        """Return JSON-ready PATH polylines without sharing mutable result state."""
-
-        return [
-            {
-                "points": [[float(x), float(y)] for x, y in contour.points],
-                "closed": True,
-            }
-            for contour in self.contours
-        ]
 
     def metadata(self) -> dict[str, object]:
         """Return a compact JSON-ready provenance and quality summary."""
@@ -326,7 +382,15 @@ class RasterVectorizationResult:
                 self.raw_contour_point_count
             ),
             "raster_vectorization_fitted_segments": self.fitted_segment_count,
-            "raster_vectorization_final_e3_points": self.final_point_count,
+            "raster_vectorization_preview_flattened_points": (
+                self.preview_flattened_point_count
+            ),
+            "raster_vectorization_max_fitting_error_mm": max(
+                contour.max_fitting_error_mm for contour in self.contours
+            ),
+            "raster_vectorization_max_smoothing_displacement_mm": max(
+                contour.smoothing_displacement_mm for contour in self.contours
+            ),
             "raster_vectorization_max_estimated_deviation_mm": (
                 self.max_estimated_deviation_mm
             ),
@@ -360,10 +424,17 @@ class _CubicSegment:
 _FittedSegment: TypeAlias = _LineSegment | _CubicSegment
 
 
+@dataclass(frozen=True, slots=True)
+class _FittedContour:
+    segments: tuple[_FittedSegment, ...]
+    smoothing_displacement_mm: float
+    max_fitting_error_mm: float
+
+
 @dataclass(slots=True)
 class _ComplexityBudget:
     fitted_segments: int = 0
-    final_points: int = 0
+    preview_points: int = 0
 
     def add_fitted_segments(self, count: int = 1) -> None:
         if self.fitted_segments + count > MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS:
@@ -373,13 +444,17 @@ class _ComplexityBudget:
             )
         self.fitted_segments += count
 
-    def add_final_points(self, count: int = 1) -> None:
-        if self.final_points + count > MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION:
+    def add_preview_points(self, count: int = 1) -> None:
+        if (
+            self.preview_points + count
+            > MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION
+        ):
             _raise_complexity(
                 "Raster vectorization requires more than "
-                f"{MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION:,} final E3 points"
+                f"{MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION:,} "
+                "preview-flattened points"
             )
-        self.final_points += count
+        self.preview_points += count
 
 
 def _raise_complexity(message: str) -> None:
@@ -1743,12 +1818,12 @@ def _flatten_segment(
     depth: int = 0,
 ) -> float:
     if isinstance(segment, _LineSegment):
-        budget.add_final_points()
+        budget.add_preview_points()
         output.append(segment.end.copy())
         return 0.0
     flatness = _control_flatness(segment)
     if flatness <= tolerance_mm:
-        budget.add_final_points()
+        budget.add_preview_points()
         output.append(segment.end.copy())
         return flatness
     if depth >= _MAX_FLATTEN_RECURSION:
@@ -1776,13 +1851,13 @@ def _contour_spans(points: np.ndarray, anchors: list[int]) -> list[np.ndarray]:
     return spans
 
 
-def _fit_and_flatten_contour(
+def _fit_contour(
     raw_points: np.ndarray,
     options: RasterVectorizationOptions,
     width_mm: float,
     height_mm: float,
     budget: _ComplexityBudget,
-) -> tuple[np.ndarray, int, float]:
+) -> _FittedContour:
     raw_points = _canonicalize_closed_contour(raw_points)
     corner_tolerance = options.simplification_tolerance_mm * 0.65
     fit_tolerance = options.simplification_tolerance_mm * 0.80
@@ -1832,7 +1907,6 @@ def _fit_and_flatten_contour(
         for anchor in anchors
         if anchor not in corner_set
     }
-    flatten_tolerance = options.simplification_tolerance_mm * 0.20
     control_minimum = np.asarray((-width_mm / 2.0, -height_mm / 2.0))
     control_maximum = np.asarray((width_mm / 2.0, height_mm / 2.0))
     segments: list[_FittedSegment] = []
@@ -1892,16 +1966,87 @@ def _fit_and_flatten_contour(
         )
     if not segments:
         raise RasterVectorizationError("A contour could not be fitted to vector geometry")
+    return _FittedContour(
+        segments=tuple(segments),
+        smoothing_displacement_mm=smoothing_displacement,
+        max_fitting_error_mm=max(
+            segment.fitting_error_mm for segment in segments
+        ),
+    )
 
-    output = [segments[0].start.copy()]
-    budget.add_final_points()
+
+def _normalized_point(
+    point: np.ndarray,
+    width_mm: float,
+    height_mm: float,
+) -> tuple[float, float]:
+    return float(point[0] / width_mm), float(point[1] / height_mm)
+
+
+def _native_subpath_from_fitted_contour(
+    fitted: _FittedContour,
+    width_mm: float,
+    height_mm: float,
+) -> PathSubpath:
+    """Convert the mathematical fit exactly once into canonical native types."""
+
+    segments: list[PathLineSegment | PathCubicSegment] = []
+    for segment in fitted.segments:
+        if isinstance(segment, _LineSegment):
+            segments.append(
+                PathLineSegment(to=_normalized_point(segment.end, width_mm, height_mm))
+            )
+        else:
+            segments.append(
+                PathCubicSegment(
+                    control_1=_normalized_point(
+                        segment.control_1,
+                        width_mm,
+                        height_mm,
+                    ),
+                    control_2=_normalized_point(
+                        segment.control_2,
+                        width_mm,
+                        height_mm,
+                    ),
+                    to=_normalized_point(segment.end, width_mm, height_mm),
+                )
+            )
+    subpath = PathSubpath(
+        start=_normalized_point(
+            fitted.segments[0].start,
+            width_mm,
+            height_mm,
+        ),
+        segments=tuple(segments),
+        closed=True,
+    )
+    # Constructing one authoritative path validates finite JSON coordinates,
+    # segment types, and native complexity before preview flattening.
+    return NativePathGeometry(
+        subpaths=(subpath,),
+        fill_rule=PathFillRule.EVENODD,
+    ).subpaths[0]
+
+
+def _flatten_fitted_contour_for_preview(
+    fitted: _FittedContour,
+    tolerance_mm: float,
+    width_mm: float,
+    height_mm: float,
+    budget: _ComplexityBudget,
+) -> tuple[np.ndarray, float, float]:
+    """Return bounded ephemeral points used only for preview and topology checks."""
+
+    output = [fitted.segments[0].start.copy()]
+    budget.add_preview_points()
     maximum_flatness = 0.0
-    for segment in segments:
+    for segment in fitted.segments:
         maximum_flatness = max(
             maximum_flatness,
             _flatten_segment(
                 segment,
-                flatten_tolerance,
+                tolerance_mm,
                 budget,
                 output,
             ),
@@ -1909,7 +2054,7 @@ def _fit_and_flatten_contour(
     points = np.asarray(output, dtype=np.float64)
     if len(points) > 1 and np.linalg.norm(points[0] - points[-1]) <= 1e-9:
         points = points[:-1]
-        budget.final_points -= 1
+        budget.preview_points -= 1
     if len(points) < 3:
         raise RasterVectorizationError(
             "Simplification collapsed a closed contour below three points"
@@ -1927,20 +2072,13 @@ def _fit_and_flatten_contour(
         points = points[:-1]
     removed_points = len(keep) - len(points)
     if removed_points:
-        budget.final_points -= removed_points
+        budget.preview_points -= removed_points
     if len(points) < 3 or abs(_signed_area(points)) <= 1e-15:
         raise RasterVectorizationError(
             "Fitting at the selected tolerance collapsed a closed contour; reduce "
             "smoothing or simplification"
         )
-    fitting_error = max(segment.fitting_error_mm for segment in segments)
-    maximum_deviation = (
-        smoothing_displacement
-        + fitting_error
-        + maximum_flatness
-        + clipping_displacement
-    )
-    return points, len(segments), maximum_deviation
+    return points, maximum_flatness, clipping_displacement
 
 
 def _preview_mask(mask: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -1962,7 +2100,7 @@ def _overlay_preview(
                     int(round((x + 0.5) * width)),
                     int(round((0.5 - y) * height)),
                 ]
-                for x, y in contour.points
+                for x, y in contour.preview_points
             ],
             dtype=np.int32,
         ).reshape(-1, 1, 2)
@@ -1986,7 +2124,10 @@ def _validate_topology(
 ) -> None:
     physical = [
         np.asarray(
-            [[x * width_mm, y * height_mm] for x, y in contour.points],
+            [
+                [x * width_mm, y * height_mm]
+                for x, y in contour.preview_points
+            ],
             dtype=np.float32,
         )
         for contour in contours
@@ -2046,7 +2187,7 @@ def _validate_rasterized_topology(
     rendered = np.zeros((height, width), dtype=np.uint8)
     ordered = sorted(enumerate(contours), key=lambda item: (item[1].depth, item[0]))
     for _index, contour in ordered:
-        normalized = np.asarray(contour.points, dtype=np.float64)
+        normalized = np.asarray(contour.preview_points, dtype=np.float64)
         pixels = np.empty_like(normalized)
         pixels[:, 0] = (normalized[:, 0] + 0.5) * width - 0.5
         pixels[:, 1] = (0.5 - normalized[:, 1]) * height - 0.5
@@ -2196,15 +2337,38 @@ def vectorize_prepared_raster(
             )
         if (not is_hole and area < 0.0) or (is_hole and area > 0.0):
             physical = physical[::-1].copy()
-        final_physical, segment_count, deviation = _fit_and_flatten_contour(
+        fitted = _fit_contour(
             physical,
             options,
             width_mm,
             height_mm,
             budget,
         )
+        native_subpath = _native_subpath_from_fitted_contour(
+            fitted,
+            width_mm,
+            height_mm,
+        )
+        (
+            final_physical,
+            maximum_preview_flatness,
+            clipping_displacement,
+        ) = _flatten_fitted_contour_for_preview(
+            fitted,
+            options.simplification_tolerance_mm * 0.20,
+            width_mm,
+            height_mm,
+            budget,
+        )
+        deviation = (
+            fitted.smoothing_displacement_mm
+            + fitted.max_fitting_error_mm
+            + maximum_preview_flatness
+            + clipping_displacement
+        )
         final_area = _signed_area(final_physical)
         if (not is_hole and final_area < 0.0) or (is_hole and final_area > 0.0):
+            native_subpath = reverse_subpath(native_subpath)
             final_physical = final_physical[::-1].copy()
         parent_original = int(parents[original_index])
         parent_index = selected_map.get(parent_original) if parent_original >= 0 else None
@@ -2222,13 +2386,16 @@ def vectorize_prepared_raster(
         )
         results.append(
             RasterVectorizedContour(
-                points=normalized,
+                native_subpath=native_subpath,
+                preview_points=normalized,
                 parent_index=parent_index,
                 depth=depth if options.contour_output is RasterContourOutput.ALL_CONTOURS else 0,
                 is_hole=is_hole if options.contour_output is RasterContourOutput.ALL_CONTOURS else False,
                 raw_point_count=len(raw_contours[original_index]),
-                fitted_segment_count=segment_count,
-                final_point_count=len(normalized),
+                fitted_segment_count=len(native_subpath.segments),
+                preview_flattened_point_count=len(normalized),
+                max_fitting_error_mm=fitted.max_fitting_error_mm,
+                smoothing_displacement_mm=fitted.smoothing_displacement_mm,
                 max_estimated_deviation_mm=deviation,
             )
         )
@@ -2265,7 +2432,7 @@ def vectorize_prepared_raster(
         connected_component_count=component_count,
         raw_contour_point_count=raw_point_count,
         fitted_segment_count=budget.fitted_segments,
-        final_point_count=budget.final_points,
+        preview_flattened_point_count=budget.preview_points,
         max_estimated_deviation_mm=maximum_deviation,
     )
 

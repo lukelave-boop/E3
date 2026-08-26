@@ -18,10 +18,16 @@ from laser_aligner.project import (
     Bounds,
     CoordinateSpace,
     LayerMode,
+    NativePathGeometry,
     ObjectKind,
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+    PathSubpath,
     ProjectDocument,
     RasterAssetMetadata,
     SceneObject,
+    Transform,
     decode_raster_grayscale,
     generate_project_frame,
     generate_project_gcode,
@@ -102,6 +108,68 @@ def honeycomb_frame(
         width_mm=width,
         height_mm=height,
         provenance_digest=digest,
+    )
+
+
+def _native_bulge_document(
+    center_y: float,
+    *,
+    coordinate_space: CoordinateSpace = CoordinateSpace.MACHINE,
+    control_y: float = 0.02,
+) -> ProjectDocument:
+    document = ProjectDocument.new(
+        "Native bulge",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=coordinate_space,
+    )
+    geometry = NativePathGeometry(
+        (
+            PathSubpath(
+                (-0.5, 0.0),
+                (
+                    PathCubicSegment(
+                        (-0.25, control_y),
+                        (0.25, control_y),
+                        (0.5, 0.0),
+                    ),
+                ),
+                closed=False,
+            ),
+        )
+    )
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            geometry,
+            transform=Transform(50.0, center_y, 80.0, 1.0),
+        )
+    )
+    return document
+
+
+def _closed_square_subpath(half_size: float) -> PathSubpath:
+    return PathSubpath(
+        (-half_size, -half_size),
+        (
+            PathLineSegment((half_size, -half_size)),
+            PathLineSegment((half_size, half_size)),
+            PathLineSegment((-half_size, half_size)),
+        ),
+        closed=True,
+    )
+
+
+def _closed_cubic_circle_subpath(radius: float) -> PathSubpath:
+    handle = radius * 0.5522847498307936
+    return PathSubpath(
+        (radius, 0.0),
+        (
+            PathCubicSegment((radius, handle), (handle, radius), (0.0, radius)),
+            PathCubicSegment((-handle, radius), (-radius, handle), (-radius, 0.0)),
+            PathCubicSegment((-radius, -handle), (-handle, -radius), (0.0, -radius)),
+            PathCubicSegment((handle, -radius), (radius, -handle), (radius, 0.0)),
+        ),
+        closed=True,
     )
 
 
@@ -572,6 +640,111 @@ def test_exact_boundary_float_noise_is_safe_but_real_overflow_is_rejected():
         )
 
 
+def test_legacy_line_path_migration_preserves_planning_geometry() -> None:
+    document = ProjectDocument.new("Legacy planning", Bounds(0, 0, 100, 100))
+    current = SceneObject.path(
+        document.active_layer_id,
+        [
+            {
+                "points": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5]],
+                "closed": False,
+            }
+        ],
+    )
+    current.transform = Transform(
+        40.0,
+        60.0,
+        30.0,
+        20.0,
+        rotation_deg=23.0,
+        mirror_x=True,
+        mirror_y=True,
+    )
+    document.add_object(current)
+    payload = document.to_dict()
+    payload["schema_version"] = 2
+    payload["objects"][0]["geometry"] = {
+        "polylines": [
+            {
+                "points": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5]],
+                "closed": False,
+            }
+        ]
+    }
+
+    migrated = ProjectDocument.from_dict(payload).objects[0]
+    expected = toolpath_module.object_polylines(current)
+    actual = toolpath_module.object_polylines(migrated)
+
+    assert len(actual) == len(expected) == 1
+    assert actual[0].closed is expected[0].closed is False
+    assert actual[0].points == pytest.approx(expected[0].points)
+
+
+def test_native_cubic_with_inside_endpoints_but_outside_curve_is_rejected() -> None:
+    document = _native_bulge_document(99.99)
+    flattened = toolpath_module.object_polylines(document.objects[0])[0]
+
+    assert len(flattened.points) == 2
+    assert max(flattened.points[:, 1]) < 100.0
+    with pytest.raises(SafetyError, match="native curve"):
+        generate_project_gcode(
+            document,
+            LaserSettings(boundary_margin_mm=0),
+        )
+
+
+def test_native_cubic_guarded_polygon_checks_full_curve_not_cached_vertices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _native_bulge_document(
+        89.9,
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+        control_y=0.2,
+    )
+    item = document.objects[0]
+    endpoints = np.asarray([[10.0, 89.9], [90.0, 89.9]], dtype=np.float64)
+    monkeypatch.setattr(
+        toolpath_module,
+        "object_polylines",
+        lambda _item: [Polyline(endpoints, closed=False, source_tag=item.name)],
+    )
+    frame = honeycomb_frame(
+        origin=(0.0, 0.0),
+        x_axis=(1.0, 0.0),
+        y_axis=(0.0, 1.0),
+    )
+    polygon = ((0.0, 0.0), (100.0, 0.0), (100.0, 90.0), (0.0, 90.0))
+
+    with pytest.raises(SafetyError, match="guarded output polygon.*native curve"):
+        generate_project_gcode(
+            document,
+            LaserSettings(
+                boundary_margin_mm=0,
+                guarded_output_polygon_mm=polygon,
+            ),
+            coordinate_frame=frame,
+            machine_work_area=WorkArea(0, 100, 0, 100),
+            guarded_output_polygon_mm=polygon,
+            start_position=(0.0, 0.0),
+        )
+
+
+def test_wholly_authorized_native_cubic_generates_and_frames_conservatively() -> None:
+    document = _native_bulge_document(50.0, control_y=0.4)
+    laser = LaserSettings(boundary_margin_mm=0)
+
+    job = generate_project_gcode(document, laser)
+    frame = generate_project_frame(document, laser)
+
+    assert job.path_count == 1
+    assert job.point_count > 2
+    assert frame.bounds_mm[0] == pytest.approx(9.975)
+    assert frame.bounds_mm[2] == pytest.approx(90.025)
+    assert frame.bounds_mm[1] == pytest.approx(49.975)
+    assert frame.bounds_mm[3] == pytest.approx(50.325)
+
+
 def test_frame_contains_no_positive_laser_command():
     job = generate_project_frame(make_document(), LaserSettings(frame_power=0))
 
@@ -665,6 +838,60 @@ def test_fill_layer_emits_bounded_scanlines_and_exact_preview():
         document.work_area.contains(move.end_x, move.end_y)
         for move in job.plan.moves
     )
+
+
+def test_native_compound_scanlines_honor_evenodd_and_nonzero_winding() -> None:
+    outer = np.asarray(
+        [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0], [-5.0, -5.0]],
+        dtype=np.float64,
+    )
+    inner_same_winding = np.asarray(
+        [[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0], [-2.0, -2.0]],
+        dtype=np.float64,
+    )
+
+    evenodd = toolpath_module._scanline_x_intervals(
+        [outer, inner_same_winding],
+        0.0,
+        PathFillRule.EVENODD,
+    )
+    nonzero_solid = toolpath_module._scanline_x_intervals(
+        [outer, inner_same_winding],
+        0.0,
+        PathFillRule.NONZERO,
+    )
+    nonzero_hole = toolpath_module._scanline_x_intervals(
+        [outer, inner_same_winding[::-1].copy()],
+        0.0,
+        PathFillRule.NONZERO,
+    )
+
+    assert evenodd == pytest.approx([(-5.0, -2.0), (2.0, 5.0)])
+    assert nonzero_solid == pytest.approx([(-5.0, 5.0)])
+    assert nonzero_hole == pytest.approx(evenodd)
+
+
+def test_native_cubic_hole_remains_nested_after_planning_flattening() -> None:
+    document = ProjectDocument.new("Native donut", Bounds(0, 0, 100, 100))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        NativePathGeometry(
+            (
+                _closed_square_subpath(0.5),
+                _closed_cubic_circle_subpath(0.2),
+            ),
+            fill_rule=PathFillRule.EVENODD,
+        ),
+        transform=Transform(50.0, 50.0, 80.0, 80.0),
+    )
+
+    paths = toolpath_module.object_polylines(item)
+
+    assert len(paths) == 2
+    assert all(path.closed for path in paths)
+    assert toolpath_module._containment_depths(paths) == [0, 1]
+    ordered = toolpath_module._containment_aware_source_order(paths)
+    assert np.ptp(ordered[0].points[:, 0]) < np.ptp(ordered[1].points[:, 0])
 
 
 def test_raster_layer_scans_vector_silhouette_and_image_assets(tmp_path: Path):

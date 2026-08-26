@@ -180,17 +180,20 @@ Exactly one selected image also exposes **Trace image to vectors…** in the
 Objects panel. The window-modal review compares the bounded, SHA-verified source,
 foreground mask, and fitted-vector overlay. Magenta, cyan, yellow, white, and
 black presets plus 0–100% opacity are preview-only and do not rerun fitting or
-change output authority. The workflow creates one ordinary compound PATH while
-either replacing or retaining the image. Contours are fitted at 4× internal
-resolution with physical cleanup/smoothing/error controls, a canonical closed
-seam, persistent physical corner classification, and shared tangents only at
-non-corner joins; nested holes remain separate closed child polylines. The copied
-image transform preserves its full displayed frame, rotation, and mirrors. A
-retained image stays beneath the vector, and the new vector and its ordinary
-editable Line layer are selected. The entire layer/object/source choice is one
-undoable command, and any automatically created layer is visible Line mode at
-0% power with output disabled. This offline authoring action does not call
-camera, planning, G-code, controller, or hardware paths.
+change output authority. The workflow creates one ordinary compound native PATH
+while either replacing or retaining the image. Contours are fitted at 4×
+internal resolution with physical cleanup/smoothing/error controls, full-cycle
+seam canonicalization, persistent physical corner classification, generic
+straight-run anchors, and shared tangents only at non-corner joins. Straight
+spans persist as lines, curved spans persist as cubic Béziers, and nested holes
+remain separate closed child subpaths; preview/topology samples are not stored as
+a second geometry copy. The copied image transform preserves its full displayed
+frame, rotation, and mirrors. A retained image stays beneath the vector, and the
+new vector and its ordinary editable Line layer are selected. The entire
+layer/object/source choice is one undoable command, and any automatically created
+layer is visible Line mode at 0% power with output disabled. This offline
+authoring action does not call camera, planning, G-code, controller, or hardware
+paths.
 
 ### Feature-preservation map
 
@@ -348,9 +351,50 @@ Direct launch commands:
 - embedded original SVG text when available;
 - project metadata and timestamps.
 
-Legacy schema-1 files migrate explicitly as machine-coordinate projects and are
-never silently reinterpreted as honeycomb-local. The format deliberately does
-not depend on LightBurn project files.
+Schema 3 stores PATH and POLYGON geometry as one versioned native representation
+containing only line and cubic segments, one or more open or closed subpaths,
+and an explicit even-odd or nonzero fill rule. Legacy schema-1 and schema-2
+`geometry.polylines` migrate in memory to native line-only subpaths. Opening an
+old project does not rewrite it; a later explicit save writes canonical schema
+3 while preserving the existing atomic-save and backup behavior. Schema-1 files
+still migrate explicitly as machine-coordinate projects and are never silently
+reinterpreted as honeycomb-local. The format deliberately does not depend on
+LightBurn project files.
+
+Canonical schema-3 PATH/POLYGON `geometry` is:
+
+```json
+{
+  "path_version": 1,
+  "fill_rule": "evenodd",
+  "subpaths": [
+    {
+      "start": [-0.5, 0.0],
+      "closed": true,
+      "segments": [
+        {"type": "line", "to": [0.0, -0.5]},
+        {
+          "type": "cubic",
+          "control_1": [0.2, -0.5],
+          "control_2": [0.5, -0.2],
+          "to": [0.5, 0.0]
+        }
+      ]
+    }
+  ]
+}
+```
+
+Coordinates are finite JSON numbers in normalized object-local space. A
+current object never stores `polylines` beside this representation.
+
+The workspace builds `QPainterPath` line and cubic elements directly, so zooming
+does not reveal a stored point staircase. Whole-object move, resize, rotation,
+mirrors, duplicate, group/ungroup, save/reopen, recovery, undo, and redo retain
+the native controls. Node/handle editing is not part of this increment. Exact
+planning applies the complete object transform before deterministic adaptive
+flattening at 0.025 mm and then uses the existing guarded G0/G1 pipeline; it
+does not send controller spline or arc commands.
 
 ## Data locations
 

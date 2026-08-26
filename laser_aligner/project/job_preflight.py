@@ -800,8 +800,9 @@ def build_job_preflight_report(
             layer.mode in {LayerMode.FILL, LayerMode.RASTER}
             and item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}
         ):
-            polylines = item.geometry.get("polylines")
-            if not isinstance(polylines, list) or not polylines:
+            try:
+                geometry = item.path_geometry()
+            except (TypeError, ValueError):
                 add(
                     "object.geometry_invalid",
                     PreflightSeverity.BLOCKER,
@@ -809,17 +810,15 @@ def build_job_preflight_report(
                     f"Object {item.name!r} has no inspectable vector paths.",
                     finding_context={"object_id": item.id},
                 )
-            elif any(
-                not isinstance(line, Mapping) or line.get("closed") is not True
-                for line in polylines
-            ):
-                add(
-                    "object.closed_geometry_required",
-                    PreflightSeverity.BLOCKER,
-                    "Closed vector geometry required",
-                    f"{layer.mode.value.title()} output requires closed paths for {item.name!r}.",
-                    finding_context={"object_id": item.id, "layer_id": layer.id},
-                )
+            else:
+                if any(not subpath.closed for subpath in geometry.subpaths):
+                    add(
+                        "object.closed_geometry_required",
+                        PreflightSeverity.BLOCKER,
+                        "Closed vector geometry required",
+                        f"{layer.mode.value.title()} output requires closed paths for {item.name!r}.",
+                        finding_context={"object_id": item.id, "layer_id": layer.id},
+                    )
 
         if transform_valid and isinstance(item.kind, ObjectKind):
             bounds = _simple_object_bounds(item)

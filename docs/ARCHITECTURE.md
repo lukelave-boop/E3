@@ -69,7 +69,8 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
-| `project/raster_vectorize.py` | Qt-free exact-payload raster masking, bounded hierarchy-aware contour fitting, and adaptive E3 PATH flattening |
+| `project/path_geometry.py` | Qt-free canonical line/cubic path values, schema adapters, exact affine operations and bounds, deterministic flattening, and bounded complexity |
+| `project/raster_vectorize.py` | Qt-free exact-payload raster masking, bounded hierarchy-aware contour fitting, native line/cubic persistence, and preview/topology flattening |
 | `planning/` | Qt-free stage identities, coordinate-domain contracts, artifact provenance, and shared planner payload models |
 | `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, and rigid instantiation |
 | `materials/` | SQLite material-recipe library, scoped compatibility, and legacy database migration |
@@ -167,8 +168,8 @@ The desktop has three deliberately separate coordinate domains:
 - honeycomb-local design millimetres, with ruler zero at `(0, 0)` and an
   orthonormal rigid pose derived from the detected square.
 
-Schema-2 projects persist their coordinate-space kind. Legacy schema-1 files
-migrate as machine-coordinate projects. A honeycomb-local project stores only
+Schema-2 and schema-3 projects persist their coordinate-space kind. Legacy
+schema-1 files migrate as machine-coordinate projects. A honeycomb-local project stores only
 local geometry; the movable support pose remains calibration state. Camera
 rectification maps each local output pixel through the rigid support pose and
 the complete bed/lens mapping. Project generation performs the inverse boundary
@@ -309,7 +310,7 @@ generated files are written under the configured application data directory.
 ### Desktop pipeline
 
 ```text
-native shapes / imported SVG / traced outlines
+native shapes / imported SVG / traced outlines / native cubic paths
   -> SceneObject instances
   -> ProjectDocument operation layers
   -> undoable CommandStack changes
@@ -440,7 +441,13 @@ the count of non-LINE layers that still use the legacy internal path.
 point and orchestrator. `SceneRevision.source_digest` is a canonical SHA-256
 fingerprint of persisted planning source content; project ID, timestamps, and
 the monotonic revision counter remain separate identity and bookkeeping fields.
-LINE geometry artifacts now also carry a deterministic `dependency_digest`
+The normalized-geometry stage is version 2. Native path anchors and controls are
+first transformed into physical project millimetres and then flattened exactly
+once with the deterministic native-path algorithm at
+`NATIVE_PATH_FLATTEN_TOLERANCE_MM = 0.025`. The tolerance and algorithm version
+participate in the normalized dependency identity, while
+`polyline_sequence_digest()` remains at the downstream flattened boundary.
+LINE geometry artifacts also carry a deterministic `dependency_digest`
 separate from their run-oriented `artifact_id`. The normalized digest covers the
 ordered source geometry consumed by that layer, the operation digest adds layer
 settings, the placed digest covers effective geometry plus the exact coordinate
@@ -564,15 +571,17 @@ before fitting. Each closed contour is rotated to a coordinate-canonical start
 before anchor selection, so OpenCV's arbitrary cyclic start index cannot change
 the fit. Corner classification compares turns and straight-arm support across
 multiple physical arc-length scales; isolated raster steps are not hard anchors,
-while persistent stencil corners retain their exact original sample. Smooth
-anchors and recursive non-corner splits share fitted tangent directions across
-the join. Corner-bounded spans are reduced to straight segments where the error
-and tangent evidence permit and otherwise fitted with bounded cubic Béziers;
-only then are curves adaptively flattened using the user-visible millimetre
-tolerance. Straight runs therefore retain few points while tighter curves
-receive more. The result reports raw contour points, fitted segments, final E3
-points, and maximum estimated deviation. That deviation is relative to
-threshold-derived and optionally smoothed contours; it is not a
+while persistent stencil corners retain their exact samples. Generic long
+straight runs also supply seam-independent anchors. Smooth anchors and recursive
+non-corner splits share tangent directions across joins. Corner-bounded spans
+become straight segments where the error and tangent evidence permit and
+otherwise become bounded cubic Béziers. Those fitted segments are validated and
+stored as the authoritative native subpath. Separate adaptive flattening supplies
+only overlay, topology, diagnostics, and complexity estimates. Straight runs
+therefore remain native lines while curved regions remain cubic segments. The
+result reports raw contour points, fitted segments, preview-flattened points, and
+maximum estimated deviation. That deviation is relative to threshold-derived
+and optionally smoothed contours; it is not a
 physical-accuracy certification of the source image.
 
 Digital boundary transitions are counted at source resolution before the 4×
@@ -590,14 +599,16 @@ The option, contour, and result records are frozen validated values. Result
 validation checks immutable preview arrays, source identity, normalized contour
 coordinates, hierarchy/count consistency, and the reported maximum deviation.
 
-The created object is the established compound PATH representation:
-`{"polylines": [{"points": [...], "closed": true}, ...]}`. Each contour is
-normalized to the image-local frame and the source image `Transform` is copied,
-preserving displayed width/height, center, rotation, and horizontal/vertical
-mirrors. Parent/depth/hole provenance is retained in metadata. Outer contours
-and holes remain separate closed polylines in one PATH; downstream containment
-planning is winding-independent and schedules nested contours deepest-first.
-Projects persist the final E3 polylines rather than Bézier primitives.
+The created object is one schema-3 `NativePathGeometry` with `path_version: 1`,
+explicit `fill_rule: "evenodd"`, and one closed native subpath for each retained
+contour. Each subpath stores only line and cubic segments. It is normalized to
+the image-local frame and the source image `Transform` is copied, preserving
+displayed width/height, center, rotation, and horizontal/vertical mirrors.
+Parent/depth/hole provenance is retained in metadata. Outer contours and holes
+remain separate closed subpaths in one PATH; downstream containment planning is
+winding-independent and schedules nested contours deepest-first. Preview and
+topology polylines are ephemeral analysis data and are never persisted beside
+the native path.
 
 The portable vectorizer rejects work above these production limits and returns
 guidance to increase minimum feature size or simplification, adjust threshold,
@@ -608,7 +619,13 @@ or use cleaner artwork:
 - 8,192 extracted contours;
 - 1,000,000 total extracted raw contour points before simplification;
 - 100,000 fitted line/cubic segments; and
-- 250,000 final E3 points.
+- 250,000 preview/topology flattened points.
+
+The native path model independently caps one object at 8,192 subpaths and
+100,000 segments, a project at 250,000 native segments, one flattening result
+at 250,000 points, recursion at 18 subdivisions, JSON nesting at eight levels,
+and coordinate magnitude at 1,000,000. Limit failures reject deterministically
+and recommend simplifying the source artwork.
 
 Replace removes the IMAGE and adds the PATH in the same undo command. Keep adds
 the PATH after the IMAGE so it is visually above the unchanged source, and can
@@ -673,6 +690,15 @@ contours run deepest-first and complete all layer passes per contour before a
 parent begins; unrelated paths retain pass-major source/nearest scheduling.
 Text-to-path, selectable dither algorithms, and calibrated grayscale power
 curves remain unsupported and must never be silently dropped.
+
+Native cubic authorization is checked before output in every relevant
+coordinate domain. Rectangular authorities use exact cubic derivative extrema.
+The arbitrary guarded convex polygon uses recursive de Casteljau subdivision
+and the Bézier convex-hull property, with the flattening error envelope included
+in the proof. Local project geometry, honeycomb-placed beam geometry, and
+spot-corrected controller geometry are checked independently; the ordinary
+flattened-path, final G-code, and `MachineService` checks still run and cannot
+be bypassed by planning-cache reuse.
 
 For a selected rectangle, the Transform inspector edits width, height, and the
 absolute corner radius. `UpdateObjectShapeCommand` validates and applies the
