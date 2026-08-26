@@ -200,7 +200,17 @@ class RemoteCameraService(CameraService):
         raw = header.get("status")
         if not isinstance(raw, dict):
             raise CameraError("Remote camera returned invalid status data")
-        status = CameraStatus(**raw)
+        status_fields = dict(raw)
+        if "synthetic" in status_fields:
+            # Legacy physical Pi nodes reported this retired field as an exact
+            # false boolean. Accept only that historical wire shape; every
+            # other value remains invalid and cannot restore simulation.
+            if status_fields["synthetic"] is not False:
+                raise CameraError(
+                    "Remote camera returned invalid legacy synthetic status data"
+                )
+            status_fields.pop("synthetic")
+        status = CameraStatus(**status_fields)
         self._set_cached_status(status)
         return status
 

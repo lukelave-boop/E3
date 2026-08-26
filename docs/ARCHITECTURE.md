@@ -114,6 +114,13 @@ validation and any direct-MJPEG decode; `negotiated_fps` remains the separate
 backend-reported mode and is not proof of sustained delivery. Burst diagnostics
 include observed and negotiated FPS plus skipped sequence counts.
 
+`RemoteCameraService` adapts one retired status-wire field from legacy physical
+Pi nodes without changing the current model. It first copies the returned status
+mapping, removes `synthetic` only when its value is the exact boolean `False`,
+then constructs `CameraStatus` from every remaining field unchanged. Any other
+`synthetic` value is invalid. The adapter neither mutates the received mapping
+nor reintroduces a simulated camera path.
+
 On Linux V4L2 MJPG sources with persistent device paths, startup first attempts
 a small native V4L2 MMAP backend. It negotiates the configured profile and
 publishes each bounded SOI/EOI-framed source JPEG together with one decoded BGR
@@ -138,6 +145,16 @@ never choose a representative frame from an unscored burst.
 The desktop camera panel and workspace share one presentation constant for the
 initial corrected-overlay opacity. It is 70%, remains operator-adjustable from
 0–100%, and does not alter captured pixels or any vision analysis input.
+
+The corrected workspace overlay offers nominal 0.5, 1, 2, 4, 5, 10, and 15 fps
+cadences and defaults to 2 fps. The nearest integer timer period for 15 fps is
+67 ms. `DesktopController` permits that interval but retains one corrected-frame
+worker at a time: periodic ticks that arrive during an in-flight correction are
+dropped, while any number of explicit refresh requests coalesce into one
+boolean pending replacement. Correction or network throughput therefore limits
+the displayed rate without creating an accumulating work queue. This path is
+separate from both raw Live Monitor rate selection and configured camera capture
+FPS.
 
 ## Coordinate domains
 
@@ -305,6 +322,46 @@ native shapes / imported SVG / traced outlines
   -> unchanged guarded main-window run path
   -> the same finalized G-code text is submitted to MachineService
 ```
+
+#### Desktop presentation topology (`v7`)
+
+`E3MainWindow` keeps `WorkspaceFrame` as the central widget and uses one
+full-height right `InspectorTabs` dock for Cuts/Layers, Camera, Objects, Shape,
+Templates, Trace, Machine, and Material Recipes. Machine and material pages
+reuse their existing panels; moving them does not move state or authority out
+of `AppContext`, `DesktopController`, or `MachineService`. The former lower
+raw-G-code and Laser/job docks do not exist. The optional Console remains a
+separate bottom dock that is hidden by default, so it reserves no normal
+workspace height.
+
+`JobProgressWidget` projects the existing preparation and controller-job status
+into the main status bar. It keeps prepared maximum power distinct from live
+execution percentage and finishing phases. Templates and Trace each emit into
+the same main-window Generate `QAction` used by the Job toolbar; they do not own
+another planning path. Finalized G-code remains in the prepared job for exact
+Preview, explicit export, and guarded submission, but it is not mirrored into a
+persistent main-window text pane.
+
+The status bar measures its live text at layout time. It always reserves room
+for a compact preparation/execution label, then admits runtime, zoom, and
+editing/cursor/selection readouts only when they fit. Hidden runtime detail is
+retained on the status-bar tooltip; complete preparation, prepared-power, and
+controller summaries remain on the progress tooltip.
+
+`RuntimeSafetyStrip` owns only the primary presentation and request signals for
+Connect/Reconnect, Disconnect, the deliberately disabled Pause, and software
+STOP. `DesktopController` receives those requests and retains the existing
+`MachineService` boundary. STOP stays enabled during ordinary background work.
+On compact windows the non-hideable strip moves to its own toolbar row, and when
+its allocated width falls below 1100 logical pixels it reflows into a status row
+above a control row. This reflow changes no connection, motion, arming,
+authorization, STOP/`M5`, or execution rule.
+
+The dedicated window-modal exact Preview remains the only visible **START JOB**
+gate. Its signal dismisses Preview and enters the same guarded main-window run
+path described below. Layout `v7` may reuse compatible older geometry and tab
+choices, but it does not restore opaque `v6` dock state that describes the
+removed bottom row.
 
 The structured job-preflight boundary is Qt-neutral and advisory.
 `PreflightSeverity` classifies findings as info, warning, or blocker;
@@ -792,7 +849,7 @@ This is an accidental-command boundary, not functional safety.
 | Autosaves | OS-native per-user data root under `backups/` by default |
 | Material recipes | OS-native per-user data root as `materials.sqlite` by default |
 | Cutting templates | configured application data directory under `templates/` |
-| Window geometry, dock topology, and active desktop tabs | Qt `QSettings`; dock topology is versioned independently from compatible geometry/tab fallbacks |
+| Window geometry, dock topology, and active desktop tab | Qt `QSettings`; current topology is `v7`, opaque `v6` dock state is ignored, and compatible geometry/tab fallbacks migrate independently |
 
 Autosaves, packaged-config fallback data, and material recipes share the
 `storage.default_user_data_dir()` platform abstraction. When the native root

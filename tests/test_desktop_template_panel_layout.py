@@ -75,14 +75,23 @@ def test_template_panel_actions_fit_360px_with_large_windows_text(
         panel.auto_button.text(),
         panel.match_selected_button.text(),
         panel.apply_button.text(),
+        panel.generate_button.text(),
         panel.clear_button.text(),
     ] == [
         "Save project",
         "Auto align",
         "Align selected",
         "Create cuts",
+        "Generate",
         "Clear preview",
     ]
+    panel_layout = panel.layout()
+    assert panel_layout is not None
+    assert (
+        panel_layout.indexOf(panel.apply_button)
+        < panel_layout.indexOf(panel.generate_button)
+        < panel_layout.indexOf(panel.clear_button)
+    )
 
     for button in panel.findChildren(QtWidgets.QPushButton):
         top_left = button.mapTo(scroll.viewport(), button.rect().topLeft())
@@ -113,10 +122,48 @@ def test_template_panel_restores_full_actions_when_space_is_available(
     assert panel.auto_button.text() == "Auto identify and align"
     assert panel.match_selected_button.text() == "Align selected template"
     assert panel.apply_button.text() == "Create aligned cut objects"
+    assert panel.generate_button.text() == "Generate"
     assert panel.clear_button.text() == "Clear template preview"
+    panel_layout = panel.layout()
+    assert panel_layout is not None
+    assert (
+        panel_layout.indexOf(panel.apply_button)
+        < panel_layout.indexOf(panel.generate_button)
+        < panel_layout.indexOf(panel.clear_button)
+    )
 
     host.close()
     host.deleteLater()
+
+
+def test_template_generate_button_emits_and_preserves_explicit_action_gate(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TemplatePanel()
+    generated: list[bool] = []
+    panel.generateRequested.connect(lambda: generated.append(True))
+
+    assert panel.generate_button.objectName() == "templateGenerateButton"
+    assert panel.generate_button.isEnabled()
+    panel.generate_button.click()
+    assert generated == [True]
+
+    panel.set_generate_enabled(False)
+    assert not panel.generate_button.isEnabled()
+    panel.set_busy(True)
+    panel.set_busy(False)
+    assert not panel.generate_button.isEnabled()
+    panel.generate_button.click()
+    assert generated == [True]
+
+    panel.set_generate_enabled(True)
+    assert panel.generate_button.isEnabled()
+    panel.generate_button.click()
+    assert generated == [True, True]
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
 
 
 def test_template_combo_tooltips_expose_full_names_when_display_is_truncated(

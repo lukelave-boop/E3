@@ -372,6 +372,31 @@ def test_trace_create_payload_can_keep_earlier_trace_batches(
     panel.deleteLater()
 
 
+def test_trace_generate_follows_create_and_emits_once(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    result_layout = panel.create_button.parentWidget().layout()
+    requests: list[bool] = []
+    panel.generateRequested.connect(lambda: requests.append(True))
+
+    assert result_layout is not None
+    assert result_layout.indexOf(panel.generate_button) == (
+        result_layout.indexOf(panel.create_button) + 1
+    )
+    panel.generate_button.click()
+    qt_application.processEvents()
+    assert requests == [True]
+
+    panel.set_generate_enabled(False)
+    assert not panel.generate_button.isEnabled()
+    panel.set_generate_enabled(True)
+    assert panel.generate_button.isEnabled()
+
+    panel.close()
+    panel.deleteLater()
+
+
 def test_trace_result_can_select_complete_normalized_grid(
     qt_application: QtWidgets.QApplication,
 ) -> None:

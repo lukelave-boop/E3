@@ -14,7 +14,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget te
 
 from PySide6 import QtWidgets
 
-from laser_aligner.desktop.panels import JobPanel, LayerPanel, MachinePanel
+from laser_aligner.desktop.panels import JobProgressWidget, LayerPanel, MachinePanel
 from laser_aligner.desktop.theme import DARK_STYLESHEET
 from laser_aligner.project import ProjectDocument
 
@@ -80,115 +80,45 @@ def test_layer_panel_keeps_table_and_quick_settings_visible_at_dock_width(
     panel.deleteLater()
 
 
-def test_job_panel_uses_compact_rows_and_preserves_action_states(
+def test_job_progress_widget_is_compact_and_switches_preparation_state(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    panel = JobPanel()
-    _show_compact(panel, qt_application, 220)
-    generated: list[bool] = []
-    previewed: list[bool] = []
-    stopped: list[bool] = []
-    panel.generateRequested.connect(lambda: generated.append(True))
-    panel.previewRequested.connect(lambda: previewed.append(True))
-    panel.stopRequested.connect(lambda: stopped.append(True))
+    widget = JobProgressWidget()
+    _show_compact(widget, qt_application, 18)
 
-    assert not hasattr(panel, "frame_button")
-    assert panel.preview_button.geometry().top() == panel.stop_button.geometry().top()
-    assert not panel.pause_button.isEnabled()
-    for button in (
-        panel.generate_button,
-        panel.preview_button,
-        panel.pause_button,
-        panel.stop_button,
+    assert widget.height() == 18
+    assert widget.currentWidget() is widget.progress
+    assert widget.findChildren(QtWidgets.QPushButton) == []
+    for removed_control in (
+        "generate_button",
+        "preview_button",
+        "pause_button",
+        "stop_button",
     ):
-        _assert_inside_panel(button, panel)
+        assert not hasattr(widget, removed_control)
 
-    panel.generate_button.click()
-    assert not panel.preview_button.isEnabled()
-    panel.set_machine_status(
-        {
-            "connected": True,
-            "allow_motion": True,
-            "coordinate_reference_ready": True,
-        }
+    widget.set_preparing(
+        True,
+        "Building exact previews · 40%",
+        completed=400,
+        total=1000,
     )
-    assert not panel.preview_button.isEnabled()
-    panel.set_prepared_job(
-        "1 path · estimated 1 s",
-        power_percent=0.0,
-        controller_power=0.0,
-    )
-    assert panel.preview_button.isEnabled()
-    assert panel.preview_button.text() == "Preview Job…"
-    panel.preview_button.click()
-    panel.stop_button.click()
-    assert generated == [True]
-    assert previewed == [True]
-    assert stopped == [True]
+    assert widget.currentWidget() is widget.preparation_progress
+    assert widget.preparation_progress.minimum() == 0
+    assert widget.preparation_progress.maximum() == 1000
+    assert widget.preparation_progress.value() == 400
+    assert widget.preparation_progress.format() == "Preparing 40%"
+    assert "Building exact previews · 40%" in widget.toolTip()
 
-    panel.close()
-    panel.deleteLater()
+    widget.set_preparing(False)
+    assert widget.currentWidget() is widget.progress
+    assert widget.preparation_progress.value() == 0
+
+    widget.close()
+    widget.deleteLater()
 
 
-def test_job_panel_keeps_preview_available_during_reconnect_requirement(
-    qt_application: QtWidgets.QApplication,
-) -> None:
-    panel = JobPanel()
-    _show_compact(panel, qt_application, 220)
-    panel.set_prepared_job(
-        "1 path · estimated 1 s",
-        power_percent=0.0,
-        controller_power=0.0,
-    )
-
-    panel.set_machine_status(
-        {
-            "connected": True,
-            "allow_motion": True,
-            "coordinate_reference_ready": False,
-            "controller_reconnect_required": True,
-        }
-    )
-
-    assert panel.preview_button.isEnabled()
-    assert "start job" in panel.preview_button.toolTip().lower()
-    assert panel.stop_button.isEnabled()
-
-    panel.set_machine_status(
-        {
-            "connected": True,
-            "allow_motion": True,
-            "coordinate_reference_ready": True,
-            "controller_reconnect_required": False,
-        }
-    )
-    assert panel.preview_button.isEnabled()
-    panel.clear_prepared_job()
-    assert not panel.preview_button.isEnabled()
-    panel.close()
-    panel.deleteLater()
-
-
-def test_prepared_job_can_be_previewed_while_controller_is_offline(
-    qt_application: QtWidgets.QApplication,
-) -> None:
-    panel = JobPanel()
-    _show_compact(panel, qt_application, 220)
-    panel.set_prepared_job(
-        "calibration marks",
-        power_percent=0.0,
-        controller_power=0.0,
-    )
-
-    panel.set_machine_status({"connected": False, "allow_motion": True})
-
-    assert panel.preview_button.isEnabled()
-    assert "start job" in panel.preview_button.toolTip().lower()
-    panel.close()
-    panel.deleteLater()
-
-
-def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
+def test_machine_panel_is_dense_without_duplicate_primary_controls(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     panel = MachinePanel()
@@ -197,15 +127,10 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
     jog_group = panel.jog_group
     assert not jog_group.isEnabled()
     assert "physical emergency stop" in panel.safety_note.text()
-    assert panel.stop_button.isEnabled()
-    assert panel.connect_button.geometry().top() == panel.park_button.geometry().top()
-    for button in (
-        panel.connect_button,
-        panel.disconnect_button,
-        panel.park_button,
-        panel.stop_button,
-    ):
-        _assert_inside_panel(button, panel)
+    assert not hasattr(panel, "connect_button")
+    assert not hasattr(panel, "disconnect_button")
+    assert not hasattr(panel, "stop_button")
+    _assert_inside_panel(panel.park_button, panel)
 
     panel.set_status(
         {
@@ -228,8 +153,6 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
             "job": {},
         }
     )
-    assert not panel.connect_button.isEnabled()
-    assert panel.disconnect_button.isEnabled()
     assert not panel.park_button.isEnabled()
     assert "Motion blocked" in panel.state_label.text()
 
@@ -293,17 +216,9 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
         }
     )
     assert "RECONNECT REQUIRED" in panel.state_label.text()
-    assert panel.connect_button.text() == "Reconnect"
-    assert panel.connect_button.isEnabled()
-    assert panel.disconnect_button.isEnabled()
     assert not panel.park_button.isEnabled()
     assert not jog_group.isEnabled()
     assert "disconnect and reconnect" in panel.park_button.toolTip().lower()
-
-    reconnect_requests: list[bool] = []
-    panel.reconnectRequested.connect(lambda: reconnect_requests.append(True))
-    panel.connect_button.click()
-    assert reconnect_requests == [True]
 
     panel.set_status(
         {
@@ -314,15 +229,11 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
             "job": {},
         }
     )
-    assert panel.connect_button.text() == "Connect"
-    assert not panel.connect_button.isEnabled()
+    assert panel.park_button.isEnabled()
 
     panel.set_busy(True)
-    assert not panel.connect_button.isEnabled()
-    assert not panel.disconnect_button.isEnabled()
     assert not panel.park_button.isEnabled()
     assert not jog_group.isEnabled()
-    assert panel.stop_button.isEnabled()
     panel.set_status(
         {
             "connected": True,
@@ -334,13 +245,12 @@ def test_machine_panel_is_dense_without_relaxing_motion_or_stop_semantics(
     )
     assert not panel.park_button.isEnabled()
     panel.set_busy(False)
-    assert panel.disconnect_button.isEnabled()
     assert panel.park_button.isEnabled()
 
-    stop_requests: list[bool] = []
-    panel.stopRequested.connect(lambda: stop_requests.append(True))
-    panel.stop_button.click()
-    assert stop_requests == [True]
+    park_requests: list[bool] = []
+    panel.parkRequested.connect(lambda: park_requests.append(True))
+    panel.park_button.click()
+    assert park_requests == [True]
 
     panel.close()
     panel.deleteLater()

@@ -17,13 +17,17 @@ geometry, G-code, safety and controller services.
 - Native `QMainWindow` application shell with persistent dock and window layout
 - Build-first native window title showing the application name, release version,
   short source revision, current project, and unsaved-change marker
-- A full-height right-side inspector for Cuts/Layers, Cameras, Objects, Shape
-  Properties, Templates, and Trace, plus a compact bottom row with G-code on
-  the left and Laser, Machine, and Material Recipes tabs beside it
+- A full-height right-side inspector for Cuts/Layers, Camera, Objects, Shape
+  Properties, Templates, Trace, Machine, and Material Recipes. The obsolete
+  lower raw-G-code and Laser/job docks are removed so the workspace uses the
+  freed height; preparation and execution progress remain globally visible at
+  the bottom
 - Physical coordinate-aware workspace with adaptive grid, rulers, origin, pan,
   zoom and selectable snap spacing. Machine projects use machine coordinates;
   current honeycomb-local projects use the detected support's rigid X0/Y0 frame.
-- Corrected camera image behind the workspace with adjustable opacity
+- Corrected camera image behind the workspace with adjustable opacity and
+  nominal 0.5, 1, 2, 4, 5, 10, and 15 fps refresh choices; 2 fps is the
+  current default
 - Selection, drag movement, direct corner resize and rotation handles, numeric
   size/position/rotation, mirror, duplicate, delete, group/ungroup, alignment,
   distribution and z-order controls
@@ -69,10 +73,12 @@ without copying LightBurn branding or changing the E3 machine-control model:
 2. Original icon-only File/Edit/Arrange/Job controls share one compact command
    row above the workspace.
 3. A non-hideable runtime strip always reports hardware authority, controller
-   connection, and motion permission. Its software-stop
-   action remains enabled during ordinary background work. It stays inline on
-   wide windows and moves to its own row below 1100 logical pixels so STOP can
-   never disappear into toolbar overflow.
+   connection, and motion permission. Connect/Reconnect, Disconnect, the
+   intentionally disabled Pause, and software STOP share its primary-control
+   region. STOP remains enabled during ordinary background work. The strip
+   stays inline when space permits, moves to its own toolbar row on narrower
+   windows, and wraps status above controls when allocated less than 1100
+   logical pixels so STOP cannot disappear into toolbar overflow.
 4. An always-present two-row property bar exposes X, Y, width, height,
    percentage scaling, aspect lock, rotation, millimetre/inch display, and
    explicit `mm` or `in` entry in dimensional fields,
@@ -92,30 +98,35 @@ without copying LightBurn branding or changing the E3 machine-control model:
    key identifies transient Trace, camera-detection, template-cut, and toolpath
    lines by both role and line style. The key stays in the upper-left viewport
    corner during canvas interaction unless the operator drags the key itself.
-8. Cuts/Layers, Cameras, Objects, Shape Properties, Templates, and Trace share
-   one full-height tabbed inspector on the right.
-9. A short dock row beneath the canvas keeps raw G-code in a narrow left panel
-   and Laser, Machine, and Material Recipes in a wider tabbed panel beside it.
+8. Cuts/Layers, Camera, Objects, Shape Properties, Templates, Trace, Machine,
+   and Material Recipes share one full-height tabbed inspector on the right.
+9. Templates places Generate immediately below Create cuts; Trace places the
+   same shared action immediately below its dynamic Create objects control.
+   The Job toolbar retains its Generate and Preview actions and shortcuts.
 10. A fixed 30-color bottom palette assigns selected objects to existing
-   operations; clicking an unused color creates a matching operation. The
-   status bar reports direct-edit affordances and live workspace feedback.
+    operations; clicking an unused color creates a matching operation. The
+    status bar keeps preparation/execution progress globally visible alongside
+    direct-edit and live workspace feedback. At compact widths it reserves a
+    readable progress label first, then shows runtime, zoom, and editing details
+    only while each lower-priority readout fits without compression.
 
-Raw G-code starts visible in its compact panel. Console remains available from
-the Window menu and shares that slot when opened. Generating or framing a job
-still opens the dedicated graphical Preview. **Window > Reset workspace
-layout** restores this maintained arrangement. Window geometry, dock state,
-and active inspector tabs use versioned Qt settings keys for layout `v6`.
-Compatible older geometry and tab choices migrate, while obsolete `v5` dock
-topology is deliberately ignored so it cannot restore the previous cramped
-right-side stack.
+There is no persistent main-window raw-G-code pane or lower Laser/job panel.
+The optional Console remains available from the Window menu and hidden by
+default. Generating or framing a job still opens the dedicated graphical
+Preview. **Window > Reset workspace layout** restores this maintained
+arrangement. Window geometry, dock state, and the active inspector tab use
+versioned Qt settings keys for layout `v7`. Compatible older geometry and tab
+choices migrate, while opaque `v6` dock topology is deliberately ignored so it
+cannot restore the removed bottom row.
 
-The default three-region dock layout is offscreen-tested at `1080x780` and
+The default unified-sidebar layout is offscreen-tested at `1080x780` and
 `900x680` logical pixels with 13 pt application text. The requested window size
-is retained, the canvas and all visible dock rectangles remain disjoint, and
-every design/runtime inspector fits its horizontal viewport; compact panels
-use vertical scrolling where needed. Operation speed, power, pass, interval,
-angle, and overscan editors now update the project on edit completion rather
-than creating an undo entry and rebuilding the inspector for every typed digit.
+is retained, the full-height canvas and visible right sidebar remain disjoint,
+global progress stays inside the bottom status bar, and every inspector fits
+its horizontal viewport; compact panels use vertical scrolling where needed.
+Operation speed, power, pass, interval, angle, and overscan editors update the
+project on edit completion rather than creating an undo entry and rebuilding
+the inspector for every typed digit.
 
 Trace can now create a locked, teal dashed **Stock boundary (layout only)**
 instead of cut geometry. The construction outline survives project save/load
@@ -170,12 +181,12 @@ rejected consistently because its Qt decode plugin is not portable.
 | Existing capability | Current surface | Preservation boundary |
 |---|---|---|
 | Project file, import, undo/redo, and object commands | Menus, global toolbars, left rail, and context bar | Existing `ProjectDocument` commands and history stack remain authoritative |
-| Machine authority, arming, execution, and stop | Persistent runtime strip plus Machine and Job inspectors | `DesktopController` and `MachineService` gates are unchanged; the strip is status/presentation only |
+| Machine authority, arming, execution, and stop | Persistent primary runtime strip, Machine inspector, and global bottom progress | `DesktopController` and `MachineService` gates are unchanged; the strip and progress widget are presentation only |
 | Camera overlay, focus, and corrected test sources | Camera inspector and workspace | Existing camera/controller lifecycle is unchanged |
 | Object tracing and stock layout | Trace tool, inspector, contextual Stock layout toolbar, and workspace | Existing frozen-frame review remains authoritative; Stock boundaries are role-tagged construction objects that persist but are filtered from every output path |
 | Cutting templates and alignment | Templates tool, inspector, and grid designer | Existing rigid placement, review, and one-command apply path is unchanged |
 | Operation layers and materials | Operations/Layers table, bottom palette, and Material Recipes inspector | Existing layer schema, ordering, machine-aware recipes, and explicit unsupported-mode checks are retained; recipes add no execution authority |
-| Toolpath generation, framing, preview, and run | Job toolbar, Job inspector, dedicated graphical Preview, and on-demand raw G-code | Preview parses the exact finalized stream; existing revision invalidation, validation, arming, and execution gates are unchanged |
+| Toolpath generation, framing, preview, and run | Job toolbar, shared Generate controls in Templates/Trace, global bottom progress, dedicated graphical Preview, and explicit G-code export | Preview parses the exact finalized stream; existing revision invalidation, validation, arming, and execution gates are unchanged |
 | Browser calibration and placement application | Native Machine Setup plus richer desktop project workflow | Browser remains an optional legacy single-SVG surface; no operator capability requires it |
 
 ### Project and operations model
@@ -235,12 +246,12 @@ rejected consistently because its Qt decode plugin is not portable.
   desktop does not show a confirmation or typed-phrase dialog
 
 After software STOP or another uncertain established-session failure, the
-Machine panel changes its normal Connect control to an explicit **Reconnect**
-action. It performs one operator-requested disconnect/connect sequence and then
-leaves the machine HOME REQUIRED. It does not automatically reconnect, Home,
-move, resume, or arm. Desktop modal message boxes use a shared queued first-show
-polish and repaint so Linux compositors receive complete dark-theme contents on
-the initial exposure without blocking the GUI event loop.
+primary runtime strip changes its normal Connect control to an explicit
+**Reconnect** action. It performs one operator-requested disconnect/connect
+sequence and then leaves the machine HOME REQUIRED. It does not automatically
+reconnect, Home, move, resume, or arm. Desktop modal message boxes use a shared
+queued first-show polish and repaint so Linux compositors receive complete
+dark-theme contents on the initial exposure without blocking the GUI event loop.
 
 Native Machine Setup exposes raw camera preview and controls,
 checkerboard capture/solve, a no-prior-map keyed 5×5 base job with automatic
@@ -266,17 +277,17 @@ pool clones the project while authoring is temporarily held, then performs
 toolpath, zero-power framing, or Start Here planning against the clone or
 immutable plan.
 Distinct worker/render owners plus source-document and revision checks reject
-late success and failure results without mutating newer preparation. Large raw
-G-code documents, workspace paths, dedicated Preview paths, and backward
-timeline rebuilds are constructed in short GUI-thread slices with visible
-progress; Qt objects never cross into workers. Conflicting job actions remain
-unavailable until every required exact view finishes, while software STOP stays
-live. Preview is window-modal, and the main Job controls can only open it rather
-than execute directly. **START JOB** dismisses Preview before synchronously
-entering the existing guarded run path. Closing an unfinished Preview fails
-closed, and application close retains workers through completion before runtime
-teardown. Generated programs remain in memory until the explicit export action
-writes one.
+late success and failure results without mutating newer preparation. Workspace
+paths, dedicated Preview paths, and backward timeline rebuilds are constructed
+in short GUI-thread slices with visible global progress; Qt objects never cross
+into workers. Conflicting job actions remain unavailable until every required
+exact view finishes, while software STOP stays live. Preview is window-modal,
+and the main-window Preview action can only reopen it rather than execute
+directly. **START JOB** dismisses Preview before synchronously entering the
+existing guarded run path. Closing an unfinished Preview fails closed, and
+application close retains workers through completion before runtime teardown.
+Generated programs remain in memory until the explicit export action writes
+one; there is no persistent raw-G-code pane.
 
 Start Here planning snapshots the configured controller photography pose and
 records it in the replacement program. Its exact Preview includes the
@@ -368,14 +379,15 @@ The desktop shell does not relax the existing machine controls:
 - rapid travel occurs only while the laser is off;
 - the software stop is not a replacement for a physical emergency stop.
 
-The Machine panel provides separately tested laser-off incremental jogging.
-Home / park must first establish the current XY position; every button press is
-converted to an absolute move, begins with `M5`, uses an explicit bounded travel
-feed on `G1` motion, and intentionally does not apply the configured work-area
-rectangle so the operator can measure the actual travel limits. STOP,
-disconnect, jobs, and motor release invalidate the jog position. Pause/resume
-remains disabled until the Falcon controller's realtime behavior has been
-physically verified.
+The Machine panel provides Home / park and separately tested laser-off
+incremental jogging; connection controls and software STOP remain in the
+primary runtime strip. Home / park must first establish the current XY position;
+every jog press is converted to an absolute move, begins with `M5`, uses an
+explicit bounded travel feed on `G1` motion, and intentionally does not apply
+the configured work-area rectangle so the operator can measure the actual
+travel limits. STOP, disconnect, jobs, and motor release invalidate the jog
+position. Pause remains visibly adjacent to STOP but disabled until the Falcon
+controller's realtime hold/resume behavior has been physically verified.
 
 ## Validation performed for this milestone
 

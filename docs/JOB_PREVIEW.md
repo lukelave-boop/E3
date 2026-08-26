@@ -8,9 +8,11 @@ only report continues to the authoritative planner and is shown inside the
 resulting Preview. Warnings are visible but do not replace or block exact
 planning.
 
-The native desktop opens the dedicated graphical Preview after successful
-**Generate** and after calibration-job preparation. This window-modal review is
-the mandatory final gate before execution and answers two separate questions:
+The native desktop opens the dedicated graphical Preview after successful use
+of any main-window **Generate** control and after calibration-job preparation.
+The Job toolbar, Templates, and Trace controls all trigger the same Generate
+action. This window-modal review is the mandatory final gate before execution
+and answers two separate questions:
 
 1. What exact motion and controller power did generation produce?
 2. In what order and at approximately what time will each move occur?
@@ -29,8 +31,8 @@ The cyan head marker at the end of the timeline is the final point in that
 generated stream. Automatic hardware preflight and successful-powered-job
 Home/park/motor-release actions belong to `MachineService`, occur outside the
 stream, and are not drawn. The machine job remains running until configured
-completion actions finish; the Laser panel reports the drain, home, park, and
-motor-release phases after the previewed stream reaches 100%.
+completion actions finish; the global bottom progress bar reports the drain,
+home, park, and motor-release phases after the previewed stream reaches 100%.
 
 ## Structured preflight report
 
@@ -83,10 +85,11 @@ arm the laser, submit G-code, or grant execution authority.
   time and maximum planned power. With nearest-path planning they also report
   rapid-travel distance saved relative to source order.
 
-The Job inspector deliberately keeps prepared and executing state separate.
-After generation it reports the maximum power present in the prepared job, for
-example `20.0% / S200`. Controller polling reports execution progress on its own
-line and cannot replace that prepared-job value.
+The global bottom progress widget deliberately keeps prepared and executing
+state separate. Its compact visible label reports execution percentage or the
+current finishing phase. The widget tooltip retains the complete prepared-job
+summary—including maximum power such as `20.0% / S200`—and the controller
+summary, so controller polling cannot replace prepared-job power information.
 
 Generation and exact-preview preparation do not monopolize the Qt event loop.
 An owned worker clones the framework-independent project model, builds the
@@ -97,19 +100,20 @@ indexes the immutable `JobPlan`. Preflight and planning share the request's
 cancellation token and authority snapshot. Separate worker and renderer request
 owners accept a result only while its token, source document, revision,
 coordinate/support/calibration binding, feed ceilings, and runtime identity
-remain current. Raw G-code, the workspace overlay, and the dedicated Preview
-painter paths are populated in bounded GUI-thread slices; no Qt object is
-created or mutated by a worker.
+remain current. The workspace overlay and dedicated Preview painter paths are
+populated in bounded GUI-thread slices; no Qt object is created or mutated by a
+worker. Finalized G-code remains in the prepared job and explicit export path,
+but the main window no longer mirrors it into a persistent text pane.
 
-The Laser inspector shows preparation progress and blocks overlapping Generate,
-Frame, Preview, Start, and export commands until all exact views are complete.
-Closing an unfinished Preview, software STOP, project replacement, or a project
-revision invalidates the whole unfinished result. Application close requests
-cancellation and keeps task ownership until every worker has returned before
-stopping the runtime. Late success and failure callbacks cannot clear a newer
-job's busy state or install their result. Generation remains in memory and does
-not create a G-code artifact automatically; only the explicit **Export G-code**
-command writes a file.
+The global bottom widget shows preparation progress, while the shared action
+state blocks overlapping Generate, Frame, Preview, Start, and export commands
+until all exact views are complete. Closing an unfinished Preview, software
+STOP, project replacement, or a project revision invalidates the whole
+unfinished result. Application close requests cancellation and keeps task
+ownership until every worker has returned before stopping the runtime. Late
+success and failure callbacks cannot clear a newer job's busy state or install
+their result. Generation remains in memory and does not create a G-code artifact
+automatically; only the explicit **Export G-code** command writes a file.
 
 ## Exactness and invalidation
 
@@ -130,9 +134,9 @@ The existing guarded `run_current_job()` path remains authoritative. Preview's
 that path; Preview itself cannot connect, home, enable motion, arm the laser, or
 submit commands. The handoff does not relax revision and bound-source checks,
 bounds checking, the conservative command allowlist, rapid-with-laser rejection,
-or stop/disarm behavior. The main Job panel and menu action only reopen Preview,
-so they cannot bypass review. Preview is not a safety-rated beam-location
-guarantee; zero-power frame every real job and keep the operator present.
+or stop/disarm behavior. The main-window Preview action only reopens Preview, so
+it cannot bypass review. Preview is not a safety-rated beam-location guarantee;
+zero-power frame every real job and keep the operator present.
 
 **Prepare Start Here…** never runs hardware. It asks for confirmation owned by
 the modal Preview, replaces the prepared program, and requires the replacement

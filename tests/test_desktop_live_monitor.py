@@ -98,6 +98,40 @@ def test_camera_panel_exposes_raw_monitor_independent_of_camera_status(
         panel.close()
 
 
+def test_camera_panel_exposes_corrected_overlay_rates_with_two_fps_default(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = CameraPanel()
+    emitted: list[int] = []
+    panel.refreshIntervalChanged.connect(emitted.append)
+    expected = [
+        ("0.5 fps", 2000),
+        ("1 fps", 1000),
+        ("2 fps", 500),
+        ("4 fps", 250),
+        ("5 fps", 200),
+        ("10 fps", 100),
+        ("15 fps", 67),
+    ]
+    try:
+        assert [
+            (panel.live_rate.itemText(index), panel.live_rate.itemData(index))
+            for index in range(panel.live_rate.count())
+        ] == expected
+        assert panel.live_rate.currentText() == "2 fps"
+        assert panel.live_rate.currentData() == 500
+        assert panel.refresh_interval_ms() == 500
+
+        panel.live_rate.setCurrentIndex(panel.live_rate.findData(67))
+        qt_application.processEvents()
+
+        assert panel.refresh_interval_ms() == 67
+        assert emitted == [67]
+    finally:
+        panel.close()
+        panel.deleteLater()
+
+
 def test_live_monitor_defaults_starts_stops_and_has_no_machine_dependency(
     qt_application: QtWidgets.QApplication,
 ) -> None:

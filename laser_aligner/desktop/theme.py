@@ -480,7 +480,7 @@ QStatusBar {
     color: #E1E1E1;
     background: #181818;
     border-top: 1px solid #444444;
-    min-height: 18px;
+    min-height: 24px;
 }
 QStatusBar::item {
     border: none;
