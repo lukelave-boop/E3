@@ -43,6 +43,8 @@ The following foundations are implemented and automated-test covered:
 - immutable running-versus-next-launch machine identity;
 - machine/tool-aware new-project defaults, including a visible 0%-power,
   output-disabled fallback for unmatched physical profiles;
+- shared operation-color editing from Cuts/Layers and clickable Objects-row
+  swatches through one undoable layer command;
 - guarded exact Preview and the existing `MachineService` execution boundary;
 - Windows frozen packaging and automatic-update source boundaries, including
   the hardened external Inno process handoff.

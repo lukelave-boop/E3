@@ -7,6 +7,36 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-26**
 
+## Active Objects layer-color swatch recovery
+
+The Objects table again presents each assigned operation layer as a visible
+24 px color button beside the layer name. The exact earlier implementation was
+recovered from local branch/worktree commit `ebfac234`; the native Bézier branch
+had been independently rebased onto merged raster-fit work and never included
+that sibling UI commit, leaving the common ancestor's static 12 px icons in
+place. Only the layer-color portion was restored; the recovered commit's
+unrelated File-menu grouping was not copied.
+
+The button sends its row's assigned layer ID to the existing `LayerPanel` color
+chooser. Cancel emits no edit. A valid choice continues through the queued
+`layerEdited` signal, `E3MainWindow._layer_edited()`, and `UpdateLayerCommand`,
+so one undoable shared-layer change refreshes every Objects swatch, the
+Cuts/Layers table and selected color control, the bottom palette, and workspace
+vectors. Object selection and layer assignment remain independent, and speed,
+power, passes, output state, visibility, scan settings, and power-correction
+settings are preserved. Raster IMAGE and native cubic PATH rows use the same
+assigned-layer control; raster-vectorization preview-overlay colors remain
+separate and unchanged.
+
+Focused Windows/offscreen coverage passed **64 tests** across Objects/Cuts,
+layer-edit routing and history, native/raster workspace rendering, and raster-
+vectorization UI. The complete Windows Python 3.14 suite passed **2,591 tests**
+with **14 expected platform/capability skips**. Repository-wide Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` passed. This is
+automated offscreen-widget verification only; no interactive GUI, camera,
+controller, motion, homing, arming, laser-output, or physical test was performed
+or is claimed.
+
 ## Active remove-simulation-mode milestone
 
 Production simulation has been removed as a runtime and user capability. The

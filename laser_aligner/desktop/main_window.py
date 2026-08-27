@@ -1040,6 +1040,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._object_edited,
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
+        self.object_panel.layerColorEditRequested.connect(
+            self.layer_panel.choose_color
+        )
         self.object_panel.rasterVectorizeRequested.connect(
             self.vectorize_raster_image
         )

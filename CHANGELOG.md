@@ -6,6 +6,13 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Restored the clickable operation-color swatch beside every Objects-row layer
+  name. It opens the same current-color-initialized chooser as Cuts/Layers and
+  uses the existing undoable layer-edit command, so all objects sharing the
+  layer, the workspace, Cuts/Layers controls, and the bottom palette refresh
+  together. Cancel makes no project or history change, and object layer
+  assignments and all non-color operation settings remain unchanged.
+
 - Added the schema-3 native path foundation. PATH and POLYGON objects now use
   one versioned canonical geometry containing line and cubic Bézier segments,
   multiple open or closed subpaths, and an explicit even-odd or nonzero fill

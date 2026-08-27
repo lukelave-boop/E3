@@ -21,15 +21,21 @@ from laser_aligner.desktop.main_window import (
     LAYER_PALETTE_COLORS,
     LayerPaletteBar,
 )
-from laser_aligner.desktop.panels import LayerPanel, MaterialPanel
+from laser_aligner.desktop.panels import LayerPanel, MaterialPanel, ObjectPanel
 from laser_aligner.desktop.theme import DARK_STYLESHEET
+from laser_aligner.desktop.workspace import WorkspaceView
 from laser_aligner.materials import MaterialDatabase, MaterialPreset
 from laser_aligner.project import (
     CommandStack,
     LayerMode,
+    NativePathGeometry,
+    ObjectKind,
     OperationLayer,
+    PathCubicSegment,
+    PathSubpath,
     ProjectDocument,
     SceneObject,
+    Transform,
 )
 
 
@@ -691,3 +697,237 @@ def test_safe_trace_layer_uses_ordinary_color_picker_without_changing_authority(
 
     panel.close()
     panel.deleteLater()
+
+
+def _object_layer_row(
+    panel: ObjectPanel,
+    object_id: str,
+) -> tuple[int, QtWidgets.QTreeWidgetItem]:
+    for row in range(panel.tree.topLevelItemCount()):
+        item = panel.tree.topLevelItem(row)
+        if item.data(0, QtCore.Qt.ItemDataRole.UserRole) == object_id:
+            return row, item
+    raise AssertionError(f"Object row not found: {object_id}")
+
+
+def _object_layer_color_button(
+    panel: ObjectPanel,
+    object_id: str,
+) -> QtWidgets.QPushButton:
+    _row, item = _object_layer_row(panel, object_id)
+    cell = panel.tree.itemWidget(item, 1)
+    assert cell is not None
+    button = cell.findChild(QtWidgets.QPushButton, "objectLayerColorButton")
+    assert button is not None
+    return button
+
+
+def test_object_layer_color_button_targets_assigned_layer_and_keeps_name_selection(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    first_layer = OperationLayer(name="First", color="#D64D4D")
+    second_layer = OperationLayer(name="Second", color="#4D6ED6")
+    document = ProjectDocument(layers=[first_layer, second_layer])
+    first = SceneObject.rectangle(first_layer.id, name="First object")
+    second = SceneObject.rectangle(second_layer.id, name="Second object")
+    document.add_object(first)
+    document.add_object(second)
+    original_assignments = {item.id: item.layer_id for item in document.objects}
+
+    panel = ObjectPanel()
+    panel.resize(640, 400)
+    panel.set_document(document)
+    panel.show()
+    qt_application.processEvents()
+    color_requests: list[str] = []
+    selections: list[list[str]] = []
+    panel.layerColorEditRequested.connect(color_requests.append)
+    panel.selectionRequested.connect(selections.append)
+
+    button = _object_layer_color_button(panel, first.id)
+    assert button.property("layerId") == first_layer.id
+    assert button.property("layerColor") == first_layer.color
+    assert button.isEnabled()
+    assert button.minimumWidth() >= 22
+    assert button.minimumHeight() >= 22
+    assert "Change operation layer color" in button.toolTip()
+    assert "Change operation layer color" in button.accessibleName()
+
+    button.click()
+    qt_application.processEvents()
+    assert color_requests == [first_layer.id]
+    assert {item.id: item.layer_id for item in document.objects} == original_assignments
+
+    panel.tree.clearSelection()
+    _row, item = _object_layer_row(panel, first.id)
+    item_rect = panel.tree.visualItemRect(item)
+    name_x = panel.tree.header().sectionViewportPosition(0) + 12
+    QtTest.QTest.mouseClick(
+        panel.tree.viewport(),
+        QtCore.Qt.MouseButton.LeftButton,
+        pos=QtCore.QPoint(name_x, item_rect.center().y()),
+    )
+    qt_application.processEvents()
+    assert item.isSelected()
+    assert selections[-1] == [first.id]
+
+    panel.close()
+    panel.deleteLater()
+
+
+def test_objects_layer_color_uses_shared_undoable_path_for_raster_and_native_path(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layer = OperationLayer(
+        name="Safe raster trace",
+        color="#6FAF58",
+        mode=LayerMode.LINE,
+        speed_mm_min=1375.0,
+        power_percent=0.0,
+        passes=3,
+        output_enabled=False,
+        visible=True,
+        line_interval_mm=0.23,
+        scan_angle_deg=17.0,
+        overscan_percent=8.0,
+        vector_power_correction=-12.0,
+        raster_power_correction=9.0,
+    )
+    document = ProjectDocument(layers=[layer])
+    raster = SceneObject(
+        name="Imported raster",
+        kind=ObjectKind.IMAGE,
+        layer_id=layer.id,
+        transform=Transform(width_mm=20.0, height_mm=10.0),
+        geometry={"asset": "missing-object-layer-color-test.png"},
+    )
+    native_path = SceneObject.native_path(
+        layer.id,
+        NativePathGeometry(
+            subpaths=(
+                PathSubpath(
+                    start=(-0.5, 0.0),
+                    segments=(
+                        PathCubicSegment(
+                            control_1=(-0.25, 0.5),
+                            control_2=(0.25, 0.5),
+                            to=(0.5, 0.0),
+                        ),
+                    ),
+                    closed=False,
+                ),
+            )
+        ),
+        name="Native cubic path",
+        transform=Transform(width_mm=20.0, height_mm=10.0),
+    )
+    document.add_object(raster)
+    document.add_object(native_path)
+    initial_layer = layer.to_dict()
+    initial_revision = document.revision
+    initial_assignments = {item.id: item.layer_id for item in document.objects}
+
+    layer_panel = LayerPanel()
+    object_panel = ObjectPanel()
+    workspace = WorkspaceView(document.work_area)
+    palette = LayerPaletteBar()
+    history = CommandStack()
+    refresh_count = 0
+
+    def refresh(selected_ids: list[str] | None = None) -> None:
+        nonlocal refresh_count
+        refresh_count += 1
+        workspace.set_document(document)
+        layer_panel.set_document(document, layer.id)
+        object_panel.set_document(document, selected_ids)
+        palette.set_layers(document.layers, layer.id)
+
+    harness = SimpleNamespace(
+        document=document,
+        history=history,
+        workspace=workspace,
+        _refresh_document=refresh,
+    )
+    history.add_listener(lambda _stack: refresh(workspace.selected_object_ids()))
+    layer_panel.layerEdited.connect(
+        lambda layer_id, changes: E3MainWindow._layer_edited(
+            harness, layer_id, changes
+        ),
+        QtCore.Qt.ConnectionType.QueuedConnection,
+    )
+    object_panel.layerColorEditRequested.connect(layer_panel.choose_color)
+    refresh()
+
+    raster_button = _object_layer_color_button(object_panel, raster.id)
+    path_button = _object_layer_color_button(object_panel, native_path.id)
+    assert raster_button.property("layerId") == layer.id
+    assert path_button.property("layerId") == layer.id
+    assert raster_button.property("layerColor") == layer.color
+    assert path_button.property("layerColor") == layer.color
+
+    dialog_colors = iter((QtGui.QColor(), QtGui.QColor("#2A7BCB")))
+    dialog_initial_colors: list[str] = []
+
+    def choose_color(initial: QtGui.QColor, *_args, **_kwargs) -> QtGui.QColor:
+        dialog_initial_colors.append(initial.name())
+        return next(dialog_colors)
+
+    monkeypatch.setattr(QtWidgets.QColorDialog, "getColor", choose_color)
+
+    raster_button.click()
+    qt_application.processEvents()
+    assert document.revision == initial_revision
+    assert history.depth == 0
+    assert document.get_layer(layer.id).to_dict() == initial_layer
+
+    path_button.click()
+    qt_application.processEvents()
+    changed = document.get_layer(layer.id)
+    assert dialog_initial_colors == ["#6faf58", "#6faf58"]
+    assert changed.color == "#2A7BCB"
+    assert history.depth == 1
+    assert history.undo_text == f"Edit {layer.name}"
+    assert {
+        key: value for key, value in changed.to_dict().items() if key != "color"
+    } == {
+        key: value for key, value in initial_layer.items() if key != "color"
+    }
+    assert {item.id: item.layer_id for item in document.objects} == initial_assignments
+
+    assert _object_layer_color_button(
+        object_panel, raster.id
+    ).property("layerColor") == "#2A7BCB"
+    assert _object_layer_color_button(
+        object_panel, native_path.id
+    ).property("layerColor") == "#2A7BCB"
+    layer_item = layer_panel.layer_list.topLevelItem(0)
+    layer_icon = layer_item.icon(0).pixmap(14, 14).toImage()
+    assert layer_icon.pixelColor(layer_icon.rect().center()).name() == "#2a7bcb"
+    assert layer_panel.color_button.property("layerColor") == "#2A7BCB"
+    assert "#2a7bcb" in palette._buttons[layer.id].styleSheet().lower()
+    assert workspace._items_by_id[native_path.id].pen().color().name() == "#2a7bcb"
+
+    assert history.undo()
+    assert document.get_layer(layer.id).color == "#6FAF58"
+    assert layer_panel.color_button.property("layerColor") == "#6FAF58"
+    assert workspace._items_by_id[native_path.id].pen().color().name() == "#6faf58"
+    assert all(
+        _object_layer_color_button(object_panel, item.id).property("layerColor")
+        == "#6FAF58"
+        for item in (raster, native_path)
+    )
+
+    assert history.redo()
+    assert document.get_layer(layer.id).color == "#2A7BCB"
+    assert workspace._items_by_id[native_path.id].pen().color().name() == "#2a7bcb"
+    assert refresh_count >= 5
+
+    workspace.close()
+    workspace.deleteLater()
+    object_panel.close()
+    object_panel.deleteLater()
+    layer_panel.close()
+    layer_panel.deleteLater()
+    palette.close()
+    palette.deleteLater()

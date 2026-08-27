@@ -61,8 +61,10 @@ Native desktop workflow:
 - LightBurn-inspired compact icon chrome with a bright drafting bed, persistent
   runtime/safety status, always-present selection properties, one full-height
   right sidebar for Cuts, Camera, Objects, Shape, Templates, Trace, Machine, and
-  Material Recipes, and a fixed 30-color operation palette. The former lower
-  Laser and raw-G-code docks are removed so the workspace extends downward
+  Material Recipes, and a fixed 30-color operation palette. Objects rows expose
+  their shared operation color as a clickable swatch that uses the normal
+  undoable Cuts/Layers color path. The former lower Laser and raw-G-code docks
+  are removed so the workspace extends downward
 - Consolidated primary runtime controls keep Connect/Disconnect and the
   intentionally disabled Pause beside the always-available software STOP. The
   strip moves to its own toolbar row and wraps status above controls at compact

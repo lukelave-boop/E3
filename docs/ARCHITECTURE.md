@@ -365,6 +365,13 @@ path described below. Layout `v7` may reuse compatible older geometry and tab
 choices, but it does not restore opaque `v6` dock state that describes the
 removed bottom row.
 
+`ObjectPanel` treats each row's color control as a request for its assigned
+operation-layer ID. `LayerPanel` remains the single color-dialog owner, and its
+`layerEdited` signal continues through `E3MainWindow._layer_edited()` and
+`UpdateLayerCommand`. The normal history refresh therefore updates every object
+on the shared layer, the workspace, Cuts/Layers controls, and the palette while
+retaining prepared-job invalidation and undo/redo behavior.
+
 The structured job-preflight boundary is Qt-neutral and advisory.
 `PreflightSeverity` classifies findings as info, warning, or blocker;
 `PreflightFinding` carries a stable dotted code, title, message, optional detail,

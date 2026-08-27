@@ -72,6 +72,19 @@ def _muted(text: str) -> QtWidgets.QLabel:
     return label
 
 
+def _set_operation_color_swatch(
+    button: QtWidgets.QAbstractButton,
+    color: str,
+) -> None:
+    swatch = QtGui.QColor(color)
+    foreground = "#07130F" if swatch.lightnessF() >= 0.58 else "#FFFFFF"
+    button.setStyleSheet(
+        f"background: {color}; color: {foreground}; "
+        "border: 1px solid #70818B; border-radius: 2px; padding: 0;"
+    )
+    button.setProperty("layerColor", color)
+
+
 class LayerPanel(QtWidgets.QWidget):
     activeLayerChanged = QtCore.Signal(str)
     layerEdited = QtCore.Signal(str, dict)
@@ -139,9 +152,10 @@ class LayerPanel(QtWidgets.QWidget):
         self.name_edit.setPlaceholderText("Operation name")
         self.color_button = QtWidgets.QPushButton("")
         self.color_button.setFixedWidth(30)
-        self.color_button.setAccessibleName("Operation color")
+        self.color_button.setAccessibleName("Change operation layer color")
         self.color_button.setToolTip(
-            "Choose the operation color used in the workspace and bottom palette."
+            "Change operation layer color\n"
+            "Affects all objects assigned to this operation layer."
         )
         self.mode_combo = QtWidgets.QComboBox()
         self.mode_combo.setSizeAdjustPolicy(
@@ -430,15 +444,7 @@ class LayerPanel(QtWidgets.QWidget):
         self._updating = True
         try:
             self.name_edit.setText(layer.name)
-            swatch = QtGui.QColor(layer.color)
-            foreground = "#07130F" if swatch.lightnessF() >= 0.58 else "#FFFFFF"
-            self.color_button.setStyleSheet(
-                "QPushButton {"
-                f"background: {layer.color}; color: {foreground};"
-                "border: 1px solid #70818B;"
-                "}"
-            )
-            self.color_button.setProperty("layerColor", layer.color)
+            _set_operation_color_swatch(self.color_button, layer.color)
             self.mode_combo.setCurrentIndex(
                 max(0, self.mode_combo.findData(layer.mode.value))
             )
@@ -459,9 +465,14 @@ class LayerPanel(QtWidgets.QWidget):
             self._updating = False
 
     def _choose_color(self) -> None:
+        self.choose_color()
+
+    def choose_color(self, layer_id: str | None = None) -> None:
+        """Open the shared operation-layer color chooser for ``layer_id``."""
+
         if self._updating:
             return
-        layer_id = self.current_layer_id()
+        layer_id = layer_id or self.current_layer_id()
         if layer_id is None or self._document is None:
             return
         layer = self._document.get_layer(layer_id)
@@ -2619,6 +2630,7 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
 class ObjectPanel(QtWidgets.QWidget):
     selectionRequested = QtCore.Signal(list)
     objectEdited = QtCore.Signal(str, dict)
+    layerColorEditRequested = QtCore.Signal(str)
     rasterVectorizeRequested = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
@@ -2681,9 +2693,10 @@ class ObjectPanel(QtWidgets.QWidget):
             for scene_object in reversed(document.objects):
                 layer = layers[scene_object.layer_id]
                 item = QtWidgets.QTreeWidgetItem(
-                    [scene_object.name, layer.name, "", ""]
+                    [scene_object.name, "", "", ""]
                 )
                 item.setData(0, QtCore.Qt.ItemDataRole.UserRole, scene_object.id)
+                item.setData(1, QtCore.Qt.ItemDataRole.UserRole, layer.id)
                 item.setFlags(
                     item.flags()
                     | QtCore.Qt.ItemFlag.ItemIsEditable
@@ -2701,10 +2714,35 @@ class ObjectPanel(QtWidgets.QWidget):
                     if scene_object.locked
                     else QtCore.Qt.CheckState.Unchecked,
                 )
-                swatch = QtGui.QPixmap(12, 12)
-                swatch.fill(QtGui.QColor(layer.color))
-                item.setIcon(1, QtGui.QIcon(swatch))
                 self.tree.addTopLevelItem(item)
+                layer_cell = QtWidgets.QWidget(self.tree)
+                layer_cell.setObjectName("objectLayerCell")
+                layer_layout = QtWidgets.QHBoxLayout(layer_cell)
+                layer_layout.setContentsMargins(3, 1, 4, 1)
+                layer_layout.setSpacing(6)
+                color_button = QtWidgets.QPushButton(layer_cell)
+                color_button.setObjectName("objectLayerColorButton")
+                color_button.setFixedSize(24, 24)
+                color_button.setToolTip(
+                    "Change operation layer color\n"
+                    "Affects all objects assigned to this operation layer."
+                )
+                color_button.setAccessibleName(
+                    f"Change operation layer color for {layer.name}"
+                )
+                color_button.setProperty("layerId", layer.id)
+                _set_operation_color_swatch(color_button, layer.color)
+                color_button.clicked.connect(
+                    lambda checked=False, layer_id=layer.id: (
+                        self.layerColorEditRequested.emit(layer_id)
+                    )
+                )
+                layer_label = QtWidgets.QLabel(layer.name, layer_cell)
+                layer_label.setObjectName("objectLayerName")
+                layer_layout.addWidget(color_button)
+                layer_layout.addWidget(layer_label)
+                self.tree.setItemWidget(item, 1, layer_cell)
+                item.setSizeHint(1, QtCore.QSize(0, 28))
                 item.setSelected(scene_object.id in selected)
         finally:
             self._updating = False
