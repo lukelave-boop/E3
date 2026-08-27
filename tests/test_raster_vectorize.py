@@ -11,6 +11,7 @@ import pytest
 import laser_aligner.project.raster_vectorize as raster_vectorize_module
 from laser_aligner.project import (
     NativePathGeometry,
+    PathAffineTransform,
     PathCubicSegment,
     PathFillRule,
     PathLineSegment,
@@ -20,6 +21,8 @@ from laser_aligner.project import (
     RasterVectorizationComplexityError,
     RasterVectorizationError,
     RasterVectorizationOptions,
+    flatten_native_path,
+    native_path_bounds,
     prepare_raster_vectorization_source,
     raster_payload_has_usable_alpha,
     read_raster_asset_payload,
@@ -81,6 +84,85 @@ def _closed_line_subpath(
         ),
         closed=True,
     )
+
+
+def _line_contour(
+    points: tuple[tuple[float, float], ...],
+    *,
+    parent_index: int | None = None,
+    depth: int = 0,
+) -> raster_vectorize_module.RasterVectorizedContour:
+    return raster_vectorize_module.RasterVectorizedContour(
+        native_subpath=_closed_line_subpath(points),
+        preview_points=points,
+        parent_index=parent_index,
+        depth=depth,
+        is_hole=bool(depth % 2),
+        raw_point_count=len(points),
+        fitted_segment_count=len(points),
+        preview_flattened_point_count=len(points),
+        max_fitting_error_mm=0.0,
+        smoothing_displacement_mm=0.0,
+        max_estimated_deviation_mm=0.0,
+    )
+
+
+def _curved_frame_case(case: str) -> np.ndarray:
+    pixels = np.full((64, 64, 3), 255, dtype=np.uint8)
+    ellipses = {
+        "left": ((20, 32), (20, 13), 0.0),
+        "right": ((43, 32), (20, 13), 0.0),
+        "top": ((32, 13), (20, 13), 0.0),
+        "bottom": ((32, 50), (20, 13), 0.0),
+        "corner": ((18, 18), (18, 18), 0.0),
+        "excursion": ((-1, 18), (39, 23), 20.704841),
+    }
+    if case == "near-edge-hole":
+        pixels[:] = 0
+        cv2.ellipse(pixels, (10, 32), (9, 12), 0.0, 0.0, 360.0, 255, -1)
+        return pixels
+    center, axes, angle = ellipses[case]
+    cv2.ellipse(pixels, center, axes, angle, 0.0, 360.0, 0, -1)
+    return pixels
+
+
+def _assert_authoritative_preview_and_planning(
+    result,
+    *,
+    width_mm: float,
+    height_mm: float,
+    preview_tolerance_mm: float,
+) -> None:
+    transform = PathAffineTransform.from_components(
+        scale_x=width_mm,
+        scale_y=height_mm,
+    )
+    for contour in result.contours:
+        geometry = NativePathGeometry((contour.native_subpath,))
+        preview = np.asarray(
+            flatten_native_path(
+                geometry,
+                preview_tolerance_mm,
+                transform=transform,
+            )[0],
+            dtype=np.float64,
+        )
+        actual = np.asarray(contour.preview_points, dtype=np.float64) * (
+            width_mm,
+            height_mm,
+        )
+        assert actual == pytest.approx(preview[:-1])
+        planning = np.asarray(
+            flatten_native_path(geometry, 0.025, transform=transform)[0],
+            dtype=np.float64,
+        )
+        assert planning[0] == pytest.approx(preview[0])
+        assert planning[-1] == pytest.approx(planning[0])
+        x_min, y_min, x_max, y_max = native_path_bounds(geometry, transform)
+        assert -width_mm / 2.0 <= x_min <= x_max <= width_mm / 2.0
+        assert -height_mm / 2.0 <= y_min <= y_max <= height_mm / 2.0
+        assert np.all(np.abs(planning[:, 0]) <= width_mm / 2.0 + 1e-9)
+        assert np.all(np.abs(planning[:, 1]) <= height_mm / 2.0 + 1e-9)
 
 
 def test_solid_rectangle_uses_corner_preserving_few_point_geometry(
@@ -499,6 +581,323 @@ def test_raster_contour_allows_cubic_controls_outside_visible_frame() -> None:
     segment = contour.native_subpath.segments[0]
     assert isinstance(segment, PathCubicSegment)
     assert segment.control_1[0] > 0.5
+    raster_vectorize_module._validate_native_subpath_in_frame(native, 100.0, 20.0)
+    assert native_path_bounds(
+        NativePathGeometry((native,)),
+        PathAffineTransform.from_components(scale_x=100.0, scale_y=20.0),
+    )[2] < 50.0
+    raster_vectorize_module._validate_authoritative_native_topology(
+        (contour,),
+        100.0,
+        20.0,
+    )
+
+
+def test_native_curve_exact_extrema_reject_anisotropic_frame_excursion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels = np.full((64, 64, 3), 255, dtype=np.uint8)
+    cv2.ellipse(
+        pixels,
+        (-1, 18),
+        (39, 23),
+        20.704841,
+        0.0,
+        360.0,
+        (0, 0, 0),
+        thickness=-1,
+    )
+    payload = _write_payload(tmp_path / "edge-excursion.png", pixels)
+    out_of_frame = PathSubpath(
+        start=(-0.4, 0.0),
+        segments=(
+            PathCubicSegment(
+                control_1=(0.9, 0.5),
+                control_2=(0.9, -0.5),
+                to=(-0.4, 0.0),
+            ),
+        ),
+        closed=True,
+    )
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_native_subpath_from_fitted_contour",
+        lambda *_args, **_kwargs: out_of_frame,
+    )
+
+    with pytest.raises(RasterVectorizationError, match="native curve leaves.*frame"):
+        _vectorize(
+            payload,
+            _manual_options(
+                smoothing_mm=1.5,
+                simplification_tolerance_mm=2.0,
+            ),
+            width_mm=96.0,
+            height_mm=24.0,
+        )
+
+
+def test_edge_touching_preview_is_authoritative_native_flattening(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((64, 64, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (0, 8), (42, 55), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "edge-touch.png", pixels)
+    options = _manual_options(simplification_tolerance_mm=0.1)
+
+    result = _vectorize(payload, options, width_mm=96.0, height_mm=24.0)
+
+    contour = result.contours[0]
+    transform = PathAffineTransform.from_components(scale_x=96.0, scale_y=24.0)
+    expected = np.asarray(
+        flatten_native_path(
+            NativePathGeometry((contour.native_subpath,)),
+            options.simplification_tolerance_mm * 0.20,
+            transform=transform,
+        )[0][:-1],
+        dtype=np.float64,
+    )
+    actual = np.asarray(contour.preview_points, dtype=np.float64) * (96.0, 24.0)
+    assert actual == pytest.approx(expected)
+    x_min, y_min, x_max, y_max = native_path_bounds(
+        NativePathGeometry((contour.native_subpath,)),
+        transform,
+    )
+    assert x_min >= -48.0
+    assert x_max <= 48.0
+    assert y_min >= -12.0
+    assert y_max <= 12.0
+
+
+@pytest.mark.parametrize(
+    ("case", "smoothing_mm", "tolerance_mm", "accepted"),
+    [
+        ("left", 0.05, 0.25, True),
+        ("right", 0.05, 0.25, True),
+        ("top", 0.05, 0.25, True),
+        ("bottom", 0.05, 0.25, True),
+        ("corner", 0.05, 0.25, True),
+        ("near-edge-hole", 0.15, 0.75, True),
+        ("excursion", 1.5, 2.0, True),
+    ],
+)
+def test_curved_frame_positions_use_one_authoritative_geometry_sequence(
+    tmp_path: Path,
+    case: str,
+    smoothing_mm: float,
+    tolerance_mm: float,
+    accepted: bool,
+) -> None:
+    payload = _write_payload(tmp_path / f"curved-{case}.png", _curved_frame_case(case))
+    options = _manual_options(
+        smoothing_mm=smoothing_mm,
+        simplification_tolerance_mm=tolerance_mm,
+    )
+    if not accepted:
+        with pytest.raises(RasterVectorizationError, match="native curve leaves.*frame"):
+            _vectorize(payload, options, width_mm=96.0, height_mm=24.0)
+        return
+
+    result = _vectorize(payload, options, width_mm=96.0, height_mm=24.0)
+    _assert_authoritative_preview_and_planning(
+        result,
+        width_mm=96.0,
+        height_mm=24.0,
+        preview_tolerance_mm=tolerance_mm * 0.20,
+    )
+
+
+def test_authoritative_topology_rejects_fitted_hole_excursion(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((64, 64, 3), 255, dtype=np.uint8)
+    outer = np.asarray(
+        [
+            [58, 39],
+            [43, 54],
+            [31, 62],
+            [29, 57],
+            [24, 62],
+            [24, 58],
+            [16, 51],
+            [13, 53],
+            [3, 31],
+            [44, 5],
+            [60, 21],
+        ],
+        dtype=np.int32,
+    )
+    cv2.fillPoly(pixels, [outer], (0, 0, 0))
+    cv2.ellipse(
+        pixels,
+        (36, 31),
+        (16, 17),
+        130.65926726215258,
+        0.0,
+        360.0,
+        (255, 255, 255),
+        thickness=-1,
+    )
+    payload = _write_payload(tmp_path / "hole-excursion.png", pixels)
+
+    with pytest.raises(RasterVectorizationError, match="ambiguous at the bounded"):
+        _vectorize(
+            payload,
+            _manual_options(
+                smoothing_mm=5.0,
+                simplification_tolerance_mm=5.0,
+            ),
+            width_mm=96.0,
+            height_mm=24.0,
+        )
+
+
+@pytest.mark.parametrize(
+    "contours",
+    [
+        (
+            _line_contour(
+                ((-0.4, -0.4), (0.4, 0.4), (-0.4, 0.4), (0.4, -0.4))
+            ),
+        ),
+        (
+            _line_contour(((-0.4, -0.4), (0.1, -0.4), (0.1, 0.1), (-0.4, 0.1))),
+            _line_contour(((-0.1, -0.1), (0.4, -0.1), (0.4, 0.4), (-0.1, 0.4))),
+        ),
+    ],
+    ids=("self-crossing", "overlapping-siblings"),
+)
+def test_authoritative_topology_rejects_self_and_sibling_ambiguity(
+    contours: tuple[raster_vectorize_module.RasterVectorizedContour, ...],
+) -> None:
+    with pytest.raises(RasterVectorizationError, match="topology.*ambiguous"):
+        raster_vectorize_module._validate_authoritative_native_topology(
+            contours,
+            100.0,
+            100.0,
+        )
+
+
+def test_authoritative_topology_rejects_self_loop_inside_one_flatten_leaf() -> None:
+    start = (-0.4, -0.4)
+    physical_scale_mm = 0.0005
+    normalized_scale = physical_scale_mm / 100.0
+    loop = PathCubicSegment(
+        control_1=(
+            start[0] - 0.25333333333333335 * normalized_scale,
+            start[1] - normalized_scale / 3.0,
+        ),
+        control_2=(
+            start[0] - 0.5066666666666667 * normalized_scale,
+            start[1] - normalized_scale / 3.0,
+        ),
+        to=(start[0] + 0.24 * normalized_scale, start[1]),
+    )
+    native = PathSubpath(
+        start=start,
+        segments=(
+            loop,
+            PathLineSegment((0.4, -0.4)),
+            PathLineSegment((0.4, 0.4)),
+            PathLineSegment((-0.4, 0.4)),
+            PathLineSegment(start),
+        ),
+        closed=True,
+    )
+    contour = dataclasses.replace(
+        _line_contour((start, (0.4, -0.4), (0.4, 0.4), (-0.4, 0.4))),
+        native_subpath=native,
+        fitted_segment_count=len(native.segments),
+    )
+    transform = PathAffineTransform.from_components(scale_x=100.0, scale_y=100.0)
+    flattened = flatten_native_path(
+        NativePathGeometry((native,)),
+        raster_vectorize_module._NATIVE_TOPOLOGY_MIN_TOLERANCE_MM,
+        transform=transform,
+    )[0]
+    assert len(flattened) == 6  # The tiny loop was accepted as one flat chord.
+
+    with pytest.raises(RasterVectorizationError, match="within a cubic"):
+        raster_vectorize_module._validate_authoritative_native_topology(
+            (contour,),
+            100.0,
+            100.0,
+        )
+
+
+def test_authoritative_topology_uses_float64_for_large_coordinate_containment() -> None:
+    outer_points = ((-0.49, -0.49), (0.49, -0.49), (0.49, 0.49), (-0.49, 0.49))
+    hole_points = (
+        (0.4899999998, -0.00000000005),
+        (0.4899999999, -0.00000000005),
+        (0.4899999999, 0.00000000005),
+        (0.4899999998, 0.00000000005),
+    )
+    dimension_mm = 1_000_000_000_000.0
+    assert np.float32(outer_points[1][0] * dimension_mm) == np.float32(
+        hole_points[0][0] * dimension_mm
+    )
+
+    raster_vectorize_module._validate_authoritative_native_topology(
+        (
+            _line_contour(outer_points),
+            _line_contour(hole_points, parent_index=0, depth=1),
+        ),
+        dimension_mm,
+        dimension_mm,
+    )
+
+
+def test_authoritative_topology_rejects_hidden_adjacent_cubic_crossing() -> None:
+    start = (-0.4, -0.4)
+    width_mm = height_mm = 100.0
+    horizontal_mm = 0.0005
+    vertical_mm = 0.0002
+    dx = horizontal_mm / width_mm
+    dy = vertical_mm / height_mm
+    shared = (start[0] + dx, start[1])
+    native = PathSubpath(
+        start=start,
+        segments=(
+            PathCubicSegment(
+                (start[0] + dx / 3.0, start[1]),
+                (start[0] + 2.0 * dx / 3.0, start[1]),
+                shared,
+            ),
+            PathCubicSegment(
+                (shared[0] - dx / 3.0, shared[1] + dy),
+                (shared[0] - 2.0 * dx / 3.0, shared[1] + dy),
+                (start[0], start[1] - dy),
+            ),
+            PathLineSegment((0.4, start[1] - dy)),
+            PathLineSegment((0.4, 0.4)),
+            PathLineSegment((-0.4, 0.4)),
+            PathLineSegment(start),
+        ),
+        closed=True,
+    )
+    contour = dataclasses.replace(
+        _line_contour((start, (0.4, -0.4), (0.4, 0.4), (-0.4, 0.4))),
+        native_subpath=native,
+        fitted_segment_count=len(native.segments),
+    )
+    flattened = flatten_native_path(
+        NativePathGeometry((native,)),
+        raster_vectorize_module._NATIVE_TOPOLOGY_MIN_TOLERANCE_MM,
+        transform=PathAffineTransform.from_components(
+            scale_x=width_mm,
+            scale_y=height_mm,
+        ),
+    )[0]
+    assert len(flattened) == 7  # Both crossing cubics were accepted as one chord.
+
+    with pytest.raises(RasterVectorizationError, match="between adjacent native arcs"):
+        raster_vectorize_module._validate_authoritative_native_topology(
+            (contour,),
+            width_mm,
+            height_mm,
+        )
 
 
 def test_vectorization_does_not_import_or_depend_on_camera_trace_settings(

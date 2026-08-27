@@ -582,18 +582,26 @@ therefore remain native lines while curved regions remain cubic segments. The
 result reports raw contour points, fitted segments, preview-flattened points, and
 maximum estimated deviation. That deviation is relative to threshold-derived
 and optionally smoothed contours; it is not a
-physical-accuracy certification of the source image.
+physical-accuracy certification of the source image. Highly pixel-constrained
+`A` and `S` glyphs remain an accepted first-release quality limitation because
+narrow counters and curved shoulders can still vary with raster phase and
+threshold; those cases require a cleaner or higher-resolution source.
 
 Digital boundary transitions are counted at source resolution before the 4×
 workspace and again before full-point contour extraction, so a single connected
 maze or jagged photographic mask cannot defer the raw-point rejection until
 after an oversized contour allocation. Corner non-maximum suppression uses a
 bounded circular exclusion window rather than pairwise corner comparisons.
-After fitting and clipping, duplicate/zero-area contours are rejected and
-clipping displacement is included in the deviation estimate. E3 also rasterizes
-the fitted contour forest at the capped 4× resolution and compares its complete
-parent/child hierarchy signature with the extracted tree before returning a
-result.
+After fitting, exact native cubic extrema are checked against the image-local
+frame; an excursion is rejected rather than hidden by clipping only the preview.
+Preview points are regenerated from that authoritative native path in physical
+millimetres. Duplicate/zero-area contours are rejected. Bounded exact checks
+reject cubic self-intersections and ambiguous adjacent native arcs; adaptive
+flattening then requires more than the combined curve-error envelopes between
+non-adjacent and inter-contour boundaries while verifying the extracted ancestry
+in float64. E3 finally rasterizes the transient flattening at the capped 4×
+resolution and compares the complete parent/child hierarchy signature with the
+extracted tree.
 
 The option, contour, and result records are frozen validated values. Result
 validation checks immutable preview arrays, source identity, normalized contour

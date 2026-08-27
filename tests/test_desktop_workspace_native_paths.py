@@ -134,4 +134,3 @@ def test_workspace_compound_path_honors_native_fill_rule(
     )
     assert path.fillRule() is expected
     assert path.contains(QtCore.QPointF(0.0, 0.0)) is center_is_filled
-

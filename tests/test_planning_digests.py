@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from laser_aligner.config import LaserSettings
 from laser_aligner.planning import (
     project_scene_revision,
@@ -10,6 +12,8 @@ from laser_aligner.project.model import Bounds, ProjectDocument, SceneObject, Tr
 from laser_aligner.project.path_geometry import (
     NativePathGeometry,
     PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
     PathSubpath,
 )
 from laser_aligner.project.toolpath import generate_project_gcode
@@ -151,8 +155,6 @@ def test_stage_dependency_digest_is_version_namespaced() -> None:
 
 
 def test_artifact_dependency_digest_rejects_non_sha256_text() -> None:
-    import pytest
-
     from laser_aligner.planning import ArtifactMetadata, CoordinateDomain, PlanningStage
 
     scene = project_scene_revision(_document())
@@ -253,6 +255,100 @@ def test_normalized_dependency_tracks_flatten_contract(monkeypatch) -> None:
         algorithm_changed.metadata.dependency_digest
         != tolerance_changed.metadata.dependency_digest
     )
+
+
+def _native_dependency_document() -> ProjectDocument:
+    document = ProjectDocument.new("Native dependency", Bounds(0, 0, 100, 100))
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (-0.4, -0.2),
+                        (
+                            PathCubicSegment(
+                                (-0.2, 0.3),
+                                (0.2, 0.3),
+                                (0.4, -0.2),
+                            ),
+                        ),
+                    ),
+                    PathSubpath(
+                        (-0.3, 0.25),
+                        (PathLineSegment((0.3, 0.25)),),
+                    ),
+                ),
+                fill_rule=PathFillRule.EVENODD,
+            ),
+            transform=Transform(50.0, 50.0, 20.0, 10.0),
+        )
+    )
+    return document
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    (
+        lambda payload, transform: payload["subpaths"][0].update(
+            {"start": [-0.39, -0.2]}
+        ),
+        lambda payload, transform: payload["subpaths"][0]["segments"][0].update(
+            {"control_1": [-0.19, 0.3]}
+        ),
+        lambda payload, transform: payload["subpaths"][0]["segments"][0].update(
+            {"control_2": [0.19, 0.3]}
+        ),
+        lambda payload, transform: payload["subpaths"][0]["segments"][0].update(
+            {"to": [0.39, -0.2]}
+        ),
+        lambda payload, transform: payload.update(
+            {"subpaths": list(reversed(payload["subpaths"]))}
+        ),
+        lambda payload, transform: payload["subpaths"][0].update({"closed": True}),
+        lambda payload, transform: payload.update({"fill_rule": "nonzero"}),
+        lambda payload, transform: setattr(transform, "x_mm", transform.x_mm + 0.1),
+        lambda payload, transform: setattr(
+            transform, "width_mm", transform.width_mm + 0.1
+        ),
+        lambda payload, transform: setattr(transform, "mirror_x", True),
+        lambda payload, transform: setattr(
+            transform, "rotation_deg", transform.rotation_deg + 1.0
+        ),
+    ),
+    ids=(
+        "anchor",
+        "control-1",
+        "control-2",
+        "endpoint",
+        "subpath-order",
+        "closure",
+        "fill-rule",
+        "translation",
+        "scale",
+        "mirror",
+        "rotation",
+    ),
+)
+def test_normalized_dependency_binds_all_native_geometry_identity(
+    mutation,
+) -> None:
+    baseline = _native_dependency_document()
+    baseline_digest = toolpath_module._normalized_layer_geometry(
+        baseline,
+        baseline.layers[0],
+    ).metadata.dependency_digest
+    changed = baseline.clone()
+    payload = changed.objects[0].path_geometry().to_dict()
+
+    mutation(payload, changed.objects[0].transform)
+    changed.objects[0].geometry = NativePathGeometry.from_dict(payload).to_dict()
+
+    changed_digest = toolpath_module._normalized_layer_geometry(
+        changed,
+        changed.layers[0],
+    ).metadata.dependency_digest
+    assert changed_digest != baseline_digest
 
 
 def test_operation_dependency_changes_without_forcing_placement_change() -> None:

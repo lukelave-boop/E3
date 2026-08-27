@@ -14,10 +14,13 @@ import numpy as np
 
 from .path_geometry import (
     NativePathGeometry,
+    PathAffineTransform,
     PathCubicSegment,
     PathFillRule,
     PathLineSegment,
     PathSubpath,
+    flatten_native_path,
+    native_path_bounds,
     reverse_subpath,
 )
 from .raster_asset import (
@@ -44,6 +47,10 @@ _MAX_FIT_TANGENT_WINDOW_POINTS = 12
 _LINE_MAXIMUM_TANGENT_DEVIATION_DEGREES = 2.0
 _MAX_FIT_RECURSION = 18
 _MAX_FLATTEN_RECURSION = 18
+_NATIVE_FRAME_EPSILON_MM = 1e-9
+_NATIVE_TOPOLOGY_INITIAL_TOLERANCE_MM = 0.025
+_NATIVE_TOPOLOGY_MIN_TOLERANCE_MM = 0.001
+_NATIVE_TOPOLOGY_MAX_SEGMENT_PAIR_CHECKS = 1_000_000
 
 _COMPLEXITY_ADVICE = (
     "Increase the minimum feature size, increase simplification, adjust the "
@@ -1773,70 +1780,6 @@ def _fit_span(
     ]
 
 
-def _control_flatness(segment: _CubicSegment) -> float:
-    return float(
-        max(
-            _distance_to_segment(
-                np.vstack((segment.control_1, segment.control_2)),
-                segment.start,
-                segment.end,
-            )
-        )
-    )
-
-
-def _split_cubic(segment: _CubicSegment) -> tuple[_CubicSegment, _CubicSegment]:
-    p01 = (segment.start + segment.control_1) / 2.0
-    p12 = (segment.control_1 + segment.control_2) / 2.0
-    p23 = (segment.control_2 + segment.end) / 2.0
-    p012 = (p01 + p12) / 2.0
-    p123 = (p12 + p23) / 2.0
-    middle = (p012 + p123) / 2.0
-    return (
-        _CubicSegment(
-            segment.start,
-            p01,
-            p012,
-            middle,
-            segment.fitting_error_mm,
-        ),
-        _CubicSegment(
-            middle,
-            p123,
-            p23,
-            segment.end,
-            segment.fitting_error_mm,
-        ),
-    )
-
-
-def _flatten_segment(
-    segment: _FittedSegment,
-    tolerance_mm: float,
-    budget: _ComplexityBudget,
-    output: list[np.ndarray],
-    depth: int = 0,
-) -> float:
-    if isinstance(segment, _LineSegment):
-        budget.add_preview_points()
-        output.append(segment.end.copy())
-        return 0.0
-    flatness = _control_flatness(segment)
-    if flatness <= tolerance_mm:
-        budget.add_preview_points()
-        output.append(segment.end.copy())
-        return flatness
-    if depth >= _MAX_FLATTEN_RECURSION:
-        _raise_complexity(
-            "A fitted curve could not be flattened within the bounded recursion limit"
-        )
-    first, second = _split_cubic(segment)
-    return max(
-        _flatten_segment(first, tolerance_mm, budget, output, depth + 1),
-        _flatten_segment(second, tolerance_mm, budget, output, depth + 1),
-    )
-
-
 def _contour_spans(points: np.ndarray, anchors: list[int]) -> list[np.ndarray]:
     spans: list[np.ndarray] = []
     for offset, start in enumerate(anchors):
@@ -2029,56 +1972,90 @@ def _native_subpath_from_fitted_contour(
     ).subpaths[0]
 
 
-def _flatten_fitted_contour_for_preview(
-    fitted: _FittedContour,
+def _physical_native_transform(
+    width_mm: float,
+    height_mm: float,
+) -> PathAffineTransform:
+    return PathAffineTransform.from_components(scale_x=width_mm, scale_y=height_mm)
+
+
+def _validate_native_subpath_in_frame(
+    native_subpath: PathSubpath,
+    width_mm: float,
+    height_mm: float,
+) -> None:
+    bounds = native_path_bounds(
+        NativePathGeometry((native_subpath,), fill_rule=PathFillRule.EVENODD),
+        _physical_native_transform(width_mm, height_mm),
+    )
+    x_min, y_min, x_max, y_max = bounds
+    epsilon = max(
+        _NATIVE_FRAME_EPSILON_MM,
+        max(width_mm, height_mm) * 1e-12,
+    )
+    if (
+        x_min < -width_mm / 2.0 - epsilon
+        or x_max > width_mm / 2.0 + epsilon
+        or y_min < -height_mm / 2.0 - epsilon
+        or y_max > height_mm / 2.0 + epsilon
+    ):
+        raise RasterVectorizationError(
+            "A fitted native curve leaves the source image frame; reduce smoothing "
+            "or simplification"
+        )
+
+
+def _flatten_native_subpath_for_preview(
+    native_subpath: PathSubpath,
     tolerance_mm: float,
     width_mm: float,
     height_mm: float,
     budget: _ComplexityBudget,
-) -> tuple[np.ndarray, float, float]:
-    """Return bounded ephemeral points used only for preview and topology checks."""
+) -> np.ndarray:
+    """Flatten the authoritative native path in physical millimetres."""
 
-    output = [fitted.segments[0].start.copy()]
-    budget.add_preview_points()
-    maximum_flatness = 0.0
-    for segment in fitted.segments:
-        maximum_flatness = max(
-            maximum_flatness,
-            _flatten_segment(
-                segment,
-                tolerance_mm,
-                budget,
-                output,
-            ),
+    remaining = (
+        MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION
+        - budget.preview_points
+    )
+    if remaining < 3:
+        _raise_complexity(
+            "Raster vectorization requires more than "
+            f"{MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION:,} "
+            "preview-flattened points"
         )
-    points = np.asarray(output, dtype=np.float64)
+    try:
+        flattened = flatten_native_path(
+            NativePathGeometry((native_subpath,), fill_rule=PathFillRule.EVENODD),
+            tolerance_mm,
+            transform=_physical_native_transform(width_mm, height_mm),
+            max_points=remaining,
+            max_depth=_MAX_FLATTEN_RECURSION,
+        )[0]
+    except ValueError as exc:
+        _raise_complexity(
+            "Raster vectorization could not produce bounded preview-flattened points"
+        )
+        raise AssertionError("unreachable") from exc
+    points = np.asarray(flattened, dtype=np.float64)
     if len(points) > 1 and np.linalg.norm(points[0] - points[-1]) <= 1e-9:
         points = points[:-1]
-        budget.preview_points -= 1
     if len(points) < 3:
         raise RasterVectorizationError(
             "Simplification collapsed a closed contour below three points"
         )
-    unclipped = points.copy()
-    points[:, 0] = np.clip(points[:, 0], -width_mm / 2.0, width_mm / 2.0)
-    points[:, 1] = np.clip(points[:, 1], -height_mm / 2.0, height_mm / 2.0)
-    clipping_displacement = float(
-        np.max(np.linalg.norm(points - unclipped, axis=1))
-    )
     keep = np.ones(len(points), dtype=bool)
     keep[1:] = np.linalg.norm(np.diff(points, axis=0), axis=1) > 1e-12
     points = points[keep]
     if len(points) > 1 and np.linalg.norm(points[0] - points[-1]) <= 1e-12:
         points = points[:-1]
-    removed_points = len(keep) - len(points)
-    if removed_points:
-        budget.preview_points -= removed_points
     if len(points) < 3 or abs(_signed_area(points)) <= 1e-15:
         raise RasterVectorizationError(
             "Fitting at the selected tolerance collapsed a closed contour; reduce "
             "smoothing or simplification"
         )
-    return points, maximum_flatness, clipping_displacement
+    budget.add_preview_points(len(points))
+    return points
 
 
 def _preview_mask(mask: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -2116,37 +2093,673 @@ def _overlay_preview(
     return overlay
 
 
-def _validate_topology(
+@dataclass(slots=True)
+class _TopologyWorkBudget:
+    segment_pair_checks: int = 0
+
+    def consume(self, count: int = 1) -> None:
+        if (
+            self.segment_pair_checks + count
+            > _NATIVE_TOPOLOGY_MAX_SEGMENT_PAIR_CHECKS
+        ):
+            _raise_complexity(
+                "Authoritative native-path topology validation requires more than "
+                f"{_NATIVE_TOPOLOGY_MAX_SEGMENT_PAIR_CHECKS:,} bounded comparisons"
+            )
+        self.segment_pair_checks += count
+
+
+def _cubic_self_topology_is_ambiguous(
+    start: tuple[float, float],
+    segment: PathCubicSegment,
+    transform: PathAffineTransform,
+) -> bool:
+    """Detect the one possible double point of a planar cubic exactly."""
+
+    p0, p1, p2, p3 = (
+        np.asarray(transform.apply(point), dtype=np.float64)
+        for point in (
+            start,
+            segment.control_1,
+            segment.control_2,
+            segment.to,
+        )
+    )
+    cubic = -p0 + 3.0 * p1 - 3.0 * p2 + p3
+    quadratic = 3.0 * p0 - 6.0 * p1 + 3.0 * p2
+    linear = -3.0 * p0 + 3.0 * p1
+    determinant = float(
+        cubic[0] * quadratic[1] - cubic[1] * quadratic[0]
+    )
+    coefficient_scale = max(
+        1.0,
+        float(np.linalg.norm(cubic)),
+        float(np.linalg.norm(quadratic)),
+        float(np.linalg.norm(linear)),
+    )
+    if abs(determinant) <= coefficient_scale * coefficient_scale * 1e-12:
+        chord = p3 - p0
+        chord_length_squared = float(np.dot(chord, chord))
+        if chord_length_squared <= 1e-24:
+            return True
+        first_projection = float(np.dot(p1 - p0, chord)) / chord_length_squared
+        second_projection = float(np.dot(p2 - p0, chord)) / chord_length_squared
+        return not 0.0 <= first_projection <= second_projection <= 1.0
+
+    summed_parameters = float(
+        (cubic[1] * linear[0] - cubic[0] * linear[1]) / determinant
+    )
+    squared_sum_minus_product = float(
+        (quadratic[0] * linear[1] - linear[0] * quadratic[1])
+        / determinant
+    )
+    discriminant = (
+        4.0 * squared_sum_minus_product - 3.0 * summed_parameters**2
+    )
+    if discriminant <= 0.0:
+        return False
+    square_root = math.sqrt(discriminant)
+    parameters = tuple(
+        sorted(
+            (
+                (summed_parameters - square_root) / 2.0,
+                (summed_parameters + square_root) / 2.0,
+            )
+        )
+    )
+    if parameters[0] < 0.0 or parameters[1] > 1.0:
+        return False
+    intended_closure = (
+        parameters[0] <= 1e-12
+        and parameters[1] >= 1.0 - 1e-12
+        and float(np.linalg.norm(p3 - p0)) <= coefficient_scale * 1e-12
+    )
+    return not intended_closure
+
+
+def _native_self_topology_is_ambiguous(
+    contours: tuple[RasterVectorizedContour, ...],
+    transform: PathAffineTransform,
+) -> bool:
+    for contour in contours:
+        current = contour.native_subpath.start
+        for segment in contour.native_subpath.segments:
+            if isinstance(segment, PathCubicSegment) and (
+                _cubic_self_topology_is_ambiguous(current, segment, transform)
+            ):
+                return True
+            current = segment.to
+    return False
+
+
+def _split_control_polygon(
+    controls: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    levels = [controls]
+    while len(levels[-1]) > 1:
+        previous = levels[-1]
+        levels.append((previous[:-1] + previous[1:]) / 2.0)
+    return (
+        np.asarray([level[0] for level in levels], dtype=np.float64),
+        np.asarray([level[-1] for level in reversed(levels)], dtype=np.float64),
+    )
+
+
+def _control_hulls_are_disjoint(first: np.ndarray, second: np.ndarray) -> bool:
+    origin = first[0]
+    translated = (first - origin, second - origin)
+    scale = max(
+        1.0,
+        *(float(np.linalg.norm(point)) for controls in translated for point in controls),
+    )
+    epsilon = scale * 1e-12
+    for controls in translated:
+        for first_index in range(len(controls)):
+            for second_index in range(first_index + 1, len(controls)):
+                delta = controls[second_index] - controls[first_index]
+                length = float(np.linalg.norm(delta))
+                if length <= 1e-24:
+                    continue
+                direction = delta / length
+                for axis in (direction, np.asarray((-direction[1], direction[0]))):
+                    first_projection = translated[0] @ axis
+                    second_projection = translated[1] @ axis
+                    if (
+                        float(np.max(first_projection))
+                        < float(np.min(second_projection)) - epsilon
+                        or float(np.max(second_projection))
+                        < float(np.min(first_projection)) - epsilon
+                    ):
+                        return True
+    return False
+
+
+def _control_hulls_share_only_endpoint(
+    first: np.ndarray,
+    second: np.ndarray,
+) -> bool:
+    shared = first[-1]
+    first_vectors = first[:-1] - shared
+    second_vectors = second[1:] - shared
+    vectors = (first_vectors, second_vectors)
+    scale = max(
+        1.0,
+        *(float(np.linalg.norm(vector)) for group in vectors for vector in group),
+    )
+    epsilon = scale * 1e-12
+    for group in vectors:
+        for vector in group:
+            length = float(np.linalg.norm(vector))
+            if length <= 1e-24:
+                continue
+            direction = vector / length
+            for normal in (direction, np.asarray((-direction[1], direction[0]))):
+                first_sides = first_vectors @ normal
+                second_sides = second_vectors @ normal
+                separated = (
+                    float(np.max(first_sides)) <= epsilon
+                    and float(np.min(second_sides)) >= -epsilon
+                ) or (
+                    float(np.max(second_sides)) <= epsilon
+                    and float(np.min(first_sides)) >= -epsilon
+                )
+                if not separated:
+                    continue
+                tangent = np.asarray((-normal[1], normal[0]))
+                first_on_line = [
+                    0.0,
+                    *(
+                        float(np.dot(value, tangent))
+                        for value, side in zip(
+                            first_vectors,
+                            first_sides,
+                            strict=True,
+                        )
+                        if abs(float(side)) <= epsilon
+                    ),
+                ]
+                second_on_line = [
+                    0.0,
+                    *(
+                        float(np.dot(value, tangent))
+                        for value, side in zip(
+                            second_vectors,
+                            second_sides,
+                            strict=True,
+                        )
+                        if abs(float(side)) <= epsilon
+                    ),
+                ]
+                overlap_minimum = max(min(first_on_line), min(second_on_line))
+                overlap_maximum = min(max(first_on_line), max(second_on_line))
+                if overlap_minimum >= -epsilon and overlap_maximum <= epsilon:
+                    return True
+    return False
+
+
+def _control_arcs_are_disjoint(
+    first: np.ndarray,
+    second: np.ndarray,
+    budget: _TopologyWorkBudget,
+    depth: int,
+) -> bool:
+    budget.consume()
+    if _control_hulls_are_disjoint(first, second):
+        return True
+    if depth >= _MAX_FLATTEN_RECURSION:
+        return False
+    first_span = float(np.max(np.ptp(first, axis=0)))
+    second_span = float(np.max(np.ptp(second, axis=0)))
+    if first_span >= second_span:
+        first_half, second_half = _split_control_polygon(first)
+        return _control_arcs_are_disjoint(
+            first_half,
+            second,
+            budget,
+            depth + 1,
+        ) and _control_arcs_are_disjoint(
+            second_half,
+            second,
+            budget,
+            depth + 1,
+        )
+    first_half, second_half = _split_control_polygon(second)
+    return _control_arcs_are_disjoint(
+        first,
+        first_half,
+        budget,
+        depth + 1,
+    ) and _control_arcs_are_disjoint(
+        first,
+        second_half,
+        budget,
+        depth + 1,
+    )
+
+
+def _adjacent_control_arcs_share_only_endpoint(
+    first: np.ndarray,
+    second: np.ndarray,
+    budget: _TopologyWorkBudget,
+    depth: int = 0,
+) -> bool:
+    budget.consume()
+    if _control_hulls_share_only_endpoint(first, second):
+        return True
+    if depth >= _MAX_FLATTEN_RECURSION:
+        return False
+    first_far, first_near = _split_control_polygon(first)
+    second_near, second_far = _split_control_polygon(second)
+    next_depth = depth + 1
+    return (
+        _control_arcs_are_disjoint(first_far, second_near, budget, next_depth)
+        and _control_arcs_are_disjoint(first_far, second_far, budget, next_depth)
+        and _control_arcs_are_disjoint(first_near, second_far, budget, next_depth)
+        and _adjacent_control_arcs_share_only_endpoint(
+            first_near,
+            second_near,
+            budget,
+            next_depth,
+        )
+    )
+
+
+def _native_control_arcs(
+    subpath: PathSubpath,
+    transform: PathAffineTransform,
+) -> tuple[np.ndarray, ...]:
+    start = np.asarray(transform.apply(subpath.start), dtype=np.float64)
+    current = start
+    arcs: list[np.ndarray] = []
+    for segment in subpath.segments:
+        end = np.asarray(transform.apply(segment.to), dtype=np.float64)
+        if isinstance(segment, PathLineSegment):
+            controls = np.asarray((current, end), dtype=np.float64)
+        else:
+            controls = np.asarray(
+                (
+                    current,
+                    transform.apply(segment.control_1),
+                    transform.apply(segment.control_2),
+                    end,
+                ),
+                dtype=np.float64,
+            )
+        arcs.append(controls)
+        current = end
+    if subpath.closed and not np.array_equal(current, start):
+        arcs.append(np.asarray((current, start), dtype=np.float64))
+    return tuple(arcs)
+
+
+def _native_adjacent_topology_is_ambiguous(
+    contours: tuple[RasterVectorizedContour, ...],
+    transform: PathAffineTransform,
+    budget: _TopologyWorkBudget,
+) -> bool:
+    for contour in contours:
+        arcs = _native_control_arcs(contour.native_subpath, transform)
+        if len(arcs) < 2:
+            continue
+        for index, first in enumerate(arcs):
+            second = arcs[(index + 1) % len(arcs)]
+            if not _adjacent_control_arcs_share_only_endpoint(
+                first,
+                second,
+                budget,
+            ):
+                return True
+    return False
+
+
+def _topology_points(flattened: tuple[tuple[float, float], ...]) -> np.ndarray:
+    points = np.asarray(flattened, dtype=np.float64)
+    if len(points) > 1:
+        keep = np.ones(len(points), dtype=bool)
+        keep[1:] = np.linalg.norm(np.diff(points, axis=0), axis=1) > 1e-12
+        points = points[keep]
+    if len(points) and np.linalg.norm(points[0] - points[-1]) > 1e-12:
+        points = np.vstack((points, points[0]))
+    if len(points) < 4:
+        raise RasterVectorizationError(
+            "Authoritative native-path topology validation found a collapsed contour"
+        )
+    return points
+
+
+def _topology_segments(
+    points: np.ndarray,
+) -> list[tuple[int, np.ndarray, np.ndarray, float, float, float, float]]:
+    return [
+        (
+            index,
+            start,
+            end,
+            min(start[0], end[0]),
+            max(start[0], end[0]),
+            min(start[1], end[1]),
+            max(start[1], end[1]),
+        )
+        for index, (start, end) in enumerate(
+            zip(points[:-1], points[1:], strict=True)
+        )
+    ]
+
+
+def _segment_distance_squared(
+    first_start: np.ndarray,
+    first_end: np.ndarray,
+    second_start: np.ndarray,
+    second_end: np.ndarray,
+) -> float:
+    def orientation(start: np.ndarray, end: np.ndarray, point: np.ndarray) -> float:
+        direction = end - start
+        offset = point - start
+        return float(direction[0] * offset[1] - direction[1] * offset[0])
+
+    scale = max(
+        1.0,
+        *(abs(float(value)) for point in (
+            first_start,
+            first_end,
+            second_start,
+            second_end,
+        ) for value in point),
+    )
+    epsilon = scale * scale * 1e-12
+    first_sides = (
+        orientation(first_start, first_end, second_start),
+        orientation(first_start, first_end, second_end),
+    )
+    second_sides = (
+        orientation(second_start, second_end, first_start),
+        orientation(second_start, second_end, first_end),
+    )
+    boxes_overlap = (
+        max(min(first_start[0], first_end[0]), min(second_start[0], second_end[0]))
+        <= min(max(first_start[0], first_end[0]), max(second_start[0], second_end[0]))
+        + epsilon
+        and max(min(first_start[1], first_end[1]), min(second_start[1], second_end[1]))
+        <= min(max(first_start[1], first_end[1]), max(second_start[1], second_end[1]))
+        + epsilon
+    )
+    if boxes_overlap and all(
+        not (first > epsilon and second > epsilon)
+        and not (first < -epsilon and second < -epsilon)
+        for first, second in (first_sides, second_sides)
+    ):
+        return 0.0
+
+    def point_distance(
+        point: np.ndarray,
+        start: np.ndarray,
+        end: np.ndarray,
+    ) -> float:
+        delta = end - start
+        length_squared = float(np.dot(delta, delta))
+        if length_squared <= 1e-30:
+            return float(np.dot(point - start, point - start))
+        ratio = float(np.dot(point - start, delta)) / length_squared
+        difference = point - (start + max(0.0, min(1.0, ratio)) * delta)
+        return float(np.dot(difference, difference))
+
+    return min(
+        point_distance(first_start, second_start, second_end),
+        point_distance(first_end, second_start, second_end),
+        point_distance(second_start, first_start, first_end),
+        point_distance(second_end, first_start, first_end),
+    )
+
+
+def _self_topology_is_ambiguous(
+    points: np.ndarray,
+    clearance_mm: float,
+    budget: _TopologyWorkBudget,
+) -> bool:
+    segments = _topology_segments(points)
+    count = len(segments)
+    if count < 3:
+        return True
+
+    # Adjacent arcs share one intended endpoint. A same-ray departure is instead
+    # a retrace and is not an admissible closed boundary.
+    for index, segment in enumerate(segments):
+        following = segments[(index + 1) % count]
+        shared = segment[2]
+        first_away = segment[1] - shared
+        second_away = following[2] - shared
+        product = float(np.linalg.norm(first_away) * np.linalg.norm(second_away))
+        cross = abs(
+            float(
+                first_away[0] * second_away[1]
+                - first_away[1] * second_away[0]
+            )
+        )
+        if product <= 1e-24 or (
+            cross <= product * 1e-12
+            and float(np.dot(first_away, second_away)) > 0.0
+        ):
+            return True
+
+    ordered = sorted(segments, key=lambda segment: segment[3])
+    clearance_squared = clearance_mm * clearance_mm
+    for offset, first in enumerate(ordered):
+        for second in ordered[offset + 1 :]:
+            if second[3] > first[4] + clearance_mm:
+                break
+            if (
+                abs(first[0] - second[0]) == 1
+                or {first[0], second[0]} == {0, count - 1}
+            ):
+                continue
+            budget.consume()
+            if second[5] > first[6] + clearance_mm or first[5] > second[6] + clearance_mm:
+                continue
+            if _segment_distance_squared(first[1], first[2], second[1], second[2]) <= (
+                clearance_squared
+            ):
+                return True
+    return False
+
+
+def _boundaries_are_too_close(
+    first: np.ndarray,
+    second: np.ndarray,
+    clearance_mm: float,
+    budget: _TopologyWorkBudget,
+) -> bool:
+    first_segments = sorted(_topology_segments(first), key=lambda segment: segment[3])
+    second_segments = sorted(_topology_segments(second), key=lambda segment: segment[3])
+    clearance_squared = clearance_mm * clearance_mm
+    for first_segment in first_segments:
+        for second_segment in second_segments:
+            if second_segment[3] > first_segment[4] + clearance_mm:
+                break
+            if second_segment[4] < first_segment[3] - clearance_mm:
+                continue
+            budget.consume()
+            if (
+                second_segment[5] > first_segment[6] + clearance_mm
+                or first_segment[5] > second_segment[6] + clearance_mm
+            ):
+                continue
+            if _segment_distance_squared(
+                first_segment[1],
+                first_segment[2],
+                second_segment[1],
+                second_segment[2],
+            ) <= clearance_squared:
+                return True
+    return False
+
+
+def _is_ancestor(
+    ancestor: int,
+    descendant: int,
+    contours: tuple[RasterVectorizedContour, ...],
+    budget: _TopologyWorkBudget,
+) -> bool:
+    parent = contours[descendant].parent_index
+    while parent is not None:
+        budget.consume()
+        if parent == ancestor:
+            return True
+        parent = contours[parent].parent_index
+    return False
+
+
+def _point_inside_closed_polyline(point: np.ndarray, polygon: np.ndarray) -> bool:
+    """Return deterministic even/odd containment using float64 coordinates."""
+
+    inside = False
+    for start, end in zip(polygon[:-1], polygon[1:], strict=True):
+        if (start[1] > point[1]) == (end[1] > point[1]):
+            continue
+        crossing_x = start[0] + (
+            (point[1] - start[1]) * (end[0] - start[0])
+            / (end[1] - start[1])
+        )
+        if point[0] < crossing_x:
+            inside = not inside
+    return inside
+
+
+def _topology_is_ambiguous(
+    physical: tuple[np.ndarray, ...],
+    contours: tuple[RasterVectorizedContour, ...],
+    clearance_mm: float,
+    budget: _TopologyWorkBudget,
+) -> bool:
+    if any(
+        _self_topology_is_ambiguous(points, clearance_mm, budget)
+        for points in physical
+    ):
+        return True
+
+    bounds = [
+        (
+            float(np.min(points[:, 0])),
+            float(np.min(points[:, 1])),
+            float(np.max(points[:, 0])),
+            float(np.max(points[:, 1])),
+        )
+        for points in physical
+    ]
+    candidates = {
+        tuple(sorted((index, contour.parent_index)))
+        for index, contour in enumerate(contours)
+        if contour.parent_index is not None
+    }
+    order = sorted(range(len(contours)), key=lambda index: bounds[index][0])
+    for offset, first_index in enumerate(order):
+        for second_index in order[offset + 1 :]:
+            if bounds[second_index][0] > bounds[first_index][2] + clearance_mm:
+                break
+            budget.consume()
+            if (
+                bounds[second_index][1] <= bounds[first_index][3] + clearance_mm
+                and bounds[first_index][1] <= bounds[second_index][3] + clearance_mm
+            ):
+                candidates.add((min(first_index, second_index), max(first_index, second_index)))
+
+    for first_index, second_index in sorted(candidates):
+        budget.consume()
+        first = physical[first_index]
+        second = physical[second_index]
+        if _boundaries_are_too_close(first, second, clearance_mm, budget):
+            return True
+        first_contains_second = _point_inside_closed_polyline(second[0], first)
+        second_contains_first = _point_inside_closed_polyline(first[0], second)
+        first_is_ancestor = _is_ancestor(
+            first_index,
+            second_index,
+            contours,
+            budget,
+        )
+        second_is_ancestor = _is_ancestor(
+            second_index,
+            first_index,
+            contours,
+            budget,
+        )
+        if first_is_ancestor:
+            if not first_contains_second or second_contains_first:
+                return True
+        elif second_is_ancestor:
+            if not second_contains_first or first_contains_second:
+                return True
+        elif first_contains_second or second_contains_first:
+            return True
+    return False
+
+
+def _validate_authoritative_native_topology(
     contours: tuple[RasterVectorizedContour, ...],
     width_mm: float,
     height_mm: float,
-    tolerance_mm: float,
 ) -> None:
-    physical = [
-        np.asarray(
-            [
-                [x * width_mm, y * height_mm]
-                for x, y in contour.preview_points
-            ],
-            dtype=np.float32,
-        )
-        for contour in contours
-    ]
     for index, contour in enumerate(contours):
         parent = contour.parent_index
-        if parent is None:
-            continue
-        if parent < 0 or parent >= index:
+        if parent is not None and (parent < 0 or parent >= index):
             raise RasterVectorizationError(
                 "Raster contour hierarchy contains an invalid parent relationship"
             )
-        probe = tuple(float(value) for value in physical[index][0])
-        inside = cv2.pointPolygonTest(physical[parent], probe, True)
-        if inside < -max(1e-6, tolerance_mm):
-            raise RasterVectorizationError(
-                "Vector fitting could not preserve nested contour topology; reduce "
-                "smoothing or simplification"
+
+    geometry = NativePathGeometry(
+        tuple(contour.native_subpath for contour in contours),
+        fill_rule=PathFillRule.EVENODD,
+    )
+    transform = _physical_native_transform(width_mm, height_mm)
+    budget = _TopologyWorkBudget()
+    if _native_self_topology_is_ambiguous(contours, transform):
+        raise RasterVectorizationError(
+            "Authoritative native-path topology remains ambiguous within a cubic "
+            "segment; reduce smoothing or simplification"
+        )
+    if _native_adjacent_topology_is_ambiguous(contours, transform, budget):
+        raise RasterVectorizationError(
+            "Authoritative native-path topology remains ambiguous between adjacent "
+            "native arcs; reduce smoothing or simplification"
+        )
+    tolerance_mm = _NATIVE_TOPOLOGY_INITIAL_TOLERANCE_MM
+    while True:
+        try:
+            flattened = flatten_native_path(
+                geometry,
+                tolerance_mm,
+                transform=transform,
+                max_points=min(
+                    MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION,
+                    250_000,
+                ),
+                max_depth=_MAX_FLATTEN_RECURSION,
             )
+        except ValueError as exc:
+            raise RasterVectorizationComplexityError(
+                "Authoritative native-path topology validation could not be bounded. "
+                + _COMPLEXITY_ADVICE
+            ) from exc
+        physical = tuple(_topology_points(points) for points in flattened)
+        numeric_margin = max(
+            _NATIVE_FRAME_EPSILON_MM,
+            max(width_mm, height_mm) * 1e-12,
+        )
+        if not _topology_is_ambiguous(
+            physical,
+            contours,
+            2.0 * tolerance_mm + numeric_margin,
+            budget,
+        ):
+            return
+        if tolerance_mm <= _NATIVE_TOPOLOGY_MIN_TOLERANCE_MM:
+            raise RasterVectorizationError(
+                "Authoritative native-path topology remains ambiguous at the bounded "
+                "validation tolerance; reduce smoothing or simplification"
+            )
+        tolerance_mm = max(
+            _NATIVE_TOPOLOGY_MIN_TOLERANCE_MM,
+            tolerance_mm / 2.0,
+        )
 
 
 def _hierarchy_signature(parents: np.ndarray) -> tuple[bytes, ...]:
@@ -2349,13 +2962,11 @@ def vectorize_prepared_raster(
             width_mm,
             height_mm,
         )
-        (
-            final_physical,
-            maximum_preview_flatness,
-            clipping_displacement,
-        ) = _flatten_fitted_contour_for_preview(
-            fitted,
-            options.simplification_tolerance_mm * 0.20,
+        _validate_native_subpath_in_frame(native_subpath, width_mm, height_mm)
+        preview_tolerance_mm = options.simplification_tolerance_mm * 0.20
+        final_physical = _flatten_native_subpath_for_preview(
+            native_subpath,
+            preview_tolerance_mm,
             width_mm,
             height_mm,
             budget,
@@ -2363,8 +2974,7 @@ def vectorize_prepared_raster(
         deviation = (
             fitted.smoothing_displacement_mm
             + fitted.max_fitting_error_mm
-            + maximum_preview_flatness
-            + clipping_displacement
+            + preview_tolerance_mm
         )
         final_area = _signed_area(final_physical)
         if (not is_hole and final_area < 0.0) or (is_hole and final_area > 0.0):
@@ -2404,12 +3014,7 @@ def vectorize_prepared_raster(
             "Raster vectorization produced no non-degenerate closed paths"
         )
     result_contours = tuple(results)
-    _validate_topology(
-        result_contours,
-        width_mm,
-        height_mm,
-        options.simplification_tolerance_mm,
-    )
+    _validate_authoritative_native_topology(result_contours, width_mm, height_mm)
     _validate_rasterized_topology(result_contours, working_mask.shape)
     mask_preview = _preview_mask(
         working_mask,

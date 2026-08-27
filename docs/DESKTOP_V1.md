@@ -359,7 +359,9 @@ old project does not rewrite it; a later explicit save writes canonical schema
 3 while preserving the existing atomic-save and backup behavior. Schema-1 files
 still migrate explicitly as machine-coordinate projects and are never silently
 reinterpreted as honeycomb-local. The format deliberately does not depend on
-LightBurn project files.
+LightBurn project files. Schema 3 is forward-incompatible with older E3 builds
+that support only schema 2: those builds reject the newer file rather than
+silently discarding native path fields.
 
 Canonical schema-3 PATH/POLYGON `geometry` is:
 

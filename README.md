@@ -82,7 +82,9 @@ Native desktop workflow:
   fill rules. Curves remain native through project editing, transforms,
   duplication, grouping, save/reopen, autosave, recovery, and workspace
   rendering; planning flattens them deterministically in physical millimetres
-  at one controlled boundary
+  at one controlled boundary. Saving as schema 3 is forward-incompatible with
+  older E3 builds that understand only schema 2; those builds reject the newer
+  file instead of silently discarding native geometry
 - Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,
   imported 2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
   output-disabled speed/power layers, vector outline text, and automatically
@@ -441,8 +443,14 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   line art, silhouettes, stencils, and similar artwork, not a full-color or
   multi-layer tracer. Its fitted-curve deviation is estimated against the
   threshold-derived contour, so source resolution, antialiasing, threshold, and
-  smoothing still limit real accuracy. Projects retain adaptively flattened E3
-  polylines rather than editable Bézier primitives.
+  smoothing still limit real accuracy. Projects retain fitted native line and
+  cubic segments; bounded flattened points are transient preview, topology, and
+  planning artifacts rather than editable node data. Exact fitted extrema must
+  remain inside the reviewed source frame, and accepted compound contours must
+  retain provable separation through their flattening-error envelopes. Highly
+  pixel-constrained `A` and `S` glyphs can still vary at narrow counters and
+  curved shoulders; using a cleaner or higher-resolution source for those cases
+  is an accepted first-release quality limitation.
 - SVG text and embedded images are not converted. Native desktop import stops
   before creating an object when either is present; convert them to paths in
   the design program.

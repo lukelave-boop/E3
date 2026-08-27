@@ -58,6 +58,7 @@ from .path_geometry import (
     PathAffineTransform,
     PathCubicSegment,
     PathFillRule,
+    PathSubpath,
     flatten_native_path,
     native_path_bounds,
     split_cubic,
@@ -97,7 +98,38 @@ NATIVE_PATH_FLATTEN_TOLERANCE_MM = 0.025
 NATIVE_PATH_FLATTEN_ALGORITHM_VERSION = 1
 _NATIVE_PATH_FLATTEN_MAX_POINTS = MAX_NATIVE_PATH_FLATTENED_POINTS
 _NATIVE_PATH_SUBDIVISION_MAX_DEPTH = MAX_NATIVE_PATH_SUBDIVISION_DEPTH
+_NATIVE_PATH_TOPOLOGY_ALGORITHM_VERSION = 2
+_NATIVE_PATH_TOPOLOGY_MAX_TESTS = _MAX_SCANLINE_EDGE_TESTS
+_NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_FLOOR_MM = 1e-9
+_NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_RELATIVE = 1e-12
 _NORMALIZED_GEOMETRY_STAGE_VERSION = 2
+
+
+@dataclass(slots=True)
+class _NormalizedPointBudget:
+    limit: int
+    used: int = 0
+
+    @property
+    def remaining(self) -> int:
+        return self.limit - self.used
+
+    def native_max_points(self) -> int:
+        if self.remaining < 1:
+            raise self._exceeded()
+        return self.remaining
+
+    def consume(self, paths: Iterable[Polyline]) -> None:
+        point_count = sum(len(path.points) for path in paths)
+        if point_count > self.remaining:
+            raise self._exceeded()
+        self.used += point_count
+
+    def _exceeded(self) -> ValueError:
+        return ValueError(
+            "Project vector normalization exceeds the aggregate "
+            f"{self.limit:,}-point limit; simplify the project geometry"
+        )
 
 
 @dataclass(slots=True)
@@ -188,15 +220,216 @@ def _project_native_path(item: SceneObject) -> NativePathGeometry | None:
     return transform_native_path(geometry, _object_path_transform(item))
 
 
-def _native_path_has_cubic(geometry: NativePathGeometry) -> bool:
-    return any(
-        isinstance(segment, PathCubicSegment)
-        for subpath in geometry.subpaths
-        for segment in subpath.segments
+def _iter_native_cubic_bounds(
+    geometry: NativePathGeometry,
+) -> Iterable[tuple[float, float, float, float]]:
+    """Yield exact bounds for each cubic without including adjacent line segments."""
+
+    for subpath in geometry.subpaths:
+        current = subpath.start
+        for segment in subpath.segments:
+            if isinstance(segment, PathCubicSegment):
+                cubic = NativePathGeometry(
+                    (PathSubpath(current, (segment,), closed=False),),
+                )
+                yield native_path_bounds(cubic)
+            current = segment.to
+
+
+def _point_segment_distance_squared(
+    point: np.ndarray,
+    start: np.ndarray,
+    end: np.ndarray,
+) -> float:
+    vector = end - start
+    length_squared = float(np.dot(vector, vector))
+    if length_squared <= 1e-30:
+        difference = point - start
+        return float(np.dot(difference, difference))
+    ratio = float(np.dot(point - start, vector)) / length_squared
+    ratio = max(0.0, min(1.0, ratio))
+    difference = point - (start + ratio * vector)
+    return float(np.dot(difference, difference))
+
+
+def _orientation(first: np.ndarray, second: np.ndarray, third: np.ndarray) -> float:
+    first_delta = second - first
+    second_delta = third - first
+    return float(
+        first_delta[0] * second_delta[1]
+        - first_delta[1] * second_delta[0]
     )
 
 
-def _flatten_object_native_path(item: SceneObject) -> list[Polyline]:
+def _segments_touch_or_intersect(
+    first_start: np.ndarray,
+    first_end: np.ndarray,
+    second_start: np.ndarray,
+    second_end: np.ndarray,
+    *,
+    clearance_mm: float,
+) -> bool:
+    first_side_start = _orientation(first_start, first_end, second_start)
+    first_side_end = _orientation(first_start, first_end, second_end)
+    second_side_start = _orientation(second_start, second_end, first_start)
+    second_side_end = _orientation(second_start, second_end, first_end)
+    if (
+        (first_side_start > 0.0 > first_side_end)
+        or (first_side_start < 0.0 < first_side_end)
+    ) and (
+        (second_side_start > 0.0 > second_side_end)
+        or (second_side_start < 0.0 < second_side_end)
+    ):
+        return True
+    tolerance_squared = clearance_mm**2
+    return min(
+        _point_segment_distance_squared(first_start, second_start, second_end),
+        _point_segment_distance_squared(first_end, second_start, second_end),
+        _point_segment_distance_squared(second_start, first_start, first_end),
+        _point_segment_distance_squared(second_end, first_start, first_end),
+    ) <= tolerance_squared
+
+
+def _closed_paths_touch_or_intersect(
+    first: np.ndarray,
+    second: np.ndarray,
+    *,
+    clearance_mm: float,
+) -> bool:
+    first_starts = first[:-1]
+    first_ends = first[1:]
+    second_starts = second[:-1]
+    second_ends = second[1:]
+    if len(first_starts) > len(second_starts):
+        first_starts, second_starts = second_starts, first_starts
+        first_ends, second_ends = second_ends, first_ends
+    second_minimum = np.minimum(second_starts, second_ends)
+    second_maximum = np.maximum(second_starts, second_ends)
+    tolerance = clearance_mm
+    for first_start, first_end in zip(first_starts, first_ends, strict=True):
+        first_minimum = np.minimum(first_start, first_end) - tolerance
+        first_maximum = np.maximum(first_start, first_end) + tolerance
+        candidates = np.flatnonzero(
+            np.all(second_maximum >= first_minimum, axis=1)
+            & np.all(second_minimum <= first_maximum, axis=1)
+        )
+        for index in candidates:
+            if _segments_touch_or_intersect(
+                first_start,
+                first_end,
+                second_starts[index],
+                second_ends[index],
+                clearance_mm=clearance_mm,
+            ):
+                return True
+    return False
+
+
+def _native_path_topology_numeric_margin_mm(
+    first: np.ndarray,
+    second: np.ndarray,
+) -> float:
+    scale = max(
+        float(np.max(np.abs(first))),
+        float(np.max(np.abs(second))),
+    )
+    return max(
+        _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_FLOOR_MM,
+        scale * _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_RELATIVE,
+    )
+
+
+def _validate_native_closed_subpath_topology(
+    paths: list[np.ndarray],
+    closed: list[bool],
+    curve_envelopes_mm: list[float],
+    *,
+    source_tag: str,
+) -> None:
+    """Prove closed subpaths remain disjoint across both flattening envelopes."""
+
+    candidates = [
+        (path, path.min(axis=0), path.max(axis=0), envelope)
+        for path, is_closed, envelope in zip(
+            paths,
+            closed,
+            curve_envelopes_mm,
+            strict=True,
+        )
+        if is_closed and len(path) >= 2
+    ]
+    candidates.sort(key=lambda value: float(value[1][0]))
+    work = 0
+    maximum_envelope = max(
+        (candidate[3] for candidate in candidates),
+        default=0.0,
+    )
+    global_scale = max(
+        (float(np.max(np.abs(candidate[0]))) for candidate in candidates),
+        default=0.0,
+    )
+    global_numeric_margin = max(
+        _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_FLOOR_MM,
+        global_scale * _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_RELATIVE,
+    )
+    for position, (
+        first,
+        first_minimum,
+        first_maximum,
+        first_envelope,
+    ) in enumerate(candidates):
+        maximum_pair_clearance = (
+            first_envelope + maximum_envelope + global_numeric_margin
+        )
+        for second_position in range(position + 1, len(candidates)):
+            second, second_minimum, second_maximum, second_envelope = candidates[
+                second_position
+            ]
+            work += 1
+            if work > _NATIVE_PATH_TOPOLOGY_MAX_TESTS:
+                raise ValueError(
+                    "Native compound path topology exceeds the bounded intersection "
+                    f"test limit for {source_tag}; simplify the source artwork"
+                )
+            if second_minimum[0] > first_maximum[0] + maximum_pair_clearance:
+                break
+            clearance = (
+                first_envelope
+                + second_envelope
+                + _native_path_topology_numeric_margin_mm(first, second)
+            )
+            if (
+                second_minimum[1] > first_maximum[1] + clearance
+                or second_maximum[1] < first_minimum[1] - clearance
+            ):
+                continue
+            edge_tests = (len(first) - 1) * (len(second) - 1)
+            if edge_tests > _NATIVE_PATH_TOPOLOGY_MAX_TESTS - work:
+                raise ValueError(
+                    "Native compound path topology exceeds the bounded intersection "
+                    f"test limit for {source_tag}; simplify the source artwork"
+                )
+            work += edge_tests
+            if _closed_paths_touch_or_intersect(
+                first,
+                second,
+                clearance_mm=clearance,
+            ):
+                raise ValueError(
+                    "Native compound path has touching or intersecting closed "
+                    "subpaths, or insufficient flattened clearance to prove them "
+                    f"disjoint after {NATIVE_PATH_FLATTEN_TOLERANCE_MM:g} mm planning "
+                    f"flattening: {source_tag}; flattened boundaries must be separated "
+                    f"by more than {first_envelope + second_envelope:g} mm plus the "
+                    "scale-aware numeric margin"
+                )
+
+
+def _flatten_object_native_path(
+    item: SceneObject,
+    *,
+    max_points: int | None = None,
+) -> list[Polyline]:
     geometry = _object_native_path(item)
     if geometry is None:
         return []
@@ -204,16 +437,37 @@ def _flatten_object_native_path(item: SceneObject) -> list[Polyline]:
         geometry,
         NATIVE_PATH_FLATTEN_TOLERANCE_MM,
         transform=_object_path_transform(item),
-        max_points=_NATIVE_PATH_FLATTEN_MAX_POINTS,
+        max_points=(
+            _NATIVE_PATH_FLATTEN_MAX_POINTS if max_points is None else max_points
+        ),
         max_depth=_NATIVE_PATH_SUBDIVISION_MAX_DEPTH,
+    )
+    arrays = [np.asarray(points, dtype=np.float64) for points in flattened]
+    closed = [subpath.closed for subpath in geometry.subpaths]
+    curve_envelopes = [
+        (
+            NATIVE_PATH_FLATTEN_TOLERANCE_MM
+            if any(
+                isinstance(segment, PathCubicSegment)
+                for segment in subpath.segments
+            )
+            else 0.0
+        )
+        for subpath in geometry.subpaths
+    ]
+    _validate_native_closed_subpath_topology(
+        arrays,
+        closed,
+        curve_envelopes,
+        source_tag=item.name,
     )
     return [
         Polyline(
-            np.asarray(points, dtype=np.float64),
-            closed=subpath.closed,
+            points,
+            closed=is_closed,
             source_tag=item.name,
         )
-        for subpath, points in zip(geometry.subpaths, flattened, strict=True)
+        for points, is_closed in zip(arrays, closed, strict=True)
     ]
 
 
@@ -277,15 +531,40 @@ def object_polylines(item: SceneObject) -> list[Polyline]:
     return []
 
 
+def _budgeted_object_polylines(
+    item: SceneObject,
+    point_budget: _NormalizedPointBudget | None,
+) -> list[Polyline]:
+    if point_budget is None:
+        return object_polylines(item)
+    try:
+        paths = (
+            _flatten_object_native_path(
+                item,
+                max_points=point_budget.native_max_points(),
+            )
+            if item.visible and item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}
+            else object_polylines(item)
+        )
+    except ValueError as exc:
+        if "bounded point limit" not in str(exc):
+            raise
+        raise point_budget._exceeded() from exc
+    point_budget.consume(paths)
+    return paths
+
+
 def _prepared_object_polylines(
     item: SceneObject,
     prepared: dict[str, tuple[Polyline, ...]] | None,
+    *,
+    point_budget: _NormalizedPointBudget | None = None,
 ) -> list[Polyline]:
     if prepared is None:
-        return object_polylines(item)
+        return _budgeted_object_polylines(item, point_budget)
     cached = prepared.get(item.id)
     if cached is None:
-        cached = tuple(object_polylines(item))
+        cached = tuple(_budgeted_object_polylines(item, point_budget))
         prepared[item.id] = cached
     return list(cached)
 
@@ -506,20 +785,20 @@ def _validate_native_curves_in_work_area(
     safe_minimum_y = work_area.y_min + margin_mm
     safe_maximum_y = work_area.y_max - margin_mm
     for geometry in paths:
-        if not _native_path_has_cubic(geometry):
-            continue
-        minimum_x, minimum_y, maximum_x, maximum_y = native_path_bounds(geometry)
-        if (
-            minimum_x - envelope < safe_minimum_x - tolerance
-            or maximum_x + envelope > safe_maximum_x + tolerance
-            or minimum_y - envelope < safe_minimum_y - tolerance
-            or maximum_y + envelope > safe_maximum_y + tolerance
+        for minimum_x, minimum_y, maximum_x, maximum_y in _iter_native_cubic_bounds(
+            geometry
         ):
-            raise SafetyError(
-                "Path exceeds the configured safe work area: "
-                f"{coordinate_label} native curve plus its {envelope:g} mm "
-                "flattening envelope is outside the authorized rectangle"
-            )
+            if (
+                minimum_x - envelope < safe_minimum_x - tolerance
+                or maximum_x + envelope > safe_maximum_x + tolerance
+                or minimum_y - envelope < safe_minimum_y - tolerance
+                or maximum_y + envelope > safe_maximum_y + tolerance
+            ):
+                raise SafetyError(
+                    "Path exceeds the configured safe work area: "
+                    f"{coordinate_label} native curve plus its {envelope:g} mm "
+                    "flattening envelope is outside the authorized rectangle"
+                )
 
 
 def _polygon_clearance_mm(
@@ -587,8 +866,6 @@ def _native_path_proves_guarded_containment(
 ) -> bool:
     for subpath in geometry.subpaths:
         current = subpath.start
-        if not _point_has_curve_clearance(current, polygon):
-            return False
         for segment in subpath.segments:
             if isinstance(segment, PathCubicSegment):
                 if not _cubic_hull_proves_guarded_containment(
@@ -597,14 +874,7 @@ def _native_path_proves_guarded_containment(
                     polygon,
                 ):
                     return False
-            elif not _point_has_curve_clearance(segment.to, polygon):
-                return False
             current = segment.to
-        if subpath.closed and not _point_has_curve_clearance(
-            subpath.start,
-            polygon,
-        ):
-            return False
     return True
 
 
@@ -619,7 +889,7 @@ def _validate_native_curves_in_guarded_polygon(
         label="guarded output polygon",
     )
     for geometry in paths:
-        if _native_path_has_cubic(geometry) and not _native_path_proves_guarded_containment(
+        if not _native_path_proves_guarded_containment(
             geometry,
             normalized,
         ):
@@ -856,6 +1126,18 @@ def _normalized_layer_dependency_payload(
             "maximum_points": _NATIVE_PATH_FLATTEN_MAX_POINTS,
             "maximum_subdivision_depth": _NATIVE_PATH_SUBDIVISION_MAX_DEPTH,
         },
+        "native_path_topology": {
+            "algorithm_version": _NATIVE_PATH_TOPOLOGY_ALGORITHM_VERSION,
+            "clearance_policy": "sum-per-subpath-curve-envelopes-plus-numeric-margin",
+            "curve_envelope_mm": NATIVE_PATH_FLATTEN_TOLERANCE_MM,
+            "numeric_margin_floor_mm": (
+                _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_FLOOR_MM
+            ),
+            "numeric_margin_relative": (
+                _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_RELATIVE
+            ),
+            "maximum_tests": _NATIVE_PATH_TOPOLOGY_MAX_TESTS,
+        },
         "objects": [
             {
                 "name": item.name,
@@ -873,7 +1155,12 @@ def _normalized_layer_dependency_payload(
     }
 
 
-def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyline]:
+def _layer_paths(
+    document: ProjectDocument,
+    layer: OperationLayer,
+    *,
+    point_budget: _NormalizedPointBudget | None = None,
+) -> list[Polyline]:
     paths: list[Polyline] = []
     for item in document.objects:
         if (
@@ -881,7 +1168,7 @@ def _layer_paths(document: ProjectDocument, layer: OperationLayer) -> list[Polyl
             and item.visible
             and item.is_output_geometry
         ):
-            paths.extend(object_polylines(item))
+            paths.extend(_budgeted_object_polylines(item, point_budget))
     return paths
 
 
@@ -891,6 +1178,15 @@ def _normalized_layer_geometry(
     scene_revision: SceneRevision | None = None,
     *,
     planning_cache: PlanningCache | None = None,
+    point_budget: _NormalizedPointBudget | None = None,
+    deferred_cache_writes: dict[
+        str,
+        tuple[
+            tuple[Polyline, ...],
+            tuple[float, float, float, float] | None,
+        ],
+    ]
+    | None = None,
 ) -> NormalizedGeometryArtifact:
     """Capture or safely reuse LINE geometry at the normalized stage boundary."""
 
@@ -905,16 +1201,21 @@ def _normalized_layer_geometry(
         else planning_cache.get_normalized(dependency_digest)
     )
     if cached is None:
-        paths = tuple(_layer_paths(document, layer))
+        paths = tuple(_layer_paths(document, layer, point_budget=point_budget))
         bounds_mm = _bounds(paths) if paths else None
         if planning_cache is not None:
-            planning_cache.put_normalized(
-                dependency_digest,
-                paths,
-                bounds_mm,
-            )
+            if deferred_cache_writes is None:
+                planning_cache.put_normalized(
+                    dependency_digest,
+                    paths,
+                    bounds_mm,
+                )
+            else:
+                deferred_cache_writes[dependency_digest] = (paths, bounds_mm)
     else:
         paths, bounds_mm = cached
+        if point_budget is not None:
+            point_budget.consume(paths)
     native_geometries = [
         item.path_geometry()
         for item in document.objects
@@ -960,6 +1261,66 @@ def _normalized_layer_geometry(
         metadata=metadata,
         layer_paths=((layer.id, paths),),
     )
+
+
+def _preflight_normalized_point_budget(
+    document: ProjectDocument,
+    scene_revision: SceneRevision,
+    *,
+    planning_cache: PlanningCache | None,
+    prepared_object_paths: dict[str, tuple[Polyline, ...]],
+) -> tuple[
+    dict[str, NormalizedGeometryArtifact],
+    dict[
+        str,
+        tuple[
+            tuple[Polyline, ...],
+            tuple[float, float, float, float] | None,
+        ],
+    ],
+]:
+    """Prepare every vector source before publishing any new cache entries."""
+
+    point_budget = _NormalizedPointBudget(_NATIVE_PATH_FLATTEN_MAX_POINTS)
+    normalized_layers: dict[str, NormalizedGeometryArtifact] = {}
+    deferred_cache_writes: dict[
+        str,
+        tuple[
+            tuple[Polyline, ...],
+            tuple[float, float, float, float] | None,
+        ],
+    ] = {}
+    for layer in sorted(document.layers, key=lambda item: item.priority):
+        if not layer.visible or not layer.output_enabled:
+            continue
+        layer_objects = [
+            item
+            for item in document.objects
+            if (
+                item.layer_id == layer.id
+                and item.visible
+                and item.is_output_geometry
+            )
+        ]
+        if not layer_objects:
+            continue
+        if layer.mode == LayerMode.LINE:
+            normalized_layers[layer.id] = _normalized_layer_geometry(
+                document,
+                layer,
+                scene_revision,
+                planning_cache=planning_cache,
+                point_budget=point_budget,
+                deferred_cache_writes=deferred_cache_writes,
+            )
+            continue
+        for item in layer_objects:
+            _prepared_object_polylines(
+                item,
+                prepared_object_paths,
+                point_budget=point_budget,
+            )
+    return normalized_layers, deferred_cache_writes
 
 
 def _line_operation_artifact(
@@ -1925,9 +2286,10 @@ def _operation_paths(
     scene_revision: SceneRevision | None = None,
     planning_cache: PlanningCache | None = None,
     prepared_object_paths: dict[str, tuple[Polyline, ...]] | None = None,
+    normalized_geometry: NormalizedGeometryArtifact | None = None,
 ) -> tuple[list[Polyline], OperationArtifact | None]:
     if layer.mode == LayerMode.LINE:
-        normalized = _normalized_layer_geometry(
+        normalized = normalized_geometry or _normalized_layer_geometry(
             document,
             layer,
             scene_revision=scene_revision,
@@ -2094,6 +2456,14 @@ def generate_project_gcode(
     scene_revision = project_scene_revision(document)
     controller_power_max = int(power_max or laser.power_max)
     prepared_object_paths: dict[str, tuple[Polyline, ...]] = {}
+    prepared_normalized_layers, deferred_normalized_cache_writes = (
+        _preflight_normalized_point_budget(
+            document,
+            scene_revision,
+            planning_cache=planning_cache,
+            prepared_object_paths=prepared_object_paths,
+        )
+    )
     raster_sources = _preflight_raster_budget(
         document,
         controller_power_max,
@@ -2294,6 +2664,23 @@ def generate_project_gcode(
             all_controller_paths.extend(controller_motion_paths)
             continue
 
+        normalized_geometry = prepared_normalized_layers.get(layer.id)
+        if normalized_geometry is not None and planning_cache is not None:
+            dependency_digest = normalized_geometry.metadata.dependency_digest
+            if dependency_digest is None:
+                raise RuntimeError(
+                    "Normalized LINE artifact is missing its dependency digest"
+                )
+            deferred = deferred_normalized_cache_writes.pop(
+                dependency_digest,
+                None,
+            )
+            if deferred is not None:
+                planning_cache.put_normalized(
+                    dependency_digest,
+                    deferred[0],
+                    deferred[1],
+                )
         local_design_paths, operation_artifact = _operation_paths(
             document,
             layer,
@@ -2301,6 +2688,7 @@ def generate_project_gcode(
             scene_revision=scene_revision,
             planning_cache=planning_cache,
             prepared_object_paths=prepared_object_paths,
+            normalized_geometry=normalized_geometry,
         )
         if not local_design_paths:
             continue
@@ -2773,6 +3161,7 @@ def generate_project_frame(
         ).identity
     paths: list[Polyline] = []
     native_paths: list[NativePathGeometry] = []
+    point_budget = _NormalizedPointBudget(_NATIVE_PATH_FLATTEN_MAX_POINTS)
     for item in objects:
         if item.kind == ObjectKind.IMAGE:
             corners = _transform_points(
@@ -2795,20 +3184,30 @@ def generate_project_frame(
             native_path = _project_native_path(item)
             if native_path is not None:
                 native_paths.append(native_path)
-            paths.extend(object_polylines(item))
+            paths.extend(_budgeted_object_polylines(item, point_budget))
     if not paths:
         raise ValueError("The project contains no visible output geometry")
     local_bounds = _bounds(paths)
     for geometry in native_paths:
-        if not _native_path_has_cubic(geometry):
-            continue
-        curve_bounds = native_path_bounds(geometry)
-        local_bounds = (
-            min(local_bounds[0], curve_bounds[0] - NATIVE_PATH_FLATTEN_TOLERANCE_MM),
-            min(local_bounds[1], curve_bounds[1] - NATIVE_PATH_FLATTEN_TOLERANCE_MM),
-            max(local_bounds[2], curve_bounds[2] + NATIVE_PATH_FLATTEN_TOLERANCE_MM),
-            max(local_bounds[3], curve_bounds[3] + NATIVE_PATH_FLATTEN_TOLERANCE_MM),
-        )
+        for curve_bounds in _iter_native_cubic_bounds(geometry):
+            local_bounds = (
+                min(
+                    local_bounds[0],
+                    curve_bounds[0] - NATIVE_PATH_FLATTEN_TOLERANCE_MM,
+                ),
+                min(
+                    local_bounds[1],
+                    curve_bounds[1] - NATIVE_PATH_FLATTEN_TOLERANCE_MM,
+                ),
+                max(
+                    local_bounds[2],
+                    curve_bounds[2] + NATIVE_PATH_FLATTEN_TOLERANCE_MM,
+                ),
+                max(
+                    local_bounds[3],
+                    curve_bounds[3] + NATIVE_PATH_FLATTEN_TOLERANCE_MM,
+                ),
+            )
     local_rectangle = Polyline(
         np.asarray(
             [

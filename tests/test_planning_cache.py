@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from laser_aligner.config import LaserSettings
 from laser_aligner.geometry.svg import Polyline
@@ -11,10 +12,17 @@ from laser_aligner.planning import (
     stage_dependency_digest,
 )
 from laser_aligner.project import toolpath as toolpath_module
-from laser_aligner.project.model import Bounds, ProjectDocument, SceneObject, Transform
+from laser_aligner.project.model import (
+    Bounds,
+    LayerMode,
+    ProjectDocument,
+    SceneObject,
+    Transform,
+)
 from laser_aligner.project.path_geometry import (
     NativePathGeometry,
     PathCubicSegment,
+    PathLineSegment,
     PathSubpath,
 )
 from laser_aligner.project.toolpath import generate_project_gcode
@@ -34,16 +42,36 @@ def _document() -> ProjectDocument:
     return document
 
 
+def _triangle_object(layer_id: str, *, name: str, x_mm: float) -> SceneObject:
+    return SceneObject.native_path(
+        layer_id,
+        NativePathGeometry(
+            (
+                PathSubpath(
+                    (-0.5, -0.5),
+                    (
+                        PathLineSegment((0.5, -0.5)),
+                        PathLineSegment((0.0, 0.5)),
+                    ),
+                    closed=True,
+                ),
+            )
+        ),
+        name=name,
+        transform=Transform(x_mm, 50.0, 10.0, 10.0),
+    )
+
+
 def test_repeated_generation_reuses_normalized_line_geometry(monkeypatch) -> None:
     document = _document()
     cache = PlanningCache()
     calls = 0
     original = toolpath_module._layer_paths
 
-    def counted_layer_paths(project, layer):
+    def counted_layer_paths(project, layer, **kwargs):
         nonlocal calls
         calls += 1
-        return original(project, layer)
+        return original(project, layer, **kwargs)
 
     monkeypatch.setattr(toolpath_module, "_layer_paths", counted_layer_paths)
 
@@ -72,10 +100,10 @@ def test_layer_setting_change_reuses_normalized_geometry(monkeypatch) -> None:
     calls = 0
     original = toolpath_module._layer_paths
 
-    def counted_layer_paths(project, layer):
+    def counted_layer_paths(project, layer, **kwargs):
         nonlocal calls
         calls += 1
-        return original(project, layer)
+        return original(project, layer, **kwargs)
 
     monkeypatch.setattr(toolpath_module, "_layer_paths", counted_layer_paths)
 
@@ -102,10 +130,10 @@ def test_geometry_change_invalidates_normalized_cache(monkeypatch) -> None:
     calls = 0
     original = toolpath_module._layer_paths
 
-    def counted_layer_paths(project, layer):
+    def counted_layer_paths(project, layer, **kwargs):
         nonlocal calls
         calls += 1
-        return original(project, layer)
+        return original(project, layer, **kwargs)
 
     monkeypatch.setattr(toolpath_module, "_layer_paths", counted_layer_paths)
 
@@ -133,10 +161,10 @@ def test_cache_hit_rehydrates_current_artifact_identity(monkeypatch) -> None:
     calls = 0
     original = toolpath_module._layer_paths
 
-    def counted_layer_paths(project, operation_layer):
+    def counted_layer_paths(project, operation_layer, **kwargs):
         nonlocal calls
         calls += 1
-        return original(project, operation_layer)
+        return original(project, operation_layer, **kwargs)
 
     monkeypatch.setattr(toolpath_module, "_layer_paths", counted_layer_paths)
 
@@ -209,6 +237,73 @@ def test_stage_one_flattened_cache_entry_is_not_reused_for_native_stage_two() ->
     assert artifact.paths_for_layer(layer.id)[0].source_tag != "stale-stage-one"
     assert cache.stats.normalized_hits == 0
     assert cache.stats.normalized_misses == 1
+
+
+@pytest.mark.parametrize("mode", [LayerMode.LINE, LayerMode.FILL, LayerMode.RASTER])
+def test_generation_point_budget_rejects_fresh_multi_layer_vectors_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+    mode: LayerMode,
+) -> None:
+    monkeypatch.setattr(toolpath_module, "_NATIVE_PATH_FLATTEN_MAX_POINTS", 7)
+    document = ProjectDocument.new("Aggregate vectors", Bounds(0, 0, 100, 100))
+    first_layer = document.layers[0]
+    first_layer.mode = mode
+    second_layer = document.add_layer(name="Second", mode=mode)
+    objects = (
+        _triangle_object(first_layer.id, name="First", x_mm=25.0),
+        _triangle_object(second_layer.id, name="Second", x_mm=75.0),
+    )
+    for item in objects:
+        document.add_object(item)
+        assert sum(len(path.points) for path in toolpath_module.object_polylines(item)) == 4
+    cache = PlanningCache()
+
+    with pytest.raises(ValueError, match=r"aggregate 7-point limit"):
+        generate_project_gcode(
+            document,
+            LaserSettings(power_max=1000),
+            planning_cache=cache,
+        )
+
+    assert cache.stats.normalized_entries == 0
+    assert cache.stats.placed_entries == 0
+    assert cache.stats.controller_entries == 0
+
+
+def test_generation_point_budget_rejects_multi_layer_normalized_cache_hits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(toolpath_module, "_NATIVE_PATH_FLATTEN_MAX_POINTS", 7)
+    document = ProjectDocument.new("Cached aggregate vectors", Bounds(0, 0, 100, 100))
+    first_layer = document.layers[0]
+    second_layer = document.add_layer(name="Second")
+    objects = (
+        _triangle_object(first_layer.id, name="First", x_mm=25.0),
+        _triangle_object(second_layer.id, name="Second", x_mm=75.0),
+    )
+    cache = PlanningCache()
+    for layer, item in zip((first_layer, second_layer), objects, strict=True):
+        document.add_object(item)
+        paths = tuple(toolpath_module.object_polylines(item))
+        digest = stage_dependency_digest(
+            PlanningStage.NORMALIZED_GEOMETRY,
+            toolpath_module._NORMALIZED_GEOMETRY_STAGE_VERSION,
+            toolpath_module._normalized_layer_dependency_payload(document, layer),
+        )
+        cache.put_normalized(digest, paths, toolpath_module._bounds(paths))
+
+    with pytest.raises(ValueError, match=r"aggregate 7-point limit"):
+        generate_project_gcode(
+            document,
+            LaserSettings(power_max=1000),
+            planning_cache=cache,
+        )
+
+    assert cache.stats.normalized_hits == 2
+    assert cache.stats.normalized_misses == 0
+    assert cache.stats.normalized_entries == 2
+    assert cache.stats.placed_entries == 0
+    assert cache.stats.controller_entries == 0
 
 
 def test_cached_geometry_is_isolated_from_callers() -> None:

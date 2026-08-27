@@ -11,8 +11,10 @@ not current product capability.
   multiple open or closed subpaths, and an explicit even-odd or nonzero fill
   rule. Schema-1 and schema-2 polyline projects migrate in memory to native
   line-only paths and are written as schema 3 only on an explicit later save;
-  their source files are not rewritten by opening. Raster vectorization now
-  retains its fitted straight and cubic segments rather than persisting its
+  their source files are not rewritten by opening. Schema-3 files are
+  intentionally forward-incompatible with older E3 builds that understand only
+  schema 2, which reject them rather than dropping native data. Raster
+  vectorization now retains its fitted straight and cubic segments rather than persisting its
   preview/topology samples, and the Qt workspace renders cubic segments
   directly. The existing Polyline planner remains authoritative after one
   deterministic project-to-planning flattening boundary at 0.025 mm in
@@ -20,9 +22,17 @@ not current product capability.
   2 and includes the flattening contract in its dependency/cache identity.
   Exact cubic extrema and conservative convex-polygon subdivision protect the
   full curve in local, placed-beam, and spot-corrected controller coordinates;
-  the existing flattened-path and final program checks still run. No controller
-  spline command, node editor, SVG native-curve import, machine authority, or
-  physical verification is added.
+  the existing flattened-path and final program checks still run. An adversarial
+  follow-up rejects fitted raster curves whose exact extrema leave the reviewed
+  source frame, derives preview points only from the authoritative native path,
+  and proves contour topology with bounded native-arc checks plus adaptive
+  flattening clearance. Compound planning paths must clear the sum of their
+  per-subpath flattening envelopes, and one aggregate point budget covers fresh
+  LINE/FILL/RASTER normalization and normalized-cache hits before downstream
+  artifacts are published. Shape-history replacement now enforces the project
+  segment cap atomically, and legacy polyline children reject unexpected native
+  fields. No controller spline command, node editor, SVG native-curve import,
+  machine authority, or physical verification is added.
 
 - Added a dedicated imported-raster vectorization workflow without replacing
   raster import or engraving. Exactly one selected IMAGE exposes **Trace image
@@ -31,10 +41,12 @@ not current product capability.
   manual, or usable-alpha detection, physical speck/smoothing/fit controls,
   contour/hole policy, high-contrast preview color presets and opacity, and
   Replace or Keep/hide handling. The Qt-free production pipeline uses a capped
-  4× mask, hierarchy-aware contours, a coordinate-canonical closed seam,
-  physical multi-scale corner persistence, smooth tangent sharing across
-  non-corner joins, bounded line/cubic fitting, and adaptive flattening into the
-  established multi-contour PATH representation. It records raw/fitted/final counts and
+  4× mask, hierarchy-aware contours, full-cycle seam canonicalization, physical
+  multi-scale corner persistence, generic straight-run anchors, shared tangents
+  across non-corner joins, and bounded line/cubic fitting into authoritative
+  native PATH geometry. Exact source-frame and native-arc topology checks review
+  that geometry before bounded transient flattening is used for overlay,
+  diagnostics, and planning estimates. It records raw/fitted/preview counts and
   estimated deviation, preserves the source frame/transform and nested holes,
   and rejects excess connected components, contours, raw points, fitted
   segments, final points, or internal work pixels with actionable cleanup
@@ -42,8 +54,8 @@ not current product capability.
   0%-power, output-disabled ordinary Line layer are one undoable operation; a
   retained source stays beneath the vector in its unchanged transform. This first version is
   a single-foreground logo/line-art/silhouette tracer, not full-color or
-  multi-layer tracing; it persists adaptive polylines rather than Bézier
-  primitives. It does not generate G-code, authorize output, contact hardware,
+  multi-layer tracing; it does not provide node-level curve editing. It does not
+  generate G-code, authorize output, contact hardware,
   Home, move, arm, or start a job.
 
 - Removed the reduced-capability `--hardware` product launch mode. Normal

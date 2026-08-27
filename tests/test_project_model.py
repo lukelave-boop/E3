@@ -332,6 +332,14 @@ def test_schema_mismatch_is_rejected(schema: object):
         ProjectDocument.from_dict(payload)
 
 
+def test_newer_project_schema_is_rejected_without_downconversion():
+    payload = ProjectDocument.new().to_dict()
+    payload["schema_version"] = 4
+
+    with pytest.raises(ProjectFormatError, match="Unsupported project schema 4"):
+        ProjectDocument.from_dict(payload)
+
+
 def test_duplicate_group_gets_a_new_group_identity():
     document = ProjectDocument.new()
     first = SceneObject.rectangle(document.active_layer_id)
@@ -403,6 +411,35 @@ def test_legacy_project_path_geometry_migrates_to_canonical_native_lines(schema)
         isinstance(segment, PathLineSegment)
         for segment in geometry.subpaths[0].segments
     )
+
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_legacy_project_path_rejects_unexpected_polyline_child_fields(schema):
+    document = ProjectDocument.new("Malformed legacy path")
+    path = SceneObject.path(
+        document.active_layer_id,
+        [{"points": [[0, 0], [1, 1]], "closed": False}],
+    )
+    document.add_object(path)
+    payload = document.to_dict()
+    payload["schema_version"] = schema
+    payload["objects"][0]["geometry"] = {
+        "polylines": [
+            {
+                "points": [[-0.5, -0.5], [0.5, 0.5]],
+                "closed": False,
+                "segments": [],
+            }
+        ]
+    }
+    if schema == 1:
+        payload.pop("coordinate_space")
+
+    with pytest.raises(
+        ProjectFormatError,
+        match=r"legacy polyline\[0\].*unsupported field.*segments",
+    ):
+        ProjectDocument.from_dict(payload)
 
 
 def test_schema_three_rejects_legacy_polyline_geometry():

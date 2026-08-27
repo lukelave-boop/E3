@@ -105,11 +105,11 @@ class CommandStack:
         self._changed()
 
     def execute(self, command: Command) -> None:
+        command.redo()
         if self.can_redo:
             del self._commands[self._index :]
             if self._clean_index > self._index:
                 self._clean_index = -1
-        command.redo()
         self._commands.append(command)
         self._index += 1
         if len(self._commands) > self.max_depth:
@@ -122,8 +122,9 @@ class CommandStack:
     def undo(self) -> bool:
         if not self.can_undo:
             return False
+        command = self._commands[self._index - 1]
+        command.undo()
         self._index -= 1
-        self._commands[self._index].undo()
         self._changed()
         return True
 
@@ -473,8 +474,16 @@ class UpdateObjectShapeCommand(Command):
         geometry_changed = item.geometry != geometry
         if not transform_changed and not geometry_changed:
             return
-        item.transform = transform.copy()
-        item.geometry = copy.deepcopy(dict(geometry))
+        payload = item.to_dict()
+        payload["transform"] = transform.to_dict()
+        payload["geometry"] = copy.deepcopy(dict(geometry))
+        validated = SceneObject.from_dict(payload)
+        self.document.validate_object_additions(
+            (validated,),
+            replacing_ids=(item.id,),
+        )
+        item.transform = validated.transform.copy()
+        item.geometry = copy.deepcopy(validated.geometry)
         self.document.touch()
 
     def redo(self) -> None:

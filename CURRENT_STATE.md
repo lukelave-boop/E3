@@ -92,8 +92,8 @@ memory; opening an old file does not rewrite it, and the next explicit save
 writes only canonical schema-3 native geometry. Existing SVG, G-code, and
 LightBurn polyline constructors pass through the same immediate compatibility
 conversion and retain no second legacy geometry copy. Schema 3 is intentionally
-forward-incompatible with older E3 builds, which reject it instead of silently
-discarding native geometry.
+forward-incompatible with older E3 builds that understand only schema 2; those
+builds reject it rather than silently losing native path data.
 
 The workspace builds `QPainterPath` line and cubic elements directly, applies
 the persisted fill rule, and does not flatten native curves for display. Native
@@ -119,12 +119,14 @@ of destroying curves at the former `_fit_and_flatten_contour()` seam. The stages
 canonicalize the complete closed-contour cycle, classify only corners persistent
 across physical scales, add generic straight-run anchors, fit bounded line/cubic
 segments with shared tangents at non-corner joins, validate/convert that fit to
-one authoritative native subpath, and separately flatten bounded transient
-points for topology comparison, overlay preview, diagnostics, and planning-point
-estimation. Source- and 4×-resolution budgets reject pathological masks before
-full allocation, and capped reconstruction must reproduce the fitted contour
-forest. Parent/depth/hole state and quality metrics remain attached to each
-native subpath; no fitted cubic is replaced by persisted polyline samples.
+one authoritative native subpath, reject exact cubic extrema outside the
+image-local frame, and derive bounded preview points from that native geometry
+without clipping. Bounded exact cubic self/adjacent-arc checks and adaptive
+physical-space clearance prove the authoritative contour forest before the
+existing 4× rasterized hierarchy comparison. Source- and 4×-resolution budgets
+reject pathological masks before full allocation. Parent/depth/hole state and
+quality metrics remain attached to each native subpath; no fitted cubic is
+replaced by persisted polyline samples.
 
 One compound native path preserves all selected outers and holes in the original
 image-local frame with the source Transform and SHA-256. Replace/Keep/hide,
@@ -142,7 +144,12 @@ at **0.025 mm** tolerance. The normalized-geometry planning stage is version 2;
 its dependency identity includes the tolerance and flattening algorithm version
 so a stage-1 artifact cannot be reused. Downstream placement, containment,
 preview, preflight, and G0/G1 generation continue to consume ordinary
-`Polyline` values. No controller spline or arc command is introduced.
+`Polyline` values. Generation applies one aggregate 250,000-point normalization
+budget across fresh LINE/FILL/RASTER vectors and normalized-cache hits before
+publishing downstream artifacts. Closed compound subpaths must be separated by
+more than the sum of their per-subpath curve envelopes plus a scale-aware numeric
+margin; all-line subpaths carry no curve envelope. No controller spline or arc
+command is introduced.
 
 Before output acceptance, exact derivative-root extrema bound complete cubics in
 rectangular work areas. Convex guarded polygons use recursive Bézier subdivision
@@ -150,12 +157,16 @@ and the convex-hull property, including the 0.025 mm flattening envelope. Those
 checks are applied in project-local, placed machine, and controller-offset
 domains in addition to the existing flattened-path checks. Compound fill
 planning honors even-odd parity or deliberate nonzero winding; containment cut
-ordering remains winding-independent and deepest-first.
+ordering remains winding-independent and deepest-first. Cubic bounds are applied
+per cubic, so an exact boundary line is not spuriously expanded merely because
+another subpath contains a curve.
 
 Native-path production caps are 8 levels of JSON nesting, 8,192 subpaths per
 object, 100,000 segments per object, 250,000 segments per project, 250,000
 flattened output points, 18 recursive subdivisions, and coordinate magnitude
-1,000,000. Existing raster caps remain 67,108,864 pixels in the 4× workspace,
+1,000,000. Shape-history execute/undo/redo validates replacement-aware project
+segment totals before mutation, and failed commands preserve both document and
+history state. Existing raster caps remain 67,108,864 pixels in the 4× workspace,
 4,096 retained connected components, 8,192 contours, 1,000,000 raw
 pre-simplification points, 100,000 fitted segments, and 250,000 transient
 preview-flattened points. Limit failures recommend simplifying or cleaning the
@@ -165,10 +176,21 @@ This remains offline authoring and guarded planning behavior. It does not
 connect, Home, move, arm, enable output, generate a job automatically, or start
 execution. `machine.allow_motion`, coordinate/reference trust, exact program
 authorization, temporary arming, Preview, preflight, START JOB, STOP/immediate
-`M5`, controller dialects, and offline editing remain unchanged. The combined
-rebased implementation is verified after the following native hardening commit.
-No controller, camera, motion, homing, arming, laser-output, physical
-tracing-quality, or physical accuracy verification is performed or claimed.
+`M5`, controller dialects, and offline editing remain unchanged. Verification is
+automated Qt-free and offscreen-widget geometry coverage only. The requested
+post-rebase focused integration run passed **457 tests**. The Coleman stencil
+diagnostic used the production automatic threshold (**Otsu 122**), 80.0 mm
+width, 30.358974 mm height, no inversion, alpha cutoff 1, 0.05 mm² minimum
+feature area, no smoothing, 0.10 mm fitting tolerance, and all contours. Its two
+target rounded bars each retained a `CLCCLC` six-segment native sequence; their
+maximum fit errors were **0.033948 mm** and **0.039448 mm**, their worst
+non-corner join-angle discontinuities were **0 degrees**, and their centered
+geometric difference was **0.038244 mm**. The complete Windows Python 3.14.4
+suite passed **2,588 tests** with **14 expected platform skips**; repository-wide
+Ruff, `compileall -q laser_aligner`, `git diff --check`, and
+`git diff --check origin/main..HEAD` also passed. No controller, camera, motion,
+homing, arming, laser-output, physical tracing-quality, or physical accuracy
+verification is performed or claimed.
 
 ## Active Windows updater hardening
 
@@ -2431,7 +2453,8 @@ physical placement. No marker detector is implemented. See
   and BMP sources use deterministic ordered dithering; TIFF is unsupported.
   Raster vectorization is single-foreground only, not full-color or multi-layer;
   threshold, source resolution, and smoothing affect its estimated fit quality,
-  and final projects retain flattened PATH points rather than Bézier controls.
+  and final projects retain fitted native line/cubic PATH segments. Preview and
+  planning point sequences are bounded transient derivatives.
 - Ellipse and line creation remain one-shot centered inserts; only rectangles
   currently have the persistent canvas drawing interaction.
 - Single visible, unlocked objects have corner resize and rotation handles.
@@ -2444,7 +2467,10 @@ physical placement. No marker detector is implemented. See
   no real-camera validation dataset or physically measured accuracy threshold.
 - Object tracing has no sub-pixel edge estimator or real-camera accuracy
   dataset. At the default 4 pixels/mm, one corrected-image pixel is 0.25 mm;
-  fitted dimensions and radii remain raster- and threshold-dependent.
+  fitted dimensions and radii remain raster- and threshold-dependent. Highly
+  pixel-constrained `A` and `S` glyphs can still vary at narrow counters and
+  curved shoulders; requiring a cleaner or higher-resolution source for those
+  cases is an accepted first-release quality limitation.
 - Loaded test images must already be corrected full-bed views; the loader does
   not infer bed corners or calibrate an ordinary photograph. Generated images
   reuse ideal template geometry and therefore cannot expose lens, homography,

@@ -107,6 +107,14 @@ def test_native_path_strict_parser_rejects_malformed_fields(mutation) -> None:
         NativePathGeometry.from_dict(payload)
 
 
+def test_native_path_rejects_newer_format_version_without_downconversion() -> None:
+    payload = _mixed_geometry().to_dict()
+    payload["path_version"] = 2
+
+    with pytest.raises(ValueError, match="Unsupported native path format version 2"):
+        NativePathGeometry.from_dict(payload)
+
+
 def test_native_path_rejects_json_nested_beyond_explicit_limit() -> None:
     payload = _mixed_geometry().to_dict()
     nested: object = 0
@@ -292,6 +300,85 @@ def test_adaptive_flattening_is_deterministic_and_within_physical_tolerance() ->
             for start, end in zip(flattened, flattened[1:], strict=False)
         )
         assert distance <= tolerance + 1e-12
+
+
+@pytest.mark.parametrize(
+    ("segment", "transform", "tolerance"),
+    [
+        (
+            PathCubicSegment((10.0, 5.0), (-9.0, -4.0), (1.0, 0.0)),
+            PathAffineTransform(),
+            0.025,
+        ),
+        (
+            PathCubicSegment((0.0, 1.0), (1.0, -1.0), (1.0, 0.0)),
+            PathAffineTransform(),
+            0.025,
+        ),
+        (
+            PathCubicSegment((2.0, 2.0), (-2.0, 2.0), (0.001, 0.0)),
+            PathAffineTransform(),
+            0.025,
+        ),
+        (
+            PathCubicSegment((1.0, 2.0), (-1.0, 2.0), (1e-12, -1e-12)),
+            PathAffineTransform(),
+            0.025,
+        ),
+        (
+            PathCubicSegment((0.0, 1.0), (1.0, 1.0), (1.0, 0.0)),
+            PathAffineTransform.from_components(scale_x=1e-6, scale_y=1e-6),
+            1e-8,
+        ),
+        (
+            PathCubicSegment((0.0, 1.0), (1.0, 1.0), (1.0, 0.0)),
+            PathAffineTransform.from_components(scale_x=1e6, scale_y=1e6),
+            25.0,
+        ),
+        (
+            PathCubicSegment((0.0, 1.0), (1.0, -1.0), (1.0, 0.0)),
+            PathAffineTransform.from_components(
+                scale_x=-37.0,
+                scale_y=4.5,
+                rotation_deg=137.0,
+                translate_x=12.0,
+                translate_y=-8.0,
+            ),
+            0.025,
+        ),
+    ],
+    ids=(
+        "controls-far-beyond-endpoints",
+        "s-curve",
+        "near-loop",
+        "nearly-coincident-endpoints",
+        "very-small-scale",
+        "very-large-scale",
+        "nonuniform-mirror-rotation",
+    ),
+)
+def test_adaptive_flattening_adversarial_curves_obey_physical_error_bound(
+    segment: PathCubicSegment,
+    transform: PathAffineTransform,
+    tolerance: float,
+) -> None:
+    start = (0.0, 0.0)
+    geometry = NativePathGeometry((PathSubpath(start, (segment,)),))
+
+    first = flatten_native_path(geometry, tolerance, transform=transform)[0]
+    second = flatten_native_path(geometry, tolerance, transform=transform)[0]
+
+    assert first == second
+    numerical_slack = max(1e-12, tolerance * 1e-9)
+    for index in range(4_001):
+        physical = transform.apply(
+            evaluate_cubic(start, segment, index / 4_000.0)
+        )
+        distance = min(
+            _distance_to_segment(physical, chord_start, chord_end)
+            for chord_start, chord_end in zip(first, first[1:], strict=False)
+        )
+        assert distance <= tolerance + numerical_slack
 
 
 def test_flattening_applies_nonuniform_scaling_before_tolerance() -> None:

@@ -324,6 +324,12 @@ class NativePathGeometry:
                     f"{MAX_NATIVE_PATH_SUBPATHS:,} subpaths; simplify the source artwork"
                 )
             line = _mapping(raw_line, f"legacy polyline[{index}]")
+            unsupported = set(line) - {"points", "closed"}
+            if unsupported:
+                raise ValueError(
+                    f"legacy polyline[{index}] contains unsupported field(s): "
+                    f"{sorted(unsupported)}"
+                )
             points_raw = line.get("points")
             if (
                 not isinstance(points_raw, Sequence)
@@ -695,6 +701,9 @@ def flatten_native_path(
             _distance_to_chord(control_1, start, end),
             _distance_to_chord(control_2, start, end),
         )
+        # The chord plus the closed tolerance disk is convex. All four Bézier
+        # control points lie in it, so the convex-hull property bounds the
+        # complete curve within tolerance of the chord.
         if flatness <= tolerance:
             append(output, end)
             return
