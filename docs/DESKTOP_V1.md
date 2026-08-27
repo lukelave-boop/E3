@@ -176,6 +176,22 @@ area-prefiltered when the physical raster pitch minifies the source, and use
 deterministic 8x8 ordered dithering at the operation's maximum power. TIFF is
 rejected consistently because its Qt decode plugin is not portable.
 
+Exactly one selected image also exposes **Trace image to vectors…** in the
+Objects panel. The window-modal review compares the bounded, SHA-verified source,
+foreground mask, and fitted-vector overlay. Magenta, cyan, yellow, white, and
+black presets plus 0–100% opacity are preview-only and do not rerun fitting or
+change output authority. The workflow creates one ordinary compound PATH while
+either replacing or retaining the image. Contours are fitted at 4× internal
+resolution with physical cleanup/smoothing/error controls, a canonical closed
+seam, persistent physical corner classification, and shared tangents only at
+non-corner joins; nested holes remain separate closed child polylines. The copied
+image transform preserves its full displayed frame, rotation, and mirrors. A
+retained image stays beneath the vector, and the new vector and its ordinary
+editable Line layer are selected. The entire layer/object/source choice is one
+undoable command, and any automatically created layer is visible Line mode at
+0% power with output disabled. This offline authoring action does not call
+camera, planning, G-code, controller, or hardware paths.
+
 ### Feature-preservation map
 
 | Existing capability | Current surface | Preservation boundary |

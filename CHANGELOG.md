@@ -6,6 +6,28 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added a dedicated imported-raster vectorization workflow without replacing
+  raster import or engraving. Exactly one selected IMAGE exposes **Trace image
+  to vectors…** in Objects; its modal, coalesced worker preview shows the exact
+  identity-verified original, foreground mask, and vector overlay with automatic,
+  manual, or usable-alpha detection, physical speck/smoothing/fit controls,
+  contour/hole policy, high-contrast preview color presets and opacity, and
+  Replace or Keep/hide handling. The Qt-free production pipeline uses a capped
+  4× mask, hierarchy-aware contours, a coordinate-canonical closed seam,
+  physical multi-scale corner persistence, smooth tangent sharing across
+  non-corner joins, bounded line/cubic fitting, and adaptive flattening into the
+  established multi-contour PATH representation. It records raw/fitted/final counts and
+  estimated deviation, preserves the source frame/transform and nested holes,
+  and rejects excess connected components, contours, raw points, fitted
+  segments, final points, or internal work pixels with actionable cleanup
+  guidance. Source handling, vector insertion, selection, and any new visible
+  0%-power, output-disabled ordinary Line layer are one undoable operation; a
+  retained source stays beneath the vector in its unchanged transform. This first version is
+  a single-foreground logo/line-art/silhouette tracer, not full-color or
+  multi-layer tracing; it persists adaptive polylines rather than Bézier
+  primitives. It does not generate G-code, authorize output, contact hardware,
+  Home, move, arm, or start a job.
+
 - Removed the reduced-capability `--hardware` product launch mode. Normal
   browser and desktop startup now always grants process hardware authority
   without eagerly connecting to a controller; disconnected controllers report

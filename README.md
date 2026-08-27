@@ -88,6 +88,16 @@ Native desktop workflow:
   and authoring state intact. The review caps each rendered list at 200 with
   exact omitted counts, and its SHA-256 approval is rejected if source bytes
   change before strict import
+- A dedicated **Trace image to vectors…** action for exactly one selected raster
+  image. Its modal review compares the original, foreground mask, and vector
+  overlay, with high-contrast color presets and preview-only opacity; supports
+  automatic, manual, or usable-alpha detection; and creates one normal
+  multi-contour PATH while preserving the image frame, position, rotation, and
+  mirrors. Closed-contour fitting uses a coordinate-canonical seam,
+  physically persistent corner evidence, and smooth tangents at non-corner
+  joins so small raster-phase differences do not invent angular shoulders.
+  Replace, Keep, optional source hiding, safe-layer creation, and vector
+  creation are one undoable operation
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
@@ -152,6 +162,22 @@ See [G-code project import](docs/GCODE_IMPORT.md) for the supported foreign
 program subset, layer reconstruction, and review boundary.
 See [Power Correction](docs/POWER_CORRECTION.md) for its mapping, motion model,
 overscan interaction, limitations, and tuning guidance.
+
+To convert imported single-color artwork, select exactly one image in the
+**Objects** panel and choose **Trace image to vectors…**. Adjust the physical
+minimum-feature area, smoothing, and **Simplification / max fitting error** while
+reviewing the original, mask, and overlaid contours. Choose a magenta, cyan,
+yellow, white, or black comparison overlay and adjust its opacity without
+rerunning or changing the trace, then choose whether to replace or retain the
+source. Keeping the source leaves it in place beneath the new, selected vector
+and preserves the hide-source choice. Preserving all contours keeps counters and
+holes as closed child polylines in the same editable PATH. A trace uses an
+existing layer only when it is a visible Line layer already at 0% power with
+output disabled; otherwise E3 creates `<image name> trace` with those safe
+settings and selects both that layer and the vector. Its ordinary layer swatch
+uses the same color picker as other Line layers. This is an offline authoring
+action: it does not generate G-code, enable output, connect, move, Home, arm, or
+start a job.
 
 The desktop also contains an automated and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable
@@ -401,6 +427,12 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   are supported. Existing generated text cannot yet be reopened for editable
   regeneration; selectable dither algorithms and calibrated grayscale power
   curves are not implemented.
+- Raster vectorization is intentionally a single-foreground tracer for logos,
+  line art, silhouettes, stencils, and similar artwork, not a full-color or
+  multi-layer tracer. Its fitted-curve deviation is estimated against the
+  threshold-derived contour, so source resolution, antialiasing, threshold, and
+  smoothing still limit real accuracy. Projects retain adaptively flattened E3
+  polylines rather than editable Bézier primitives.
 - SVG text and embedded images are not converted. Native desktop import stops
   before creating an object when either is present; convert them to paths in
   the design program.

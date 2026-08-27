@@ -5,7 +5,7 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-24**
+Snapshot: **2026-08-26**
 
 ## Active remove-simulation-mode milestone
 
@@ -79,6 +79,73 @@ tests**. The complete Windows Python 3.14 suite passed **2,358 tests** with **14
 expected platform skips**; repository-wide Ruff, `compileall -q laser_aligner`,
 and `git diff --check` also passed. No physical hardware test was performed or
 is claimed for this startup-only correction.
+
+## Active imported-raster vectorization
+
+The native Objects panel now exposes **Trace image to vectors…** only when
+exactly one imported IMAGE object is selected. Its window-modal Raster
+Vectorization dialog shows the original raster, generated foreground mask, and
+vector overlay. Its magenta, cyan, yellow, white, or black color preset and
+0–100% opacity are preview-only and repaint without rerunning vectorization or
+changing project/output state. Automatic Otsu, manual 0–255, and usable-alpha
+detection are available with inversion, alpha cutoff, physical minimum-feature
+area for isolated foreground specks and enclosed pinholes,
+smoothing, a millimetre fitting/flattening tolerance, outer-only or full
+hierarchy output, and Replace or Keep/optionally-hide source handling. Preview
+work is debounced and coalesced to one running task plus the newest pending
+settings. Cancel performs no project mutation.
+
+The Qt-free `project.raster_vectorize` module consumes the existing bounded
+`RasterAssetPayload`; it validates the payload bytes/metadata and exact source
+SHA-256 rather than opening an independent unbounded decode path. Approval is
+checked against the payload identity again before the document command. The
+quality pipeline extracts contours from an interpolated 4× mask, retains OpenCV
+tree hierarchy, canonicalizes each closed contour's cyclic seam, locks only
+corners supported across physical arc-length scales before optional smoothing,
+fits bounded straight and cubic Bézier segments in physical coordinates with
+shared tangents across non-corner joins, and adaptively flattens only the fitted
+curves into normal E3 PATH polylines. It reports raw
+contour points, fitted segments, final E3 points, and maximum estimated
+deviation. The estimate is relative to the threshold-derived and optionally
+smoothed contour; source sampling and threshold choice still bound real quality.
+Source- and 4×-resolution boundary budgets reject pathological jagged masks
+before full-point contour allocation, corner suppression uses bounded local
+exclusion, and a capped 4× reconstruction must reproduce the complete fitted
+parent/child hierarchy before the result is accepted.
+
+One compound PATH stores each outer boundary and nested hole as a separate
+closed polyline, with parent/depth/hole provenance in metadata. Its coordinates
+are normalized in the original image frame and its copied Transform preserves
+the exact displayed width/height, center, rotation, and mirrors. Replace or
+Keep/hide, vector insertion, and any safe-layer creation are one undoable
+`FunctionalCommand`, so undo/redo restores raster, vector, visibility, layer,
+and active-layer state together. The active layer is reused only when it is a
+visible Line layer at 0% power with output disabled; otherwise E3 creates a
+visible `<image name> trace` Line layer at 0% power with output disabled. The
+new vector and layer are selected; a retained source keeps its transform and
+remains below the vector. The created layer uses the ordinary editable layer
+color picker, independently of preview-overlay styling.
+
+Production caps are 67,108,864 pixels in the 4× workspace, 4,096 retained
+connected components, 8,192 contours, 1,000,000 raw pre-simplification points,
+100,000 fitted segments, and 250,000 final E3 points. Limit failures recommend
+increasing minimum feature size or simplification, adjusting threshold, or using
+cleaner source artwork. This first version is for predominantly single-color
+logos, line art, silhouettes, transparent artwork, and stencils. It is not a
+full-color/multi-layer tracer and persists adaptive PATH polylines rather than
+editable Bézier primitives.
+
+This is offline authoring behavior. It neither changes the existing raster
+importer/engraver nor generates G-code, enables output, connects, Homes, moves,
+arms, or starts a job. Any later output continues through ordinary Generate,
+exact Preview, preflight, and guarded execution. The final feature-focused run
+passes **49 fitting/vectorizer tests** and **39 raster-dialog, layer, and
+workspace tests**; the focused project save/model/history run passes **126
+tests**. The complete Windows run passes **2,466 tests with 14 expected
+platform/capability skips**. Repository-wide Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` also pass. This is
+automated and offscreen-widget verification only; no controller, camera, motion,
+arming, laser-output, or physical-quality verification is claimed.
 
 ## Active Windows updater hardening
 
@@ -2208,6 +2275,10 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
 - Five-column operation summaries for mode, speed/power, output, and
   visibility, with inline toggles, operation-color editing, ordering controls,
   and scan interval, angle, and raster overscan controls.
+- Single-selected-image raster vectorization with original/mask/overlay review,
+  physical cleanup and fit controls, hierarchy-preserving compound PATH output,
+  one-step Replace or Keep/hide undo/redo, and an automatic visible 0%-power,
+  output-disabled Line layer when the active layer is not already appropriate.
 - Transform, mirror, duplicate, delete, group, ungroup, align, distribute, and
   z-order commands.
 - Undo/redo.
@@ -2335,6 +2406,9 @@ physical placement. No marker detector is implemented. See
   asset path; managed or embedded portable assets, selectable dither methods,
   and calibrated grayscale power modulation are not implemented. PNG, JPEG,
   and BMP sources use deterministic ordered dithering; TIFF is unsupported.
+  Raster vectorization is single-foreground only, not full-color or multi-layer;
+  threshold, source resolution, and smoothing affect its estimated fit quality,
+  and final projects retain flattened PATH points rather than Bézier controls.
 - Ellipse and line creation remain one-shot centered inserts; only rectangles
   currently have the persistent canvas drawing interaction.
 - Single visible, unlocked objects have corner resize and rotation handles.

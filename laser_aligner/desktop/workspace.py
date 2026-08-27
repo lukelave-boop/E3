@@ -2614,6 +2614,15 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             )
         )
 
+    def raster_preview_identity_for_object(
+        self,
+        object_id: str,
+    ) -> tuple[str, str] | None:
+        """Return the exact bounded source identity currently shown for an image."""
+
+        item = self._items_by_id.get(str(object_id))
+        return None if item is None else item.raster_preview_identity
+
     def refresh_raster_previews(self, paths: tuple[str, ...]) -> bool:
         pending = set(paths)
         by_path: dict[str, list[ObjectGraphicsItem]] = {}

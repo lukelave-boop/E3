@@ -40,6 +40,8 @@ from ..project import (
     OperationLayer,
     ProjectDocument,
     ProjectJob,
+    RasterVectorizationOptions,
+    RasterVectorizationResult,
     RemoveLayerCommand,
     RemoveObjectsCommand,
     ReorderLayersCommand,
@@ -109,6 +111,7 @@ from .panels import (
     TransformPanel,
 )
 from .qt import require_qt
+from .raster_vectorize_dialog import RasterVectorizationDialog
 from .runtime_strip import RuntimeSafetyStrip
 from .setup_guide import show_setup_guide
 from .stock_layout_bar import StockLayoutToolBar
@@ -1036,6 +1039,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.object_panel.objectEdited.connect(
             self._object_edited,
             QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        self.object_panel.rasterVectorizeRequested.connect(
+            self.vectorize_raster_image
         )
         self.transform_panel.transformEdited.connect(self._transform_edited)
         self.transform_panel.rectangleShapeEdited.connect(
@@ -2163,6 +2169,249 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.show_notice(
             "Imported grayscale raster image with deterministic ordered dithering"
         )
+
+    def vectorize_raster_image(self, object_id: str) -> None:
+        """Open the offline raster-to-vector review for one selected image."""
+
+        selected = self.workspace.selected_object_ids()
+        if selected != [object_id]:
+            self.show_error("Select exactly one raster image to trace to vectors")
+            return
+        try:
+            source = self.document.get_object(object_id)
+        except KeyError:
+            self.show_error("The selected raster image no longer exists")
+            return
+        if source.kind is not ObjectKind.IMAGE:
+            self.show_error("Select exactly one raster image to trace to vectors")
+            return
+
+        asset = str(source.geometry.get("asset", "")).strip()
+        if not asset:
+            self.show_error("The selected raster image has no source asset")
+            return
+        preview_identity = self.workspace.raster_preview_identity_for_object(
+            object_id
+        )
+        if preview_identity is None:
+            self.show_error(
+                "The selected raster source is missing, unreadable, or has no "
+                "identity-verified canvas preview"
+            )
+            return
+        preview_path, preview_sha256 = preview_identity
+        try:
+            payload = read_raster_asset_payload(
+                asset,
+                expected_source_sha256=preview_sha256,
+            )
+        except Exception as exc:
+            self.show_error(
+                "Could not open Raster Vectorization because the exact source no "
+                f"longer matches its canvas preview: {exc}"
+            )
+            return
+        if payload.identity.path != preview_path:
+            self.show_error(
+                "The raster canvas preview and selected image refer to different "
+                "source assets"
+            )
+            return
+
+        dialog = RasterVectorizationDialog(
+            payload,
+            source.transform.width_mm,
+            source.transform.height_mm,
+            self,
+        )
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        result = dialog.vectorization_result
+        options = dialog.accepted_options
+        if result is None or options is None:
+            self.show_error("Raster Vectorization closed without a current result")
+            return
+
+        # The dialog works only from the immutable bounded payload. Re-read the
+        # source through the same strict path immediately before the history
+        # operation so replacement on disk cannot be committed under stale review.
+        try:
+            current = read_raster_asset_payload(
+                asset,
+                expected_source_sha256=payload.identity.sha256,
+            )
+        except Exception as exc:
+            self.show_error(
+                "Could not create vectors because the raster source changed while "
+                f"the dialog was open: {exc}"
+            )
+            return
+        if current.identity.sha256 != result.source_sha256:
+            self.show_error(
+                "Could not create vectors because the reviewed raster identity is stale"
+            )
+            return
+        try:
+            self._commit_raster_vectorization(
+                source,
+                result,
+                options,
+                source_handling=dialog.source_handling,
+                hide_source_after=dialog.hide_source_after,
+            )
+        except Exception as exc:
+            self.show_error(f"Could not create raster vectors: {exc}")
+
+    @staticmethod
+    def _raster_vector_layer_is_appropriate(layer: OperationLayer) -> bool:
+        return (
+            layer.mode is LayerMode.LINE
+            and layer.power_percent == 0.0
+            and not layer.output_enabled
+            and layer.visible
+        )
+
+    def _commit_raster_vectorization(
+        self,
+        source: SceneObject,
+        result: RasterVectorizationResult,
+        options: RasterVectorizationOptions,
+        *,
+        source_handling: str,
+        hide_source_after: bool,
+    ) -> SceneObject:
+        """Commit the safe layer, source choice, and compound PATH atomically."""
+
+        if source.kind is not ObjectKind.IMAGE:
+            raise ValueError("Raster vectorization source must be an image object")
+        if self.document.get_object(source.id) is not source:
+            raise ValueError("Raster vectorization source is no longer current")
+        handling = str(source_handling).strip().casefold()
+        if handling not in {"replace", "keep"}:
+            raise ValueError("Raster source handling must be replace or keep")
+        if not isinstance(result, RasterVectorizationResult):
+            raise TypeError("result must be a RasterVectorizationResult")
+        if not isinstance(options, RasterVectorizationOptions):
+            raise TypeError("options must be RasterVectorizationOptions")
+
+        previous_active_layer_id = self.active_layer_id
+        active_layer = self.document.get_layer(previous_active_layer_id)
+        layer_command: AddLayerCommand | None = None
+        if E3MainWindow._raster_vector_layer_is_appropriate(active_layer):
+            output_layer = active_layer
+        else:
+            output_layer = OperationLayer(
+                name=f"{source.name} trace",
+                color=self.document.next_layer_color(),
+                mode=LayerMode.LINE,
+                power_percent=0.0,
+                output_enabled=False,
+                visible=True,
+                priority=len(self.document.layers),
+            )
+            layer_command = AddLayerCommand(
+                self.document,
+                output_layer,
+                index=len(self.document.layers),
+                description="Add raster trace layer",
+            )
+
+        metadata = result.metadata()
+        metadata.update(
+            {
+                "source_name": source.name,
+                "source_asset": str(source.geometry.get("asset", "")),
+                "raster_vectorization_detection_mode": options.detection_mode.value,
+                "raster_vectorization_manual_threshold": options.threshold,
+                "raster_vectorization_invert": options.invert,
+                "raster_vectorization_alpha_cutoff": options.alpha_cutoff,
+                "raster_vectorization_minimum_feature_area_mm2": (
+                    options.minimum_feature_area_mm2
+                ),
+                "raster_vectorization_smoothing_mm": options.smoothing_mm,
+                "raster_vectorization_simplification_tolerance_mm": (
+                    options.simplification_tolerance_mm
+                ),
+                "raster_vectorization_contour_output": options.contour_output.value,
+                "raster_vectorization_source_handling": handling,
+            }
+        )
+        vector = SceneObject(
+            name=f"{source.name} trace",
+            kind=ObjectKind.PATH,
+            layer_id=output_layer.id,
+            transform=source.transform.copy(),
+            geometry={"polylines": result.project_polylines()},
+            metadata=metadata,
+        )
+
+        if handling == "replace":
+            object_command: AddObjectCommand | ReplaceObjectsCommand = (
+                ReplaceObjectsCommand(
+                    self.document,
+                    [source.id],
+                    [vector],
+                    description="Replace raster with vectors",
+                )
+            )
+            visibility_command = None
+        else:
+            object_command = AddObjectCommand(
+                self.document,
+                vector,
+                description="Add raster vectors",
+            )
+            visibility_command = (
+                UpdateObjectPropertiesCommand(
+                    self.document,
+                    source.id,
+                    {"visible": False},
+                    description="Hide raster source",
+                )
+                if hide_source_after and source.visible
+                else None
+            )
+
+        def redo_vectorization() -> None:
+            completed: list[Any] = []
+            try:
+                if layer_command is not None:
+                    layer_command.redo()
+                    completed.append(layer_command)
+                object_command.redo()
+                completed.append(object_command)
+                if visibility_command is not None:
+                    visibility_command.redo()
+                    completed.append(visibility_command)
+            except Exception:
+                for command in reversed(completed):
+                    command.undo()
+                self.active_layer_id = previous_active_layer_id
+                raise
+            self.active_layer_id = output_layer.id
+
+        def undo_vectorization() -> None:
+            if visibility_command is not None:
+                visibility_command.undo()
+            object_command.undo()
+            if layer_command is not None:
+                layer_command.undo()
+            self.active_layer_id = previous_active_layer_id
+
+        self.history.execute(
+            FunctionalCommand(
+                "Vectorize raster image",
+                redo_vectorization,
+                undo_vectorization,
+            )
+        )
+        self.workspace.select_objects([vector.id])
+        self.show_notice(
+            f"Created {len(result.contours)} contour"
+            f"{'s' if len(result.contours) != 1 else ''} as one editable path on "
+            f"output-disabled 0% layer {output_layer.name}"
+        )
+        return vector
 
     def new_project(self) -> None:
         if not self._confirm_discard_changes():

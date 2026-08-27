@@ -69,6 +69,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
+| `project/raster_vectorize.py` | Qt-free exact-payload raster masking, bounded hierarchy-aware contour fitting, and adaptive E3 PATH flattening |
 | `planning/` | Qt-free stage identities, coordinate-domain contracts, artifact provenance, and shared planner payload models |
 | `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, and rigid instantiation |
 | `materials/` | SQLite material-recipe library, scoped compatibility, and legacy database migration |
@@ -521,6 +522,105 @@ bytes they consume have the reviewed SHA-256, so changed content cannot be
 imported under stale approval. SVG retains its one-object undo command;
 LightBurn and G-code retain one atomic import transaction; raster retains its
 existing object command and, when needed, preceding raster-layer command.
+
+#### Imported raster vectorization
+
+Raster vectorization is a second, explicit authoring step and does not replace
+the raster importer. The Objects panel exposes **Trace image to vectors…** only
+for exactly one selected `ObjectKind.IMAGE`. The workflow is identity-bound from
+the pixels already approved and displayed through project mutation:
+
+```text
+selected IMAGE + workspace payload identity
+  -> read_raster_asset_payload(expected_source_sha256=displayed SHA-256)
+  -> window-modal RasterVectorizationDialog
+  -> coalesced worker preview: original + mask + display-styled vector overlay
+  -> project.raster_vectorize exact-payload mask/contour/fitting pipeline
+  -> strict exact-source SHA-256 recheck after approval
+  -> one FunctionalCommand for layer + PATH + source replace/visibility choice
+```
+
+`RasterVectorizationOptions` is a frozen validated value. Automatic detection
+uses Otsu thresholding over the white-composited image and applies alpha as an
+independent mask gate; manual mode uses the selected 0–255 threshold; alpha mode
+is available only when decoded opacity contains spatially useful variation.
+Inversion changes foreground polarity, and
+the connected-component cleanup interprets minimum feature area in square
+millimetres from the selected image's displayed size, removing both small
+foreground islands and enclosed background pinholes while retaining larger
+holes. Preview requests use a
+160 ms debounce by default and retain at most one running request plus the latest
+pending options, so slider input cannot build an unbounded task queue. The
+overlay is a cached Qt vector path drawn over the exact source image. Its
+magenta, cyan, yellow, white, or black preset and 0–100% opacity are display-only
+state: changing them repaints locally without changing options, metadata,
+geometry, project layers, or output authority. The dialog and portable
+vectorizer do not call `DesktopController`, `MachineService`,
+camera, planning, G-code, or execution paths.
+
+Contour extraction interpolates the exact bounded payload to a 4× internal mask,
+uses `RETR_TREE` hierarchy, and maps contour samples into physical coordinates
+before fitting. Each closed contour is rotated to a coordinate-canonical start
+before anchor selection, so OpenCV's arbitrary cyclic start index cannot change
+the fit. Corner classification compares turns and straight-arm support across
+multiple physical arc-length scales; isolated raster steps are not hard anchors,
+while persistent stencil corners retain their exact original sample. Smooth
+anchors and recursive non-corner splits share fitted tangent directions across
+the join. Corner-bounded spans are reduced to straight segments where the error
+and tangent evidence permit and otherwise fitted with bounded cubic Béziers;
+only then are curves adaptively flattened using the user-visible millimetre
+tolerance. Straight runs therefore retain few points while tighter curves
+receive more. The result reports raw contour points, fitted segments, final E3
+points, and maximum estimated deviation. That deviation is relative to
+threshold-derived and optionally smoothed contours; it is not a
+physical-accuracy certification of the source image.
+
+Digital boundary transitions are counted at source resolution before the 4×
+workspace and again before full-point contour extraction, so a single connected
+maze or jagged photographic mask cannot defer the raw-point rejection until
+after an oversized contour allocation. Corner non-maximum suppression uses a
+bounded circular exclusion window rather than pairwise corner comparisons.
+After fitting and clipping, duplicate/zero-area contours are rejected and
+clipping displacement is included in the deviation estimate. E3 also rasterizes
+the fitted contour forest at the capped 4× resolution and compares its complete
+parent/child hierarchy signature with the extracted tree before returning a
+result.
+
+The option, contour, and result records are frozen validated values. Result
+validation checks immutable preview arrays, source identity, normalized contour
+coordinates, hierarchy/count consistency, and the reported maximum deviation.
+
+The created object is the established compound PATH representation:
+`{"polylines": [{"points": [...], "closed": true}, ...]}`. Each contour is
+normalized to the image-local frame and the source image `Transform` is copied,
+preserving displayed width/height, center, rotation, and horizontal/vertical
+mirrors. Parent/depth/hole provenance is retained in metadata. Outer contours
+and holes remain separate closed polylines in one PATH; downstream containment
+planning is winding-independent and schedules nested contours deepest-first.
+Projects persist the final E3 polylines rather than Bézier primitives.
+
+The portable vectorizer rejects work above these production limits and returns
+guidance to increase minimum feature size or simplification, adjust threshold,
+or use cleaner artwork:
+
+- 67,108,864 pixels in the 4× internal contour workspace;
+- 4,096 retained connected foreground components;
+- 8,192 extracted contours;
+- 1,000,000 total extracted raw contour points before simplification;
+- 100,000 fitted line/cubic segments; and
+- 250,000 final E3 points.
+
+Replace removes the IMAGE and adds the PATH in the same undo command. Keep adds
+the PATH after the IMAGE so it is visually above the unchanged source, and can
+hide the source in that command. The new PATH is selected and its layer becomes
+active. The active layer is reused only when it is visible `LayerMode.LINE`, 0% power, and
+output-disabled; otherwise the transaction creates a visible
+`<image name> trace` layer with exactly those non-output settings. This is an
+ordinary editable Line layer whose swatch uses the existing layer color picker;
+preview-overlay color remains independent. Vectorization
+does not generate or authorize a program, enable output, connect to hardware,
+Home, move, arm, or start a job. Subsequent output still enters ordinary
+Generate, exact Preview, preflight, and guarded execution.
 
 `JobPlan` models the final stream rather than a second approximation of the
 project geometry. It records motion order, elapsed time, feed, controller power,
