@@ -29,6 +29,9 @@ The following foundations are implemented and automated-test covered:
 - importer registry and immutable bounded-scan manifests;
 - shared desktop pre-import review with blocking findings, bounded rendering,
   explicit approval, and exact-source binding;
+- imported-raster tracing with seam-invariant bounded fitting, persistent
+  physical corner classification, editable safe Line-layer output, and
+  high-contrast preview comparison controls;
 - SVG, raster-image, LightBurn, and foreign-G-code preflight;
 - structured job readiness preflight before authoritative exact planning;
 - machine-aware material recipes that remain authoring aids rather than

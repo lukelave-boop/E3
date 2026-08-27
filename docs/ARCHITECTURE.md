@@ -534,7 +534,7 @@ the pixels already approved and displayed through project mutation:
 selected IMAGE + workspace payload identity
   -> read_raster_asset_payload(expected_source_sha256=displayed SHA-256)
   -> window-modal RasterVectorizationDialog
-  -> coalesced worker preview: original + mask + vector overlay
+  -> coalesced worker preview: original + mask + display-styled vector overlay
   -> project.raster_vectorize exact-payload mask/contour/fitting pipeline
   -> strict exact-source SHA-256 recheck after approval
   -> one FunctionalCommand for layer + PATH + source replace/visibility choice
@@ -551,20 +551,29 @@ foreground islands and enclosed background pinholes while retaining larger
 holes. Preview requests use a
 160 ms debounce by default and retain at most one running request plus the latest
 pending options, so slider input cannot build an unbounded task queue. The
-dialog and portable vectorizer do not call `DesktopController`, `MachineService`,
+overlay is a cached Qt vector path drawn over the exact source image. Its
+magenta, cyan, yellow, white, or black preset and 0–100% opacity are display-only
+state: changing them repaints locally without changing options, metadata,
+geometry, project layers, or output authority. The dialog and portable
+vectorizer do not call `DesktopController`, `MachineService`,
 camera, planning, G-code, or execution paths.
 
 Contour extraction interpolates the exact bounded payload to a 4× internal mask,
 uses `RETR_TREE` hierarchy, and maps contour samples into physical coordinates
-before fitting. Likely corners are detected before optional smoothing and remain
-locked. Corner-bounded spans are reduced to straight segments where the error
-permits and otherwise fitted with bounded cubic Béziers; only then are curves
-adaptively flattened using the user-visible millimetre tolerance. Straight runs
-therefore retain few points while tighter curves receive more. The result reports
-raw contour points, fitted segments, final E3 points, and maximum estimated
-deviation. That deviation is relative to threshold-derived and optionally
-smoothed contours; it is not a physical-accuracy certification of the source
-image.
+before fitting. Each closed contour is rotated to a coordinate-canonical start
+before anchor selection, so OpenCV's arbitrary cyclic start index cannot change
+the fit. Corner classification compares turns and straight-arm support across
+multiple physical arc-length scales; isolated raster steps are not hard anchors,
+while persistent stencil corners retain their exact original sample. Smooth
+anchors and recursive non-corner splits share fitted tangent directions across
+the join. Corner-bounded spans are reduced to straight segments where the error
+and tangent evidence permit and otherwise fitted with bounded cubic Béziers;
+only then are curves adaptively flattened using the user-visible millimetre
+tolerance. Straight runs therefore retain few points while tighter curves
+receive more. The result reports raw contour points, fitted segments, final E3
+points, and maximum estimated deviation. That deviation is relative to
+threshold-derived and optionally smoothed contours; it is not a
+physical-accuracy certification of the source image.
 
 Digital boundary transitions are counted at source resolution before the 4×
 workspace and again before full-point contour extraction, so a single connected
@@ -602,10 +611,13 @@ or use cleaner artwork:
 - 250,000 final E3 points.
 
 Replace removes the IMAGE and adds the PATH in the same undo command. Keep adds
-the PATH beside the IMAGE and can hide the source in that command. The active
-layer is reused only when it is visible `LayerMode.LINE`, 0% power, and
+the PATH after the IMAGE so it is visually above the unchanged source, and can
+hide the source in that command. The new PATH is selected and its layer becomes
+active. The active layer is reused only when it is visible `LayerMode.LINE`, 0% power, and
 output-disabled; otherwise the transaction creates a visible
-`<image name> trace` layer with exactly those non-output settings. Vectorization
+`<image name> trace` layer with exactly those non-output settings. This is an
+ordinary editable Line layer whose swatch uses the existing layer color picker;
+preview-overlay color remains independent. Vectorization
 does not generate or authorize a program, enable output, connect to hardware,
 Home, move, arm, or start a job. Subsequent output still enters ordinary
 Generate, exact Preview, preflight, and guarded execution.

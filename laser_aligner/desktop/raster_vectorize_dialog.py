@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +23,15 @@ from .tasks import FunctionTask
 QtCore, QtGui, QtWidgets = require_qt()
 
 _DEFAULT_DEBOUNCE_MS = 160
+_DEFAULT_OVERLAY_COLOR = "#FF4F9F"
+_DEFAULT_OVERLAY_OPACITY_PERCENT = 100
+_OVERLAY_COLOR_PRESETS = (
+    ("Magenta", _DEFAULT_OVERLAY_COLOR),
+    ("Cyan", "#00D9FF"),
+    ("Yellow", "#FFD84D"),
+    ("White", "#FFFFFF"),
+    ("Black", "#000000"),
+)
 
 # FunctionTask deliberately disables QThreadPool auto-deletion. Keep every task
 # alive independently of the dialog until its queued finished signal is handled;
@@ -75,6 +84,9 @@ class _ImagePreview(QtWidgets.QWidget):
         super().__init__(parent)
         self._image = QtGui.QImage()
         self._placeholder = str(placeholder)
+        self._overlay_path = QtGui.QPainterPath()
+        self._overlay_color = QtGui.QColor(_DEFAULT_OVERLAY_COLOR)
+        self._overlay_opacity = 1.0
         self.setMinimumSize(180, 150)
         self.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Expanding,
@@ -88,10 +100,36 @@ class _ImagePreview(QtWidgets.QWidget):
         self._image = QtGui.QImage(image)
         self.update()
 
+    def set_vector_overlay(self, contours: Iterable[Any]) -> None:
+        path = QtGui.QPainterPath()
+        for contour in contours:
+            points = tuple(getattr(contour, "points", ()))
+            if len(points) < 2:
+                continue
+            first = points[0]
+            path.moveTo(float(first[0]) + 0.5, 0.5 - float(first[1]))
+            for point in points[1:]:
+                path.lineTo(float(point[0]) + 0.5, 0.5 - float(point[1]))
+            path.closeSubpath()
+        self._overlay_path = path
+        self.update()
+
+    def set_overlay_style(self, color: str, opacity: float) -> None:
+        selected = QtGui.QColor(str(color))
+        opacity = float(opacity)
+        if not selected.isValid():
+            raise ValueError(f"Invalid vector overlay color: {color!r}")
+        if not math.isfinite(opacity) or not 0.0 <= opacity <= 1.0:
+            raise ValueError("Vector overlay opacity must be between 0 and 1")
+        self._overlay_color = selected
+        self._overlay_opacity = opacity
+        self.update()
+
     def paintEvent(self, event: QtGui.QPaintEvent) -> None:  # noqa: N802 - Qt override
         del event
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing, True)
         bounds = self.rect().adjusted(1, 1, -1, -1)
 
         tile = 12
@@ -118,6 +156,21 @@ class _ImagePreview(QtWidgets.QWidget):
                 scaled.height(),
             )
             painter.drawImage(target, scaled)
+            if not self._overlay_path.isEmpty() and self._overlay_opacity > 0.0:
+                painter.save()
+                painter.setClipRect(target)
+                painter.translate(target.left(), target.top())
+                painter.scale(float(target.width()), float(target.height()))
+                color = QtGui.QColor(self._overlay_color)
+                color.setAlphaF(self._overlay_opacity)
+                pen = QtGui.QPen(color, 2.0)
+                pen.setCosmetic(True)
+                pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+                pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+                painter.setPen(pen)
+                painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                painter.drawPath(self._overlay_path)
+                painter.restore()
         else:
             painter.setPen(QtGui.QColor("#AAB3C2"))
             painter.drawText(
@@ -191,10 +244,6 @@ def _mask_qimage(values: np.ndarray) -> QtGui.QImage:
         QtGui.QImage.Format.Format_Grayscale8,
     )
     return image.copy()
-
-
-def _overlay_qimage(result: RasterVectorizationResult) -> QtGui.QImage:
-    return _rgba_qimage(result.overlay_rgba)
 
 
 class RasterVectorizationDialog(QtWidgets.QDialog):
@@ -329,6 +378,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
 
         self._connect_option_signals()
         self._sync_control_state()
+        self._sync_overlay_style()
 
     def _build_detection_group(self) -> Any:
         defaults = RasterVectorizationOptions()
@@ -443,6 +493,32 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         )
         form.addRow("Contour output", self.contour_combo)
 
+        self.overlay_color_combo = QtWidgets.QComboBox()
+        for name, color in _OVERLAY_COLOR_PRESETS:
+            swatch = QtGui.QPixmap(14, 14)
+            swatch.fill(QtGui.QColor(color))
+            self.overlay_color_combo.addItem(QtGui.QIcon(swatch), name, color)
+        self.overlay_color_combo.setCurrentIndex(
+            self.overlay_color_combo.findData(_DEFAULT_OVERLAY_COLOR)
+        )
+        self.overlay_color_combo.setToolTip(
+            "Choose a high-contrast display color for the fitted vector preview. "
+            "This does not change project layers or output settings."
+        )
+        form.addRow("Overlay color", self.overlay_color_combo)
+
+        (
+            self.overlay_opacity_row,
+            self.overlay_opacity_slider,
+            self.overlay_opacity_spin,
+        ) = _slider_row(0, 100, _DEFAULT_OVERLAY_OPACITY_PERCENT)
+        self.overlay_opacity_spin.setSuffix(" %")
+        self.overlay_opacity_row.setToolTip(
+            "Adjust only the fitted vector preview opacity. This does not change "
+            "the traced geometry or project output settings."
+        )
+        form.addRow("Overlay opacity", self.overlay_opacity_row)
+
         self.source_combo = QtWidgets.QComboBox()
         self.source_combo.addItem("Replace source image", "replace")
         self.source_combo.addItem("Keep source image", "keep")
@@ -455,8 +531,9 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         form.addRow("", self.hide_source_check)
 
         note = QtWidgets.QLabel(
-            "Vectors are committed only after Create vectors. Their project layer "
-            "and output authorization are chosen by the Objects workflow."
+            "Overlay color and opacity are preview-only. Vectors are committed "
+            "only after Create vectors; their project layer and output "
+            "authorization are chosen by the Objects workflow."
         )
         note.setObjectName("mutedLabel")
         note.setWordWrap(True)
@@ -483,6 +560,12 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         )
         self.contour_combo.currentIndexChanged.connect(
             lambda _index: self._schedule_preview()
+        )
+        self.overlay_color_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_overlay_style()
+        )
+        self.overlay_opacity_spin.valueChanged.connect(
+            lambda _value: self._sync_overlay_style()
         )
         self.source_combo.currentIndexChanged.connect(
             lambda _index: self._sync_control_state()
@@ -535,6 +618,20 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
             smoothing_mm=float(self.smoothing_spin.value()),
             simplification_tolerance_mm=float(self.simplification_spin.value()),
             contour_output=contour_output,
+        )
+
+    @property
+    def overlay_color(self) -> str:
+        return str(self.overlay_color_combo.currentData())
+
+    @property
+    def overlay_opacity(self) -> float:
+        return float(self.overlay_opacity_spin.value()) / 100.0
+
+    def _sync_overlay_style(self) -> None:
+        self.overlay_preview.set_overlay_style(
+            self.overlay_color,
+            self.overlay_opacity,
         )
 
     @property
@@ -707,7 +804,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         try:
             original = _rgba_qimage(result.source_rgba)
             mask = _mask_qimage(result.foreground_mask)
-            overlay = _overlay_qimage(result)
+            overlay = _rgba_qimage(result.source_rgba)
         except (TypeError, ValueError) as exc:
             self._preview_failed(request_id, str(exc))
             return
@@ -717,6 +814,8 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self.original_preview.set_image(original)
         self.mask_preview.set_image(mask)
         self.overlay_preview.set_image(overlay)
+        self.overlay_preview.set_vector_overlay(result.contours)
+        self._sync_overlay_style()
         self.stats_label.setText(
             f"Raw contour points {result.raw_contour_point_count:,}  ·  "
             f"fitted segments {result.fitted_segment_count:,}  ·  "

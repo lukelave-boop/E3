@@ -102,6 +102,27 @@ def _close_dialog(
     application.processEvents()
 
 
+def _overlay_sample(dialog: RasterVectorizationDialog) -> QtGui.QColor:
+    preview = dialog.overlay_preview
+    rendered = preview.grab().toImage()
+    bounds = preview.rect().adjusted(1, 1, -1, -1)
+    scaled = preview._image.scaled(
+        bounds.size(),
+        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+        QtCore.Qt.TransformationMode.SmoothTransformation,
+    )
+    target = QtCore.QRect(
+        bounds.center().x() - scaled.width() // 2,
+        bounds.center().y() - scaled.height() // 2,
+        scaled.width(),
+        scaled.height(),
+    )
+    return rendered.pixelColor(
+        int(round(target.left() + target.width() * 0.2)),
+        int(round(target.top() + target.height() * 0.5)),
+    )
+
+
 def test_dialog_previews_controls_stats_and_acceptance_contract(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
@@ -134,6 +155,13 @@ def test_dialog_previews_controls_stats_and_acceptance_contract(
     assert not dialog.threshold_row.isEnabled()
     assert dialog.alpha_row.isEnabled()
     assert dialog.detection_combo.model().item(dialog._alpha_mode_index).isEnabled()
+    assert dialog.overlay_color == "#FF4F9F"
+    assert dialog.overlay_opacity == 1.0
+    assert [
+        dialog.overlay_color_combo.itemText(index)
+        for index in range(dialog.overlay_color_combo.count())
+    ] == ["Magenta", "Cyan", "Yellow", "White", "Black"]
+    assert not dialog.overlay_preview._overlay_path.isEmpty()
 
     manual_index = dialog.detection_combo.findData(
         RasterDetectionMode.MANUAL_THRESHOLD
@@ -158,6 +186,62 @@ def test_dialog_previews_controls_stats_and_acceptance_contract(
     assert dialog.accepted_options.detection_mode == RasterDetectionMode.MANUAL_THRESHOLD
     dialog.deleteLater()
     qt_application.processEvents()
+
+
+def test_overlay_color_and_opacity_are_display_only(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path / "display-only-overlay.png")
+    calls: list[Any] = []
+
+    def vectorize(_payload: Any, options: Any, **_kwargs: Any) -> Any:
+        calls.append(options)
+        return _result()
+
+    dialog = RasterVectorizationDialog(
+        payload,
+        25.0,
+        20.0,
+        debounce_ms=0,
+        vectorizer=vectorize,
+    )
+    try:
+        dialog.show()
+        _wait_until(qt_application, dialog.create_button.isEnabled)
+        options_before = dialog.selected_options()
+        request_serial = dialog._request_serial
+
+        magenta = _overlay_sample(dialog)
+        assert magenta.red() > magenta.green()
+        assert magenta.blue() > magenta.green()
+
+        cyan_index = dialog.overlay_color_combo.findData("#00D9FF")
+        assert cyan_index >= 0
+        dialog.overlay_color_combo.setCurrentIndex(cyan_index)
+        qt_application.processEvents()
+
+        cyan = _overlay_sample(dialog)
+        assert dialog.overlay_color == "#00D9FF"
+        assert cyan.green() > cyan.red()
+        assert cyan.blue() > cyan.red()
+
+        dialog.overlay_opacity_spin.setValue(0)
+        qt_application.processEvents()
+        hidden = _overlay_sample(dialog)
+
+        assert dialog.overlay_opacity == 0.0
+        assert hidden.green() < cyan.green()
+        assert hidden.blue() < cyan.blue()
+        assert max(hidden.red(), hidden.green(), hidden.blue()) - min(
+            hidden.red(), hidden.green(), hidden.blue()
+        ) < 20
+        assert calls == [options_before]
+        assert dialog._request_serial == request_serial
+        assert dialog.selected_options() == options_before
+        assert dialog.create_button.isEnabled()
+    finally:
+        _close_dialog(dialog, qt_application)
 
 
 def test_dialog_default_pipeline_reuses_one_verified_prepared_source(

@@ -648,3 +648,46 @@ def test_layer_panel_exposes_operation_color_editing(
 
     panel.close()
     panel.deleteLater()
+
+
+def test_safe_trace_layer_uses_ordinary_color_picker_without_changing_authority(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    trace_layer = OperationLayer(
+        name="Artwork trace",
+        color="#FF4F9F",
+        mode=LayerMode.LINE,
+        power_percent=0.0,
+        output_enabled=False,
+        visible=True,
+    )
+    document = ProjectDocument(layers=[trace_layer])
+    panel = LayerPanel()
+    panel.set_document(document, trace_layer.id)
+    edits: list[tuple[str, dict[str, object]]] = []
+    panel.layerEdited.connect(
+        lambda layer_id, changes: edits.append((layer_id, changes))
+    )
+    monkeypatch.setattr(
+        QtWidgets.QColorDialog,
+        "getColor",
+        lambda *args, **kwargs: QtGui.QColor("#00D9FF"),
+    )
+
+    panel.color_button.click()
+    qt_application.processEvents()
+
+    assert panel.current_layer_id() == trace_layer.id
+    assert edits == [(trace_layer.id, {"color": "#00d9ff"})]
+    payload = trace_layer.to_dict()
+    payload.update(edits[0][1])
+    recolored = OperationLayer.from_dict(payload)
+    assert recolored.color == "#00D9FF"
+    assert recolored.mode is LayerMode.LINE
+    assert recolored.power_percent == 0.0
+    assert recolored.output_enabled is False
+    assert recolored.visible is True
+
+    panel.close()
+    panel.deleteLater()

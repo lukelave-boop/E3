@@ -11,15 +11,18 @@ not current product capability.
   to vectors…** in Objects; its modal, coalesced worker preview shows the exact
   identity-verified original, foreground mask, and vector overlay with automatic,
   manual, or usable-alpha detection, physical speck/smoothing/fit controls,
-  contour/hole policy, and Replace or Keep/hide handling. The Qt-free production
-  pipeline uses a capped 4× mask, hierarchy-aware contours, pre-smoothing corner
-  locks, bounded line/cubic fitting, and adaptive flattening into the established
-  multi-contour PATH representation. It records raw/fitted/final counts and
+  contour/hole policy, high-contrast preview color presets and opacity, and
+  Replace or Keep/hide handling. The Qt-free production pipeline uses a capped
+  4× mask, hierarchy-aware contours, a coordinate-canonical closed seam,
+  physical multi-scale corner persistence, smooth tangent sharing across
+  non-corner joins, bounded line/cubic fitting, and adaptive flattening into the
+  established multi-contour PATH representation. It records raw/fitted/final counts and
   estimated deviation, preserves the source frame/transform and nested holes,
   and rejects excess connected components, contours, raw points, fitted
   segments, final points, or internal work pixels with actionable cleanup
-  guidance. Source handling, vector insertion, and any new visible 0%-power,
-  output-disabled Line layer are one undoable operation. This first version is
+  guidance. Source handling, vector insertion, selection, and any new visible
+  0%-power, output-disabled ordinary Line layer are one undoable operation; a
+  retained source stays beneath the vector in its unchanged transform. This first version is
   a single-foreground logo/line-art/silhouette tracer, not full-color or
   multi-layer tracing; it persists adaptive polylines rather than Bézier
   primitives. It does not generate G-code, authorize output, contact hardware,

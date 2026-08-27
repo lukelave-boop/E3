@@ -309,6 +309,7 @@ def test_replace_workflow_preserves_frame_transform_holes_and_is_one_undo_step(
     assert output_layer.power_percent == 0.0
     assert output_layer.output_enabled is False
     assert output_layer.name == "Donut logo trace"
+    assert harness.active_layer_id == output_layer.id
     assert harness.workspace.selection == [vector.id]
 
     assert harness.history.undo()
@@ -346,9 +347,12 @@ def test_keep_source_visibility_choice_and_undo_redo(
         hide_source_after=hide_source,
     )
 
-    assert {item.id for item in document.objects} == {source.id, vector.id}
+    assert [item.id for item in document.objects] == [source.id, vector.id]
+    assert vector.transform.to_dict() == source.transform.to_dict()
     assert source.visible is expected_visible
     assert len(document.layers) == initial_layer_count + 1
+    assert harness.active_layer_id == vector.layer_id
+    assert harness.workspace.selection == [vector.id]
     assert harness.history.depth == 1
 
     assert harness.history.undo()
@@ -357,7 +361,7 @@ def test_keep_source_visibility_choice_and_undo_redo(
     assert len(document.layers) == initial_layer_count
 
     assert harness.history.redo()
-    assert {item.id for item in document.objects} == {source.id, vector.id}
+    assert [item.id for item in document.objects] == [source.id, vector.id]
     assert source.visible is expected_visible
 
 
@@ -389,6 +393,8 @@ def test_safe_active_line_layer_is_reused_without_changing_its_authority(
     assert vector.layer_id == safe_layer.id
     assert safe_layer.power_percent == 0.0
     assert safe_layer.output_enabled is False
+    assert harness.active_layer_id == safe_layer.id
+    assert harness.workspace.selection == [vector.id]
 
 
 def test_saved_and_reopened_project_preserves_compound_vector_result(

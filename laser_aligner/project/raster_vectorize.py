@@ -27,8 +27,13 @@ MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS = 100_000
 MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION = 250_000
 
 _CORNER_MINIMUM_TURN_DEGREES = 35.0
+_CORNER_INNER_MINIMUM_TURN_DEGREES = 22.5
+_CORNER_MINIMUM_SCALE_AGREEMENT = 0.60
+_STRAIGHT_MAXIMUM_TURN_DEGREES = 6.0
 _MAX_CORNER_WINDOW_POINTS = 12
 _MAX_SMOOTHING_RADIUS_POINTS = 64
+_MAX_FIT_TANGENT_WINDOW_POINTS = 12
+_LINE_MAXIMUM_TANGENT_DEVIATION_DEGREES = 2.0
 _MAX_FIT_RECURSION = 18
 _MAX_FLATTEN_RECURSION = 18
 
@@ -859,26 +864,223 @@ def _physical_contour(
     return points
 
 
-def _corner_indices(points: np.ndarray) -> list[int]:
+def _minimal_cyclic_rotation_index(points: np.ndarray) -> int:
+    """Return the lexicographically least full cyclic rotation in O(n)."""
+
+    count = len(points)
+    if count < 2:
+        return 0
+    first = 0
+    second = 1
+    offset = 0
+    while first < count and second < count and offset < count:
+        left = points[(first + offset) % count]
+        right = points[(second + offset) % count]
+        if left[0] == right[0] and left[1] == right[1]:
+            offset += 1
+            continue
+        left_is_less = bool(
+            left[0] < right[0]
+            or (left[0] == right[0] and left[1] < right[1])
+        )
+        if left_is_less:
+            second += offset + 1
+            if second <= first:
+                second = first + 1
+        else:
+            first += offset + 1
+            if first <= second:
+                first = second + 1
+        offset = 0
+    return min(first, second) % count
+
+
+def _canonicalize_closed_contour(points: np.ndarray) -> np.ndarray:
+    """Rotate a closed contour to a coordinate-defined, seam-independent start."""
+
+    values = np.asarray(points, dtype=np.float64)
+    if len(values) < 2:
+        return values.copy()
+    # A coordinate minimum can occur at several disconnected boundary samples.
+    # Comparing the complete cyclic sequence makes the tie-break independent of
+    # whichever seam OpenCV happened to return.
+    start = _minimal_cyclic_rotation_index(values)
+    return np.roll(values, -start, axis=0).copy()
+
+
+def _closed_arc_positions(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    steps = np.linalg.norm(np.roll(points, -1, axis=0) - points, axis=1)
+    positions = np.concatenate(([0.0], np.cumsum(steps[:-1])))
+    return positions, steps, float(np.sum(steps))
+
+
+def _sample_closed_contour(
+    points: np.ndarray,
+    positions: np.ndarray,
+    steps: np.ndarray,
+    perimeter: float,
+    targets: np.ndarray,
+) -> np.ndarray:
+    wrapped = np.mod(targets, perimeter)
+    starts = np.searchsorted(positions, wrapped, side="right") - 1
+    starts = np.clip(starts, 0, len(points) - 1)
+    lengths = steps[starts]
+    ratios = np.divide(
+        wrapped - positions[starts],
+        lengths,
+        out=np.zeros_like(wrapped),
+        where=lengths > 1e-15,
+    )
+    following = (starts + 1) % len(points)
+    return points[starts] + ratios[:, None] * (points[following] - points[starts])
+
+
+def _point_to_corresponding_lines(
+    samples: np.ndarray,
+    starts: np.ndarray,
+    ends: np.ndarray,
+) -> np.ndarray:
+    delta = ends - starts
+    lengths = np.linalg.norm(delta, axis=1)
+    cross = np.abs(
+        delta[:, 0] * (samples[:, 1] - starts[:, 1])
+        - delta[:, 1] * (samples[:, 0] - starts[:, 0])
+    )
+    return np.divide(
+        cross,
+        lengths,
+        out=np.full_like(cross, math.inf),
+        where=lengths > 1e-15,
+    )
+
+
+def _corner_scale_metrics(
+    points: np.ndarray,
+    positions: np.ndarray,
+    steps: np.ndarray,
+    perimeter: float,
+    distance_mm: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    previous = _sample_closed_contour(
+        points,
+        positions,
+        steps,
+        perimeter,
+        positions - distance_mm,
+    )
+    following = _sample_closed_contour(
+        points,
+        positions,
+        steps,
+        perimeter,
+        positions + distance_mm,
+    )
+    incoming = points - previous
+    outgoing = following - points
+    denominator = np.maximum(
+        np.linalg.norm(incoming, axis=1) * np.linalg.norm(outgoing, axis=1),
+        1e-15,
+    )
+    turns = np.arccos(
+        np.clip(np.sum(incoming * outgoing, axis=1) / denominator, -1.0, 1.0)
+    )
+    orientation = incoming[:, 0] * outgoing[:, 1] - incoming[:, 1] * outgoing[:, 0]
+    residual = np.zeros(len(points), dtype=np.float64)
+    for fraction in (1.0 / 3.0, 2.0 / 3.0):
+        before = _sample_closed_contour(
+            points,
+            positions,
+            steps,
+            perimeter,
+            positions - distance_mm * fraction,
+        )
+        after = _sample_closed_contour(
+            points,
+            positions,
+            steps,
+            perimeter,
+            positions + distance_mm * fraction,
+        )
+        residual = np.maximum(
+            residual,
+            _point_to_corresponding_lines(before, previous, points),
+        )
+        residual = np.maximum(
+            residual,
+            _point_to_corresponding_lines(after, points, following),
+        )
+    return turns, orientation, residual
+
+
+def _corner_indices(
+    points: np.ndarray,
+    tolerance_mm: float | None = None,
+) -> list[int]:
+    """Return sharp turns that persist across two physical arc-length scales."""
+
     count = len(points)
     if count < 8:
         return list(range(count))
-    span = max(2, min(_MAX_CORNER_WINDOW_POINTS, count // 32))
-    previous = np.roll(points, span, axis=0)
-    following = np.roll(points, -span, axis=0)
-    incoming = points - previous
-    outgoing = following - points
-    incoming_norm = np.linalg.norm(incoming, axis=1)
-    outgoing_norm = np.linalg.norm(outgoing, axis=1)
-    denominator = np.maximum(incoming_norm * outgoing_norm, 1e-15)
-    cosine = np.clip(np.sum(incoming * outgoing, axis=1) / denominator, -1.0, 1.0)
-    turns = np.arccos(cosine)
-    candidates = np.flatnonzero(
-        turns >= math.radians(_CORNER_MINIMUM_TURN_DEGREES)
-    )
-    if not len(candidates):
+    positions, steps, perimeter = _closed_arc_positions(points)
+    positive_steps = steps[steps > 1e-12]
+    if not len(positive_steps) or perimeter <= 1e-12:
         return []
-    minimum_separation = max(2, span)
+    step_mm = float(np.median(positive_steps))
+    tolerance = step_mm if tolerance_mm is None else max(0.0, float(tolerance_mm))
+    inner_distance = min(
+        perimeter / 12.0,
+        max(3.0 * step_mm, tolerance),
+    )
+    outer_distance = min(
+        perimeter / 8.0,
+        max(8.0 * step_mm, 3.0 * tolerance),
+    )
+    if outer_distance <= inner_distance:
+        outer_distance = min(perimeter / 6.0, inner_distance * 1.5)
+    inner_turns, inner_orientation, inner_residual = _corner_scale_metrics(
+        points,
+        positions,
+        steps,
+        perimeter,
+        inner_distance,
+    )
+    outer_turns, outer_orientation, outer_residual = _corner_scale_metrics(
+        points,
+        positions,
+        steps,
+        perimeter,
+        outer_distance,
+    )
+    maximum_turn = np.maximum(inner_turns, outer_turns)
+    scale_agreement = np.divide(
+        np.minimum(inner_turns, outer_turns),
+        maximum_turn,
+        out=np.zeros_like(maximum_turn),
+        where=maximum_turn > 1e-12,
+    )
+    # A raster stair-step remains close to either supporting arm, while a
+    # rounded cap (and especially a one-pixel spur on one) does not remain
+    # linear at the outer scale.  Keep this tied to both trace pitch and the
+    # requested physical tolerance: the former admits the half-pixel contour
+    # bevel at a real corner and the latter prevents a larger fit tolerance
+    # from turning a curved cap into a hard join.
+    arm_allowance = max(0.75 * step_mm, 0.30 * tolerance)
+    candidates = np.flatnonzero(
+        (inner_turns >= math.radians(_CORNER_INNER_MINIMUM_TURN_DEGREES))
+        & (outer_turns >= math.radians(_CORNER_MINIMUM_TURN_DEGREES))
+        & (scale_agreement >= _CORNER_MINIMUM_SCALE_AGREEMENT)
+        & (inner_orientation * outer_orientation > 0.0)
+        & (inner_residual <= arm_allowance)
+        & (outer_residual <= arm_allowance)
+    )
+    strengths = np.minimum(inner_turns, outer_turns) * scale_agreement
+    minimum_separation = max(
+        2,
+        min(
+            _MAX_CORNER_WINDOW_POINTS,
+            int(math.ceil(inner_distance / max(step_mm, 1e-15))),
+        ),
+    )
     selected: list[int] = []
     blocked = np.zeros(count, dtype=bool)
     offsets = np.arange(
@@ -886,16 +1088,19 @@ def _corner_indices(points: np.ndarray) -> list[int]:
         minimum_separation + 1,
         dtype=np.int64,
     )
-    ordered = candidates[
-        np.argsort(turns[candidates], kind="stable")[::-1]
-    ]
+    ordered = candidates[np.argsort(strengths[candidates], kind="stable")[::-1]]
     for raw_index in ordered:
         index = int(raw_index)
         if blocked[index]:
             continue
         selected.append(index)
         blocked[(index + offsets) % count] = True
-    return sorted(selected)
+
+    # Preserve the bounded-behaviour contract for malformed synthetic inputs
+    # whose final-to-first edge is not a normal closed-contour sample.
+    if float(steps[-1]) > max(8.0 * step_mm, outer_distance * 2.0):
+        selected.append(0)
+    return sorted(set(selected))
 
 
 def _gaussian_kernel(radius: int) -> np.ndarray:
@@ -957,16 +1162,178 @@ def _smooth_contour(
     return smoothed, displacement
 
 
-def _fitting_anchors(point_count: int, corners: list[int]) -> list[int]:
+def _fitting_anchors(
+    points_or_count: np.ndarray | int,
+    corners: list[int],
+    tolerance_mm: float | None = None,
+) -> list[int]:
+    """Choose hard corners or deterministic physical arc-length soft anchors."""
+
+    if isinstance(points_or_count, np.ndarray):
+        points = np.asarray(points_or_count, dtype=np.float64)
+        point_count = len(points)
+    else:
+        points = None
+        point_count = int(points_or_count)
     if point_count < 4:
         return list(range(point_count))
-    anchors = sorted(set(corners))
-    target = 4 if not anchors else 2
-    if len(anchors) < target:
-        for index in np.linspace(0, point_count, target, endpoint=False, dtype=int):
+    anchors = sorted(set(int(index) % point_count for index in corners))
+    if len(anchors) >= 2:
+        return anchors
+
+    if points is not None and not anchors:
+        straight_anchors = _long_straight_run_anchors(
+            points,
+            0.0 if tolerance_mm is None else max(0.0, float(tolerance_mm)),
+        )
+        if straight_anchors:
+            return straight_anchors
+
+    target_count = 4 if not anchors else 2
+    if points is None:
+        for index in np.linspace(
+            0,
+            point_count,
+            target_count,
+            endpoint=False,
+            dtype=int,
+        ):
             anchors.append(int(index) % point_count)
-    if len(anchors) == 1:
-        anchors.append((anchors[0] + point_count // 2) % point_count)
+        return sorted(set(anchors))
+
+    positions, _steps, perimeter = _closed_arc_positions(points)
+    if perimeter <= 1e-12:
+        return list(range(min(point_count, target_count)))
+    origin = positions[anchors[0]] if anchors else 0.0
+    targets = origin + np.arange(target_count, dtype=np.float64) * (
+        perimeter / target_count
+    )
+    for target in np.mod(targets, perimeter):
+        distance = np.abs(positions - target)
+        circular = np.minimum(distance, perimeter - distance)
+        anchors.append(int(np.argmin(circular)))
+    return sorted(set(anchors))
+
+
+def _circular_true_runs(mask: np.ndarray) -> list[np.ndarray]:
+    count = len(mask)
+    if count == 0 or not np.any(mask):
+        return []
+    if np.all(mask):
+        return [np.arange(count, dtype=np.int64)]
+    false_index = int(np.flatnonzero(~mask)[0])
+    order = (np.arange(count, dtype=np.int64) + false_index + 1) % count
+    values = mask[order]
+    runs: list[np.ndarray] = []
+    start = 0
+    while start < count:
+        if not values[start]:
+            start += 1
+            continue
+        end = start + 1
+        while end < count and values[end]:
+            end += 1
+        runs.append(order[start:end])
+        start = end
+    return runs
+
+
+def _run_arc_length(run: np.ndarray, steps: np.ndarray) -> float:
+    if len(run) < 2:
+        return 0.0
+    return float(np.sum(steps[run[:-1]]))
+
+
+def _arc_midpoint_index(
+    start: int,
+    end: int,
+    point_count: int,
+    steps: np.ndarray,
+) -> int:
+    indices = (
+        np.arange(start, end + 1, dtype=np.int64)
+        if end > start
+        else np.concatenate(
+            (
+                np.arange(start, point_count, dtype=np.int64),
+                np.arange(0, end + 1, dtype=np.int64),
+            )
+        )
+    )
+    cumulative = np.concatenate(
+        (
+            np.asarray((0.0,), dtype=np.float64),
+            np.cumsum(steps[indices[:-1]]),
+        )
+    )
+    return int(indices[int(np.argmin(np.abs(cumulative - cumulative[-1] / 2.0)))])
+
+
+def _long_straight_run_anchors(
+    points: np.ndarray,
+    tolerance_mm: float,
+) -> list[int]:
+    """Anchor every persistent straight run and subdivide the curved gaps."""
+
+    if len(points) < 8:
+        return []
+    positions, steps, perimeter = _closed_arc_positions(points)
+    positive_steps = steps[steps > 1e-12]
+    if not len(positive_steps) or perimeter <= 1e-12:
+        return []
+    step_mm = float(np.median(positive_steps))
+    window_mm = min(
+        perimeter / 16.0,
+        max(8.0 * step_mm, 2.5 * tolerance_mm),
+    )
+    turns, _orientation, residuals = _corner_scale_metrics(
+        points,
+        positions,
+        steps,
+        perimeter,
+        window_mm,
+    )
+    residual_allowance = max(0.75 * step_mm, 0.25 * tolerance_mm)
+    straight_mask = (
+        turns <= math.radians(_STRAIGHT_MAXIMUM_TURN_DEGREES)
+    ) & (residuals <= residual_allowance)
+    minimum_run_length = max(4.0 * tolerance_mm, 0.10 * perimeter)
+    straight_runs = [
+        run
+        for run in _circular_true_runs(straight_mask)
+        if _run_arc_length(run, steps) >= minimum_run_length
+    ]
+    if not straight_runs:
+        return []
+
+    run_endpoints = sorted(
+        {int(run[0]) for run in straight_runs}
+        | {int(run[-1]) for run in straight_runs}
+    )
+    if len(run_endpoints) < 2:
+        return []
+
+    anchors = list(run_endpoints)
+    for offset, start in enumerate(run_endpoints):
+        end = run_endpoints[(offset + 1) % len(run_endpoints)]
+        indices = (
+            np.arange(start, end + 1, dtype=np.int64)
+            if end > start
+            else np.concatenate(
+                (
+                    np.arange(start, len(points), dtype=np.int64),
+                    np.arange(0, end + 1, dtype=np.int64),
+                )
+            )
+        )
+        span = points[indices]
+        if float(np.max(_distance_to_segment(span, span[0], span[-1]))) > max(
+            tolerance_mm,
+            1e-12,
+        ):
+            anchors.append(
+                _arc_midpoint_index(start, end, len(points), steps)
+            )
     return sorted(set(anchors))
 
 
@@ -1000,13 +1367,105 @@ def _cubic_values(
     )
 
 
-def _fit_cubic(points: np.ndarray, tolerance_mm: float) -> _CubicSegment:
+def _unit_direction(vector: np.ndarray) -> np.ndarray | None:
+    length = float(np.linalg.norm(vector))
+    if length <= 1e-15:
+        return None
+    return vector / length
+
+
+def _endpoint_tangent(points: np.ndarray, *, at_start: bool) -> np.ndarray:
+    offset = min(_MAX_FIT_TANGENT_WINDOW_POINTS, len(points) - 1)
+    if at_start:
+        vector = points[offset] - points[0]
+        fallback = points[-1] - points[0]
+    else:
+        vector = points[-offset - 1] - points[-1]
+        fallback = points[0] - points[-1]
+    tangent = _unit_direction(vector)
+    if tangent is None:
+        tangent = _unit_direction(fallback)
+    if tangent is None:
+        return np.asarray((1.0, 0.0), dtype=np.float64)
+    return tangent
+
+
+def _closed_contour_tangent(
+    points: np.ndarray,
+    index: int,
+    tolerance_mm: float,
+) -> np.ndarray:
+    positions, steps, perimeter = _closed_arc_positions(points)
+    positive_steps = steps[steps > 1e-12]
+    step_mm = float(np.median(positive_steps)) if len(positive_steps) else 0.0
+    distance = min(
+        perimeter / 16.0,
+        max(4.0 * step_mm, 2.0 * tolerance_mm),
+    )
+    samples = _sample_closed_contour(
+        points,
+        positions,
+        steps,
+        perimeter,
+        np.asarray((positions[index] - distance, positions[index] + distance)),
+    )
+    tangent = _unit_direction(samples[1] - samples[0])
+    if tangent is None:
+        tangent = _unit_direction(
+            points[(index + 1) % len(points)]
+            - points[(index - 1) % len(points)]
+        )
+    if tangent is None:
+        return np.asarray((1.0, 0.0), dtype=np.float64)
+    return tangent
+
+
+def _chord_parameters(points: np.ndarray) -> np.ndarray:
     distances = np.linalg.norm(np.diff(points, axis=0), axis=1)
     cumulative = np.concatenate(([0.0], np.cumsum(distances)))
     total = float(cumulative[-1])
     if total <= 1e-15:
+        return np.linspace(0.0, 1.0, len(points))
+    return cumulative / total
+
+
+def _maximum_control_distance(
+    origin: np.ndarray,
+    direction: np.ndarray,
+    minimum: np.ndarray,
+    maximum: np.ndarray,
+) -> float:
+    limit = math.inf
+    for axis in range(2):
+        component = float(direction[axis])
+        if component > 1e-15:
+            limit = min(limit, float((maximum[axis] - origin[axis]) / component))
+        elif component < -1e-15:
+            limit = min(limit, float((minimum[axis] - origin[axis]) / component))
+    return max(0.0, limit)
+
+
+def _fit_cubic(
+    points: np.ndarray,
+    tolerance_mm: float,
+    start_tangent: np.ndarray | None = None,
+    end_tangent: np.ndarray | None = None,
+    control_minimum: np.ndarray | None = None,
+    control_maximum: np.ndarray | None = None,
+) -> _CubicSegment:
+    polyline_length = float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
+    parameters = _chord_parameters(points)
+    if polyline_length <= 1e-15:
         return _CubicSegment(points[0], points[0], points[-1], points[-1], 0.0)
-    parameters = cumulative / total
+    if start_tangent is None:
+        start_tangent = _endpoint_tangent(points, at_start=True)
+    if end_tangent is None:
+        end_tangent = _endpoint_tangent(points, at_start=False)
+    start_tangent = _unit_direction(start_tangent)
+    end_tangent = _unit_direction(end_tangent)
+    if start_tangent is None or end_tangent is None:
+        raise RasterVectorizationError("A fitted span has an undefined endpoint tangent")
+
     inverse = 1.0 - parameters
     basis_0 = inverse**3
     basis_1 = 3.0 * inverse**2 * parameters
@@ -1014,21 +1473,47 @@ def _fit_cubic(points: np.ndarray, tolerance_mm: float) -> _CubicSegment:
     basis_3 = parameters**3
     residual = (
         points
-        - basis_0[:, None] * points[0]
-        - basis_3[:, None] * points[-1]
+        - (basis_0 + basis_1)[:, None] * points[0]
+        - (basis_2 + basis_3)[:, None] * points[-1]
     )
-    matrix = np.column_stack((basis_1, basis_2))
-    controls, _residuals, _rank, _singular = np.linalg.lstsq(
+    matrix = np.column_stack(
+        (
+            (basis_1[:, None] * start_tangent).reshape(-1),
+            (basis_2[:, None] * end_tangent).reshape(-1),
+        )
+    )
+    control_distances, _residuals, rank, _singular = np.linalg.lstsq(
         matrix,
-        residual,
+        residual.reshape(-1),
         rcond=None,
     )
-    control_1 = controls[0]
-    control_2 = controls[1]
+    chord_length = float(np.linalg.norm(points[-1] - points[0]))
+    fallback_distance = chord_length / 3.0
+    if (
+        rank < 2
+        or not np.all(np.isfinite(control_distances))
+        or np.any(control_distances <= chord_length * 1e-6)
+    ):
+        control_distances = np.asarray(
+            (fallback_distance, fallback_distance),
+            dtype=np.float64,
+        )
     minimum = np.min(points, axis=0) - tolerance_mm
     maximum = np.max(points, axis=0) + tolerance_mm
-    control_1 = np.clip(control_1, minimum, maximum)
-    control_2 = np.clip(control_2, minimum, maximum)
+    if control_minimum is not None:
+        minimum = np.maximum(minimum, control_minimum)
+    if control_maximum is not None:
+        maximum = np.minimum(maximum, control_maximum)
+    control_distances[0] = min(
+        float(control_distances[0]),
+        _maximum_control_distance(points[0], start_tangent, minimum, maximum),
+    )
+    control_distances[1] = min(
+        float(control_distances[1]),
+        _maximum_control_distance(points[-1], end_tangent, minimum, maximum),
+    )
+    control_1 = points[0] + control_distances[0] * start_tangent
+    control_2 = points[-1] + control_distances[1] * end_tangent
     fitted = _cubic_values(
         points[0],
         control_1,
@@ -1037,6 +1522,22 @@ def _fit_cubic(points: np.ndarray, tolerance_mm: float) -> _CubicSegment:
         parameters,
     )
     error = float(np.max(np.linalg.norm(fitted - points, axis=1)))
+    if len(points) == 2:
+        curve_samples = _cubic_values(
+            points[0],
+            control_1,
+            control_2,
+            points[-1],
+            np.linspace(0.0, 1.0, 9),
+        )
+        error = max(
+            error,
+            float(
+                np.max(
+                    _distance_to_segment(curve_samples, points[0], points[-1])
+                )
+            ),
+        )
     return _CubicSegment(
         points[0].copy(),
         control_1.copy(),
@@ -1046,48 +1547,154 @@ def _fit_cubic(points: np.ndarray, tolerance_mm: float) -> _CubicSegment:
     )
 
 
+def _line_matches_tangents(
+    start: np.ndarray,
+    end: np.ndarray,
+    start_tangent: np.ndarray,
+    end_tangent: np.ndarray,
+) -> bool:
+    chord = _unit_direction(end - start)
+    if chord is None:
+        return True
+    minimum_alignment = math.cos(
+        math.radians(_LINE_MAXIMUM_TANGENT_DEVIATION_DEGREES)
+    )
+    return bool(
+        np.dot(start_tangent, chord) >= minimum_alignment
+        and np.dot(-end_tangent, chord) >= minimum_alignment
+    )
+
+
 def _fit_span(
     points: np.ndarray,
     tolerance_mm: float,
     budget: _ComplexityBudget,
     depth: int = 0,
+    *,
+    start_tangent: np.ndarray | None = None,
+    end_tangent: np.ndarray | None = None,
+    prefer_cubic_leaves: bool = False,
+    allow_unconstrained_line: bool = False,
+    control_minimum: np.ndarray | None = None,
+    control_maximum: np.ndarray | None = None,
 ) -> list[_FittedSegment]:
     if len(points) <= 2:
+        if prefer_cubic_leaves and len(points) == 2:
+            cubic = _fit_cubic(
+                points,
+                tolerance_mm,
+                start_tangent,
+                end_tangent,
+                control_minimum,
+                control_maximum,
+            )
+            if cubic.fitting_error_mm <= tolerance_mm:
+                budget.add_fitted_segments()
+                return [cubic]
         budget.add_fitted_segments()
         return [_LineSegment(points[0].copy(), points[-1].copy(), 0.0)]
+    if start_tangent is None:
+        start_tangent = _endpoint_tangent(points, at_start=True)
+    if end_tangent is None:
+        end_tangent = _endpoint_tangent(points, at_start=False)
+    polyline_steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    polyline_length = float(np.sum(polyline_steps))
+    closed_span = bool(
+        polyline_length > 1e-15
+        and np.linalg.norm(points[-1] - points[0]) <= 1e-15
+    )
+    if closed_span:
+        if depth >= _MAX_FIT_RECURSION:
+            _raise_complexity(
+                "A non-degenerate closed fitting span could not be split within "
+                "the bounded recursion limit"
+            )
+        cumulative = np.concatenate(([0.0], np.cumsum(polyline_steps)))
+        split = int(np.searchsorted(cumulative, polyline_length / 2.0))
+        split = max(1, min(len(points) - 2, split))
+    else:
+        split = -1
     line_errors = _distance_to_segment(points, points[0], points[-1])
     line_error = float(np.max(line_errors))
-    if line_error <= tolerance_mm:
-        budget.add_fitted_segments()
-        return [_LineSegment(points[0].copy(), points[-1].copy(), line_error)]
-
-    cubic = _fit_cubic(points, tolerance_mm)
-    if cubic.fitting_error_mm <= tolerance_mm:
-        budget.add_fitted_segments()
-        return [cubic]
-    if depth >= _MAX_FIT_RECURSION:
-        segments: list[_FittedSegment] = []
-        for start, end in zip(points[:-1], points[1:], strict=True):
+    if not closed_span:
+        if line_error <= tolerance_mm and (
+            allow_unconstrained_line
+            or _line_matches_tangents(
+                points[0],
+                points[-1],
+                start_tangent,
+                end_tangent,
+            )
+        ):
             budget.add_fitted_segments()
-            segments.append(_LineSegment(start.copy(), end.copy(), 0.0))
-        return segments
+            return [_LineSegment(points[0].copy(), points[-1].copy(), line_error)]
 
-    distances = np.linalg.norm(
-        _cubic_values(
-            cubic.start,
-            cubic.control_1,
-            cubic.control_2,
-            cubic.end,
-            np.linspace(0.0, 1.0, len(points)),
+        cubic = _fit_cubic(
+            points,
+            tolerance_mm,
+            start_tangent,
+            end_tangent,
+            control_minimum,
+            control_maximum,
         )
-        - points,
-        axis=1,
+        if cubic.fitting_error_mm <= tolerance_mm:
+            budget.add_fitted_segments()
+            return [cubic]
+        if depth >= _MAX_FIT_RECURSION:
+            segments: list[_FittedSegment] = []
+            for start, end in zip(points[:-1], points[1:], strict=True):
+                budget.add_fitted_segments()
+                segments.append(_LineSegment(start.copy(), end.copy(), 0.0))
+            return segments
+
+        distances = np.linalg.norm(
+            _cubic_values(
+                cubic.start,
+                cubic.control_1,
+                cubic.control_2,
+                cubic.end,
+                _chord_parameters(points),
+            )
+            - points,
+            axis=1,
+        )
+        split = int(np.argmax(distances))
+        split = max(1, min(len(points) - 2, split))
+    tangent_window = min(
+        _MAX_FIT_TANGENT_WINDOW_POINTS,
+        split,
+        len(points) - split - 1,
     )
-    split = int(np.argmax(distances))
-    split = max(1, min(len(points) - 2, split))
+    center_tangent = _unit_direction(
+        points[split + tangent_window] - points[split - tangent_window]
+    )
+    if center_tangent is None:
+        center_tangent = _unit_direction(points[-1] - points[0])
+    if center_tangent is None:
+        center_tangent = -end_tangent
     return [
-        *_fit_span(points[: split + 1], tolerance_mm, budget, depth + 1),
-        *_fit_span(points[split:], tolerance_mm, budget, depth + 1),
+        *_fit_span(
+            points[: split + 1],
+            tolerance_mm,
+            budget,
+            depth + 1,
+            start_tangent=start_tangent,
+            end_tangent=-center_tangent,
+            prefer_cubic_leaves=prefer_cubic_leaves,
+            control_minimum=control_minimum,
+            control_maximum=control_maximum,
+        ),
+        *_fit_span(
+            points[split:],
+            tolerance_mm,
+            budget,
+            depth + 1,
+            start_tangent=center_tangent,
+            end_tangent=end_tangent,
+            prefer_cubic_leaves=prefer_cubic_leaves,
+            control_minimum=control_minimum,
+            control_maximum=control_maximum,
+        ),
     ]
 
 
@@ -1176,18 +1783,113 @@ def _fit_and_flatten_contour(
     height_mm: float,
     budget: _ComplexityBudget,
 ) -> tuple[np.ndarray, int, float]:
-    corners = _corner_indices(raw_points)
+    raw_points = _canonicalize_closed_contour(raw_points)
+    corner_tolerance = options.simplification_tolerance_mm * 0.65
+    fit_tolerance = options.simplification_tolerance_mm * 0.80
+    corners = _corner_indices(raw_points, corner_tolerance)
+    # A dense raster trace represents a mathematically sharp corner with a
+    # one-sample bevel.  Keep the two support samples beside the classified
+    # corner as hard fitting anchors; this yields the expected short bevel plus
+    # straight arms instead of asking a tangent-constrained cubic to round the
+    # corner or recursively chase the stair-step.
+    corner_set = {
+        index
+        for corner in corners
+        for index in (
+            (corner - 1) % len(raw_points),
+            corner,
+            (corner + 1) % len(raw_points),
+        )
+    }
+    if (
+        budget.fitted_segments + len(corner_set)
+        > MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS
+    ):
+        _raise_complexity(
+            "Raster vectorization requires more than "
+            f"{MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS:,} fitted segments"
+        )
     smoothed, smoothing_displacement = _smooth_contour(
         raw_points,
         corners,
         options.smoothing_mm,
     )
-    anchors = _fitting_anchors(len(smoothed), corners)
-    fit_tolerance = options.simplification_tolerance_mm * 0.65
-    flatten_tolerance = options.simplification_tolerance_mm * 0.35
+    anchors = _fitting_anchors(
+        smoothed,
+        sorted(corner_set),
+        fit_tolerance,
+    )
+    if (
+        budget.fitted_segments + len(anchors)
+        > MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS
+    ):
+        _raise_complexity(
+            "Raster vectorization requires more than "
+            f"{MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS:,} fitted segments"
+        )
+    smooth_anchor_tangents = {
+        anchor: _closed_contour_tangent(smoothed, anchor, fit_tolerance)
+        for anchor in anchors
+        if anchor not in corner_set
+    }
+    flatten_tolerance = options.simplification_tolerance_mm * 0.20
+    control_minimum = np.asarray((-width_mm / 2.0, -height_mm / 2.0))
+    control_maximum = np.asarray((width_mm / 2.0, height_mm / 2.0))
     segments: list[_FittedSegment] = []
-    for span in _contour_spans(smoothed, anchors):
-        segments.extend(_fit_span(span, fit_tolerance, budget))
+    spans = _contour_spans(smoothed, anchors)
+    span_line_errors = [
+        float(np.max(_distance_to_segment(span, span[0], span[-1])))
+        for span in spans
+    ]
+    # Persistent straight spans define their own derivative more accurately
+    # than independently sampled endpoint windows do.  Share that chord
+    # tangent with each adjoining smooth span so the join stays G1 across
+    # differently phased raster samples.
+    for offset, span in enumerate(spans):
+        start = anchors[offset]
+        end = anchors[(offset + 1) % len(anchors)]
+        if (
+            start not in corner_set
+            and end not in corner_set
+            and span_line_errors[offset] <= fit_tolerance
+        ):
+            tangent = _unit_direction(span[-1] - span[0])
+            if tangent is not None:
+                smooth_anchor_tangents[start] = tangent
+                smooth_anchor_tangents[end] = tangent
+    for offset, span in enumerate(spans):
+        start = anchors[offset]
+        end = anchors[(offset + 1) % len(anchors)]
+        hard_start = start in corner_set
+        hard_end = end in corner_set
+        start_tangent = (
+            _endpoint_tangent(span, at_start=True)
+            if hard_start
+            else smooth_anchor_tangents[start]
+        )
+        end_tangent = (
+            _endpoint_tangent(span, at_start=False)
+            if hard_end
+            else -smooth_anchor_tangents[end]
+        )
+        straight_hard_span = bool(
+            hard_start
+            and hard_end
+            and span_line_errors[offset] <= fit_tolerance
+        )
+        segments.extend(
+            _fit_span(
+                span,
+                fit_tolerance,
+                budget,
+                start_tangent=start_tangent,
+                end_tangent=end_tangent,
+                prefer_cubic_leaves=not straight_hard_span,
+                allow_unconstrained_line=straight_hard_span,
+                control_minimum=control_minimum,
+                control_maximum=control_maximum,
+            )
+        )
     if not segments:
         raise RasterVectorizationError("A contour could not be fitted to vector geometry")
 

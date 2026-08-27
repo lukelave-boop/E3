@@ -85,9 +85,11 @@ is claimed for this startup-only correction.
 The native Objects panel now exposes **Trace image to vectors…** only when
 exactly one imported IMAGE object is selected. Its window-modal Raster
 Vectorization dialog shows the original raster, generated foreground mask, and
-vector overlay. Automatic Otsu, manual 0–255, and usable-alpha detection are
-available with inversion, alpha cutoff, physical minimum-feature area for
-isolated foreground specks and enclosed pinholes,
+vector overlay. Its magenta, cyan, yellow, white, or black color preset and
+0–100% opacity are preview-only and repaint without rerunning vectorization or
+changing project/output state. Automatic Otsu, manual 0–255, and usable-alpha
+detection are available with inversion, alpha cutoff, physical minimum-feature
+area for isolated foreground specks and enclosed pinholes,
 smoothing, a millimetre fitting/flattening tolerance, outer-only or full
 hierarchy output, and Replace or Keep/optionally-hide source handling. Preview
 work is debounced and coalesced to one running task plus the newest pending
@@ -98,9 +100,11 @@ The Qt-free `project.raster_vectorize` module consumes the existing bounded
 SHA-256 rather than opening an independent unbounded decode path. Approval is
 checked against the payload identity again before the document command. The
 quality pipeline extracts contours from an interpolated 4× mask, retains OpenCV
-tree hierarchy, locks likely corners before optional smoothing, fits bounded
-straight and cubic Bézier segments in physical coordinates, and adaptively
-flattens only the fitted curves into normal E3 PATH polylines. It reports raw
+tree hierarchy, canonicalizes each closed contour's cyclic seam, locks only
+corners supported across physical arc-length scales before optional smoothing,
+fits bounded straight and cubic Bézier segments in physical coordinates with
+shared tangents across non-corner joins, and adaptively flattens only the fitted
+curves into normal E3 PATH polylines. It reports raw
 contour points, fitted segments, final E3 points, and maximum estimated
 deviation. The estimate is relative to the threshold-derived and optionally
 smoothed contour; source sampling and threshold choice still bound real quality.
@@ -117,7 +121,10 @@ Keep/hide, vector insertion, and any safe-layer creation are one undoable
 `FunctionalCommand`, so undo/redo restores raster, vector, visibility, layer,
 and active-layer state together. The active layer is reused only when it is a
 visible Line layer at 0% power with output disabled; otherwise E3 creates a
-visible `<image name> trace` Line layer at 0% power with output disabled.
+visible `<image name> trace` Line layer at 0% power with output disabled. The
+new vector and layer are selected; a retained source keeps its transform and
+remains below the vector. The created layer uses the ordinary editable layer
+color picker, independently of preview-overlay styling.
 
 Production caps are 67,108,864 pixels in the 4× workspace, 4,096 retained
 connected components, 8,192 contours, 1,000,000 raw pre-simplification points,
@@ -132,9 +139,10 @@ This is offline authoring behavior. It neither changes the existing raster
 importer/engraver nor generates G-code, enables output, connects, Homes, moves,
 arms, or starts a job. Any later output continues through ordinary Generate,
 exact Preview, preflight, and guarded execution. The final feature-focused run
-passes **44 tests**, the broader raster/import/object/project/toolpath regression
-run passes **317 tests**, and the complete Windows run passes **2,446 tests with
-14 expected platform/capability skips**. Repository-wide Ruff,
+passes **49 fitting/vectorizer tests** and **39 raster-dialog, layer, and
+workspace tests**; the focused project save/model/history run passes **126
+tests**. The complete Windows run passes **2,466 tests with 14 expected
+platform/capability skips**. Repository-wide Ruff,
 `python -m compileall -q laser_aligner`, and `git diff --check` also pass. This is
 automated and offscreen-widget verification only; no controller, camera, motion,
 arming, laser-output, or physical-quality verification is claimed.
