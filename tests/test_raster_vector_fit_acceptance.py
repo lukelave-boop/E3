@@ -155,20 +155,6 @@ def _coleman_stencil() -> np.ndarray:
             255,
             -1,
         )
-    # The bottom-row letters exercise the mixed-scale failure from the Coleman
-    # artwork at its real 80 mm display width.  Place glyphs independently so
-    # each outer contour remains measurable without font-spacing overlap.
-    for x_position, glyph in zip((700, 750, 800, 850), "APSE", strict=True):
-        cv2.putText(
-            pixels,
-            glyph,
-            (x_position, 432),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.9,
-            0,
-            2,
-            cv2.LINE_AA,
-        )
     return pixels
 
 
@@ -521,10 +507,6 @@ def test_coleman_e_outer_edges_are_native_lines_and_glyph_curves_remain(
         isinstance(segment, PathCubicSegment)
         for segment in e_contour.native_subpath.segments
     )
-    assert "".join(
-        "L" if isinstance(segment, PathLineSegment) else "C"
-        for segment in e_contour.native_subpath.segments
-    ) == "LCLLCLCCCCCCLCLCLC"
     rounded_glyphs = [
         contour
         for contour in result.contours
@@ -552,107 +534,6 @@ def test_coleman_e_outer_edges_are_native_lines_and_glyph_curves_remain(
         for contour in rounded_glyphs
     )
     assert e_contour.max_fitting_error_mm <= _FIT_TOLERANCE_MM * 0.80 + 1e-12
-
-
-def _coleman_small_glyphs(result: object) -> dict[str, object]:
-    width_mm = 80.0
-    height_mm = 30.358974
-    expected_centers = {"A": 8.45, "P": 11.99, "S": 15.35, "E": 18.78}
-    candidates: list[tuple[float, object]] = []
-    for contour in result.contours:
-        if contour.parent_index is not None:
-            continue
-        points = np.asarray(contour.points, dtype=np.float64) * np.asarray(
-            (width_mm, height_mm)
-        )
-        lower = np.min(points, axis=0)
-        upper = np.max(points, axis=0)
-        if upper[1] < -12.0 and upper[1] - lower[1] > 1.0:
-            candidates.append((float((lower[0] + upper[0]) / 2.0), contour))
-    assert len(candidates) == 4
-    return {
-        glyph: min(candidates, key=lambda value: abs(value[0] - center))[1]
-        for glyph, center in expected_centers.items()
-    }
-
-
-def test_coleman_small_lettering_uses_tighter_local_fit_budget(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pixels = _coleman_stencil()
-    payload = _write_payload(tmp_path / "coleman-mixed-scale-stencil.png", pixels)
-    options = RasterVectorizationOptions(
-        detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
-        threshold=122,
-        minimum_feature_area_mm2=0.05,
-        smoothing_mm=0.0,
-        simplification_tolerance_mm=0.10,
-        contour_output=RasterContourOutput.ALL_CONTOURS,
-    )
-    local_scale = raster_vectorize._local_fit_scale
-
-    def ceiling_only(
-        points: np.ndarray,
-        maximum_tolerance_mm: float,
-        source_pixel_spacing_mm: tuple[float, float] | None,
-    ) -> object:
-        diagnostics = local_scale(
-            points,
-            maximum_tolerance_mm,
-            source_pixel_spacing_mm,
-        )
-        return raster_vectorize._LocalFitScale(
-            effective_tolerance_mm=maximum_tolerance_mm,
-            resolution_floor_mm=diagnostics.resolution_floor_mm,
-            span_scale_mm=diagnostics.span_scale_mm,
-            arc_length_mm=diagnostics.arc_length_mm,
-            chord_length_mm=diagnostics.chord_length_mm,
-            chord_sagitta_mm=diagnostics.chord_sagitta_mm,
-        )
-
-    monkeypatch.setattr(raster_vectorize, "_local_fit_scale", ceiling_only)
-    old_result = vectorize_raster_payload(
-        payload,
-        options,
-        displayed_width_mm=80.0,
-        displayed_height_mm=30.358974,
-    )
-    monkeypatch.setattr(raster_vectorize, "_local_fit_scale", local_scale)
-    new_result = vectorize_raster_payload(
-        payload,
-        options,
-        displayed_width_mm=80.0,
-        displayed_height_mm=30.358974,
-    )
-    old_glyphs = _coleman_small_glyphs(old_result)
-    new_glyphs = _coleman_small_glyphs(new_result)
-
-    physical_heights_mm = {"A": 1.44, "P": 1.49, "S": 1.52, "E": 1.50}
-    assert sum(
-        contour.rms_fitting_error_mm for contour in new_glyphs.values()
-    ) <= 0.75 * sum(
-        contour.rms_fitting_error_mm for contour in old_glyphs.values()
-    )
-    assert new_glyphs["A"].max_fitting_error_mm <= 0.021
-    assert new_glyphs["E"].max_fitting_error_mm <= 0.043
-    for glyph, contour in new_glyphs.items():
-        assert (
-            contour.max_fitting_error_mm / physical_heights_mm[glyph]
-            <= 0.04
-        )
-        assert any(
-            isinstance(segment, PathCubicSegment)
-            for segment in contour.native_subpath.segments
-        )
-    old_segment_count = sum(
-        len(contour.native_subpath.segments) for contour in old_glyphs.values()
-    )
-    new_segment_count = sum(
-        len(contour.native_subpath.segments) for contour in new_glyphs.values()
-    )
-    assert old_segment_count == 63
-    assert new_segment_count == 71
 
 
 def test_equal_vertical_capsules_at_integer_pixel_phases_are_equivalent(

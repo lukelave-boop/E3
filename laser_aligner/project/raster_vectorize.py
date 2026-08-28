@@ -63,9 +63,15 @@ _CUBIC_DISTRIBUTION_RMS_TRIGGER_TOLERANCE_FRACTION = 0.45
 _CUBIC_DISTRIBUTION_BIAS_TRIGGER_TOLERANCE_FRACTION = 0.04
 _CUBIC_DISTRIBUTION_ONE_SIDED_TRIGGER_FRACTION = 0.67
 _CUBIC_DISTRIBUTION_MAX_REPARAMETERIZATIONS = 3
-_LOCAL_FIT_SCALE_FRACTION = 0.04
-_LOCAL_FIT_SOURCE_PIXEL_FRACTION = 0.375
-_LOCAL_FIT_WORKSPACE_PITCH_MULTIPLE = 1.5
+_SOURCE_EDGE_NORMAL_WINDOW_SOURCE_PIXELS = 1.25
+_SOURCE_EDGE_PROFILE_RADIUS_SOURCE_PIXELS = 1.25
+_SOURCE_EDGE_PROFILE_STEP_SOURCE_PIXELS = 0.125
+_SOURCE_EDGE_PROFILE_CHUNK_SIZE = 8_192
+_SOURCE_EDGE_MAXIMUM_DISPLACEMENT_SOURCE_PIXELS = 0.60
+_SOURCE_EDGE_MINIMUM_ENDPOINT_MARGIN = 8.0
+_SOURCE_EDGE_MINIMUM_CONTRAST = 32.0
+_SOURCE_EDGE_MINIMUM_SLOPE_PER_SOURCE_PIXEL = 24.0
+_SOURCE_EDGE_MAXIMUM_REVERSE_VARIATION_FRACTION = 0.20
 _MAX_REPARAMETERIZATION_ITERATIONS = 8
 _MAX_FIT_RECURSION = 18
 _MAX_FIT_VALIDATION_RECURSION = 18
@@ -720,14 +726,28 @@ class _StraightRun:
     directional_range_degrees: float
 
 
-@dataclass(frozen=True, slots=True)
-class _LocalFitScale:
-    effective_tolerance_mm: float
-    resolution_floor_mm: float
-    span_scale_mm: float
-    arc_length_mm: float
-    chord_length_mm: float
-    chord_sagitta_mm: float
+@dataclass(frozen=True, slots=True, eq=False)
+class _SourceEdgeRefinement:
+    points: np.ndarray
+    signed_displacements_mm: np.ndarray
+    eligible: np.ndarray
+    protected: np.ndarray
+
+    @property
+    def maximum_displacement_mm(self) -> float:
+        if not len(self.signed_displacements_mm):
+            return 0.0
+        return float(np.max(np.abs(self.signed_displacements_mm)))
+
+
+def _unchanged_source_edge(points: np.ndarray) -> _SourceEdgeRefinement:
+    values = np.asarray(points, dtype=np.float64)
+    return _SourceEdgeRefinement(
+        points=values.copy(),
+        signed_displacements_mm=np.zeros(len(values), dtype=np.float64),
+        eligible=np.zeros(len(values), dtype=bool),
+        protected=np.ones(len(values), dtype=bool),
+    )
 
 
 @dataclass(slots=True)
@@ -1945,6 +1965,257 @@ def _persistent_straight_runs(
     return tuple(run for run in runs if run.length_mm >= final_minimum_length)
 
 
+def _source_edge_normal_pitch_mm(
+    normals: np.ndarray,
+    source_pixel_spacing_mm: tuple[float, float],
+) -> np.ndarray:
+    x_spacing, y_spacing = source_pixel_spacing_mm
+    inverse_pitch = np.sqrt(
+        (normals[:, 0] / x_spacing) ** 2
+        + (normals[:, 1] / y_spacing) ** 2
+    )
+    return np.divide(
+        1.0,
+        inverse_pitch,
+        out=np.zeros_like(inverse_pitch),
+        where=inverse_pitch > 1e-15,
+    )
+
+
+def _source_edge_profiles(
+    points: np.ndarray,
+    normals: np.ndarray,
+    normal_pitch_mm: np.ndarray,
+    source: RasterVectorizationSource,
+    options: RasterVectorizationOptions,
+    threshold_used: int | None,
+    width_mm: float,
+    height_mm: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    fractions = np.arange(
+        -_SOURCE_EDGE_PROFILE_RADIUS_SOURCE_PIXELS,
+        _SOURCE_EDGE_PROFILE_RADIUS_SOURCE_PIXELS
+        + _SOURCE_EDGE_PROFILE_STEP_SOURCE_PIXELS * 0.5,
+        _SOURCE_EDGE_PROFILE_STEP_SOURCE_PIXELS,
+        dtype=np.float64,
+    )
+    offsets = normal_pitch_mm[:, None] * fractions[None, :]
+    samples = points[:, None, :] + normals[:, None, :] * offsets[:, :, None]
+    map_x = (
+        (samples[:, :, 0] / width_mm + 0.5) * source.width_px - 0.5
+    )
+    map_y = (
+        (0.5 - samples[:, :, 1] / height_mm) * source.height_px - 0.5
+    )
+    valid = (
+        (map_x >= 0.0).all(axis=1)
+        & (map_x <= source.width_px - 1.0).all(axis=1)
+        & (map_y >= 0.0).all(axis=1)
+        & (map_y <= source.height_px - 1.0).all(axis=1)
+    )
+    map_x_32 = map_x.astype(np.float32)
+    map_y_32 = map_y.astype(np.float32)
+    alpha = cv2.remap(
+        source.alpha,
+        map_x_32,
+        map_y_32,
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    ).astype(np.float64)
+    if options.detection_mode is RasterDetectionMode.ALPHA:
+        profiles = alpha - options.alpha_cutoff
+        if options.invert:
+            profiles = -profiles
+        return fractions, profiles, valid
+
+    assert threshold_used is not None
+    grayscale = cv2.remap(
+        source.composited_grayscale,
+        map_x_32,
+        map_y_32,
+        cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    ).astype(np.float64)
+    intensity_margin = threshold_used - grayscale
+    if options.invert:
+        intensity_margin = -intensity_margin
+    alpha_margin = alpha - options.alpha_cutoff
+    return fractions, np.minimum(intensity_margin, alpha_margin), valid
+
+
+@_timed_stage("source_edge_refinement")
+def _refine_contour_source_edges(
+    points: np.ndarray,
+    source: RasterVectorizationSource,
+    options: RasterVectorizationOptions,
+    threshold_used: int | None,
+    width_mm: float,
+    height_mm: float,
+) -> _SourceEdgeRefinement:
+    """Move eligible contour samples to supported source-raster crossings.
+
+    The extracted contour remains the topology authority. Each accepted update
+    is one bounded displacement along a locally estimated normal. Hard-corner
+    support and every positively classified straight run remain byte-for-byte
+    at their extracted positions; weak, flat, multi-crossing, or non-monotone
+    source profiles are left unchanged.
+    """
+
+    values = np.asarray(points, dtype=np.float64)
+    count = len(values)
+    if count < 8:
+        return _unchanged_source_edge(values)
+    source_spacing = (
+        width_mm / source.width_px,
+        height_mm / source.height_px,
+    )
+    positions, steps, perimeter = _closed_arc_positions(values)
+    positive_steps = steps[steps > 1e-12]
+    if perimeter <= 1e-12 or not len(positive_steps):
+        return _unchanged_source_edge(values)
+    normal_window_mm = min(
+        perimeter / 16.0,
+        max(source_spacing) * _SOURCE_EDGE_NORMAL_WINDOW_SOURCE_PIXELS,
+    )
+    previous = _sample_closed_contour(
+        values,
+        positions,
+        steps,
+        perimeter,
+        positions - normal_window_mm,
+    )
+    following = _sample_closed_contour(
+        values,
+        positions,
+        steps,
+        perimeter,
+        positions + normal_window_mm,
+    )
+    tangents = following - previous
+    tangent_lengths = np.linalg.norm(tangents, axis=1)
+    normals = np.zeros_like(tangents)
+    usable_tangent = tangent_lengths > 1e-15
+    normals[usable_tangent, 0] = (
+        tangents[usable_tangent, 1] / tangent_lengths[usable_tangent]
+    )
+    normals[usable_tangent, 1] = (
+        -tangents[usable_tangent, 0] / tangent_lengths[usable_tangent]
+    )
+    normal_pitch_mm = _source_edge_normal_pitch_mm(normals, source_spacing)
+
+    corner_tolerance = options.simplification_tolerance_mm * 0.65
+    fit_tolerance = options.simplification_tolerance_mm * 0.80
+    corners = _corner_indices(values, corner_tolerance)
+    protected = np.zeros(count, dtype=bool)
+    for corner in corners:
+        protected[(corner - 1) % count] = True
+        protected[corner] = True
+        protected[(corner + 1) % count] = True
+    straight_runs = _persistent_straight_runs(
+        values,
+        fit_tolerance,
+        source_pixel_spacing_mm=source_spacing,
+    )
+    oversampled_step = float(np.median(positive_steps))
+    minimum_run_length = _minimum_straight_run_length(
+        fit_tolerance,
+        oversampled_step,
+        source_spacing,
+    )
+    hard_anchors = np.flatnonzero(protected)
+    promoted_runs: list[_StraightRun] = []
+    if len(hard_anchors) >= 2:
+        for offset, start_value in enumerate(hard_anchors):
+            start = int(start_value)
+            end = int(hard_anchors[(offset + 1) % len(hard_anchors)])
+            indices = _circular_indices(start, end, count)
+            if _run_arc_length(indices, steps) < minimum_run_length:
+                continue
+            evidence = _straight_run_evidence(
+                values,
+                indices,
+                fit_tolerance,
+                oversampled_step,
+                source_spacing,
+            )
+            if evidence is not None:
+                promoted_runs.append(evidence)
+    for run in (*straight_runs, *promoted_runs):
+        protected[_circular_indices(run.start_index, run.end_index, count)] = True
+
+    eligible = np.zeros(count, dtype=bool)
+    signed_displacements = np.zeros(count, dtype=np.float64)
+    for start in range(0, count, _SOURCE_EDGE_PROFILE_CHUNK_SIZE):
+        end = min(count, start + _SOURCE_EDGE_PROFILE_CHUNK_SIZE)
+        fractions, profiles, in_frame = _source_edge_profiles(
+            values[start:end],
+            normals[start:end],
+            normal_pitch_mm[start:end],
+            source,
+            options,
+            threshold_used,
+            width_mm,
+            height_mm,
+        )
+        transitions = (profiles[:, :-1] >= 0.0) & (profiles[:, 1:] < 0.0)
+        transition_counts = np.count_nonzero(transitions, axis=1)
+        transition_indices = np.argmax(transitions, axis=1)
+        rows = np.arange(end - start)
+        left = profiles[rows, transition_indices]
+        right = profiles[rows, transition_indices + 1]
+        denominator = left - right
+        crossing_fraction = fractions[transition_indices] + np.divide(
+            left,
+            denominator,
+            out=np.zeros_like(left),
+            where=denominator > 1e-15,
+        ) * _SOURCE_EDGE_PROFILE_STEP_SOURCE_PIXELS
+        profile_differences = np.diff(profiles, axis=1)
+        reverse_variation = np.sum(
+            np.maximum(profile_differences, 0.0),
+            axis=1,
+        )
+        total_decline = profiles[:, 0] - profiles[:, -1]
+        contrast = np.max(profiles, axis=1) - np.min(profiles, axis=1)
+        crossing_slope = np.divide(
+            denominator,
+            _SOURCE_EDGE_PROFILE_STEP_SOURCE_PIXELS,
+        )
+        chunk_eligible = (
+            usable_tangent[start:end]
+            & in_frame
+            & ~protected[start:end]
+            & (normal_pitch_mm[start:end] > 1e-15)
+            & (transition_counts == 1)
+            & (profiles[:, 0] >= _SOURCE_EDGE_MINIMUM_ENDPOINT_MARGIN)
+            & (profiles[:, -1] <= -_SOURCE_EDGE_MINIMUM_ENDPOINT_MARGIN)
+            & (contrast >= _SOURCE_EDGE_MINIMUM_CONTRAST)
+            & (crossing_slope >= _SOURCE_EDGE_MINIMUM_SLOPE_PER_SOURCE_PIXEL)
+            & (
+                reverse_variation
+                <= _SOURCE_EDGE_MAXIMUM_REVERSE_VARIATION_FRACTION
+                * np.maximum(total_decline, 0.0)
+            )
+            & (
+                np.abs(crossing_fraction)
+                <= _SOURCE_EDGE_MAXIMUM_DISPLACEMENT_SOURCE_PIXELS
+            )
+        )
+        eligible[start:end] = chunk_eligible
+        eligible_indices = np.flatnonzero(chunk_eligible) + start
+        signed_displacements[eligible_indices] = (
+            crossing_fraction[chunk_eligible]
+            * normal_pitch_mm[eligible_indices]
+        )
+    refined = values + normals * signed_displacements[:, None]
+    return _SourceEdgeRefinement(
+        points=refined,
+        signed_displacements_mm=signed_displacements,
+        eligible=eligible,
+        protected=protected,
+    )
+
+
 def _arc_midpoint_index(
     start: int,
     end: int,
@@ -2040,79 +2311,6 @@ def _distance_to_segment(
     ratios = np.clip(((points - start) @ delta) / denominator, 0.0, 1.0)
     projections = start + ratios[:, None] * delta
     return np.linalg.norm(points - projections, axis=1)
-
-
-def _local_fit_scale(
-    points: np.ndarray,
-    maximum_tolerance_mm: float,
-    source_pixel_spacing_mm: tuple[float, float] | None,
-) -> _LocalFitScale:
-    """Return a resolution-bounded, local fitting-span tolerance.
-
-    The user-selected tolerance remains the ceiling.  The local geometric
-    scale is rotation-independent: a straight span is represented by its
-    chord, while a turning span also includes twice its chord sagitta.  Capping
-    that measure by physical arc length keeps loops and strongly folded spans
-    finite without consulting the complete contour's bounding box. The chosen
-    budget remains stable through recursive fitting of this authoritative span,
-    preventing raster stair steps from tightening the rule again after a split.
-
-    Automatic tightening stops at the larger of 3/8 of one source pixel and
-    1.5 contour-workspace pitches.  Both describe the same physical floor at
-    the production 4x oversampling factor, but retaining both terms makes the
-    source-resolution and contour-workspace contracts explicit.
-    """
-
-    values = np.asarray(points, dtype=np.float64)
-    if source_pixel_spacing_mm is None:
-        # Compatibility callers provide no raster quantization evidence. Keep
-        # their explicitly supplied tolerance authoritative instead of
-        # inventing a resolution floor.
-        return _LocalFitScale(
-            effective_tolerance_mm=max(0.0, float(maximum_tolerance_mm)),
-            resolution_floor_mm=0.0,
-            span_scale_mm=0.0,
-            arc_length_mm=0.0,
-            chord_length_mm=0.0,
-            chord_sagitta_mm=0.0,
-        )
-    if len(values) < 2:
-        arc_length = 0.0
-        chord_length = 0.0
-        chord_sagitta = 0.0
-    else:
-        arc_length = float(
-            np.sum(np.linalg.norm(np.diff(values, axis=0), axis=1))
-        )
-        chord_length = float(np.linalg.norm(values[-1] - values[0]))
-        chord_sagitta = float(
-            np.max(_distance_to_segment(values, values[0], values[-1]))
-        )
-    span_scale = min(
-        arc_length,
-        max(chord_length, 2.0 * chord_sagitta),
-    )
-    source_pitch = max(abs(float(value)) for value in source_pixel_spacing_mm)
-    workspace_pitch = source_pitch / RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
-    resolution_floor = max(
-        _LOCAL_FIT_SOURCE_PIXEL_FRACTION * source_pitch,
-        _LOCAL_FIT_WORKSPACE_PITCH_MULTIPLE * workspace_pitch,
-    )
-    effective_tolerance = min(
-        maximum_tolerance_mm,
-        max(
-            resolution_floor,
-            _LOCAL_FIT_SCALE_FRACTION * span_scale,
-        ),
-    )
-    return _LocalFitScale(
-        effective_tolerance_mm=max(0.0, float(effective_tolerance)),
-        resolution_floor_mm=max(0.0, float(resolution_floor)),
-        span_scale_mm=max(0.0, float(span_scale)),
-        arc_length_mm=max(0.0, float(arc_length)),
-        chord_length_mm=max(0.0, float(chord_length)),
-        chord_sagitta_mm=max(0.0, float(chord_sagitta)),
-    )
 
 
 def _cubic_values(
@@ -3124,7 +3322,6 @@ def _merge_smooth_pieces(
     budget: _ComplexityBudget,
     *,
     minimum_segment_count: int,
-    source_pixel_spacing_mm: tuple[float, float] | None = None,
 ) -> list[_FittedPiece]:
     """Merge adjacent like-kind pieces only after full fit revalidation."""
 
@@ -3142,16 +3339,11 @@ def _merge_smooth_pieces(
             index += 1
             continue
         target = np.vstack((first.target_points[:-1], second.target_points))
-        effective_tolerance = _local_fit_scale(
-            target,
-            tolerance_mm,
-            source_pixel_spacing_mm,
-        ).effective_tolerance_mm
         merged: _FittedPiece | None = None
         if isinstance(first.segment, _LineSegment):
             merged = _attempt_line_piece(
                 target,
-                effective_tolerance,
+                tolerance_mm,
                 budget,
                 hard_start=first.hard_start,
                 hard_end=second.hard_end,
@@ -3159,7 +3351,7 @@ def _merge_smooth_pieces(
         else:
             merged, _split, _best = _attempt_cubic_piece(
                 target,
-                effective_tolerance,
+                tolerance_mm,
                 first.start_tangent,
                 second.end_tangent,
                 budget,
@@ -3208,11 +3400,24 @@ def _fit_contour(
     budget: _ComplexityBudget,
     *,
     source_pixel_spacing_mm: tuple[float, float] | None = None,
+    classification_points: np.ndarray | None = None,
 ) -> _FittedContour:
-    raw_points = _canonicalize_closed_contour(raw_points)
+    if classification_points is None:
+        raw_points = _canonicalize_closed_contour(raw_points)
+        classification = raw_points
+    else:
+        raw_points = np.asarray(raw_points, dtype=np.float64)
+        classification = np.asarray(classification_points, dtype=np.float64)
+        if classification.shape != raw_points.shape:
+            raise ValueError(
+                "classification_points must match the fitted contour shape"
+            )
+        start = _minimal_cyclic_rotation_index(classification)
+        raw_points = np.roll(raw_points, -start, axis=0).copy()
+        classification = np.roll(classification, -start, axis=0).copy()
     corner_tolerance = options.simplification_tolerance_mm * 0.65
     fit_tolerance = options.simplification_tolerance_mm * 0.80
-    corners = _corner_indices(raw_points, corner_tolerance)
+    corners = _corner_indices(classification, corner_tolerance)
     # A dense raster trace represents a mathematically sharp corner with a
     # one-sample bevel.  Keep the two support samples beside the classified
     # corner as hard fitting anchors; this yields the expected short bevel plus
@@ -3228,13 +3433,13 @@ def _fit_contour(
         )
     }
     straight_runs = _persistent_straight_runs(
-        raw_points,
+        classification,
         fit_tolerance,
         source_pixel_spacing_mm=source_pixel_spacing_mm,
     )
     if len(corner_set) >= 2:
         raw_steps = np.linalg.norm(
-            np.roll(raw_points, -1, axis=0) - raw_points,
+            np.roll(classification, -1, axis=0) - classification,
             axis=1,
         )
         positive_raw_steps = raw_steps[raw_steps > 1e-12]
@@ -3256,7 +3461,7 @@ def _fit_contour(
             if _run_arc_length(indices, raw_steps) < minimum_run_length:
                 continue
             evidence = _straight_run_evidence(
-                raw_points,
+                classification,
                 indices,
                 fit_tolerance,
                 oversampled_step,
@@ -3374,11 +3579,6 @@ def _fit_contour(
     for offset, span in enumerate(spans):
         start = anchors[offset]
         end = anchors[(offset + 1) % len(anchors)]
-        span_tolerance = _local_fit_scale(
-            span,
-            fit_tolerance,
-            source_pixel_spacing_mm,
-        ).effective_tolerance_mm
         hard_start = start in corner_set
         hard_end = end in corner_set
         start_tangent = (
@@ -3399,7 +3599,7 @@ def _fit_contour(
         if straight_span_flags[offset]:
             line = _attempt_line_piece(
                 span,
-                span_tolerance,
+                fit_tolerance,
                 budget,
                 hard_start=hard_start,
                 hard_end=hard_end,
@@ -3411,7 +3611,7 @@ def _fit_contour(
         pieces.extend(
             _fit_span_pieces(
                 span,
-                span_tolerance,
+                fit_tolerance,
                 budget,
                 start_tangent=start_tangent,
                 end_tangent=end_tangent,
@@ -3431,7 +3631,6 @@ def _fit_contour(
         control_maximum,
         budget,
         minimum_segment_count=max(4, len(corner_set)),
-        source_pixel_spacing_mm=source_pixel_spacing_mm,
     )
     if not pieces:
         raise RasterVectorizationError("A contour could not be fitted to vector geometry")
@@ -4717,6 +4916,25 @@ def _vectorize_prepared_raster(
             )
         if (not is_hole and area < 0.0) or (is_hole and area > 0.0):
             physical = physical[::-1].copy()
+        hierarchy_entry = hierarchy[0, original_index]
+        # Keep every contour that participates in nesting on the exact legacy
+        # target. This conservatively preserves hole/parent clearances and the
+        # established rejection boundary while source-edge localization is
+        # limited to independent stencil components and silhouettes.
+        threshold_physical = physical
+        source_edge = (
+            _unchanged_source_edge(physical)
+            if int(hierarchy_entry[2]) >= 0 or int(hierarchy_entry[3]) >= 0
+            else _refine_contour_source_edges(
+                physical,
+                source,
+                options,
+                threshold_used,
+                width_mm,
+                height_mm,
+            )
+        )
+        physical = source_edge.points
         fitted = _fit_contour(
             physical,
             options,
@@ -4727,6 +4945,7 @@ def _vectorize_prepared_raster(
                 width_mm / source.width_px,
                 height_mm / source.height_px,
             ),
+            classification_points=threshold_physical,
         )
         native_subpath = _native_subpath_from_fitted_contour(
             fitted,
@@ -4743,7 +4962,8 @@ def _vectorize_prepared_raster(
             budget,
         )
         deviation = (
-            fitted.smoothing_displacement_mm
+            source_edge.maximum_displacement_mm
+            + fitted.smoothing_displacement_mm
             + fitted.max_fitting_error_mm
             + preview_tolerance_mm
         )

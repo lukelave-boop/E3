@@ -203,11 +203,13 @@ tangents only at non-corner joins. Material, rotation-independent straight
 source runs persist as lines after continuous revalidation; short curve
 plateaus, rounded transitions, and shallow arcs remain cubic. Curved spans use
 constrained cubic handle solving, Newton reparameterization, conservative
-continuous error bounds, and verified adjacent merging. The displayed fitting
-tolerance is a ceiling: each anchor span may automatically tighten it from a
-rotation-independent arc/chord scale, stopping at the source-pixel/4×-workspace
-resolution floor and keeping the selected budget stable through recursive
-splits. Hidden between-sample
+continuous error bounds, and verified adjacent merging. Before that exact fit,
+eligible independent curve samples may move only along their local normal to a
+strong, unique, bounded threshold crossing sampled from the original
+grayscale/alpha source. Nested contours, hard-corner support, classified
+straight runs, and ambiguous profiles retain their extracted positions. The
+displayed 0.10 mm tolerance and fixed 0.08 mm internal budget are unchanged;
+Quick Preview does not perform this refinement. Hidden between-sample
 lobes and current native-arc topology
 ambiguities are rejected. The dialog reports validated maximum/RMS fit error,
 hard corners, recursive splits, and verified merges. Nested holes remain

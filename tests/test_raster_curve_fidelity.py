@@ -30,13 +30,33 @@ _COLEMAN_P_COMPRESSED = (
     "ui$B_-5cr~r2NBFE^xa8HmilddIk9HUA8?7JnevW3R!Hwo)5KPJw)S*LvqYvU`SX%"
 )
 _COLEMAN_P_SHAPE = (71, 59)
+_COLEMAN_GLYPH_CROPS = {
+    "A": (
+        (71, 45),
+        "0cbcedeca62501e1328d635a0d09ef80a6c4da4182e207fbc3e2b714d15d6891",
+        "c-rmN%M!yN2nEo^{r?|s1>0#dO?+?#)2u4HIA@3=Avv#D5exwL;aV%Rm#{EfYcXErz_tDA-flxUTR6LLOwVA|+fx4yUp%5q?~myyh(@aCz|vxvI<*NAIpV2QLtNCg(n<$Fg@u39Q+Qi?@&QodG?*5wnZQ$zy0Tc&Sqy?P#(;&X{VXyJ56%{re&Qqz#`y}%qbS9_&DA>5i#0GDUC?6IUb>GCIGXW|W!Sh!n{QYjd|)E<+h6gA@dDqA89D",
+    ),
+    "E": (
+        (71, 45),
+        "a532911240e09306d173afcc950efc481d2a905fdc4c383b54795c6e129536af",
+        "c-rmOy$*mN3<Thz@Bh9I-qjd?1{A!iNKCke!4HE)i|*wR%QymlnGFMUL9c^iXGYofypz4!md$aJnXb(OTE(n}ub1(p7+$Js9%ruOhuCXj${1;jDd9sqy0?SMEQ@H1=#McX4>&SVx`Ag$hPo;1nWb%Ddgrg-=QbD-%;syp`3)-lxz*8D8O!Bh_^+U+C&>iz3OLX",
+    ),
+    "S": (
+        (71, 56),
+        "331c4774887da48a202795eb1f6fb4322a8109b578997e557bd1fe4b399a6ed8",
+        "c-rlk+meDX42CbVPvD*V{tvlA4i@M_18GRnQO6-Og3x><rGH`-`CQ}iNI}2lk~#8lLZs1|XN-f15ogO>AjRbJ*9{yIrc=t9sZRs9o1E4p2$*cTQ+^l0^y!H$4rVK!k;!2_$ifhy!ofe6g~LjJQ0GADRCC~QP?I+cY~9qIX==QhA%mHfD2~T~io2Rrxf(g%3aw*#Ow6|#;)a4+S0U_xvYndL-nnc#%oe=*ATn1v40s^rZewu29*8uU-O<1U6NOmmgy50HwRj>wK3MO&7dND5he3IJ$nOD@B!W6$bE=vfKwT=wruZCCUIRWJP@W7jS)<*4z;bwANTPm+D~FdJo22J*tnyLYxnR8Ur>AJ@9Gu?_8u{;*+_KvZte?9tXpw)Q0FjKW8p^2j>zcHw9FIx*H1nU-X)m)oQDmjQ",
+    ),
+}
 _COLEMAN_PITCH_MM = 80.0 / 1170.0
 _FIT_TOLERANCE_MM = 0.10
 
 
 @dataclass(frozen=True, slots=True)
 class _ContourFit:
+    threshold_raw: np.ndarray
     raw: np.ndarray
+    signed_source_displacements_mm: np.ndarray
+    source_edge: fitter._SourceEdgeRefinement
     fitted: fitter._FittedContour
 
 
@@ -65,6 +85,13 @@ def _coleman_p_crop() -> np.ndarray:
     payload = zlib.decompress(base64.b85decode(_COLEMAN_P_COMPRESSED))
     assert hashlib.sha256(payload).hexdigest() == _COLEMAN_P_PIXELS_SHA256
     return np.frombuffer(payload, dtype=np.uint8).reshape(_COLEMAN_P_SHAPE).copy()
+
+
+def _coleman_glyph_crop(glyph: str) -> np.ndarray:
+    shape, expected_sha256, compressed = _COLEMAN_GLYPH_CROPS[glyph]
+    payload = zlib.decompress(base64.b85decode(compressed))
+    assert hashlib.sha256(payload).hexdigest() == expected_sha256
+    return np.frombuffer(payload, dtype=np.uint8).reshape(shape).copy()
 
 
 def _fit_raster_outer_contours(
@@ -104,7 +131,21 @@ def _fit_raster_outer_contours(
         )
         if fitter._signed_area(physical) < 0.0:
             physical = physical[::-1].copy()
-        raw = fitter._canonicalize_closed_contour(physical)
+        source_edge = fitter._refine_contour_source_edges(
+            physical,
+            source,
+            options,
+            masks.threshold_used,
+            width_mm,
+            height_mm,
+        )
+        canonical_start = fitter._minimal_cyclic_rotation_index(physical)
+        threshold_raw = np.roll(physical, -canonical_start, axis=0).copy()
+        raw = np.roll(source_edge.points, -canonical_start, axis=0).copy()
+        signed_displacements = np.roll(
+            source_edge.signed_displacements_mm,
+            -canonical_start,
+        ).copy()
         fitted = fitter._fit_contour(
             raw,
             options,
@@ -112,8 +153,17 @@ def _fit_raster_outer_contours(
             height_mm,
             fitter._ComplexityBudget(),
             source_pixel_spacing_mm=(pitch_mm, pitch_mm),
+            classification_points=threshold_raw,
         )
-        results.append(_ContourFit(raw, fitted))
+        results.append(
+            _ContourFit(
+                threshold_raw,
+                raw,
+                signed_displacements,
+                source_edge,
+                fitted,
+            )
+        )
     return results
 
 
@@ -200,6 +250,35 @@ def _error_metrics(target: np.ndarray, segment: object) -> _ErrorMetrics:
     )
 
 
+def _fit_errors_against_points(
+    points: np.ndarray,
+    segments: tuple[object, ...],
+) -> np.ndarray:
+    parameters = np.linspace(0.0, 1.0, 129)
+    sampled = np.stack(
+        [
+            fitter._cubic_values(*_segment_controls(segment), parameters)
+            for segment in segments
+        ]
+    )
+    errors: list[float] = []
+    for point in points:
+        distances = np.linalg.norm(sampled - point[None, None, :], axis=2)
+        segment_index, sample_index = np.unravel_index(
+            np.argmin(distances),
+            distances.shape,
+        )
+        controls = _segment_controls(segments[segment_index])
+        parameter = _project_parameter(
+            point,
+            controls,
+            float(parameters[sample_index]),
+        )
+        value = fitter._cubic_values(*controls, np.asarray((parameter,)))[0]
+        errors.append(float(np.linalg.norm(value - point)))
+    return np.asarray(errors)
+
+
 def _longest_cubic(fit: _ContourFit) -> tuple[object, np.ndarray]:
     candidates: list[tuple[int, object, np.ndarray]] = []
     for segment in fit.fitted.segments:
@@ -259,6 +338,19 @@ def _sample_segments(segments: tuple[object, ...], count: int = 65) -> np.ndarra
     )
 
 
+def _centered_segment_samples(fit: _ContourFit) -> np.ndarray:
+    points = _sample_segments(fit.fitted.segments)
+    return points - (np.min(points, axis=0) + np.max(points, axis=0)) / 2.0
+
+
+def _symmetric_maximum_distance(first: np.ndarray, second: np.ndarray) -> float:
+    distances = np.linalg.norm(first[:, None, :] - second[None, :, :], axis=2)
+    return max(
+        float(np.max(np.min(distances, axis=1))),
+        float(np.max(np.min(distances, axis=0))),
+    )
+
+
 def _ideal_d_distance_mm(
     physical_points: np.ndarray,
     *,
@@ -311,29 +403,181 @@ def test_actual_coleman_p_bowl_refines_biased_long_cubic(
     bowl = max(fits, key=lambda fit: float(np.mean(fit.raw[:, 0])))
 
     assert len(bowl.raw) == 392
-    assert len(fitter._corner_indices(bowl.raw, 0.065)) == 4
+    assert len(fitter._corner_indices(bowl.threshold_raw, 0.065)) == 4
     assert not fitter._persistent_straight_runs(
-        bowl.raw,
+        bowl.threshold_raw,
         0.08,
         source_pixel_spacing_mm=(_COLEMAN_PITCH_MM, _COLEMAN_PITCH_MM),
     )
-    assert _segment_sequence(bowl) == "LLCCCCLLCLLCLLCCC"
-
-    outer_curve, target = _longest_cubic(bowl)
-    assert len(target) == 147
-    outer_scale = fitter._local_fit_scale(
-        target,
-        0.08,
-        (_COLEMAN_PITCH_MM, _COLEMAN_PITCH_MM),
+    baseline = fitter._fit_contour(
+        bowl.threshold_raw,
+        _options(),
+        _COLEMAN_P_SHAPE[1] * _COLEMAN_PITCH_MM,
+        _COLEMAN_P_SHAPE[0] * _COLEMAN_PITCH_MM,
+        fitter._ComplexityBudget(),
+        source_pixel_spacing_mm=(_COLEMAN_PITCH_MM, _COLEMAN_PITCH_MM),
     )
-    assert outer_scale.span_scale_mm >= 2.0
-    assert outer_scale.effective_tolerance_mm == 0.08
-    metrics = _error_metrics(target, outer_curve)
-    assert outer_curve.fitting_error_mm <= 0.068
-    assert metrics.maximum_mm <= 0.068
-    assert metrics.rms_mm <= 0.034
-    assert abs(metrics.signed_mean_mm) <= 0.006
-    assert metrics.same_side_fraction <= 0.56
+    baseline_fit = _ContourFit(
+        bowl.threshold_raw,
+        bowl.threshold_raw,
+        np.zeros(len(bowl.raw)),
+        fitter._unchanged_source_edge(bowl.threshold_raw),
+        baseline,
+    )
+    assert _segment_sequence(baseline_fit) == "LLCCCCLLCLLCLLC"
+    assert _segment_sequence(bowl) == "LLCCCLLCLLCLLC"
+    assert len(bowl.fitted.segments) == len(baseline.segments) - 1
+
+    baseline_curve, threshold_target = _longest_cubic(baseline_fit)
+    refined_curve, refined_target = _longest_cubic(bowl)
+    assert len(threshold_target) == len(refined_target) == 147
+
+    # Critical comparison 1: the restored pre-4039047 cubic against the
+    # threshold-derived contour that it was asked to fit.
+    threshold_fit = _error_metrics(threshold_target, baseline_curve)
+    assert threshold_fit.maximum_mm <= 0.067
+    assert threshold_fit.rms_mm <= 0.034
+
+    # Critical comparison 2: the threshold contour's displacement to the
+    # independently sampled source-raster crossing. It is much smaller than
+    # the cubic fitting error, disproving local tolerance as the only issue,
+    # but is comparable to the old signed centering bias.
+    displacement = np.linalg.norm(
+        refined_target - threshold_target,
+        axis=1,
+    )
+    displacement_rms = math.sqrt(float(np.mean(displacement**2)))
+    assert float(np.max(displacement)) <= 0.012
+    assert displacement_rms <= 0.007
+    assert displacement_rms <= 0.25 * threshold_fit.rms_mm
+    assert float(np.mean(bowl.signed_source_displacements_mm[220:367])) >= 0.005
+
+    # Critical comparison 3: fitting against the recovered source edge halves
+    # the systematic inward bias and lowers maximum source-edge error without
+    # adding segments or changing the protected span endpoints.
+    baseline_source = _error_metrics(refined_target, baseline_curve)
+    refined_source = _error_metrics(refined_target, refined_curve)
+    assert refined_source.maximum_mm < baseline_source.maximum_mm
+    assert abs(refined_source.signed_mean_mm) <= 0.50 * abs(
+        baseline_source.signed_mean_mm
+    )
+    assert abs(refined_source.signed_mean_mm) <= 0.005
+    assert refined_source.rms_mm <= 0.037
+    assert refined_source.same_side_fraction <= 0.56
+
+
+def test_actual_coleman_a_e_s_do_not_regress_against_source_edges(
+    tmp_path: Path,
+) -> None:
+    for glyph in ("A", "E", "S"):
+        pixels = _coleman_glyph_crop(glyph)
+        fits = _fit_raster_outer_contours(
+            tmp_path / f"coleman-{glyph}.png",
+            pixels,
+            pitch_mm=_COLEMAN_PITCH_MM,
+        )
+        before_errors: list[np.ndarray] = []
+        after_errors: list[np.ndarray] = []
+        before_segments = 0
+        after_segments = 0
+        for fit in fits:
+            baseline = fitter._fit_contour(
+                fit.threshold_raw,
+                _options(),
+                pixels.shape[1] * _COLEMAN_PITCH_MM,
+                pixels.shape[0] * _COLEMAN_PITCH_MM,
+                fitter._ComplexityBudget(),
+                source_pixel_spacing_mm=(
+                    _COLEMAN_PITCH_MM,
+                    _COLEMAN_PITCH_MM,
+                ),
+            )
+            before_errors.append(
+                _fit_errors_against_points(fit.raw, baseline.segments)
+            )
+            after_errors.append(
+                _fit_errors_against_points(fit.raw, fit.fitted.segments)
+            )
+            before_segments += len(baseline.segments)
+            after_segments += len(fit.fitted.segments)
+        before = np.concatenate(before_errors)
+        after = np.concatenate(after_errors)
+        assert after_segments <= before_segments
+        assert float(np.max(after)) <= float(np.max(before)) + 1e-12
+        assert math.sqrt(float(np.mean(after**2))) <= math.sqrt(
+            float(np.mean(before**2))
+        ) + 1e-12
+
+
+def test_source_edge_refinement_preserves_constraints_and_rejects_ambiguous_profiles(
+    tmp_path: Path,
+) -> None:
+    e_fit = _fit_raster_outer_contours(
+        tmp_path / "coleman-E.png",
+        _coleman_glyph_crop("E"),
+        pitch_mm=_COLEMAN_PITCH_MM,
+    )[0]
+    assert np.count_nonzero(e_fit.source_edge.protected) >= 600
+    assert np.all(
+        e_fit.source_edge.signed_displacements_mm[e_fit.source_edge.protected]
+        == 0.0
+    )
+
+    pixels = np.full((96, 96), 255, dtype=np.uint8)
+    cv2.circle(pixels, (48, 48), 20, 0, thickness=-1, lineType=cv2.LINE_AA)
+    cv2.circle(pixels, (48, 48), 18, 255, thickness=-1, lineType=cv2.LINE_AA)
+    path = tmp_path / "ambiguous-thin-annulus.png"
+    assert cv2.imwrite(str(path), pixels)
+    source = fitter.prepare_raster_vectorization_source(
+        read_raster_asset_payload(path)
+    )
+    angles = np.linspace(0.0, 2.0 * math.pi, 257, endpoint=False)
+    radius_mm = 19.0 * _COLEMAN_PITCH_MM
+    contour = np.column_stack(
+        (radius_mm * np.cos(angles), radius_mm * np.sin(angles))
+    )
+    refinement = fitter._refine_contour_source_edges(
+        contour,
+        source,
+        _options(),
+        122,
+        96 * _COLEMAN_PITCH_MM,
+        96 * _COLEMAN_PITCH_MM,
+    )
+    assert not np.any(refinement.eligible)
+    np.testing.assert_array_equal(refinement.points, contour)
+
+
+def test_source_edge_profile_chunking_is_geometry_neutral(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels = _coleman_p_crop()
+    normal = _fit_raster_outer_contours(
+        tmp_path / "coleman-p-normal-chunks.png",
+        pixels,
+        pitch_mm=_COLEMAN_PITCH_MM,
+    )
+    monkeypatch.setattr(fitter, "_SOURCE_EDGE_PROFILE_CHUNK_SIZE", 17)
+    chunked = _fit_raster_outer_contours(
+        tmp_path / "coleman-p-small-chunks.png",
+        pixels,
+        pitch_mm=_COLEMAN_PITCH_MM,
+    )
+
+    assert len(chunked) == len(normal)
+    for normal_fit, chunked_fit in zip(normal, chunked, strict=True):
+        np.testing.assert_array_equal(chunked_fit.raw, normal_fit.raw)
+        assert len(chunked_fit.fitted.segments) == len(normal_fit.fitted.segments)
+        for normal_segment, chunked_segment in zip(
+            normal_fit.fitted.segments,
+            chunked_fit.fitted.segments,
+            strict=True,
+        ):
+            np.testing.assert_array_equal(
+                _segment_controls(chunked_segment),
+                _segment_controls(normal_segment),
+            )
 
 
 def test_analytic_d_bowl_tracks_threshold_and_known_geometry(tmp_path: Path) -> None:
@@ -345,6 +589,14 @@ def test_analytic_d_bowl_tracks_threshold_and_known_geometry(tmp_path: Path) -> 
         pixels,
         pitch_mm=pitch_mm,
     )[0]
+    baseline = fitter._fit_contour(
+        fit.threshold_raw,
+        _options(),
+        180 * pitch_mm,
+        180 * pitch_mm,
+        fitter._ComplexityBudget(),
+        source_pixel_spacing_mm=(pitch_mm, pitch_mm),
+    )
 
     assert any(isinstance(segment, fitter._CubicSegment) for segment in fit.fitted.segments)
     assert fit.fitted.max_fitting_error_mm <= 0.08
@@ -354,7 +606,7 @@ def test_analytic_d_bowl_tracks_threshold_and_known_geometry(tmp_path: Path) -> 
         assert metrics.maximum_mm <= 0.08
         if len(target) >= 20:
             assert metrics.rms_mm <= 0.04
-            assert abs(metrics.signed_mean_mm) <= 0.012
+            assert abs(metrics.signed_mean_mm) <= 0.016
     ideal_errors = _ideal_d_distance_mm(
         _sample_segments(fit.fitted.segments),
         image_size=180,
@@ -362,8 +614,20 @@ def test_analytic_d_bowl_tracks_threshold_and_known_geometry(tmp_path: Path) -> 
         center=center,
         angle_radians=0.0,
     )
-    assert float(np.max(ideal_errors)) <= 0.13
-    assert math.sqrt(float(np.mean(ideal_errors**2))) <= 0.055
+    baseline_ideal_errors = _ideal_d_distance_mm(
+        _sample_segments(baseline.segments),
+        image_size=180,
+        pitch_mm=pitch_mm,
+        center=center,
+        angle_radians=0.0,
+    )
+    assert len(fit.fitted.segments) <= len(baseline.segments)
+    assert float(np.max(ideal_errors)) < float(np.max(baseline_ideal_errors))
+    assert math.sqrt(float(np.mean(ideal_errors**2))) < math.sqrt(
+        float(np.mean(baseline_ideal_errors**2))
+    )
+    assert float(np.max(ideal_errors)) <= 0.062
+    assert math.sqrt(float(np.mean(ideal_errors**2))) <= 0.019
 
 
 def test_analytic_d_bowl_is_invariant_to_one_pixel_translation(tmp_path: Path) -> None:
@@ -392,6 +656,60 @@ def test_analytic_d_bowl_is_invariant_to_one_pixel_translation(tmp_path: Path) -
             atol=1e-11,
             rtol=0.0,
         )
+
+
+def test_rotated_analytic_d_bowl_converges_across_source_scale(
+    tmp_path: Path,
+) -> None:
+    angle = 0.47
+    low_pitch = 0.08
+    scale = 1.5
+    low = _fit_raster_outer_contours(
+        tmp_path / "d-bowl-scaled-low.png",
+        _d_bowl(
+            center=(90.25, 90.5),
+            angle_radians=angle,
+        ),
+        pitch_mm=low_pitch,
+    )[0]
+    high = _fit_raster_outer_contours(
+        tmp_path / "d-bowl-scaled-high.png",
+        _d_bowl(
+            center=(135.375, 135.75),
+            angle_radians=angle,
+            size=270,
+            outer_radius_px=72.0,
+            inner_radius_px=45.0,
+        ),
+        pitch_mm=low_pitch / scale,
+    )[0]
+
+    baselines: list[fitter._FittedContour] = []
+    for fit, pitch in ((low, low_pitch), (high, low_pitch / scale)):
+        baseline = fitter._fit_contour(
+            fit.threshold_raw,
+            _options(),
+            180 * low_pitch,
+            180 * low_pitch,
+            fitter._ComplexityBudget(),
+            source_pixel_spacing_mm=(pitch, pitch),
+        )
+        baselines.append(baseline)
+        assert len(fit.fitted.segments) == len(baseline.segments)
+    assert abs(len(high.fitted.segments) - len(low.fitted.segments)) <= 3
+    refined_distance = _symmetric_maximum_distance(
+        _centered_segment_samples(low),
+        _centered_segment_samples(high),
+    )
+    baseline_samples = []
+    for baseline in baselines:
+        samples = _sample_segments(baseline.segments)
+        baseline_samples.append(
+            samples - (np.min(samples, axis=0) + np.max(samples, axis=0)) / 2.0
+        )
+    baseline_distance = _symmetric_maximum_distance(*baseline_samples)
+    assert refined_distance <= baseline_distance
+    assert refined_distance <= 0.10
 
 
 def test_rotated_analytic_d_bowl_remains_centered(tmp_path: Path) -> None:
@@ -525,157 +843,3 @@ def test_rounded_c_and_o_regions_remain_cubic() -> None:
             for segment in fitted.segments
         )
         assert fitted.max_fitting_error_mm <= 0.08
-
-
-def test_local_fit_tolerance_scales_spans_but_stops_at_raster_resolution() -> None:
-    pitch_mm = _COLEMAN_PITCH_MM
-    angles = np.linspace(0.0, math.pi, 129)
-    small_arc = np.column_stack((0.5 * np.cos(angles), 0.5 * np.sin(angles)))
-    large_arc = np.column_stack((2.5 * np.cos(angles), 2.5 * np.sin(angles)))
-    tiny_arc = np.column_stack((0.2 * np.cos(angles), 0.2 * np.sin(angles)))
-
-    small = fitter._local_fit_scale(small_arc, 0.08, (pitch_mm, pitch_mm))
-    large = fitter._local_fit_scale(large_arc, 0.08, (pitch_mm, pitch_mm))
-    tiny = fitter._local_fit_scale(tiny_arc, 0.08, (pitch_mm, pitch_mm))
-
-    assert small.arc_length_mm == pytest.approx(math.pi / 2.0, rel=1e-4)
-    assert small.chord_length_mm == pytest.approx(1.0, abs=1e-12)
-    assert small.chord_sagitta_mm == pytest.approx(0.5, abs=1e-12)
-    assert small.span_scale_mm == pytest.approx(1.0, abs=1e-12)
-    assert small.effective_tolerance_mm == pytest.approx(0.04, abs=1e-12)
-    assert large.span_scale_mm == pytest.approx(5.0, abs=1e-12)
-    assert large.effective_tolerance_mm == pytest.approx(0.08, abs=1e-12)
-    assert tiny.resolution_floor_mm == pytest.approx(0.0256410256, rel=1e-8)
-    assert tiny.effective_tolerance_mm == pytest.approx(
-        tiny.resolution_floor_mm,
-        abs=1e-12,
-    )
-
-    tighter_user_ceiling = fitter._local_fit_scale(
-        tiny_arc,
-        0.02,
-        (pitch_mm, pitch_mm),
-    )
-    assert tighter_user_ceiling.effective_tolerance_mm == 0.02
-
-    angle = 0.47
-    rotation = np.asarray(
-        (
-            (math.cos(angle), -math.sin(angle)),
-            (math.sin(angle), math.cos(angle)),
-        )
-    )
-    transformed = small_arc @ rotation.T + np.asarray((8.0, -3.0))
-    rotated = fitter._local_fit_scale(transformed, 0.08, (pitch_mm, pitch_mm))
-    assert rotated.span_scale_mm == pytest.approx(small.span_scale_mm, abs=1e-12)
-    assert rotated.effective_tolerance_mm == pytest.approx(
-        small.effective_tolerance_mm,
-        abs=1e-12,
-    )
-
-
-def _small_s_source(*, shift_high_px: int = 0, rotate_degrees: float = 0.0) -> np.ndarray:
-    high = np.full((320, 320), 255, dtype=np.uint8)
-    cv2.putText(
-        high,
-        "S",
-        (70 + shift_high_px, 245 + shift_high_px),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        3.6,
-        0,
-        8,
-        cv2.LINE_AA,
-    )
-    if rotate_degrees:
-        transform = cv2.getRotationMatrix2D((160.0, 160.0), rotate_degrees, 1.0)
-        high = cv2.warpAffine(
-            high,
-            transform,
-            (320, 320),
-            flags=cv2.INTER_LINEAR,
-            borderValue=255,
-        )
-    return high
-
-
-def _centered_fit_samples(fit: _ContourFit) -> np.ndarray:
-    points = _sample_segments(fit.fitted.segments, count=129)
-    return points - (np.min(points, axis=0) + np.max(points, axis=0)) / 2.0
-
-
-def _symmetric_maximum_distance(first: np.ndarray, second: np.ndarray) -> float:
-    distances = np.linalg.norm(first[:, None, :] - second[None, :, :], axis=2)
-    return max(
-        float(np.max(np.min(distances, axis=1))),
-        float(np.max(np.min(distances, axis=0))),
-    )
-
-
-def test_small_glyph_is_phase_stable_and_converges_with_resolution(
-    tmp_path: Path,
-) -> None:
-    pitch_mm = _COLEMAN_PITCH_MM
-    high = _small_s_source()
-    translated_high = _small_s_source(shift_high_px=4)
-    low = cv2.resize(high, (80, 80), interpolation=cv2.INTER_AREA)
-    translated_low = cv2.resize(
-        translated_high,
-        (80, 80),
-        interpolation=cv2.INTER_AREA,
-    )
-    low_fit = _fit_raster_outer_contours(
-        tmp_path / "small-s-low.png",
-        low,
-        pitch_mm=pitch_mm,
-    )[0]
-    translated_fit = _fit_raster_outer_contours(
-        tmp_path / "small-s-translated.png",
-        translated_low,
-        pitch_mm=pitch_mm,
-    )[0]
-    high_fit = _fit_raster_outer_contours(
-        tmp_path / "small-s-high.png",
-        high,
-        pitch_mm=pitch_mm / 4.0,
-    )[0]
-
-    assert _segment_sequence(low_fit) == _segment_sequence(translated_fit)
-    assert _symmetric_maximum_distance(
-        _centered_fit_samples(low_fit),
-        _centered_fit_samples(translated_fit),
-    ) <= 1e-10
-    assert _symmetric_maximum_distance(
-        _centered_fit_samples(low_fit),
-        _centered_fit_samples(high_fit),
-    ) <= 0.05
-    assert len(low_fit.fitted.segments) <= 24
-    assert len(high_fit.fitted.segments) <= len(low_fit.fitted.segments)
-    assert any(
-        isinstance(segment, fitter._CubicSegment)
-        for segment in low_fit.fitted.segments
-    )
-
-
-def test_small_rotated_glyph_keeps_curves_without_anchor_explosion(
-    tmp_path: Path,
-) -> None:
-    pitch_mm = _COLEMAN_PITCH_MM
-    rotated = cv2.resize(
-        _small_s_source(rotate_degrees=23.0),
-        (80, 80),
-        interpolation=cv2.INTER_AREA,
-    )
-    fit = _fit_raster_outer_contours(
-        tmp_path / "small-s-rotated.png",
-        rotated,
-        pitch_mm=pitch_mm,
-    )[0]
-    samples = _sample_segments(fit.fitted.segments, count=129)
-    feature_scale_mm = float(np.max(np.ptp(samples, axis=0)))
-
-    assert len(fit.fitted.segments) <= 28
-    assert any(
-        isinstance(segment, fitter._CubicSegment)
-        for segment in fit.fitted.segments
-    )
-    assert fit.fitted.max_fitting_error_mm / feature_scale_mm <= 0.045

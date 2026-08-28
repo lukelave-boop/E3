@@ -111,6 +111,7 @@ def test_quick_preview_is_preview_only_and_subsecond_for_logo_artwork(
         "mask_generation",
         "contour_extraction",
     } <= timing.stage_seconds.keys()
+    assert "source_edge_refinement" not in timing.stage_seconds
 
 
 def test_timing_instrumentation_preserves_authoritative_geometry(
@@ -167,6 +168,7 @@ def test_timing_instrumentation_preserves_authoritative_geometry(
         "mask_generation",
         "contour_extraction",
         "corner_classification",
+        "source_edge_refinement",
         "cubic_fitting",
         "newton_reparameterization",
         "continuous_fit_validation",
@@ -178,6 +180,7 @@ def test_timing_instrumentation_preserves_authoritative_geometry(
     assert all(value >= 0.0 for value in fit_timing.stage_seconds.values())
     assert "mask_generation" not in reuse_timing.stage_seconds
     assert "contour_extraction" not in reuse_timing.stage_seconds
+    assert "source_edge_refinement" in reuse_timing.stage_seconds
 
 
 def _normalized_bounds(contour) -> tuple[float, float, float, float]:

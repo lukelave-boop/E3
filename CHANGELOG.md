@@ -6,6 +6,20 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Reverted the adaptive per-span fitting-tolerance experiment from `4039047`.
+  The displayed 0.10 mm tolerance again supplies the existing fixed 0.08 mm
+  internal budget for every span. Straight-run recovery, bounded Newton curve
+  centering, responsive Quick Preview, native line/cubic persistence, and all
+  continuous-error, frame, topology, clearance, and hierarchy validation remain
+  in place. The exact stage now instead localizes eligible independent curve
+  samples against the original grayscale/alpha threshold transition. Updates
+  are normal-only, capped at 0.6 source pixel, and rejected for flat, noisy,
+  multiple-crossing, or out-of-frame profiles. Existing hard-corner support,
+  classified straight runs, and all nested contours remain on the extracted
+  threshold contour. The real Coleman P bowl's source-relative inward bias fell
+  from 0.0116 to 0.0049 mm without an added segment; A and S improved against
+  source evidence and E's protected straight geometry was unchanged.
+
 - Improved curved raster-vector fidelity without changing the 0.10 mm user
   default or the conservative maximum-error proof. Material cubic candidates
   now inspect arc-length-weighted RMS error, signed normal bias, and one-sided

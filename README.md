@@ -201,10 +201,13 @@ Béziers are persisted directly; the review reports validated maximum/RMS fit
 error plus hard-corner, recursive-split, and verified-merge counts. Material
 curved spans also use RMS and signed-normal distribution evidence to avoid a
 one-sided fit that is numerically bounded but visibly off-center.
-The displayed native fitting tolerance remains the maximum: spans below about
-the large-feature scale automatically receive a tighter physical tolerance
-derived from their own arc/chord geometry, with a source-resolution floor so
-small lettering gains fidelity without tracing pixel stair-steps.
+Before exact fitting, eligible non-nested curve samples use the original
+grayscale/alpha raster to recover a bounded subpixel threshold crossing along
+their local contour normal. Ambiguous profiles are left unchanged, and detected
+hard corners plus persistent straight runs remain locked to the extracted
+contour. The 0.10 mm displayed tolerance and existing 0.08 mm internal fit
+budget remain fixed; this source-edge step does not introduce a local span
+tolerance or give Quick Preview geometry authoring authority.
 Preview/topology samples are not a second authoritative geometry copy. When
 planning is requested, E3 applies the complete
 object transform and then adaptively flattens the native curve at the fixed
@@ -466,20 +469,20 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   curves are not implemented.
 - Raster vectorization is intentionally a single-foreground tracer for logos,
   line art, silhouettes, stencils, and similar artwork, not a full-color or
-  multi-layer tracer. Its fitted-curve deviation is estimated against the
-  threshold-derived contour, so source resolution, antialiasing, threshold, and
-  smoothing still limit real accuracy. Projects retain fitted native line and
+  multi-layer tracer. Eligible independent curve samples are localized against
+  the original intensity/alpha transition before fitting; unsupported,
+  ambiguous, nested, hard-corner, and classified-straight samples retain their
+  threshold-contour positions. Source resolution, antialiasing, threshold, and
+  smoothing therefore still limit real accuracy. Projects retain fitted native line and
   cubic segments; bounded flattened points are transient preview, topology, and
   planning artifacts rather than editable node data. Persistent straight-source
   evidence is scale-aware and rotation-independent; short flat raster plateaus
   on curved regions are not sufficient to force a line. Exact fitted extrema must
   remain inside the reviewed source frame, and accepted compound contours must
-  retain provable separation through their flattening-error envelopes. Small
-  spans automatically tighten below the user-selected tolerance but stop at a
-  source-resolution floor. Highly pixel-constrained glyphs can still vary at
-  narrow counters and curved shoulders when the source itself does not contain
-  stable boundary evidence; cleaner or higher-resolution artwork remains the
-  appropriate remedy for those cases.
+  retain provable separation through their flattening-error envelopes. Highly
+  pixel-constrained `A` and `S` glyphs can still vary at narrow counters and
+  curved shoulders; using a cleaner or higher-resolution source for those cases
+  is an accepted first-release quality limitation.
 - SVG text and embedded images are not converted. Native desktop import stops
   before creating an object when either is present; convert them to paths in
   the design program.

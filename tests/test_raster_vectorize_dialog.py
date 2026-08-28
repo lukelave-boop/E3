@@ -173,8 +173,6 @@ def test_dialog_previews_controls_stats_and_acceptance_contract(
     assert dialog.detection_combo.model().item(dialog._alpha_mode_index).isEnabled()
     assert dialog.overlay_color == "#FF4F9F"
     assert dialog.overlay_opacity == 1.0
-    assert "automatically use a tighter" in dialog.simplification_spin.toolTip()
-    assert "remains the ceiling" in dialog.simplification_spin.toolTip()
     assert [
         dialog.overlay_color_combo.itemText(index)
         for index in range(dialog.overlay_color_combo.count())

@@ -586,16 +586,39 @@ camera, planning, G-code, or execution paths.
 `RasterVectorizationTiming` is opt-in development/test instrumentation and is
 never attached to project data. It accumulates inclusive elapsed time and call
 counts for image decode/preparation, mask generation, contour extraction,
-corner classification, cubic fitting, Newton reparameterization, continuous fit
-validation, adjacent merging, authoritative topology, preview flattening, and
-rasterized hierarchy validation. Timing does not select algorithms or relax a
-budget. The five-million-step continuous-validation limit remains authoritative;
+corner classification, source-edge refinement, cubic fitting, Newton
+reparameterization, continuous fit validation, adjacent merging, authoritative
+topology, preview flattening, and rasterized hierarchy validation. Timing does
+not select algorithms or relax a budget. The five-million-step
+continuous-validation limit remains authoritative;
 profiling the Coleman stencil showed that proof was inexpensive compared with
 Newton refinement, so it was not weakened or bypassed.
 
 Contour extraction interpolates the exact bounded payload to a 4× internal mask,
 uses `RETR_TREE` hierarchy, and maps contour samples into physical coordinates
-before fitting. Each closed contour is rotated to a coordinate-canonical start
+before fitting. The extracted contour and hierarchy remain the topology
+authority. For an independent contour, the exact stage estimates a local normal
+over 1.25 source pixels and samples the original composited grayscale and alpha
+fields at 0.125-pixel intervals over ±1.25 source pixels. The foreground margin
+uses the same manual/Otsu/alpha threshold and inversion semantics as mask
+generation. A sample moves only when it has one strong foreground-to-background
+crossing, sufficient endpoint margin, contrast and slope, bounded reverse
+variation, and a displacement no larger than 0.6 source pixel. Sampling is
+chunked to 8,192 contour points. Flat, noisy, multiple-crossing, out-of-frame,
+and otherwise unsupported profiles stay at their threshold position. Contours
+that participate in nesting are not refined.
+
+Hard corners and their adjacent support samples, along with every persistent or
+hard-anchor-promoted straight run, remain fixed. Corner and straight-run
+classification for fitting is still performed against the original threshold
+contour, so source localization cannot erase a corner or bend a known line. The
+source-edge maximum displacement is included in the conservative deviation
+envelope. Existing native frame, continuous-error, topology, clearance, and 4×
+raster-hierarchy validation remains authoritative. The user-facing 0.10 mm
+tolerance and fixed 0.08 mm internal fit budget are unchanged; there is no local
+per-span tolerance rule.
+
+Each closed contour is rotated to a coordinate-canonical start
 before anchor selection, so OpenCV's arbitrary cyclic start index cannot change
 the fit. Corner classification compares turns and straight-arm support across
 multiple physical arc-length scales; isolated raster steps are not hard anchors,
@@ -613,26 +636,13 @@ continuous fit validation passes again; absent that positive classification, a
 shallow arc remains cubic even if its endpoint chord alone falls within the fit
 tolerance. Other spans use bounded cubic Béziers. Cubic candidates use a
 positive, tangent-constrained handle solve followed by bounded Newton
-reparameterization. The user-selected native fitting tolerance is the
-authoritative ceiling; the existing internal maximum remains 80% of that value.
-Each authoritative anchor span can tighten that maximum from its own physical
-geometry and raster resolution, without consulting the complete contour's
-bounding box. Its rotation-independent local scale is
-`min(arc length, max(chord length, 2 * chord sagitta))`. The effective tolerance
-is the smaller of the internal maximum and the larger of 4% of that scale,
-3/8 of the coarsest source-pixel pitch, and 1.5 pitches in the 4x contour
-workspace. The last two terms are the same physical floor at the production
-oversampling factor and prevent automatic tightening from fitting raster
-stair-steps more finely than the source supports. Once selected, a span's
-tolerance stays stable through recursive splits; an independently considered
-merge recomputes the rule over its combined target and must pass all ordinary
-validation again.
+reparameterization.
 Before accepting a material cubic at its chord-length point correspondence, the
 fitter also measures arc-length-weighted RMS error, signed normal bias, and the
 fraction of error lying on one side of the curve. A maximum-error-compliant but
 materially biased distribution is sent through up to three existing bounded
-Newton reparameterizations. This centering gate does not add raster stair-step
-anchors or replace the continuous proof.
+Newton reparameterizations. This centering gate does not lower the requested
+tolerance, add raster stair-step anchors, or replace the continuous proof.
 Every accepted line or cubic has a conservative continuous error proof: each
 target edge and the corresponding restricted Bézier interval form a difference
 cubic whose control hull bounds all between-sample deviation. A candidate with
@@ -647,13 +657,12 @@ corners, and adjoining transitions remain cubic segments. The
 result reports raw contour points, fitted segments, preview-flattened points,
 validated maximum/mean/RMS fit error, detected hard corners, recursive splits,
 verified merges, longest smooth-span size, and maximum estimated deviation.
-That deviation is relative to threshold-derived and optionally smoothed
-contours; it is not a
+That deviation includes accepted source-edge displacement, optional smoothing,
+fitting error, and preview flattening; it is not a
 physical-accuracy certification of the source image. Highly pixel-constrained
-glyphs can still vary at narrow counters and curved shoulders with raster phase
-and threshold, but their small spans now receive the resolution-bounded local
-budget automatically; a cleaner or higher-resolution source still supplies
-more trustworthy boundary evidence.
+glyphs remain an accepted first-release quality limitation because
+narrow counters and curved shoulders can still vary with raster phase and
+threshold; those cases require a cleaner or higher-resolution source.
 
 Digital boundary transitions are counted at source resolution before the 4×
 workspace and again before full-point contour extraction, so a single connected
