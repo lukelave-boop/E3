@@ -6,6 +6,17 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Improved curved raster-vector fidelity without changing the 0.10 mm user
+  default or the conservative maximum-error proof. Material cubic candidates
+  now inspect arc-length-weighted RMS error, signed normal bias, and one-sided
+  error distribution before accepting the initial chord-length correspondence.
+  A visibly biased candidate receives up to three bounded Newton
+  reparameterizations before ordinary acceptance continues. This removes the
+  inward bow on the outer Coleman stencil `P` curve while preserving its native
+  segment sequence, hard corners, recursive splits, straight-run recovery,
+  frame/topology/hierarchy validation, verified-only Create gate, and quick
+  preview path.
+
 - Fixed the exact raster fitter so material straight source edges remain native
   lines even on contours that also contain hard corners. The previous anchor
   path returned as soon as it had corner support, and its separate

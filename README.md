@@ -198,7 +198,9 @@ source. Keeping the source leaves it in place beneath the new, selected vector
 and preserves the hide-source choice. Preserving all contours keeps counters and
 closed child subpaths in the same native PATH. The fitted lines and cubic
 Béziers are persisted directly; the review reports validated maximum/RMS fit
-error plus hard-corner, recursive-split, and verified-merge counts.
+error plus hard-corner, recursive-split, and verified-merge counts. Material
+curved spans also use RMS and signed-normal distribution evidence to avoid a
+one-sided fit that is numerically bounded but visibly off-center.
 Preview/topology samples are not a second authoritative geometry copy. When
 planning is requested, E3 applies the complete
 object transform and then adaptively flattens the native curve at the fixed

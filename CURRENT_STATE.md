@@ -28,6 +28,58 @@ application, controller, motion, arming, laser-output, packaging, manifest, or
 publishing implementation changed; no package build or physical test was
 required or performed.
 
+## Active raster-vectorization curved-span centering
+
+The exact cubic fitter now checks the spatial distribution of a material
+candidate's error before accepting an otherwise tolerance-compliant
+chord-length correspondence. The additional gate uses physical arc-length
+weights, RMS error, signed normal bias, and the fraction of signed error on one
+side. A materially biased candidate receives up to three passes through the
+existing bounded Newton reparameterization path. The conservative continuous
+maximum-error proof remains authoritative for every accepted line and cubic;
+the user-facing 0.10 mm default and 0.08 mm internal fit budget are unchanged.
+
+The diagnosed Coleman `P` bowl is OpenCV outer contour 27 from the exact
+1,170 × 444 source at 80.0 × 30.358974 mm, manual threshold 122, no smoothing,
+and 0.10 mm fitting tolerance. Source pitch is 0.0683760684 mm horizontally and
+0.0683760676 mm vertically. Its 392 samples span source pixels
+`(176.125, 327.125)` through `(195.875, 361.875)`. The four hard corners are at
+samples 49 `(186.875, 339.125)`, 219 `(193.625, 354.875)`, 367
+`(178.625, 327.125)`, and 380 `(176.125, 329.625)`; the protected neighboring
+hard anchors are 48-50, 218-220, 366-368, and 379-381. No persistent straight
+run is classified on this contour.
+
+The old and new native sequence is `LLCCCCLLCLLCLLC`; recursive splits remain
+three and verified merges remain zero. The defect was inside the single cubic
+from sample 220 to 366, not at an anchor, split, or merge. That span covers 147
+threshold-boundary points across the lower transition, outer right arc, and top
+transition. Previously it passed on its first chord parameters, so Newton never
+ran: conservative max error was 0.076471 mm, nearest-point RMS was 0.035119 mm,
+and mean signed normal error was -0.012450 mm (62.6% of samples on the inward
+side). One Newton pass now precedes acceptance: conservative max is 0.066740 mm,
+nearest-point RMS is 0.033027 mm, signed mean is -0.005640 mm, and same-side
+fraction is 55.8%. Maximum error remains at source pixel
+`(195.875, 341.625)`, parameter approximately 0.343, showing that the change
+corrects correspondence within the long curve rather than moving its anchors.
+Across the full contour, conservative max/RMS changed from
+0.076471/0.031228 mm to 0.066740/0.027719 mm; independently projected
+nearest-point max/RMS changed from 0.076252/0.027764 mm to
+0.066449/0.026714 mm.
+
+On the same prepared payload and Python 3.14 interpreter, five measured runs
+after warmup changed the exact-fit median from **7.270 seconds** on starting
+`main` to **7.668 seconds** with centering, a 5.5% increase. Useful quick
+preview remained approximately **0.05 seconds** (0.051-second median after the
+change) because it does not execute cubic fitting. Focused Coleman/synthetic
+`P`/`D`, translated phase, rotation, shallow-arc, straight-`E`, rounded-`C`/`O`,
+and existing fitter verification passes **39 direct tests**. The complete
+focused raster/fitter/dialog/desktop selection passes **154 tests**. Broader
+native-path, project/history, toolpath, planning, golden, digest/cache, and
+desktop native-path verification passes **400 tests**, all with four xdist
+workers. Repository Ruff, `python -m compileall -q laser_aligner`, and
+`git diff --check` pass. This is automated Qt-free/offscreen verification only;
+no interactive GUI or physical hardware test is claimed.
+
 ## Active raster-vectorization straight-edge recovery
 
 The exact native fitter now classifies persistent straight source runs before

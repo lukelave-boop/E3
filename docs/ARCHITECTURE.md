@@ -614,6 +614,12 @@ shallow arc remains cubic even if its endpoint chord alone falls within the fit
 tolerance. Other spans use bounded cubic Béziers. Cubic candidates use a
 positive, tangent-constrained handle solve followed by bounded Newton
 reparameterization.
+Before accepting a material cubic at its chord-length point correspondence, the
+fitter also measures arc-length-weighted RMS error, signed normal bias, and the
+fraction of error lying on one side of the curve. A maximum-error-compliant but
+materially biased distribution is sent through up to three existing bounded
+Newton reparameterizations. This centering gate does not lower the requested
+tolerance, add raster stair-step anchors, or replace the continuous proof.
 Every accepted line or cubic has a conservative continuous error proof: each
 target edge and the corresponding restricted Bézier interval form a difference
 cubic whose control hull bounds all between-sample deviation. A candidate with

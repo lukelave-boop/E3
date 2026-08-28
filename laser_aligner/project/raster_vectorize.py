@@ -58,6 +58,11 @@ _MAX_CORNER_WINDOW_POINTS = 12
 _MAX_SMOOTHING_RADIUS_POINTS = 64
 _MAX_FIT_TANGENT_WINDOW_POINTS = 12
 _LINE_MAXIMUM_TANGENT_DEVIATION_DEGREES = 2.0
+_CUBIC_DISTRIBUTION_MINIMUM_TOLERANCE_MULTIPLE = 4.0
+_CUBIC_DISTRIBUTION_RMS_TRIGGER_TOLERANCE_FRACTION = 0.45
+_CUBIC_DISTRIBUTION_BIAS_TRIGGER_TOLERANCE_FRACTION = 0.04
+_CUBIC_DISTRIBUTION_ONE_SIDED_TRIGGER_FRACTION = 0.67
+_CUBIC_DISTRIBUTION_MAX_REPARAMETERIZATIONS = 3
 _MAX_REPARAMETERIZATION_ITERATIONS = 8
 _MAX_FIT_RECURSION = 18
 _MAX_FIT_VALIDATION_RECURSION = 18
@@ -2466,6 +2471,87 @@ def _cubic_controls_have_ambiguous_topology(controls: np.ndarray) -> bool:
     )
 
 
+def _cubic_fit_distribution_is_centered(
+    target: np.ndarray,
+    parameters: np.ndarray,
+    values: np.ndarray,
+    controls: np.ndarray,
+    tolerance_mm: float,
+) -> bool:
+    """Require material curved spans to distribute error around the evidence.
+
+    The conservative continuous proof remains the maximum-error authority. This
+    additional test prevents a long cubic from passing that proof on its first
+    chord-length correspondence while bowing consistently to one side of the
+    dense threshold contour. An otherwise bounded candidate receives up to
+    three centering-driven passes through the existing Newton path; the cap
+    preserves exact-fit responsiveness while the continuous proof still guards
+    every accepted candidate.
+    """
+
+    if len(target) < 3:
+        return True
+    steps = np.linalg.norm(np.diff(target, axis=0), axis=1)
+    span_length = float(np.sum(steps))
+    if span_length < (
+        _CUBIC_DISTRIBUTION_MINIMUM_TOLERANCE_MULTIPLE * tolerance_mm
+    ):
+        return True
+    weights = np.empty(len(target), dtype=np.float64)
+    weights[0] = steps[0] / 2.0
+    weights[-1] = steps[-1] / 2.0
+    weights[1:-1] = (steps[:-1] + steps[1:]) / 2.0
+    weight_sum = float(np.sum(weights))
+    if weight_sum <= 1e-15:
+        return True
+
+    errors = values - target
+    squared_errors = np.sum(errors * errors, axis=1)
+    rms_error = math.sqrt(float(np.dot(weights, squared_errors)) / weight_sum)
+    derivatives = _cubic_first_derivative_values(controls, parameters)
+    derivative_lengths = np.linalg.norm(derivatives, axis=1)
+    usable = derivative_lengths > 1e-15
+    if not np.any(usable):
+        return False
+    signed_normal_errors = np.zeros(len(target), dtype=np.float64)
+    signed_normal_errors[usable] = (
+        derivatives[usable, 1] * errors[usable, 0]
+        - derivatives[usable, 0] * errors[usable, 1]
+    ) / derivative_lengths[usable]
+    usable_weights = weights * usable
+    usable_weight_sum = float(np.sum(usable_weights))
+    if usable_weight_sum <= 1e-15:
+        return False
+    normal_bias = float(np.dot(usable_weights, signed_normal_errors)) / (
+        usable_weight_sum
+    )
+    positive_weight = float(
+        np.sum(usable_weights[signed_normal_errors > 1e-15])
+    )
+    negative_weight = float(
+        np.sum(usable_weights[signed_normal_errors < -1e-15])
+    )
+    signed_weight = positive_weight + negative_weight
+    same_side_fraction = (
+        max(positive_weight, negative_weight) / signed_weight
+        if signed_weight > 1e-15
+        else 0.0
+    )
+    biased = bool(
+        abs(normal_bias)
+        > _CUBIC_DISTRIBUTION_BIAS_TRIGGER_TOLERANCE_FRACTION * tolerance_mm
+    )
+    return not bool(
+        biased
+        and (
+            rms_error
+            > _CUBIC_DISTRIBUTION_RMS_TRIGGER_TOLERANCE_FRACTION * tolerance_mm
+            or same_side_fraction
+            >= _CUBIC_DISTRIBUTION_ONE_SIDED_TRIGGER_FRACTION
+        )
+    )
+
+
 @_timed_stage("cubic_fitting")
 def _attempt_cubic_piece(
     points: np.ndarray,
@@ -2513,9 +2599,27 @@ def _attempt_cubic_piece(
                 controls[3].copy(),
                 maximum_error,
             )
+        candidate_is_bounded = maximum_error <= tolerance_mm
+        controls_are_unambiguous = bool(
+            not candidate_is_bounded
+            or not _cubic_controls_have_ambiguous_topology(controls)
+        )
+        distribution_is_centered = bool(
+            not candidate_is_bounded
+            or not controls_are_unambiguous
+            or _iteration >= _CUBIC_DISTRIBUTION_MAX_REPARAMETERIZATIONS
+            or _cubic_fit_distribution_is_centered(
+                points,
+                parameters,
+                values,
+                controls,
+                tolerance_mm,
+            )
+        )
         if (
-            maximum_error <= tolerance_mm
-            and not _cubic_controls_have_ambiguous_topology(controls)
+            candidate_is_bounded
+            and controls_are_unambiguous
+            and distribution_is_centered
         ):
             validation = _validate_curve_fit(
                 points,
