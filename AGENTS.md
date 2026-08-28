@@ -90,6 +90,15 @@ The current platform boundary and known blockers are recorded in
 7. Update the README, architecture, roadmap, and changelog when user-visible
    behavior changes.
 
+**Branch hygiene:** Treat `main` as the authoritative integration branch. Do
+not allow completed, superseded, experimental, or abandoned branches to
+accumulate. When a development branch is complete, verified, and safe to
+integrate, prefer merging it into `main` promptly and deleting the branch
+afterward. Before starting new work, check for existing branches that should
+first be merged, closed, or removed. Never merge an older implementation over
+newer authoritative code merely to reduce branch count; preserve newer `main`
+behavior and port only still-useful work when necessary.
+
 Do not run the complete local suite after every small iterative fix unless the
 change is broad or cross-cutting, focused tests expose unexpected regressions,
 the user explicitly requests it, or the branch is being prepared for a merge or
@@ -165,4 +174,6 @@ A change is complete only when:
 - generated or local artifacts are not accidentally included;
 - user-facing documentation matches the implementation;
 - `CURRENT_STATE.md` records what is tested, smoke-tested, implemented but
-  unverified, historically verified, and physically verified.
+  unverified, historically verified, and physically verified;
+- completed feature/fix branches have been merged into `main` when appropriate
+  and are ready to be deleted; avoid leaving finished branches behind.
