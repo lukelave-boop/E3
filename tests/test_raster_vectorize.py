@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import sys
+import time
 from pathlib import Path
 
 import cv2
@@ -21,9 +22,11 @@ from laser_aligner.project import (
     RasterVectorizationComplexityError,
     RasterVectorizationError,
     RasterVectorizationOptions,
+    RasterVectorizationTiming,
     flatten_native_path,
     native_path_bounds,
     prepare_raster_vectorization_source,
+    quick_preview_prepared_raster,
     raster_payload_has_usable_alpha,
     read_raster_asset_payload,
     vectorize_prepared_raster,
@@ -62,6 +65,119 @@ def _vectorize(
         displayed_width_mm=width_mm,
         displayed_height_mm=height_mm,
     )
+
+
+def test_quick_preview_is_preview_only_and_subsecond_for_logo_artwork(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((444, 1170), 255, dtype=np.uint8)
+    cv2.putText(
+        pixels,
+        "COLEMAN",
+        (45, 235),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        4.4,
+        0,
+        18,
+        cv2.LINE_AA,
+    )
+    for start in (250, 470, 690, 910):
+        cv2.rectangle(pixels, (start, 275), (start + 175, 292), 0, -1)
+    cv2.rectangle(pixels, (150, 345), (1020, 375), 0, -1)
+    for center_x in range(210, 1010, 160):
+        cv2.rectangle(pixels, (center_x - 5, 335), (center_x + 5, 385), 255, -1)
+    payload = _write_payload(tmp_path / "stencil-logo.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    timing = RasterVectorizationTiming()
+
+    started = time.perf_counter()
+    preview = quick_preview_prepared_raster(
+        source,
+        _manual_options(threshold=122, minimum_feature_area_mm2=0.05),
+        displayed_width_mm=80.0,
+        displayed_height_mm=30.358974,
+        timing=timing,
+    )
+    elapsed = time.perf_counter() - started
+
+    assert elapsed < 1.0
+    assert preview.contours
+    assert preview.preview_point_count > 0
+    assert preview.source_identity == payload.identity
+    assert not hasattr(preview, "project_path_geometry")
+    assert all(not hasattr(contour, "native_subpath") for contour in preview.contours)
+    assert {
+        "quick_preview_total",
+        "mask_generation",
+        "contour_extraction",
+    } <= timing.stage_seconds.keys()
+
+
+def test_timing_instrumentation_preserves_authoritative_geometry(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((128, 128), 255, dtype=np.uint8)
+    cv2.circle(pixels, (64, 64), 42, 0, thickness=-1, lineType=cv2.LINE_AA)
+    payload = _write_payload(tmp_path / "timed-circle.png", pixels)
+    options = _manual_options()
+    preparation_timing = RasterVectorizationTiming()
+    source = prepare_raster_vectorization_source(
+        payload,
+        timing=preparation_timing,
+    )
+    fit_timing = RasterVectorizationTiming()
+
+    timed = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=64.0,
+        displayed_height_mm=64.0,
+        timing=fit_timing,
+    )
+    direct = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=64.0,
+        displayed_height_mm=64.0,
+    )
+    prepared_preview = quick_preview_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=64.0,
+        displayed_height_mm=64.0,
+    )
+    reuse_timing = RasterVectorizationTiming()
+    reused = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=64.0,
+        displayed_height_mm=64.0,
+        prepared_preview=prepared_preview,
+        timing=reuse_timing,
+    )
+
+    assert timed.project_path_geometry() == direct.project_path_geometry()
+    assert reused.project_path_geometry() == direct.project_path_geometry()
+    assert timed.metadata() == direct.metadata()
+    assert reused.metadata() == direct.metadata()
+    assert np.array_equal(timed.foreground_mask, direct.foreground_mask)
+    assert preparation_timing.stage_calls == {"image_decode_preparation": 1}
+    assert {
+        "verified_vectorization_total",
+        "mask_generation",
+        "contour_extraction",
+        "corner_classification",
+        "cubic_fitting",
+        "newton_reparameterization",
+        "continuous_fit_validation",
+        "topology_validation",
+        "adjacent_merging",
+        "preview_flattening",
+        "raster_hierarchy_validation",
+    } <= fit_timing.stage_seconds.keys()
+    assert all(value >= 0.0 for value in fit_timing.stage_seconds.values())
+    assert "mask_generation" not in reuse_timing.stage_seconds
+    assert "contour_extraction" not in reuse_timing.stage_seconds
 
 
 def _normalized_bounds(contour) -> tuple[float, float, float, float]:

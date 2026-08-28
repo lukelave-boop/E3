@@ -100,8 +100,12 @@ Native desktop workflow:
   and its SHA-256 approval is rejected if source bytes change before strict
   import
 - A dedicated **Trace image to vectors…** action for exactly one selected raster
-  image. Its modal review compares the original, foreground mask, and vector
-  overlay, with high-contrast color presets and preview-only opacity; supports
+  image. Its modal review first shows the decoded original, foreground mask, and
+  a bounded **Quick preview** contour overlay, then replaces that display with
+  the exact **Verified** native fit in a separate worker. Quick geometry is
+  display-only; **Create vectors** remains disabled until the verified fit and
+  all authoritative validation finish. High-contrast color presets and
+  preview-only opacity repaint locally; the workflow supports
   automatic, manual, or usable-alpha detection; and creates one native
   multi-contour line/cubic PATH while preserving the image frame, position,
   rotation, and mirrors. Closed-contour fitting uses full-cycle seam
@@ -180,7 +184,11 @@ overscan interaction, limitations, and tuning guidance.
 To convert imported single-color artwork, select exactly one image in the
 **Objects** panel and choose **Trace image to vectors…**. Adjust the physical
 minimum-feature area, smoothing, and **Native fitting tolerance** while
-reviewing the original, mask, and overlaid contours. Choose a magenta, cyan,
+reviewing the original, mask, and overlaid contours. **Quick preview** appears
+without waiting for cubic fitting and topology checks; **Refining verified
+vectors…** remains responsive, and only **Verified** enables **Create vectors**.
+Changing settings invalidates both stages and coalesces work to the newest
+values. Choose a magenta, cyan,
 yellow, white, or black comparison overlay and adjust its opacity without
 rerunning or changing the trace, then choose whether to replace or retain the
 source. Keeping the source leaves it in place beneath the new, selected vector

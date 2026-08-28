@@ -6,6 +6,21 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Restored sub-second perceived responsiveness to **Trace image to vectors…**.
+  The dialog now decodes and displays the source, mask, and a bounded
+  preview-only contour overlay first, then refines the unchanged authoritative
+  native line/cubic result in a separate worker. **Create vectors** remains
+  disabled until the exact fit and all existing frame, continuous-error,
+  topology, clearance, and hierarchy checks pass. Newer settings invalidate
+  both stages, coalesce to the latest request, and cannot be overwritten by
+  stale worker results. Immutable prepared grayscale, mask, and raw-contour data
+  are reused without giving quick geometry persistence or planning authority.
+  Opt-in per-stage timing covers decode, masks, contours, corners, cubic fitting,
+  Newton refinement, continuous validation, merging, topology, preview
+  flattening, and raster hierarchy checks. The Coleman development stencil now
+  reaches a useful core preview in about 0.07 seconds; its verified result keeps
+  byte-identical native geometry and metadata to the prior authoritative result.
+
 - Grouped the four native desktop import commands under one **File > Import**
   submenu with concise **SVG…**, **G-code…**, **LightBurn project…**, and
   **Raster image…** child labels while preserving their existing actions,

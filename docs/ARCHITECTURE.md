@@ -552,8 +552,9 @@ the pixels already approved and displayed through project mutation:
 selected IMAGE + workspace payload identity
   -> read_raster_asset_payload(expected_source_sha256=displayed SHA-256)
   -> window-modal RasterVectorizationDialog
-  -> coalesced worker preview: original + mask + display-styled vector overlay
-  -> project.raster_vectorize exact-payload mask/contour/fitting pipeline
+  -> coalesced quick worker: decoded original + mask + preview-only raw outline
+  -> coalesced exact worker: native line/cubic fit + authoritative validation
+  -> replace quick overlay with the verified native-path flattening
   -> strict exact-source SHA-256 recheck after approval
   -> one FunctionalCommand for layer + PATH + source replace/visibility choice
 ```
@@ -567,14 +568,30 @@ the connected-component cleanup interprets minimum feature area in square
 millimetres from the selected image's displayed size, removing both small
 foreground islands and enclosed background pinholes while retaining larger
 holes. Preview requests use a
-160 ms debounce by default and retain at most one running request plus the latest
-pending options, so slider input cannot build an unbounded task queue. The
-overlay is a cached Qt vector path drawn over the exact source image. Its
+160 ms debounce by default. Quick and exact work each retain at most one running
+request plus the latest pending options, so slider input cannot build an
+unbounded task queue. A newer request immediately makes the prior result
+ineligible for creation; stale quick or exact completion cannot replace it. The
+quick stage decodes the source once, builds the production 4× mask and raw
+contour tree, and derives a bounded display-only approximation. The exact stage
+reuses that immutable preparation for identical settings, but ignores the quick
+geometry and performs the complete native fit and validation itself. The overlay
+is a cached Qt vector path drawn over the exact source image. Its
 magenta, cyan, yellow, white, or black preset and 0–100% opacity are display-only
 state: changing them repaints locally without changing options, metadata,
 geometry, project layers, or output authority. The dialog and portable
 vectorizer do not call `DesktopController`, `MachineService`,
 camera, planning, G-code, or execution paths.
+
+`RasterVectorizationTiming` is opt-in development/test instrumentation and is
+never attached to project data. It accumulates inclusive elapsed time and call
+counts for image decode/preparation, mask generation, contour extraction,
+corner classification, cubic fitting, Newton reparameterization, continuous fit
+validation, adjacent merging, authoritative topology, preview flattening, and
+rasterized hierarchy validation. Timing does not select algorithms or relax a
+budget. The five-million-step continuous-validation limit remains authoritative;
+profiling the Coleman stencil showed that proof was inexpensive compared with
+Newton refinement, so it was not weakened or bypassed.
 
 Contour extraction interpolates the exact bounded payload to a 4× internal mask,
 uses `RETR_TREE` hierarchy, and maps contour samples into physical coordinates

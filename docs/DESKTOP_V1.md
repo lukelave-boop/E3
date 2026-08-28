@@ -187,9 +187,14 @@ rejected consistently because its Qt decode plugin is not portable.
 
 Exactly one selected image also exposes **Trace image to vectors…** in the
 Objects panel. The window-modal review compares the bounded, SHA-verified source,
-foreground mask, and fitted-vector overlay. Magenta, cyan, yellow, white, and
-black presets plus 0–100% opacity are preview-only and do not rerun fitting or
-change output authority. The workflow creates one ordinary compound native PATH
+foreground mask, and vector overlay. A display-only **Quick preview** appears
+before expensive fitting and remains visible while **Refining verified
+vectors…** runs in a separate worker. It is seamlessly replaced by the exact
+**Verified** native result; **Create vectors** is disabled until that exact
+result exists. Settings changes coalesce independently across the two bounded
+stages, and stale results cannot overwrite newer options. Magenta, cyan, yellow,
+white, and black presets plus 0–100% opacity are preview-only and do not rerun
+fitting or change output authority. The workflow creates one ordinary compound native PATH
 while either replacing or retaining the image. Contours are fitted at 4×
 internal resolution with physical cleanup/smoothing/error controls, full-cycle
 seam canonicalization, persistent physical corner classification, generic

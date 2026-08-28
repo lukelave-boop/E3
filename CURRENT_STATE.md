@@ -7,6 +7,50 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-27**
 
+## Active raster-vectorization responsiveness recovery
+
+**Trace image to vectors…** now uses two bounded background stages. The first
+decodes and displays the exact source, production foreground mask, and a
+preview-only approximation of the extracted contour tree. The second ignores
+that approximation, reuses only immutable prepared grayscale/mask/raw-contour
+data for identical options, and runs the complete authoritative native
+line/cubic fitter plus the existing continuous-error, frame/extrema,
+self/adjacent-arc topology, compound-clearance, preview-flattening, and 4×
+raster-hierarchy checks. The quick geometry has no native subpath or project/
+planning conversion and cannot enable **Create vectors**. It is replaced by the
+verified result only after exact completion. Quick and exact workers each
+coalesce to the newest pending settings; stale results and cancellation cannot
+create or replace project geometry.
+
+The portable vectorizer exposes opt-in, non-persistent timing with elapsed time
+and call counts for decode/preparation, mask generation, contour extraction,
+corner classification, cubic fitting, Newton reparameterization, continuous fit
+validation, adjacent merging, authoritative topology, preview flattening, and
+raster hierarchy validation. Prepared white-composited grayscale is cached with
+the verified source. The exact fitter hoists immutable derivative differences
+out of Newton's point loop and avoids scalar `np.clip` overhead while retaining
+current-main reduction order. The five-million-step continuous-validation
+budget and proof are unchanged: Coleman profiling measured that proof at about
+0.10–0.14 seconds, not as the latency bottleneck.
+
+On the 1,170 × 444 Coleman development stencil at 80.0 × 30.358974 mm and
+threshold 122, authoritative current `main` took **8.16–8.47 seconds**
+unprofiled for the first/final result. The new core path measured **0.020
+seconds** to verify/decode, **0.046 seconds** to the useful quick mask/outline
+(**0.067 seconds** cumulative), and **5.96 seconds** for the background exact
+fit (**6.03 seconds** cumulative). The normal dialog's 160 ms debounce puts the
+expected first visual near **0.23 seconds**. The final Coleman native-geometry
+JSON and metadata JSON matched starting commit `32bd1ec` byte-for-byte. No
+fitting tolerance, corner rule, Newton requirement, continuous proof, topology
+rule, hierarchy rule, native persistence, transform, project/history,
+planning/cache, or output-safety contract changed.
+
+Focused verification currently passes **144 raster/fitter/dialog/desktop
+tests** and **235 native-path, project/history, planning, digest, cache, and
+toolpath tests**. This is automated Qt-free and offscreen-widget verification
+only; no interactive GUI or physical camera/controller/motion/laser test is
+claimed.
+
 ## Active desktop Import and status-message layout fixes
 
 The native File menu now exposes one **Import** submenu containing **SVG…**,
@@ -169,8 +213,10 @@ metadata, layer power, or output authority. Automatic Otsu, manual 0–255, and
 usable-alpha detection are available with inversion, alpha cutoff, physical
 minimum-feature area, smoothing, a millimetre fitting tolerance, outer-only or
 full hierarchy output, and Replace or Keep/optionally-hide source handling.
-Preview work is debounced and coalesced to one running task plus the newest
-pending settings. Cancel performs no project mutation.
+Preview work is debounced and coalesced independently for one quick and one
+exact worker plus the newest pending settings. The quick mask/outline remains
+visible while exact verified fitting continues; only the verified result can
+enable creation. Cancel performs no project mutation.
 
 Imported-raster vectorization retains its fitted straight/cubic result instead
 of destroying curves at the former `_fit_and_flatten_contour()` seam. The stages

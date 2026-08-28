@@ -12,9 +12,11 @@ from ..project.raster_vectorize import (
     RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationOptions,
+    RasterVectorizationQuickPreview,
     RasterVectorizationResult,
     RasterVectorizationSource,
     prepare_raster_vectorization_source,
+    quick_preview_prepared_raster,
     vectorize_prepared_raster,
 )
 from .qt import require_qt
@@ -56,8 +58,14 @@ def _retain_preview_task(task: FunctionTask) -> None:
 
 
 @dataclass(frozen=True, slots=True)
-class _PreviewOutcome:
+class _ExactPreviewOutcome:
     result: RasterVectorizationResult | None
+    error_message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _QuickPreviewOutcome:
+    preview: RasterVectorizationQuickPreview | None
     prepared_source: RasterVectorizationSource | None = None
     error_message: str | None = None
 
@@ -258,6 +266,8 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         *,
         debounce_ms: int = _DEFAULT_DEBOUNCE_MS,
         vectorizer: Callable[..., RasterVectorizationResult] | None = None,
+        quick_vectorizer: Callable[..., RasterVectorizationQuickPreview]
+        | None = None,
     ) -> None:
         super().__init__(parent)
         if not isinstance(payload, RasterAssetPayload):
@@ -274,13 +284,24 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
             raise ValueError("Displayed raster width and height must be positive")
 
         self._vectorizer = vectorizer
+        self._quick_vectorizer = quick_vectorizer
         self._prepared_source: RasterVectorizationSource | None = None
         self._request_serial = 0
         self._latest_requested_id = 0
-        self._active_request_id: int | None = None
-        self._active_options: RasterVectorizationOptions | None = None
-        self._active_task: FunctionTask | None = None
-        self._pending_request: tuple[int, RasterVectorizationOptions] | None = None
+        self._quick_request_id: int | None = None
+        self._quick_options: RasterVectorizationOptions | None = None
+        self._quick_task: FunctionTask | None = None
+        self._pending_quick_request: (
+            tuple[int, RasterVectorizationOptions] | None
+        ) = None
+        self._exact_request_id: int | None = None
+        self._exact_options: RasterVectorizationOptions | None = None
+        self._exact_task: FunctionTask | None = None
+        self._pending_exact_request: (
+            tuple[int, RasterVectorizationOptions] | None
+        ) = None
+        self._current_quick_id: int | None = None
+        self._current_quick_preview: RasterVectorizationQuickPreview | None = None
         self._current_result: RasterVectorizationResult | None = None
         self._current_result_id: int | None = None
         self._current_options: RasterVectorizationOptions | None = None
@@ -666,6 +687,33 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         style.unpolish(self.status_label)
         style.polish(self.status_label)
 
+    @property
+    def _active_task(self) -> FunctionTask | None:
+        """Compatibility view for tests that only need any active preview work."""
+
+        return self._exact_task or self._quick_task
+
+    @property
+    def _pending_request(
+        self,
+    ) -> tuple[int, RasterVectorizationOptions] | None:
+        """Compatibility view of the newest queued work across both stages."""
+
+        return self._pending_quick_request or self._pending_exact_request
+
+    def _sync_create_button(self) -> None:
+        self.create_button.setEnabled(
+            bool(
+                not self._closed
+                and self._quick_task is None
+                and self._exact_task is None
+                and self._pending_quick_request is None
+                and self._pending_exact_request is None
+                and self._current_result is not None
+                and self._current_result_id == self._latest_requested_id
+            )
+        )
+
     def _schedule_preview(self) -> None:
         if self._closed:
             return
@@ -678,125 +726,301 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self._request_serial += 1
         request = (self._request_serial, options)
         self._latest_requested_id = self._request_serial
-        self._pending_request = request
+        self._pending_quick_request = request
+        self._pending_exact_request = None
+        self._current_quick_id = None
+        self._current_quick_preview = None
         self._current_result = None
         self._current_result_id = None
         self._current_options = None
         self.create_button.setEnabled(False)
-        self._set_status("Updating vector preview…")
-        if self._active_task is None:
+        self._set_status("Updating quick preview…")
+        if self._quick_task is None:
             self._debounce_timer.start()
 
     def _debounce_elapsed(self) -> None:
-        if self._closed or self._active_task is not None:
+        if self._closed or self._quick_task is not None:
             return
-        request = self._pending_request
-        self._pending_request = None
+        request = self._pending_quick_request
+        self._pending_quick_request = None
         if request is not None:
-            self._start_preview(*request)
+            self._start_quick_preview(*request)
 
-    def _start_preview(
+    def _start_quick_preview(
         self,
         request_id: int,
         options: RasterVectorizationOptions,
     ) -> None:
         if self._closed:
             return
-        self._active_request_id = request_id
-        self._set_status("Building mask and fitting vector paths…")
-        vectorizer = self._vectorizer
+        self._quick_request_id = request_id
+        self._quick_options = options
+        if request_id == self._latest_requested_id:
+            self._set_status("Building quick preview…")
+        quick_vectorizer = self._quick_vectorizer
         payload = self.payload
         prepared_source = self._prepared_source
         width_mm = self.width_mm
         height_mm = self.height_mm
 
-        def operation() -> _PreviewOutcome:
-            if vectorizer is not None:
-                result = vectorizer(
-                    payload,
-                    options,
-                    displayed_width_mm=width_mm,
-                    displayed_height_mm=height_mm,
-                )
-                return _PreviewOutcome(result=result)
+        def operation() -> _QuickPreviewOutcome:
             source = prepared_source
-            if source is None:
-                source = prepare_raster_vectorization_source(payload)
             try:
-                result = vectorize_prepared_raster(
-                    source,
-                    options,
-                    displayed_width_mm=width_mm,
-                    displayed_height_mm=height_mm,
-                )
+                if source is None:
+                    source = prepare_raster_vectorization_source(payload)
+                if quick_vectorizer is None:
+                    preview = quick_preview_prepared_raster(
+                        source,
+                        options,
+                        displayed_width_mm=width_mm,
+                        displayed_height_mm=height_mm,
+                    )
+                else:
+                    preview = quick_vectorizer(
+                        source,
+                        options,
+                        displayed_width_mm=width_mm,
+                        displayed_height_mm=height_mm,
+                    )
             except Exception as exc:
-                return _PreviewOutcome(
-                    result=None,
+                return _QuickPreviewOutcome(
+                    preview=None,
                     prepared_source=source,
                     error_message=_exception_message(exc),
                 )
-            return _PreviewOutcome(result=result, prepared_source=source)
+            return _QuickPreviewOutcome(
+                preview=preview,
+                prepared_source=source,
+            )
 
         task = FunctionTask(operation)
-        self._active_task = task
-        self._active_options = options
+        self._quick_task = task
         task.signals.succeeded.connect(
-            self._active_preview_succeeded,
+            self._active_quick_succeeded,
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
         task.signals.failed.connect(
-            self._active_preview_failed,
+            self._active_quick_failed,
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
         task.signals.finished.connect(
-            self._active_preview_finished,
+            self._active_quick_finished,
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
         _retain_preview_task(task)
         QtCore.QThreadPool.globalInstance().start(task)
 
     @QtCore.Slot(object)
-    def _active_preview_succeeded(self, outcome: object) -> None:
+    def _active_quick_succeeded(self, outcome: object) -> None:
         if self._closed:
             return
-        request_id = self._active_request_id
-        options = self._active_options
+        request_id = self._quick_request_id
+        options = self._quick_options
         if request_id is None or options is None:
             return
-        if not isinstance(outcome, _PreviewOutcome):
-            self._preview_failed(
+        if not isinstance(outcome, _QuickPreviewOutcome):
+            self._quick_preview_failed(
                 request_id,
-                "Vector preview worker returned an invalid result",
+                "Quick preview worker returned an invalid result",
             )
             return
         if outcome.prepared_source is not None:
             self._prepared_source = outcome.prepared_source
             self._show_prepared_source(outcome.prepared_source)
         if outcome.error_message is not None:
-            self._preview_failed(request_id, outcome.error_message)
+            self._quick_preview_failed(request_id, outcome.error_message)
             return
-        if outcome.result is None:
-            self._preview_failed(
+        if outcome.preview is None:
+            self._quick_preview_failed(
                 request_id,
-                "Vector preview worker returned no result",
+                "Quick preview worker returned no result",
             )
             return
-        self._preview_succeeded(request_id, options, outcome.result)
+        self._quick_preview_succeeded(request_id, options, outcome.preview)
 
     @QtCore.Slot(str)
-    def _active_preview_failed(self, message: str) -> None:
-        request_id = self._active_request_id
+    def _active_quick_failed(self, message: str) -> None:
+        request_id = self._quick_request_id
         if request_id is not None:
-            self._preview_failed(request_id, message)
+            self._quick_preview_failed(request_id, message)
 
     @QtCore.Slot()
-    def _active_preview_finished(self) -> None:
-        task = self._active_task
-        request_id = self._active_request_id
-        if task is not None and request_id is not None:
-            self._preview_finished(request_id, task)
+    def _active_quick_finished(self) -> None:
+        task = self._quick_task
+        request_id = self._quick_request_id
+        if task is None or request_id is None:
+            return
+        self._quick_task = None
+        self._quick_request_id = None
+        self._quick_options = None
+        if self._closed:
+            self._pending_quick_request = None
+            return
+        if self._pending_quick_request is not None:
+            pending = self._pending_quick_request
+            self._pending_quick_request = None
+            self._debounce_timer.stop()
+            self._start_quick_preview(*pending)
+        self._sync_create_button()
 
-    def _preview_succeeded(
+    def _quick_preview_succeeded(
+        self,
+        request_id: int,
+        options: RasterVectorizationOptions,
+        preview: RasterVectorizationQuickPreview,
+    ) -> None:
+        if self._closed or request_id != self._latest_requested_id:
+            return
+        try:
+            original = _rgba_qimage(preview.source_rgba)
+            mask = _mask_qimage(preview.foreground_mask)
+            overlay = _rgba_qimage(preview.source_rgba)
+        except (TypeError, ValueError) as exc:
+            self._quick_preview_failed(request_id, str(exc))
+            return
+        self._has_usable_alpha = bool(preview.has_usable_alpha)
+        self._sync_control_state()
+        self.original_preview.set_image(original)
+        self.mask_preview.set_image(mask)
+        self.overlay_preview.set_image(overlay)
+        self.overlay_preview.set_vector_overlay(preview.contours)
+        self._sync_overlay_style()
+        self.stats_label.setText(
+            f"Quick preview · raw contour points {preview.raw_contour_point_count:,}  ·  "
+            f"display points {preview.preview_point_count:,}  ·  verified fit pending"
+        )
+        self._current_quick_id = request_id
+        self._current_quick_preview = preview
+        self._pending_exact_request = (request_id, options)
+        self._set_status("Quick preview · Refining verified vectors…")
+        self._start_pending_exact_if_possible()
+
+    def _start_pending_exact_if_possible(self) -> None:
+        if self._closed or self._exact_task is not None:
+            return
+        pending = self._pending_exact_request
+        self._pending_exact_request = None
+        if pending is None:
+            return
+        request_id, options = pending
+        if (
+            request_id != self._latest_requested_id
+            or request_id != self._current_quick_id
+        ):
+            return
+        self._start_exact_preview(request_id, options)
+
+    def _start_exact_preview(
+        self,
+        request_id: int,
+        options: RasterVectorizationOptions,
+    ) -> None:
+        if self._closed or request_id != self._latest_requested_id:
+            return
+        source = self._prepared_source
+        if source is None:
+            self._quick_preview_failed(
+                request_id,
+                "Verified fitting has no prepared raster source",
+            )
+            return
+        self._exact_request_id = request_id
+        self._exact_options = options
+        self._set_status("Quick preview · Refining verified vectors…")
+        vectorizer = self._vectorizer
+        prepared_preview = self._current_quick_preview
+        payload = self.payload
+        width_mm = self.width_mm
+        height_mm = self.height_mm
+
+        def operation() -> _ExactPreviewOutcome:
+            try:
+                if vectorizer is not None:
+                    result = vectorizer(
+                        payload,
+                        options,
+                        displayed_width_mm=width_mm,
+                        displayed_height_mm=height_mm,
+                    )
+                else:
+                    result = vectorize_prepared_raster(
+                        source,
+                        options,
+                        displayed_width_mm=width_mm,
+                        displayed_height_mm=height_mm,
+                        prepared_preview=prepared_preview,
+                    )
+            except Exception as exc:
+                return _ExactPreviewOutcome(
+                    result=None,
+                    error_message=_exception_message(exc),
+                )
+            return _ExactPreviewOutcome(result=result)
+
+        task = FunctionTask(operation)
+        self._exact_task = task
+        task.signals.succeeded.connect(
+            self._active_exact_succeeded,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        task.signals.failed.connect(
+            self._active_exact_failed,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        task.signals.finished.connect(
+            self._active_exact_finished,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        _retain_preview_task(task)
+        QtCore.QThreadPool.globalInstance().start(task)
+
+    @QtCore.Slot(object)
+    def _active_exact_succeeded(self, outcome: object) -> None:
+        if self._closed:
+            return
+        request_id = self._exact_request_id
+        options = self._exact_options
+        if request_id is None or options is None:
+            return
+        if not isinstance(outcome, _ExactPreviewOutcome):
+            self._exact_preview_failed(
+                request_id,
+                "Verified vector worker returned an invalid result",
+            )
+            return
+        if outcome.error_message is not None:
+            self._exact_preview_failed(request_id, outcome.error_message)
+            return
+        if outcome.result is None:
+            self._exact_preview_failed(
+                request_id,
+                "Verified vector worker returned no result",
+            )
+            return
+        self._verified_preview_succeeded(request_id, options, outcome.result)
+
+    @QtCore.Slot(str)
+    def _active_exact_failed(self, message: str) -> None:
+        request_id = self._exact_request_id
+        if request_id is not None:
+            self._exact_preview_failed(request_id, message)
+
+    @QtCore.Slot()
+    def _active_exact_finished(self) -> None:
+        task = self._exact_task
+        request_id = self._exact_request_id
+        if task is None or request_id is None:
+            return
+        self._exact_task = None
+        self._exact_request_id = None
+        self._exact_options = None
+        if self._closed:
+            self._pending_exact_request = None
+            return
+        self._start_pending_exact_if_possible()
+        self._sync_create_button()
+
+    def _verified_preview_succeeded(
         self,
         request_id: int,
         options: RasterVectorizationOptions,
@@ -809,7 +1033,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
             mask = _mask_qimage(result.foreground_mask)
             overlay = _rgba_qimage(result.source_rgba)
         except (TypeError, ValueError) as exc:
-            self._preview_failed(request_id, str(exc))
+            self._exact_preview_failed(request_id, str(exc))
             return
 
         self._has_usable_alpha = bool(result.has_usable_alpha)
@@ -855,10 +1079,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
             method = f"alpha cutoff {options.alpha_cutoff}"
         else:
             method = f"threshold {result.threshold_used}"
-        self._set_status(
-            f"Preview ready · {method}",
-            "good",
-        )
+        self._set_status(f"Verified · {method}", "good")
 
     def _show_prepared_source(self, source: RasterVectorizationSource) -> None:
         try:
@@ -869,7 +1090,28 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self._has_usable_alpha = bool(source.has_usable_alpha)
         self._sync_control_state()
 
-    def _preview_failed(self, request_id: int, message: str) -> None:
+    def _quick_preview_failed(self, request_id: int, message: str) -> None:
+        if self._closed or request_id != self._latest_requested_id:
+            return
+        self._current_quick_id = None
+        self._current_quick_preview = None
+        self._current_result = None
+        self._current_result_id = None
+        self._current_options = None
+        self._accepted_options = None
+        self.create_button.setEnabled(False)
+        suggestion = ""
+        if (
+            self._has_usable_alpha
+            and self.detection_combo.currentData() != RasterDetectionMode.ALPHA
+        ):
+            suggestion = " Try Transparency / alpha detection."
+        self._set_status(
+            f"Could not build quick preview: {message}{suggestion}",
+            "bad",
+        )
+
+    def _exact_preview_failed(self, request_id: int, message: str) -> None:
         if self._closed or request_id != self._latest_requested_id:
             return
         self._current_result = None
@@ -884,36 +1126,17 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         ):
             suggestion = " Try Transparency / alpha detection."
         self._set_status(
-            f"Could not vectorize this image: {message}{suggestion}",
+            f"Quick preview · verified vectors unavailable: {message}{suggestion}",
             "bad",
         )
-
-    def _preview_finished(self, request_id: int, task: FunctionTask) -> None:
-        if task is not self._active_task or request_id != self._active_request_id:
-            return
-        self._active_task = None
-        self._active_request_id = None
-        self._active_options = None
-        if self._closed:
-            self._pending_request = None
-            return
-        if self._pending_request is not None:
-            pending = self._pending_request
-            self._pending_request = None
-            self._debounce_timer.stop()
-            self._start_preview(*pending)
-            return
-        if (
-            self._current_result is not None
-            and self._current_result_id == self._latest_requested_id
-        ):
-            self.create_button.setEnabled(True)
 
     def _accept_latest(self) -> None:
         if (
             self._closed
-            or self._active_task is not None
-            or self._pending_request is not None
+            or self._exact_task is not None
+            or self._quick_task is not None
+            or self._pending_exact_request is not None
+            or self._pending_quick_request is not None
             or self._current_result is None
             or self._current_result_id != self._latest_requested_id
         ):
@@ -927,8 +1150,10 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
     def _abandon_pending_work(self) -> None:
         self._closed = True
         self._debounce_timer.stop()
-        self._pending_request = None
+        self._pending_quick_request = None
+        self._pending_exact_request = None
         self.create_button.setEnabled(False)
+
 
     def reject(self) -> None:
         self._accepted_result = None

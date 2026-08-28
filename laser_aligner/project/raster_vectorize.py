@@ -3,11 +3,15 @@ from __future__ import annotations
 import hashlib
 import math
 import struct
-from dataclasses import dataclass
+import time
+from collections.abc import Callable
+from contextvars import ContextVar
+from dataclasses import dataclass, field
 from enum import Enum
+from functools import wraps
 from numbers import Real
 from pathlib import Path
-from typing import TypeAlias
+from typing import Any, TypeAlias, TypeVar
 
 import cv2
 import numpy as np
@@ -59,6 +63,63 @@ _COMPLEXITY_ADVICE = (
     "Increase the minimum feature size, increase simplification by raising the "
     "native fitting tolerance, adjust the threshold, or use cleaner source artwork."
 )
+
+_TIMING_STAGE = ContextVar["RasterVectorizationTiming | None"](
+    "raster_vectorization_timing",
+    default=None,
+)
+_TimedResult = TypeVar("_TimedResult")
+
+
+@dataclass(slots=True)
+class RasterVectorizationTiming:
+    """Opt-in, non-persistent development timing for vectorization stages."""
+
+    stage_seconds: dict[str, float] = field(default_factory=dict, init=False)
+    stage_calls: dict[str, int] = field(default_factory=dict, init=False)
+
+    def record(self, stage: str, elapsed_seconds: float) -> None:
+        name = str(stage)
+        elapsed = max(0.0, float(elapsed_seconds))
+        self.stage_seconds[name] = self.stage_seconds.get(name, 0.0) + elapsed
+        self.stage_calls[name] = self.stage_calls.get(name, 0) + 1
+
+    def reset(self) -> None:
+        self.stage_seconds.clear()
+        self.stage_calls.clear()
+
+    def snapshot(self) -> dict[str, dict[str, float | int]]:
+        return {
+            name: {
+                "seconds": self.stage_seconds[name],
+                "calls": self.stage_calls[name],
+            }
+            for name in sorted(self.stage_seconds)
+        }
+
+
+def _timed_stage(
+    stage: str,
+) -> Callable[[Callable[..., _TimedResult]], Callable[..., _TimedResult]]:
+    """Accumulate inclusive stage time only when a collector is active."""
+
+    def decorate(
+        function: Callable[..., _TimedResult],
+    ) -> Callable[..., _TimedResult]:
+        @wraps(function)
+        def measured(*args: Any, **kwargs: Any) -> _TimedResult:
+            timing = _TIMING_STAGE.get()
+            if timing is None:
+                return function(*args, **kwargs)
+            started = time.perf_counter()
+            try:
+                return function(*args, **kwargs)
+            finally:
+                timing.record(stage, time.perf_counter() - started)
+
+        return measured
+
+    return decorate
 
 
 class RasterVectorizationError(ValueError):
@@ -162,6 +223,7 @@ class RasterVectorizationSource:
     identity: RasterAssetIdentity
     source_rgba: np.ndarray
     grayscale: np.ndarray
+    composited_grayscale: np.ndarray
     alpha: np.ndarray
     has_usable_alpha: bool
 
@@ -172,6 +234,93 @@ class RasterVectorizationSource:
     @property
     def height_px(self) -> int:
         return int(self.source_rgba.shape[0])
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _RasterMaskPreparation:
+    threshold_used: int | None
+    source_mask: np.ndarray
+    cleaned_mask: np.ndarray
+    working_mask: np.ndarray
+    component_count: int
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _RasterTracePreparation:
+    source_identity: RasterAssetIdentity
+    options: RasterVectorizationOptions
+    width_mm: float
+    height_mm: float
+    masks: _RasterMaskPreparation
+    raw_contours: tuple[np.ndarray, ...]
+    hierarchy: np.ndarray
+
+
+@dataclass(frozen=True, slots=True)
+class RasterVectorizationQuickContour:
+    """Preview-only raster outline that can never become project geometry."""
+
+    points: tuple[tuple[float, float], ...]
+    parent_index: int | None
+    depth: int
+    is_hole: bool
+
+    def __post_init__(self) -> None:
+        points = tuple(
+            (_finite(point[0], "quick preview x"), _finite(point[1], "quick preview y"))
+            for point in self.points
+        )
+        if len(points) < 3:
+            raise ValueError("quick preview contours require at least three points")
+        if any(abs(value) > 0.500000001 for point in points for value in point):
+            raise ValueError("quick preview contours must stay in the source frame")
+        if self.parent_index is not None and (
+            type(self.parent_index) is not int or self.parent_index < 0
+        ):
+            raise ValueError("quick preview parent_index must be non-negative or None")
+        if type(self.depth) is not int or self.depth < 0:
+            raise ValueError("quick preview depth must be a non-negative integer")
+        if type(self.is_hole) is not bool:
+            raise ValueError("quick preview is_hole must be a boolean")
+        object.__setattr__(self, "points", points)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class RasterVectorizationQuickPreview:
+    """Fast display geometry with no persistence or planning authority."""
+
+    source_identity: RasterAssetIdentity
+    source_rgba: np.ndarray
+    foreground_mask: np.ndarray
+    contours: tuple[RasterVectorizationQuickContour, ...]
+    threshold_used: int | None
+    has_usable_alpha: bool
+    connected_component_count: int
+    raw_contour_point_count: int
+    preview_point_count: int
+    _prepared_trace: _RasterTracePreparation = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        contours = tuple(self.contours)
+        if not contours:
+            raise ValueError("quick preview requires at least one contour")
+        if type(self.has_usable_alpha) is not bool:
+            raise ValueError("quick preview has_usable_alpha must be a boolean")
+        if self.threshold_used is not None:
+            _bounded_byte(self.threshold_used, "quick preview threshold")
+        for name in (
+            "connected_component_count",
+            "raw_contour_point_count",
+            "preview_point_count",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"quick preview {name} must be non-negative")
+        if self.preview_point_count != sum(len(contour.points) for contour in contours):
+            raise ValueError("quick preview point count does not match its contours")
+        if not isinstance(self._prepared_trace, _RasterTracePreparation):
+            raise TypeError("quick preview requires its immutable prepared trace")
+        object.__setattr__(self, "contours", contours)
 
 
 @dataclass(frozen=True, slots=True)
@@ -706,6 +855,10 @@ def _decode_payload(payload: RasterAssetPayload) -> RasterVectorizationSource:
 
     rgba = np.dstack((rgb, alpha)).astype(np.uint8, copy=False)
     grayscale = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    opacity = alpha.astype(np.float32) / 255.0
+    composited_grayscale = np.rint(
+        grayscale.astype(np.float32) * opacity + 255.0 * (1.0 - opacity)
+    ).astype(np.uint8)
     alpha_min = int(np.min(alpha))
     alpha_max = int(np.max(alpha))
     has_usable_alpha = alpha_min < alpha_max and alpha_min < 255 and alpha_max > 0
@@ -713,18 +866,32 @@ def _decode_payload(payload: RasterAssetPayload) -> RasterVectorizationSource:
         identity=payload.identity,
         source_rgba=_readonly(rgba),
         grayscale=_readonly(grayscale),
+        composited_grayscale=_readonly(composited_grayscale),
         alpha=_readonly(alpha),
         has_usable_alpha=has_usable_alpha,
     )
 
 
+@_timed_stage("image_decode_preparation")
+def _prepare_raster_vectorization_source(
+    payload: RasterAssetPayload,
+) -> RasterVectorizationSource:
+    _validate_payload(payload)
+    return _decode_payload(payload)
+
+
 def prepare_raster_vectorization_source(
     payload: RasterAssetPayload,
+    *,
+    timing: RasterVectorizationTiming | None = None,
 ) -> RasterVectorizationSource:
     """Verify and decode one exact bounded payload for repeated preview work."""
 
-    _validate_payload(payload)
-    return _decode_payload(payload)
+    token = _TIMING_STAGE.set(timing)
+    try:
+        return _prepare_raster_vectorization_source(payload)
+    finally:
+        _TIMING_STAGE.reset(token)
 
 
 def raster_payload_has_usable_alpha(payload: RasterAssetPayload) -> bool:
@@ -742,12 +909,7 @@ def _display_dimensions(width: object, height: object) -> tuple[float, float]:
 
 
 def _composited_grayscale(source: RasterVectorizationSource) -> np.ndarray:
-    opacity = source.alpha.astype(np.float32) / 255.0
-    output = np.rint(
-        source.grayscale.astype(np.float32) * opacity
-        + 255.0 * (1.0 - opacity)
-    )
-    return output.astype(np.uint8)
+    return source.composited_grayscale
 
 
 def _threshold_value(
@@ -1216,6 +1378,7 @@ def _corner_scale_metrics(
     return turns, orientation, residual
 
 
+@_timed_stage("corner_classification")
 def _corner_indices(
     points: np.ndarray,
     tolerance_mm: float | None = None,
@@ -1749,6 +1912,7 @@ def _cubic_first_derivative_values(
     )
 
 
+@_timed_stage("newton_reparameterization")
 def _reparameterize(
     points: np.ndarray,
     parameters: np.ndarray,
@@ -1757,6 +1921,11 @@ def _reparameterize(
     """Refine point parameters with bounded Newton-Raphson projection."""
 
     refined = parameters.copy()
+    first_start = controls[1] - controls[0]
+    first_middle = controls[2] - controls[1]
+    first_end = controls[3] - controls[2]
+    second_start = controls[2] - 2.0 * controls[1] + controls[0]
+    second_end = controls[3] - 2.0 * controls[2] + controls[1]
     for index in range(1, len(points) - 1):
         parameter = float(parameters[index])
         value = _cubic_values(
@@ -1766,17 +1935,18 @@ def _reparameterize(
             controls[3],
             np.asarray((parameter,), dtype=np.float64),
         )[0]
-        first, second = _cubic_derivatives(controls, parameter)
+        inverse = 1.0 - parameter
+        first = 3.0 * (
+            inverse**2 * first_start
+            + 2.0 * inverse * parameter * first_middle
+            + parameter**2 * first_end
+        )
+        second = 6.0 * (inverse * second_start + parameter * second_end)
         delta = value - points[index]
         denominator = float(np.dot(first, first) + np.dot(delta, second))
         if abs(denominator) > 1e-15:
-            refined[index] = float(
-                np.clip(
-                    parameter - float(np.dot(delta, first)) / denominator,
-                    0.0,
-                    1.0,
-                )
-            )
+            candidate = parameter - float(np.dot(delta, first)) / denominator
+            refined[index] = min(1.0, max(0.0, candidate))
     if np.any(np.diff(refined) <= 1e-9):
         return parameters
     return refined
@@ -1811,6 +1981,7 @@ def _subcurve_controls(
     return interval
 
 
+@_timed_stage("continuous_fit_validation")
 def _validate_curve_fit(
     target: np.ndarray,
     parameters: np.ndarray,
@@ -1989,6 +2160,7 @@ def _cubic_controls_have_ambiguous_topology(controls: np.ndarray) -> bool:
     )
 
 
+@_timed_stage("cubic_fitting")
 def _attempt_cubic_piece(
     points: np.ndarray,
     tolerance_mm: float,
@@ -2441,6 +2613,7 @@ def _merge_preserves_adjacent_topology(
     )
 
 
+@_timed_stage("adjacent_merging")
 def _merge_smooth_pieces(
     pieces: list[_FittedPiece],
     tolerance_mm: float,
@@ -2759,6 +2932,7 @@ def _validate_native_subpath_in_frame(
         )
 
 
+@_timed_stage("preview_flattening")
 def _flatten_native_subpath_for_preview(
     native_subpath: PathSubpath,
     tolerance_mm: float,
@@ -3447,6 +3621,7 @@ def _topology_is_ambiguous(
     return False
 
 
+@_timed_stage("topology_validation")
 def _validate_authoritative_native_topology(
     contours: tuple[RasterVectorizedContour, ...],
     width_mm: float,
@@ -3544,6 +3719,7 @@ def _hierarchy_signature(parents: np.ndarray) -> tuple[bytes, ...]:
     )
 
 
+@_timed_stage("raster_hierarchy_validation")
 def _validate_rasterized_topology(
     contours: tuple[RasterVectorizedContour, ...],
     shape: tuple[int, int],
@@ -3595,26 +3771,13 @@ def _validate_rasterized_topology(
         )
 
 
-def vectorize_prepared_raster(
+@_timed_stage("mask_generation")
+def _prepare_vectorization_masks(
     source: RasterVectorizationSource,
     options: RasterVectorizationOptions,
-    *,
-    displayed_width_mm: float,
-    displayed_height_mm: float,
-) -> RasterVectorizationResult:
-    """Vectorize one verified decoded source without reopening its asset."""
-
-    if not isinstance(source, RasterVectorizationSource):
-        raise TypeError("source must be a RasterVectorizationSource")
-    options = (
-        options
-        if isinstance(options, RasterVectorizationOptions)
-        else RasterVectorizationOptions(**dict(options))
-    )
-    width_mm, height_mm = _display_dimensions(
-        displayed_width_mm,
-        displayed_height_mm,
-    )
+    width_mm: float,
+    height_mm: float,
+) -> _RasterMaskPreparation:
     grayscale = _composited_grayscale(source)
     threshold_used = _threshold_value(source, options, grayscale)
     source_mask = _mask_at_resolution(
@@ -3639,10 +3802,24 @@ def vectorize_prepared_raster(
         cleaned_mask,
     )
     _enforce_oversampled_edge_budget(working_mask)
+    return _RasterMaskPreparation(
+        threshold_used=threshold_used,
+        source_mask=_readonly(source_mask),
+        cleaned_mask=_readonly(cleaned_mask),
+        working_mask=_readonly(working_mask),
+        component_count=component_count,
+    )
+
+
+@_timed_stage("contour_extraction")
+def _extract_vectorization_contours(
+    mask: np.ndarray,
+    approximation: int,
+) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
     raw_contours, hierarchy = cv2.findContours(
-        working_mask,
+        mask,
         cv2.RETR_TREE,
-        cv2.CHAIN_APPROX_NONE,
+        approximation,
     )
     if hierarchy is None or not raw_contours:
         raise RasterVectorizationError(
@@ -3654,6 +3831,226 @@ def vectorize_prepared_raster(
             f"{len(raw_contours):,} contours, exceeding the "
             f"{MAX_RASTER_VECTORIZATION_CONTOURS:,}-contour limit"
         )
+    return tuple(_readonly(contour) for contour in raw_contours), _readonly(hierarchy)
+
+
+@_timed_stage("quick_preview_total")
+def _quick_preview_prepared_raster(
+    source: RasterVectorizationSource,
+    options: RasterVectorizationOptions,
+    width_mm: float,
+    height_mm: float,
+) -> RasterVectorizationQuickPreview:
+    masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
+    raw_contours, hierarchy = _extract_vectorization_contours(
+        masks.working_mask,
+        cv2.CHAIN_APPROX_NONE,
+    )
+    prepared_trace = _RasterTracePreparation(
+        source_identity=source.identity,
+        options=options,
+        width_mm=width_mm,
+        height_mm=height_mm,
+        masks=masks,
+        raw_contours=raw_contours,
+        hierarchy=hierarchy,
+    )
+    parents = hierarchy[0, :, 3]
+    depths = [_hierarchy_depth(index, parents) for index in range(len(raw_contours))]
+    selected_indices = sorted(
+        (
+            index
+            for index, depth in enumerate(depths)
+            if options.contour_output is RasterContourOutput.ALL_CONTOURS
+            or depth == 0
+        ),
+        key=lambda index: (depths[index], index),
+    )
+    selected_map = {
+        original_index: result_index
+        for result_index, original_index in enumerate(selected_indices)
+    }
+    factor = RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
+    pitch_mm = min(
+        width_mm / float(source.width_px * factor),
+        height_mm / float(source.height_px * factor),
+    )
+    approximation_px = max(
+        0.75,
+        min(
+            4.0,
+            options.simplification_tolerance_mm / max(pitch_mm, 1e-15) * 0.25,
+        ),
+    )
+    contours: list[RasterVectorizationQuickContour] = []
+    raw_point_count = 0
+    preview_point_count = 0
+    for original_index in selected_indices:
+        raw = raw_contours[original_index]
+        raw_point_count += len(raw)
+        approximated = cv2.approxPolyDP(raw, approximation_px, True)
+        if len(approximated) < 3:
+            approximated = raw
+        physical = _physical_contour(
+            approximated,
+            source.width_px,
+            source.height_px,
+            width_mm,
+            height_mm,
+        )
+        if len(physical) < 3:
+            raise RasterVectorizationError(
+                "A retained raster quick-preview contour has fewer than three "
+                "distinct points"
+            )
+        normalized = tuple(
+            (float(point[0] / width_mm), float(point[1] / height_mm))
+            for point in physical
+        )
+        preview_point_count += len(normalized)
+        if preview_point_count > MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION:
+            _raise_complexity(
+                "Raster quick preview requires more than "
+                f"{MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION:,} points"
+            )
+        depth = depths[original_index]
+        parent_original = int(parents[original_index])
+        parent_index = selected_map.get(parent_original) if parent_original >= 0 else None
+        contours.append(
+            RasterVectorizationQuickContour(
+                points=normalized,
+                parent_index=parent_index,
+                depth=(
+                    depth
+                    if options.contour_output is RasterContourOutput.ALL_CONTOURS
+                    else 0
+                ),
+                is_hole=(
+                    bool(depth % 2)
+                    if options.contour_output is RasterContourOutput.ALL_CONTOURS
+                    else False
+                ),
+            )
+        )
+    if not contours:
+        raise RasterVectorizationError(
+            "Raster quick preview produced no non-degenerate closed paths"
+        )
+    return RasterVectorizationQuickPreview(
+        source_identity=source.identity,
+        source_rgba=source.source_rgba,
+        foreground_mask=_readonly(
+            _preview_mask(
+                masks.working_mask,
+                source.width_px,
+                source.height_px,
+            )
+        ),
+        contours=tuple(contours),
+        threshold_used=masks.threshold_used,
+        has_usable_alpha=source.has_usable_alpha,
+        connected_component_count=masks.component_count,
+        raw_contour_point_count=raw_point_count,
+        preview_point_count=preview_point_count,
+        _prepared_trace=prepared_trace,
+    )
+
+
+def quick_preview_prepared_raster(
+    source: RasterVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+    timing: RasterVectorizationTiming | None = None,
+) -> RasterVectorizationQuickPreview:
+    """Build bounded display-only mask/outline geometry without fitting."""
+
+    if not isinstance(source, RasterVectorizationSource):
+        raise TypeError("source must be a RasterVectorizationSource")
+    options = (
+        options
+        if isinstance(options, RasterVectorizationOptions)
+        else RasterVectorizationOptions(**dict(options))
+    )
+    width_mm, height_mm = _display_dimensions(
+        displayed_width_mm,
+        displayed_height_mm,
+    )
+    token = _TIMING_STAGE.set(timing)
+    try:
+        return _quick_preview_prepared_raster(
+            source,
+            options,
+            width_mm,
+            height_mm,
+        )
+    finally:
+        _TIMING_STAGE.reset(token)
+
+
+def _reusable_prepared_trace(
+    source: RasterVectorizationSource,
+    options: RasterVectorizationOptions,
+    width_mm: float,
+    height_mm: float,
+    prepared_preview: RasterVectorizationQuickPreview | None,
+) -> _RasterTracePreparation | None:
+    if prepared_preview is None:
+        return None
+    trace = prepared_preview._prepared_trace
+    if (
+        trace.source_identity != source.identity
+        or trace.options != options
+        or trace.width_mm != width_mm
+        or trace.height_mm != height_mm
+    ):
+        return None
+    return trace
+
+
+@_timed_stage("verified_vectorization_total")
+def _vectorize_prepared_raster(
+    source: RasterVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+    prepared_preview: RasterVectorizationQuickPreview | None = None,
+) -> RasterVectorizationResult:
+    """Vectorize one verified decoded source without reopening its asset."""
+
+    if not isinstance(source, RasterVectorizationSource):
+        raise TypeError("source must be a RasterVectorizationSource")
+    options = (
+        options
+        if isinstance(options, RasterVectorizationOptions)
+        else RasterVectorizationOptions(**dict(options))
+    )
+    width_mm, height_mm = _display_dimensions(
+        displayed_width_mm,
+        displayed_height_mm,
+    )
+    prepared_trace = _reusable_prepared_trace(
+        source,
+        options,
+        width_mm,
+        height_mm,
+        prepared_preview,
+    )
+    if prepared_trace is None:
+        masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
+        raw_contours, hierarchy = _extract_vectorization_contours(
+            masks.working_mask,
+            cv2.CHAIN_APPROX_NONE,
+        )
+    else:
+        masks = prepared_trace.masks
+        raw_contours = prepared_trace.raw_contours
+        hierarchy = prepared_trace.hierarchy
+    threshold_used = masks.threshold_used
+    component_count = masks.component_count
+    working_mask = masks.working_mask
     parents = hierarchy[0, :, 3]
     depths = [_hierarchy_depth(index, parents) for index in range(len(raw_contours))]
     total_raw_point_count = sum(len(contour) for contour in raw_contours)
@@ -3805,21 +4202,47 @@ def vectorize_prepared_raster(
     )
 
 
+def vectorize_prepared_raster(
+    source: RasterVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+    prepared_preview: RasterVectorizationQuickPreview | None = None,
+    timing: RasterVectorizationTiming | None = None,
+) -> RasterVectorizationResult:
+    """Vectorize one verified source with optional non-persistent timing."""
+
+    token = _TIMING_STAGE.set(timing)
+    try:
+        return _vectorize_prepared_raster(
+            source,
+            options,
+            displayed_width_mm=displayed_width_mm,
+            displayed_height_mm=displayed_height_mm,
+            prepared_preview=prepared_preview,
+        )
+    finally:
+        _TIMING_STAGE.reset(token)
+
+
 def vectorize_raster_payload(
     payload: RasterAssetPayload,
     options: RasterVectorizationOptions,
     *,
     displayed_width_mm: float,
     displayed_height_mm: float,
+    timing: RasterVectorizationTiming | None = None,
 ) -> RasterVectorizationResult:
     """Verify, decode, and vectorize an exact bounded raster payload."""
 
-    source = prepare_raster_vectorization_source(payload)
+    source = prepare_raster_vectorization_source(payload, timing=timing)
     return vectorize_prepared_raster(
         source,
         options,
         displayed_width_mm=displayed_width_mm,
         displayed_height_mm=displayed_height_mm,
+        timing=timing,
     )
 
 
@@ -3836,10 +4259,14 @@ __all__ = [
     "RasterVectorizationComplexityError",
     "RasterVectorizationError",
     "RasterVectorizationOptions",
+    "RasterVectorizationQuickContour",
+    "RasterVectorizationQuickPreview",
     "RasterVectorizationResult",
     "RasterVectorizationSource",
+    "RasterVectorizationTiming",
     "RasterVectorizedContour",
     "prepare_raster_vectorization_source",
+    "quick_preview_prepared_raster",
     "raster_payload_has_usable_alpha",
     "vectorize_prepared_raster",
     "vectorize_raster_payload",

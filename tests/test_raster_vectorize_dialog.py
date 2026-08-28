@@ -21,7 +21,12 @@ from laser_aligner.desktop.raster_vectorize_dialog import (
     RasterVectorizationDialog,
 )
 from laser_aligner.project.raster_asset import read_raster_asset_payload
-from laser_aligner.project.raster_vectorize import RasterDetectionMode
+from laser_aligner.project.raster_vectorize import (
+    RasterDetectionMode,
+    RasterVectorizationOptions,
+    quick_preview_prepared_raster,
+    vectorize_raster_payload,
+)
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -199,6 +204,166 @@ def test_dialog_previews_controls_stats_and_acceptance_contract(
     qt_application.processEvents()
 
 
+def test_quick_preview_is_responsive_and_independent_of_slow_verified_fit(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path / "slow-exact.png")
+    exact_started = threading.Event()
+    release_exact = threading.Event()
+    ui_heartbeat = threading.Event()
+
+    def slow_vectorize(*_args: Any, **_kwargs: Any) -> Any:
+        exact_started.set()
+        assert release_exact.wait(3.0)
+        return _result()
+
+    dialog = RasterVectorizationDialog(
+        payload,
+        25.0,
+        20.0,
+        debounce_ms=0,
+        vectorizer=slow_vectorize,
+    )
+    started = time.monotonic()
+    try:
+        dialog.show()
+        QtCore.QTimer.singleShot(0, ui_heartbeat.set)
+        _wait_until(qt_application, exact_started.is_set)
+
+        assert time.monotonic() - started < 1.0
+        assert ui_heartbeat.is_set()
+        assert dialog._current_quick_id == dialog._latest_requested_id
+        assert not dialog.original_preview._image.isNull()
+        assert not dialog.mask_preview._image.isNull()
+        assert not dialog.overlay_preview._overlay_path.isEmpty()
+        assert "Quick preview" in dialog.status_label.text()
+        assert "Refining verified vectors" in dialog.status_label.text()
+        assert dialog._current_result is None
+        assert not dialog.create_button.isEnabled()
+
+        release_exact.set()
+        _wait_until(qt_application, dialog.create_button.isEnabled)
+        assert dialog.status_label.text().startswith("Verified")
+        assert dialog._current_result is not None
+    finally:
+        release_exact.set()
+        _close_dialog(dialog, qt_application)
+
+
+def test_stale_quick_result_never_starts_an_exact_fit(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path / "stale-quick.png")
+    first_quick_started = threading.Event()
+    release_first_quick = threading.Event()
+    quick_calls: list[Any] = []
+    exact_calls: list[Any] = []
+
+    def delayed_quick(source: Any, options: Any, **kwargs: Any) -> Any:
+        quick_calls.append(options)
+        if len(quick_calls) == 1:
+            first_quick_started.set()
+            assert release_first_quick.wait(3.0)
+        return quick_preview_prepared_raster(source, options, **kwargs)
+
+    def vectorize(_payload: Any, options: Any, **_kwargs: Any) -> Any:
+        exact_calls.append(options)
+        result = _result()
+        result.threshold_used = options.threshold
+        return result
+
+    dialog = RasterVectorizationDialog(
+        payload,
+        25.0,
+        20.0,
+        debounce_ms=0,
+        vectorizer=vectorize,
+        quick_vectorizer=delayed_quick,
+    )
+    try:
+        dialog.show()
+        _wait_until(qt_application, first_quick_started.is_set)
+        manual_index = dialog.detection_combo.findData(
+            RasterDetectionMode.MANUAL_THRESHOLD
+        )
+        dialog.detection_combo.setCurrentIndex(manual_index)
+        dialog.threshold_spin.setValue(37)
+        dialog.threshold_spin.setValue(93)
+        assert not exact_calls
+
+        release_first_quick.set()
+        _wait_until(qt_application, dialog.create_button.isEnabled)
+
+        assert len(quick_calls) == 2
+        assert quick_calls[-1].threshold == 93
+        assert len(exact_calls) == 1
+        assert exact_calls[0].threshold == 93
+        assert dialog._current_options == exact_calls[0]
+        assert dialog._current_result.threshold_used == 93
+    finally:
+        release_first_quick.set()
+        _close_dialog(dialog, qt_application)
+
+
+def test_stale_exact_result_cannot_replace_newer_quick_settings(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path / "stale-exact.png")
+    first_exact_started = threading.Event()
+    release_first_exact = threading.Event()
+    exact_calls: list[Any] = []
+
+    def vectorize(_payload: Any, options: Any, **_kwargs: Any) -> Any:
+        exact_calls.append(options)
+        if len(exact_calls) == 1:
+            first_exact_started.set()
+            assert release_first_exact.wait(3.0)
+        result = _result()
+        result.threshold_used = options.threshold
+        return result
+
+    dialog = RasterVectorizationDialog(
+        payload,
+        25.0,
+        20.0,
+        debounce_ms=0,
+        vectorizer=vectorize,
+    )
+    try:
+        dialog.show()
+        _wait_until(qt_application, first_exact_started.is_set)
+        first_request = dialog._latest_requested_id
+        manual_index = dialog.detection_combo.findData(
+            RasterDetectionMode.MANUAL_THRESHOLD
+        )
+        dialog.detection_combo.setCurrentIndex(manual_index)
+        dialog.threshold_spin.setValue(41)
+        _wait_until(
+            qt_application,
+            lambda: dialog._current_quick_id == dialog._latest_requested_id,
+        )
+
+        assert dialog._latest_requested_id > first_request
+        assert not dialog.create_button.isEnabled()
+        assert dialog._current_result is None
+        assert "Quick preview" in dialog.status_label.text()
+
+        release_first_exact.set()
+        _wait_until(qt_application, dialog.create_button.isEnabled)
+
+        assert len(exact_calls) == 2
+        assert exact_calls[-1].detection_mode is RasterDetectionMode.MANUAL_THRESHOLD
+        assert exact_calls[-1].threshold == 41
+        assert dialog._current_options == exact_calls[-1]
+        assert dialog._current_result.threshold_used == 41
+    finally:
+        release_first_exact.set()
+        _close_dialog(dialog, qt_application)
+
+
 def test_overlay_color_and_opacity_are_display_only(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
@@ -292,6 +457,40 @@ def test_dialog_default_pipeline_reuses_one_verified_prepared_source(
         _close_dialog(dialog, qt_application)
 
 
+def test_dialog_accepts_only_the_direct_authoritative_geometry(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path / "authoritative-dialog.png")
+    options = RasterVectorizationOptions()
+    direct = vectorize_raster_payload(
+        payload,
+        options,
+        displayed_width_mm=25.0,
+        displayed_height_mm=20.0,
+    )
+    dialog = RasterVectorizationDialog(
+        payload,
+        25.0,
+        20.0,
+        debounce_ms=0,
+    )
+    dialog.show()
+    _wait_until(qt_application, dialog.create_button.isEnabled)
+    dialog.create_button.click()
+    qt_application.processEvents()
+
+    assert dialog.result() == QtWidgets.QDialog.DialogCode.Accepted
+    assert dialog.vectorization_result is not None
+    assert (
+        dialog.vectorization_result.project_path_geometry()
+        == direct.project_path_geometry()
+    )
+    assert dialog.vectorization_result.metadata() == direct.metadata()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
 def test_preview_work_is_bounded_to_one_running_and_one_latest_pending(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
@@ -378,5 +577,46 @@ def test_cancel_during_worker_retains_task_without_late_dialog_callbacks(
     qt_application.processEvents()
 
     release.set()
+    _wait_until(qt_application, callback_finished.is_set)
+    _wait_until(qt_application, lambda: task not in _LIVE_PREVIEW_TASKS)
+
+
+def test_cancel_during_quick_stage_has_no_accepted_result(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path / "cancelled-quick.png")
+    quick_started = threading.Event()
+    release_quick = threading.Event()
+    callback_finished = threading.Event()
+
+    def slow_quick(source: Any, options: Any, **kwargs: Any) -> Any:
+        quick_started.set()
+        assert release_quick.wait(3.0)
+        result = quick_preview_prepared_raster(source, options, **kwargs)
+        callback_finished.set()
+        return result
+
+    dialog = RasterVectorizationDialog(
+        payload,
+        25.0,
+        20.0,
+        debounce_ms=0,
+        quick_vectorizer=slow_quick,
+    )
+    dialog.show()
+    _wait_until(qt_application, quick_started.is_set)
+    task = dialog._quick_task
+    assert task is not None
+    assert task in _LIVE_PREVIEW_TASKS
+
+    dialog.reject()
+    assert dialog.result() == QtWidgets.QDialog.DialogCode.Rejected
+    assert dialog.vectorization_result is None
+    assert dialog.accepted_options is None
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+    release_quick.set()
     _wait_until(qt_application, callback_finished.is_set)
     _wait_until(qt_application, lambda: task not in _LIVE_PREVIEW_TASKS)
