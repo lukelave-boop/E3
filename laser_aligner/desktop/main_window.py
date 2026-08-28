@@ -127,6 +127,7 @@ _DESIGN_DOCK_MIN_WIDTH = 360
 _DESIGN_DOCK_DEFAULT_WIDTH = 420
 _PRIMARY_CONTROLS_INLINE_WIDTH = 1800
 _STATUS_LAYOUT_RESERVE = 56
+_STATUS_MESSAGE_PADDING = 12
 
 _AUTHORING_ACTION_KEYS = (
     "new",
@@ -482,10 +483,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
         action("save", "Save project", "Ctrl+S", QtWidgets.QStyle.StandardPixmap.SP_DialogSaveButton)
         action("save_as", "Save project as…", "Ctrl+Shift+S")
         action("save_template", "Save project as cutting template…")
-        action("import_svg", "Import SVG…", "Ctrl+I")
-        action("import_gcode", "Import G-code…")
-        action("import_lightburn", "Import LightBurn project…")
-        action("import_image", "Import raster image…", "Ctrl+Shift+I")
+        import_actions = (
+            ("import_svg", "SVG…", "Ctrl+I", "Import SVG…"),
+            ("import_gcode", "G-code…", None, "Import G-code…"),
+            (
+                "import_lightburn",
+                "LightBurn project…",
+                None,
+                "Import LightBurn project…",
+            ),
+            (
+                "import_image",
+                "Raster image…",
+                "Ctrl+Shift+I",
+                "Import raster image…",
+            ),
+        )
+        for key, text, shortcut, tool_tip in import_actions:
+            item = action(key, text, shortcut)
+            item.setIconText(tool_tip)
+            item.setToolTip(tool_tip)
         action("quit", "Quit", "Ctrl+Q")
         action("undo", "Undo", "Ctrl+Z", QtWidgets.QStyle.StandardPixmap.SP_ArrowBack)
         action("redo", "Redo", "Ctrl+Shift+Z", QtWidgets.QStyle.StandardPixmap.SP_ArrowForward)
@@ -625,12 +642,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "save",
             "save_as",
             "save_template",
+        ):
+            file_menu.addAction(self.actions[key])
+        self.import_menu = file_menu.addMenu("Import")
+        for key in (
             "import_svg",
             "import_gcode",
             "import_lightburn",
             "import_image",
         ):
-            file_menu.addAction(self.actions[key])
+            self.import_menu.addAction(self.actions[key])
         file_menu.addSeparator()
         file_menu.addAction(self.actions["quit"])
 
@@ -974,6 +995,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.window_menu.addAction(dock.toggleViewAction())
 
     def _create_status_bar(self) -> None:
+        status_bar = self.statusBar()
         self.direct_edit_label = QtWidgets.QLabel("Move  •  Size  •  Rotate")
         self.direct_edit_label.setObjectName("directEditStatus")
         self.direct_edit_label.setToolTip(
@@ -983,15 +1005,19 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.cursor_label = QtWidgets.QLabel("X —  Y —")
         self.selection_label = QtWidgets.QLabel("0 objects selected")
         self.job_progress = JobProgressWidget(self)
+        self._job_progress_maximum_width = self.job_progress.maximumWidth()
         self.zoom_label = QtWidgets.QLabel("Zoom —")
         self.runtime_label = QtWidgets.QLabel("Starting core services…")
-        self.statusBar().setMinimumHeight(self.job_progress.height() + 6)
-        self.statusBar().addWidget(self.direct_edit_label)
-        self.statusBar().addWidget(self.cursor_label)
-        self.statusBar().addWidget(self.selection_label)
-        self.statusBar().addPermanentWidget(self.job_progress, 1)
-        self.statusBar().addPermanentWidget(self.zoom_label)
-        self.statusBar().addPermanentWidget(self.runtime_label)
+        status_bar.setMinimumHeight(self.job_progress.height() + 6)
+        status_bar.addWidget(self.direct_edit_label)
+        status_bar.addWidget(self.cursor_label)
+        status_bar.addWidget(self.selection_label)
+        status_bar.addPermanentWidget(self.job_progress, 1)
+        status_bar.addPermanentWidget(self.zoom_label)
+        status_bar.addPermanentWidget(self.runtime_label)
+        status_bar.messageChanged.connect(
+            lambda _message: self._update_status_bar_layout()
+        )
         self._update_status_bar_layout()
 
     def _connect_signals(self) -> None:
@@ -5485,8 +5511,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._update_status_bar_layout()
 
     def _update_status_bar_layout(self) -> None:
-        """Preserve global job progress before lower-priority compact details."""
+        """Preserve job progress and temporary messages before compact details."""
 
+        status_bar = self.statusBar()
+        temporary_message = status_bar.currentMessage()
         detail_labels = (
             self.direct_edit_label,
             self.cursor_label,
@@ -5502,7 +5530,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 )
                 + 8,
             )
-        required_width = progress_width + _STATUS_LAYOUT_RESERVE
+        self.job_progress.setMaximumWidth(
+            progress_width
+            if temporary_message
+            else self._job_progress_maximum_width
+        )
+        message_width = 0
+        if temporary_message:
+            message_width = (
+                status_bar.fontMetrics().horizontalAdvance(temporary_message)
+                + _STATUS_MESSAGE_PADDING
+            )
+        required_width = progress_width + _STATUS_LAYOUT_RESERVE + message_width
         show_runtime = (
             required_width + self.runtime_label.sizeHint().width()
             <= self.width()
@@ -5519,15 +5558,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
             required_width += self.zoom_label.sizeHint().width()
 
         show_details = (
-            required_width
+            not temporary_message
+            and required_width
             + sum(label.sizeHint().width() for label in detail_labels)
             <= self.width()
         )
         for label in detail_labels:
             label.setVisible(show_details)
-        self.statusBar().setToolTip(
-            "" if show_runtime else f"Runtime: {self.runtime_label.text()}"
-        )
+        tooltip_lines: list[str] = []
+        if (
+            temporary_message
+            and required_width > self.width()
+        ):
+            tooltip_lines.append(temporary_message)
+        if not show_runtime:
+            tooltip_lines.append(f"Runtime: {self.runtime_label.text()}")
+        status_bar.setToolTip("\n".join(tooltip_lines))
 
     def _update_chrome_toolbar_layout(self, *, force: bool = False) -> None:
         """Keep STOP inline on wide screens and guaranteed visible on narrow ones."""

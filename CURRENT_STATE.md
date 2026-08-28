@@ -5,7 +5,35 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-26**
+Snapshot: **2026-08-27**
+
+## Active desktop Import and status-message layout fixes
+
+The native File menu now exposes one **Import** submenu containing **SVG…**,
+**G-code…**, **LightBurn project…**, and **Raster image…**. The existing import
+actions remain authoritative, including their callbacks, icons, enablement, and
+`Ctrl+I` / `Ctrl+Shift+I` shortcuts; only their File-menu grouping and displayed
+labels changed. The old direct File-menu import entries are absent.
+
+The bottom status bar now responds to every `QStatusBar.messageChanged` signal.
+While a temporary message is active, it constrains the permanent job-progress
+widget to its readable minimum and hides editing details plus runtime and zoom
+readouts only as required by the available width. Active preparation/execution
+progress remains the highest-priority permanent widget. Clearing or timing out
+the message automatically restores the normal responsive labels. Messages that
+cannot fully fit beside progress at the narrowest supported width are clipped
+before the permanent widgets and retained in the status-bar tooltip rather than
+painting over other status text.
+
+This is presentation-only desktop behavior. It changes no import parser or
+project transaction, planning, controller, motion, homing, arming, laser output,
+camera service, machine authority, or project geometry behavior. Verification
+passed **58 focused tests** across the real menu/action construction, responsive
+status geometry, control-surface source contract, reusable import review, and
+all four desktop import integrations. Repository-wide Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` passed. This is
+automated offscreen-widget coverage only; no interactive GUI or physical
+hardware test is claimed.
 
 ## Active Objects layer-color swatch recovery
 

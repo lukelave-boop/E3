@@ -348,7 +348,11 @@ The status bar measures its live text at layout time. It always reserves room
 for a compact preparation/execution label, then admits runtime, zoom, and
 editing/cursor/selection readouts only when they fit. Hidden runtime detail is
 retained on the status-bar tooltip; complete preparation, prepared-power, and
-controller summaries remain on the progress tooltip.
+controller summaries remain on the progress tooltip. `QStatusBar.messageChanged`
+drives the same layout policy for temporary notices: progress retains its
+readable minimum, editing details are suppressed, runtime and zoom remain only
+when the notice also fits, and the normal responsive widgets return when the
+notice clears.
 
 `RuntimeSafetyStrip` owns only the primary presentation and request signals for
 Connect/Reconnect, Disconnect, the deliberately disabled Pause, and software

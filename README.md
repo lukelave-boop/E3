@@ -93,11 +93,12 @@ Native desktop workflow:
   bridged stencil-safe text objects, with
   numeric width/height and corner-radius editing for rectangles
 - Shared pre-import review for SVG, raster images, LightBurn, and foreign G-code
-  manifests. Blocked scans disable Import, valid or warning-only scans require
-  explicit approval, and Cancel leaves project, history, selection, active layer,
-  and authoring state intact. The review caps each rendered list at 200 with
-  exact omitted counts, and its SHA-256 approval is rejected if source bytes
-  change before strict import
+  manifests, reached through one **File > Import** submenu. Blocked scans
+  disable Import, valid or warning-only scans require explicit approval, and
+  Cancel leaves project, history, selection, active layer, and authoring state
+  intact. The review caps each rendered list at 200 with exact omitted counts,
+  and its SHA-256 approval is rejected if source bytes change before strict
+  import
 - A dedicated **Trace image to vectors…** action for exactly one selected raster
   image. Its modal review compares the original, foreground mask, and vector
   overlay, with high-contrast color presets and preview-only opacity; supports

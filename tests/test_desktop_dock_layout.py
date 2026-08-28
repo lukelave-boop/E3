@@ -357,3 +357,134 @@ def test_live_status_details_never_displace_readable_global_progress(
     window.close()
     window.deleteLater()
     qt_application.processEvents()
+
+
+def _visible_status_widget_rectangles(
+    window: _DockLayoutHarness,
+) -> dict[str, QtCore.QRect]:
+    status_bar = window.statusBar()
+    widgets = {
+        "direct edit": window.direct_edit_label,
+        "cursor": window.cursor_label,
+        "selection": window.selection_label,
+        "progress": window.job_progress,
+        "zoom": window.zoom_label,
+        "runtime": window.runtime_label,
+    }
+    return {
+        name: QtCore.QRect(
+            widget.mapTo(status_bar, QtCore.QPoint(0, 0)),
+            widget.size(),
+        )
+        for name, widget in widgets.items()
+        if widget.isVisible()
+    }
+
+
+def _assert_status_widgets_do_not_overlap(window: _DockLayoutHarness) -> None:
+    rectangles = _visible_status_widget_rectangles(window)
+    for (left_name, left), (right_name, right) in combinations(
+        rectangles.items(),
+        2,
+    ):
+        assert not left.intersects(right), f"{left_name} overlaps {right_name}"
+
+
+@pytest.mark.parametrize("width", [900, 1900])
+def test_temporary_status_messages_reserve_space_and_restore_details(
+    qt_application: QtWidgets.QApplication,
+    width: int,
+) -> None:
+    window = _DockLayoutHarness()
+    window.direct_edit_label.setText("Move  •  Size  •  Rotate")
+    window.cursor_label.setText("Honeycomb X 287.233  Y -0.000 mm")
+    window.selection_label.setText("12 objects selected")
+    window.zoom_label.setText("Zoom 195%")
+    window.runtime_label.setText(
+        "camera offline · controller offline · motion disabled"
+    )
+    window.job_progress.set_job_status(
+        {
+            "running": True,
+            "total_lines": 100,
+            "completed_lines": 100,
+            "phase": "draining",
+        }
+    )
+    window.resize(width, 780)
+    window.show()
+    qt_application.processEvents()
+    qt_application.processEvents()
+
+    baseline_visibility = {
+        widget: widget.isVisible()
+        for widget in (
+            window.direct_edit_label,
+            window.cursor_label,
+            window.selection_label,
+            window.zoom_label,
+            window.runtime_label,
+        )
+    }
+    baseline_progress_maximum = window.job_progress.maximumWidth()
+    _assert_status_widgets_do_not_overlap(window)
+
+    message = (
+        "Temporary camera recovery completed; the corrected overlay is ready"
+    )
+    window.statusBar().showMessage(message)
+    qt_application.processEvents()
+    qt_application.processEvents()
+
+    assert window.statusBar().currentMessage() == message
+    assert window.job_progress.isVisible()
+    assert window.job_progress.currentWidget() is window.job_progress.progress
+    assert window.job_progress.progress.format() == "Finishing · motion"
+    assert window.job_progress.width() >= (
+        window.job_progress.progress.fontMetrics().horizontalAdvance(
+            window.job_progress.progress.format()
+        )
+        + 8
+    )
+    assert not window.direct_edit_label.isVisible()
+    assert not window.cursor_label.isVisible()
+    assert not window.selection_label.isVisible()
+    if width == 900:
+        assert not window.zoom_label.isVisible()
+        assert not window.runtime_label.isVisible()
+    else:
+        assert window.zoom_label.isVisible()
+        assert window.runtime_label.isVisible()
+
+    status_bar = window.statusBar()
+    progress_left = window.job_progress.mapTo(
+        status_bar,
+        QtCore.QPoint(0, 0),
+    ).x()
+    message_width = status_bar.fontMetrics().horizontalAdvance(message)
+    available_message_width = progress_left - status_bar.contentsRect().left()
+    if (
+        message_width
+        + window.job_progress.minimumWidth()
+        + 80
+        <= status_bar.contentsRect().width()
+    ):
+        assert available_message_width >= message_width
+    else:
+        assert available_message_width >= status_bar.contentsRect().width() * 0.7
+        assert message in status_bar.toolTip()
+    _assert_status_widgets_do_not_overlap(window)
+
+    status_bar.clearMessage()
+    qt_application.processEvents()
+    qt_application.processEvents()
+
+    assert status_bar.currentMessage() == ""
+    assert window.job_progress.maximumWidth() == baseline_progress_maximum
+    for widget, was_visible in baseline_visibility.items():
+        assert widget.isVisible() is was_visible
+    _assert_status_widgets_do_not_overlap(window)
+
+    window.close()
+    window.deleteLater()
+    qt_application.processEvents()

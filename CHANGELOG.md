@@ -6,6 +6,15 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Grouped the four native desktop import commands under one **File > Import**
+  submenu with concise **SVG…**, **G-code…**, **LightBurn project…**, and
+  **Raster image…** child labels while preserving their existing actions,
+  shortcuts, icons, enablement, callbacks, review flow, and import behavior.
+  Temporary bottom-status messages now reserve their own horizontal space,
+  retain active job progress first, hide lower-priority readouts responsively,
+  and restore them automatically when the message clears, preventing status
+  text overlap at compact window widths.
+
 - Restored the clickable operation-color swatch beside every Objects-row layer
   name. It opens the same current-color-initialized chooser as Cuts/Layers and
   uses the existing undoable layer-edit command, so all objects sharing the

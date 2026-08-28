@@ -69,7 +69,10 @@ without copying LightBurn branding or changing the E3 machine-control model:
   switches remain visibly unavailable rather than appearing active.
 
 1. Traditional File, Edit, Tools, Arrange, Laser Tools, Window, and Help menus
-   retain every existing command.
+   retain every existing command. File groups SVG, G-code, LightBurn-project,
+   and raster-image actions under one **Import** submenu; the child labels omit
+   the repeated word "Import" while retaining the existing shortcuts and
+   implementations.
 2. Original icon-only File/Edit/Arrange/Job controls share one compact command
    row above the workspace.
 3. A non-hideable runtime strip always reports hardware authority, controller
@@ -108,7 +111,9 @@ without copying LightBurn branding or changing the E3 machine-control model:
     status bar keeps preparation/execution progress globally visible alongside
     direct-edit and live workspace feedback. At compact widths it reserves a
     readable progress label first, then shows runtime, zoom, and editing details
-    only while each lower-priority readout fits without compression.
+    only while each lower-priority readout fits without compression. Temporary
+    status messages receive their own measured space, suppress lower-priority
+    readouts as needed, and restore them when the message clears.
 
 There is no persistent main-window raw-G-code pane or lower Laser/job panel.
 The optional Console remains available from the Window menu and hidden by

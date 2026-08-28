@@ -65,7 +65,7 @@ def test_main_window_has_no_bottom_job_docks_and_uses_status_progress():
     assert '"inspectorDock"' not in text
     assert "self.console_dock.hide()" in text
     assert "self.job_progress = JobProgressWidget(self)" in text
-    assert "self.statusBar().addPermanentWidget(self.job_progress, 1)" in text
+    assert "status_bar.addPermanentWidget(self.job_progress, 1)" in text
     assert "class JobProgressWidget" in panels
     assert 'self.setObjectName("jobProgressWidget")' in panels
     assert 'self.progress.setObjectName("jobExecutionProgress")' in panels
