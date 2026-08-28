@@ -72,6 +72,11 @@ Powered moves with the same effective feed, raw `S` value, and `M3`/`M4` mode
 are grouped into one E3 Line layer. Travel moves split paths but do not become
 cut geometry.
 
+The reconstructed polylines pass through the schema-3 compatibility adapter
+and become canonical native line-segment subpaths immediately. Foreign G-code
+arc sampling is unchanged in this phase; the project does not retain a second
+legacy polyline copy.
+
 E3 looks for a commented S-value maximum such as `S-value max: 1000` or
 `$30=1000`. When no authoritative maximum is present, it uses a conservative
 scale inference (1, 100, 255, 1000, or the observed maximum) and displays a

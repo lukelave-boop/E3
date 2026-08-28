@@ -3,14 +3,19 @@ from __future__ import annotations
 import copy
 import math
 import uuid
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from numbers import Real
 from typing import Any
 
-PROJECT_SCHEMA_VERSION = 2
+from .path_geometry import (
+    MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT,
+    NativePathGeometry,
+)
+
+PROJECT_SCHEMA_VERSION = 3
 OBJECT_ROLE_KEY = "e3_role"
 STOCK_BOUNDARY_ROLE = "stock_boundary"
 
@@ -427,27 +432,20 @@ class SceneObject:
                 for point in points
             ]
         elif self.kind in {ObjectKind.POLYGON, ObjectKind.PATH}:
-            polylines = self.geometry.get("polylines")
-            if not isinstance(polylines, list) or not polylines:
-                raise ProjectFormatError("Path geometry requires at least one polyline")
-            cleaned: list[dict[str, Any]] = []
-            for line in polylines:
-                points = line.get("points") if isinstance(line, Mapping) else None
-                if not isinstance(points, Sequence) or len(points) < 2:
-                    raise ProjectFormatError("Each polyline requires at least two points")
-                cleaned.append(
-                    {
-                        "points": [
-                            [_finite(point[0], "path.x"), _finite(point[1], "path.y")]
-                            for point in points
-                        ],
-                        "closed": _boolean(
-                            line.get("closed", False),
-                            "path.closed",
-                        ),
-                    }
-                )
-            self.geometry["polylines"] = cleaned
+            try:
+                if "polylines" in self.geometry:
+                    if set(self.geometry) != {"polylines"}:
+                        raise ValueError(
+                            "Path geometry cannot mix legacy polylines with native fields"
+                        )
+                    native = NativePathGeometry.from_legacy_polylines(
+                        _array(self.geometry["polylines"], "path.polylines")
+                    )
+                else:
+                    native = NativePathGeometry.from_dict(self.geometry)
+            except (TypeError, ValueError) as exc:
+                raise ProjectFormatError(f"Invalid native path geometry: {exc}") from exc
+            self.geometry = native.to_dict()
         elif self.kind == ObjectKind.TEXT:
             self.geometry["text"] = _string(
                 self.geometry.get("text", "Text"),
@@ -518,6 +516,53 @@ class SceneObject:
         )
 
     @classmethod
+    def native_path(
+        cls,
+        layer_id: str,
+        geometry: NativePathGeometry | Mapping[str, Any],
+        *,
+        name: str = "Native path",
+        transform: Transform | Mapping[str, Any] | None = None,
+        center: tuple[float, float] = (0.0, 0.0),
+        width_mm: float = 10.0,
+        height_mm: float = 10.0,
+        source_name: str = "",
+        source_svg: str | None = None,
+    ) -> SceneObject:
+        """Construct a PATH from already-normalized validated native geometry."""
+
+        try:
+            native = (
+                geometry
+                if isinstance(geometry, NativePathGeometry)
+                else NativePathGeometry.from_dict(geometry)
+            )
+        except (TypeError, ValueError) as exc:
+            raise ProjectFormatError(f"Invalid native path geometry: {exc}") from exc
+        if transform is None:
+            object_transform = Transform(
+                center[0],
+                center[1],
+                width_mm,
+                height_mm,
+            )
+        elif isinstance(transform, Transform):
+            object_transform = transform.copy()
+        else:
+            object_transform = Transform.from_dict(transform)
+        metadata: dict[str, Any] = {"source_name": source_name}
+        if source_svg is not None:
+            metadata["source_svg"] = source_svg
+        return cls(
+            name=name,
+            kind=ObjectKind.PATH,
+            layer_id=layer_id,
+            transform=object_transform,
+            geometry=native.to_dict(),
+            metadata=metadata,
+        )
+
+    @classmethod
     def path(
         cls,
         layer_id: str,
@@ -531,7 +576,10 @@ class SceneObject:
         raw_lines: list[dict[str, Any]] = []
         all_points: list[tuple[float, float]] = []
         for line in polylines:
-            points = [(float(point[0]), float(point[1])) for point in line["points"]]
+            points = [
+                (_finite(point[0], "path.x"), _finite(point[1], "path.y"))
+                for point in line["points"]
+            ]
             if len(points) < 2:
                 continue
             raw_lines.append(
@@ -561,17 +609,25 @@ class SceneObject:
             }
             for line in raw_lines
         ]
-        metadata: dict[str, Any] = {"source_name": source_name}
-        if source_svg is not None:
-            metadata["source_svg"] = source_svg
-        return cls(
+        native = NativePathGeometry.from_legacy_polylines(normalized)
+        return cls.native_path(
+            layer_id,
+            native,
             name=name,
-            kind=ObjectKind.PATH,
-            layer_id=layer_id,
-            transform=Transform(center[0], center[1], width, height),
-            geometry={"polylines": normalized},
-            metadata=metadata,
+            center=center,
+            width_mm=width,
+            height_mm=height,
+            source_name=source_name,
+            source_svg=source_svg,
         )
+
+    def path_geometry(self) -> NativePathGeometry:
+        if self.kind not in {ObjectKind.PATH, ObjectKind.POLYGON}:
+            raise ValueError("Only PATH and POLYGON objects have native path geometry")
+        try:
+            return NativePathGeometry.from_dict(self.geometry)
+        except (TypeError, ValueError) as exc:
+            raise ProjectFormatError(f"Invalid native path geometry: {exc}") from exc
 
     def duplicate(
         self,
@@ -1033,11 +1089,67 @@ class ProjectDocument:
         if len(set(object_ids)) != len(object_ids):
             raise ProjectFormatError("Object IDs must be unique")
         known_layers = set(layer_ids)
+        native_segment_count = 0
         for item in self.objects:
             if item.layer_id not in known_layers:
                 raise ProjectFormatError(
                     f"Object {item.id} references unknown layer {item.layer_id}"
                 )
+            if item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}:
+                native_segment_count += item.path_geometry().segment_count
+                if native_segment_count > MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT:
+                    raise ProjectFormatError(
+                        "Project native paths contain more than "
+                        f"{MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT:,} total segments; "
+                        "simplify the source artwork"
+                    )
+
+    def _native_path_segment_count(self) -> int:
+        return sum(
+            item.path_geometry().segment_count
+            for item in self.objects
+            if item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}
+        )
+
+    def validate_object_additions(
+        self,
+        items: Iterable[SceneObject],
+        *,
+        replacing_ids: Iterable[str] = (),
+    ) -> None:
+        """Preflight a batch before commands begin mutating the document."""
+
+        additions = tuple(items)
+        replaced = set(replacing_ids)
+        known_layers = {layer.id for layer in self.layers}
+        retained = tuple(item for item in self.objects if item.id not in replaced)
+        retained_ids = {item.id for item in retained}
+        addition_ids = [item.id for item in additions]
+        for item in additions:
+            if item.layer_id not in known_layers:
+                raise ValueError(f"Object references unknown layer {item.layer_id}")
+        if len(set(addition_ids)) != len(addition_ids):
+            raise ValueError("Object additions contain duplicate object IDs")
+        duplicate_ids = retained_ids.intersection(addition_ids)
+        if duplicate_ids:
+            duplicate_id = sorted(duplicate_ids)[0]
+            raise ValueError(f"Duplicate object ID: {duplicate_id}")
+        retained_segments = sum(
+            item.path_geometry().segment_count
+            for item in retained
+            if item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}
+        )
+        addition = sum(
+            item.path_geometry().segment_count
+            for item in additions
+            if item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}
+        )
+        if retained_segments + addition > MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT:
+            raise ValueError(
+                "Project native paths would exceed the "
+                f"{MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT:,}-segment project limit; "
+                "simplify the source artwork"
+            )
 
     def get_layer(self, layer_id: str) -> OperationLayer:
         for layer in self.layers:
@@ -1086,10 +1198,7 @@ class ProjectDocument:
         return layer
 
     def add_object(self, item: SceneObject, index: int | None = None) -> SceneObject:
-        if item.layer_id not in {layer.id for layer in self.layers}:
-            raise ValueError(f"Object references unknown layer {item.layer_id}")
-        if any(existing.id == item.id for existing in self.objects):
-            raise ValueError(f"Duplicate object ID: {item.id}")
+        self.validate_object_additions((item,))
         if index is None:
             self.objects.append(item)
         else:
@@ -1122,8 +1231,9 @@ class ProjectDocument:
                 offset_mm,
                 group_id=group_map.get(item.group_id),
             )
-            self.objects.append(duplicate)
             duplicates.append(duplicate)
+        self.validate_object_additions(duplicates)
+        self.objects.extend(duplicates)
         if duplicates:
             self.touch()
         return duplicates
@@ -1192,9 +1302,10 @@ class ProjectDocument:
         schema = raw.get("schema_version", 0)
         if type(schema) is not int:
             raise ProjectFormatError("Project schema_version must be an integer")
-        if schema not in (1, PROJECT_SCHEMA_VERSION):
+        if schema not in (1, 2, PROJECT_SCHEMA_VERSION):
             raise ProjectFormatError(
-                f"Unsupported project schema {schema}; expected 1 or {PROJECT_SCHEMA_VERSION}"
+                "Unsupported project schema "
+                f"{schema}; expected 1, 2, or {PROJECT_SCHEMA_VERSION}"
             )
         try:
             work_area = _object(raw["work_area"], "project.work_area")
@@ -1219,7 +1330,10 @@ class ProjectDocument:
                     )
                 ),
                 layers=[OperationLayer.from_dict(item) for item in layers],
-                objects=[SceneObject.from_dict(item) for item in objects],
+                objects=[
+                    cls._object_from_schema(item, schema)
+                    for item in objects
+                ],
                 created_at=_string(
                     raw.get("created_at", _utc_now()),
                     "project.created_at",
@@ -1235,6 +1349,23 @@ class ProjectDocument:
             if isinstance(exc, ProjectFormatError):
                 raise
             raise ProjectFormatError(f"Invalid project structure: {exc}") from exc
+
+    @staticmethod
+    def _object_from_schema(raw: Any, schema: int) -> SceneObject:
+        value = _object(raw, "project object")
+        kind = value.get("kind")
+        if kind in {ObjectKind.PATH.value, ObjectKind.POLYGON.value}:
+            geometry = _object(value.get("geometry", {}), "object.geometry")
+            has_legacy = "polylines" in geometry
+            if schema in {1, 2} and not has_legacy:
+                raise ProjectFormatError(
+                    f"Project schema {schema} PATH/POLYGON objects require legacy polylines"
+                )
+            if schema == PROJECT_SCHEMA_VERSION and has_legacy:
+                raise ProjectFormatError(
+                    "Project schema 3 PATH/POLYGON objects require canonical native path geometry"
+                )
+        return SceneObject.from_dict(value)
 
     def clone(self) -> ProjectDocument:
         return ProjectDocument.from_dict(self.to_dict())

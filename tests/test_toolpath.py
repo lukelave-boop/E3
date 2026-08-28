@@ -18,11 +18,19 @@ from laser_aligner.project import (
     Bounds,
     CoordinateSpace,
     LayerMode,
+    NativePathGeometry,
     ObjectKind,
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+    PathSubpath,
     ProjectDocument,
     RasterAssetMetadata,
     SceneObject,
+    Transform,
     decode_raster_grayscale,
+    evaluate_cubic,
+    flatten_native_path,
     generate_project_frame,
     generate_project_gcode,
     probe_raster_asset,
@@ -102,6 +110,168 @@ def honeycomb_frame(
         width_mm=width,
         height_mm=height,
         provenance_digest=digest,
+    )
+
+
+def _native_bulge_document(
+    center_y: float,
+    *,
+    coordinate_space: CoordinateSpace = CoordinateSpace.MACHINE,
+    control_y: float = 0.02,
+) -> ProjectDocument:
+    document = ProjectDocument.new(
+        "Native bulge",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=coordinate_space,
+    )
+    geometry = NativePathGeometry(
+        (
+            PathSubpath(
+                (-0.5, 0.0),
+                (
+                    PathCubicSegment(
+                        (-0.25, control_y),
+                        (0.25, control_y),
+                        (0.5, 0.0),
+                    ),
+                ),
+                closed=False,
+            ),
+        )
+    )
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            geometry,
+            transform=Transform(50.0, center_y, 80.0, 1.0),
+        )
+    )
+    return document
+
+
+def _closed_square_subpath(half_size: float) -> PathSubpath:
+    return PathSubpath(
+        (-half_size, -half_size),
+        (
+            PathLineSegment((half_size, -half_size)),
+            PathLineSegment((half_size, half_size)),
+            PathLineSegment((-half_size, half_size)),
+        ),
+        closed=True,
+    )
+
+
+def _closed_cubic_circle_subpath(
+    radius: float,
+    *,
+    center: tuple[float, float] = (0.0, 0.0),
+    start_quarter: int = 0,
+) -> PathSubpath:
+    handle = radius * 0.5522847498307936
+    anchors = (
+        (radius, 0.0),
+        (0.0, radius),
+        (-radius, 0.0),
+        (0.0, -radius),
+    )
+    segments = (
+        PathCubicSegment((radius, handle), (handle, radius), anchors[1]),
+        PathCubicSegment((-handle, radius), (-radius, handle), anchors[2]),
+        PathCubicSegment((-radius, -handle), (-handle, -radius), anchors[3]),
+        PathCubicSegment((handle, -radius), (radius, -handle), anchors[0]),
+    )
+    start_index = start_quarter % len(segments)
+
+    def translated(point: tuple[float, float]) -> tuple[float, float]:
+        return point[0] + center[0], point[1] + center[1]
+
+    return PathSubpath(
+        translated(anchors[start_index]),
+        tuple(
+            PathCubicSegment(
+                translated(segment.control_1),
+                translated(segment.control_2),
+                translated(segment.to),
+            )
+            for segment in segments[start_index:] + segments[:start_index]
+        ),
+        closed=True,
+    )
+
+
+def _closed_line_circle_subpath(
+    radius: float,
+    *,
+    center: tuple[float, float],
+    seam_angle_rad: float,
+    point_count: int = 128,
+) -> PathSubpath:
+    points = tuple(
+        (
+            center[0]
+            + radius * math.cos(seam_angle_rad + 2.0 * math.pi * index / point_count),
+            center[1]
+            + radius * math.sin(seam_angle_rad + 2.0 * math.pi * index / point_count),
+        )
+        for index in range(point_count)
+    )
+    return PathSubpath(
+        points[0],
+        tuple(PathLineSegment(point) for point in points[1:]),
+        closed=True,
+    )
+
+
+def _mixed_boundary_and_cubic_geometry() -> NativePathGeometry:
+    return NativePathGeometry(
+        (
+            _closed_square_subpath(0.5),
+            _closed_cubic_circle_subpath(0.1),
+        ),
+        fill_rule=PathFillRule.EVENODD,
+    )
+
+
+def _facing_closed_subpath_geometry(
+    gap_mm: float,
+    *,
+    cubic_control_offset_mm: float | None,
+) -> NativePathGeometry:
+    if cubic_control_offset_mm is None:
+        lower_facing = PathLineSegment((1.0, 0.0))
+        upper_facing = PathLineSegment((1.0, gap_mm))
+    else:
+        lower_facing = PathCubicSegment(
+            (-1.0 / 3.0, cubic_control_offset_mm),
+            (1.0 / 3.0, cubic_control_offset_mm),
+            (1.0, 0.0),
+        )
+        upper_facing = PathCubicSegment(
+            (-1.0 / 3.0, gap_mm - cubic_control_offset_mm),
+            (1.0 / 3.0, gap_mm - cubic_control_offset_mm),
+            (1.0, gap_mm),
+        )
+    return NativePathGeometry(
+        (
+            PathSubpath(
+                (-1.0, 0.0),
+                (
+                    lower_facing,
+                    PathLineSegment((1.0, -1.0)),
+                    PathLineSegment((-1.0, -1.0)),
+                ),
+                closed=True,
+            ),
+            PathSubpath(
+                (-1.0, gap_mm),
+                (
+                    upper_facing,
+                    PathLineSegment((1.0, 1.0)),
+                    PathLineSegment((-1.0, 1.0)),
+                ),
+                closed=True,
+            ),
+        )
     )
 
 
@@ -572,6 +742,322 @@ def test_exact_boundary_float_noise_is_safe_but_real_overflow_is_rejected():
         )
 
 
+def test_legacy_line_path_migration_preserves_planning_geometry() -> None:
+    document = ProjectDocument.new("Legacy planning", Bounds(0, 0, 100, 100))
+    current = SceneObject.path(
+        document.active_layer_id,
+        [
+            {
+                "points": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5]],
+                "closed": False,
+            }
+        ],
+    )
+    current.transform = Transform(
+        40.0,
+        60.0,
+        30.0,
+        20.0,
+        rotation_deg=23.0,
+        mirror_x=True,
+        mirror_y=True,
+    )
+    document.add_object(current)
+    payload = document.to_dict()
+    payload["schema_version"] = 2
+    payload["objects"][0]["geometry"] = {
+        "polylines": [
+            {
+                "points": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5]],
+                "closed": False,
+            }
+        ]
+    }
+
+    migrated = ProjectDocument.from_dict(payload).objects[0]
+    expected = toolpath_module.object_polylines(current)
+    actual = toolpath_module.object_polylines(migrated)
+
+    assert len(actual) == len(expected) == 1
+    assert actual[0].closed is expected[0].closed is False
+    assert actual[0].points == pytest.approx(expected[0].points)
+
+
+def test_native_cubic_with_inside_endpoints_but_outside_curve_is_rejected() -> None:
+    document = _native_bulge_document(99.99)
+    flattened = toolpath_module.object_polylines(document.objects[0])[0]
+
+    assert len(flattened.points) == 2
+    assert max(flattened.points[:, 1]) < 100.0
+    with pytest.raises(SafetyError, match="native curve"):
+        generate_project_gcode(
+            document,
+            LaserSettings(boundary_margin_mm=0),
+        )
+
+
+def test_native_cubic_inside_rectangle_but_within_flatten_envelope_is_rejected() -> None:
+    document = _native_bulge_document(99.99, control_y=0.0)
+    flattened = toolpath_module.object_polylines(document.objects[0])[0]
+
+    assert flattened.points[:, 1] == pytest.approx([99.99, 99.99])
+    with pytest.raises(
+        SafetyError,
+        match=r"native curve plus its 0\.025 mm flattening envelope",
+    ):
+        generate_project_gcode(
+            document,
+            LaserSettings(boundary_margin_mm=0),
+        )
+
+
+def test_native_cubic_guarded_polygon_checks_full_curve_not_cached_vertices(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _native_bulge_document(
+        89.9,
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+        control_y=0.2,
+    )
+    item = document.objects[0]
+    endpoints = np.asarray([[10.0, 89.9], [90.0, 89.9]], dtype=np.float64)
+    monkeypatch.setattr(
+        toolpath_module,
+        "object_polylines",
+        lambda _item: [Polyline(endpoints, closed=False, source_tag=item.name)],
+    )
+    frame = honeycomb_frame(
+        origin=(0.0, 0.0),
+        x_axis=(1.0, 0.0),
+        y_axis=(0.0, 1.0),
+    )
+    polygon = ((0.0, 0.0), (100.0, 0.0), (100.0, 90.0), (0.0, 90.0))
+
+    with pytest.raises(SafetyError, match="guarded output polygon.*native curve"):
+        generate_project_gcode(
+            document,
+            LaserSettings(
+                boundary_margin_mm=0,
+                guarded_output_polygon_mm=polygon,
+            ),
+            coordinate_frame=frame,
+            machine_work_area=WorkArea(0, 100, 0, 100),
+            guarded_output_polygon_mm=polygon,
+            start_position=(0.0, 0.0),
+        )
+
+
+def test_native_cubic_bowing_outside_rotated_guard_after_placement_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = _native_bulge_document(
+        89.9,
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+        control_y=0.2,
+    )
+    item = document.objects[0]
+    endpoints = np.asarray([[10.0, 89.9], [90.0, 89.9]], dtype=np.float64)
+    monkeypatch.setattr(
+        toolpath_module,
+        "object_polylines",
+        lambda _item: [Polyline(endpoints, closed=False, source_tag=item.name)],
+    )
+    angle = math.radians(30.0)
+    x_axis = (math.cos(angle), math.sin(angle))
+    y_axis = (-math.sin(angle), math.cos(angle))
+    frame = honeycomb_frame(
+        origin=(100.0, 100.0),
+        x_axis=x_axis,
+        y_axis=y_axis,
+    )
+
+    def placed(point: tuple[float, float]) -> tuple[float, float]:
+        return (
+            frame.origin_machine_mm[0]
+            + point[0] * x_axis[0]
+            + point[1] * y_axis[0],
+            frame.origin_machine_mm[1]
+            + point[0] * x_axis[1]
+            + point[1] * y_axis[1],
+        )
+
+    polygon = tuple(
+        placed(point)
+        for point in ((0.0, 0.0), (100.0, 0.0), (100.0, 90.0), (0.0, 90.0))
+    )
+    placed_endpoints = np.asarray([placed(tuple(point)) for point in endpoints])
+    xs = [point[0] for point in polygon]
+    ys = [point[1] for point in polygon]
+
+    toolpath_module._validate_paths_in_guarded_polygon(
+        [Polyline(placed_endpoints, closed=False, source_tag=item.name)],
+        polygon,
+        coordinate_label="placed endpoint fixture",
+    )
+    with pytest.raises(
+        SafetyError,
+        match=r"guarded output polygon.*placed design native curve",
+    ):
+        generate_project_gcode(
+            document,
+            LaserSettings(
+                boundary_margin_mm=0,
+                guarded_output_polygon_mm=polygon,
+            ),
+            coordinate_frame=frame,
+            machine_work_area=WorkArea(min(xs), max(xs), min(ys), max(ys)),
+            guarded_output_polygon_mm=polygon,
+            start_position=polygon[0],
+        )
+
+
+def test_native_cubic_envelope_after_spot_correction_rejects_with_context() -> None:
+    document = _native_bulge_document(0.03, control_y=0.0)
+    flattened = toolpath_module.object_polylines(document.objects[0])[0]
+    controller_endpoints = flattened.points - np.asarray([0.0, 0.02])
+
+    assert min(flattened.points[:, 1]) == pytest.approx(0.03)
+    assert min(controller_endpoints[:, 1]) == pytest.approx(0.01)
+    assert all(
+        document.work_area.contains(float(point[0]), float(point[1]))
+        for point in controller_endpoints
+    )
+    with pytest.raises(
+        SafetyError,
+        match=(
+            r"after laser spot correction native curve plus its "
+            r"0\.025 mm flattening envelope"
+        ),
+    ):
+        generate_project_gcode(
+            document,
+            LaserSettings(
+                boundary_margin_mm=0,
+                spot_offset_y_mm=0.02,
+            ),
+        )
+
+
+def test_wholly_authorized_native_cubic_generates_and_frames_conservatively() -> None:
+    document = _native_bulge_document(50.0, control_y=0.4)
+    laser = LaserSettings(boundary_margin_mm=0)
+
+    job = generate_project_gcode(document, laser)
+    frame = generate_project_frame(document, laser)
+
+    assert job.path_count == 1
+    assert job.point_count > 2
+    assert frame.bounds_mm[0] == pytest.approx(9.975)
+    assert frame.bounds_mm[2] == pytest.approx(90.025)
+    assert frame.bounds_mm[1] == pytest.approx(49.975)
+    assert frame.bounds_mm[3] == pytest.approx(50.325)
+
+
+def test_line_boundary_is_not_expanded_by_unrelated_cubic_for_job_or_frame() -> None:
+    document = ProjectDocument.new("Mixed boundary", Bounds(0, 0, 100, 100))
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            _mixed_boundary_and_cubic_geometry(),
+            transform=Transform(50.0, 50.0, 100.0, 100.0),
+        )
+    )
+    laser = LaserSettings(boundary_margin_mm=0)
+
+    job = generate_project_gcode(document, laser)
+    frame = generate_project_frame(document, laser)
+
+    assert job.bounds_mm == pytest.approx((0.0, 0.0, 100.0, 100.0))
+    assert frame.bounds_mm == pytest.approx((0.0, 0.0, 100.0, 100.0))
+
+
+def test_line_boundary_after_only_spot_offset_is_not_given_curve_envelope() -> None:
+    document = ProjectDocument.new("Offset boundary", Bounds(0, 0, 100, 100))
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            _mixed_boundary_and_cubic_geometry(),
+            transform=Transform(50.0, 50.0, 98.0, 98.0),
+        )
+    )
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(
+            boundary_margin_mm=0,
+            spot_offset_x_mm=1.0,
+            spot_offset_y_mm=1.0,
+        ),
+    )
+
+    assert job.bounds_mm == pytest.approx((1.0, 1.0, 99.0, 99.0))
+    assert "G0 X0 Y0" in job.text
+
+
+@pytest.mark.parametrize("clockwise", [False, True])
+def test_mixed_boundary_curve_passes_rotated_guard_after_placement_and_offset(
+    clockwise: bool,
+) -> None:
+    document = ProjectDocument.new(
+        "Guarded mixed boundary",
+        Bounds(0, 0, 100, 100),
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            _mixed_boundary_and_cubic_geometry(),
+            transform=Transform(50.0, 50.0, 100.0, 100.0),
+        )
+    )
+    angle = math.radians(30.0)
+    x_axis = (math.cos(angle), math.sin(angle))
+    y_axis = (-math.sin(angle), math.cos(angle))
+    frame = honeycomb_frame(
+        origin=(100.0, 100.0),
+        x_axis=x_axis,
+        y_axis=y_axis,
+    )
+
+    def placed(point: tuple[float, float]) -> tuple[float, float]:
+        return (
+            frame.origin_machine_mm[0]
+            + point[0] * x_axis[0]
+            + point[1] * y_axis[0],
+            frame.origin_machine_mm[1]
+            + point[0] * x_axis[1]
+            + point[1] * y_axis[1],
+        )
+
+    counter_clockwise = tuple(
+        placed(point)
+        for point in ((-1.0, 0.0), (100.0, 0.0), (100.0, 100.0), (-1.0, 100.0))
+    )
+    polygon = (
+        tuple(reversed(counter_clockwise)) if clockwise else counter_clockwise
+    )
+    xs = [point[0] for point in polygon]
+    ys = [point[1] for point in polygon]
+    laser = LaserSettings(
+        boundary_margin_mm=0,
+        spot_offset_x_mm=x_axis[0],
+        spot_offset_y_mm=x_axis[1],
+        guarded_output_polygon_mm=polygon,
+    )
+
+    job = generate_project_gcode(
+        document,
+        laser,
+        coordinate_frame=frame,
+        machine_work_area=WorkArea(min(xs), max(xs), min(ys), max(ys)),
+        guarded_output_polygon_mm=polygon,
+        start_position=polygon[0],
+    )
+
+    assert job.path_count == 2
+    assert job.guarded_output_polygon_mm is not None
+
+
 def test_frame_contains_no_positive_laser_command():
     job = generate_project_frame(make_document(), LaserSettings(frame_power=0))
 
@@ -665,6 +1151,338 @@ def test_fill_layer_emits_bounded_scanlines_and_exact_preview():
         document.work_area.contains(move.end_x, move.end_y)
         for move in job.plan.moves
     )
+
+
+def test_native_compound_scanlines_honor_evenodd_and_nonzero_winding() -> None:
+    outer = np.asarray(
+        [[-5.0, -5.0], [5.0, -5.0], [5.0, 5.0], [-5.0, 5.0], [-5.0, -5.0]],
+        dtype=np.float64,
+    )
+    inner_same_winding = np.asarray(
+        [[-2.0, -2.0], [2.0, -2.0], [2.0, 2.0], [-2.0, 2.0], [-2.0, -2.0]],
+        dtype=np.float64,
+    )
+
+    evenodd = toolpath_module._scanline_x_intervals(
+        [outer, inner_same_winding],
+        0.0,
+        PathFillRule.EVENODD,
+    )
+    nonzero_solid = toolpath_module._scanline_x_intervals(
+        [outer, inner_same_winding],
+        0.0,
+        PathFillRule.NONZERO,
+    )
+    nonzero_hole = toolpath_module._scanline_x_intervals(
+        [outer, inner_same_winding[::-1].copy()],
+        0.0,
+        PathFillRule.NONZERO,
+    )
+
+    assert evenodd == pytest.approx([(-5.0, -2.0), (2.0, 5.0)])
+    assert nonzero_solid == pytest.approx([(-5.0, 5.0)])
+    assert nonzero_hole == pytest.approx(evenodd)
+
+
+def test_three_level_compound_with_island_agrees_on_fill_and_cut_order() -> None:
+    def square(
+        center_x: float,
+        half_size: float,
+        source_tag: str,
+    ) -> Polyline:
+        return Polyline(
+            np.asarray(
+                [
+                    [center_x - half_size, -half_size],
+                    [center_x + half_size, -half_size],
+                    [center_x + half_size, half_size],
+                    [center_x - half_size, half_size],
+                    [center_x - half_size, -half_size],
+                ],
+                dtype=np.float64,
+            ),
+            closed=True,
+            source_tag=source_tag,
+        )
+
+    outer = square(0.0, 5.0, "outer")
+    separate_island = square(8.0, 1.0, "separate island")
+    hole = square(0.0, 3.0, "hole")
+    inner_island = square(0.0, 1.0, "inner island")
+    paths = [outer, separate_island, hole, inner_island]
+
+    assert toolpath_module._scanline_x_intervals(
+        [path.points for path in paths],
+        0.0,
+        PathFillRule.EVENODD,
+    ) == pytest.approx(
+        [(-5.0, -3.0), (-1.0, 1.0), (3.0, 5.0), (7.0, 9.0)]
+    )
+    assert toolpath_module._containment_depths(paths) == [0, 0, 1, 2]
+    assert [
+        path.source_tag
+        for path in toolpath_module._containment_aware_source_order(paths)
+    ] == ["inner island", "hole", "outer", "separate island"]
+
+
+def test_fill_rejects_native_compound_with_closed_and_open_subpaths() -> None:
+    document = ProjectDocument.new("Mixed fill", Bounds(0, 0, 100, 100))
+    document.layers[0].mode = LayerMode.FILL
+    document.add_object(
+        SceneObject.native_path(
+            document.active_layer_id,
+            NativePathGeometry(
+                (
+                    _closed_square_subpath(0.4),
+                    PathSubpath(
+                        (-0.3, 0.0),
+                        (PathLineSegment((0.3, 0.0)),),
+                        closed=False,
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 50.0, 50.0),
+        )
+    )
+
+    with pytest.raises(ValueError, match="Fill output requires closed vector geometry"):
+        generate_project_gcode(document, LaserSettings(boundary_margin_mm=0))
+
+
+def test_native_cubic_hole_remains_nested_after_planning_flattening() -> None:
+    document = ProjectDocument.new("Native donut", Bounds(0, 0, 100, 100))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        NativePathGeometry(
+            (
+                _closed_square_subpath(0.5),
+                _closed_cubic_circle_subpath(0.2),
+            ),
+            fill_rule=PathFillRule.EVENODD,
+        ),
+        transform=Transform(50.0, 50.0, 80.0, 80.0),
+    )
+
+    paths = toolpath_module.object_polylines(item)
+
+    assert len(paths) == 2
+    assert all(path.closed for path in paths)
+    assert toolpath_module._containment_depths(paths) == [0, 1]
+    ordered = toolpath_module._containment_aware_source_order(paths)
+    assert np.ptp(ordered[0].points[:, 0]) < np.ptp(ordered[1].points[:, 0])
+
+
+@pytest.mark.parametrize("start_quarter", [0, 2])
+def test_tangent_native_hole_rejects_independently_of_cyclic_seam(
+    start_quarter: int,
+) -> None:
+    document = ProjectDocument.new("Tangent donut", Bounds(-1, -1, 1, 1))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        NativePathGeometry(
+            (
+                _closed_square_subpath(0.5),
+                _closed_cubic_circle_subpath(
+                    0.2,
+                    center=(0.3, 0.0),
+                    start_quarter=start_quarter,
+                ),
+            )
+        ),
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+
+    with pytest.raises(ValueError, match="touching or intersecting closed subpaths"):
+        toolpath_module.object_polylines(item)
+
+
+def test_native_compound_rejects_flattening_induced_intersection() -> None:
+    angle = math.radians(2.9339800285520656)
+    outer_radius = 10.0
+    radius = 2.0
+    gap = 0.005
+    distance = outer_radius - radius - gap
+    center = (distance * math.cos(angle), distance * math.sin(angle))
+    document = ProjectDocument.new("Near-touch donut", Bounds(-2, -2, 2, 2))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        NativePathGeometry(
+            (
+                _closed_cubic_circle_subpath(outer_radius),
+                _closed_line_circle_subpath(
+                    radius,
+                    center=center,
+                    seam_angle_rad=angle,
+                    point_count=512,
+                ),
+            ),
+            fill_rule=PathFillRule.EVENODD,
+        ),
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+
+    assert math.hypot(*center) + radius == pytest.approx(outer_radius - gap)
+    with pytest.raises(ValueError, match="touching or intersecting closed subpaths"):
+        toolpath_module.object_polylines(item)
+
+
+def test_native_compound_rejects_exact_crossing_hidden_by_disjoint_chords() -> None:
+    geometry = _facing_closed_subpath_geometry(
+        0.03,
+        cubic_control_offset_mm=0.024,
+    )
+    lower_cubic = geometry.subpaths[0].segments[0]
+    upper_cubic = geometry.subpaths[1].segments[0]
+    assert isinstance(lower_cubic, PathCubicSegment)
+    assert isinstance(upper_cubic, PathCubicSegment)
+    flattened = tuple(
+        np.asarray(points, dtype=np.float64)
+        for points in flatten_native_path(
+            geometry,
+            toolpath_module.NATIVE_PATH_FLATTEN_TOLERANCE_MM,
+        )
+    )
+
+    assert len(flattened[0]) == len(flattened[1]) == 5
+    assert flattened[1][:, 1].min() - flattened[0][:, 1].max() == pytest.approx(
+        0.03
+    )
+    lower_midpoint = evaluate_cubic((-1.0, 0.0), lower_cubic, 0.5)
+    upper_midpoint = evaluate_cubic((-1.0, 0.03), upper_cubic, 0.5)
+    assert lower_midpoint[1] > upper_midpoint[1]
+
+    document = ProjectDocument.new("Hidden exact crossing", Bounds(-2, -2, 2, 2))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        geometry,
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+    with pytest.raises(
+        ValueError,
+        match="insufficient flattened clearance to prove them disjoint",
+    ):
+        toolpath_module.object_polylines(item)
+
+
+@pytest.mark.parametrize(
+    ("gap_mm", "rejected"),
+    [(0.05, True), (0.051, False)],
+)
+def test_native_compound_curve_clearance_boundary(
+    gap_mm: float,
+    rejected: bool,
+) -> None:
+    document = ProjectDocument.new("Curve clearance", Bounds(-2, -2, 2, 2))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        _facing_closed_subpath_geometry(
+            gap_mm,
+            cubic_control_offset_mm=0.0,
+        ),
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+
+    if rejected:
+        with pytest.raises(ValueError, match="insufficient flattened clearance"):
+            toolpath_module.object_polylines(item)
+    else:
+        assert len(toolpath_module.object_polylines(item)) == 2
+
+
+def test_native_compound_curve_clearance_uses_scale_aware_numeric_margin() -> None:
+    document = ProjectDocument.new("Scaled curve clearance", Bounds(-2, -2, 2, 2))
+    geometry = _facing_closed_subpath_geometry(
+        0.0505,
+        cubic_control_offset_mm=0.0,
+    )
+    local_item = SceneObject.native_path(
+        document.active_layer_id,
+        geometry,
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+    translated_item = SceneObject.native_path(
+        document.active_layer_id,
+        geometry,
+        transform=Transform(1_000_000_000.0, 1_000_000_000.0, 1.0, 1.0),
+    )
+
+    assert len(toolpath_module.object_polylines(local_item)) == 2
+    with pytest.raises(ValueError, match="scale-aware numeric margin"):
+        toolpath_module.object_polylines(translated_item)
+
+
+def test_native_line_compound_uses_only_numeric_clearance() -> None:
+    document = ProjectDocument.new("Line clearance", Bounds(-2, -2, 2, 2))
+    separated = SceneObject.native_path(
+        document.active_layer_id,
+        _facing_closed_subpath_geometry(
+            0.01,
+            cubic_control_offset_mm=None,
+        ),
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+    touching = SceneObject.native_path(
+        document.active_layer_id,
+        _facing_closed_subpath_geometry(
+            0.0,
+            cubic_control_offset_mm=None,
+        ),
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+
+    assert len(toolpath_module.object_polylines(separated)) == 2
+    with pytest.raises(ValueError, match="touching or intersecting closed subpaths"):
+        toolpath_module.object_polylines(touching)
+
+
+def test_native_compound_accepts_clear_separation_after_flattening() -> None:
+    angle = math.radians(2.9339800285520656)
+    outer_radius = 10.0
+    radius = 2.0
+    gap = 0.1
+    distance = outer_radius - radius - gap
+    center = (distance * math.cos(angle), distance * math.sin(angle))
+    document = ProjectDocument.new("Separated donut", Bounds(-2, -2, 2, 2))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        NativePathGeometry(
+            (
+                _closed_cubic_circle_subpath(outer_radius),
+                _closed_line_circle_subpath(
+                    radius,
+                    center=center,
+                    seam_angle_rad=angle,
+                    point_count=512,
+                ),
+            ),
+            fill_rule=PathFillRule.EVENODD,
+        ),
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+
+    paths = toolpath_module.object_polylines(item)
+
+    assert toolpath_module._containment_depths(paths) == [0, 1]
+
+
+def test_native_compound_topology_intersection_work_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    document = ProjectDocument.new("Bounded donut", Bounds(-1, -1, 1, 1))
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        NativePathGeometry(
+            (
+                _closed_square_subpath(0.5),
+                _closed_square_subpath(0.2),
+            )
+        ),
+        transform=Transform(0.0, 0.0, 1.0, 1.0),
+    )
+    monkeypatch.setattr(toolpath_module, "_NATIVE_PATH_TOPOLOGY_MAX_TESTS", 4)
+
+    with pytest.raises(ValueError, match="bounded intersection test limit"):
+        toolpath_module.object_polylines(item)
 
 
 def test_raster_layer_scans_vector_silhouette_and_image_assets(tmp_path: Path):

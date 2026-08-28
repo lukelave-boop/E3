@@ -61,8 +61,10 @@ Native desktop workflow:
 - LightBurn-inspired compact icon chrome with a bright drafting bed, persistent
   runtime/safety status, always-present selection properties, one full-height
   right sidebar for Cuts, Camera, Objects, Shape, Templates, Trace, Machine, and
-  Material Recipes, and a fixed 30-color operation palette. The former lower
-  Laser and raw-G-code docks are removed so the workspace extends downward
+  Material Recipes, and a fixed 30-color operation palette. Objects rows expose
+  their shared operation color as a clickable swatch that uses the normal
+  undoable Cuts/Layers color path. The former lower Laser and raw-G-code docks
+  are removed so the workspace extends downward
 - Consolidated primary runtime controls keep Connect/Disconnect and the
   intentionally disabled Pause beside the always-available software STOP. The
   strip moves to its own toolbar row and wraps status above controls at compact
@@ -77,6 +79,14 @@ Native desktop workflow:
   overlapping frame work
 - Multi-object `.e3laser` projects with operation layers, undo/redo, grouping,
   alignment, distribution, ordering, autosave, backup, and recovery
+- Schema-3 native PATH/POLYGON geometry with versioned line and cubic Bézier
+  segments, multiple open or closed subpaths, and explicit even-odd or nonzero
+  fill rules. Curves remain native through project editing, transforms,
+  duplication, grouping, save/reopen, autosave, recovery, and workspace
+  rendering; planning flattens them deterministically in physical millimetres
+  at one controlled boundary. Saving as schema 3 is forward-incompatible with
+  older E3 builds that understand only schema 2; those builds reject the newer
+  file instead of silently discarding native geometry
 - Rectangle, rounded rectangle, ellipse, line, imported SVG/LightBurn paths,
   imported 2-D laser G-code (`.gc`, `.gcode`, `.nc`, `.tap`) reconstructed into
   output-disabled speed/power layers, vector outline text, and automatically
@@ -91,13 +101,13 @@ Native desktop workflow:
 - A dedicated **Trace image to vectors…** action for exactly one selected raster
   image. Its modal review compares the original, foreground mask, and vector
   overlay, with high-contrast color presets and preview-only opacity; supports
-  automatic, manual, or usable-alpha detection; and creates one normal
-  multi-contour PATH while preserving the image frame, position, rotation, and
-  mirrors. Closed-contour fitting uses a coordinate-canonical seam,
-  physically persistent corner evidence, and smooth tangents at non-corner
-  joins so small raster-phase differences do not invent angular shoulders.
-  Replace, Keep, optional source hiding, safe-layer creation, and vector
-  creation are one undoable operation
+  automatic, manual, or usable-alpha detection; and creates one native
+  multi-contour line/cubic PATH while preserving the image frame, position,
+  rotation, and mirrors. Closed-contour fitting uses full-cycle seam
+  canonicalization, physically persistent corner evidence, generic straight-run
+  anchors, and shared tangents at non-corner joins so raster phase does not
+  invent angular shoulders. Replace, Keep, optional source hiding, safe-layer
+  creation, and vector creation are one undoable operation
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
@@ -171,13 +181,17 @@ yellow, white, or black comparison overlay and adjust its opacity without
 rerunning or changing the trace, then choose whether to replace or retain the
 source. Keeping the source leaves it in place beneath the new, selected vector
 and preserves the hide-source choice. Preserving all contours keeps counters and
-holes as closed child polylines in the same editable PATH. A trace uses an
-existing layer only when it is a visible Line layer already at 0% power with
-output disabled; otherwise E3 creates `<image name> trace` with those safe
-settings and selects both that layer and the vector. Its ordinary layer swatch
-uses the same color picker as other Line layers. This is an offline authoring
-action: it does not generate G-code, enable output, connect, move, Home, arm, or
-start a job.
+closed child subpaths in the same native PATH. The fitted lines and cubic
+Béziers are persisted directly; preview/topology samples are not a second
+authoritative geometry copy. When planning is requested, E3 applies the complete
+object transform and then adaptively flattens the native curve at the fixed
+0.025 mm planning tolerance before the existing G0/G1 pipeline. A trace uses an
+existing layer
+only when it is a visible Line layer already at 0% power with output disabled;
+otherwise E3 creates `<image name> trace` with those safe settings and selects
+both that layer and the vector. Its ordinary layer swatch uses the same color
+picker as other Line layers. This is an offline authoring action: it does not
+generate G-code, enable output, connect, move, Home, arm, or start a job.
 
 The desktop also contains an automated and behaviorally tested
 object-tracing workflow for converting detected camera outlines into editable
@@ -431,8 +445,14 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   line art, silhouettes, stencils, and similar artwork, not a full-color or
   multi-layer tracer. Its fitted-curve deviation is estimated against the
   threshold-derived contour, so source resolution, antialiasing, threshold, and
-  smoothing still limit real accuracy. Projects retain adaptively flattened E3
-  polylines rather than editable Bézier primitives.
+  smoothing still limit real accuracy. Projects retain fitted native line and
+  cubic segments; bounded flattened points are transient preview, topology, and
+  planning artifacts rather than editable node data. Exact fitted extrema must
+  remain inside the reviewed source frame, and accepted compound contours must
+  retain provable separation through their flattening-error envelopes. Highly
+  pixel-constrained `A` and `S` glyphs can still vary at narrow counters and
+  curved shoulders; using a cleaner or higher-resolution source for those cases
+  is an accepted first-release quality limitation.
 - SVG text and embedded images are not converted. Native desktop import stops
   before creating an object when either is present; convert them to paths in
   the design program.

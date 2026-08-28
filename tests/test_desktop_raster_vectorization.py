@@ -26,6 +26,8 @@ from laser_aligner.project import (
     LayerMode,
     ObjectKind,
     OperationLayer,
+    PathCubicSegment,
+    PathFillRule,
     ProjectDocument,
     RasterDetectionMode,
     RasterVectorizationOptions,
@@ -281,7 +283,20 @@ def test_replace_workflow_preserves_frame_transform_holes_and_is_one_undo_step(
     assert vector.transform.rotation_deg == pytest.approx(31.0)
     assert vector.transform.mirror_x is True
     assert vector.transform.mirror_y is True
-    assert len(vector.geometry["polylines"]) == 2
+    assert "polylines" not in vector.geometry
+    native_path = vector.path_geometry()
+    assert native_path.fill_rule is PathFillRule.EVENODD
+    assert len(native_path.subpaths) == 2
+    assert all(subpath.closed for subpath in native_path.subpaths)
+    assert any(
+        isinstance(segment, PathCubicSegment)
+        for subpath in native_path.subpaths
+        for segment in subpath.segments
+    )
+    assert native_path == result.project_path_geometry()
+    assert vector.metadata["raster_vectorization_preview_flattened_points"] == (
+        result.preview_flattened_point_count
+    )
     assert vector.metadata["raster_vectorization_hierarchy"][1] == {
         "parent_index": 0,
         "depth": 1,
@@ -289,7 +304,10 @@ def test_replace_workflow_preserves_frame_transform_holes_and_is_one_undo_step(
     }
     world_paths = object_polylines(vector)
     assert len(world_paths) == 2
-    local_first = np.asarray(result.contours[0].points[0], dtype=np.float64)
+    local_first = np.asarray(
+        result.contours[0].native_subpath.start,
+        dtype=np.float64,
+    )
     scaled = local_first * np.asarray([-48.0, -36.0])
     angle = np.deg2rad(31.0)
     expected_first = np.asarray(
@@ -319,6 +337,9 @@ def test_replace_workflow_preserves_frame_transform_holes_and_is_one_undo_step(
 
     assert harness.history.redo()
     assert [item.id for item in document.objects] == [vector.id]
+    restored_vector = document.get_object(vector.id)
+    assert restored_vector.geometry == vector.geometry
+    assert restored_vector.path_geometry() == native_path
     assert document.get_layer(vector.layer_id).output_enabled is False
 
 

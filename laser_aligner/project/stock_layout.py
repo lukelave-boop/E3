@@ -14,6 +14,14 @@ from .model import (
     SceneObject,
     Transform,
 )
+from .path_geometry import (
+    MAX_NATIVE_PATH_FLATTENED_POINTS,
+    MAX_NATIVE_PATH_SUBDIVISION_DEPTH,
+    PathAffineTransform,
+    flatten_native_path,
+)
+
+_NATIVE_PATH_FLATTEN_TOLERANCE_MM = 0.025
 
 EdgeMode = Literal["nearest", "top", "bottom", "left", "right"]
 
@@ -71,8 +79,8 @@ def mark_stock_boundary(item: SceneObject) -> SceneObject:
             "A stock boundary must be a closed rectangle, ellipse, polygon, or path"
         )
     if item.kind in {ObjectKind.PATH, ObjectKind.POLYGON} and not any(
-        bool(line.get("closed", False)) and len(line.get("points", [])) >= 3
-        for line in item.geometry.get("polylines", [])
+        subpath.closed and len(subpath.segments) >= 2
+        for subpath in item.path_geometry().subpaths
     ):
         raise StockLayoutError(
             "A stock boundary path must contain at least one closed outline"
@@ -137,14 +145,30 @@ def stock_polygons(item: SceneObject) -> list[list[tuple[float, float]]]:
         ]
     if item.kind not in {ObjectKind.PATH, ObjectKind.POLYGON}:
         return []
+    geometry = item.path_geometry()
+    affine = PathAffineTransform.from_components(
+        scale_x=transform.width_mm * (-1.0 if transform.mirror_x else 1.0),
+        scale_y=transform.height_mm * (-1.0 if transform.mirror_y else 1.0),
+        rotation_deg=transform.rotation_deg,
+        translate_x=transform.x_mm,
+        translate_y=transform.y_mm,
+    )
+    flattened = flatten_native_path(
+        geometry,
+        _NATIVE_PATH_FLATTEN_TOLERANCE_MM,
+        transform=affine,
+        max_points=MAX_NATIVE_PATH_FLATTENED_POINTS,
+        max_depth=MAX_NATIVE_PATH_SUBDIVISION_DEPTH,
+    )
     polygons: list[list[tuple[float, float]]] = []
-    for line in item.geometry.get("polylines", []):
-        if not line.get("closed", False):
+    for subpath, flattened_points in zip(
+        geometry.subpaths,
+        flattened,
+        strict=True,
+    ):
+        if not subpath.closed:
             continue
-        points = [
-            _transform_point((float(point[0]), float(point[1])), transform)
-            for point in line.get("points", [])
-        ]
+        points = list(flattened_points)
         if len(points) >= 3:
             if math.dist(points[0], points[-1]) <= 1e-9:
                 points.pop()

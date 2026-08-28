@@ -72,34 +72,15 @@ def _options() -> raster_vectorize.RasterVectorizationOptions:
     )
 
 
-def _capture_segments(
-    points: np.ndarray,
-    monkeypatch: pytest.MonkeyPatch,
-) -> tuple[object, ...]:
-    captured: list[object] = []
-    original = raster_vectorize._flatten_segment
-
-    def capture(
-        segment: object,
-        tolerance_mm: float,
-        budget: object,
-        output: list[np.ndarray],
-        depth: int = 0,
-    ) -> float:
-        if depth == 0:
-            captured.append(segment)
-        return original(segment, tolerance_mm, budget, output, depth)
-
-    with monkeypatch.context() as context:
-        context.setattr(raster_vectorize, "_flatten_segment", capture)
-        raster_vectorize._fit_and_flatten_contour(
-            points,
-            _options(),
-            20.0,
-            20.0,
-            raster_vectorize._ComplexityBudget(),
-        )
-    return tuple(captured)
+def _capture_segments(points: np.ndarray) -> tuple[object, ...]:
+    fitted = raster_vectorize._fit_contour(
+        points,
+        _options(),
+        20.0,
+        20.0,
+        raster_vectorize._ComplexityBudget(),
+    )
+    return tuple(fitted.segments)
 
 
 def _segment_code(segment: object) -> str:
@@ -179,7 +160,7 @@ def test_anchor_lower_bound_rejects_before_contour_spans_are_allocated(
         raster_vectorize.RasterVectorizationComplexityError,
         match="fitted segments",
     ):
-        raster_vectorize._fit_and_flatten_contour(
+        raster_vectorize._fit_contour(
             _stadium(angle_radians=0.41),
             _options(),
             20.0,
@@ -210,7 +191,7 @@ def test_corner_lower_bound_rejects_before_smoothing(
         raster_vectorize.RasterVectorizationComplexityError,
         match="fitted segments",
     ):
-        raster_vectorize._fit_and_flatten_contour(
+        raster_vectorize._fit_contour(
             _stadium(angle_radians=0.41),
             _options(),
             20.0,
@@ -219,9 +200,7 @@ def test_corner_lower_bound_rejects_before_smoothing(
         )
 
 
-def test_arbitrary_angle_closed_fit_is_cyclically_identical_and_g1(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_arbitrary_angle_closed_fit_is_cyclically_identical_and_g1() -> None:
     raw = _stadium(angle_radians=0.61)
     offsets = (0, 1, len(raw) // 13, len(raw) // 4, len(raw) // 2)
     canonical = [
@@ -230,7 +209,7 @@ def test_arbitrary_angle_closed_fit_is_cyclically_identical_and_g1(
         )
         for offset in offsets
     ]
-    fits = [_capture_segments(points, monkeypatch) for points in canonical]
+    fits = [_capture_segments(points) for points in canonical]
 
     for points in canonical[1:]:
         np.testing.assert_allclose(points, canonical[0], atol=0.0, rtol=0.0)

@@ -210,36 +210,15 @@ def _fit_raw_contour(
     fitting_tolerance = options.simplification_tolerance_mm * 0.65
     corners = _corner_indices(canonical, fitting_tolerance)
 
-    # The feature branch's public result intentionally exposes only flattened
-    # PATH points. Capture depth-zero flatten calls while invoking the production
-    # fitter so these tests can inspect its authoritative line/cubic sequence.
-    captured: list[object] = []
-    original_flatten = raster_vectorize._flatten_segment
-
-    def capture_flatten(
-        segment: object,
-        tolerance_mm: float,
-        budget: object,
-        output: list[np.ndarray],
-        depth: int = 0,
-    ) -> float:
-        if depth == 0:
-            captured.append(segment)
-        return original_flatten(segment, tolerance_mm, budget, output, depth)
-
-    raster_vectorize._flatten_segment = capture_flatten
-    try:
-        raster_vectorize._fit_and_flatten_contour(
-            canonical,
-            options,
-            width_mm,
-            height_mm,
-            raster_vectorize._ComplexityBudget(),
-        )
-    finally:
-        raster_vectorize._flatten_segment = original_flatten
-    assert captured
-    return _FitDiagnostics(canonical, corners, tuple(captured))
+    fitted = raster_vectorize._fit_contour(
+        canonical,
+        options,
+        width_mm,
+        height_mm,
+        raster_vectorize._ComplexityBudget(),
+    )
+    assert fitted.segments
+    return _FitDiagnostics(canonical, corners, tuple(fitted.segments))
 
 
 def _fit_payload_contours(

@@ -6,6 +6,7 @@ import pytest
 
 from laser_aligner.config import LaserSettings
 from laser_aligner.project import (
+    PROJECT_SCHEMA_VERSION,
     Bounds,
     LayerMode,
     ProjectDocument,
@@ -47,7 +48,7 @@ def test_stock_boundary_round_trips_without_a_schema_change() -> None:
     restored = ProjectDocument.from_dict(document.to_dict())
     restored_stock = restored.get_object(stock.id)
 
-    assert document.to_dict()["schema_version"] == 2
+    assert document.to_dict()["schema_version"] == PROJECT_SCHEMA_VERSION
     assert is_stock_boundary(restored_stock)
     assert restored_stock.locked is True
     assert restored_stock.metadata["construction_only"] is True

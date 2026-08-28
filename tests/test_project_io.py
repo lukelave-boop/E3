@@ -7,7 +7,11 @@ import laser_aligner.project.io as project_io
 from laser_aligner.project import (
     Bounds,
     CoordinateSpace,
+    NativePathGeometry,
     OperationLayer,
+    PathCubicSegment,
+    PathFillRule,
+    PathSubpath,
     ProjectDocument,
     ProjectFormatError,
     SceneObject,
@@ -42,7 +46,7 @@ def test_save_and_load_preserves_honeycomb_local_coordinate_space(tmp_path):
     raw = json.loads(path.read_text(encoding="utf-8"))
     restored = load_project(path)
 
-    assert raw["schema_version"] == 2
+    assert raw["schema_version"] == 3
     assert raw["coordinate_space"] == "honeycomb_local"
     assert restored.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL
     assert restored.work_area == Bounds(0.0, 0.0, 190.0, 190.0)
@@ -60,18 +64,123 @@ def test_load_schema_one_migrates_to_explicit_machine_coordinates(tmp_path):
     migrated_payload = json.loads(migrated.read_text(encoding="utf-8"))
 
     assert restored.coordinate_space is CoordinateSpace.MACHINE
-    assert migrated_payload["schema_version"] == 2
+    assert migrated_payload["schema_version"] == 3
     assert migrated_payload["coordinate_space"] == "machine"
 
 
 def test_load_schema_two_requires_coordinate_space(tmp_path):
     payload = ProjectDocument.new().to_dict()
+    payload["schema_version"] = 2
     payload.pop("coordinate_space")
     source = tmp_path / "missing-coordinate-space.e3laser"
     source.write_text(json.dumps(payload), encoding="utf-8")
 
     with pytest.raises(ProjectFormatError, match="coordinate_space"):
         load_project(source)
+
+
+@pytest.mark.parametrize("schema", [1, 2])
+def test_load_legacy_path_migrates_in_memory_without_rewriting_source(
+    tmp_path,
+    schema,
+):
+    document = ProjectDocument.new("Read-only legacy migration")
+    item = SceneObject.path(
+        document.active_layer_id,
+        [{"points": [[0, 0], [20, 0], [20, 10], [0, 0]], "closed": True}],
+    )
+    document.add_object(item)
+    payload = document.to_dict()
+    payload["schema_version"] = schema
+    payload["objects"][0]["geometry"] = {
+        "polylines": [
+            {
+                "points": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, -0.5]],
+                "closed": True,
+            }
+        ]
+    }
+    if schema == 1:
+        payload.pop("coordinate_space")
+    source = tmp_path / f"legacy-schema-{schema}.e3laser"
+    source.write_text(json.dumps(payload, indent=3), encoding="utf-8")
+    before = source.read_bytes()
+
+    restored = load_project(source)
+
+    assert source.read_bytes() == before
+    assert restored.to_dict()["schema_version"] == 3
+    assert "polylines" not in restored.objects[0].geometry
+    assert restored.objects[0].path_geometry().fill_rule is PathFillRule.EVENODD
+
+
+def test_explicit_save_of_migrated_path_writes_schema_three_and_backs_up_legacy(
+    tmp_path,
+):
+    document = ProjectDocument.new("Saved migration")
+    item = SceneObject.path(
+        document.active_layer_id,
+        [{"points": [[0, 0], [2, 0], [2, 1]], "closed": False}],
+    )
+    document.add_object(item)
+    payload = document.to_dict()
+    payload["schema_version"] = 2
+    payload["objects"][0]["geometry"] = {
+        "polylines": [
+            {"points": [[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5]], "closed": False}
+        ]
+    }
+    source = tmp_path / "legacy-save.e3laser"
+    source.write_text(json.dumps(payload), encoding="utf-8")
+    legacy_bytes = source.read_bytes()
+
+    restored = load_project(source)
+    save_project(restored, source)
+    saved = json.loads(source.read_text(encoding="utf-8"))
+
+    assert saved["schema_version"] == 3
+    assert saved["objects"][0]["geometry"]["path_version"] == 1
+    assert "polylines" not in saved["objects"][0]["geometry"]
+    assert source.with_suffix(".e3laser.bak").read_bytes() == legacy_bytes
+
+
+def test_native_cubic_save_reopen_and_autosave_round_trip_exactly(tmp_path):
+    document = ProjectDocument.new("Native cubic persistence")
+    geometry = NativePathGeometry(
+        (
+            PathSubpath(
+                (-0.5, 0.0),
+                (
+                    PathCubicSegment(
+                        (-0.25, -0.8),
+                        (0.25, 0.8),
+                        (0.5, 0.0),
+                    ),
+                ),
+                closed=False,
+            ),
+        ),
+        fill_rule=PathFillRule.NONZERO,
+    )
+    item = SceneObject.native_path(
+        document.active_layer_id,
+        geometry,
+        transform=Transform(50, 60, 70, 80, rotation_deg=23, mirror_y=True),
+    )
+    document.add_object(item)
+
+    project = save_project(document, tmp_path / "native-cubic.e3laser")
+    autosave = project_io.save_autosave(
+        document,
+        project_path=project,
+        autosave_root=tmp_path / "autosaves",
+    )
+
+    assert load_project(project).to_dict() == document.to_dict()
+    assert load_project(autosave).to_dict() == document.to_dict()
+    raw = json.loads(project.read_text(encoding="utf-8"))
+    assert raw["schema_version"] == 3
+    assert raw["objects"][0]["geometry"] == geometry.to_dict()
 
 
 def test_project_file_without_power_correction_loads_zero_defaults(tmp_path):

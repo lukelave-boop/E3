@@ -17,6 +17,12 @@ from ..project import (
     ProjectFormatError,
     SceneObject,
 )
+from ..project.path_geometry import (
+    MAX_NATIVE_PATH_FLATTENED_POINTS,
+    MAX_NATIVE_PATH_SUBDIVISION_DEPTH,
+    PathAffineTransform,
+    flatten_native_path,
+)
 
 TEMPLATE_SCHEMA_VERSION = 1
 TEMPLATE_EXTENSION = ".e3template"
@@ -264,17 +270,26 @@ def _closed_component_polygons(
     transform = item.transform
     mirror_x = -1.0 if transform.mirror_x else 1.0
     mirror_y = -1.0 if transform.mirror_y else 1.0
+    geometry = item.path_geometry()
+    flattened = flatten_native_path(
+        geometry,
+        0.025,
+        transform=PathAffineTransform.from_components(
+            scale_x=transform.width_mm * mirror_x,
+            scale_y=transform.height_mm * mirror_y,
+        ),
+        max_points=MAX_NATIVE_PATH_FLATTENED_POINTS,
+        max_depth=MAX_NATIVE_PATH_SUBDIVISION_DEPTH,
+    )
     polygons: list[list[tuple[float, float]]] = []
-    for line in item.geometry.get("polylines", []):
-        if not bool(line.get("closed", False)):
+    for subpath, flattened_points in zip(
+        geometry.subpaths,
+        flattened,
+        strict=True,
+    ):
+        if not subpath.closed:
             continue
-        points = [
-            (
-                float(point[0]) * transform.width_mm * mirror_x,
-                float(point[1]) * transform.height_mm * mirror_y,
-            )
-            for point in line.get("points", [])
-        ]
+        points = list(flattened_points)
         if len(points) > 1 and math.isclose(points[0][0], points[-1][0], abs_tol=1e-9) and math.isclose(
             points[0][1], points[-1][1], abs_tol=1e-9
         ):

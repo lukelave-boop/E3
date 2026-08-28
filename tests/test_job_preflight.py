@@ -25,6 +25,11 @@ from laser_aligner.project.model import (
     SceneObject,
     Transform,
 )
+from laser_aligner.project.path_geometry import (
+    NativePathGeometry,
+    PathCubicSegment,
+    PathSubpath,
+)
 from laser_aligner.project.planner_limits import MAX_RASTER_SAMPLES
 from laser_aligner.project.raster_asset import RasterAssetMetadata
 
@@ -287,6 +292,31 @@ def test_finding_codes_and_order_are_stable_for_known_unsupported_content() -> N
         "geometry.complex_bounds_deferred",
         "planner.exact_checks_deferred",
     )
+
+
+def test_fill_preflight_rejects_an_open_native_cubic_path() -> None:
+    document = ProjectDocument.new("Open fill", _DEFAULT_AREA)
+    document.layers[0].mode = LayerMode.FILL
+    document.objects.append(
+        SceneObject.native_path(
+            document.active_layer_id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (PathCubicSegment((0.2, 0.5), (0.8, 0.5), (1.0, 0.0)),),
+                        closed=False,
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 20.0, 10.0),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert report.has_blockers
+    assert "object.closed_geometry_required" in _codes(report)
 
 
 def test_aggregate_image_raster_sample_limit_uses_shared_planner_constant(

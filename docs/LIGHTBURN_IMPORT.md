@@ -63,6 +63,13 @@ project center. Relative position, scale, rotation, mirroring encoded by the
 shape transforms, and layer assignment are retained. The import is one
 undoable E3 command.
 
+This importer still uses its established bounded polyline conversion in this
+increment. Those polylines enter schema-3 projects through the compatibility
+adapter and immediately become canonical native line-segment subpaths; no
+legacy `geometry.polylines` copy is retained. Preserving LightBurn cubic
+controls directly is follow-up work and does not require another project-schema
+change.
+
 ## Deliberate first-version limits
 
 E3 stops the import with a useful error instead of silently dropping:

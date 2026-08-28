@@ -2,16 +2,43 @@ import pytest
 
 from laser_aligner.project import (
     AddObjectCommand,
+    AddObjectsCommand,
     CommandStack,
     DuplicateObjectsCommand,
+    NativePathGeometry,
+    PathLineSegment,
+    PathSubpath,
     ProjectDocument,
     ProjectFormatError,
     RemoveObjectsCommand,
+    ReplaceObjectsCommand,
     SceneObject,
     Transform,
     UpdateObjectShapeCommand,
     UpdateTransformCommand,
 )
+
+
+def _native_geometry(segment_count: int) -> NativePathGeometry:
+    return NativePathGeometry(
+        (
+            PathSubpath(
+                (0.0, 0.0),
+                tuple(
+                    PathLineSegment((float(index + 1), 0.0))
+                    for index in range(segment_count)
+                ),
+            ),
+        )
+    )
+
+
+def _one_segment_native_path(document: ProjectDocument, name: str) -> SceneObject:
+    return SceneObject.native_path(
+        document.active_layer_id,
+        _native_geometry(1),
+        name=name,
+    )
 
 
 def test_add_undo_redo():
@@ -27,6 +54,52 @@ def test_add_undo_redo():
 
     assert stack.redo()
     assert [obj.id for obj in document.objects] == [item.id]
+
+
+def test_native_batch_add_limit_failure_is_atomic(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 1)
+    document = ProjectDocument.new("Atomic native add")
+    first = _one_segment_native_path(document, "First")
+    second = _one_segment_native_path(document, "Second")
+    stack = CommandStack()
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.execute(AddObjectsCommand(document, (first, second)))
+
+    assert document.objects == []
+    assert stack.depth == 0
+
+
+def test_native_replacement_limit_preflights_before_removal_and_round_trips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 1)
+    document = ProjectDocument.new("Atomic native replace")
+    original = _one_segment_native_path(document, "Original")
+    document.add_object(original)
+    first = _one_segment_native_path(document, "First replacement")
+    second = _one_segment_native_path(document, "Second replacement")
+    stack = CommandStack()
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.execute(
+            ReplaceObjectsCommand(document, (original.id,), (first, second))
+        )
+    assert [item.id for item in document.objects] == [original.id]
+    assert stack.depth == 0
+
+    stack.execute(ReplaceObjectsCommand(document, (original.id,), (first,)))
+    assert [item.id for item in document.objects] == [first.id]
+    assert stack.undo()
+    assert [item.id for item in document.objects] == [original.id]
+    assert stack.redo()
+    assert [item.id for item in document.objects] == [first.id]
 
 
 def test_transform_undo_redo():
@@ -113,6 +186,141 @@ def test_object_shape_command_validates_geometry_before_mutating_document():
     assert document.revision == revision
     assert item.transform.width_mm == 40
     assert item.geometry == {"corner_radius_mm": 2.0}
+
+
+def test_object_shape_command_native_segment_limit_rejects_execute_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 2)
+    document = ProjectDocument.new("Atomic native shape execute")
+    target = _one_segment_native_path(document, "Target")
+    sibling = _one_segment_native_path(document, "Sibling")
+    document.add_object(target)
+    document.add_object(sibling)
+    before = target.to_dict()
+    revision = document.revision
+    stack = CommandStack()
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.execute(
+            UpdateObjectShapeCommand(
+                document,
+                target.id,
+                target.transform.copy(width_mm=25.0),
+                _native_geometry(2).to_dict(),
+            )
+        )
+
+    assert target.to_dict() == before
+    assert document.revision == revision
+    assert stack.depth == 0
+
+
+def test_failed_shape_execute_after_undo_preserves_redo_branch_and_document(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 2)
+    document = ProjectDocument.new("Atomic native shape branch")
+    target = _one_segment_native_path(document, "Target")
+    document.add_object(target)
+    document.add_object(_one_segment_native_path(document, "Sibling"))
+    stack = CommandStack()
+    moved = target.transform.copy(x_mm=15.0)
+    stack.execute(UpdateTransformCommand(document, target.id, moved))
+    assert stack.undo()
+    before = document.to_dict()
+    redo_text = stack.redo_text
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.execute(
+            UpdateObjectShapeCommand(
+                document,
+                target.id,
+                target.transform.copy(width_mm=25.0),
+                _native_geometry(2).to_dict(),
+            )
+        )
+
+    assert document.to_dict() == before
+    assert stack.depth == 1
+    assert not stack.can_undo
+    assert stack.can_redo
+    assert stack.redo_text == redo_text
+    assert stack.redo()
+    assert target.transform.to_dict() == moved.to_dict()
+
+
+def test_object_shape_command_native_segment_limit_rejects_undo_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 3)
+    document = ProjectDocument.new("Atomic native shape undo")
+    target = SceneObject.native_path(
+        document.active_layer_id,
+        _native_geometry(2),
+        name="Target",
+    )
+    document.add_object(target)
+    document.add_object(_one_segment_native_path(document, "Sibling"))
+    stack = CommandStack()
+    stack.execute(
+        UpdateObjectShapeCommand(
+            document,
+            target.id,
+            target.transform.copy(width_mm=25.0),
+            _native_geometry(1).to_dict(),
+        )
+    )
+    document.add_object(_one_segment_native_path(document, "Later addition"))
+    before = target.to_dict()
+    revision = document.revision
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.undo()
+
+    assert target.to_dict() == before
+    assert document.revision == revision
+    assert stack.can_undo
+    assert not stack.can_redo
+
+
+def test_object_shape_command_native_segment_limit_rejects_redo_atomically(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import laser_aligner.project.model as project_model
+
+    monkeypatch.setattr(project_model, "MAX_NATIVE_PATH_SEGMENTS_PER_PROJECT", 3)
+    document = ProjectDocument.new("Atomic native shape redo")
+    target = _one_segment_native_path(document, "Target")
+    document.add_object(target)
+    document.add_object(_one_segment_native_path(document, "Sibling"))
+    stack = CommandStack()
+    stack.execute(
+        UpdateObjectShapeCommand(
+            document,
+            target.id,
+            target.transform.copy(width_mm=25.0),
+            _native_geometry(2).to_dict(),
+        )
+    )
+    assert stack.undo()
+    document.add_object(_one_segment_native_path(document, "Later addition"))
+    before = target.to_dict()
+    revision = document.revision
+
+    with pytest.raises(ValueError, match="segment project limit"):
+        stack.redo()
+
+    assert target.to_dict() == before
+    assert document.revision == revision
+    assert not stack.can_undo
+    assert stack.can_redo
 
 
 def test_new_command_after_undo_clears_redo_branch():

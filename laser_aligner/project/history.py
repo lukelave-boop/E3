@@ -105,11 +105,11 @@ class CommandStack:
         self._changed()
 
     def execute(self, command: Command) -> None:
+        command.redo()
         if self.can_redo:
             del self._commands[self._index :]
             if self._clean_index > self._index:
                 self._clean_index = -1
-        command.redo()
         self._commands.append(command)
         self._index += 1
         if len(self._commands) > self.max_depth:
@@ -122,8 +122,9 @@ class CommandStack:
     def undo(self) -> bool:
         if not self.can_undo:
             return False
+        command = self._commands[self._index - 1]
+        command.undo()
         self._index -= 1
-        self._commands[self._index].undo()
         self._changed()
         return True
 
@@ -284,6 +285,7 @@ class AddObjectsCommand(Command):
         else:
             start = max(0, min(self.index, len(self.document.objects)))
             records = [(item, start + offset) for offset, item in enumerate(self.items)]
+        self.document.validate_object_additions(self.items)
         self._indices = []
         for item, index in records:
             self.document.add_object(item, index)
@@ -328,6 +330,7 @@ class RemoveObjectsCommand(Command):
             self.document.remove_object(item.id)
 
     def undo(self) -> None:
+        self.document.validate_object_additions(item for item, _ in self._removed)
         for item, index in self._removed:
             self.document.add_object(item, index)
 
@@ -370,6 +373,10 @@ class ReplaceObjectsCommand(Command):
             self._insertion_index = (
                 self._removed[0][1] if self._removed else len(self.document.objects)
             )
+        self.document.validate_object_additions(
+            self.items,
+            replacing_ids=(item.id for item, _ in self._removed),
+        )
         for item, _ in reversed(self._removed):
             self.document.remove_object(item.id)
         insertion = min(
@@ -380,6 +387,10 @@ class ReplaceObjectsCommand(Command):
             self.document.add_object(item, insertion + offset)
 
     def undo(self) -> None:
+        self.document.validate_object_additions(
+            (item for item, _ in self._removed),
+            replacing_ids=(item.id for item in self.items),
+        )
         for item in reversed(self.items):
             self.document.remove_object(item.id)
         for item, index in self._removed:
@@ -463,8 +474,16 @@ class UpdateObjectShapeCommand(Command):
         geometry_changed = item.geometry != geometry
         if not transform_changed and not geometry_changed:
             return
-        item.transform = transform.copy()
-        item.geometry = copy.deepcopy(dict(geometry))
+        payload = item.to_dict()
+        payload["transform"] = transform.to_dict()
+        payload["geometry"] = copy.deepcopy(dict(geometry))
+        validated = SceneObject.from_dict(payload)
+        self.document.validate_object_additions(
+            (validated,),
+            replacing_ids=(item.id,),
+        )
+        item.transform = validated.transform.copy()
+        item.geometry = copy.deepcopy(validated.geometry)
         self.document.touch()
 
     def redo(self) -> None:
@@ -696,6 +715,7 @@ class DuplicateObjectsCommand(Command):
         if not self.duplicates:
             self.duplicates = self.document.duplicate_objects(self.object_ids, self.offset_mm)
         else:
+            self.document.validate_object_additions(self.duplicates)
             for item in self.duplicates:
                 self.document.add_object(item)
 
