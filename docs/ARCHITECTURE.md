@@ -613,13 +613,26 @@ continuous fit validation passes again; absent that positive classification, a
 shallow arc remains cubic even if its endpoint chord alone falls within the fit
 tolerance. Other spans use bounded cubic Béziers. Cubic candidates use a
 positive, tangent-constrained handle solve followed by bounded Newton
-reparameterization.
+reparameterization. The user-selected native fitting tolerance is the
+authoritative ceiling; the existing internal maximum remains 80% of that value.
+Each authoritative anchor span can tighten that maximum from its own physical
+geometry and raster resolution, without consulting the complete contour's
+bounding box. Its rotation-independent local scale is
+`min(arc length, max(chord length, 2 * chord sagitta))`. The effective tolerance
+is the smaller of the internal maximum and the larger of 4% of that scale,
+3/8 of the coarsest source-pixel pitch, and 1.5 pitches in the 4x contour
+workspace. The last two terms are the same physical floor at the production
+oversampling factor and prevent automatic tightening from fitting raster
+stair-steps more finely than the source supports. Once selected, a span's
+tolerance stays stable through recursive splits; an independently considered
+merge recomputes the rule over its combined target and must pass all ordinary
+validation again.
 Before accepting a material cubic at its chord-length point correspondence, the
 fitter also measures arc-length-weighted RMS error, signed normal bias, and the
 fraction of error lying on one side of the curve. A maximum-error-compliant but
 materially biased distribution is sent through up to three existing bounded
-Newton reparameterizations. This centering gate does not lower the requested
-tolerance, add raster stair-step anchors, or replace the continuous proof.
+Newton reparameterizations. This centering gate does not add raster stair-step
+anchors or replace the continuous proof.
 Every accepted line or cubic has a conservative continuous error proof: each
 target edge and the corresponding restricted Bézier interval form a difference
 cubic whose control hull bounds all between-sample deviation. A candidate with
@@ -637,9 +650,10 @@ verified merges, longest smooth-span size, and maximum estimated deviation.
 That deviation is relative to threshold-derived and optionally smoothed
 contours; it is not a
 physical-accuracy certification of the source image. Highly pixel-constrained
-`A` and `S` glyphs remain an accepted first-release quality limitation because
-narrow counters and curved shoulders can still vary with raster phase and
-threshold; those cases require a cleaner or higher-resolution source.
+glyphs can still vary at narrow counters and curved shoulders with raster phase
+and threshold, but their small spans now receive the resolution-bounded local
+budget automatically; a cleaner or higher-resolution source still supplies
+more trustworthy boundary evidence.
 
 Digital boundary transitions are counted at source resolution before the 4×
 workspace and again before full-point contour extraction, so a single connected

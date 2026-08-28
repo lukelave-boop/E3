@@ -28,6 +28,81 @@ application, controller, motion, arming, laser-output, packaging, manifest, or
 publishing implementation changed; no package build or physical test was
 required or performed.
 
+## Active raster-vectorization local scale tolerance
+
+The 0.10 mm user-selected native fitting tolerance remains the authoritative
+ceiling, and the existing internal maximum remains 80% of it (0.08 mm at the
+default). Each authoritative fitting-anchor span now derives a
+rotation-independent local scale as
+`min(arc length, max(chord length, 2 * chord sagitta))`. Its effective tolerance
+is `min(internal maximum, max(0.04 * local scale, resolution floor))`. The
+resolution floor is the larger of 3/8 of the coarsest source-pixel pitch and
+1.5 pitches in the 4x contour workspace; those are the same physical distance
+at the production oversampling factor. A selected span tolerance stays stable
+through recursive splits so rejected candidates do not progressively chase
+raster stairs. An adjacent merge recomputes the same rule over its combined
+target and still passes the existing cubic solve, bounded Newton centering,
+continuous maximum-error proof, frame/extrema validation, and adjacent-arc
+topology checks. No complete-contour bounding box participates in the rule.
+
+At the Coleman 80.0 / 1,170 = **0.0683760684 mm** source pitch, the 4x contour
+pitch is **0.0170940171 mm** and the automatic floor is **0.0256410256 mm**. A
+1.0 mm local span therefore receives 0.040 mm; spans at or above 2.0 mm retain
+the current 0.080 mm internal maximum. The deterministic 1,170 x 444 Coleman
+regression source now includes separately measurable 1.44-1.52 mm bottom-row
+`A`, `P`, `S`, and `E` glyphs at that same physical pitch. Their old/new
+maximum/RMS fit errors in mm were: `A` 0.078227/0.022455 ->
+0.020269/0.006344; `P` 0.036875/0.010542 -> 0.036875/0.009098; `S`
+0.058847/0.020132 -> 0.058847/0.019389; and `E` 0.079740/0.016573 ->
+0.042096/0.014607. Maximum error as a fraction of glyph height changed from
+5.25% to 1.36% for `A`, remained 2.48% for `P`, remained 3.87% for `S`, and
+changed from 5.30% to 2.80% for `E`. Aggregate RMS fell 29%. Their outer native
+segment counts changed from 13/15/17/18 to 18/16/18/19 (63 to 71 total), a
+bounded 12.7% increase rather than an anchor explosion.
+
+Representative small-glyph source spans quantify the selected local budgets.
+The `A` curved span has 0.598 mm arc, 0.310 mm chord, 0.208 mm sagitta, and the
+0.025641 mm resolution floor; its longest classified straight run is 1.223 mm
+with 0.019646 mm maximum orthogonal residual. The `P` curve has 2.816 mm arc,
+1.531 mm chord, 0.674 mm sagitta, and 0.061234 mm tolerance. The `S` curve has
+2.333 mm arc, 0.872 mm chord, 0.702 mm sagitta, and 0.056135 mm tolerance. The
+small `E` curve has 1.395 mm arc, 0.599 mm chord, 0.433 mm sagitta, and
+0.034678 mm tolerance; its straight 0.547 mm stroke uses the 0.025641 mm floor.
+Sagitta-equivalent radii for those non-circular curved spans are approximately
+0.162, 0.772, 0.486, and 0.320 mm respectively.
+
+Large-feature quality remains stable. The 5.23 x 7.64 mm Coleman `E` retains
+native sequence `LCLLCLCCCCCCLCLCLC`, 18 segments, and 0.067771 mm maximum
+error; RMS changed from 0.018437 to 0.018387 mm. The exact embedded Coleman `P`
+bowl remains 1.350 x 2.376 mm. Its 147-sample outer curve has 2.779 mm arc,
+2.142 mm chord, 0.598 mm sagitta, an approximately 1.258 mm
+sagitta-equivalent radius, and retains the full 0.080 mm budget. That curve's
+nearest-point maximum/RMS/signed error remains
+0.066449/0.033027/-0.005640 mm. The contour sequence changes only in its tighter
+0.946 mm closure, from `LLCCCCLLCLLCLLC` to `LLCCCCLLCLLCLLCCC` (15 to 17
+segments), while whole-contour RMS improves from 0.027719 to 0.025085 mm.
+
+One six-run prepared-source timing session (first run discarded) measured the
+mixed Coleman exact fit at 1.897 seconds with the former ceiling-only rule and
+1.747 seconds with local scaling; segment count changed 310 -> 321 and aggregate
+RMS changed 0.013401 -> 0.012835 mm. The small-letter-only crop changed 0.221 ->
+0.311 seconds, 75 -> 86 segments, and 0.018843 -> 0.013506 mm aggregate RMS.
+The large-feature-only crop changed 1.215 -> 1.235 seconds with 115 segments in
+both cases and 0.018679 -> 0.018337 mm RMS. Useful Quick Preview remains outside
+exact fitting and measured 0.043 seconds for the full source, 0.002 seconds for
+the small crop, and 0.020 seconds for the large crop.
+
+Focused Coleman, analytic scale, one-pixel translation, rotated glyph,
+higher-resolution convergence, straight-run, small/large curve, fitter, dialog,
+and desktop vectorization verification passes **118 tests** with four xdist
+workers. Broader native-path, project/history, toolpath, planning/golden,
+digest/cache, preflight, and desktop native-path verification passes **397
+tests**, also with four workers. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass. This is
+automated Qt-free/offscreen authoring verification only; no interactive GUI,
+camera, controller, motion, arming, laser-output, or physical accuracy test was
+performed or is claimed.
+
 ## Active raster-vectorization curved-span centering
 
 The exact cubic fitter now checks the spatial distribution of a material

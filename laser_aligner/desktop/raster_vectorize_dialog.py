@@ -485,9 +485,10 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self.simplification_spin.setValue(defaults.simplification_tolerance_mm)
         self.simplification_spin.setToolTip(
             "Maximum continuously validated native line/Bezier fitting error in "
-            "millimetres at the image's displayed size. Preview flattening and "
-            "intentional smoothing are measured separately; machine planning uses "
-            "its own controlled flattening tolerance."
+            "millimetres at the image's displayed size. Small local spans "
+            "automatically use a tighter resolution-bounded fit; this value remains "
+            "the ceiling. Preview flattening and intentional smoothing are measured "
+            "separately; machine planning uses its own controlled flattening tolerance."
         )
         form.addRow("Native fitting tolerance", self.simplification_spin)
         return group

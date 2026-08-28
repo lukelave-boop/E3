@@ -63,6 +63,9 @@ _CUBIC_DISTRIBUTION_RMS_TRIGGER_TOLERANCE_FRACTION = 0.45
 _CUBIC_DISTRIBUTION_BIAS_TRIGGER_TOLERANCE_FRACTION = 0.04
 _CUBIC_DISTRIBUTION_ONE_SIDED_TRIGGER_FRACTION = 0.67
 _CUBIC_DISTRIBUTION_MAX_REPARAMETERIZATIONS = 3
+_LOCAL_FIT_SCALE_FRACTION = 0.04
+_LOCAL_FIT_SOURCE_PIXEL_FRACTION = 0.375
+_LOCAL_FIT_WORKSPACE_PITCH_MULTIPLE = 1.5
 _MAX_REPARAMETERIZATION_ITERATIONS = 8
 _MAX_FIT_RECURSION = 18
 _MAX_FIT_VALIDATION_RECURSION = 18
@@ -715,6 +718,16 @@ class _StraightRun:
     max_orthogonal_residual_mm: float
     maximum_directional_turn_degrees: float
     directional_range_degrees: float
+
+
+@dataclass(frozen=True, slots=True)
+class _LocalFitScale:
+    effective_tolerance_mm: float
+    resolution_floor_mm: float
+    span_scale_mm: float
+    arc_length_mm: float
+    chord_length_mm: float
+    chord_sagitta_mm: float
 
 
 @dataclass(slots=True)
@@ -2029,6 +2042,79 @@ def _distance_to_segment(
     return np.linalg.norm(points - projections, axis=1)
 
 
+def _local_fit_scale(
+    points: np.ndarray,
+    maximum_tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float] | None,
+) -> _LocalFitScale:
+    """Return a resolution-bounded, local fitting-span tolerance.
+
+    The user-selected tolerance remains the ceiling.  The local geometric
+    scale is rotation-independent: a straight span is represented by its
+    chord, while a turning span also includes twice its chord sagitta.  Capping
+    that measure by physical arc length keeps loops and strongly folded spans
+    finite without consulting the complete contour's bounding box. The chosen
+    budget remains stable through recursive fitting of this authoritative span,
+    preventing raster stair steps from tightening the rule again after a split.
+
+    Automatic tightening stops at the larger of 3/8 of one source pixel and
+    1.5 contour-workspace pitches.  Both describe the same physical floor at
+    the production 4x oversampling factor, but retaining both terms makes the
+    source-resolution and contour-workspace contracts explicit.
+    """
+
+    values = np.asarray(points, dtype=np.float64)
+    if source_pixel_spacing_mm is None:
+        # Compatibility callers provide no raster quantization evidence. Keep
+        # their explicitly supplied tolerance authoritative instead of
+        # inventing a resolution floor.
+        return _LocalFitScale(
+            effective_tolerance_mm=max(0.0, float(maximum_tolerance_mm)),
+            resolution_floor_mm=0.0,
+            span_scale_mm=0.0,
+            arc_length_mm=0.0,
+            chord_length_mm=0.0,
+            chord_sagitta_mm=0.0,
+        )
+    if len(values) < 2:
+        arc_length = 0.0
+        chord_length = 0.0
+        chord_sagitta = 0.0
+    else:
+        arc_length = float(
+            np.sum(np.linalg.norm(np.diff(values, axis=0), axis=1))
+        )
+        chord_length = float(np.linalg.norm(values[-1] - values[0]))
+        chord_sagitta = float(
+            np.max(_distance_to_segment(values, values[0], values[-1]))
+        )
+    span_scale = min(
+        arc_length,
+        max(chord_length, 2.0 * chord_sagitta),
+    )
+    source_pitch = max(abs(float(value)) for value in source_pixel_spacing_mm)
+    workspace_pitch = source_pitch / RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
+    resolution_floor = max(
+        _LOCAL_FIT_SOURCE_PIXEL_FRACTION * source_pitch,
+        _LOCAL_FIT_WORKSPACE_PITCH_MULTIPLE * workspace_pitch,
+    )
+    effective_tolerance = min(
+        maximum_tolerance_mm,
+        max(
+            resolution_floor,
+            _LOCAL_FIT_SCALE_FRACTION * span_scale,
+        ),
+    )
+    return _LocalFitScale(
+        effective_tolerance_mm=max(0.0, float(effective_tolerance)),
+        resolution_floor_mm=max(0.0, float(resolution_floor)),
+        span_scale_mm=max(0.0, float(span_scale)),
+        arc_length_mm=max(0.0, float(arc_length)),
+        chord_length_mm=max(0.0, float(chord_length)),
+        chord_sagitta_mm=max(0.0, float(chord_sagitta)),
+    )
+
+
 def _cubic_values(
     start: np.ndarray,
     control_1: np.ndarray,
@@ -3038,6 +3124,7 @@ def _merge_smooth_pieces(
     budget: _ComplexityBudget,
     *,
     minimum_segment_count: int,
+    source_pixel_spacing_mm: tuple[float, float] | None = None,
 ) -> list[_FittedPiece]:
     """Merge adjacent like-kind pieces only after full fit revalidation."""
 
@@ -3055,11 +3142,16 @@ def _merge_smooth_pieces(
             index += 1
             continue
         target = np.vstack((first.target_points[:-1], second.target_points))
+        effective_tolerance = _local_fit_scale(
+            target,
+            tolerance_mm,
+            source_pixel_spacing_mm,
+        ).effective_tolerance_mm
         merged: _FittedPiece | None = None
         if isinstance(first.segment, _LineSegment):
             merged = _attempt_line_piece(
                 target,
-                tolerance_mm,
+                effective_tolerance,
                 budget,
                 hard_start=first.hard_start,
                 hard_end=second.hard_end,
@@ -3067,7 +3159,7 @@ def _merge_smooth_pieces(
         else:
             merged, _split, _best = _attempt_cubic_piece(
                 target,
-                tolerance_mm,
+                effective_tolerance,
                 first.start_tangent,
                 second.end_tangent,
                 budget,
@@ -3282,6 +3374,11 @@ def _fit_contour(
     for offset, span in enumerate(spans):
         start = anchors[offset]
         end = anchors[(offset + 1) % len(anchors)]
+        span_tolerance = _local_fit_scale(
+            span,
+            fit_tolerance,
+            source_pixel_spacing_mm,
+        ).effective_tolerance_mm
         hard_start = start in corner_set
         hard_end = end in corner_set
         start_tangent = (
@@ -3302,7 +3399,7 @@ def _fit_contour(
         if straight_span_flags[offset]:
             line = _attempt_line_piece(
                 span,
-                fit_tolerance,
+                span_tolerance,
                 budget,
                 hard_start=hard_start,
                 hard_end=hard_end,
@@ -3314,7 +3411,7 @@ def _fit_contour(
         pieces.extend(
             _fit_span_pieces(
                 span,
-                fit_tolerance,
+                span_tolerance,
                 budget,
                 start_tangent=start_tangent,
                 end_tangent=end_tangent,
@@ -3334,6 +3431,7 @@ def _fit_contour(
         control_maximum,
         budget,
         minimum_segment_count=max(4, len(corner_set)),
+        source_pixel_spacing_mm=source_pixel_spacing_mm,
     )
     if not pieces:
         raise RasterVectorizationError("A contour could not be fitted to vector geometry")

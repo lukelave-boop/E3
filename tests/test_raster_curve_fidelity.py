@@ -9,6 +9,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 
 import laser_aligner.project.raster_vectorize as fitter
 from laser_aligner.project.raster_asset import read_raster_asset_payload
@@ -316,10 +317,17 @@ def test_actual_coleman_p_bowl_refines_biased_long_cubic(
         0.08,
         source_pixel_spacing_mm=(_COLEMAN_PITCH_MM, _COLEMAN_PITCH_MM),
     )
-    assert _segment_sequence(bowl) == "LLCCCCLLCLLCLLC"
+    assert _segment_sequence(bowl) == "LLCCCCLLCLLCLLCCC"
 
     outer_curve, target = _longest_cubic(bowl)
     assert len(target) == 147
+    outer_scale = fitter._local_fit_scale(
+        target,
+        0.08,
+        (_COLEMAN_PITCH_MM, _COLEMAN_PITCH_MM),
+    )
+    assert outer_scale.span_scale_mm >= 2.0
+    assert outer_scale.effective_tolerance_mm == 0.08
     metrics = _error_metrics(target, outer_curve)
     assert outer_curve.fitting_error_mm <= 0.068
     assert metrics.maximum_mm <= 0.068
@@ -517,3 +525,157 @@ def test_rounded_c_and_o_regions_remain_cubic() -> None:
             for segment in fitted.segments
         )
         assert fitted.max_fitting_error_mm <= 0.08
+
+
+def test_local_fit_tolerance_scales_spans_but_stops_at_raster_resolution() -> None:
+    pitch_mm = _COLEMAN_PITCH_MM
+    angles = np.linspace(0.0, math.pi, 129)
+    small_arc = np.column_stack((0.5 * np.cos(angles), 0.5 * np.sin(angles)))
+    large_arc = np.column_stack((2.5 * np.cos(angles), 2.5 * np.sin(angles)))
+    tiny_arc = np.column_stack((0.2 * np.cos(angles), 0.2 * np.sin(angles)))
+
+    small = fitter._local_fit_scale(small_arc, 0.08, (pitch_mm, pitch_mm))
+    large = fitter._local_fit_scale(large_arc, 0.08, (pitch_mm, pitch_mm))
+    tiny = fitter._local_fit_scale(tiny_arc, 0.08, (pitch_mm, pitch_mm))
+
+    assert small.arc_length_mm == pytest.approx(math.pi / 2.0, rel=1e-4)
+    assert small.chord_length_mm == pytest.approx(1.0, abs=1e-12)
+    assert small.chord_sagitta_mm == pytest.approx(0.5, abs=1e-12)
+    assert small.span_scale_mm == pytest.approx(1.0, abs=1e-12)
+    assert small.effective_tolerance_mm == pytest.approx(0.04, abs=1e-12)
+    assert large.span_scale_mm == pytest.approx(5.0, abs=1e-12)
+    assert large.effective_tolerance_mm == pytest.approx(0.08, abs=1e-12)
+    assert tiny.resolution_floor_mm == pytest.approx(0.0256410256, rel=1e-8)
+    assert tiny.effective_tolerance_mm == pytest.approx(
+        tiny.resolution_floor_mm,
+        abs=1e-12,
+    )
+
+    tighter_user_ceiling = fitter._local_fit_scale(
+        tiny_arc,
+        0.02,
+        (pitch_mm, pitch_mm),
+    )
+    assert tighter_user_ceiling.effective_tolerance_mm == 0.02
+
+    angle = 0.47
+    rotation = np.asarray(
+        (
+            (math.cos(angle), -math.sin(angle)),
+            (math.sin(angle), math.cos(angle)),
+        )
+    )
+    transformed = small_arc @ rotation.T + np.asarray((8.0, -3.0))
+    rotated = fitter._local_fit_scale(transformed, 0.08, (pitch_mm, pitch_mm))
+    assert rotated.span_scale_mm == pytest.approx(small.span_scale_mm, abs=1e-12)
+    assert rotated.effective_tolerance_mm == pytest.approx(
+        small.effective_tolerance_mm,
+        abs=1e-12,
+    )
+
+
+def _small_s_source(*, shift_high_px: int = 0, rotate_degrees: float = 0.0) -> np.ndarray:
+    high = np.full((320, 320), 255, dtype=np.uint8)
+    cv2.putText(
+        high,
+        "S",
+        (70 + shift_high_px, 245 + shift_high_px),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        3.6,
+        0,
+        8,
+        cv2.LINE_AA,
+    )
+    if rotate_degrees:
+        transform = cv2.getRotationMatrix2D((160.0, 160.0), rotate_degrees, 1.0)
+        high = cv2.warpAffine(
+            high,
+            transform,
+            (320, 320),
+            flags=cv2.INTER_LINEAR,
+            borderValue=255,
+        )
+    return high
+
+
+def _centered_fit_samples(fit: _ContourFit) -> np.ndarray:
+    points = _sample_segments(fit.fitted.segments, count=129)
+    return points - (np.min(points, axis=0) + np.max(points, axis=0)) / 2.0
+
+
+def _symmetric_maximum_distance(first: np.ndarray, second: np.ndarray) -> float:
+    distances = np.linalg.norm(first[:, None, :] - second[None, :, :], axis=2)
+    return max(
+        float(np.max(np.min(distances, axis=1))),
+        float(np.max(np.min(distances, axis=0))),
+    )
+
+
+def test_small_glyph_is_phase_stable_and_converges_with_resolution(
+    tmp_path: Path,
+) -> None:
+    pitch_mm = _COLEMAN_PITCH_MM
+    high = _small_s_source()
+    translated_high = _small_s_source(shift_high_px=4)
+    low = cv2.resize(high, (80, 80), interpolation=cv2.INTER_AREA)
+    translated_low = cv2.resize(
+        translated_high,
+        (80, 80),
+        interpolation=cv2.INTER_AREA,
+    )
+    low_fit = _fit_raster_outer_contours(
+        tmp_path / "small-s-low.png",
+        low,
+        pitch_mm=pitch_mm,
+    )[0]
+    translated_fit = _fit_raster_outer_contours(
+        tmp_path / "small-s-translated.png",
+        translated_low,
+        pitch_mm=pitch_mm,
+    )[0]
+    high_fit = _fit_raster_outer_contours(
+        tmp_path / "small-s-high.png",
+        high,
+        pitch_mm=pitch_mm / 4.0,
+    )[0]
+
+    assert _segment_sequence(low_fit) == _segment_sequence(translated_fit)
+    assert _symmetric_maximum_distance(
+        _centered_fit_samples(low_fit),
+        _centered_fit_samples(translated_fit),
+    ) <= 1e-10
+    assert _symmetric_maximum_distance(
+        _centered_fit_samples(low_fit),
+        _centered_fit_samples(high_fit),
+    ) <= 0.05
+    assert len(low_fit.fitted.segments) <= 24
+    assert len(high_fit.fitted.segments) <= len(low_fit.fitted.segments)
+    assert any(
+        isinstance(segment, fitter._CubicSegment)
+        for segment in low_fit.fitted.segments
+    )
+
+
+def test_small_rotated_glyph_keeps_curves_without_anchor_explosion(
+    tmp_path: Path,
+) -> None:
+    pitch_mm = _COLEMAN_PITCH_MM
+    rotated = cv2.resize(
+        _small_s_source(rotate_degrees=23.0),
+        (80, 80),
+        interpolation=cv2.INTER_AREA,
+    )
+    fit = _fit_raster_outer_contours(
+        tmp_path / "small-s-rotated.png",
+        rotated,
+        pitch_mm=pitch_mm,
+    )[0]
+    samples = _sample_segments(fit.fitted.segments, count=129)
+    feature_scale_mm = float(np.max(np.ptp(samples, axis=0)))
+
+    assert len(fit.fitted.segments) <= 28
+    assert any(
+        isinstance(segment, fitter._CubicSegment)
+        for segment in fit.fitted.segments
+    )
+    assert fit.fitted.max_fitting_error_mm / feature_scale_mm <= 0.045
