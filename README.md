@@ -109,10 +109,13 @@ Native desktop workflow:
   automatic, manual, or usable-alpha detection; and creates one native
   multi-contour line/cubic PATH while preserving the image frame, position,
   rotation, and mirrors. Closed-contour fitting uses full-cycle seam
-  canonicalization, physically persistent corner evidence, generic straight-run
-  anchors, shared tangents at non-corner joins, constrained cubic handles,
-  Newton reparameterization, and conservative continuous fit validation so
-  raster phase does not invent angular shoulders or hide between-sample lobes.
+  canonicalization, physically persistent corner evidence, scale-aware straight-
+  run classification on both cornered and smooth contours, shared tangents at
+  non-corner joins, constrained cubic handles, Newton reparameterization, and
+  conservative continuous fit validation. Material straight source runs persist
+  as native lines after revalidation, while shallow arcs and rounded transitions
+  remain cubic, so raster phase does not invent angular shoulders or hide
+  between-sample lobes.
   Compatible adjacent spans merge only after the same fit and native-topology
   checks pass. Replace, Keep, optional source hiding, safe-layer creation, and
   vector creation are one undoable operation
@@ -461,7 +464,9 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   threshold-derived contour, so source resolution, antialiasing, threshold, and
   smoothing still limit real accuracy. Projects retain fitted native line and
   cubic segments; bounded flattened points are transient preview, topology, and
-  planning artifacts rather than editable node data. Exact fitted extrema must
+  planning artifacts rather than editable node data. Persistent straight-source
+  evidence is scale-aware and rotation-independent; short flat raster plateaus
+  on curved regions are not sufficient to force a line. Exact fitted extrema must
   remain inside the reviewed source frame, and accepted compound contours must
   retain provable separation through their flattening-error envelopes. Highly
   pixel-constrained `A` and `S` glyphs can still vary at narrow counters and

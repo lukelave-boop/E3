@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import pytest
 
 import laser_aligner.project.raster_vectorize as raster_vectorize
 from laser_aligner.project import (
+    PathCubicSegment,
+    PathLineSegment,
     RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationOptions,
@@ -126,6 +129,32 @@ def _capsule_pair(
         # The antialiased cap reaches the preceding row at this threshold, so this
         # is one attached boundary pixel rather than a third isolated component.
         pixels[bottom, center_x] = 0
+    return pixels
+
+
+def _coleman_stencil() -> np.ndarray:
+    pixels = np.full((444, 1170), 255, dtype=np.uint8)
+    cv2.putText(
+        pixels,
+        "COLEMAN",
+        (45, 235),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        4.4,
+        0,
+        18,
+        cv2.LINE_AA,
+    )
+    for start in (250, 470, 690, 910):
+        cv2.rectangle(pixels, (start, 275), (start + 175, 292), 0, -1)
+    cv2.rectangle(pixels, (150, 345), (1020, 375), 0, -1)
+    for center_x in range(210, 1010, 160):
+        cv2.rectangle(
+            pixels,
+            (center_x - 5, 335),
+            (center_x + 5, 385),
+            255,
+            -1,
+        )
     return pixels
 
 
@@ -357,6 +386,154 @@ def _assert_result_in_frame(result: object) -> None:
     for contour in result.contours:
         points = np.asarray(contour.points, dtype=np.float64)
         assert np.all(np.abs(points) <= 0.500000001)
+
+
+def _native_physical_segments(
+    contour: object,
+    width_mm: float,
+    height_mm: float,
+) -> list[tuple[object, np.ndarray, np.ndarray]]:
+    scale = np.asarray((width_mm, height_mm), dtype=np.float64)
+    start = np.asarray(contour.native_subpath.start, dtype=np.float64) * scale
+    output: list[tuple[object, np.ndarray, np.ndarray]] = []
+    for segment in contour.native_subpath.segments:
+        end = np.asarray(segment.to, dtype=np.float64) * scale
+        output.append((segment, start, end))
+        start = end
+    return output
+
+
+def _assert_native_line_tracks_raw_samples(
+    contour: object,
+    raw_points: np.ndarray,
+    width_mm: float,
+    height_mm: float,
+    predicate: Callable[[np.ndarray, np.ndarray], bool],
+) -> None:
+    for native_segment, start, end in _native_physical_segments(
+        contour,
+        width_mm,
+        height_mm,
+    ):
+        if not isinstance(native_segment, PathLineSegment) or not predicate(start, end):
+            continue
+        start_index = int(np.argmin(np.linalg.norm(raw_points - start, axis=1)))
+        end_index = int(np.argmin(np.linalg.norm(raw_points - end, axis=1)))
+        assert float(np.linalg.norm(raw_points[start_index] - start)) < 1e-8
+        assert float(np.linalg.norm(raw_points[end_index] - end)) < 1e-8
+        target = raw_points[
+            raster_vectorize._circular_indices(
+                start_index,
+                end_index,
+                len(raw_points),
+            )
+        ]
+        assert float(
+            np.max(raster_vectorize._distance_to_segment(target, start, end))
+        ) <= _FIT_TOLERANCE_MM * 0.80 + 1e-12
+        return
+    pytest.fail("The expected Coleman source edge was not a native line")
+
+
+def test_coleman_e_outer_edges_are_native_lines_and_glyph_curves_remain(
+    tmp_path: Path,
+) -> None:
+    pixels = _coleman_stencil()
+    width_mm = 80.0
+    height_mm = 30.358974
+    result, fits = _fit_payload_contours(
+        tmp_path / "coleman-stencil.png",
+        pixels,
+        RasterVectorizationOptions(
+            detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+            threshold=122,
+            minimum_feature_area_mm2=0.05,
+            smoothing_mm=0.0,
+            simplification_tolerance_mm=0.10,
+            contour_output=RasterContourOutput.ALL_CONTOURS,
+        ),
+        width_mm=width_mm,
+        height_mm=height_mm,
+    )
+    e_fit = next(
+        fitted
+        for fitted in fits
+        if -19.0 < float(np.min(fitted.raw_points[:, 0])) < -17.0
+    )
+    e_contour = next(
+        contour
+        for contour in result.contours
+        if -19.0
+        < float(np.min(np.asarray(contour.points)[:, 0] * width_mm))
+        < -17.0
+    )
+    lower = np.min(e_fit.raw_points, axis=0)
+    upper = np.max(e_fit.raw_points, axis=0)
+
+    _assert_native_line_tracks_raw_samples(
+        e_contour,
+        e_fit.raw_points,
+        width_mm,
+        height_mm,
+        lambda start, end: (
+            abs(float(end[1] - start[1])) < 0.05
+            and float(np.linalg.norm(end - start)) > 3.0
+            and float((start[1] + end[1]) / 2.0) < lower[1] + 0.10
+        ),
+    )
+    _assert_native_line_tracks_raw_samples(
+        e_contour,
+        e_fit.raw_points,
+        width_mm,
+        height_mm,
+        lambda start, end: (
+            abs(float(end[1] - start[1])) < 0.05
+            and float(np.linalg.norm(end - start)) > 3.0
+            and float((start[1] + end[1]) / 2.0) > upper[1] - 0.10
+        ),
+    )
+    _assert_native_line_tracks_raw_samples(
+        e_contour,
+        e_fit.raw_points,
+        width_mm,
+        height_mm,
+        lambda start, end: (
+            abs(float(end[0] - start[0])) < 0.05
+            and float(np.linalg.norm(end - start)) > 5.0
+            and float((start[0] + end[0]) / 2.0) < lower[0] + 0.10
+        ),
+    )
+    assert any(
+        isinstance(segment, PathCubicSegment)
+        for segment in e_contour.native_subpath.segments
+    )
+    rounded_glyphs = [
+        contour
+        for contour in result.contours
+        if float(np.max(np.asarray(contour.points)[:, 1] * height_mm)) > 0.0
+        and (
+            (
+                -37.0
+                < float(np.min(np.asarray(contour.points)[:, 0] * width_mm))
+                < -30.5
+            )
+            or (
+                -30.5
+                < float(np.min(np.asarray(contour.points)[:, 0] * width_mm))
+                < -24.0
+            )
+        )
+    ]
+    assert len(rounded_glyphs) >= 2
+    assert all(
+        contour.native_subpath.segments
+        and any(
+            isinstance(segment, PathCubicSegment)
+            for segment in contour.native_subpath.segments
+        )
+        for contour in rounded_glyphs
+    )
+    assert e_contour.max_fitting_error_mm <= _FIT_TOLERANCE_MM * 0.80 + 1e-12
 
 
 def test_equal_vertical_capsules_at_integer_pixel_phases_are_equivalent(

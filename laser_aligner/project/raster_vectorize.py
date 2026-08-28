@@ -46,6 +46,14 @@ _CORNER_MINIMUM_TURN_DEGREES = 35.0
 _CORNER_INNER_MINIMUM_TURN_DEGREES = 22.5
 _CORNER_MINIMUM_SCALE_AGREEMENT = 0.60
 _STRAIGHT_MAXIMUM_TURN_DEGREES = 6.0
+_STRAIGHT_LOCAL_MAXIMUM_TURN_DEGREES = 12.0
+_STRAIGHT_MAXIMUM_DIRECTION_RANGE_DEGREES = 24.0
+_STRAIGHT_QUANTIZATION_ALLOWANCE_STEPS = 1.10
+_STRAIGHT_LOCAL_QUANTIZATION_ALLOWANCE_STEPS = 1.50
+_STRAIGHT_MINIMUM_TOLERANCE_MULTIPLE = 4.0
+_STRAIGHT_MINIMUM_SOURCE_PIXEL_MULTIPLE = 4.0
+_STRAIGHT_MINIMUM_OVERSAMPLED_STEP_MULTIPLE = 12.0
+_STRAIGHT_MINIMUM_PERIMETER_FRACTION = 1.0 / 16.0
 _MAX_CORNER_WINDOW_POINTS = 12
 _MAX_SMOOTHING_RADIUS_POINTS = 64
 _MAX_FIT_TANGENT_WINDOW_POINTS = 12
@@ -692,6 +700,16 @@ class _FittedPiece:
     sample_error_sum_mm: float
     sample_squared_error_sum_mm2: float
     sample_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _StraightRun:
+    start_index: int
+    end_index: int
+    length_mm: float
+    max_orthogonal_residual_mm: float
+    maximum_directional_turn_degrees: float
+    directional_range_degrees: float
 
 
 @dataclass(slots=True)
@@ -1533,8 +1551,11 @@ def _fitting_anchors(
     points_or_count: np.ndarray | int,
     corners: list[int],
     tolerance_mm: float | None = None,
+    *,
+    straight_runs: tuple[_StraightRun, ...] | None = None,
+    source_pixel_spacing_mm: tuple[float, float] | None = None,
 ) -> list[int]:
-    """Choose hard corners or deterministic physical arc-length soft anchors."""
+    """Combine hard corners with deterministic straight-run and soft anchors."""
 
     if isinstance(points_or_count, np.ndarray):
         points = np.asarray(points_or_count, dtype=np.float64)
@@ -1545,18 +1566,38 @@ def _fitting_anchors(
     if point_count < 4:
         return list(range(point_count))
     anchors = sorted(set(int(index) % point_count for index in corners))
+    runs: tuple[_StraightRun, ...] = ()
+    if points is not None:
+        tolerance = 0.0 if tolerance_mm is None else max(0.0, float(tolerance_mm))
+        runs = (
+            _persistent_straight_runs(
+                points,
+                tolerance,
+                source_pixel_spacing_mm=source_pixel_spacing_mm,
+            )
+            if straight_runs is None
+            else straight_runs
+        )
+        if anchors:
+            anchors.extend(
+                index
+                for run in runs
+                for index in (run.start_index, run.end_index)
+            )
+            anchors = sorted(set(anchors))
+        elif runs:
+            return _long_straight_run_anchors(
+                points,
+                tolerance,
+                straight_runs=runs,
+                source_pixel_spacing_mm=source_pixel_spacing_mm,
+            )
     if len(anchors) >= 2:
         return anchors
 
-    if points is not None and not anchors:
-        straight_anchors = _long_straight_run_anchors(
-            points,
-            0.0 if tolerance_mm is None else max(0.0, float(tolerance_mm)),
-        )
-        if straight_anchors:
-            return straight_anchors
-
-    target_count = 4 if not anchors else 2
+    target_count = 8 if points is not None and not anchors and not runs else 4
+    if anchors:
+        target_count = 2
     if points is None:
         for index in np.linspace(
             0,
@@ -1611,6 +1652,281 @@ def _run_arc_length(run: np.ndarray, steps: np.ndarray) -> float:
     return float(np.sum(steps[run[:-1]]))
 
 
+def _circular_indices(start: int, end: int, point_count: int) -> np.ndarray:
+    if end >= start:
+        return np.arange(start, end + 1, dtype=np.int64)
+    return np.concatenate(
+        (
+            np.arange(start, point_count, dtype=np.int64),
+            np.arange(0, end + 1, dtype=np.int64),
+        )
+    )
+
+
+def _normal_quantization_spacing(
+    direction: np.ndarray,
+    fallback_step_mm: float,
+    source_pixel_spacing_mm: tuple[float, float] | None,
+) -> float:
+    if source_pixel_spacing_mm is None:
+        return fallback_step_mm
+    normal = np.asarray((-direction[1], direction[0]), dtype=np.float64)
+    x_spacing, y_spacing = source_pixel_spacing_mm
+    return (
+        abs(float(normal[0])) * x_spacing
+        + abs(float(normal[1])) * y_spacing
+    ) / float(RASTER_VECTORIZATION_OVERSAMPLE_FACTOR)
+
+
+def _directional_turn_metrics(
+    points: np.ndarray,
+    sampling_distance_mm: float,
+) -> tuple[float, float]:
+    distances = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    cumulative = np.concatenate(([0.0], np.cumsum(distances)))
+    length_mm = float(cumulative[-1])
+    if length_mm <= 1e-15:
+        return math.inf, math.inf
+    sample_count = max(2, int(math.ceil(length_mm / sampling_distance_mm)) + 1)
+    target_positions = np.linspace(0.0, length_mm, sample_count)
+    starts = np.searchsorted(cumulative, target_positions, side="right") - 1
+    starts = np.clip(starts, 0, len(points) - 2)
+    local_lengths = distances[starts]
+    ratios = np.divide(
+        target_positions - cumulative[starts],
+        local_lengths,
+        out=np.zeros_like(target_positions),
+        where=local_lengths > 1e-15,
+    )
+    sampled = points[starts] + ratios[:, None] * (
+        points[starts + 1] - points[starts]
+    )
+    directions = np.diff(sampled, axis=0)
+    direction_lengths = np.linalg.norm(directions, axis=1)
+    directions = directions[direction_lengths > 1e-15]
+    if not len(directions):
+        return math.inf, math.inf
+    angles = np.unwrap(np.arctan2(directions[:, 1], directions[:, 0]))
+    chord = points[-1] - points[0]
+    chord_angle = math.atan2(float(chord[1]), float(chord[0]))
+    deviations = np.abs(
+        np.arctan2(np.sin(angles - chord_angle), np.cos(angles - chord_angle))
+    )
+    directional_range = float(np.max(angles) - np.min(angles))
+    return math.degrees(float(np.max(deviations))), math.degrees(directional_range)
+
+
+def _straight_run_evidence(
+    points: np.ndarray,
+    indices: np.ndarray,
+    tolerance_mm: float,
+    oversampled_step_mm: float,
+    source_pixel_spacing_mm: tuple[float, float] | None,
+) -> _StraightRun | None:
+    run_points = points[indices]
+    delta = run_points[-1] - run_points[0]
+    direction = _unit_direction(delta)
+    if direction is None:
+        return None
+    length_mm = float(np.sum(np.linalg.norm(np.diff(run_points, axis=0), axis=1)))
+    quantization_spacing = _normal_quantization_spacing(
+        direction,
+        oversampled_step_mm,
+        source_pixel_spacing_mm,
+    )
+    residual_allowance = min(
+        tolerance_mm,
+        max(
+            _STRAIGHT_QUANTIZATION_ALLOWANCE_STEPS * quantization_spacing,
+            1e-12,
+        ),
+    )
+    max_residual = float(
+        np.max(_distance_to_segment(run_points, run_points[0], run_points[-1]))
+    )
+    if max_residual > residual_allowance:
+        return None
+    source_spacing = (
+        max(source_pixel_spacing_mm)
+        if source_pixel_spacing_mm is not None
+        else oversampled_step_mm * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
+    )
+    sampling_distance = max(
+        4.0 * oversampled_step_mm,
+        2.5 * tolerance_mm,
+        source_spacing,
+    )
+    maximum_turn, directional_range = _directional_turn_metrics(
+        run_points,
+        sampling_distance,
+    )
+    if (
+        maximum_turn > _STRAIGHT_MAXIMUM_TURN_DEGREES
+        or directional_range > _STRAIGHT_MAXIMUM_DIRECTION_RANGE_DEGREES
+    ):
+        return None
+    return _StraightRun(
+        start_index=int(indices[0]),
+        end_index=int(indices[-1]),
+        length_mm=length_mm,
+        max_orthogonal_residual_mm=max_residual,
+        maximum_directional_turn_degrees=maximum_turn,
+        directional_range_degrees=directional_range,
+    )
+
+
+def _minimum_straight_run_length(
+    tolerance_mm: float,
+    oversampled_step_mm: float,
+    source_pixel_spacing_mm: tuple[float, float] | None,
+) -> float:
+    source_spacing = (
+        max(source_pixel_spacing_mm)
+        if source_pixel_spacing_mm is not None
+        else oversampled_step_mm * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
+    )
+    return max(
+        _STRAIGHT_MINIMUM_TOLERANCE_MULTIPLE * tolerance_mm,
+        _STRAIGHT_MINIMUM_SOURCE_PIXEL_MULTIPLE * source_spacing,
+        _STRAIGHT_MINIMUM_OVERSAMPLED_STEP_MULTIPLE * oversampled_step_mm,
+    )
+
+
+def _circular_span_contains(
+    outer_start: int,
+    outer_end: int,
+    inner_start: int,
+    inner_end: int,
+    point_count: int,
+) -> bool:
+    outer_length = (outer_end - outer_start) % point_count
+    inner_start_offset = (inner_start - outer_start) % point_count
+    inner_end_offset = (inner_end - outer_start) % point_count
+    return inner_start_offset <= inner_end_offset <= outer_length
+
+
+def _persistent_straight_runs(
+    points: np.ndarray,
+    tolerance_mm: float,
+    *,
+    source_pixel_spacing_mm: tuple[float, float] | None = None,
+) -> tuple[_StraightRun, ...]:
+    """Classify scale-aware full contour runs with positive line evidence."""
+
+    if len(points) < 8 or tolerance_mm <= 0.0:
+        return ()
+    positions, steps, perimeter = _closed_arc_positions(points)
+    positive_steps = steps[steps > 1e-12]
+    if not len(positive_steps) or perimeter <= 1e-12:
+        return ()
+    oversampled_step = float(np.median(positive_steps))
+    window_mm = min(
+        perimeter / 16.0,
+        max(8.0 * oversampled_step, 2.5 * tolerance_mm),
+    )
+    turns, _orientation, residuals = _corner_scale_metrics(
+        points,
+        positions,
+        steps,
+        perimeter,
+        window_mm,
+    )
+    local_quantization = (
+        max(source_pixel_spacing_mm) / RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
+        if source_pixel_spacing_mm is not None
+        else oversampled_step
+    )
+    residual_allowance = min(
+        tolerance_mm,
+        max(
+            _STRAIGHT_LOCAL_QUANTIZATION_ALLOWANCE_STEPS * local_quantization,
+            1e-12,
+        ),
+    )
+    permissive_mask = (
+        turns <= math.radians(_STRAIGHT_LOCAL_MAXIMUM_TURN_DEGREES)
+    ) & (residuals <= residual_allowance)
+    strict_mask = (
+        turns <= math.radians(_STRAIGHT_MAXIMUM_TURN_DEGREES)
+    ) & (residuals <= residual_allowance)
+    minimum_run_length = _minimum_straight_run_length(
+        tolerance_mm,
+        oversampled_step,
+        source_pixel_spacing_mm,
+    )
+    candidates: list[_StraightRun] = []
+    for mask in (permissive_mask, strict_mask):
+        for indices in _circular_true_runs(mask):
+            if _run_arc_length(indices, steps) < minimum_run_length:
+                continue
+            evidence = _straight_run_evidence(
+                points,
+                indices,
+                tolerance_mm,
+                oversampled_step,
+                source_pixel_spacing_mm,
+            )
+            if evidence is not None:
+                candidates.append(evidence)
+    runs: list[_StraightRun] = []
+    for candidate in sorted(candidates, key=lambda run: run.length_mm, reverse=True):
+        if any(
+            _circular_span_contains(
+                retained.start_index,
+                retained.end_index,
+                candidate.start_index,
+                candidate.end_index,
+                len(points),
+            )
+            for retained in runs
+        ):
+            continue
+        runs.append(candidate)
+    runs.sort(key=lambda run: run.start_index)
+
+    gap_allowance = max(1.5 * tolerance_mm, 6.0 * oversampled_step)
+    index = 0
+    while index + 1 < len(runs):
+        first = runs[index]
+        second = runs[index + 1]
+        gap_indices = _circular_indices(
+            first.end_index,
+            second.start_index,
+            len(points),
+        )
+        if _run_arc_length(gap_indices, steps) > gap_allowance:
+            index += 1
+            continue
+        combined_indices = _circular_indices(
+            first.start_index,
+            second.end_index,
+            len(points),
+        )
+        combined = _straight_run_evidence(
+            points,
+            combined_indices,
+            tolerance_mm,
+            oversampled_step,
+            source_pixel_spacing_mm,
+        )
+        if combined is None:
+            index += 1
+            continue
+        runs[index : index + 2] = [combined]
+        if index:
+            index -= 1
+    # A locally flat pixel plateau on a genuine curve is not source evidence of
+    # a line. Require persistence across at least one complete contour-scale
+    # classification interval (the same one-sixteenth scale used to cap the
+    # local evidence window), in addition to the physical tolerance/pixel
+    # minimum.
+    final_minimum_length = max(
+        minimum_run_length,
+        _STRAIGHT_MINIMUM_PERIMETER_FRACTION * perimeter,
+    )
+    return tuple(run for run in runs if run.length_mm >= final_minimum_length)
+
+
 def _arc_midpoint_index(
     start: int,
     end: int,
@@ -1639,43 +1955,33 @@ def _arc_midpoint_index(
 def _long_straight_run_anchors(
     points: np.ndarray,
     tolerance_mm: float,
+    *,
+    straight_runs: tuple[_StraightRun, ...] | None = None,
+    source_pixel_spacing_mm: tuple[float, float] | None = None,
 ) -> list[int]:
     """Anchor every persistent straight run and subdivide the curved gaps."""
 
     if len(points) < 8:
         return []
-    positions, steps, perimeter = _closed_arc_positions(points)
+    _positions, steps, perimeter = _closed_arc_positions(points)
     positive_steps = steps[steps > 1e-12]
     if not len(positive_steps) or perimeter <= 1e-12:
         return []
-    step_mm = float(np.median(positive_steps))
-    window_mm = min(
-        perimeter / 16.0,
-        max(8.0 * step_mm, 2.5 * tolerance_mm),
+    runs = (
+        _persistent_straight_runs(
+            points,
+            tolerance_mm,
+            source_pixel_spacing_mm=source_pixel_spacing_mm,
+        )
+        if straight_runs is None
+        else straight_runs
     )
-    turns, _orientation, residuals = _corner_scale_metrics(
-        points,
-        positions,
-        steps,
-        perimeter,
-        window_mm,
-    )
-    residual_allowance = max(0.75 * step_mm, 0.25 * tolerance_mm)
-    straight_mask = (
-        turns <= math.radians(_STRAIGHT_MAXIMUM_TURN_DEGREES)
-    ) & (residuals <= residual_allowance)
-    minimum_run_length = max(4.0 * tolerance_mm, 0.10 * perimeter)
-    straight_runs = [
-        run
-        for run in _circular_true_runs(straight_mask)
-        if _run_arc_length(run, steps) >= minimum_run_length
-    ]
-    if not straight_runs:
+    if not runs:
         return []
 
     run_endpoints = sorted(
-        {int(run[0]) for run in straight_runs}
-        | {int(run[-1]) for run in straight_runs}
+        {run.start_index for run in runs}
+        | {run.end_index for run in runs}
     )
     if len(run_endpoints) < 2:
         return []
@@ -2370,6 +2676,7 @@ def _fit_span_pieces(
     end_tangent: np.ndarray | None = None,
     prefer_cubic_leaves: bool = False,
     allow_unconstrained_line: bool = False,
+    allow_tangent_line: bool = True,
     control_minimum: np.ndarray | None = None,
     control_maximum: np.ndarray | None = None,
     hard_start: bool = False,
@@ -2434,11 +2741,14 @@ def _fit_span_pieces(
     if not closed_span:
         if line_error <= tolerance_mm and (
             allow_unconstrained_line
-            or _line_matches_tangents(
-                points[0],
-                points[-1],
-                start_tangent,
-                end_tangent,
+            or (
+                allow_tangent_line
+                and _line_matches_tangents(
+                    points[0],
+                    points[-1],
+                    start_tangent,
+                    end_tangent,
+                )
             )
         ):
             line = _attempt_line_piece(
@@ -2506,6 +2816,7 @@ def _fit_span_pieces(
             start_tangent=start_tangent,
             end_tangent=-center_tangent,
             prefer_cubic_leaves=prefer_cubic_leaves,
+            allow_tangent_line=allow_tangent_line,
             control_minimum=control_minimum,
             control_maximum=control_maximum,
             hard_start=hard_start,
@@ -2519,6 +2830,7 @@ def _fit_span_pieces(
             start_tangent=center_tangent,
             end_tangent=end_tangent,
             prefer_cubic_leaves=prefer_cubic_leaves,
+            allow_tangent_line=allow_tangent_line,
             control_minimum=control_minimum,
             control_maximum=control_maximum,
             hard_start=False,
@@ -2698,6 +3010,8 @@ def _fit_contour(
     width_mm: float,
     height_mm: float,
     budget: _ComplexityBudget,
+    *,
+    source_pixel_spacing_mm: tuple[float, float] | None = None,
 ) -> _FittedContour:
     raw_points = _canonicalize_closed_contour(raw_points)
     corner_tolerance = options.simplification_tolerance_mm * 0.65
@@ -2717,8 +3031,65 @@ def _fit_contour(
             (corner + 1) % len(raw_points),
         )
     }
+    straight_runs = _persistent_straight_runs(
+        raw_points,
+        fit_tolerance,
+        source_pixel_spacing_mm=source_pixel_spacing_mm,
+    )
+    if len(corner_set) >= 2:
+        raw_steps = np.linalg.norm(
+            np.roll(raw_points, -1, axis=0) - raw_points,
+            axis=1,
+        )
+        positive_raw_steps = raw_steps[raw_steps > 1e-12]
+        oversampled_step = (
+            float(np.median(positive_raw_steps))
+            if len(positive_raw_steps)
+            else 0.0
+        )
+        minimum_run_length = _minimum_straight_run_length(
+            fit_tolerance,
+            oversampled_step,
+            source_pixel_spacing_mm,
+        )
+        hard_anchors = sorted(corner_set)
+        promoted_runs: list[_StraightRun] = []
+        for offset, start in enumerate(hard_anchors):
+            end = hard_anchors[(offset + 1) % len(hard_anchors)]
+            indices = _circular_indices(start, end, len(raw_points))
+            if _run_arc_length(indices, raw_steps) < minimum_run_length:
+                continue
+            evidence = _straight_run_evidence(
+                raw_points,
+                indices,
+                fit_tolerance,
+                oversampled_step,
+                source_pixel_spacing_mm,
+            )
+            if evidence is not None:
+                promoted_runs.append(evidence)
+        if promoted_runs:
+            straight_runs = tuple(
+                run
+                for run in straight_runs
+                if not any(
+                    _circular_span_contains(
+                        promoted.start_index,
+                        promoted.end_index,
+                        run.start_index,
+                        run.end_index,
+                        len(raw_points),
+                    )
+                    for promoted in promoted_runs
+                )
+            ) + tuple(promoted_runs)
+    straight_boundaries = {
+        index
+        for run in straight_runs
+        for index in (run.start_index, run.end_index)
+    }
     if (
-        budget.fitted_segments + len(corner_set)
+        budget.fitted_segments + len(corner_set | straight_boundaries)
         > MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS
     ):
         _raise_complexity(
@@ -2727,13 +3098,15 @@ def _fit_contour(
         )
     smoothed, smoothing_displacement = _smooth_contour(
         raw_points,
-        corners,
+        sorted(set(corners) | straight_boundaries),
         options.smoothing_mm,
     )
     anchors = _fitting_anchors(
         smoothed,
         sorted(corner_set),
         fit_tolerance,
+        straight_runs=straight_runs,
+        source_pixel_spacing_mm=source_pixel_spacing_mm,
     )
     if (
         budget.fitted_segments + len(anchors)
@@ -2754,10 +3127,38 @@ def _fit_contour(
     merged_start = budget.merged_segments
     pieces: list[_FittedPiece] = []
     spans = _contour_spans(smoothed, anchors)
-    span_line_errors = [
-        float(np.max(_distance_to_segment(span, span[0], span[-1])))
-        for span in spans
-    ]
+    contour_steps = np.linalg.norm(
+        np.roll(smoothed, -1, axis=0) - smoothed,
+        axis=1,
+    )
+    positive_contour_steps = contour_steps[contour_steps > 1e-12]
+    oversampled_step = (
+        float(np.median(positive_contour_steps))
+        if len(positive_contour_steps)
+        else 0.0
+    )
+    straight_span_flags: list[bool] = []
+    for offset, _span in enumerate(spans):
+        start = anchors[offset]
+        end = anchors[(offset + 1) % len(anchors)]
+        classified = any(
+            (start - run.start_index) % len(smoothed)
+            <= (end - run.start_index) % len(smoothed)
+            <= (run.end_index - run.start_index) % len(smoothed)
+            for run in straight_runs
+        )
+        if classified:
+            classified = (
+                _straight_run_evidence(
+                    smoothed,
+                    _circular_indices(start, end, len(smoothed)),
+                    fit_tolerance,
+                    oversampled_step,
+                    source_pixel_spacing_mm,
+                )
+                is not None
+            )
+        straight_span_flags.append(classified)
     # Persistent straight spans define their own derivative more accurately
     # than independently sampled endpoint windows do.  Share that chord
     # tangent with each adjoining smooth span so the join stays G1 across
@@ -2768,7 +3169,7 @@ def _fit_contour(
         if (
             start not in corner_set
             and end not in corner_set
-            and span_line_errors[offset] <= fit_tolerance
+            and straight_span_flags[offset]
         ):
             tangent = _unit_direction(span[-1] - span[0])
             if tangent is not None:
@@ -2792,8 +3193,20 @@ def _fit_contour(
         straight_hard_span = bool(
             hard_start
             and hard_end
-            and span_line_errors[offset] <= fit_tolerance
+            and (len(span) <= 2 or straight_span_flags[offset])
         )
+        if straight_span_flags[offset]:
+            line = _attempt_line_piece(
+                span,
+                fit_tolerance,
+                budget,
+                hard_start=hard_start,
+                hard_end=hard_end,
+            )
+            if line is not None:
+                budget.add_fitted_segments()
+                pieces.append(line)
+                continue
         pieces.extend(
             _fit_span_pieces(
                 span,
@@ -2803,6 +3216,7 @@ def _fit_contour(
                 end_tangent=end_tangent,
                 prefer_cubic_leaves=not straight_hard_span,
                 allow_unconstrained_line=straight_hard_span,
+                allow_tangent_line=False,
                 control_minimum=control_minimum,
                 control_maximum=control_maximum,
                 hard_start=hard_start,
@@ -4107,6 +4521,10 @@ def _vectorize_prepared_raster(
             width_mm,
             height_mm,
             budget,
+            source_pixel_spacing_mm=(
+                width_mm / source.width_px,
+                height_mm / source.height_px,
+            ),
         )
         native_subpath = _native_subpath_from_fitted_contour(
             fitted,

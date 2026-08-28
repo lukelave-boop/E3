@@ -6,6 +6,22 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed the exact raster fitter so material straight source edges remain native
+  lines even on contours that also contain hard corners. The previous anchor
+  path returned as soon as it had corner support, and its separate
+  10%-of-perimeter straight-run cutoff excluded the Coleman stencil `E` top and
+  split left edge. The replacement uses rotation-independent, scale-aware
+  evidence from physical tolerance, source and oversampled pixel pitch,
+  full-run chord residual, and directional change; nearby raster-step fragments
+  merge only after combined revalidation. Classified spans still pass the
+  authoritative continuous fit proof. Shallow sub-tolerance arcs, rounded
+  corners, adjoining transitions, and rounded `C`/`O` glyph regions remain cubic
+  without positive line evidence. The default 0.10 mm control, responsive
+  quick/exact workers, verified-only Create gate, Newton fitting,
+  topology/clearance, hierarchy,
+  native persistence, project/history, planning/cache, and output-safety
+  contracts are unchanged.
+
 - Restored sub-second perceived responsiveness to **Trace image to vectors…**.
   The dialog now decodes and displays the source, mask, and a bounded
   preview-only contour overlay first, then refines the unchanged authoritative
@@ -17,9 +33,9 @@ not current product capability.
   are reused without giving quick geometry persistence or planning authority.
   Opt-in per-stage timing covers decode, masks, contours, corners, cubic fitting,
   Newton refinement, continuous validation, merging, topology, preview
-  flattening, and raster hierarchy checks. The Coleman development stencil now
-  reaches a useful core preview in about 0.07 seconds; its verified result keeps
-  byte-identical native geometry and metadata to the prior authoritative result.
+  flattening, and raster hierarchy checks. That responsiveness-only revision
+  reached a useful Coleman core preview in about 0.07 seconds while retaining
+  byte-identical native geometry and metadata to its prior authoritative result.
 
 - Grouped the four native desktop import commands under one **File > Import**
   submenu with concise **SVG…**, **G-code…**, **LightBurn project…**, and

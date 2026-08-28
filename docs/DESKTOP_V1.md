@@ -198,10 +198,13 @@ fitting or change output authority. The workflow creates one ordinary compound n
 while either replacing or retaining the image. Contours are fitted at 4×
 internal resolution with physical cleanup/smoothing/error controls, full-cycle
 seam canonicalization, persistent physical corner classification, generic
-straight-run anchors, and shared tangents only at non-corner joins. Straight
-spans persist as lines, while curved spans use constrained cubic handle solving,
-Newton reparameterization, conservative continuous error bounds, and verified
-adjacent merging. Hidden between-sample lobes and current native-arc topology
+straight-run classification across both cornered and smooth contours, and shared
+tangents only at non-corner joins. Material, rotation-independent straight
+source runs persist as lines after continuous revalidation; short curve
+plateaus, rounded transitions, and shallow arcs remain cubic. Curved spans use
+constrained cubic handle solving, Newton reparameterization, conservative
+continuous error bounds, and verified adjacent merging. Hidden between-sample
+lobes and current native-arc topology
 ambiguities are rejected. The dialog reports validated maximum/RMS fit error,
 hard corners, recursive splits, and verified merges. Nested holes remain
 separate closed child subpaths; preview/topology samples are not stored as a

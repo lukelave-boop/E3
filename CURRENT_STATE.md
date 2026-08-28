@@ -5,7 +5,52 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-27**
+Snapshot: **2026-08-28**
+
+## Active raster-vectorization straight-edge recovery
+
+The exact native fitter now classifies persistent straight source runs before
+anchor selection on every contour, including contours that already have hard
+corners. This fixes the Coleman stencil `E`, whose single detected hard corner
+previously caused `_fitting_anchors()` to return before straight-run discovery;
+the older independent 10%-of-perimeter minimum also excluded its 3.46 mm top
+edge. Classification is orientation-independent and scale-aware: a candidate
+must have material physical/source-pixel/oversampled extent, bounded full-run
+orthogonal residual at the stricter of the fit tolerance and source
+quantization allowance, and bounded local plus full-run directional change.
+Nearby raster-step fragments merge only when the complete combined span passes
+the same evidence. A classified span is continuously revalidated and persisted
+as a native line. Without that positive evidence, a shallow curve remains a
+cubic even when its chord alone is within the 0.08 mm internal fit budget.
+
+The exact 1,170 × 444 Coleman development stencil at 80.0 × 30.358974 mm,
+manual threshold 122, no smoothing, and the default 0.10 mm native fitting
+tolerance produced a 2,038-sample canonical outer `E` contour. Its bounding box
+was `(-18.316239, -1.598291)` to `(-13.068376, 6.076923)` mm, with one hard
+corner at sample 335. The source-supported bottom (samples 59-275), top
+(1397-1599), and merged left (1684-2021) runs measured 3.692308, 3.460072, and
+5.774845 mm, with maximum chord residuals 0, 0.017009, and 0.017094 mm. The
+persisted `E` changed from `LLCCCCCCCCCCCCCCCC` to
+`LCLLCLCCCCCCLCLCLC`: straight source arms are lines while corner transitions
+remain cubic. Its maximum validated fit error changed from 0.075076 to 0.075472
+mm and remains below 0.08 mm. Rounded Coleman `C`/`O` regions, analytic rounded
+joins, rotated straight edges, quantized/noisy rotated edges, and a shallow
+0.05 mm-sag curve are covered explicitly so short curve plateaus are not
+promoted to lines.
+
+On the same prepared payload and interpreter, two independent five-run sets
+after one warmup each measured a combined exact-fit median of **3.998 seconds**
+at starting commit `19aa9bab` and **1.211 seconds** with the repair. Focused
+verification passes **107 raster/fitter/dialog/desktop tests**; broader native-path,
+project, toolpath, planning, golden, digest/cache, and desktop-workspace
+verification passes **366 tests**. Repository-wide Ruff,
+`python -m compileall -q laser_aligner`, and
+`git diff --check` pass. No quick-preview authority, fitting tolerance, Newton
+requirement, continuous proof, frame/extrema check, topology/clearance rule,
+hierarchy rule, native persistence, project/history, planning/cache, G-code,
+machine, motion, arming, or output-safety contract changed. This is automated
+Qt-free/offscreen verification only; no interactive GUI or physical hardware
+test is claimed.
 
 ## Active raster-vectorization responsiveness recovery
 

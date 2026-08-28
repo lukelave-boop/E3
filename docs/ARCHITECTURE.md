@@ -599,12 +599,21 @@ before fitting. Each closed contour is rotated to a coordinate-canonical start
 before anchor selection, so OpenCV's arbitrary cyclic start index cannot change
 the fit. Corner classification compares turns and straight-arm support across
 multiple physical arc-length scales; isolated raster steps are not hard anchors,
-while persistent stencil corners retain their exact samples. Generic long
-straight runs also supply seam-independent anchors. Smooth anchors and recursive
-non-corner splits share tangent directions across joins. Corner-bounded spans
-become straight segments where the error and tangent evidence permit and
-otherwise become bounded cubic Béziers. Cubic candidates use a positive,
-tangent-constrained handle solve followed by bounded Newton reparameterization.
+while persistent stencil corners retain their exact samples. Before smoothing or
+anchor selection, every contour also classifies generic persistent straight runs,
+even when hard corners already exist. The evidence combines physical fit
+tolerance, source-pixel pitch, oversampled contour pitch, full-run chord residual,
+and directional change, so it is rotation-independent and does not mistake a
+short pixel plateau on a curve for a source line. Nearby raster-step fragments
+merge only when the complete combined run passes the same evidence. Run
+boundaries become seam-independent anchors and are protected from smoothing.
+Smooth anchors and recursive non-corner splits share tangent directions across
+joins. A classified span becomes a native line only after the ordinary
+continuous fit validation passes again; absent that positive classification, a
+shallow arc remains cubic even if its endpoint chord alone falls within the fit
+tolerance. Other spans use bounded cubic Béziers. Cubic candidates use a
+positive, tangent-constrained handle solve followed by bounded Newton
+reparameterization.
 Every accepted line or cubic has a conservative continuous error proof: each
 target edge and the corresponding restricted Bézier interval form a difference
 cubic whose control hull bounds all between-sample deviation. A candidate with
@@ -613,8 +622,9 @@ error is split instead. Adjacent like-kind pieces may merge only after a fresh
 solve, the same continuous proof, current frame constraints, and the current
 adjacent-native-arc topology check all pass. Those fitted segments are stored as
 the authoritative native subpath. Separate adaptive flattening supplies only
-overlay, topology, diagnostics, and complexity estimates. Straight runs
-therefore remain native lines while curved regions remain cubic segments. The
+overlay, topology, diagnostics, and complexity estimates. Source-supported
+straight runs therefore remain native lines while curved regions, rounded
+corners, and adjoining transitions remain cubic segments. The
 result reports raw contour points, fitted segments, preview-flattened points,
 validated maximum/mean/RMS fit error, detected hard corners, recursive splits,
 verified merges, longest smooth-span size, and maximum estimated deviation.
