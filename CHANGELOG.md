@@ -6,6 +6,18 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Removed the development updater's release-wide delete/recreate outage. The
+  `e3-development` prerelease now retains its live manifest and packages while
+  revision-specific Windows and Linux assets upload and are checked against
+  GitHub's recorded size and SHA-256. A verified staged manifest is the final
+  authority switch through a recoverable name swap; cancellation recovery keeps
+  either the old or new complete revision usable, and prior packages remain for
+  clients that already fetched an older manifest. The stable manifest URL and
+  development channel are unchanged. Desktop manifest retrieval now retries
+  transient HTTP 404, 408, 429, and 5xx responses with bounded 0.5, 1, and 2
+  second backoff, without weakening manifest parsing, channel/revision checks,
+  package size/SHA-256 verification, or installer handoff.
+
 - Added a seeded **Cutout / silhouette** Camera Trace mode alongside unchanged
   Auto, Color, Contrast, and repeated-grid detection. A frozen corrected frame
   accepts multiple inside-object clicks and retains only each clicked connected

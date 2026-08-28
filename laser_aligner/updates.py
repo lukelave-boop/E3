@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -22,6 +23,7 @@ from .storage import strict_json_loads
 
 _MAX_MANIFEST_BYTES = 1_048_576
 _DOWNLOAD_CHUNK_BYTES = 1_048_576
+_MANIFEST_RETRY_DELAYS = (0.5, 1.0, 2.0)
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _REVISION_RE = re.compile(r"^[0-9a-f]{7,64}$")
 LOGGER = logging.getLogger(__name__)
@@ -148,11 +150,33 @@ def _request(url: str) -> urllib.request.Request:
 
 
 def fetch_manifest(url: str, *, timeout: float = 15.0) -> UpdateManifest:
-    try:
-        with urllib.request.urlopen(_request(url), timeout=timeout) as response:
-            payload = response.read(_MAX_MANIFEST_BYTES + 1)
-    except (OSError, urllib.error.URLError) as exc:
-        raise UpdateError(f"Could not download update manifest: {exc}") from exc
+    request = _request(url)
+    payload: bytes | None = None
+    for attempt in range(len(_MANIFEST_RETRY_DELAYS) + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                payload = response.read(_MAX_MANIFEST_BYTES + 1)
+            break
+        except urllib.error.HTTPError as exc:
+            transient = exc.code in {404, 408, 429} or 500 <= exc.code <= 599
+            if not transient or attempt >= len(_MANIFEST_RETRY_DELAYS):
+                attempts = attempt + 1
+                suffix = f" after {attempts} attempts" if attempts > 1 else ""
+                raise UpdateError(
+                    f"Could not download update manifest{suffix}: {exc}"
+                ) from exc
+            delay = _MANIFEST_RETRY_DELAYS[attempt]
+            LOGGER.info(
+                "Transient HTTP %s while downloading the update manifest; "
+                "retrying in %.1f seconds",
+                exc.code,
+                delay,
+            )
+            time.sleep(delay)
+        except (OSError, urllib.error.URLError) as exc:
+            raise UpdateError(f"Could not download update manifest: {exc}") from exc
+    if payload is None:  # pragma: no cover - the bounded loop always returns or raises
+        raise UpdateError("Could not download update manifest")
     if len(payload) > _MAX_MANIFEST_BYTES:
         raise UpdateError("Update manifest exceeds the maximum allowed size")
     return parse_manifest(payload)

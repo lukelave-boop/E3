@@ -113,26 +113,44 @@ jobs:
         with:
           path: release
           merge-multiple: true
-      - name: Create update manifest
+      - name: Prepare immutable update assets and manifest
         run: |
+          short_sha="${GITHUB_SHA:0:12}"
+          publication_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mv release/E3-Setup.exe "release/E3-Setup-${short_sha}.exe"
+          mv release/E3-x86_64.AppImage "release/E3-${short_sha}-x86_64.AppImage"
           python packaging/make_update_manifest.py \
-            --output release/update-manifest.json \
+            --output "release/update-manifest-${short_sha}-${publication_id}.json" \
             --revision "${{ github.sha }}" \
             --channel "$E3_UPDATE_CHANNEL" \
             --repository "${{ github.repository }}" \
             --release-tag "$E3_RELEASE_TAG" \
-            --windows release/E3-Setup.exe \
-            --linux release/E3-x86_64.AppImage
-      - name: Replace development release
+            --windows "release/E3-Setup-${short_sha}.exe" \
+            --linux "release/E3-${short_sha}-x86_64.AppImage"
+      - name: Publish verified development update
+        id: publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release delete "$E3_RELEASE_TAG" --cleanup-tag --yes || true
-          gh release create "$E3_RELEASE_TAG" \
-            release/E3-Setup.exe \
-            release/E3-x86_64.AppImage \
-            release/update-manifest.json \
-            --target "${{ github.sha }}" \
+          short_sha="${GITHUB_SHA:0:12}"
+          publication_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python packaging/publish_development_update.py publish \
+            --repository "${{ github.repository }}" \
+            --release-tag "$E3_RELEASE_TAG" \
+            --revision "${{ github.sha }}" \
+            --channel "$E3_UPDATE_CHANNEL" \
+            --windows "release/E3-Setup-${short_sha}.exe" \
+            --linux "release/E3-${short_sha}-x86_64.AppImage" \
+            --manifest "release/update-manifest-${short_sha}-${publication_id}.json" \
             --title "E3 Development ${{ github.sha }}" \
             --notes "Automated build from ${{ github.ref_name }} at ${{ github.sha }}." \
-            --prerelease
+            --recovery-state release/manifest-switch-recovery.json
+      - name: Recover interrupted manifest switch
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python packaging/publish_development_update.py recover \
+            --repository "${{ github.repository }}" \
+            --release-tag "$E3_RELEASE_TAG" \
+            --recovery-state release/manifest-switch-recovery.json

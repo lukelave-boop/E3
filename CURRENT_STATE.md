@@ -7,6 +7,48 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-28**
 
+## Active development-update publication continuity
+
+The `Publish E3 development update` workflow no longer deletes and recreates
+the live `e3-development` prerelease. Windows and Linux builds still complete
+independently before publication, but the publish job now gives their outputs
+immutable revision-specific names (`E3-Setup-<12-sha>.exe` and
+`E3-<12-sha>-x86_64.AppImage`). A Qt-free Python publisher validates the
+generated schema-1 manifest against the exact local files, uploads both
+packages, and verifies GitHub's uploaded state, byte size, and server-reported
+SHA-256 before it uploads the staged manifest.
+
+The stable updater endpoint remains
+`releases/download/e3-development/update-manifest.json`. GitHub provides no
+in-place content replacement for a release asset: CLI clobber deletes before it
+uploads, while the asset API can only rename metadata. The final switch is
+therefore a recoverable near-atomic pair of renames from the old stable manifest
+to an ID-specific backup and from the already-uploaded staged manifest to the
+stable name. Cancellation signals are deferred across that critical pair, and
+an always-run workflow recovery command restores the old verified manifest if
+normal concurrency cancellation interrupts the publisher. Failures before the
+switch retain the old manifest and packages; failures after it retain the
+complete new packages and manifest. The old manifest backup alone is cleaned
+up afterward on a best-effort basis. Prior binary assets are not removed, so a
+client holding the prior manifest can still download and verify its referenced
+package. Release tag, title, body, target, and prerelease metadata change only
+after the new manifest is authoritative.
+
+Desktop manifest retrieval now retries only transient HTTP 404, 408, 429, and
+5xx responses with bounded 0.5, 1, and 2 second delays. Malformed URL and JSON
+failures remain immediate; package downloads are not retried by this path, and
+existing channel, revision, exact-size, SHA-256, and installer verification is
+unchanged. Focused updater/workflow/publisher verification currently passes
+**24 tests**; broader deployment, versioning, desktop handoff, and Windows
+launcher regression verification passes **49 tests** with four xdist workers.
+The complete Windows suite passes **2,656 tests** with **14 expected platform
+skips** and four workers. Repository Ruff, Python compilation of `laser_aligner`
+and `packaging`, workflow YAML parsing, and `git diff --check` pass. These are
+local mocked-network and deterministic publisher tests; the actual Windows
+installer and Linux AppImage for this change have not yet been built or
+published, and no controller, motion, arming, laser-output, or physical test
+was performed or is claimed.
+
 ## Active seeded camera cutout tracing
 
 Camera Trace now has an explicit **Cutout / silhouette** mode. A frozen camera
