@@ -27,7 +27,8 @@ def test_trace_panel_and_controller_are_wired():
     assert 'capture_options["coordinate_frame"] = coordinate_frame' in controller
     assert "def sample_trace_color" in controller
     assert "def select_trace_cutout" in controller
-    assert "detect_seeded_cutouts" in controller
+    assert "prepare_cutout_frame" in controller
+    assert "detect_prepared_cutouts" in controller
     assert "fit_native=False" in controller
     assert "fit_native=True" in controller
     assert 'addItem("Cutout / silhouette", "cutout")' in panels

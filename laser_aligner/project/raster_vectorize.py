@@ -16,6 +16,12 @@ from typing import Any, TypeAlias, TypeVar
 import cv2
 import numpy as np
 
+from ..geometry.foreground import (
+    ForegroundComponentLimitError,
+    ForegroundContourLimitError,
+    clean_foreground_components,
+    extract_foreground_contours,
+)
 from .path_geometry import (
     NativePathGeometry,
     PathAffineTransform,
@@ -1080,66 +1086,27 @@ def _clean_components(
     width_mm: float,
     height_mm: float,
 ) -> tuple[np.ndarray, int]:
-    count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
-        mask,
-        connectivity=8,
-        ltype=cv2.CV_32S,
-    )
     pixel_area_mm2 = width_mm * height_mm / float(mask.shape[0] * mask.shape[1])
-    retained_labels = [
-        index
-        for index in range(1, count)
-        if int(stats[index, cv2.CC_STAT_AREA]) * pixel_area_mm2
-        >= minimum_area_mm2
-    ]
-    if len(retained_labels) > MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS:
+    minimum_area_px = minimum_area_mm2 / pixel_area_mm2
+    try:
+        cleaned, component_count = clean_foreground_components(
+            mask,
+            minimum_component_area_px=minimum_area_px,
+            minimum_hole_area_px=minimum_area_px,
+            maximum_components=MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS,
+        )
+    except ForegroundComponentLimitError as exc:
         _raise_complexity(
             "Raster vectorization found "
-            f"{len(retained_labels):,} connected foreground components, exceeding "
+            f"{exc.count:,} connected foreground components, exceeding "
             f"the {MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS:,}-component limit"
         )
-    if not retained_labels:
+    if component_count == 0:
         raise RasterVectorizationError(
             "No foreground features remain at the selected threshold and minimum "
             "feature size"
         )
-    retained = np.zeros(count, dtype=np.uint8)
-    retained[np.asarray(retained_labels, dtype=np.int64)] = 255
-    cleaned = retained[labels]
-    if minimum_area_mm2 > 0.0:
-        background_count, background_labels, background_stats, _centroids = (
-            cv2.connectedComponentsWithStats(
-                cv2.bitwise_not(cleaned),
-                connectivity=8,
-                ltype=cv2.CV_32S,
-            )
-        )
-        border_labels = set(
-            int(value)
-            for value in np.unique(
-                np.concatenate(
-                    (
-                        background_labels[0],
-                        background_labels[-1],
-                        background_labels[:, 0],
-                        background_labels[:, -1],
-                    )
-                )
-            )
-        )
-        fill_labels = [
-            index
-            for index in range(1, background_count)
-            if index not in border_labels
-            and int(background_stats[index, cv2.CC_STAT_AREA]) * pixel_area_mm2
-            < minimum_area_mm2
-        ]
-        if fill_labels:
-            fill = np.zeros(background_count, dtype=bool)
-            fill[np.asarray(fill_labels, dtype=np.int64)] = True
-            cleaned = cleaned.copy()
-            cleaned[fill[background_labels]] = 255
-    return cleaned, len(retained_labels)
+    return cleaned, component_count
 
 
 def _oversampled_mask(
@@ -4886,22 +4853,22 @@ def _extract_vectorization_contours(
     mask: np.ndarray,
     approximation: int,
 ) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
-    raw_contours, hierarchy = cv2.findContours(
-        mask,
-        cv2.RETR_TREE,
-        approximation,
-    )
-    if hierarchy is None or not raw_contours:
-        raise RasterVectorizationError(
-            "No closed contours were produced by the selected raster settings"
+    try:
+        return extract_foreground_contours(
+            mask,
+            approximation=approximation,
+            maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
         )
-    if len(raw_contours) > MAX_RASTER_VECTORIZATION_CONTOURS:
+    except ForegroundContourLimitError as exc:
         _raise_complexity(
             "Raster vectorization found "
-            f"{len(raw_contours):,} contours, exceeding the "
+            f"{exc.count:,} contours, exceeding the "
             f"{MAX_RASTER_VECTORIZATION_CONTOURS:,}-contour limit"
         )
-    return tuple(_readonly(contour) for contour in raw_contours), _readonly(hierarchy)
+    except ValueError as exc:
+        raise RasterVectorizationError(
+            "No closed contours were produced by the selected raster settings"
+        ) from exc
 
 
 @_timed_stage("quick_preview_total")

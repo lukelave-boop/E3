@@ -18,9 +18,11 @@ from ..geometry.polygon import (
 )
 from ..templates import CutTemplate
 from ..vision.object_trace import (
+    PreparedCutoutFrame,
     TraceOptions,
     detect_objects,
-    detect_seeded_cutouts,
+    detect_prepared_cutouts,
+    prepare_cutout_frame,
     sample_color,
 )
 from ..vision.template_alignment import TemplateAlignment, rank_templates
@@ -361,6 +363,7 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image: np.ndarray | None = None
         self._trace_sample_area: WorkArea | None = None
         self._trace_sample_signature: tuple[object, ...] | None = None
+        self._trace_cutout_frame: PreparedCutoutFrame | None = None
         self._trace_cutout_seeds: list[tuple[float, float]] = []
         self._trace_cutout_ids: list[str] = []
         self._template_match_request_id = 0
@@ -401,6 +404,9 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
+        self._trace_cutout_frame = None
+        self._trace_cutout_seeds.clear()
+        self._trace_cutout_ids.clear()
         self._template_match_request_id += 1
         self._template_review_active = False
         self._template_review_signature = None
@@ -436,6 +442,9 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
+        self._trace_cutout_frame = None
+        self._trace_cutout_seeds.clear()
+        self._trace_cutout_ids.clear()
         self._template_match_request_id += 1
         self._template_review_active = False
         self._template_review_signature = None
@@ -764,6 +773,9 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
+        self._trace_cutout_frame = None
+        self._trace_cutout_seeds.clear()
+        self._trace_cutout_ids.clear()
         self._template_match_request_id += 1
         self._template_review_active = False
         self._template_review_signature = None
@@ -1093,6 +1105,7 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
+        self._trace_cutout_frame = None
         self._trace_cutout_seeds.clear()
         self._trace_cutout_ids.clear()
         self._resume_live_camera_after_review(was_held)
@@ -1367,6 +1380,7 @@ class DesktopController(QtCore.QObject):
         request_id = self._trace_request_id
         self._trace_cutout_seeds.clear()
         self._trace_cutout_ids.clear()
+        self._trace_cutout_frame = None
         self._trace_review_active = True
         self._sync_camera_timer()
 
@@ -1439,6 +1453,14 @@ class DesktopController(QtCore.QObject):
                     coordinate_frame=coordinate_frame,
                 )
             options = TraceOptions.from_mapping(raw_options)
+            cutout_frame = (
+                prepare_cutout_frame(
+                    image,
+                    self.runtime.settings.calibration.bed.pixels_per_mm,
+                )
+                if options.detection_mode == "cutout"
+                else None
+            )
             guarded_output = _guarded_output_work_area(self.runtime)
             guarded_polygon = _configured_guarded_output_polygon(self.runtime)
             result = detect_objects(
@@ -1453,6 +1475,13 @@ class DesktopController(QtCore.QObject):
                 ),
                 background_image=background_image,
             )
+            if cutout_frame is not None:
+                result.message = (
+                    "Cutout frame prepared with "
+                    f"{len(cutout_frame.candidates)} discrete candidate"
+                    f"{'s' if len(cutout_frame.candidates) != 1 else ''}. "
+                    "Choose Add cutout and click farther inside one visible object."
+                )
             output_polygon = None
             if coordinate_frame is not None:
                 output_polygon, outside = _apply_local_output_review(
@@ -1491,6 +1520,7 @@ class DesktopController(QtCore.QObject):
             payload["_trace_sample_image"] = image
             payload["_trace_sample_area"] = camera_area
             payload["_trace_sample_signature"] = review_signature
+            payload["_trace_cutout_frame"] = cutout_frame
             payload["review_signature"] = review_signature
             return payload
 
@@ -1520,7 +1550,13 @@ class DesktopController(QtCore.QObject):
         sample_image = payload.pop("_trace_sample_image", None)
         sample_area = payload.pop("_trace_sample_area", None)
         sample_signature = payload.pop("_trace_sample_signature", None)
-        if sample_signature is None and sample_image is None and sample_area is None:
+        cutout_frame = payload.pop("_trace_cutout_frame", None)
+        if (
+            sample_signature is None
+            and sample_image is None
+            and sample_area is None
+            and cutout_frame is None
+        ):
             # Compatibility for injected/non-camera test payloads. The real
             # operation always supplies all three private evidence fields.
             self.traceResultReady.emit(payload)
@@ -1535,6 +1571,9 @@ class DesktopController(QtCore.QObject):
             self._trace_sample_image = None
             self._trace_sample_area = None
             self._trace_sample_signature = None
+            self._trace_cutout_frame = None
+            self._trace_cutout_seeds.clear()
+            self._trace_cutout_ids.clear()
             self._resume_live_camera_after_review(was_held)
             self.errorOccurred.emit(
                 "Detect and trace objects failed: the honeycomb or bed mapping "
@@ -1552,6 +1591,9 @@ class DesktopController(QtCore.QObject):
             sample_area if isinstance(sample_area, WorkArea) else None
         )
         self._trace_sample_signature = tuple(sample_signature)
+        self._trace_cutout_frame = (
+            cutout_frame if isinstance(cutout_frame, PreparedCutoutFrame) else None
+        )
         self.traceResultReady.emit(payload)
 
     @QtCore.Slot(int, str)
@@ -1563,6 +1605,9 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
+        self._trace_cutout_frame = None
+        self._trace_cutout_seeds.clear()
+        self._trace_cutout_ids.clear()
         self._resume_live_camera_after_review(was_held)
         self.errorOccurred.emit(f"Detect and trace objects failed: {message}")
 
@@ -1574,7 +1619,11 @@ class DesktopController(QtCore.QObject):
     ) -> int:
         """Add one seeded cutout on the frozen Trace frame, then fit it off-thread."""
 
-        if self._trace_sample_image is None or self._trace_sample_area is None:
+        if (
+            self._trace_sample_image is None
+            or self._trace_sample_area is None
+            or self._trace_cutout_frame is None
+        ):
             self.errorOccurred.emit(
                 "Capture a Cutout / silhouette frame before adding a cutout"
             )
@@ -1609,7 +1658,7 @@ class DesktopController(QtCore.QObject):
         self._trace_cutout_ids.append(added_id)
         self._trace_request_id += 1
         request_id = self._trace_request_id
-        image = self._trace_sample_image.copy()
+        prepared_cutout = self._trace_cutout_frame
         camera_area = self._trace_sample_area
         review_signature = tuple(self._trace_sample_signature)
         seeds = tuple(self._trace_cutout_seeds)
@@ -1628,15 +1677,13 @@ class DesktopController(QtCore.QObject):
         guarded_output = _guarded_output_work_area(self.runtime)
         guarded_polygon = _configured_guarded_output_polygon(self.runtime)
         output_area = guarded_output if coordinate_frame is None else camera_area
-        pixels_per_mm = self.runtime.settings.calibration.bed.pixels_per_mm
 
         def operation(*, fit_native: bool) -> dict[str, Any]:
-            result = detect_seeded_cutouts(
-                image,
+            result = detect_prepared_cutouts(
+                prepared_cutout,
                 seeds,
                 options,
                 camera_area,
-                pixels_per_mm,
                 output_work_area=output_area,
                 detection_ids=detection_ids,
                 fit_native=fit_native,
@@ -1679,6 +1726,16 @@ class DesktopController(QtCore.QObject):
         def quick_complete(payload: dict[str, Any]) -> None:
             if request_id != self._trace_request_id:
                 return
+            returned_ids = {
+                str(item.get("id")) for item in payload.get("detections", [])
+            }
+            if (
+                added_id not in returned_ids
+                and self._trace_cutout_ids
+                and self._trace_cutout_ids[-1] == added_id
+            ):
+                self._trace_cutout_ids.pop()
+                self._trace_cutout_seeds.pop()
             self.traceResultReady.emit(payload)
             self._run(
                 lambda: operation(fit_native=True),

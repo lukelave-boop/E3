@@ -8,6 +8,7 @@ from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
 
+import cv2
 import numpy as np
 import pytest
 
@@ -22,6 +23,7 @@ from laser_aligner.calibration.support import HoneycombCoordinateFrame
 from laser_aligner.config import WorkArea
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.main_window import E3MainWindow
+from laser_aligner.desktop.panels import TracePanel
 from laser_aligner.desktop.template_panel import TemplatePanel
 from laser_aligner.desktop.workspace import WorkspaceView, _TraceIndexBadge
 from laser_aligner.project import (
@@ -36,7 +38,7 @@ from laser_aligner.templates import (
     RectangleGridSpec,
     template_from_project,
 )
-from laser_aligner.vision.object_trace import TraceOptions
+from laser_aligner.vision.object_trace import TraceOptions, prepare_cutout_frame
 from laser_aligner.vision.template_alignment import TemplateAlignment
 
 
@@ -1939,6 +1941,153 @@ def test_workspace_cutout_preview_distinguishes_raw_and_verified_geometry(
     assert "Verified native cutout (green)" in legend
 
     view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_cutout_capture_and_two_add_clicks_keep_independent_verified_objects(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    height, width = 240, 400
+    gradient = np.linspace(195, 235, width, dtype=np.uint8)
+    image = np.repeat(gradient[None, :, None], height, axis=0)
+    image = np.repeat(image, 3, axis=2)
+    cv2.rectangle(image, (38, 55), (128, 188), (32, 32, 32), -1)
+    cv2.circle(image, (238, 122), 58, (38, 38, 38), -1)
+    area = WorkArea(0.0, width / 4.0, 0.0, height / 4.0)
+    prepared = prepare_cutout_frame(image, 4.0)
+    signature = ("cutout-frame",)
+    runtime = SimpleNamespace(
+        context=SimpleNamespace(current_honeycomb_coordinate_frame=lambda: None)
+    )
+    controller = DesktopController(runtime)
+    monkeypatch.setattr(
+        controller,
+        "_current_review_signature",
+        lambda _coordinate_frame=None: signature,
+    )
+    monkeypatch.setattr(
+        controller_module,
+        "_guarded_output_work_area",
+        lambda _runtime: area,
+    )
+    monkeypatch.setattr(
+        controller_module,
+        "_configured_guarded_output_polygon",
+        lambda _runtime: None,
+    )
+    prepared_calls: list[object] = []
+    real_detect_prepared = controller_module.detect_prepared_cutouts
+
+    def record_prepared_call(frame: object, *args: Any, **kwargs: Any) -> Any:
+        prepared_calls.append(frame)
+        return real_detect_prepared(frame, *args, **kwargs)
+
+    monkeypatch.setattr(
+        controller_module,
+        "detect_prepared_cutouts",
+        record_prepared_call,
+    )
+
+    def run_now(
+        callback: Any,
+        *,
+        on_success: Any = None,
+        on_failure: Any = None,
+        **_kwargs: Any,
+    ) -> SimpleNamespace:
+        try:
+            result = callback()
+        except Exception as exc:  # pragma: no cover - test failure path
+            if on_failure is not None:
+                on_failure(str(exc))
+            else:
+                raise
+        else:
+            if on_success is not None:
+                on_success(result)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(controller, "_run", run_now)
+    panel = TracePanel()
+    panel.set_calibration_ready(True)
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("cutout"))
+    view = WorkspaceView(Bounds(0.0, 0.0, area.width, area.height))
+    states: list[dict[str, object]] = []
+
+    def present(payload: dict[str, Any]) -> None:
+        panel.set_result(payload)
+        view.set_trace_preview(payload.get("detections", []), set(panel.selected_ids()))
+        detections = payload.get("detections", [])
+        if not detections:
+            return
+        paths = [
+            item
+            for item in view._trace_items
+            if isinstance(item, QtWidgets.QGraphicsPathItem)
+        ]
+        states.append(
+            {
+                "pending": bool(payload.get("native_fit_pending")),
+                "ids": [str(item["id"]) for item in detections],
+                "candidate_ids": [
+                    str(item["diagnostics"]["candidate_id"])
+                    for item in detections
+                ],
+                "create_enabled": panel.create_button.isEnabled(),
+                "colors": {item.pen().color().name().upper() for item in paths},
+            }
+        )
+
+    controller.traceResultReady.connect(present)
+    controller._trace_request_id = 1
+    controller._trace_detection_complete(
+        1,
+        {
+            "mode_used": "cutout",
+            "message": "Cutout frame captured",
+            "detections": [],
+            "grid": None,
+            "_trace_sample_image": image,
+            "_trace_sample_area": area,
+            "_trace_sample_signature": signature,
+            "_trace_cutout_frame": prepared,
+            "review_signature": signature,
+        },
+    )
+    assert panel.pick_cutout_button.isEnabled()
+
+    first_point = (80.0 / 4.0, (height - 120.0) / 4.0)
+    second_point = (238.0 / 4.0, (height - 122.0) / 4.0)
+    controller.select_trace_cutout(*first_point, panel.options())
+    controller.select_trace_cutout(*second_point, panel.options())
+    qt_application.processEvents()
+
+    assert [state["pending"] for state in states] == [True, False, True, False]
+    assert [state["create_enabled"] for state in states] == [
+        False,
+        True,
+        False,
+        True,
+    ]
+    assert states[0]["ids"] == states[1]["ids"]
+    assert states[2]["ids"] == states[3]["ids"]
+    assert states[0]["ids"] == states[2]["ids"][:1]
+    assert len(states[2]["ids"]) == 2
+    assert len(prepared_calls) == 4
+    assert all(frame is prepared for frame in prepared_calls)
+    assert len(set(states[2]["candidate_ids"])) == 2
+    assert states[2]["candidate_ids"] == states[3]["candidate_ids"]
+    assert states[0]["colors"] == {"#49A7D8"}
+    assert states[2]["colors"] == {"#49A7D8"}
+    assert states[1]["colors"] == {"#49A7D8", "#4FE36F"}
+    assert states[3]["colors"] == {"#49A7D8", "#4FE36F"}
+
+    panel.close()
+    view.close()
+    controller.deleteLater()
+    panel.deleteLater()
     view.deleteLater()
     qt_application.processEvents()
 

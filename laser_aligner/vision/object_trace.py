@@ -11,6 +11,17 @@ import cv2
 import numpy as np
 
 from ..config import WorkArea
+from ..geometry.foreground import (
+    ForegroundComponentLimitError,
+    ForegroundContourLimitError,
+    ForegroundContourTree,
+    clean_foreground_components,
+    contour_tree_at_point,
+    extract_foreground_contours,
+    foreground_contour_trees,
+    readonly_array,
+    render_contour_tree_mask,
+)
 from ..project.native_contour_fit import fit_physical_contours_to_native_path
 from ..project.path_geometry import (
     NativePathGeometry,
@@ -23,6 +34,8 @@ TRACE_MODES = {"auto", "color", "contrast", "cutout"}
 OUTPUT_MODES = {"rounded", "native", "smoothed", "exact"}
 BORDER_OFFSET_MODES = {"uniform", "custom"}
 NORMALIZE_ANCHORS = {"center", "top"}
+MAX_CUTOUT_CONNECTED_COMPONENTS = 4_096
+MAX_CUTOUT_CONTOURS = 8_192
 
 
 def _finite_option(value: Any, label: str) -> float:
@@ -264,6 +277,23 @@ class TraceResult:
             "camera_work_area": self.camera_work_area,
             "output_work_area": self.output_work_area,
         }
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class PreparedCutoutFrame:
+    """Immutable camera foreground and discrete contour candidates for one frame."""
+
+    image_bgr: np.ndarray
+    foreground_mask: np.ndarray
+    contours_px: tuple[np.ndarray, ...]
+    hierarchy: np.ndarray
+    candidates: tuple[ForegroundContourTree, ...]
+    pixels_per_mm: float
+    mask_source: str
+    connected_component_count: int
+    foreground_fraction: float
+    border_foreground_fraction: float
+    preparation_seconds: float
 
 
 def _new_id() -> str:
@@ -2689,6 +2719,7 @@ class _SeededCutoutRegion:
     segmentation_score: float
     boundary_contrast: float
     touches_image_edge: bool
+    candidate_id: str
 
 
 def _machine_to_pixel(
@@ -2706,128 +2737,231 @@ def _machine_to_pixel(
     )
 
 
-def _seed_similarity_masks(
+def _cutout_polarity_masks(
     image: np.ndarray,
-    seed_px: tuple[int, int],
     pixels_per_mm: float,
-) -> list[tuple[str, np.ndarray]]:
-    """Build camera-specific color/intensity hypotheses around one clicked seed."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """Build one click-independent dark/light consensus for a frozen frame."""
 
-    softened = cv2.GaussianBlur(image, (3, 3), 0)
-    lab = cv2.cvtColor(softened, cv2.COLOR_BGR2LAB).astype(np.float32)
-    illumination_span = max(9, int(round(8.0 * pixels_per_mm)) | 1)
-    illumination_span = min(illumination_span, 101)
-    local_lightness = (
-        lab[:, :, 0]
-        - cv2.GaussianBlur(lab[:, :, 0], (illumination_span, illumination_span), 0)
-        + 128.0
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    softened = cv2.GaussianBlur(gray, (3, 3), 0)
+    _, global_dark = cv2.threshold(
+        softened,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU,
     )
-    features = np.dstack((local_lightness, lab[:, :, 1], lab[:, :, 2]))
-    seed_x, seed_y = seed_px
-    radius = max(2, min(8, int(round(0.75 * pixels_per_mm))))
-    y_min, y_max = max(0, seed_y - radius), min(image.shape[0], seed_y + radius + 1)
-    x_min, x_max = max(0, seed_x - radius), min(image.shape[1], seed_x + radius + 1)
-    patch = features[y_min:y_max, x_min:x_max].reshape(-1, 3)
-    center = np.median(patch, axis=0)
-    mad = np.median(np.abs(patch - center), axis=0)
-    scale = np.maximum(mad * 3.5, np.asarray((8.0, 6.0, 6.0)))
-    distance = np.sqrt(np.sum(((features - center) / scale) ** 2, axis=2))
-    output: list[tuple[str, np.ndarray]] = []
-    kernel = np.ones((3, 3), dtype=np.uint8)
-    for threshold in (1.5, 2.1, 2.9, 3.8):
-        mask = (distance <= threshold).astype(np.uint8) * 255
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-        output.append((f"seed_lab_{threshold:.1f}", mask))
-    return output
+    corrected = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(softened)
+    _, corrected_dark = cv2.threshold(
+        corrected,
+        0,
+        255,
+        cv2.THRESH_BINARY_INV | cv2.THRESH_OTSU,
+    )
+
+    minimum_dimension = min(gray.shape[:2])
+    block_size = max(31, int(round(pixels_per_mm * 40.0)))
+    if block_size % 2 == 0:
+        block_size += 1
+    maximum_block = minimum_dimension if minimum_dimension % 2 else minimum_dimension - 1
+    block_size = max(3, min(block_size, maximum_block))
+    adaptive_dark = cv2.adaptiveThreshold(
+        softened,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY_INV,
+        block_size,
+        4.0,
+    )
+    adaptive_light = cv2.adaptiveThreshold(
+        softened,
+        255,
+        cv2.ADAPTIVE_THRESH_MEAN_C,
+        cv2.THRESH_BINARY,
+        block_size,
+        -4.0,
+    )
+
+    local_span = max(31, int(round(pixels_per_mm * 36.0)))
+    if local_span % 2 == 0:
+        local_span += 1
+    maximum_local_span = min(201, maximum_block)
+    local_span = max(3, min(local_span, maximum_local_span))
+    local_background = cv2.GaussianBlur(
+        softened.astype(np.float32),
+        (local_span, local_span),
+        0,
+    )
+    local_masks: list[np.ndarray] = []
+    for difference in (
+        local_background - softened.astype(np.float32),
+        softened.astype(np.float32) - local_background,
+    ):
+        positive = difference[difference > 0]
+        adaptive = 0.0 if positive.size == 0 else float(np.percentile(positive, 78))
+        local_masks.append((difference >= max(6.0, adaptive)).astype(np.uint8) * 255)
+
+    dark_hypotheses = (global_dark, corrected_dark, adaptive_dark, local_masks[0])
+    light_hypotheses = (
+        cv2.bitwise_not(global_dark),
+        cv2.bitwise_not(corrected_dark),
+        adaptive_light,
+        local_masks[1],
+    )
+    required_votes = 3
+    dark_votes = np.sum(
+        np.stack([mask > 0 for mask in dark_hypotheses], axis=0), axis=0
+    )
+    light_votes = np.sum(
+        np.stack([mask > 0 for mask in light_hypotheses], axis=0), axis=0
+    )
+    dark = (dark_votes >= required_votes).astype(np.uint8) * 255
+    light = (light_votes >= required_votes).astype(np.uint8) * 255
+    overlap = (dark > 0) & (light > 0)
+    if np.any(overlap):
+        dark[overlap] = 0
+        light[overlap] = 0
+    return dark, light
 
 
-def _contour_depth(index: int, hierarchy: np.ndarray) -> int:
-    depth = 0
-    parent = int(hierarchy[index, 3])
-    while parent >= 0:
-        depth += 1
-        if depth > len(hierarchy):
-            raise ValueError("Camera cutout contour hierarchy is cyclic")
-        parent = int(hierarchy[parent, 3])
-    return depth
+def _cutout_mask_statistics(mask: np.ndarray) -> tuple[float, float]:
+    foreground_fraction = float(np.count_nonzero(mask)) / float(mask.size)
+    border = np.concatenate((mask[0], mask[-1], mask[:, 0], mask[:, -1]))
+    border_fraction = float(np.count_nonzero(border)) / float(border.size)
+    return foreground_fraction, border_fraction
 
 
-def _extract_seeded_region(
+def prepare_cutout_frame(
     image: np.ndarray,
-    mask: np.ndarray,
+    pixels_per_mm: float,
+) -> PreparedCutoutFrame:
+    """Prepare one immutable candidate forest before any operator click."""
+
+    started = time.perf_counter()
+    _require_bgr_image(image, "Rectified camera image")
+    if min(image.shape[:2]) < 3:
+        raise ValueError(
+            "Rectified camera image must be at least 3 pixels wide and high"
+        )
+    pixels_per_mm = _finite_option(pixels_per_mm, "pixels_per_mm")
+    if pixels_per_mm <= 0.0:
+        raise ValueError("pixels_per_mm must be positive and finite")
+    dark_mask, light_mask = _cutout_polarity_masks(image, pixels_per_mm)
+    minimum_area_px = max(4.0, 0.05 * pixels_per_mm**2)
+    prepared_masks: list[
+        tuple[
+            bool,
+            float,
+            float,
+            str,
+            np.ndarray,
+            int,
+            tuple[np.ndarray, ...],
+            np.ndarray,
+            tuple[ForegroundContourTree, ...],
+        ]
+    ] = []
+    for polarity, mask in (("dark", dark_mask), ("light", light_mask)):
+        try:
+            cleaned, component_count = clean_foreground_components(
+                mask,
+                minimum_component_area_px=minimum_area_px,
+                minimum_hole_area_px=minimum_area_px,
+                maximum_components=MAX_CUTOUT_CONNECTED_COMPONENTS,
+            )
+        except ForegroundComponentLimitError as exc:
+            raise ValueError(
+                "The frozen camera frame contains too many discrete cutout features; "
+                "improve the frame or use a tighter Trace area"
+            ) from exc
+        if component_count == 0:
+            continue
+        try:
+            contours, hierarchy = extract_foreground_contours(
+                cleaned,
+                maximum_contours=MAX_CUTOUT_CONTOURS,
+            )
+        except ForegroundContourLimitError as exc:
+            raise ValueError(
+                "The frozen camera frame contains too many cutout contour trees; "
+                "improve the frame or use a tighter Trace area"
+            ) from exc
+        except ValueError:
+            continue
+        candidates = foreground_contour_trees(contours, hierarchy, image.shape)
+        if not candidates:
+            continue
+        foreground_fraction, border_fraction = _cutout_mask_statistics(cleaned)
+        background_like = bool(
+            foreground_fraction >= 0.50 and border_fraction >= 0.50
+        )
+        prepared_masks.append(
+            (
+                background_like,
+                border_fraction,
+                foreground_fraction,
+                f"frame_{polarity}_consensus",
+                cleaned,
+                component_count,
+                contours,
+                hierarchy,
+                candidates,
+            )
+        )
+    if not prepared_masks:
+        raise ValueError(
+            "The frozen camera frame contains no discrete cutout candidates; "
+            "improve lighting or contrast and capture it again"
+        )
+    chosen = min(prepared_masks, key=lambda item: item[:3])
+    (
+        _background_like,
+        border_fraction,
+        foreground_fraction,
+        mask_source,
+        foreground_mask,
+        component_count,
+        contours,
+        hierarchy,
+        candidates,
+    ) = chosen
+    return PreparedCutoutFrame(
+        image_bgr=readonly_array(image),
+        foreground_mask=readonly_array(foreground_mask),
+        contours_px=contours,
+        hierarchy=hierarchy,
+        candidates=candidates,
+        pixels_per_mm=pixels_per_mm,
+        mask_source=mask_source,
+        connected_component_count=component_count,
+        foreground_fraction=foreground_fraction,
+        border_foreground_fraction=border_fraction,
+        preparation_seconds=time.perf_counter() - started,
+    )
+
+
+def _prepared_candidate_id(
+    prepared: PreparedCutoutFrame,
+    candidate: ForegroundContourTree,
+) -> str:
+    index = next(
+        index
+        for index, item in enumerate(prepared.candidates)
+        if item is candidate
+    )
+    return f"{prepared.mask_source}:{index + 1}"
+
+
+def _cutout_region_from_candidate(
+    image: np.ndarray,
+    contours: tuple[np.ndarray, ...],
+    candidate: ForegroundContourTree,
     seed_px: tuple[int, int],
     mask_source: str,
-) -> _SeededCutoutRegion | None:
-    binary = (np.asarray(mask) > 0).astype(np.uint8) * 255
+    candidate_id: str,
+) -> _SeededCutoutRegion:
+    selected_mask = render_contour_tree_mask(contours, candidate, image.shape)
     seed_x, seed_y = seed_px
-    if not 0 <= seed_x < binary.shape[1] or not 0 <= seed_y < binary.shape[0]:
-        return None
-    if binary[seed_y, seed_x] == 0:
-        return None
-    contours, hierarchy = cv2.findContours(
-        binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE
-    )
-    if hierarchy is None:
-        return None
-    tree = hierarchy[0]
-    containing = [
-        index
-        for index, contour in enumerate(contours)
-        if cv2.pointPolygonTest(contour, (float(seed_x), float(seed_y)), False) >= 0
-    ]
-    if not containing:
-        return None
-    seed_contour = max(containing, key=lambda index: _contour_depth(index, tree))
-    if _contour_depth(seed_contour, tree) % 2:
-        return None
-    root = seed_contour
-    while int(tree[root, 3]) >= 0:
-        root = int(tree[root, 3])
-
-    descendants: list[int] = []
-    for index in range(len(contours)):
-        ancestor = index
-        while ancestor >= 0 and ancestor != root:
-            ancestor = int(tree[ancestor, 3])
-        if ancestor == root:
-            descendants.append(index)
-    depths = {index: _contour_depth(index, tree) - _contour_depth(root, tree) for index in descendants}
-    retained: list[int] = []
-    for index in sorted(descendants, key=lambda value: (depths[value], value)):
-        relative_depth = depths[index]
-        parent = int(tree[index, 3])
-        if index != root and abs(float(cv2.contourArea(contours[index]))) < 4.0:
-            continue
-        if relative_depth and parent not in retained:
-            continue
-        retained.append(index)
-    if not retained:
-        return None
-
-    selected_mask = np.zeros_like(binary)
-    index_map = {original: result for result, original in enumerate(retained)}
-    selected_parents: list[int | None] = []
-    selected_contours: list[np.ndarray] = []
-    for original in retained:
-        relative_depth = depths[original]
-        cv2.drawContours(
-            selected_mask,
-            contours,
-            original,
-            255 if relative_depth % 2 == 0 else 0,
-            thickness=cv2.FILLED,
-        )
-        parent = int(tree[original, 3])
-        selected_parents.append(index_map.get(parent))
-        selected_contours.append(contours[original])
-
-    root_points = np.asarray(contours[root], dtype=np.float64).reshape(-1, 2)
-    touches_edge = bool(
-        np.min(root_points[:, 0]) <= 0
-        or np.max(root_points[:, 0]) >= image.shape[1] - 1
-        or np.min(root_points[:, 1]) <= 0
-        or np.max(root_points[:, 1]) >= image.shape[0] - 1
-    )
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
     kernel = np.ones((3, 3), dtype=np.uint8)
     inner_band = (selected_mask > 0) & (cv2.erode(selected_mask, kernel) == 0)
@@ -2845,61 +2979,79 @@ def _extract_seeded_region(
         0.50 * min(1.0, boundary_contrast / 28.0)
         + 0.25 * min(1.0, seed_margin / 8.0)
         + 0.15 * min(1.0, math.sqrt(max(area_fraction, 0.0) / 0.08))
-        + (0.10 if not touches_edge else 0.0)
+        + (0.10 if not candidate.touches_image_edge else 0.0)
     )
-    if area_fraction <= 1e-5 or area_fraction >= 0.96:
-        return None
     return _SeededCutoutRegion(
-        contours_px=tuple(selected_contours),
-        parents=tuple(selected_parents),
+        contours_px=tuple(contours[index] for index in candidate.contour_indices),
+        parents=candidate.parents,
         mask=selected_mask,
         mask_source=mask_source,
         segmentation_score=score,
         boundary_contrast=boundary_contrast,
-        touches_image_edge=touches_edge,
+        touches_image_edge=candidate.touches_image_edge,
+        candidate_id=candidate_id,
     )
 
 
-def _segment_seeded_cutout(
+def _extract_seeded_region(
     image: np.ndarray,
+    mask: np.ndarray,
     seed_px: tuple[int, int],
-    pixels_per_mm: float,
-) -> _SeededCutoutRegion:
-    hypotheses = _seed_similarity_masks(image, seed_px, pixels_per_mm)
-    for name, mask in zip(
-        ("global_dark", "global_light", "clahe_dark", "clahe_light"),
-        _global_contrast_masks(image, pixels_per_mm),
-        strict=True,
-    ):
-        hypotheses.append((name, mask))
-    for name, mask in zip(
-        ("adaptive_dark", "adaptive_light"),
-        _adaptive_contrast_masks(image, pixels_per_mm),
-        strict=True,
-    ):
-        hypotheses.append((name, mask))
-    for name, mask in zip(
-        ("local_dark", "local_light"),
-        _contrast_region_masks(image, pixels_per_mm),
-        strict=True,
-    ):
-        hypotheses.append((name, mask))
-    regions = [
-        region
-        for name, mask in hypotheses
-        if (region := _extract_seeded_region(image, mask, seed_px, name)) is not None
-    ]
-    if not regions:
-        raise ValueError(
-            "The clicked point did not identify a closed cutout region; click farther inside the object"
+    mask_source: str,
+    candidate_id: str,
+) -> _SeededCutoutRegion | None:
+    seed_x, seed_y = seed_px
+    if not 0 <= seed_x < mask.shape[1] or not 0 <= seed_y < mask.shape[0]:
+        return None
+    if mask[seed_y, seed_x] == 0:
+        return None
+    try:
+        contours, hierarchy = extract_foreground_contours(
+            mask,
+            maximum_contours=MAX_CUTOUT_CONTOURS,
         )
-    return max(
-        regions,
-        key=lambda region: (
-            not region.touches_image_edge,
-            region.segmentation_score,
-            math.log1p(np.count_nonzero(region.mask)),
-        ),
+    except (ForegroundContourLimitError, ValueError):
+        return None
+    candidates = foreground_contour_trees(contours, hierarchy, image.shape)
+    candidate = contour_tree_at_point(contours, candidates, seed_px)
+    if candidate is None:
+        return None
+    return _cutout_region_from_candidate(
+        image,
+        contours,
+        candidate,
+        seed_px,
+        mask_source,
+        candidate_id,
+    )
+
+
+def _select_prepared_cutout(
+    prepared: PreparedCutoutFrame,
+    seed_px: tuple[int, int],
+) -> _SeededCutoutRegion:
+    seed_x, seed_y = seed_px
+    if prepared.foreground_mask[seed_y, seed_x] == 0:
+        raise ValueError(
+            "The click lies outside every discrete cutout candidate; click farther "
+            "inside the object or improve the captured frame"
+        )
+    candidate = contour_tree_at_point(
+        prepared.contours_px,
+        prepared.candidates,
+        seed_px,
+    )
+    if candidate is None:
+        raise ValueError(
+            "The clicked cutout is ambiguous; click farther inside one visible object"
+        )
+    return _cutout_region_from_candidate(
+        prepared.image_bgr,
+        prepared.contours_px,
+        candidate,
+        seed_px,
+        prepared.mask_source,
+        _prepared_candidate_id(prepared, candidate),
     )
 
 
@@ -2920,7 +3072,13 @@ def _offset_seeded_region(
         if offset_px > 0
         else cv2.erode(region.mask, kernel)
     )
-    adjusted = _extract_seeded_region(image, mask, seed_px, region.mask_source)
+    adjusted = _extract_seeded_region(
+        image,
+        mask,
+        seed_px,
+        region.mask_source,
+        region.candidate_id,
+    )
     if adjusted is None:
         raise ValueError("The requested cutout border offset collapses the selected region")
     return adjusted
@@ -2943,30 +3101,23 @@ def _oversampled_cutout_contours(
         interpolation=cv2.INTER_CUBIC,
     )
     oversampled = (oversampled >= 128).astype(np.uint8) * 255
-    contours, hierarchy = cv2.findContours(
-        oversampled, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE
-    )
-    if hierarchy is None or not contours:
+    try:
+        contours, hierarchy = extract_foreground_contours(
+            oversampled,
+            maximum_contours=MAX_CUTOUT_CONTOURS,
+        )
+    except (ForegroundContourLimitError, ValueError) as exc:
+        raise ValueError("The selected cutout has no bounded contour") from exc
+    candidates = foreground_contour_trees(contours, hierarchy, oversampled.shape)
+    if len(candidates) != 1:
         raise ValueError("The selected cutout has no bounded contour")
-    tree = hierarchy[0]
-    depths = [_contour_depth(index, tree) for index in range(len(contours))]
-    retained = [
-        index
-        for index in sorted(range(len(contours)), key=lambda value: (depths[value], value))
-        if index == 0 or abs(float(cv2.contourArea(contours[index]))) >= 16.0
-    ]
-    index_map = {original: result for result, original in enumerate(retained)}
+    candidate = candidates[0]
     output_contours: list[np.ndarray] = []
-    output_parents: list[int | None] = []
-    for original in retained:
-        parent = int(tree[original, 3])
-        if parent >= 0 and parent not in index_map:
-            continue
+    for original in candidate.contour_indices:
         points = np.asarray(contours[original], dtype=np.float64).reshape(-1, 2)
         points /= float(factor)
         output_contours.append(points)
-        output_parents.append(index_map.get(parent))
-    return tuple(output_contours), tuple(output_parents)
+    return tuple(output_contours), candidate.parents
 
 
 def _localize_camera_intensity_edges(
@@ -3184,6 +3335,7 @@ def _build_cutout_detection(
             "boundary_contrast": region.boundary_contrast,
             "physical_pixel_pitch_mm": 1.0 / pixels_per_mm,
             "native_fit_status": "quick" if not fit_native else "fitting",
+            "contour_parents": list(physical_parents),
         }
     )
     analytic = (
@@ -3333,27 +3485,30 @@ def _build_cutout_detection(
     return detection
 
 
-def detect_seeded_cutouts(
-    image: np.ndarray,
+def detect_prepared_cutouts(
+    prepared: PreparedCutoutFrame,
     seed_points_mm: Sequence[Sequence[float]],
     options: TraceOptions | Mapping[str, Any] | None,
     work_area: WorkArea,
-    pixels_per_mm: float,
     *,
     output_work_area: WorkArea | None = None,
     detection_ids: Sequence[str] | None = None,
     fit_native: bool = True,
 ) -> TraceResult:
-    """Select only clicked camera regions and optionally fit verified native paths."""
+    """Select clicked objects from one precomputed immutable candidate forest."""
 
     started = time.perf_counter()
-    options = options if isinstance(options, TraceOptions) else TraceOptions.from_mapping(options)
+    if not isinstance(prepared, PreparedCutoutFrame):
+        raise TypeError("prepared must be a PreparedCutoutFrame")
+    options = (
+        options
+        if isinstance(options, TraceOptions)
+        else TraceOptions.from_mapping(options)
+    )
     if options.detection_mode != "cutout":
         raise ValueError("Seeded cutout detection requires Cutout / silhouette mode")
-    _require_bgr_image(image, "Rectified camera image")
-    pixels_per_mm = _finite_option(pixels_per_mm, "pixels_per_mm")
-    if pixels_per_mm <= 0.0:
-        raise ValueError("pixels_per_mm must be positive and finite")
+    image = prepared.image_bgr
+    pixels_per_mm = prepared.pixels_per_mm
     output_work_area = work_area if output_work_area is None else output_work_area
     seeds = tuple(seed_points_mm)
     if len(seeds) > 64:
@@ -3387,52 +3542,57 @@ def detect_seeded_cutouts(
     if len(ids) != len(seeds):
         raise ValueError("detection_ids must match the number of cutout seeds")
     detections: list[TraceDetection] = []
-    accepted_regions: list[_SeededCutoutRegion] = []
+    accepted_candidate_ids: set[str] = set()
     for seed, detection_id in zip(seeds, ids, strict=True):
         seed_float = _machine_to_pixel(seed, work_area, pixels_per_mm)
         seed_px = (int(round(seed_float[0])), int(round(seed_float[1])))
         if not 0 <= seed_px[0] < image.shape[1] or not 0 <= seed_px[1] < image.shape[0]:
             raise ValueError("The clicked cutout seed lies outside the corrected camera image")
-        region = _segment_seeded_cutout(image, seed_px, pixels_per_mm)
+        region = _select_prepared_cutout(prepared, seed_px)
+        if region.candidate_id in accepted_candidate_ids:
+            continue
         region = _offset_seeded_region(
             image,
             region,
             seed_px,
             options.border_offset_mm * pixels_per_mm,
         )
-        duplicate = next(
-            (
-                index
-                for index, previous in enumerate(accepted_regions)
-                if (
-                    np.count_nonzero((previous.mask > 0) & (region.mask > 0))
-                    / max(1, min(np.count_nonzero(previous.mask), np.count_nonzero(region.mask)))
-                )
-                >= 0.90
-            ),
-            None,
+        accepted_candidate_ids.add(region.candidate_id)
+        detection = _build_cutout_detection(
+            image,
+            region,
+            options,
+            work_area,
+            output_work_area,
+            pixels_per_mm,
+            detection_id=str(detection_id),
+            index=len(detections) + 1,
+            fit_native=fit_native,
         )
-        if duplicate is not None:
-            continue
-        accepted_regions.append(region)
-        detections.append(
-            _build_cutout_detection(
-                image,
-                region,
-                options,
-                work_area,
-                output_work_area,
-                pixels_per_mm,
-                detection_id=str(detection_id),
-                index=len(detections) + 1,
-                fit_native=fit_native,
-            )
+        detection.diagnostics.update(
+            {
+                "candidate_id": region.candidate_id,
+                "frame_candidate_count": len(prepared.candidates),
+                "frame_connected_component_count": (
+                    prepared.connected_component_count
+                ),
+                "frame_foreground_fraction": prepared.foreground_fraction,
+                "frame_border_foreground_fraction": (
+                    prepared.border_foreground_fraction
+                ),
+                "frame_candidate_preparation_seconds": (
+                    prepared.preparation_seconds
+                ),
+            }
         )
+        detections.append(detection)
     elapsed = time.perf_counter() - started
     stage = "verified native geometry" if fit_native else "quick segmentation outline"
     message = (
         f"{stage.capitalize()}: {len(detections)} clicked cutout"
-        f"{'s' if len(detections) != 1 else ''} in {elapsed:.3f} s"
+        f"{'s' if len(detections) != 1 else ''} from "
+        f"{len(prepared.candidates)} precomputed candidate"
+        f"{'s' if len(prepared.candidates) != 1 else ''} in {elapsed:.3f} s"
     )
     camera_payload = {
         "x_min": float(work_area.x_min),
@@ -3460,6 +3620,31 @@ def detect_seeded_cutouts(
         options=options,
         camera_work_area=camera_payload,
         output_work_area=output_payload,
+    )
+
+
+def detect_seeded_cutouts(
+    image: np.ndarray,
+    seed_points_mm: Sequence[Sequence[float]],
+    options: TraceOptions | Mapping[str, Any] | None,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+    *,
+    output_work_area: WorkArea | None = None,
+    detection_ids: Sequence[str] | None = None,
+    fit_native: bool = True,
+) -> TraceResult:
+    """Prepare one frame candidate forest, then select only clicked objects."""
+
+    prepared = prepare_cutout_frame(image, pixels_per_mm)
+    return detect_prepared_cutouts(
+        prepared,
+        seed_points_mm,
+        options,
+        work_area,
+        output_work_area=output_work_area,
+        detection_ids=detection_ids,
+        fit_native=fit_native,
     )
 
 

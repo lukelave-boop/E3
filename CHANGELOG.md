@@ -6,6 +6,18 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed Camera Trace **Cutout / silhouette** after the first interactive camera
+  use exposed that per-click segmentation-hypothesis ranking could choose a
+  merged neighboring-letter region. A corrected frame now produces one bounded,
+  click-independent dark/light foreground consensus and a stable forest of
+  discrete connected contour trees before selection. Add clicks only choose an
+  existing outer/hole/island tree, duplicate clicks coalesce by candidate ID,
+  and quick plus exact stages reuse the same immutable preparation. Shared
+  source-neutral component cleanup and `RETR_TREE` decomposition now serve both
+  camera cutouts and raster vectorization, while their mask construction and UI
+  remain separate. The authoritative physical line/cubic fitter and all guarded
+  output behavior are unchanged.
+
 - Removed the development updater's release-wide delete/recreate outage. The
   `e3-development` prerelease now retains its live manifest and packages while
   revision-specific Windows and Linux assets upload and are checked against

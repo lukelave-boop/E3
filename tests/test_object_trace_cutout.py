@@ -8,7 +8,9 @@ from laser_aligner.config import WorkArea
 from laser_aligner.vision.object_trace import (
     TraceOptions,
     detect_objects,
+    detect_prepared_cutouts,
     detect_seeded_cutouts,
+    prepare_cutout_frame,
 )
 
 
@@ -67,23 +69,34 @@ def test_cutout_clicks_select_only_desired_regions_amid_distracting_text() -> No
     image = _distracting_scene()
     first_seed = _machine_seed(image, 105, 150)
     second_seed = _machine_seed(image, 405, 160)
+    prepared = prepare_cutout_frame(image, 4.0)
 
     capture = detect_objects(image, _options(), _area(image), 4.0)
     assert capture.detections == []
     assert "Unrelated contrast is not selected" in capture.message
 
-    first = detect_seeded_cutouts(
-        image, [first_seed], _options(), _area(image), 4.0, fit_native=False
+    first = detect_prepared_cutouts(
+        prepared,
+        [first_seed],
+        _options(),
+        _area(image),
+        detection_ids=["first"],
+        fit_native=False,
     )
-    second = detect_seeded_cutouts(
-        image, [second_seed], _options(), _area(image), 4.0, fit_native=False
+    second = detect_prepared_cutouts(
+        prepared,
+        [second_seed],
+        _options(),
+        _area(image),
+        detection_ids=["second"],
+        fit_native=False,
     )
-    both = detect_seeded_cutouts(
-        image,
+    both = detect_prepared_cutouts(
+        prepared,
         [first_seed, second_seed],
         _options(),
         _area(image),
-        4.0,
+        detection_ids=["first", "second"],
         fit_native=False,
     )
 
@@ -95,8 +108,179 @@ def test_cutout_clicks_select_only_desired_regions_amid_distracting_text() -> No
     assert all(item.source == "seeded_cutout" for item in both.detections)
     assert all(item.selected_default for item in both.detections)
     assert sum(item.area_mm2 for item in both.detections) > 1_500.0
-    # None of the disconnected high-contrast lettering is globally promoted.
-    assert max(len(item.raw_contours_mm) for item in both.detections) == 1
+    first_id = first.detections[0].diagnostics["candidate_id"]
+    second_id = second.detections[0].diagnostics["candidate_id"]
+    assert [item.diagnostics["candidate_id"] for item in both.detections] == [
+        first_id,
+        second_id,
+    ]
+    assert first_id != second_id
+    assert first.detections[0].id == both.detections[0].id
+    assert second.detections[0].id == both.detections[1].id
+    first_x = [point[0] for point in both.detections[0].raw_contours_mm[0]]
+    second_x = [point[0] for point in both.detections[1].raw_contours_mm[0]]
+    assert max(first_x) < min(second_x)
+    assert prepared.connected_component_count > len(both.detections)
+    assert all(item.diagnostics["contour_parents"][0] is None for item in both.detections)
+
+
+def _adjacent_glyph_camera_scene() -> np.ndarray:
+    rng = np.random.default_rng(8274)
+    height, width = 360, 760
+    y_grid, x_grid = np.mgrid[0:height, 0:width]
+    background = (
+        188.0
+        + 46.0 * x_grid / float(width - 1)
+        + 11.0 * y_grid / float(height - 1)
+        + 4.0 * np.sin(x_grid / 83.0)
+        + rng.normal(0.0, 1.4, (height, width))
+    )
+    background = np.clip(background, 0, 255).astype(np.uint8)
+    image = np.repeat(background[:, :, None], 3, axis=2)
+
+    glyph_a = np.zeros((height, width), dtype=np.uint8)
+    cv2.fillPoly(
+        glyph_a,
+        [np.asarray([[65, 245], [116, 68], [170, 245]], dtype=np.int32)],
+        255,
+    )
+    cv2.fillPoly(
+        glyph_a,
+        [np.asarray([[102, 177], [116, 122], [132, 177]], dtype=np.int32)],
+        0,
+    )
+    cv2.rectangle(glyph_a, (90, 184), (143, 202), 255, -1)
+
+    glyph_b = np.zeros_like(glyph_a)
+    cv2.rectangle(glyph_b, (178, 78), (202, 244), 255, -1)
+    cv2.ellipse(glyph_b, (207, 123), (55, 45), 0, -90, 90, 255, -1)
+    cv2.ellipse(glyph_b, (207, 198), (60, 48), 0, -90, 90, 255, -1)
+
+    glyph_c = np.zeros_like(glyph_a)
+    cv2.circle(glyph_c, (337, 161), 72, 255, -1)
+    cv2.circle(glyph_c, (337, 161), 45, 0, -1)
+    cv2.rectangle(glyph_c, (337, 82), (417, 240), 0, -1)
+
+    underline = np.zeros_like(glyph_a)
+    cv2.rectangle(underline, (62, 276), (515, 290), 255, -1)
+
+    for mask, value in (
+        (glyph_a, (30, 34, 38)),
+        (glyph_b, (38, 34, 30)),
+        (glyph_c, (27, 31, 35)),
+        (underline, (34, 34, 34)),
+    ):
+        image[mask > 0] = value
+
+    cv2.putText(
+        image,
+        "E3 CUT 8274",
+        (520, 112),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.72,
+        (35, 35, 35),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        image,
+        "NOT SELECTED",
+        (500, 330),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.55,
+        (55, 55, 55),
+        1,
+        cv2.LINE_AA,
+    )
+    return image
+
+
+def test_cutout_adjacent_glyphs_are_precomputed_and_selected_as_objects() -> None:
+    image = _adjacent_glyph_camera_scene()
+    area = _area(image)
+    prepared = prepare_cutout_frame(image, 4.0)
+    seeds = [
+        _machine_seed(image, 82, 220),
+        _machine_seed(image, 190, 160),
+        _machine_seed(image, 282, 161),
+        _machine_seed(image, 300, 283),
+    ]
+    ids = ["glyph-a", "glyph-b", "glyph-c", "underline"]
+
+    quick = detect_prepared_cutouts(
+        prepared,
+        seeds,
+        _options(),
+        area,
+        detection_ids=ids,
+        fit_native=False,
+    )
+    verified = detect_prepared_cutouts(
+        prepared,
+        seeds,
+        _options(),
+        area,
+        detection_ids=ids,
+        fit_native=True,
+    )
+    duplicate = detect_prepared_cutouts(
+        prepared,
+        [*seeds, seeds[1]],
+        _options(),
+        area,
+        detection_ids=[*ids, "duplicate-b"],
+        fit_native=False,
+    )
+
+    assert [item.id for item in quick.detections] == ids
+    assert [item.id for item in verified.detections] == ids
+    assert len(duplicate.detections) == 4
+    candidate_ids = [item.diagnostics["candidate_id"] for item in quick.detections]
+    assert len(set(candidate_ids)) == 4
+    assert [item.diagnostics["candidate_id"] for item in verified.detections] == candidate_ids
+
+    bounds = []
+    for item in quick.detections:
+        outer = np.asarray(item.raw_contours_mm[0], dtype=np.float64)
+        bounds.append(
+            (
+                float(np.min(outer[:, 0])),
+                float(np.max(outer[:, 0])),
+                float(np.min(outer[:, 1])),
+                float(np.max(outer[:, 1])),
+            )
+        )
+    assert bounds[0][1] < bounds[1][0]
+    assert bounds[1][1] < bounds[2][0]
+    assert bounds[0][2] > bounds[3][3]
+    assert bounds[2][2] > bounds[3][3]
+    assert bounds[3][1] - bounds[3][0] > 100.0
+    assert bounds[2][1] < 105.0
+    assert max(bound[1] for bound in bounds) < 130.0
+
+    with pytest.raises(ValueError, match="outside every discrete cutout candidate"):
+        detect_prepared_cutouts(
+            prepared,
+            [_machine_seed(image, 173, 160)],
+            _options(),
+            area,
+            fit_native=False,
+        )
+
+    glyph_a = quick.detections[0]
+    assert len(glyph_a.raw_contours_mm) == 2
+    assert glyph_a.diagnostics["contour_parents"] == [None, 0]
+    assert all(item.native_verified for item in verified.detections)
+    assert all(item.native_path is not None for item in verified.detections)
+    assert all(
+        set("".join(item.diagnostics["native_sequences"])) <= {"L", "C"}
+        for item in verified.detections
+    )
+    assert any(
+        "L" in "".join(item.diagnostics["native_sequences"])
+        and "C" in "".join(item.diagnostics["native_sequences"])
+        for item in verified.detections[:3]
+    )
 
 
 def test_cutout_mixed_straight_and_curved_shape_uses_native_lines_and_cubics() -> None:

@@ -34,9 +34,12 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    when sampling succeeds. A failure is shown directly in the Trace inspector.
    In **Cutout / silhouette**, first capture the corrected frame, choose **Add
    cutout**, and click inside one desired physical object. Repeat **Add cutout**
-   for more objects. The click selects a connected physical region; it is not an
-   arbitrary geometry vertex. Disconnected lettering and artwork elsewhere in
-   the frame are not promoted merely because they are high contrast.
+   for more objects. Capture fixes a frame-wide set of discrete foreground
+   objects before the first click; the click only chooses the one existing
+   contour tree under that point. It is not an arbitrary geometry vertex and
+   does not change the segmentation threshold. Click farther inside the desired
+   object if E3 reports background or an ambiguous boundary. Disconnected
+   lettering and artwork elsewhere in the frame remain unselected.
 5. For the three global detection modes, set the minimum/maximum area and minimum dimensions so dust, sheet edges,
    and unrelated artwork are excluded.
 6. For a repeated label sheet, leave **Use grid** and **Make grid cells
@@ -171,11 +174,14 @@ when created, so rotated or asymmetric traces do not shift after approval.
 
 ## Detection modes
 
-- **Cutout / silhouette** is seeded and local. Camera-specific Lab/intensity,
-  global, adaptive, and local-contrast hypotheses are evaluated only for the
-  contour tree containing the clicked foreground point. Multiple clicks retain
-  multiple objects; duplicate clicks on the same region are coalesced. `RETR_TREE`
-  hierarchy preserves an outer boundary, holes, and nested islands. The global
+- **Cutout / silhouette** prepares one click-independent dark/light foreground
+  consensus for the frozen frame, cleans its connected components, and
+  decomposes the result into discrete `RETR_TREE` contour trees before any click
+  is accepted. Adjacent glyphs separated by a real background gap therefore
+  remain independent candidates; each candidate retains its outer boundary,
+  holes, and nested islands. A click performs point containment against this
+  fixed candidate forest. Multiple clicks retain multiple objects, while a
+  repeated click on the same stable candidate is coalesced. The global
   area/width/height filters do not reject a clicked region, and no missing grid
   cells are inferred.
 
@@ -303,11 +309,13 @@ objects, changing the camera/calibration evidence, or stopping the controller
 invalidates outstanding trace work. Late results from an older request are
 ignored.
 
-In **Cutout / silhouette**, the capture establishes the frozen frame before any
-seed is accepted. Each click first runs bounded quick segmentation in a worker,
-then runs authoritative native fitting in a second worker. A newer click makes
-older exact completion stale; creation can consume only the newest verified
-payload. Neither stage runs on the GUI thread.
+In **Cutout / silhouette**, capture establishes both the frozen frame and its
+immutable candidate forest before any click is accepted. Every Add click, quick
+blue outline, and authoritative exact fit reuses that preparation; thresholding
+and frame-wide component decomposition are not rerun per click or per stage. A
+newer click makes older exact completion stale, and creation can consume only the
+newest verified payload. Quick selection and exact fitting run outside the GUI
+thread.
 
 ## Accuracy notes
 
