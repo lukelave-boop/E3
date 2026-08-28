@@ -675,6 +675,85 @@ def test_non_grid_trace_names_the_guarded_output_boundary(
     qt_application.processEvents()
 
 
+def test_cutout_mode_disables_global_grid_filters_and_waits_for_native_fit(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    panel.set_calibration_ready(True)
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("cutout"))
+    qt_application.processEvents()
+
+    assert panel.detect_button.text() == "Capture cutout frame"
+    assert panel.output_mode.currentData() == "native"
+    assert not panel.min_area.isEnabled()
+    assert not panel.max_area.isEnabled()
+    assert not panel.regular_grid.isEnabled()
+    assert not panel.infer_missing.isEnabled()
+    assert not panel.normalize_grid.isEnabled()
+    assert panel.native_fitting_tolerance.isEnabled()
+    assert not panel.pick_cutout_button.isEnabled()
+
+    panel.set_result(
+        {
+            "mode_used": "cutout",
+            "message": "Cutout frame captured",
+            "detections": [],
+            "grid": None,
+        }
+    )
+    assert panel.pick_cutout_button.isEnabled()
+
+    detection = {
+        "id": "clicked-cutout",
+        "index": 1,
+        "source": "seeded_cutout",
+        "confidence": 0.9,
+        "selected_default": True,
+        "shape": "contour",
+        "width_mm": 25.0,
+        "height_mm": 18.0,
+        "rotation_deg": 0.0,
+        "diagnostics": {
+            "within_work_area": True,
+            "native_fit_status": "quick",
+        },
+    }
+    panel.set_result(
+        {
+            "mode_used": "cutout",
+            "message": "Quick segmentation outline",
+            "native_fit_pending": True,
+            "detections": [detection],
+            "grid": None,
+        }
+    )
+    assert panel.selected_ids() == ["clicked-cutout"]
+    assert not panel.create_button.isEnabled()
+
+    detection["native_verified"] = True
+    detection["diagnostics"] = {
+        "within_work_area": True,
+        "native_fit_status": "verified",
+        "native_sequences": ["LLCC"],
+    }
+    panel.set_result(
+        {
+            "mode_used": "cutout",
+            "message": "Verified native geometry",
+            "native_fit_pending": False,
+            "detections": [detection],
+            "grid": None,
+        }
+    )
+    assert panel.create_button.isEnabled()
+    assert "Verified native sequence" in panel.result_tree.topLevelItem(0).toolTip(4)
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("auto"))
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
 def test_transform_summary_wraps_long_names_without_widening_inspector(
     qt_application: QtWidgets.QApplication,
 ) -> None:

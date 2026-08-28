@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,12 @@ from ..geometry.polygon import (
     normalize_convex_polygon,
 )
 from ..templates import CutTemplate
-from ..vision.object_trace import TraceOptions, detect_objects, sample_color
+from ..vision.object_trace import (
+    TraceOptions,
+    detect_objects,
+    detect_seeded_cutouts,
+    sample_color,
+)
 from ..vision.template_alignment import TemplateAlignment, rank_templates
 from .qt import require_qt
 from .tasks import FunctionTask
@@ -322,6 +328,7 @@ class DesktopController(QtCore.QObject):
     traceResultReady = QtCore.Signal(dict)
     traceColorReady = QtCore.Signal(dict)
     traceColorFailed = QtCore.Signal(str)
+    traceCutoutFailed = QtCore.Signal(str)
     templateMatchReady = QtCore.Signal(dict)
     reviewEvidenceInvalidated = QtCore.Signal()
     stopInitiated = QtCore.Signal()
@@ -354,6 +361,8 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image: np.ndarray | None = None
         self._trace_sample_area: WorkArea | None = None
         self._trace_sample_signature: tuple[object, ...] | None = None
+        self._trace_cutout_seeds: list[tuple[float, float]] = []
+        self._trace_cutout_ids: list[str] = []
         self._template_match_request_id = 0
         self._template_review_active = False
         self._template_review_signature: tuple[object, ...] | None = None
@@ -1084,6 +1093,8 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
+        self._trace_cutout_seeds.clear()
+        self._trace_cutout_ids.clear()
         self._resume_live_camera_after_review(was_held)
 
     def set_live_camera(self, enabled: bool, interval_ms: int | None = None) -> None:
@@ -1354,6 +1365,8 @@ class DesktopController(QtCore.QObject):
     def detect_trace_objects(self, raw_options: dict[str, Any]) -> int:
         self._trace_request_id += 1
         request_id = self._trace_request_id
+        self._trace_cutout_seeds.clear()
+        self._trace_cutout_ids.clear()
         self._trace_review_active = True
         self._sync_camera_timer()
 
@@ -1552,6 +1565,159 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_signature = None
         self._resume_live_camera_after_review(was_held)
         self.errorOccurred.emit(f"Detect and trace objects failed: {message}")
+
+    def select_trace_cutout(
+        self,
+        x_mm: float,
+        y_mm: float,
+        raw_options: dict[str, Any],
+    ) -> int:
+        """Add one seeded cutout on the frozen Trace frame, then fit it off-thread."""
+
+        if self._trace_sample_image is None or self._trace_sample_area is None:
+            self.errorOccurred.emit(
+                "Capture a Cutout / silhouette frame before adding a cutout"
+            )
+            self.traceCutoutFailed.emit(
+                "Capture a Cutout / silhouette frame before adding a cutout"
+            )
+            return self._trace_request_id
+        try:
+            options = TraceOptions.from_mapping(raw_options)
+            if options.detection_mode != "cutout":
+                raise ValueError("Select Cutout / silhouette mode before clicking")
+            current_signature = self._current_review_signature()
+            if (
+                self._trace_sample_signature is None
+                or tuple(self._trace_sample_signature) != current_signature
+            ):
+                raise ValueError(
+                    "The honeycomb or bed mapping changed; capture the cutout frame again"
+                )
+        except Exception as exc:
+            self.errorOccurred.emit(f"Select camera cutout failed: {exc}")
+            self.traceCutoutFailed.emit(str(exc))
+            return self._trace_request_id
+        if len(self._trace_cutout_seeds) >= 64:
+            message = "One Cutout / silhouette review is limited to 64 clicked regions"
+            self.traceCutoutFailed.emit(message)
+            self.errorOccurred.emit(f"Select camera cutout failed: {message}")
+            return self._trace_request_id
+
+        self._trace_cutout_seeds.append((float(x_mm), float(y_mm)))
+        added_id = str(uuid.uuid4())
+        self._trace_cutout_ids.append(added_id)
+        self._trace_request_id += 1
+        request_id = self._trace_request_id
+        image = self._trace_sample_image.copy()
+        camera_area = self._trace_sample_area
+        review_signature = tuple(self._trace_sample_signature)
+        seeds = tuple(self._trace_cutout_seeds)
+        detection_ids = tuple(self._trace_cutout_ids)
+        frame_provider = getattr(
+            self.runtime.context,
+            "current_honeycomb_coordinate_frame",
+            None,
+        )
+        coordinate_frame = (
+            frame_provider()
+            if self._workspace_coordinate_space == "honeycomb_local"
+            and callable(frame_provider)
+            else None
+        )
+        guarded_output = _guarded_output_work_area(self.runtime)
+        guarded_polygon = _configured_guarded_output_polygon(self.runtime)
+        output_area = guarded_output if coordinate_frame is None else camera_area
+        pixels_per_mm = self.runtime.settings.calibration.bed.pixels_per_mm
+
+        def operation(*, fit_native: bool) -> dict[str, Any]:
+            result = detect_seeded_cutouts(
+                image,
+                seeds,
+                options,
+                camera_area,
+                pixels_per_mm,
+                output_work_area=output_area,
+                detection_ids=detection_ids,
+                fit_native=fit_native,
+            )
+            output_polygon = None
+            if coordinate_frame is not None:
+                output_polygon, outside = _apply_local_output_review(
+                    result.detections,
+                    coordinate_frame,
+                    guarded_polygon or guarded_output,
+                )
+                if outside:
+                    result.message += (
+                        f"; WARNING: {outside} outline"
+                        f"{'s are' if outside != 1 else ' is'} outside the "
+                        "configured machine-output envelope and left unchecked"
+                    )
+            payload = result.to_dict()
+            payload["review_signature"] = review_signature
+            payload["camera_image_area"] = {
+                "x_min": float(camera_area.x_min),
+                "x_max": float(camera_area.x_max),
+                "y_min": float(camera_area.y_min),
+                "y_max": float(camera_area.y_max),
+            }
+            payload["native_fit_pending"] = not fit_native
+            if output_polygon is not None:
+                payload["output_work_area"] = None
+                payload["output_polygon_local_mm"] = output_polygon
+                payload["coordinate_space"] = "honeycomb_local"
+            support = _honeycomb_support_metadata(
+                self.runtime,
+                coordinate_space=self._workspace_coordinate_space,
+            )
+            if support is not None:
+                payload["honeycomb_support"] = support
+                payload["message"] = f"{payload['message']} {support['message']}"
+            return payload
+
+        def quick_complete(payload: dict[str, Any]) -> None:
+            if request_id != self._trace_request_id:
+                return
+            self.traceResultReady.emit(payload)
+            self._run(
+                lambda: operation(fit_native=True),
+                on_success=lambda exact: (
+                    self.traceResultReady.emit(exact)
+                    if request_id == self._trace_request_id
+                    else None
+                ),
+                on_failure=exact_failed,
+                label="Fit selected cutout",
+                show_busy=False,
+            )
+
+        def exact_failed(message: str) -> None:
+            if request_id != self._trace_request_id:
+                return
+            self.traceCutoutFailed.emit(message)
+            self.errorOccurred.emit(f"Fit selected camera cutout failed: {message}")
+
+        def quick_failed(message: str) -> None:
+            if request_id != self._trace_request_id:
+                return
+            if (
+                self._trace_cutout_ids
+                and self._trace_cutout_ids[-1] == added_id
+            ):
+                self._trace_cutout_ids.pop()
+                self._trace_cutout_seeds.pop()
+            self.traceCutoutFailed.emit(message)
+            self.errorOccurred.emit(f"Select camera cutout failed: {message}")
+
+        self._run(
+            lambda: operation(fit_native=False),
+            on_success=quick_complete,
+            on_failure=quick_failed,
+            label="Select camera cutout",
+            show_busy=False,
+        )
+        return request_id
 
     @staticmethod
     def _template_viability_reasons(

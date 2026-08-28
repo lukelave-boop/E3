@@ -26,6 +26,12 @@ def test_trace_panel_and_controller_are_wired():
     assert "context.capture_parked_trace_frame(**capture_options)" in controller
     assert 'capture_options["coordinate_frame"] = coordinate_frame' in controller
     assert "def sample_trace_color" in controller
+    assert "def select_trace_cutout" in controller
+    assert "detect_seeded_cutouts" in controller
+    assert "fit_native=False" in controller
+    assert "fit_native=True" in controller
+    assert 'addItem("Cutout / silhouette", "cutout")' in panels
+    assert "native_fit_pending" in panels
     assert 'add_panel("trace", "Trace"' in window
     assert "AddObjectsCommand" in window
     assert "def set_trace_preview" in workspace

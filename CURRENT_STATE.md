@@ -7,6 +7,68 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-28**
 
+## Active seeded camera cutout tracing
+
+Camera Trace now has an explicit **Cutout / silhouette** mode. A frozen camera
+frame remains the evidence source while the operator clicks inside one or more
+desired objects. Segmentation is seed-connected rather than global: unrelated
+high-contrast text and other disconnected foreground regions are not returned.
+The optional trace ROI remains authoritative. The existing Auto, Color,
+Contrast, grid, missing-cell, normalization, analytic-template, and guarded
+output paths are unchanged; grid and global size/confidence controls are
+disabled in Cutout mode because they do not participate in seeded selection.
+
+Each click first produces a bounded raw-contour preview, then schedules an
+asynchronous exact fit against the same frozen frame. Creation remains disabled
+until that exact result is current and verified. Raw contours are shown as blue
+dashes and verified native geometry in green. Stable detection IDs preserve
+operator selection across the two stages. Multiple seeds can select multiple
+objects; overlapping selections coalesce. Edge-cropped, outside-work-area, and
+otherwise invalid results remain unselected.
+
+Seed-local Lab/illumination hypotheses are combined with the existing global,
+adaptive, and local contrast evidence. OpenCV hierarchy extraction preserves
+outer contours, holes, nested islands, and even-odd fill topology. Independent
+camera contours receive bounded source-intensity edge localization; hard
+corners and ambiguous crossings remain at threshold evidence. Pixel-to-machine
+mapping consumes the upstream calibration rectifier's explicit pixels/mm
+output: the spatially varying raw-camera homography/Jacobian is resolved before
+Trace sees the corrected raster. Camera-only source preconditioning removes
+below-resolution stair steps, and the exact fit floor is never smaller than one
+corrected camera pixel.
+
+The exact stage calls the same authoritative physical contour-to-native-path
+contract as raster vectorization. That shared Qt-free API produces persisted
+line and cubic subpaths and runs the existing continuous fit, frame/extrema,
+hierarchy, self-intersection, adjacent-arc, compound-topology, and clearance
+validation. Analytic circle, ellipse, rounded-rectangle, and washer results
+remain semantic where possible; washers use an even-odd pair of verified
+four-cubic rings. No alternate desktop-only line/Bézier fitter was introduced.
+
+On the distracting-text development fixture, two requested objects produced no
+text detections. Quick preview measured **0.132 s** and exact fitting measured
+**0.142 s**. The first object reduced 2,451 raw boundary samples to 10 fit-input
+points and 10 native segments (`LLLLLLLCCL`), with 0.082209 mm maximum fit
+error and a 0.332209 mm source-resolution-inclusive deviation envelope. The
+second reduced 2,809 samples to 30 fit-input points and 30 native segments
+(`LLCCLLCLCLLLCCCCCCCCCCCCCCCCCC`), with 0.195378 mm maximum fit error and a
+0.445378 mm total envelope. A separate outer/hole/island stencil completed in
+**0.128 s**, retained parents `[None, 0, 1]` and depths `[0, 1, 2]`, and emitted
+three even-odd native subpaths with 51 total line/cubic segments.
+
+Automated fixtures cover single and multiple clicked silhouettes amid
+distracting text, mixed straight/curved geometry, circle, ellipse, washer,
+outer-hole-island topology, rotation, uneven illumination and noise, different
+camera resolutions, work-area rejection, and raw-versus-verified desktop
+preview/object creation. Focused and broader camera trace, desktop, raster
+native-path, template/grid, project/history, toolpath, planning, cache, and
+preflight verification culminated in the complete Windows suite passing
+**2,640 tests** with **14 expected platform skips** and four xdist workers.
+Repository Ruff, `python -m compileall -q laser_aligner`, and
+`git diff --check` pass. These are synthetic/automated Qt-free and
+offscreen-widget results only; no interactive camera, controller, motion,
+arming, laser-output, or physical-accuracy test was performed or is claimed.
+
 ## Active development-release trigger filtering
 
 The `Publish E3 development update` workflow still runs automatically for

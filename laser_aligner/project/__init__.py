@@ -91,6 +91,11 @@ from .model import (
     Transform,
     default_operation_layers,
 )
+from .native_contour_fit import (
+    PhysicalContourFitContour,
+    PhysicalContourFitResult,
+    fit_physical_contours_to_native_path,
+)
 from .path_geometry import (
     MAX_NATIVE_PATH_COORDINATE_MAGNITUDE,
     MAX_NATIVE_PATH_FLATTENED_POINTS,
@@ -253,6 +258,8 @@ __all__ = [
     "PathFillRule",
     "PathLineSegment",
     "PathSubpath",
+    "PhysicalContourFitContour",
+    "PhysicalContourFitResult",
     "PROJECT_EXTENSION",
     "PROJECT_SCHEMA_VERSION",
     "ProjectDocument",
@@ -314,6 +321,7 @@ __all__ = [
     "generate_project_gcode",
     "evaluate_cubic",
     "flatten_native_path",
+    "fit_physical_contours_to_native_path",
     "is_output_geometry",
     "is_stock_boundary",
     "load_project",

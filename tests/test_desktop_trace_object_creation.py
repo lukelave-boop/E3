@@ -8,7 +8,12 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.project import (
     CommandStack,
+    NativePathGeometry,
     ObjectKind,
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+    PathSubpath,
     ProjectDocument,
     SceneObject,
     object_polylines,
@@ -130,6 +135,46 @@ def test_recognized_washer_trace_creates_one_compound_semantic_object() -> None:
     assert len(paths) == 2
     np.testing.assert_allclose(paths[0].points[:-1], outer)
     np.testing.assert_allclose(paths[1].points[:-1], inner)
+
+
+def test_verified_cutout_creation_persists_native_lines_and_cubics() -> None:
+    detection = _contour_detection()
+    native = NativePathGeometry(
+        (
+            PathSubpath(
+                start=(-0.5, -0.5),
+                segments=(
+                    PathLineSegment((0.5, -0.5)),
+                    PathCubicSegment((0.5, -0.2), (0.2, 0.5), (-0.5, 0.5)),
+                    PathLineSegment((-0.5, -0.5)),
+                ),
+                closed=True,
+            ),
+        ),
+        fill_rule=PathFillRule.EVENODD,
+    )
+    detection.update(
+        {
+            "source": "seeded_cutout",
+            "native_verified": True,
+            "native_path": native.to_dict(),
+            "native_center_mm": [42.0, 51.0],
+            "native_width_mm": 28.0,
+            "native_height_mm": 19.0,
+        }
+    )
+
+    item = _create_trace_object(detection, "exact")
+
+    assert item.kind == ObjectKind.PATH
+    assert item.path_geometry() == native
+    assert (
+        item.transform.x_mm,
+        item.transform.y_mm,
+        item.transform.width_mm,
+        item.transform.height_mm,
+    ) == pytest.approx((42.0, 51.0, 28.0, 19.0))
+    assert item.metadata["source_name"] == "camera cutout trace"
 
 
 def test_normalized_grid_trace_creates_named_grid_cell_with_metadata() -> None:

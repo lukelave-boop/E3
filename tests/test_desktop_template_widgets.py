@@ -1893,6 +1893,56 @@ def test_workspace_trace_preview_prefers_vector_contour_with_legacy_fallback(
     qt_application.processEvents()
 
 
+def test_workspace_cutout_preview_distinguishes_raw_and_verified_geometry(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 220.0))
+    detection = {
+        "id": "cutout-vector",
+        "index": 1,
+        "source": "seeded_cutout",
+        "center_mm": [50.0, 60.0],
+        "raw_contours_mm": [
+            [[10.0, 10.0], [30.0, 10.0], [30.0, 30.0], [10.0, 30.0]]
+        ],
+        "vector_contours_mm": [
+            [[40.0, 50.0], [60.0, 50.0], [60.0, 70.0], [40.0, 70.0]]
+        ],
+        "diagnostics": {"native_fit_status": "quick"},
+    }
+
+    view.set_trace_preview([detection], {"cutout-vector"})
+    quick_paths = [
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    ]
+    assert len(quick_paths) == 1
+    assert quick_paths[0].pen().color().name().upper() == "#49A7D8"
+    assert quick_paths[0].pen().style() == QtCore.Qt.PenStyle.DashLine
+
+    detection["diagnostics"] = {"native_fit_status": "verified"}
+    view.set_trace_preview([detection], {"cutout-vector"})
+    exact_paths = [
+        item
+        for item in view._trace_items
+        if isinstance(item, QtWidgets.QGraphicsPathItem)
+    ]
+    assert len(exact_paths) == 2
+    bounds = sorted(
+        (item.path().boundingRect().left(), item.path().boundingRect().right())
+        for item in exact_paths
+    )
+    assert bounds == pytest.approx([(10.0, 30.0), (40.0, 60.0)])
+    legend = [entry[0] for entry in view._overlay_entries["trace"]]
+    assert "Raw clicked boundary (blue)" in legend
+    assert "Verified native cutout (green)" in legend
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
 def test_workspace_trace_preview_uses_fixed_high_contrast_number_badge(
     qt_application: QtWidgets.QApplication,
 ) -> None:

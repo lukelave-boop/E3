@@ -6,6 +6,22 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added a seeded **Cutout / silhouette** Camera Trace mode alongside unchanged
+  Auto, Color, Contrast, and repeated-grid detection. A frozen corrected frame
+  accepts multiple inside-object clicks and retains only each clicked connected
+  contour tree, so disconnected text and artwork are not globally promoted.
+  Outer boundaries, holes, and stencil islands survive into one even-odd path.
+  Blue quick segmentation is replaced asynchronously by verified native
+  line/cubic geometry before Create is enabled. Camera-specific segmentation
+  remains separate while physical contours share the raster vectorizer's one
+  hard-corner/straight-run/cubic fitter, continuous error proof, frame and
+  topology validation. Analytic rectangles, circles, ellipses, and washers
+  retain their fast paths; washer rings now persist as native cubics. The
+  corrected camera pixel pitch supplies a conservative physical resolution
+  floor and bounded intensity-edge centering. Existing grid normalization,
+  missing-cell inference, template consumers, and output-boundary review are
+  unchanged.
+
 - Reverted the adaptive per-span fitting-tolerance experiment from `4039047`.
   The displayed 0.10 mm tolerance again supplies the existing fixed 0.08 mm
   internal budget for every span. Straight-run recovery, bounded Newton curve

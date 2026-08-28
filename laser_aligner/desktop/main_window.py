@@ -1107,6 +1107,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.pickColorRequested.connect(
             self._begin_trace_color_pick
         )
+        self.trace_panel.pickCutoutRequested.connect(
+            self._begin_trace_cutout_pick
+        )
         self.trace_panel.clearRequested.connect(
             self._clear_trace_preview
         )
@@ -1205,6 +1208,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.controller.traceColorFailed.connect(
             self._trace_color_failed
+        )
+        self.controller.traceCutoutFailed.connect(
+            self._trace_cutout_failed
         )
         self.controller.templateMatchReady.connect(
             self._template_match_ready
@@ -4475,7 +4481,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.runtime.context.bed.calibration is not None
         )
         self.show_notice(
-            "Trace mode: detect automatically or pick a target color from the camera image."
+            "Trace mode: detect repeated objects, or capture Cutout / silhouette "
+            "and click inside only the physical outlines you want."
         )
 
     def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
@@ -4501,16 +4508,52 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self.workspace.point_pick_active:
             self.workspace.cancel_point_pick()
             self.trace_panel.set_color_pick_active(False)
+            self.trace_panel.set_cutout_pick_active(False)
             self.show_notice("Color picking cancelled")
             return
         self._activate_selection_tool(show_message=False)
         self._clear_template_preview(show_message=False)
         self.inspector_tabs.select_panel("trace")
+        self.trace_panel.set_cutout_pick_active(False)
         self.workspace.begin_point_pick()
         self.trace_panel.set_color_pick_active(True)
         self.show_notice("Click the center of one target object in the camera image")
 
+    def _begin_trace_cutout_pick(self) -> None:
+        if self.runtime.context.bed.calibration is None:
+            self.show_error("Bed mapping is required before selecting camera cutouts")
+            return
+        if self._trace_result is None or self._trace_result.get("mode_used") != "cutout":
+            self.show_error(
+                "Capture a Cutout / silhouette frame before adding a cutout"
+            )
+            return
+        if self.workspace.point_pick_active:
+            self.workspace.cancel_point_pick()
+            self.trace_panel.set_color_pick_active(False)
+            self.trace_panel.set_cutout_pick_active(False)
+            self.show_notice("Cutout picking cancelled")
+            return
+        self._activate_selection_tool(show_message=False)
+        self._clear_template_preview(show_message=False)
+        self.inspector_tabs.select_panel("trace")
+        self.trace_panel.set_color_pick_active(False)
+        self.trace_panel.set_cutout_pick_active(False)
+        self.workspace.begin_point_pick()
+        self.trace_panel.set_cutout_pick_active(True)
+        self.show_notice(
+            "Click inside one desired physical cutout; disconnected lettering will be ignored"
+        )
+
     def _trace_point_picked(self, x_mm: float, y_mm: float) -> None:
+        if self.trace_panel.cutout_pick_active:
+            self.trace_panel.set_cutout_pick_active(False, segmenting=True)
+            self.controller.select_trace_cutout(
+                x_mm,
+                y_mm,
+                self.trace_panel.options(),
+            )
+            return
         self.trace_panel.set_color_pick_active(True, sampling=True)
         self.controller.sample_trace_color(x_mm, y_mm)
 
@@ -4531,6 +4574,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _trace_color_failed(self, message: str) -> None:
         self.trace_panel.set_color_pick_failed(message)
         self.show_error(f"Sample trace color failed: {message}")
+
+    def _trace_cutout_failed(self, message: str) -> None:
+        self.trace_panel.set_cutout_pick_failed(message)
 
     def _trace_result_ready(self, result: dict[str, Any]) -> None:
         camera_image = result.get("camera_image")
@@ -4628,6 +4674,34 @@ class E3MainWindow(QtWidgets.QMainWindow):
             item.transform = item.transform.copy(
                 rotation_deg=float(detection.get("rotation_deg", 0.0))
             )
+        elif (
+            output_mode == "rounded"
+            and detection.get("shape") in {"circle", "ellipse"}
+        ):
+            item = SceneObject.ellipse(
+                self.active_layer_id,
+                name=name,
+                center=center,
+                width_mm=float(detection["width_mm"]),
+                height_mm=float(detection["height_mm"]),
+            )
+            item.transform = item.transform.copy(
+                rotation_deg=float(detection.get("rotation_deg", 0.0))
+            )
+        elif detection.get("native_verified") and detection.get("native_path"):
+            item = SceneObject.native_path(
+                self.active_layer_id,
+                detection["native_path"],
+                name=name,
+                center=tuple(
+                    float(value)
+                    for value in detection.get("native_center_mm", center)
+                ),
+                width_mm=float(detection["native_width_mm"]),
+                height_mm=float(detection["native_height_mm"]),
+                source_name="camera cutout trace",
+            )
+            item.metadata["trace_detector_center_mm"] = list(center)
         else:
             raw_contours = detection.get("vector_contours_mm") or [
                 detection.get("vector_contour_mm")
@@ -4684,6 +4758,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self._trace_result is None:
             self.show_error("Run object detection before creating vector paths")
             return
+        if self._trace_result.get("native_fit_pending"):
+            self.show_notice(
+                "Wait for verified native cutout fitting before creating geometry"
+            )
+            return
         signature = self._trace_result.get("review_signature")
         if signature is not None and not self.controller.review_signature_is_current(
             signature
@@ -4699,6 +4778,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
             for item in self._trace_result.get("detections", [])
             if str(item.get("id")) in selected
         ]
+        if any(
+            item.get("source") == "seeded_cutout"
+            and not item.get("native_verified")
+            for item in detections
+        ):
+            self.show_error(
+                "A selected cutout has no verified native or analytic geometry; "
+                "capture and select it again"
+            )
+            return
         if not detections:
             self.show_notice("Select at least one detected outline")
             return

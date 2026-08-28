@@ -1946,7 +1946,39 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         has_outside = False
         has_damaged = False
         has_likely_open = False
+        has_raw_cutout = False
+        has_verified_cutout = False
         for detection in detections:
+            diagnostics = detection.get("diagnostics") or {}
+            native_status = str(diagnostics.get("native_fit_status", ""))
+            raw_contours = detection.get("raw_contours_mm") or []
+            if detection.get("source") == "seeded_cutout" and raw_contours:
+                raw_path = QtGui.QPainterPath()
+                for points in raw_contours:
+                    if len(points) < 2:
+                        continue
+                    raw_path.moveTo(self.workspace_scene.machine_to_scene(*points[0]))
+                    for point in points[1:]:
+                        raw_path.lineTo(self.workspace_scene.machine_to_scene(*point))
+                    raw_path.closeSubpath()
+                raw_item = QtWidgets.QGraphicsPathItem(raw_path)
+                raw_pen = QtGui.QPen(QtGui.QColor("#49A7D8"))
+                raw_pen.setWidthF(0.9)
+                raw_pen.setCosmetic(True)
+                raw_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+                raw_item.setPen(raw_pen)
+                raw_item.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+                raw_item.setZValue(259.5)
+                raw_item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+                self.workspace_scene.addItem(raw_item)
+                self._trace_items.append(raw_item)
+                has_raw_cutout = True
+                if native_status == "quick":
+                    continue
+                has_verified_cutout = has_verified_cutout or native_status in {
+                    "verified",
+                    "analytic",
+                }
             contours = detection.get("vector_contours_mm") or [[
                 *(
                     detection.get("vector_contour_mm")
@@ -1969,7 +2001,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             item = QtWidgets.QGraphicsPathItem(path)
             is_selected = detection.get("id") in selected
             is_inferred = detection.get("source") == "inferred"
-            diagnostics = detection.get("diagnostics") or {}
             is_outside = not bool(diagnostics.get("within_work_area", True))
             is_cropped = bool(diagnostics.get("touches_image_edge", False))
             is_damaged = bool(diagnostics.get("damage_suspected", False))
@@ -2049,6 +2080,14 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         if has_likely_open:
             trace_entries.append(
                 ("Likely already cut/open (cyan)", "#45D7FF", QtCore.Qt.PenStyle.DashDotLine)
+            )
+        if has_raw_cutout:
+            trace_entries.append(
+                ("Raw clicked boundary (blue)", "#49A7D8", QtCore.Qt.PenStyle.DashLine)
+            )
+        if has_verified_cutout:
+            trace_entries.append(
+                ("Verified native cutout (green)", "#4FE36F", QtCore.Qt.PenStyle.SolidLine)
             )
         if has_selected_direct:
             trace_entries.append(

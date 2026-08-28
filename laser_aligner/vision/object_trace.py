@@ -1,18 +1,26 @@
 from __future__ import annotations
 
 import math
+import time
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
 import cv2
 import numpy as np
 
 from ..config import WorkArea
+from ..project.native_contour_fit import fit_physical_contours_to_native_path
+from ..project.path_geometry import (
+    NativePathGeometry,
+    PathCubicSegment,
+    PathFillRule,
+    PathSubpath,
+)
 
-TRACE_MODES = {"auto", "color", "contrast"}
-OUTPUT_MODES = {"rounded", "smoothed", "exact"}
+TRACE_MODES = {"auto", "color", "contrast", "cutout"}
+OUTPUT_MODES = {"rounded", "native", "smoothed", "exact"}
 BORDER_OFFSET_MODES = {"uniform", "custom"}
 NORMALIZE_ANCHORS = {"center", "top"}
 
@@ -65,6 +73,7 @@ class TraceOptions:
     border_offset_bottom_mm: float = 0.0
     border_offset_left_mm: float = 0.0
     smoothing_mm: float = 0.25
+    native_fitting_tolerance_mm: float = 0.10
 
     def __post_init__(self) -> None:
         self.detection_mode = str(self.detection_mode).lower()
@@ -156,6 +165,16 @@ class TraceOptions:
             0.0,
             min(10.0, _finite_option(self.smoothing_mm, "smoothing_mm")),
         )
+        self.native_fitting_tolerance_mm = max(
+            0.01,
+            min(
+                2.0,
+                _finite_option(
+                    self.native_fitting_tolerance_mm,
+                    "native_fitting_tolerance_mm",
+                ),
+            ),
+        )
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any] | None) -> TraceOptions:
@@ -187,10 +206,29 @@ class TraceDetection:
     box_mm: list[list[float]]
     selected_default: bool
     diagnostics: dict[str, Any] = field(default_factory=dict)
+    raw_contours_mm: list[list[list[float]]] = field(default_factory=list)
+    native_path: dict[str, Any] | None = None
+    native_center_mm: tuple[float, float] | None = None
+    native_width_mm: float | None = None
+    native_height_mm: float | None = None
+    native_verified: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["center_mm"] = list(self.center_mm)
+        if self.native_center_mm is not None:
+            payload["native_center_mm"] = list(self.native_center_mm)
+        for key in (
+            "raw_contours_mm",
+            "native_path",
+            "native_center_mm",
+            "native_width_mm",
+            "native_height_mm",
+        ):
+            if payload.get(key) in (None, []):
+                payload.pop(key, None)
+        if not self.native_verified:
+            payload.pop("native_verified", None)
         return payload
 
 
@@ -2363,6 +2401,47 @@ def _circle_machine_contour(
     ]
 
 
+def _analytic_ellipse_subpath(
+    radius_x: float,
+    radius_y: float,
+    *,
+    clockwise: bool = False,
+) -> PathSubpath:
+    kappa = 4.0 / 3.0 * math.tan(math.pi / 8.0)
+    rx, ry = float(radius_x), float(radius_y)
+    kx, ky = rx * kappa, ry * kappa
+    if clockwise:
+        segments = (
+            PathCubicSegment((rx, -ky), (kx, -ry), (0.0, -ry)),
+            PathCubicSegment((-kx, -ry), (-rx, -ky), (-rx, 0.0)),
+            PathCubicSegment((-rx, ky), (-kx, ry), (0.0, ry)),
+            PathCubicSegment((kx, ry), (rx, ky), (rx, 0.0)),
+        )
+    else:
+        segments = (
+            PathCubicSegment((rx, ky), (kx, ry), (0.0, ry)),
+            PathCubicSegment((-kx, ry), (-rx, ky), (-rx, 0.0)),
+            PathCubicSegment((-rx, -ky), (-kx, -ry), (0.0, -ry)),
+            PathCubicSegment((kx, -ry), (rx, -ky), (rx, 0.0)),
+        )
+    return PathSubpath(start=(rx, 0.0), segments=segments, closed=True)
+
+
+def _analytic_washer_native_path(hole_ratio: float) -> NativePathGeometry:
+    inner_radius = 0.5 * float(hole_ratio)
+    return NativePathGeometry(
+        (
+            _analytic_ellipse_subpath(0.5, 0.5),
+            _analytic_ellipse_subpath(
+                inner_radius,
+                inner_radius,
+                clockwise=True,
+            ),
+        ),
+        fill_rule=PathFillRule.EVENODD,
+    )
+
+
 def _washer_candidates(
     mask: np.ndarray,
     options: TraceOptions,
@@ -2601,6 +2680,789 @@ def _grid_cell_review_evidence(
         item["cell_edge_density"] = edge_density
 
 
+@dataclass(frozen=True, slots=True)
+class _SeededCutoutRegion:
+    contours_px: tuple[np.ndarray, ...]
+    parents: tuple[int | None, ...]
+    mask: np.ndarray
+    mask_source: str
+    segmentation_score: float
+    boundary_contrast: float
+    touches_image_edge: bool
+
+
+def _machine_to_pixel(
+    point_mm: Sequence[float],
+    work_area: WorkArea,
+    pixels_per_mm: float,
+) -> tuple[float, float]:
+    if len(point_mm) != 2:
+        raise ValueError("A cutout seed must contain exactly two coordinates")
+    x_mm = _finite_option(point_mm[0], "cutout seed x")
+    y_mm = _finite_option(point_mm[1], "cutout seed y")
+    return (
+        (x_mm - work_area.x_min) * pixels_per_mm,
+        (work_area.y_max - y_mm) * pixels_per_mm,
+    )
+
+
+def _seed_similarity_masks(
+    image: np.ndarray,
+    seed_px: tuple[int, int],
+    pixels_per_mm: float,
+) -> list[tuple[str, np.ndarray]]:
+    """Build camera-specific color/intensity hypotheses around one clicked seed."""
+
+    softened = cv2.GaussianBlur(image, (3, 3), 0)
+    lab = cv2.cvtColor(softened, cv2.COLOR_BGR2LAB).astype(np.float32)
+    illumination_span = max(9, int(round(8.0 * pixels_per_mm)) | 1)
+    illumination_span = min(illumination_span, 101)
+    local_lightness = (
+        lab[:, :, 0]
+        - cv2.GaussianBlur(lab[:, :, 0], (illumination_span, illumination_span), 0)
+        + 128.0
+    )
+    features = np.dstack((local_lightness, lab[:, :, 1], lab[:, :, 2]))
+    seed_x, seed_y = seed_px
+    radius = max(2, min(8, int(round(0.75 * pixels_per_mm))))
+    y_min, y_max = max(0, seed_y - radius), min(image.shape[0], seed_y + radius + 1)
+    x_min, x_max = max(0, seed_x - radius), min(image.shape[1], seed_x + radius + 1)
+    patch = features[y_min:y_max, x_min:x_max].reshape(-1, 3)
+    center = np.median(patch, axis=0)
+    mad = np.median(np.abs(patch - center), axis=0)
+    scale = np.maximum(mad * 3.5, np.asarray((8.0, 6.0, 6.0)))
+    distance = np.sqrt(np.sum(((features - center) / scale) ** 2, axis=2))
+    output: list[tuple[str, np.ndarray]] = []
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    for threshold in (1.5, 2.1, 2.9, 3.8):
+        mask = (distance <= threshold).astype(np.uint8) * 255
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+        output.append((f"seed_lab_{threshold:.1f}", mask))
+    return output
+
+
+def _contour_depth(index: int, hierarchy: np.ndarray) -> int:
+    depth = 0
+    parent = int(hierarchy[index, 3])
+    while parent >= 0:
+        depth += 1
+        if depth > len(hierarchy):
+            raise ValueError("Camera cutout contour hierarchy is cyclic")
+        parent = int(hierarchy[parent, 3])
+    return depth
+
+
+def _extract_seeded_region(
+    image: np.ndarray,
+    mask: np.ndarray,
+    seed_px: tuple[int, int],
+    mask_source: str,
+) -> _SeededCutoutRegion | None:
+    binary = (np.asarray(mask) > 0).astype(np.uint8) * 255
+    seed_x, seed_y = seed_px
+    if not 0 <= seed_x < binary.shape[1] or not 0 <= seed_y < binary.shape[0]:
+        return None
+    if binary[seed_y, seed_x] == 0:
+        return None
+    contours, hierarchy = cv2.findContours(
+        binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE
+    )
+    if hierarchy is None:
+        return None
+    tree = hierarchy[0]
+    containing = [
+        index
+        for index, contour in enumerate(contours)
+        if cv2.pointPolygonTest(contour, (float(seed_x), float(seed_y)), False) >= 0
+    ]
+    if not containing:
+        return None
+    seed_contour = max(containing, key=lambda index: _contour_depth(index, tree))
+    if _contour_depth(seed_contour, tree) % 2:
+        return None
+    root = seed_contour
+    while int(tree[root, 3]) >= 0:
+        root = int(tree[root, 3])
+
+    descendants: list[int] = []
+    for index in range(len(contours)):
+        ancestor = index
+        while ancestor >= 0 and ancestor != root:
+            ancestor = int(tree[ancestor, 3])
+        if ancestor == root:
+            descendants.append(index)
+    depths = {index: _contour_depth(index, tree) - _contour_depth(root, tree) for index in descendants}
+    retained: list[int] = []
+    for index in sorted(descendants, key=lambda value: (depths[value], value)):
+        relative_depth = depths[index]
+        parent = int(tree[index, 3])
+        if index != root and abs(float(cv2.contourArea(contours[index]))) < 4.0:
+            continue
+        if relative_depth and parent not in retained:
+            continue
+        retained.append(index)
+    if not retained:
+        return None
+
+    selected_mask = np.zeros_like(binary)
+    index_map = {original: result for result, original in enumerate(retained)}
+    selected_parents: list[int | None] = []
+    selected_contours: list[np.ndarray] = []
+    for original in retained:
+        relative_depth = depths[original]
+        cv2.drawContours(
+            selected_mask,
+            contours,
+            original,
+            255 if relative_depth % 2 == 0 else 0,
+            thickness=cv2.FILLED,
+        )
+        parent = int(tree[original, 3])
+        selected_parents.append(index_map.get(parent))
+        selected_contours.append(contours[original])
+
+    root_points = np.asarray(contours[root], dtype=np.float64).reshape(-1, 2)
+    touches_edge = bool(
+        np.min(root_points[:, 0]) <= 0
+        or np.max(root_points[:, 0]) >= image.shape[1] - 1
+        or np.min(root_points[:, 1]) <= 0
+        or np.max(root_points[:, 1]) >= image.shape[0] - 1
+    )
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    inner_band = (selected_mask > 0) & (cv2.erode(selected_mask, kernel) == 0)
+    outer_band = (cv2.dilate(selected_mask, kernel) > 0) & (selected_mask == 0)
+    if np.any(inner_band) and np.any(outer_band):
+        boundary_contrast = abs(
+            float(np.median(gray[inner_band])) - float(np.median(gray[outer_band]))
+        )
+    else:
+        boundary_contrast = 0.0
+    distance = cv2.distanceTransform(selected_mask, cv2.DIST_L2, 3)
+    seed_margin = float(distance[seed_y, seed_x])
+    area_fraction = float(np.count_nonzero(selected_mask)) / float(selected_mask.size)
+    score = (
+        0.50 * min(1.0, boundary_contrast / 28.0)
+        + 0.25 * min(1.0, seed_margin / 8.0)
+        + 0.15 * min(1.0, math.sqrt(max(area_fraction, 0.0) / 0.08))
+        + (0.10 if not touches_edge else 0.0)
+    )
+    if area_fraction <= 1e-5 or area_fraction >= 0.96:
+        return None
+    return _SeededCutoutRegion(
+        contours_px=tuple(selected_contours),
+        parents=tuple(selected_parents),
+        mask=selected_mask,
+        mask_source=mask_source,
+        segmentation_score=score,
+        boundary_contrast=boundary_contrast,
+        touches_image_edge=touches_edge,
+    )
+
+
+def _segment_seeded_cutout(
+    image: np.ndarray,
+    seed_px: tuple[int, int],
+    pixels_per_mm: float,
+) -> _SeededCutoutRegion:
+    hypotheses = _seed_similarity_masks(image, seed_px, pixels_per_mm)
+    for name, mask in zip(
+        ("global_dark", "global_light", "clahe_dark", "clahe_light"),
+        _global_contrast_masks(image, pixels_per_mm),
+        strict=True,
+    ):
+        hypotheses.append((name, mask))
+    for name, mask in zip(
+        ("adaptive_dark", "adaptive_light"),
+        _adaptive_contrast_masks(image, pixels_per_mm),
+        strict=True,
+    ):
+        hypotheses.append((name, mask))
+    for name, mask in zip(
+        ("local_dark", "local_light"),
+        _contrast_region_masks(image, pixels_per_mm),
+        strict=True,
+    ):
+        hypotheses.append((name, mask))
+    regions = [
+        region
+        for name, mask in hypotheses
+        if (region := _extract_seeded_region(image, mask, seed_px, name)) is not None
+    ]
+    if not regions:
+        raise ValueError(
+            "The clicked point did not identify a closed cutout region; click farther inside the object"
+        )
+    return max(
+        regions,
+        key=lambda region: (
+            not region.touches_image_edge,
+            region.segmentation_score,
+            math.log1p(np.count_nonzero(region.mask)),
+        ),
+    )
+
+
+def _offset_seeded_region(
+    image: np.ndarray,
+    region: _SeededCutoutRegion,
+    seed_px: tuple[int, int],
+    offset_px: float,
+) -> _SeededCutoutRegion:
+    radius = int(round(abs(offset_px)))
+    if radius <= 0:
+        return region
+    kernel = cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (2 * radius + 1, 2 * radius + 1)
+    )
+    mask = (
+        cv2.dilate(region.mask, kernel)
+        if offset_px > 0
+        else cv2.erode(region.mask, kernel)
+    )
+    adjusted = _extract_seeded_region(image, mask, seed_px, region.mask_source)
+    if adjusted is None:
+        raise ValueError("The requested cutout border offset collapses the selected region")
+    return adjusted
+
+
+def _oversampled_cutout_contours(
+    region: _SeededCutoutRegion,
+) -> tuple[tuple[np.ndarray, ...], tuple[int | None, ...]]:
+    """Recover quarter-pixel threshold boundaries without inventing image detail."""
+
+    factor = 4
+    height, width = region.mask.shape
+    if height * width * factor * factor > 64 * 1024 * 1024:
+        raise ValueError(
+            "The corrected cutout frame is too large for the bounded 4x contour workspace"
+        )
+    oversampled = cv2.resize(
+        region.mask,
+        (width * factor, height * factor),
+        interpolation=cv2.INTER_CUBIC,
+    )
+    oversampled = (oversampled >= 128).astype(np.uint8) * 255
+    contours, hierarchy = cv2.findContours(
+        oversampled, cv2.RETR_TREE, cv2.CHAIN_APPROX_NONE
+    )
+    if hierarchy is None or not contours:
+        raise ValueError("The selected cutout has no bounded contour")
+    tree = hierarchy[0]
+    depths = [_contour_depth(index, tree) for index in range(len(contours))]
+    retained = [
+        index
+        for index in sorted(range(len(contours)), key=lambda value: (depths[value], value))
+        if index == 0 or abs(float(cv2.contourArea(contours[index]))) >= 16.0
+    ]
+    index_map = {original: result for result, original in enumerate(retained)}
+    output_contours: list[np.ndarray] = []
+    output_parents: list[int | None] = []
+    for original in retained:
+        parent = int(tree[original, 3])
+        if parent >= 0 and parent not in index_map:
+            continue
+        points = np.asarray(contours[original], dtype=np.float64).reshape(-1, 2)
+        points /= float(factor)
+        output_contours.append(points)
+        output_parents.append(index_map.get(parent))
+    return tuple(output_contours), tuple(output_parents)
+
+
+def _localize_camera_intensity_edges(
+    image: np.ndarray,
+    points_px: np.ndarray,
+) -> tuple[np.ndarray, float, int]:
+    """Conservatively center eligible non-corner samples on camera intensity edges."""
+
+    points = np.asarray(points_px, dtype=np.float64).reshape(-1, 2)
+    if len(points) < 8:
+        return points.copy(), 0.0, 0
+    incoming = points - np.roll(points, 1, axis=0)
+    outgoing = np.roll(points, -1, axis=0) - points
+    incoming_norm = np.linalg.norm(incoming, axis=1)
+    outgoing_norm = np.linalg.norm(outgoing, axis=1)
+    cosine = np.divide(
+        np.sum(incoming * outgoing, axis=1),
+        incoming_norm * outgoing_norm,
+        out=np.ones(len(points), dtype=np.float64),
+        where=(incoming_norm * outgoing_norm) > 1e-12,
+    )
+    turns = np.degrees(np.arccos(np.clip(cosine, -1.0, 1.0)))
+    protected = turns >= 20.0
+    protected |= np.roll(protected, 1) | np.roll(protected, -1)
+
+    tangents = np.roll(points, -1, axis=0) - np.roll(points, 1, axis=0)
+    lengths = np.linalg.norm(tangents, axis=1)
+    valid = lengths > 1e-9
+    normals = np.zeros_like(tangents)
+    normals[valid, 0] = -tangents[valid, 1] / lengths[valid]
+    normals[valid, 1] = tangents[valid, 0] / lengths[valid]
+    offsets = np.arange(-1.25, 1.2501, 0.125, dtype=np.float32)
+    sample_x = (
+        points[:, 0, None] + normals[:, 0, None] * offsets[None, :]
+    ).astype(np.float32)
+    sample_y = (
+        points[:, 1, None] + normals[:, 1, None] * offsets[None, :]
+    ).astype(np.float32)
+    lightness = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)[:, :, 0]
+    profiles = cv2.remap(
+        lightness,
+        sample_x,
+        sample_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    ).astype(np.float64)
+    changes = np.abs(np.diff(profiles, axis=1))
+    strongest = np.argmax(changes, axis=1)
+    strongest_value = changes[np.arange(len(points)), strongest]
+    endpoint_contrast = np.abs(profiles[:, -1] - profiles[:, 0])
+    second = changes.copy()
+    for row, index in enumerate(strongest):
+        second[row, max(0, index - 2) : min(changes.shape[1], index + 3)] = 0.0
+    second_value = np.max(second, axis=1)
+    displacement = (offsets[strongest] + offsets[strongest + 1]) * 0.5
+    accepted = (
+        valid
+        & ~protected
+        & (endpoint_contrast >= 16.0)
+        & (strongest_value >= 4.0)
+        & (second_value <= strongest_value * 0.75)
+        & (np.abs(displacement) <= 0.60)
+    )
+    refined = points.copy()
+    refined[accepted] += normals[accepted] * displacement[accepted, None]
+    maximum = float(np.max(np.abs(displacement[accepted]))) if np.any(accepted) else 0.0
+    return refined, maximum, int(np.count_nonzero(accepted))
+
+
+def _fallback_cutout_candidate(
+    region: _SeededCutoutRegion,
+    work_area: WorkArea,
+    output_work_area: WorkArea,
+    pixels_per_mm: float,
+) -> dict[str, Any]:
+    root = region.contours_px[0]
+    points_mm = _pixel_to_machine(root, work_area, pixels_per_mm)
+    x_min, y_min = np.min(points_mm, axis=0)
+    x_max, y_max = np.max(points_mm, axis=0)
+    center = ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0)
+    vector = [[float(x), float(y)] for x, y in points_mm]
+    overruns = _work_area_overruns_mm(vector, output_work_area)
+    camera_overruns = _work_area_overruns_mm(vector, work_area)
+    area_mm2 = float(np.count_nonzero(region.mask)) / pixels_per_mm**2
+    return {
+        "center_px": np.mean(root.reshape(-1, 2), axis=0),
+        "width_px": float((x_max - x_min) * pixels_per_mm),
+        "height_px": float((y_max - y_min) * pixels_per_mm),
+        "angle_image_deg": 0.0,
+        "straight_edge_rotation": None,
+        "straight_edge_center": None,
+        "radius_px": 0.0,
+        "area_mm2": area_mm2,
+        "score": region.segmentation_score,
+        "confidence": region.segmentation_score,
+        "rectangularity": 0.0,
+        "solidity": 0.0,
+        "fit_iou": 0.0,
+        "coverage": 1.0,
+        "compactness": 0.0,
+        "shape": "contour",
+        "touches_image_edge": region.touches_image_edge,
+        "image_edge_sides": [],
+        "within_camera_work_area": max(camera_overruns.values()) <= 1e-9,
+        "camera_work_area_overrun_mm": max(camera_overruns.values()),
+        "camera_work_area_overruns_mm": camera_overruns,
+        "within_work_area": max(overruns.values()) <= 1e-9,
+        "work_area_overrun_mm": max(overruns.values()),
+        "work_area_overruns_mm": overruns,
+        "contour_mm": vector,
+        "vector_contour_mm": vector,
+        "center_mm": (float(center[0]), float(center[1])),
+        "width_mm": float(x_max - x_min),
+        "height_mm": float(y_max - y_min),
+        "rotation_deg": 0.0,
+        "corner_radius_mm": 0.0,
+        "box_mm": [
+            [float(x_min), float(y_min)],
+            [float(x_max), float(y_min)],
+            [float(x_max), float(y_max)],
+            [float(x_min), float(y_max)],
+        ],
+    }
+
+
+def _build_cutout_detection(
+    image: np.ndarray,
+    region: _SeededCutoutRegion,
+    options: TraceOptions,
+    work_area: WorkArea,
+    output_work_area: WorkArea,
+    pixels_per_mm: float,
+    *,
+    detection_id: str,
+    index: int,
+    fit_native: bool,
+) -> TraceDetection:
+    permissive = replace(
+        options,
+        min_area_mm2=0.01,
+        max_area_mm2=max(1_000_000.0, work_area.width * work_area.height),
+        min_width_mm=0.1,
+        min_height_mm=0.1,
+        regular_grid=False,
+        infer_missing=False,
+        normalize_grid=False,
+        snap_grid_cells=False,
+        repair_grid_edges=False,
+        border_offset_mm=0.0,
+        border_offset_mode="uniform",
+        smoothing_mm=0.0,
+    )
+    candidate = _candidate(
+        region.contours_px[0],
+        region.mask,
+        permissive,
+        work_area,
+        output_work_area,
+        pixels_per_mm,
+    )
+    if candidate is None:
+        candidate = _fallback_cutout_candidate(
+            region, work_area, output_work_area, pixels_per_mm
+        )
+    analytic_vector_contour = [
+        list(point)
+        for point in candidate.get("vector_contour_mm", candidate["contour_mm"])
+    ]
+    analytic_vector_contours = [analytic_vector_contour]
+    physical_contours_px, physical_parents = _oversampled_cutout_contours(region)
+    raw_contours = [
+        [
+            [float(x), float(y)]
+            for x, y in _pixel_to_machine(contour, work_area, pixels_per_mm)
+        ]
+        for contour in physical_contours_px
+    ]
+    candidate["contour_mm"] = raw_contours[0]
+    candidate["vector_contour_mm"] = raw_contours[0]
+    candidate["vector_contours_mm"] = raw_contours
+    candidate["mask_source"] = region.mask_source
+    if len(raw_contours) > 1:
+        washers = _washer_candidates(
+            region.mask,
+            permissive,
+            work_area,
+            output_work_area,
+            pixels_per_mm,
+        )
+        if len(washers) == 1 and len(raw_contours) == 2:
+            candidate.update(washers[0])
+            analytic_vector_contour = [
+                list(point) for point in candidate["vector_contour_mm"]
+            ]
+            analytic_vector_contours = [
+                [list(point) for point in contour]
+                for contour in candidate["vector_contours_mm"]
+            ]
+        else:
+            candidate["shape"] = "contour"
+            candidate["vector_contour_mm"] = raw_contours[0]
+            candidate["vector_contours_mm"] = raw_contours
+    detection = _to_detection(candidate, "seeded_cutout", permissive)
+    detection.id = detection_id
+    detection.index = index
+    detection.selected_default = bool(
+        candidate.get("within_work_area", True)
+        and not candidate.get("touches_image_edge", False)
+    )
+    detection.raw_contours_mm = raw_contours
+    detection.diagnostics.update(
+        {
+            "seeded_selection": True,
+            "segmentation_score": region.segmentation_score,
+            "boundary_contrast": region.boundary_contrast,
+            "physical_pixel_pitch_mm": 1.0 / pixels_per_mm,
+            "native_fit_status": "quick" if not fit_native else "fitting",
+        }
+    )
+    analytic = (
+        options.output_mode == "rounded"
+        and detection.shape
+        in {"circle", "ellipse", "rounded_rectangle", "washer"}
+    )
+    if fit_native and analytic:
+        detection.vector_contour_mm = analytic_vector_contour
+        detection.vector_contours_mm = analytic_vector_contours
+    if fit_native and not analytic:
+        physical_raw = tuple(
+            np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+            for contour in raw_contours
+        )
+        pitch = 1.0 / pixels_per_mm
+        # A corrected camera pixel is the smallest independent spatial sample.
+        # Remove only sub-pixel threshold stair steps in physical coordinates;
+        # the native fitter remains authoritative for all line/cubic decisions.
+        classification_physical = tuple(
+            cv2.approxPolyDP(
+                contour.astype(np.float32).reshape(-1, 1, 2),
+                pitch,
+                True,
+            )
+            .reshape(-1, 2)
+            .astype(np.float64)
+            for contour in physical_raw
+        )
+        physical = classification_physical
+        localized_count = 0
+        localization_shift_px = 0.0
+        if len(classification_physical) == 1:
+            classification_px = np.asarray(
+                [
+                    _machine_to_pixel(point, work_area, pixels_per_mm)
+                    for point in classification_physical[0]
+                ],
+                dtype=np.float64,
+            )
+            localized_px, localization_shift_px, localized_count = (
+                _localize_camera_intensity_edges(image, classification_px)
+            )
+            physical = (
+                _pixel_to_machine(localized_px, work_area, pixels_per_mm),
+            )
+        combined = np.concatenate(physical, axis=0)
+        padding = max(pitch, options.native_fitting_tolerance_mm)
+        fit_tolerance = max(options.native_fitting_tolerance_mm, pitch)
+        fit = fit_physical_contours_to_native_path(
+            physical,
+            list(physical_parents),
+            source_pixel_spacing_mm=(pitch, pitch),
+            fitting_tolerance_mm=fit_tolerance,
+            smoothing_mm=0.0,
+            classification_contours_mm=classification_physical,
+            frame_bounds_mm=(
+                float(np.min(combined[:, 0]) - padding),
+                float(np.min(combined[:, 1]) - padding),
+                float(np.max(combined[:, 0]) + padding),
+                float(np.max(combined[:, 1]) + padding),
+            ),
+        )
+        fitted_contours = [
+            [list(point) for point in contour.preview_points_mm]
+            for contour in fit.contours
+        ]
+        detection.vector_contours_mm = fitted_contours
+        detection.vector_contour_mm = fitted_contours[0]
+        detection.native_path = fit.geometry.to_dict()
+        detection.native_center_mm = fit.center_mm
+        detection.native_width_mm = fit.width_mm
+        detection.native_height_mm = fit.height_mm
+        detection.native_verified = True
+        flattened_points = [point for contour in fitted_contours for point in contour]
+        camera_overruns = _work_area_overruns_mm(flattened_points, work_area)
+        output_overruns = _work_area_overruns_mm(flattened_points, output_work_area)
+        within_camera = max(camera_overruns.values(), default=0.0) <= 1e-9
+        within_output = max(output_overruns.values(), default=0.0) <= 1e-9
+        detection.selected_default = bool(
+            within_output
+            and not detection.diagnostics.get("touches_image_edge", False)
+        )
+        sequences = [
+            "".join(
+                "L" if segment.__class__.__name__ == "PathLineSegment" else "C"
+                for segment in contour.native_subpath.segments
+            )
+            for contour in fit.contours
+        ]
+        detection.diagnostics.update(
+            {
+                "native_fit_status": "verified",
+                "raw_contour_point_count": sum(len(contour) for contour in physical_raw),
+                "fit_input_point_count": fit.raw_point_count,
+                "fitted_segment_count": fit.fitted_segment_count,
+                "native_sequences": sequences,
+                "native_fitting_tolerance_mm": fit.fitting_tolerance_mm,
+                "maximum_fitting_error_mm": max(
+                    contour.max_fitting_error_mm for contour in fit.contours
+                ),
+                "maximum_estimated_deviation_mm": pitch
+                + localization_shift_px * pitch
+                + max(contour.max_fitting_error_mm for contour in fit.contours),
+                "rms_fitting_error_mm": max(
+                    contour.rms_fitting_error_mm for contour in fit.contours
+                ),
+                "contour_parents": list(physical_parents),
+                "contour_depths": [contour.depth for contour in fit.contours],
+                "localized_edge_sample_count": localized_count,
+                "maximum_edge_localization_shift_mm": localization_shift_px * pitch,
+                "within_camera_work_area": within_camera,
+                "camera_work_area_overrun_mm": max(
+                    camera_overruns.values(), default=0.0
+                ),
+                "camera_work_area_overruns_mm": camera_overruns,
+                "within_work_area": within_output,
+                "work_area_overrun_mm": max(
+                    output_overruns.values(), default=0.0
+                ),
+                "work_area_overruns_mm": output_overruns,
+            }
+        )
+    elif fit_native:
+        if detection.shape == "washer":
+            hole_ratio = float(detection.diagnostics["hole_ratio"])
+            detection.native_path = _analytic_washer_native_path(
+                hole_ratio
+            ).to_dict()
+            detection.native_center_mm = detection.center_mm
+            detection.native_width_mm = detection.width_mm
+            detection.native_height_mm = detection.height_mm
+        detection.native_verified = True
+        detection.diagnostics.update(
+            {
+                "native_fit_status": "analytic",
+                "raw_contour_point_count": sum(len(contour) for contour in raw_contours),
+                "fitted_segment_count": 8 if detection.shape == "washer" else 0,
+                "native_sequences": (
+                    ["CCCC", "CCCC"]
+                    if detection.shape == "washer"
+                    else ["analytic"]
+                ),
+                "contour_parents": list(physical_parents),
+            }
+        )
+    return detection
+
+
+def detect_seeded_cutouts(
+    image: np.ndarray,
+    seed_points_mm: Sequence[Sequence[float]],
+    options: TraceOptions | Mapping[str, Any] | None,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+    *,
+    output_work_area: WorkArea | None = None,
+    detection_ids: Sequence[str] | None = None,
+    fit_native: bool = True,
+) -> TraceResult:
+    """Select only clicked camera regions and optionally fit verified native paths."""
+
+    started = time.perf_counter()
+    options = options if isinstance(options, TraceOptions) else TraceOptions.from_mapping(options)
+    if options.detection_mode != "cutout":
+        raise ValueError("Seeded cutout detection requires Cutout / silhouette mode")
+    _require_bgr_image(image, "Rectified camera image")
+    pixels_per_mm = _finite_option(pixels_per_mm, "pixels_per_mm")
+    if pixels_per_mm <= 0.0:
+        raise ValueError("pixels_per_mm must be positive and finite")
+    output_work_area = work_area if output_work_area is None else output_work_area
+    seeds = tuple(seed_points_mm)
+    if len(seeds) > 64:
+        raise ValueError("One Cutout / silhouette review is limited to 64 clicked regions")
+    camera_values = (
+        work_area.x_min,
+        work_area.x_max,
+        work_area.y_min,
+        work_area.y_max,
+    )
+    output_values = (
+        output_work_area.x_min,
+        output_work_area.x_max,
+        output_work_area.y_min,
+        output_work_area.y_max,
+    )
+    if not all(math.isfinite(float(value)) for value in (*camera_values, *output_values)):
+        raise ValueError("Camera and output work-area limits must be finite")
+    if work_area.width <= 0.0 or work_area.height <= 0.0:
+        raise ValueError("Camera work area must have positive dimensions")
+    if output_work_area.width <= 0.0 or output_work_area.height <= 0.0:
+        raise ValueError("Output work area must have positive dimensions")
+    if (
+        output_work_area.x_min < work_area.x_min
+        or output_work_area.x_max > work_area.x_max
+        or output_work_area.y_min < work_area.y_min
+        or output_work_area.y_max > work_area.y_max
+    ):
+        raise ValueError("output_work_area must lie inside the camera work area")
+    ids = tuple(detection_ids or (_new_id() for _seed in seeds))
+    if len(ids) != len(seeds):
+        raise ValueError("detection_ids must match the number of cutout seeds")
+    detections: list[TraceDetection] = []
+    accepted_regions: list[_SeededCutoutRegion] = []
+    for seed, detection_id in zip(seeds, ids, strict=True):
+        seed_float = _machine_to_pixel(seed, work_area, pixels_per_mm)
+        seed_px = (int(round(seed_float[0])), int(round(seed_float[1])))
+        if not 0 <= seed_px[0] < image.shape[1] or not 0 <= seed_px[1] < image.shape[0]:
+            raise ValueError("The clicked cutout seed lies outside the corrected camera image")
+        region = _segment_seeded_cutout(image, seed_px, pixels_per_mm)
+        region = _offset_seeded_region(
+            image,
+            region,
+            seed_px,
+            options.border_offset_mm * pixels_per_mm,
+        )
+        duplicate = next(
+            (
+                index
+                for index, previous in enumerate(accepted_regions)
+                if (
+                    np.count_nonzero((previous.mask > 0) & (region.mask > 0))
+                    / max(1, min(np.count_nonzero(previous.mask), np.count_nonzero(region.mask)))
+                )
+                >= 0.90
+            ),
+            None,
+        )
+        if duplicate is not None:
+            continue
+        accepted_regions.append(region)
+        detections.append(
+            _build_cutout_detection(
+                image,
+                region,
+                options,
+                work_area,
+                output_work_area,
+                pixels_per_mm,
+                detection_id=str(detection_id),
+                index=len(detections) + 1,
+                fit_native=fit_native,
+            )
+        )
+    elapsed = time.perf_counter() - started
+    stage = "verified native geometry" if fit_native else "quick segmentation outline"
+    message = (
+        f"{stage.capitalize()}: {len(detections)} clicked cutout"
+        f"{'s' if len(detections) != 1 else ''} in {elapsed:.3f} s"
+    )
+    camera_payload = {
+        "x_min": float(work_area.x_min),
+        "x_max": float(work_area.x_max),
+        "y_min": float(work_area.y_min),
+        "y_max": float(work_area.y_max),
+    }
+    output_payload = {
+        "x_min": float(output_work_area.x_min),
+        "x_max": float(output_work_area.x_max),
+        "y_min": float(output_work_area.y_min),
+        "y_max": float(output_work_area.y_max),
+    }
+    return TraceResult(
+        detected=bool(detections),
+        detections=detections,
+        mode_used="cutout",
+        target_hue=None,
+        image_width=image.shape[1],
+        image_height=image.shape[0],
+        direct_count=len(detections),
+        inferred_count=0,
+        grid=None,
+        message=message,
+        options=options,
+        camera_work_area=camera_payload,
+        output_work_area=output_payload,
+    )
+
+
 def detect_objects(
     image: np.ndarray,
     options: TraceOptions | Mapping[str, Any] | None,
@@ -2662,6 +3524,25 @@ def detect_objects(
         "y_min": float(output_work_area.y_min),
         "y_max": float(output_work_area.y_max),
     }
+    if options.detection_mode == "cutout":
+        return TraceResult(
+            detected=False,
+            detections=[],
+            mode_used="cutout",
+            target_hue=None,
+            image_width=image.shape[1],
+            image_height=image.shape[0],
+            direct_count=0,
+            inferred_count=0,
+            grid=None,
+            message=(
+                "Cutout frame captured. Choose Add cutout, then click inside each "
+                "desired physical silhouette. Unrelated contrast is not selected."
+            ),
+            options=options,
+            camera_work_area=camera_work_area_payload,
+            output_work_area=output_work_area_payload,
+        )
 
     target_hue = options.target_hue
     masks: list[tuple[str, str, np.ndarray, float | None]] = []

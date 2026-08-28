@@ -152,6 +152,44 @@ class RasterVectorizationComplexityError(RasterVectorizationError):
     """Raised when raster-derived geometry exceeds a bounded workload."""
 
 
+@dataclass(frozen=True, slots=True)
+class PhysicalContourFitContour:
+    """One fitted closed physical contour in a compound native path."""
+
+    native_subpath: PathSubpath
+    preview_points_mm: tuple[tuple[float, float], ...]
+    parent_index: int | None
+    depth: int
+    is_hole: bool
+    raw_point_count: int
+    fitted_segment_count: int
+    max_fitting_error_mm: float
+    mean_fitting_error_mm: float
+    rms_fitting_error_mm: float
+    hard_corner_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class PhysicalContourFitResult:
+    """Validated native geometry fitted from source-neutral physical contours."""
+
+    geometry: NativePathGeometry
+    contours: tuple[PhysicalContourFitContour, ...]
+    center_mm: tuple[float, float]
+    width_mm: float
+    height_mm: float
+    fitting_tolerance_mm: float
+    source_pixel_spacing_mm: tuple[float, float]
+
+    @property
+    def raw_point_count(self) -> int:
+        return sum(contour.raw_point_count for contour in self.contours)
+
+    @property
+    def fitted_segment_count(self) -> int:
+        return self.geometry.segment_count
+
+
 class RasterDetectionMode(str, Enum):
     AUTO_THRESHOLD = "auto_threshold"
     MANUAL_THRESHOLD = "manual_threshold"
@@ -4506,6 +4544,223 @@ def _validate_authoritative_native_topology(
         )
 
 
+def fit_physical_contours_to_native_path(
+    contours_mm: tuple[np.ndarray, ...] | list[np.ndarray],
+    parents: tuple[int | None, ...] | list[int | None],
+    *,
+    source_pixel_spacing_mm: tuple[float, float],
+    fitting_tolerance_mm: float = 0.10,
+    smoothing_mm: float = 0.0,
+    classification_contours_mm: tuple[np.ndarray, ...] | list[np.ndarray] | None = None,
+    frame_bounds_mm: tuple[float, float, float, float] | None = None,
+) -> PhysicalContourFitResult:
+    """Fit closed physical contours with the authoritative native raster fitter.
+
+    Segmentation remains source-specific.  This contract begins only after a
+    caller has established physical millimetre contours and their parent tree.
+    Camera Trace and raster vectorization can therefore share every fitting,
+    continuous-error, frame, and compound-topology decision without sharing
+    thresholding or UI behavior.
+    """
+
+    raw_contours = tuple(np.asarray(contour, dtype=np.float64).reshape(-1, 2) for contour in contours_mm)
+    parent_values = tuple(parents)
+    if not raw_contours:
+        raise RasterVectorizationError("Physical contour fitting requires at least one contour")
+    if len(parent_values) != len(raw_contours):
+        raise ValueError("parents must contain one entry for each physical contour")
+    if classification_contours_mm is None:
+        classification_contours = raw_contours
+    else:
+        classification_contours = tuple(
+            np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+            for contour in classification_contours_mm
+        )
+        if len(classification_contours) != len(raw_contours):
+            raise ValueError(
+                "classification_contours_mm must contain one contour per fitted contour"
+            )
+
+    spacing = tuple(
+        _finite(value, "source_pixel_spacing_mm") for value in source_pixel_spacing_mm
+    )
+    if len(spacing) != 2 or min(spacing) <= 0.0:
+        raise ValueError("source_pixel_spacing_mm must contain two positive values")
+    options = RasterVectorizationOptions(
+        smoothing_mm=smoothing_mm,
+        simplification_tolerance_mm=fitting_tolerance_mm,
+        contour_output=RasterContourOutput.ALL_CONTOURS,
+    )
+
+    cleaned: list[np.ndarray] = []
+    cleaned_classification: list[np.ndarray] = []
+    for index, (raw, classification) in enumerate(
+        zip(raw_contours, classification_contours, strict=True)
+    ):
+        if raw.shape != classification.shape:
+            raise ValueError(
+                f"classification contour {index} must match its fitted contour shape"
+            )
+        if len(raw) < 3 or not np.isfinite(raw).all() or not np.isfinite(classification).all():
+            raise RasterVectorizationError(
+                f"Physical contour {index} must contain at least three finite points"
+            )
+        keep = np.ones(len(raw), dtype=bool)
+        keep[1:] = np.linalg.norm(np.diff(raw, axis=0), axis=1) > 1e-12
+        raw = raw[keep]
+        classification = classification[keep]
+        if len(raw) > 1 and np.linalg.norm(raw[0] - raw[-1]) <= 1e-12:
+            raw = raw[:-1]
+            classification = classification[:-1]
+        if len(raw) < 3 or abs(_signed_area(raw)) <= 1e-15:
+            raise RasterVectorizationError(
+                f"Physical contour {index} is degenerate after duplicate removal"
+            )
+        parent = parent_values[index]
+        if parent is not None and (
+            type(parent) is not int or parent < 0 or parent >= index
+        ):
+            raise RasterVectorizationError(
+                "Physical contour hierarchy requires each parent to precede its children"
+            )
+        cleaned.append(raw)
+        cleaned_classification.append(classification)
+
+    if frame_bounds_mm is None:
+        combined = np.concatenate(cleaned, axis=0)
+        x_min, y_min = np.min(combined, axis=0)
+        x_max, y_max = np.max(combined, axis=0)
+    else:
+        if len(frame_bounds_mm) != 4:
+            raise ValueError("frame_bounds_mm must contain x_min, y_min, x_max, y_max")
+        x_min, y_min, x_max, y_max = (
+            _finite(value, "frame_bounds_mm") for value in frame_bounds_mm
+        )
+    width_mm = float(x_max - x_min)
+    height_mm = float(y_max - y_min)
+    if width_mm <= 0.0 or height_mm <= 0.0:
+        raise ValueError("The physical contour fitting frame must have positive dimensions")
+    center = np.asarray(((x_min + x_max) / 2.0, (y_min + y_max) / 2.0))
+    epsilon = max(_NATIVE_FRAME_EPSILON_MM, max(width_mm, height_mm) * 1e-12)
+    for index, contour in enumerate(cleaned):
+        if (
+            float(np.min(contour[:, 0])) < x_min - epsilon
+            or float(np.max(contour[:, 0])) > x_max + epsilon
+            or float(np.min(contour[:, 1])) < y_min - epsilon
+            or float(np.max(contour[:, 1])) > y_max + epsilon
+        ):
+            raise RasterVectorizationError(
+                f"Physical contour {index} leaves the supplied fitting frame"
+            )
+
+    parent_array = np.asarray(
+        [-1 if parent is None else parent for parent in parent_values], dtype=np.int32
+    )
+    depths = [_hierarchy_depth(index, parent_array) for index in range(len(cleaned))]
+    budget = _ComplexityBudget()
+    fitted_results: list[RasterVectorizedContour] = []
+    public_results: list[PhysicalContourFitContour] = []
+    preview_tolerance_mm = options.simplification_tolerance_mm * 0.20
+    for index, (raw_world, classification_world) in enumerate(
+        zip(cleaned, cleaned_classification, strict=True)
+    ):
+        raw = raw_world - center
+        classification = classification_world - center
+        depth = depths[index]
+        is_hole = bool(depth % 2)
+        area = _signed_area(classification)
+        if (not is_hole and area < 0.0) or (is_hole and area > 0.0):
+            raw = raw[::-1].copy()
+            classification = classification[::-1].copy()
+        fitted = _fit_contour(
+            raw,
+            options,
+            width_mm,
+            height_mm,
+            budget,
+            source_pixel_spacing_mm=(spacing[0], spacing[1]),
+            classification_points=classification,
+        )
+        native_subpath = _native_subpath_from_fitted_contour(
+            fitted, width_mm, height_mm
+        )
+        _validate_native_subpath_in_frame(native_subpath, width_mm, height_mm)
+        preview_local = _flatten_native_subpath_for_preview(
+            native_subpath,
+            preview_tolerance_mm,
+            width_mm,
+            height_mm,
+            budget,
+        )
+        preview_area = _signed_area(preview_local)
+        if (not is_hole and preview_area < 0.0) or (is_hole and preview_area > 0.0):
+            native_subpath = reverse_subpath(native_subpath)
+            preview_local = preview_local[::-1].copy()
+        normalized_preview = tuple(
+            (float(point[0] / width_mm), float(point[1] / height_mm))
+            for point in preview_local
+        )
+        internal = RasterVectorizedContour(
+            native_subpath=native_subpath,
+            preview_points=normalized_preview,
+            parent_index=parent_values[index],
+            depth=depth,
+            is_hole=is_hole,
+            raw_point_count=len(raw),
+            fitted_segment_count=len(native_subpath.segments),
+            preview_flattened_point_count=len(normalized_preview),
+            max_fitting_error_mm=fitted.max_fitting_error_mm,
+            smoothing_displacement_mm=fitted.smoothing_displacement_mm,
+            max_estimated_deviation_mm=(
+                fitted.smoothing_displacement_mm
+                + fitted.max_fitting_error_mm
+                + preview_tolerance_mm
+            ),
+            mean_fitting_error_mm=fitted.mean_fitting_error_mm,
+            rms_fitting_error_mm=fitted.rms_fitting_error_mm,
+            fitting_error_sample_count=fitted.fitting_error_sample_count,
+            hard_corner_count=fitted.hard_corner_count,
+            recursive_split_count=fitted.recursive_split_count,
+            merged_segment_count=fitted.merged_segment_count,
+            longest_smooth_span_segment_count=fitted.longest_smooth_span_segment_count,
+        )
+        fitted_results.append(internal)
+        preview_world = preview_local + center
+        public_results.append(
+            PhysicalContourFitContour(
+                native_subpath=native_subpath,
+                preview_points_mm=tuple(
+                    (float(point[0]), float(point[1])) for point in preview_world
+                ),
+                parent_index=parent_values[index],
+                depth=depth,
+                is_hole=is_hole,
+                raw_point_count=len(raw),
+                fitted_segment_count=len(native_subpath.segments),
+                max_fitting_error_mm=fitted.max_fitting_error_mm,
+                mean_fitting_error_mm=fitted.mean_fitting_error_mm,
+                rms_fitting_error_mm=fitted.rms_fitting_error_mm,
+                hard_corner_count=fitted.hard_corner_count,
+            )
+        )
+
+    fitted_tuple = tuple(fitted_results)
+    _validate_authoritative_native_topology(fitted_tuple, width_mm, height_mm)
+    geometry = NativePathGeometry(
+        tuple(contour.native_subpath for contour in fitted_tuple),
+        fill_rule=PathFillRule.EVENODD,
+    )
+    return PhysicalContourFitResult(
+        geometry=geometry,
+        contours=tuple(public_results),
+        center_mm=(float(center[0]), float(center[1])),
+        width_mm=width_mm,
+        height_mm=height_mm,
+        fitting_tolerance_mm=options.simplification_tolerance_mm,
+        source_pixel_spacing_mm=(spacing[0], spacing[1]),
+    )
+
+
 def _hierarchy_signature(parents: np.ndarray) -> tuple[bytes, ...]:
     count = len(parents)
     children: list[list[int]] = [[] for _index in range(count)]
@@ -5093,6 +5348,8 @@ __all__ = [
     "MAX_RASTER_VECTORIZATION_OVERSAMPLED_PIXELS",
     "MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION",
     "MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION",
+    "PhysicalContourFitContour",
+    "PhysicalContourFitResult",
     "RASTER_VECTORIZATION_OVERSAMPLE_FACTOR",
     "RasterContourOutput",
     "RasterDetectionMode",
@@ -5105,6 +5362,7 @@ __all__ = [
     "RasterVectorizationSource",
     "RasterVectorizationTiming",
     "RasterVectorizedContour",
+    "fit_physical_contours_to_native_path",
     "prepare_raster_vectorization_source",
     "quick_preview_prepared_raster",
     "raster_payload_has_usable_alpha",

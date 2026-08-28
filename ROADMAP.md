@@ -32,6 +32,9 @@ The following foundations are implemented and automated-test covered:
 - imported-raster tracing with seam-invariant bounded fitting, persistent
   physical corner classification, editable safe Line-layer output, and
   high-contrast preview comparison controls;
+- seeded Camera Trace cutout/silhouette selection with compound contour
+  hierarchy and the shared physical native line/cubic fitter, while retaining
+  the independent repeated-object/grid workflow;
 - SVG, raster-image, LightBurn, and foreign-G-code preflight;
 - structured job readiness preflight before authoritative exact planning;
 - machine-aware material recipes that remain authoring aids rather than

@@ -228,7 +228,14 @@ remaining excluded from all laser output and framing. Repeated rounded-label
 grids can share one fitted cell geometry and
 lattice so damaged observations and inferred gaps produce corresponding
 identical row/column objects, while pixel contours remain available for
-irregular objects. The
+irregular objects. **Cutout / silhouette** instead freezes one corrected frame
+and lets the operator click inside only the physical objects, holes, or stencils
+they intend to trace. Disconnected high-contrast lettering is ignored unless it
+is clicked. A blue raw contour appears first; a worker then applies the shared
+physical contour-to-native-path fitter, preserves holes and islands with
+even-odd topology, and replaces it with verified native lines/cubics before
+Create is enabled. Grid filters, normalization, and missing-cell inference
+remain unchanged and are disabled only while this seeded mode is active. The
 real-camera GUI flow is not yet verified. See
 [docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
 

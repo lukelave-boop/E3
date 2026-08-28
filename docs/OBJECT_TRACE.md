@@ -26,17 +26,25 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
      output layers;
    - **Stock boundary (layout only)** creates exactly one locked construction
      outline and never sends that outline to the laser.
-4. Choose **Auto detect**, **By color**, or **By contrast**. To sample an
+4. Choose **Auto detect**, **By color**, **By contrast**, or **Cutout /
+   silhouette**. To sample an
    object, press **Pick color**, wait for the button to read **Cancel color
    pick**, then click the center of the object in the corrected camera image.
    The button reads **Sampling…** while the frame is read and the swatch updates
    when sampling succeeds. A failure is shown directly in the Trace inspector.
-5. Set the minimum/maximum area and minimum dimensions so dust, sheet edges,
+   In **Cutout / silhouette**, first capture the corrected frame, choose **Add
+   cutout**, and click inside one desired physical object. Repeat **Add cutout**
+   for more objects. The click selects a connected physical region; it is not an
+   arbitrary geometry vertex. Disconnected lettering and artwork elsewhere in
+   the frame are not promoted merely because they are high contrast.
+5. For the three global detection modes, set the minimum/maximum area and minimum dimensions so dust, sheet edges,
    and unrelated artwork are excluded.
 6. For a repeated label sheet, leave **Use grid** and **Make grid cells
    identical** enabled. Enable **Infer gaps** only when you want suggested
    positions for missing or obscured cells. Disable grid inference when tracing
-   one parent-stock outline.
+   one parent-stock outline. Grid, normalization, and missing-cell controls are
+   disabled in **Cutout / silhouette** because seeded selections do not assume a
+   lattice.
 7. Choose the vector output described below and set either a uniform **Border
    offset** or the rounded rectangle's individual edge offsets. Start a
    line-following cleanup pass at `0.00 mm`: a negative uniform value trims that
@@ -123,6 +131,9 @@ nested contours are not forced into washers.
   preview is this proposed vector, not the jagged camera-pixel boundary. The
   **Geometry** column reports the fitted dimensions and radius. If a detection
   is not sufficiently rectangle-like, this mode falls back to its contour.
+- **Native lines / Béziers** is the default for **Cutout / silhouette**. It
+  applies the verified shared physical fitter described below and is not shown
+  for the three legacy global detection modes.
 - **Simplified contours** follows the detected pixel boundary and removes
   points within the **Simplify tolerance**. A lower tolerance preserves more
   edge detail. This is polygon simplification; it does not turn an irregular
@@ -130,6 +141,17 @@ nested contours are not forced into washers.
 - **Exact contours** preserves the pixel-derived boundary without applying the
   simplification tolerance. It can contain many points and will naturally look
   stair-stepped when magnified.
+
+For an arbitrary seeded cutout, the blue dashed outline is immediate camera
+segmentation evidence. E3 then fits the physical contour with the same native
+line/cubic machinery used by raster vectorization. The verified green outline
+retains real straight runs as lines, fits curved runs with constrained cubic
+Béziers, and performs continuous maximum-error, frame/extrema, self/adjacent
+topology, compound-clearance, and hierarchy validation. **Create** remains
+disabled until that verified result replaces the quick outline. Analytic
+circle, ellipse, rounded-rectangle, and washer evidence keeps its faster
+semantic path; an analytic washer is persisted as one even-odd compound native
+path with two four-cubic rings.
 
 **Offset mode** defaults to **Uniform**, which applies the existing single
 **Border offset** equally on all sides. Positive values expand the output and
@@ -148,6 +170,14 @@ the same geometry. Non-rectangle contours are centered from their actual bounds
 when created, so rotated or asymmetric traces do not shift after approval.
 
 ## Detection modes
+
+- **Cutout / silhouette** is seeded and local. Camera-specific Lab/intensity,
+  global, adaptive, and local-contrast hypotheses are evaluated only for the
+  contour tree containing the clicked foreground point. Multiple clicks retain
+  multiple objects; duplicate clicks on the same region are coalesced. `RETR_TREE`
+  hierarchy preserves an outer boundary, holes, and nested islands. The global
+  area/width/height filters do not reject a clicked region, and no missing grid
+  cells are inferred.
 
 - **Auto detect** evaluates color and contrast hypotheses and uses the strongest
   coherent object family. Repeated-grid fits are ranked from the observed
@@ -273,6 +303,12 @@ objects, changing the camera/calibration evidence, or stopping the controller
 invalidates outstanding trace work. Late results from an older request are
 ignored.
 
+In **Cutout / silhouette**, the capture establishes the frozen frame before any
+seed is accepted. Each click first runs bounded quick segmentation in a worker,
+then runs authoritative native fitting in a second worker. A newer click makes
+older exact completion stale; creation can consume only the newest verified
+payload. Neither stage runs on the GUI thread.
+
 ## Accuracy notes
 
 Detection runs on the rectified camera image and outputs machine millimeters.
@@ -281,6 +317,19 @@ Rasterization and thresholding can therefore move a fitted edge, dimension, or
 radius by part of a pixel or more even on an ideal generated image. A clean
 rounded vector is a geometric fit to those pixels; it is not evidence of
 sub-pixel physical accuracy.
+
+The upstream lens/bed transform may be projective and therefore have a
+spatially varying raw-camera Jacobian. Trace does not fit in those raw sensor
+coordinates. `capture_parked_trace_frame()` rectifies into the configured work
+area at one explicit pixels/mm, so the corrected image consumed here has a
+constant physical pixel pitch (apart from a possible fractional strip caused by
+integer raster dimensions). Seeded fitting converts every contour sample to the
+active machine or honeycomb millimetre frame first. Its tolerance is never finer
+than one corrected camera pixel. Eligible independent contours may move a
+non-corner threshold sample toward one strong camera-intensity crossing by at
+most 0.6 pixel; compound contours conservatively remain on the segmented
+threshold. Reported deviation includes the physical pixel floor, any accepted
+edge-centering shift, and the continuously validated native fit error.
 
 The desktop registers the center of each displayed camera pixel to the same
 OpenCV/BedMapper coordinate used by the detector. At very high zoom, a smooth

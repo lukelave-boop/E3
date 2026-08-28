@@ -261,6 +261,19 @@ should own a physical camera at a time.
   emits an analytic rounded vector. Simplified and exact modes preserve
   pixel-derived contours; simplification is a bounded polygon reduction, not a
   curve-fitting operation.
+- **Cutout / silhouette** is a separate seeded camera-segmentation path. It
+  ranks camera-specific Lab/intensity and contrast hypotheses only for the
+  contour tree containing each click, retains nested holes/islands, and never
+  sends unrelated disconnected contrast through the candidate list. It does
+  not call the raster dialog or raster segmentation. A quick raw contour worker
+  is followed by a stale-rejecting exact worker; creation is gated on verified
+  geometry.
+- Camera cutout contours are converted from the corrected raster into physical
+  machine or honeycomb millimetres before classification or fitting. The
+  corrected raster has the rectifier's explicit constant pixels/mm even though
+  the upstream raw camera homography has a spatially varying Jacobian. The
+  camera physical-resolution floor therefore comes from that corrected pixel
+  pitch, not from a guessed raw-sensor scale.
 - Identical-grid normalization derives its shared orientation from populated
   row-center baselines and refits the lattice in that orientation. Grid pose
   snapping is independent of dimension normalization: direct cells may retain
@@ -582,6 +595,17 @@ state: changing them repaints locally without changing options, metadata,
 geometry, project layers, or output authority. The dialog and portable
 vectorizer do not call `DesktopController`, `MachineService`,
 camera, planning, G-code, or execution paths.
+
+`project.native_contour_fit` is the source-neutral boundary between segmentation
+and native geometry. Its input is an ordered physical contour tree, optional
+same-shape classification evidence, physical source-pixel spacing, tolerance,
+and an explicit physical frame. It delegates to the one authoritative fitter in
+`project.raster_vectorize`: hard-corner and rotation-independent straight-run
+classification, persistent line decisions, constrained cubics, bounded Newton
+reparameterization/centering, continuous error proof, frame/extrema checks,
+self/adjacent-arc validation, compound clearance, and outer/hole hierarchy are
+therefore identical for raster and seeded camera consumers. Raster and camera
+thresholding, cleanup, edge evidence, worker lifecycles, and UI remain separate.
 
 `RasterVectorizationTiming` is opt-in development/test instrumentation and is
 never attached to project data. It accumulates inclusive elapsed time and call
