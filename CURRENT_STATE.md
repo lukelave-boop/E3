@@ -7,6 +7,27 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-28**
 
+## Active development-release trigger filtering
+
+The `Publish E3 development update` workflow still runs automatically for
+application/source, packaging, release-workflow, and runtime-dependency changes
+on `main`, and it retains manual `workflow_dispatch`. Its push trigger now uses
+an explicit `paths-ignore` list for normal CI workflows, repository templates
+and instructions, non-installed documentation, tests, and the development-only
+requirements file. GitHub applies `paths-ignore` only when every changed path
+matches the list, so a mixed commit containing any unignored product-affecting
+path still builds and publishes the Windows installer, Linux AppImage, update
+manifest, and `e3-development` prerelease. Job definitions, main-branch guards,
+and `cancel-in-progress: true` are unchanged.
+
+Focused update/workflow verification passes **8 tests**. PyYAML independently
+parses the workflow and verifies its trigger, concurrency, three-job structure,
+and Windows/Linux-to-publish dependency. Ruff on the affected test,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass. No E3
+application, controller, motion, arming, laser-output, packaging, manifest, or
+publishing implementation changed; no package build or physical test was
+required or performed.
+
 ## Active raster-vectorization straight-edge recovery
 
 The exact native fitter now classifies persistent straight source runs before

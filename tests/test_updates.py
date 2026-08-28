@@ -63,8 +63,50 @@ def test_development_update_workflow_publishes_only_main() -> None:
     ).read_text(encoding="utf-8")
 
     assert "branches:\n      - main" in source
+    assert "  workflow_dispatch:" in source
+    assert "  cancel-in-progress: true" in source
     assert "fix/live-monitor-display-throughput" not in source
     assert source.count("if: github.ref == 'refs/heads/main'") == 3
+
+
+def test_development_update_workflow_ignores_only_non_product_paths() -> None:
+    source = (
+        ROOT / ".github" / "workflows" / "publish-development-update.yml"
+    ).read_text(encoding="utf-8")
+    lines = source.splitlines()
+    ignore_start = lines.index("    paths-ignore:") + 1
+    ignored_paths: list[str] = []
+    for line in lines[ignore_start:]:
+        if not line.startswith("      - "):
+            break
+        ignored_paths.append(line.removeprefix("      - "))
+
+    assert set(ignored_paths) == {
+        ".github/ISSUE_TEMPLATE/**",
+        ".github/pull_request_template.md",
+        ".github/workflows/ci.yml",
+        ".github/workflows/fast-ci.yml",
+        "AGENTS.md",
+        "CHANGELOG.md",
+        "CONTRIBUTING.md",
+        "CURRENT_STATE.md",
+        "PROJECT_STATUS.md",
+        "README.md",
+        "ROADMAP.md",
+        "SAFETY.md",
+        "docs/**",
+        "requirements-dev.txt",
+        "tests/**",
+    }
+    assert {
+        ".github/workflows/publish-development-update.yml",
+        "laser_aligner/**",
+        "packaging/**",
+        "pyproject.toml",
+        "requirements-desktop.txt",
+        "requirements.txt",
+    }.isdisjoint(ignored_paths)
+
 
 def _build_info(*, version: str, revision: str) -> BuildInfo:
     return BuildInfo(

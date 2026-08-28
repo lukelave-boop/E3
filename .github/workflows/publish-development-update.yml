@@ -4,6 +4,22 @@ on:
   push:
     branches:
       - main
+    paths-ignore:
+      - .github/ISSUE_TEMPLATE/**
+      - .github/pull_request_template.md
+      - .github/workflows/ci.yml
+      - .github/workflows/fast-ci.yml
+      - AGENTS.md
+      - CHANGELOG.md
+      - CONTRIBUTING.md
+      - CURRENT_STATE.md
+      - PROJECT_STATUS.md
+      - README.md
+      - ROADMAP.md
+      - SAFETY.md
+      - docs/**
+      - requirements-dev.txt
+      - tests/**
   workflow_dispatch:
 
 permissions:

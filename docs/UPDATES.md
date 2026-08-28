@@ -45,8 +45,12 @@ replace the public development channel or overwrite the developer's installed
 E3 application.
 
 The development workflow publishes fixed prerelease tag `e3-development` when
-the canonical `main` branch changes. Manual publication is also restricted to
-`main`, so the in-app updater cannot be repointed at a feature branch. It contains:
+the canonical `main` branch changes application source, packaging, or runtime
+dependencies. Pushes that change only documentation, tests, repository
+instructions, issue/pull-request templates, or the normal CI workflows are
+ignored. A mixed push that also changes a product-affecting file still publishes.
+Manual publication is also restricted to `main`, so the in-app updater cannot
+be repointed at a feature branch. It contains:
 
 - `E3-Setup.exe`
 - `E3-x86_64.AppImage`
