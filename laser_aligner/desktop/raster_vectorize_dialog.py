@@ -351,7 +351,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self.stats_label = QtWidgets.QLabel(
             "Raw contour points —  ·  fitted segments —  ·  "
             "preview-flattened points —  ·  "
-            "maximum deviation —"
+            "validated fit —  ·  maximum estimated deviation —"
         )
         self.stats_label.setObjectName("mutedLabel")
         self.stats_label.setWordWrap(True)
@@ -463,12 +463,12 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self.simplification_spin.setSuffix(" mm")
         self.simplification_spin.setValue(defaults.simplification_tolerance_mm)
         self.simplification_spin.setToolTip(
-            "Maximum raster trace-fitting and preview-flattening error in "
-            "millimetres at the image's displayed size. Smaller values retain "
-            "more native segments and preview detail; machine planning uses its "
-            "separate controlled flattening tolerance."
+            "Maximum continuously validated native line/Bezier fitting error in "
+            "millimetres at the image's displayed size. Preview flattening and "
+            "intentional smoothing are measured separately; machine planning uses "
+            "its own controlled flattening tolerance."
         )
-        form.addRow("Simplification / max fitting error", self.simplification_spin)
+        form.addRow("Native fitting tolerance", self.simplification_spin)
         return group
 
     def _build_output_group(self) -> Any:
@@ -819,13 +819,34 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self.overlay_preview.set_image(overlay)
         self.overlay_preview.set_vector_overlay(result.contours)
         self._sync_overlay_style()
+        fitting_samples = sum(
+            contour.fitting_error_sample_count for contour in result.contours
+        )
+        rms_fitting_error = (
+            math.sqrt(
+                sum(
+                    contour.rms_fitting_error_mm**2
+                    * contour.fitting_error_sample_count
+                    for contour in result.contours
+                )
+                / fitting_samples
+            )
+            if fitting_samples
+            else 0.0
+        )
         self.stats_label.setText(
             f"Raw contour points {result.raw_contour_point_count:,}  ·  "
             f"fitted segments {result.fitted_segment_count:,}  ·  "
             "preview-flattened points "
             f"{result.preview_flattened_point_count:,}  ·  "
+            "validated fit max / RMS "
+            f"{max(c.max_fitting_error_mm for c in result.contours):.3f} / "
+            f"{rms_fitting_error:.3f} mm  ·  "
             "maximum estimated deviation "
-            f"{result.max_estimated_deviation_mm:.3f} mm"
+            f"{result.max_estimated_deviation_mm:.3f} mm  ·  "
+            f"hard corners {sum(c.hard_corner_count for c in result.contours):,}  ·  "
+            f"recursive splits {sum(c.recursive_split_count for c in result.contours):,}  ·  "
+            f"verified merges {sum(c.merged_segment_count for c in result.contours):,}"
         )
         self._current_result = result
         self._current_result_id = request_id

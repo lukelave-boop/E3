@@ -105,9 +105,12 @@ Native desktop workflow:
   multi-contour line/cubic PATH while preserving the image frame, position,
   rotation, and mirrors. Closed-contour fitting uses full-cycle seam
   canonicalization, physically persistent corner evidence, generic straight-run
-  anchors, and shared tangents at non-corner joins so raster phase does not
-  invent angular shoulders. Replace, Keep, optional source hiding, safe-layer
-  creation, and vector creation are one undoable operation
+  anchors, shared tangents at non-corner joins, constrained cubic handles,
+  Newton reparameterization, and conservative continuous fit validation so
+  raster phase does not invent angular shoulders or hide between-sample lobes.
+  Compatible adjacent spans merge only after the same fit and native-topology
+  checks pass. Replace, Keep, optional source hiding, safe-layer creation, and
+  vector creation are one undoable operation
 - Persistent rectangle drawing directly on the bed with a live active-layer
   preview, snapping, immediate selection, and undo/redo-backed commits
 - Direct single-object corner resizing and rotation on the canvas, including
@@ -175,15 +178,17 @@ overscan interaction, limitations, and tuning guidance.
 
 To convert imported single-color artwork, select exactly one image in the
 **Objects** panel and choose **Trace image to vectors…**. Adjust the physical
-minimum-feature area, smoothing, and **Simplification / max fitting error** while
+minimum-feature area, smoothing, and **Native fitting tolerance** while
 reviewing the original, mask, and overlaid contours. Choose a magenta, cyan,
 yellow, white, or black comparison overlay and adjust its opacity without
 rerunning or changing the trace, then choose whether to replace or retain the
 source. Keeping the source leaves it in place beneath the new, selected vector
 and preserves the hide-source choice. Preserving all contours keeps counters and
 closed child subpaths in the same native PATH. The fitted lines and cubic
-Béziers are persisted directly; preview/topology samples are not a second
-authoritative geometry copy. When planning is requested, E3 applies the complete
+Béziers are persisted directly; the review reports validated maximum/RMS fit
+error plus hard-corner, recursive-split, and verified-merge counts.
+Preview/topology samples are not a second authoritative geometry copy. When
+planning is requested, E3 applies the complete
 object transform and then adaptively flattens the native curve at the fixed
 0.025 mm planning tolerance before the existing G0/G1 pipeline. A trace uses an
 existing layer

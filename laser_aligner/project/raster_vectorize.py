@@ -36,6 +36,7 @@ MAX_RASTER_VECTORIZATION_CONTOURS = 8_192
 MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION = 1_000_000
 MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS = 100_000
 MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION = 250_000
+MAX_RASTER_VECTORIZATION_FIT_VALIDATION_STEPS = 5_000_000
 
 _CORNER_MINIMUM_TURN_DEGREES = 35.0
 _CORNER_INNER_MINIMUM_TURN_DEGREES = 22.5
@@ -45,7 +46,9 @@ _MAX_CORNER_WINDOW_POINTS = 12
 _MAX_SMOOTHING_RADIUS_POINTS = 64
 _MAX_FIT_TANGENT_WINDOW_POINTS = 12
 _LINE_MAXIMUM_TANGENT_DEVIATION_DEGREES = 2.0
+_MAX_REPARAMETERIZATION_ITERATIONS = 8
 _MAX_FIT_RECURSION = 18
+_MAX_FIT_VALIDATION_RECURSION = 18
 _MAX_FLATTEN_RECURSION = 18
 _NATIVE_FRAME_EPSILON_MM = 1e-9
 _NATIVE_TOPOLOGY_INITIAL_TOLERANCE_MM = 0.025
@@ -53,8 +56,8 @@ _NATIVE_TOPOLOGY_MIN_TOLERANCE_MM = 0.001
 _NATIVE_TOPOLOGY_MAX_SEGMENT_PAIR_CHECKS = 1_000_000
 
 _COMPLEXITY_ADVICE = (
-    "Increase the minimum feature size, increase simplification, adjust the "
-    "threshold, or use cleaner source artwork."
+    "Increase the minimum feature size, increase simplification by raising the "
+    "native fitting tolerance, adjust the threshold, or use cleaner source artwork."
 )
 
 
@@ -184,6 +187,13 @@ class RasterVectorizedContour:
     max_fitting_error_mm: float
     smoothing_displacement_mm: float
     max_estimated_deviation_mm: float
+    mean_fitting_error_mm: float = 0.0
+    rms_fitting_error_mm: float = 0.0
+    fitting_error_sample_count: int = 0
+    hard_corner_count: int = 0
+    recursive_split_count: int = 0
+    merged_segment_count: int = 0
+    longest_smooth_span_segment_count: int = 0
 
     def __post_init__(self) -> None:
         if not isinstance(self.native_subpath, PathSubpath):
@@ -236,6 +246,14 @@ class RasterVectorizedContour:
             self.max_fitting_error_mm,
             "contour max_fitting_error_mm",
         )
+        mean_fitting_error = _finite(
+            self.mean_fitting_error_mm,
+            "contour mean_fitting_error_mm",
+        )
+        rms_fitting_error = _finite(
+            self.rms_fitting_error_mm,
+            "contour rms_fitting_error_mm",
+        )
         smoothing_displacement = _finite(
             self.smoothing_displacement_mm,
             "contour smoothing_displacement_mm",
@@ -244,8 +262,12 @@ class RasterVectorizedContour:
             self.max_estimated_deviation_mm,
             "contour max_estimated_deviation_mm",
         )
-        if fitting_error < 0.0:
-            raise ValueError("contour fitting error cannot be negative")
+        if min(fitting_error, mean_fitting_error, rms_fitting_error) < 0.0:
+            raise ValueError("contour fitting errors cannot be negative")
+        if mean_fitting_error > rms_fitting_error + 1e-12:
+            raise ValueError("contour mean fitting error cannot exceed RMS error")
+        if rms_fitting_error > fitting_error + 1e-12:
+            raise ValueError("contour RMS fitting error cannot exceed maximum error")
         if smoothing_displacement < 0.0:
             raise ValueError("contour smoothing displacement cannot be negative")
         if deviation < max(fitting_error, smoothing_displacement):
@@ -254,6 +276,18 @@ class RasterVectorizedContour:
             )
         object.__setattr__(self, "preview_points", points)
         object.__setattr__(self, "max_fitting_error_mm", fitting_error)
+        object.__setattr__(self, "mean_fitting_error_mm", mean_fitting_error)
+        object.__setattr__(self, "rms_fitting_error_mm", rms_fitting_error)
+        for field_name in (
+            "fitting_error_sample_count",
+            "hard_corner_count",
+            "recursive_split_count",
+            "merged_segment_count",
+            "longest_smooth_span_segment_count",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"contour {field_name} must be a non-negative integer")
         object.__setattr__(
             self,
             "smoothing_displacement_mm",
@@ -377,6 +411,30 @@ class RasterVectorizationResult:
     def metadata(self) -> dict[str, object]:
         """Return a compact JSON-ready provenance and quality summary."""
 
+        fitting_sample_count = sum(
+            contour.fitting_error_sample_count for contour in self.contours
+        )
+        mean_fitting_error = (
+            sum(
+                contour.mean_fitting_error_mm * contour.fitting_error_sample_count
+                for contour in self.contours
+            )
+            / fitting_sample_count
+            if fitting_sample_count
+            else 0.0
+        )
+        rms_fitting_error = (
+            math.sqrt(
+                sum(
+                    contour.rms_fitting_error_mm**2
+                    * contour.fitting_error_sample_count
+                    for contour in self.contours
+                )
+                / fitting_sample_count
+            )
+            if fitting_sample_count
+            else 0.0
+        )
         return {
             "raster_vectorization_source_sha256": self.source_sha256,
             "raster_vectorization_threshold": self.threshold_used,
@@ -394,6 +452,24 @@ class RasterVectorizationResult:
             ),
             "raster_vectorization_max_fitting_error_mm": max(
                 contour.max_fitting_error_mm for contour in self.contours
+            ),
+            "raster_vectorization_mean_fitting_error_mm": mean_fitting_error,
+            "raster_vectorization_rms_fitting_error_mm": rms_fitting_error,
+            "raster_vectorization_fitting_error_samples": fitting_sample_count,
+            "raster_vectorization_max_rms_fitting_error_mm": max(
+                contour.rms_fitting_error_mm for contour in self.contours
+            ),
+            "raster_vectorization_detected_hard_corners": sum(
+                contour.hard_corner_count for contour in self.contours
+            ),
+            "raster_vectorization_recursive_splits": sum(
+                contour.recursive_split_count for contour in self.contours
+            ),
+            "raster_vectorization_merged_segments": sum(
+                contour.merged_segment_count for contour in self.contours
+            ),
+            "raster_vectorization_longest_smooth_span_segments": max(
+                contour.longest_smooth_span_segment_count for contour in self.contours
             ),
             "raster_vectorization_max_smoothing_displacement_mm": max(
                 contour.smoothing_displacement_mm for contour in self.contours
@@ -436,12 +512,46 @@ class _FittedContour:
     segments: tuple[_FittedSegment, ...]
     smoothing_displacement_mm: float
     max_fitting_error_mm: float
+    mean_fitting_error_mm: float = 0.0
+    rms_fitting_error_mm: float = 0.0
+    fitting_error_sample_count: int = 0
+    hard_corner_count: int = 0
+    recursive_split_count: int = 0
+    merged_segment_count: int = 0
+    longest_smooth_span_segment_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class _FitValidation:
+    accepted: bool
+    max_error_mm: float
+    split_index: int
+    sample_error_sum_mm: float
+    sample_squared_error_sum_mm2: float
+    sample_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class _FittedPiece:
+    segment: _FittedSegment
+    target_points: np.ndarray
+    target_parameters: np.ndarray
+    start_tangent: np.ndarray
+    end_tangent: np.ndarray
+    hard_start: bool
+    hard_end: bool
+    sample_error_sum_mm: float
+    sample_squared_error_sum_mm2: float
+    sample_count: int
 
 
 @dataclass(slots=True)
 class _ComplexityBudget:
     fitted_segments: int = 0
     preview_points: int = 0
+    fit_validation_steps: int = 0
+    recursive_splits: int = 0
+    merged_segments: int = 0
 
     def add_fitted_segments(self, count: int = 1) -> None:
         if self.fitted_segments + count > MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS:
@@ -450,6 +560,18 @@ class _ComplexityBudget:
                 f"{MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS:,} fitted segments"
             )
         self.fitted_segments += count
+
+    def consume_fit_validation_step(self, count: int = 1) -> None:
+        if (
+            self.fit_validation_steps + count
+            > MAX_RASTER_VECTORIZATION_FIT_VALIDATION_STEPS
+        ):
+            _raise_complexity(
+                "Raster vectorization requires more than "
+                f"{MAX_RASTER_VECTORIZATION_FIT_VALIDATION_STEPS:,} "
+                "bounded curve-fit validation steps"
+            )
+        self.fit_validation_steps += count
 
     def add_preview_points(self, count: int = 1) -> None:
         if (
@@ -1527,26 +1649,16 @@ def _maximum_control_distance(
     return max(0.0, limit)
 
 
-def _fit_cubic(
+def _generate_bezier_controls(
     points: np.ndarray,
+    parameters: np.ndarray,
+    start_tangent: np.ndarray,
+    end_tangent: np.ndarray,
     tolerance_mm: float,
-    start_tangent: np.ndarray | None = None,
-    end_tangent: np.ndarray | None = None,
     control_minimum: np.ndarray | None = None,
     control_maximum: np.ndarray | None = None,
-) -> _CubicSegment:
-    polyline_length = float(np.sum(np.linalg.norm(np.diff(points, axis=0), axis=1)))
-    parameters = _chord_parameters(points)
-    if polyline_length <= 1e-15:
-        return _CubicSegment(points[0], points[0], points[-1], points[-1], 0.0)
-    if start_tangent is None:
-        start_tangent = _endpoint_tangent(points, at_start=True)
-    if end_tangent is None:
-        end_tangent = _endpoint_tangent(points, at_start=False)
-    start_tangent = _unit_direction(start_tangent)
-    end_tangent = _unit_direction(end_tangent)
-    if start_tangent is None or end_tangent is None:
-        raise RasterVectorizationError("A fitted span has an undefined endpoint tangent")
+) -> np.ndarray:
+    """Solve positive tangent-constrained handles inside current-main bounds."""
 
     inverse = 1.0 - parameters
     basis_0 = inverse**3
@@ -1564,7 +1676,7 @@ def _fit_cubic(
             (basis_2[:, None] * end_tangent).reshape(-1),
         )
     )
-    control_distances, _residuals, rank, _singular = np.linalg.lstsq(
+    handle_distances, _residuals, rank, _singular = np.linalg.lstsq(
         matrix,
         residual.reshape(-1),
         rcond=None,
@@ -1573,59 +1685,488 @@ def _fit_cubic(
     fallback_distance = chord_length / 3.0
     if (
         rank < 2
-        or not np.all(np.isfinite(control_distances))
-        or np.any(control_distances <= chord_length * 1e-6)
+        or not np.all(np.isfinite(handle_distances))
+        or np.any(handle_distances <= chord_length * 1e-6)
     ):
-        control_distances = np.asarray(
+        handle_distances = np.asarray(
             (fallback_distance, fallback_distance),
             dtype=np.float64,
         )
-    minimum = np.min(points, axis=0) - tolerance_mm
-    maximum = np.max(points, axis=0) + tolerance_mm
-    if control_minimum is not None:
-        minimum = np.maximum(minimum, control_minimum)
-    if control_maximum is not None:
-        maximum = np.minimum(maximum, control_maximum)
-    control_distances[0] = min(
-        float(control_distances[0]),
+    minimum = (
+        np.min(points, axis=0) - tolerance_mm
+        if control_minimum is None
+        else control_minimum
+    )
+    maximum = (
+        np.max(points, axis=0) + tolerance_mm
+        if control_maximum is None
+        else control_maximum
+    )
+    handle_distances[0] = min(
+        float(handle_distances[0]),
         _maximum_control_distance(points[0], start_tangent, minimum, maximum),
     )
-    control_distances[1] = min(
-        float(control_distances[1]),
+    handle_distances[1] = min(
+        float(handle_distances[1]),
         _maximum_control_distance(points[-1], end_tangent, minimum, maximum),
     )
-    control_1 = points[0] + control_distances[0] * start_tangent
-    control_2 = points[-1] + control_distances[1] * end_tangent
-    fitted = _cubic_values(
-        points[0],
-        control_1,
-        control_2,
-        points[-1],
+    return np.vstack(
+        (
+            points[0],
+            points[0] + handle_distances[0] * start_tangent,
+            points[-1] + handle_distances[1] * end_tangent,
+            points[-1],
+        )
+    )
+
+
+def _cubic_derivatives(
+    controls: np.ndarray,
+    parameter: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    inverse = 1.0 - parameter
+    first = 3.0 * (
+        inverse**2 * (controls[1] - controls[0])
+        + 2.0 * inverse * parameter * (controls[2] - controls[1])
+        + parameter**2 * (controls[3] - controls[2])
+    )
+    second = 6.0 * (
+        inverse * (controls[2] - 2.0 * controls[1] + controls[0])
+        + parameter * (controls[3] - 2.0 * controls[2] + controls[1])
+    )
+    return first, second
+
+
+def _cubic_first_derivative_values(
+    controls: np.ndarray,
+    parameters: np.ndarray,
+) -> np.ndarray:
+    inverse = 1.0 - parameters
+    return 3.0 * (
+        (inverse**2)[:, None] * (controls[1] - controls[0])
+        + (2.0 * inverse * parameters)[:, None] * (controls[2] - controls[1])
+        + (parameters**2)[:, None] * (controls[3] - controls[2])
+    )
+
+
+def _reparameterize(
+    points: np.ndarray,
+    parameters: np.ndarray,
+    controls: np.ndarray,
+) -> np.ndarray:
+    """Refine point parameters with bounded Newton-Raphson projection."""
+
+    refined = parameters.copy()
+    for index in range(1, len(points) - 1):
+        parameter = float(parameters[index])
+        value = _cubic_values(
+            controls[0],
+            controls[1],
+            controls[2],
+            controls[3],
+            np.asarray((parameter,), dtype=np.float64),
+        )[0]
+        first, second = _cubic_derivatives(controls, parameter)
+        delta = value - points[index]
+        denominator = float(np.dot(first, first) + np.dot(delta, second))
+        if abs(denominator) > 1e-15:
+            refined[index] = float(
+                np.clip(
+                    parameter - float(np.dot(delta, first)) / denominator,
+                    0.0,
+                    1.0,
+                )
+            )
+    if np.any(np.diff(refined) <= 1e-9):
+        return parameters
+    return refined
+
+
+def _split_cubic_controls_at(
+    controls: np.ndarray,
+    parameter: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    parameter = float(np.clip(parameter, 0.0, 1.0))
+    first = controls[:-1] + parameter * (controls[1:] - controls[:-1])
+    second = first[:-1] + parameter * (first[1:] - first[:-1])
+    midpoint = second[0] + parameter * (second[1] - second[0])
+    return (
+        np.vstack((controls[0], first[0], second[0], midpoint)),
+        np.vstack((midpoint, second[1], first[2], controls[3])),
+    )
+
+
+def _subcurve_controls(
+    controls: np.ndarray,
+    start_parameter: float,
+    end_parameter: float,
+) -> np.ndarray:
+    if start_parameter <= 0.0 and end_parameter >= 1.0:
+        return controls.copy()
+    left, _right = _split_cubic_controls_at(controls, end_parameter)
+    if start_parameter <= 0.0:
+        return left
+    relative = start_parameter / end_parameter
+    _prefix, interval = _split_cubic_controls_at(left, relative)
+    return interval
+
+
+def _validate_curve_fit(
+    target: np.ndarray,
+    parameters: np.ndarray,
+    controls: np.ndarray,
+    tolerance_mm: float,
+    budget: _ComplexityBudget,
+) -> _FitValidation:
+    """Conservatively bound the complete curve against its target polyline.
+
+    Each target edge is represented as a cubic line over the fitted edge's
+    parameter interval.  The difference between that line and the restricted
+    fitted cubic is itself a cubic, so the convex hull of its four difference
+    controls bounds every between-sample deviation in both directions.
+    """
+
+    values = _cubic_values(
+        controls[0],
+        controls[1],
+        controls[2],
+        controls[3],
         parameters,
     )
-    error = float(np.max(np.linalg.norm(fitted - points, axis=1)))
-    if len(points) == 2:
-        curve_samples = _cubic_values(
-            points[0],
-            control_1,
-            control_2,
-            points[-1],
-            np.linspace(0.0, 1.0, 9),
+    assigned_errors = np.linalg.norm(values - target, axis=1)
+    maximum = float(np.max(assigned_errors))
+    sample_sum = float(np.sum(assigned_errors))
+    sample_squared_sum = float(np.sum(assigned_errors**2))
+    sample_count = len(assigned_errors)
+    if maximum > tolerance_mm:
+        split_index = int(np.argmax(assigned_errors))
+        return _FitValidation(
+            False,
+            maximum,
+            max(1, min(len(target) - 2, split_index)),
+            sample_sum,
+            sample_squared_sum,
+            sample_count,
         )
-        error = max(
-            error,
-            float(
-                np.max(
-                    _distance_to_segment(curve_samples, points[0], points[-1])
+
+    starts = target[:-1]
+    ends = target[1:]
+    first_parameters = parameters[:-1]
+    last_parameters = parameters[1:]
+    parameter_widths = last_parameters - first_parameters
+    derivatives = _cubic_first_derivative_values(controls, parameters)
+    curve_controls = np.stack(
+        (
+            values[:-1],
+            values[:-1] + parameter_widths[:, None] * derivatives[:-1] / 3.0,
+            values[1:] - parameter_widths[:, None] * derivatives[1:] / 3.0,
+            values[1:],
+        ),
+        axis=1,
+    )
+    target_deltas = ends - starts
+    target_controls = np.stack(
+        (
+            starts,
+            starts + target_deltas / 3.0,
+            starts + 2.0 * target_deltas / 3.0,
+            ends,
+        ),
+        axis=1,
+    )
+    upper_bounds = np.max(
+        np.linalg.norm(curve_controls - target_controls, axis=2),
+        axis=1,
+    )
+    budget.consume_fit_validation_step(len(upper_bounds))
+    accepted = upper_bounds <= tolerance_mm
+    if np.any(accepted):
+        maximum = max(maximum, float(np.max(upper_bounds[accepted])))
+        midpoint_parameters = (
+            first_parameters[accepted] + last_parameters[accepted]
+        ) / 2.0
+        curve_midpoints = _cubic_values(
+            controls[0],
+            controls[1],
+            controls[2],
+            controls[3],
+            midpoint_parameters,
+        )
+        target_midpoints = (starts[accepted] + ends[accepted]) / 2.0
+        midpoint_errors = np.linalg.norm(
+            curve_midpoints - target_midpoints,
+            axis=1,
+        )
+        sample_sum += float(np.sum(midpoint_errors))
+        sample_squared_sum += float(np.sum(midpoint_errors**2))
+        sample_count += len(midpoint_errors)
+
+    for raw_index in np.flatnonzero(~accepted):
+        index = int(raw_index)
+        start = starts[index]
+        end = ends[index]
+        stack: list[tuple[np.ndarray, np.ndarray, float, float, int]] = [
+            (
+                start,
+                end,
+                float(first_parameters[index]),
+                float(last_parameters[index]),
+                0,
+            )
+        ]
+        while stack:
+            first, last, first_u, last_u, depth = stack.pop()
+            budget.consume_fit_validation_step()
+            curve_controls = _subcurve_controls(controls, first_u, last_u)
+            delta = last - first
+            target_controls = np.vstack(
+                (
+                    first,
+                    first + delta / 3.0,
+                    first + 2.0 * delta / 3.0,
+                    last,
                 )
-            ),
+            )
+            upper = float(
+                np.max(np.linalg.norm(curve_controls - target_controls, axis=1))
+            )
+            midpoint_u = (first_u + last_u) / 2.0
+            curve_midpoint = _cubic_values(
+                controls[0],
+                controls[1],
+                controls[2],
+                controls[3],
+                np.asarray((midpoint_u,), dtype=np.float64),
+            )[0]
+            midpoint = (first + last) / 2.0
+            midpoint_error = float(np.linalg.norm(curve_midpoint - midpoint))
+            sample_sum += midpoint_error
+            sample_squared_sum += midpoint_error * midpoint_error
+            sample_count += 1
+            if midpoint_error > tolerance_mm:
+                return _FitValidation(
+                    False,
+                    max(maximum, midpoint_error),
+                    max(1, min(len(target) - 2, index + 1)),
+                    sample_sum,
+                    sample_squared_sum,
+                    sample_count,
+                )
+            if upper <= tolerance_mm:
+                maximum = max(maximum, upper)
+                continue
+            if depth >= _MAX_FIT_VALIDATION_RECURSION:
+                return _FitValidation(
+                    False,
+                    max(maximum, upper),
+                    max(1, min(len(target) - 2, index + 1)),
+                    sample_sum,
+                    sample_squared_sum,
+                    sample_count,
+                )
+            stack.append((midpoint, last, midpoint_u, last_u, depth + 1))
+            stack.append((first, midpoint, first_u, midpoint_u, depth + 1))
+    return _FitValidation(
+        True,
+        maximum,
+        0,
+        sample_sum,
+        sample_squared_sum,
+        sample_count,
+    )
+
+
+def _cubic_controls_have_ambiguous_topology(controls: np.ndarray) -> bool:
+    segment = PathCubicSegment(
+        control_1=(float(controls[1, 0]), float(controls[1, 1])),
+        control_2=(float(controls[2, 0]), float(controls[2, 1])),
+        to=(float(controls[3, 0]), float(controls[3, 1])),
+    )
+    return _cubic_self_topology_is_ambiguous(
+        (float(controls[0, 0]), float(controls[0, 1])),
+        segment,
+        PathAffineTransform(),
+    )
+
+
+def _attempt_cubic_piece(
+    points: np.ndarray,
+    tolerance_mm: float,
+    start_tangent: np.ndarray,
+    end_tangent: np.ndarray,
+    budget: _ComplexityBudget,
+    *,
+    hard_start: bool = False,
+    hard_end: bool = False,
+    control_minimum: np.ndarray | None = None,
+    control_maximum: np.ndarray | None = None,
+    max_reparameterization_iterations: int = _MAX_REPARAMETERIZATION_ITERATIONS,
+) -> tuple[_FittedPiece | None, int, _CubicSegment]:
+    parameters = _chord_parameters(points)
+    split_index = max(1, min(len(points) - 2, len(points) // 2))
+    best_error = math.inf
+    best_segment: _CubicSegment | None = None
+    for _iteration in range(max_reparameterization_iterations + 1):
+        controls = _generate_bezier_controls(
+            points,
+            parameters,
+            start_tangent,
+            end_tangent,
+            tolerance_mm,
+            control_minimum,
+            control_maximum,
         )
-    return _CubicSegment(
-        points[0].copy(),
-        control_1.copy(),
-        control_2.copy(),
-        points[-1].copy(),
-        error,
+        values = _cubic_values(
+            controls[0],
+            controls[1],
+            controls[2],
+            controls[3],
+            parameters,
+        )
+        errors = np.linalg.norm(values - points, axis=1)
+        maximum_error = float(np.max(errors))
+        if maximum_error < best_error:
+            best_error = maximum_error
+            split_index = int(np.argmax(errors))
+            best_segment = _CubicSegment(
+                controls[0].copy(),
+                controls[1].copy(),
+                controls[2].copy(),
+                controls[3].copy(),
+                maximum_error,
+            )
+        if (
+            maximum_error <= tolerance_mm
+            and not _cubic_controls_have_ambiguous_topology(controls)
+        ):
+            validation = _validate_curve_fit(
+                points,
+                parameters,
+                controls,
+                tolerance_mm,
+                budget,
+            )
+            if validation.accepted:
+                segment = _CubicSegment(
+                    controls[0].copy(),
+                    controls[1].copy(),
+                    controls[2].copy(),
+                    controls[3].copy(),
+                    validation.max_error_mm,
+                )
+                return (
+                    _FittedPiece(
+                        segment=segment,
+                        target_points=points,
+                        target_parameters=parameters,
+                        start_tangent=start_tangent,
+                        end_tangent=end_tangent,
+                        hard_start=hard_start,
+                        hard_end=hard_end,
+                        sample_error_sum_mm=validation.sample_error_sum_mm,
+                        sample_squared_error_sum_mm2=(
+                            validation.sample_squared_error_sum_mm2
+                        ),
+                        sample_count=validation.sample_count,
+                    ),
+                    split_index,
+                    segment,
+                )
+            split_index = validation.split_index
+        refined = _reparameterize(points, parameters, controls)
+        if np.array_equal(refined, parameters):
+            break
+        parameters = refined
+    if best_segment is None:
+        best_segment = _CubicSegment(
+            points[0].copy(),
+            points[0].copy(),
+            points[-1].copy(),
+            points[-1].copy(),
+            0.0,
+        )
+    return (
+        None,
+        max(1, min(len(points) - 2, split_index)),
+        best_segment,
+    )
+
+
+def _fit_cubic(
+    points: np.ndarray,
+    tolerance_mm: float,
+    start_tangent: np.ndarray | None = None,
+    end_tangent: np.ndarray | None = None,
+    control_minimum: np.ndarray | None = None,
+    control_maximum: np.ndarray | None = None,
+) -> _CubicSegment:
+    """Compatibility seam returning the accepted or best bounded cubic."""
+
+    if start_tangent is None:
+        start_tangent = _endpoint_tangent(points, at_start=True)
+    if end_tangent is None:
+        end_tangent = _endpoint_tangent(points, at_start=False)
+    start_tangent = _unit_direction(start_tangent)
+    end_tangent = _unit_direction(end_tangent)
+    if start_tangent is None or end_tangent is None:
+        raise RasterVectorizationError("A fitted span has an undefined endpoint tangent")
+    piece, _split, best = _attempt_cubic_piece(
+        points,
+        tolerance_mm,
+        start_tangent,
+        end_tangent,
+        _ComplexityBudget(),
+        control_minimum=control_minimum,
+        control_maximum=control_maximum,
+    )
+    return best if piece is None else piece.segment
+
+
+def _attempt_line_piece(
+    points: np.ndarray,
+    tolerance_mm: float,
+    budget: _ComplexityBudget,
+    *,
+    hard_start: bool = False,
+    hard_end: bool = False,
+) -> _FittedPiece | None:
+    delta = points[-1] - points[0]
+    controls = np.vstack(
+        (
+            points[0],
+            points[0] + delta / 3.0,
+            points[0] + 2.0 * delta / 3.0,
+            points[-1],
+        )
+    )
+    parameters = _chord_parameters(points)
+    validation = _validate_curve_fit(
+        points,
+        parameters,
+        controls,
+        tolerance_mm,
+        budget,
+    )
+    if not validation.accepted:
+        return None
+    forward = _unit_direction(delta)
+    if forward is None:
+        forward = np.asarray((1.0, 0.0), dtype=np.float64)
+    return _FittedPiece(
+        segment=_LineSegment(
+            points[0].copy(),
+            points[-1].copy(),
+            validation.max_error_mm,
+        ),
+        target_points=points,
+        target_parameters=parameters,
+        start_tangent=forward,
+        end_tangent=-forward,
+        hard_start=hard_start,
+        hard_end=hard_end,
+        sample_error_sum_mm=validation.sample_error_sum_mm,
+        sample_squared_error_sum_mm2=validation.sample_squared_error_sum_mm2,
+        sample_count=validation.sample_count,
     )
 
 
@@ -1647,7 +2188,7 @@ def _line_matches_tangents(
     )
 
 
-def _fit_span(
+def _fit_span_pieces(
     points: np.ndarray,
     tolerance_mm: float,
     budget: _ComplexityBudget,
@@ -1659,26 +2200,17 @@ def _fit_span(
     allow_unconstrained_line: bool = False,
     control_minimum: np.ndarray | None = None,
     control_maximum: np.ndarray | None = None,
-) -> list[_FittedSegment]:
-    if len(points) <= 2:
-        if prefer_cubic_leaves and len(points) == 2:
-            cubic = _fit_cubic(
-                points,
-                tolerance_mm,
-                start_tangent,
-                end_tangent,
-                control_minimum,
-                control_maximum,
-            )
-            if cubic.fitting_error_mm <= tolerance_mm:
-                budget.add_fitted_segments()
-                return [cubic]
-        budget.add_fitted_segments()
-        return [_LineSegment(points[0].copy(), points[-1].copy(), 0.0)]
+    hard_start: bool = False,
+    hard_end: bool = False,
+) -> list[_FittedPiece]:
     if start_tangent is None:
         start_tangent = _endpoint_tangent(points, at_start=True)
     if end_tangent is None:
         end_tangent = _endpoint_tangent(points, at_start=False)
+    start_tangent = _unit_direction(start_tangent)
+    end_tangent = _unit_direction(end_tangent)
+    if start_tangent is None or end_tangent is None:
+        raise RasterVectorizationError("A fitted span has an undefined endpoint tangent")
     polyline_steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
     polyline_length = float(np.sum(polyline_steps))
     closed_span = bool(
@@ -1696,6 +2228,35 @@ def _fit_span(
         split = max(1, min(len(points) - 2, split))
     else:
         split = -1
+    if len(points) <= 2:
+        if prefer_cubic_leaves and len(points) == 2:
+            cubic, _split, _best = _attempt_cubic_piece(
+                points,
+                tolerance_mm,
+                start_tangent,
+                end_tangent,
+                budget,
+                hard_start=hard_start,
+                hard_end=hard_end,
+                control_minimum=control_minimum,
+                control_maximum=control_maximum,
+            )
+            if cubic is not None:
+                budget.add_fitted_segments()
+                return [cubic]
+        line = _attempt_line_piece(
+            points,
+            tolerance_mm,
+            budget,
+            hard_start=hard_start,
+            hard_end=hard_end,
+        )
+        if line is None:
+            raise RasterVectorizationError(
+                "A source contour edge could not satisfy the fitting tolerance"
+            )
+        budget.add_fitted_segments()
+        return [line]
     line_errors = _distance_to_segment(points, points[0], points[-1])
     line_error = float(np.max(line_errors))
     if not closed_span:
@@ -1708,40 +2269,49 @@ def _fit_span(
                 end_tangent,
             )
         ):
-            budget.add_fitted_segments()
-            return [_LineSegment(points[0].copy(), points[-1].copy(), line_error)]
+            line = _attempt_line_piece(
+                points,
+                tolerance_mm,
+                budget,
+                hard_start=hard_start,
+                hard_end=hard_end,
+            )
+            if line is not None:
+                budget.add_fitted_segments()
+                return [line]
 
-        cubic = _fit_cubic(
+        cubic, candidate_split, _best = _attempt_cubic_piece(
             points,
             tolerance_mm,
             start_tangent,
             end_tangent,
-            control_minimum,
-            control_maximum,
+            budget,
+            hard_start=hard_start,
+            hard_end=hard_end,
+            control_minimum=control_minimum,
+            control_maximum=control_maximum,
         )
-        if cubic.fitting_error_mm <= tolerance_mm:
+        if cubic is not None:
             budget.add_fitted_segments()
             return [cubic]
         if depth >= _MAX_FIT_RECURSION:
-            segments: list[_FittedSegment] = []
-            for start, end in zip(points[:-1], points[1:], strict=True):
+            pieces: list[_FittedPiece] = []
+            for index in range(len(points) - 1):
+                line = _attempt_line_piece(
+                    points[index : index + 2],
+                    tolerance_mm,
+                    budget,
+                    hard_start=hard_start and index == 0,
+                    hard_end=hard_end and index == len(points) - 2,
+                )
+                if line is None:
+                    raise RasterVectorizationError(
+                        "A source contour edge could not satisfy the fitting tolerance"
+                    )
                 budget.add_fitted_segments()
-                segments.append(_LineSegment(start.copy(), end.copy(), 0.0))
-            return segments
-
-        distances = np.linalg.norm(
-            _cubic_values(
-                cubic.start,
-                cubic.control_1,
-                cubic.control_2,
-                cubic.end,
-                _chord_parameters(points),
-            )
-            - points,
-            axis=1,
-        )
-        split = int(np.argmax(distances))
-        split = max(1, min(len(points) - 2, split))
+                pieces.append(line)
+            return pieces
+        split = candidate_split
     tangent_window = min(
         _MAX_FIT_TANGENT_WINDOW_POINTS,
         split,
@@ -1754,8 +2324,9 @@ def _fit_span(
         center_tangent = _unit_direction(points[-1] - points[0])
     if center_tangent is None:
         center_tangent = -end_tangent
+    budget.recursive_splits += 1
     return [
-        *_fit_span(
+        *_fit_span_pieces(
             points[: split + 1],
             tolerance_mm,
             budget,
@@ -1765,8 +2336,10 @@ def _fit_span(
             prefer_cubic_leaves=prefer_cubic_leaves,
             control_minimum=control_minimum,
             control_maximum=control_maximum,
+            hard_start=hard_start,
+            hard_end=False,
         ),
-        *_fit_span(
+        *_fit_span_pieces(
             points[split:],
             tolerance_mm,
             budget,
@@ -1776,7 +2349,41 @@ def _fit_span(
             prefer_cubic_leaves=prefer_cubic_leaves,
             control_minimum=control_minimum,
             control_maximum=control_maximum,
+            hard_start=False,
+            hard_end=hard_end,
         ),
+    ]
+
+
+def _fit_span(
+    points: np.ndarray,
+    tolerance_mm: float,
+    budget: _ComplexityBudget,
+    depth: int = 0,
+    *,
+    start_tangent: np.ndarray | None = None,
+    end_tangent: np.ndarray | None = None,
+    prefer_cubic_leaves: bool = False,
+    allow_unconstrained_line: bool = False,
+    control_minimum: np.ndarray | None = None,
+    control_maximum: np.ndarray | None = None,
+) -> list[_FittedSegment]:
+    """Compatibility wrapper retaining current-main's private fit seam."""
+
+    return [
+        piece.segment
+        for piece in _fit_span_pieces(
+            points,
+            tolerance_mm,
+            budget,
+            depth,
+            start_tangent=start_tangent,
+            end_tangent=end_tangent,
+            prefer_cubic_leaves=prefer_cubic_leaves,
+            allow_unconstrained_line=allow_unconstrained_line,
+            control_minimum=control_minimum,
+            control_maximum=control_maximum,
+        )
     ]
 
 
@@ -1792,6 +2399,124 @@ def _contour_spans(points: np.ndarray, anchors: list[int]) -> list[np.ndarray]:
         if len(indices) >= 2:
             spans.append(points[indices])
     return spans
+
+
+def _piece_control_arc(piece: _FittedPiece) -> np.ndarray:
+    segment = piece.segment
+    if isinstance(segment, _LineSegment):
+        return np.vstack((segment.start, segment.end))
+    return np.vstack(
+        (
+            segment.start,
+            segment.control_1,
+            segment.control_2,
+            segment.end,
+        )
+    )
+
+
+def _merge_preserves_adjacent_topology(
+    pieces: list[_FittedPiece],
+    index: int,
+    merged: _FittedPiece,
+) -> bool:
+    candidate = [*pieces[:index], merged, *pieces[index + 2 :]]
+    if len(candidate) < 2:
+        return False
+    merged_index = index
+    previous = candidate[(merged_index - 1) % len(candidate)]
+    following = candidate[(merged_index + 1) % len(candidate)]
+    topology_budget = _TopologyWorkBudget()
+    return bool(
+        _adjacent_control_arcs_share_only_endpoint(
+            _piece_control_arc(previous),
+            _piece_control_arc(merged),
+            topology_budget,
+        )
+        and _adjacent_control_arcs_share_only_endpoint(
+            _piece_control_arc(merged),
+            _piece_control_arc(following),
+            topology_budget,
+        )
+    )
+
+
+def _merge_smooth_pieces(
+    pieces: list[_FittedPiece],
+    tolerance_mm: float,
+    control_minimum: np.ndarray,
+    control_maximum: np.ndarray,
+    budget: _ComplexityBudget,
+    *,
+    minimum_segment_count: int,
+) -> list[_FittedPiece]:
+    """Merge adjacent like-kind pieces only after full fit revalidation."""
+
+    index = 0
+    while len(pieces) > minimum_segment_count and index + 1 < len(pieces):
+        first = pieces[index]
+        second = pieces[index + 1]
+        if first.hard_end or second.hard_start:
+            index += 1
+            continue
+        if isinstance(first.segment, _LineSegment) != isinstance(
+            second.segment,
+            _LineSegment,
+        ):
+            index += 1
+            continue
+        target = np.vstack((first.target_points[:-1], second.target_points))
+        merged: _FittedPiece | None = None
+        if isinstance(first.segment, _LineSegment):
+            merged = _attempt_line_piece(
+                target,
+                tolerance_mm,
+                budget,
+                hard_start=first.hard_start,
+                hard_end=second.hard_end,
+            )
+        else:
+            merged, _split, _best = _attempt_cubic_piece(
+                target,
+                tolerance_mm,
+                first.start_tangent,
+                second.end_tangent,
+                budget,
+                hard_start=first.hard_start,
+                hard_end=second.hard_end,
+                control_minimum=control_minimum,
+                control_maximum=control_maximum,
+                max_reparameterization_iterations=2,
+            )
+        if merged is None:
+            index += 1
+            continue
+        if not _merge_preserves_adjacent_topology(pieces, index, merged):
+            index += 1
+            continue
+        pieces[index : index + 2] = [merged]
+        budget.fitted_segments -= 1
+        budget.merged_segments += 1
+        if index:
+            index -= 1
+    return pieces
+
+
+def _longest_smooth_span_segment_count(pieces: list[_FittedPiece]) -> int:
+    if not pieces:
+        return 0
+    boundaries = [
+        index
+        for index, piece in enumerate(pieces)
+        if piece.hard_end or pieces[(index + 1) % len(pieces)].hard_start
+    ]
+    if not boundaries:
+        return len(pieces)
+    ordered = sorted(set(boundaries))
+    return max(
+        (ordered[(index + 1) % len(ordered)] - boundary) % len(pieces) or 1
+        for index, boundary in enumerate(ordered)
+    )
 
 
 def _fit_contour(
@@ -1852,7 +2577,9 @@ def _fit_contour(
     }
     control_minimum = np.asarray((-width_mm / 2.0, -height_mm / 2.0))
     control_maximum = np.asarray((width_mm / 2.0, height_mm / 2.0))
-    segments: list[_FittedSegment] = []
+    split_start = budget.recursive_splits
+    merged_start = budget.merged_segments
+    pieces: list[_FittedPiece] = []
     spans = _contour_spans(smoothed, anchors)
     span_line_errors = [
         float(np.max(_distance_to_segment(span, span[0], span[-1])))
@@ -1894,8 +2621,8 @@ def _fit_contour(
             and hard_end
             and span_line_errors[offset] <= fit_tolerance
         )
-        segments.extend(
-            _fit_span(
+        pieces.extend(
+            _fit_span_pieces(
                 span,
                 fit_tolerance,
                 budget,
@@ -1905,15 +2632,42 @@ def _fit_contour(
                 allow_unconstrained_line=straight_hard_span,
                 control_minimum=control_minimum,
                 control_maximum=control_maximum,
+                hard_start=hard_start,
+                hard_end=hard_end,
             )
         )
-    if not segments:
+    pieces = _merge_smooth_pieces(
+        pieces,
+        fit_tolerance,
+        control_minimum,
+        control_maximum,
+        budget,
+        minimum_segment_count=max(4, len(corner_set)),
+    )
+    if not pieces:
         raise RasterVectorizationError("A contour could not be fitted to vector geometry")
+    sample_count = sum(piece.sample_count for piece in pieces)
+    sample_sum = sum(piece.sample_error_sum_mm for piece in pieces)
+    sample_squared_sum = sum(
+        piece.sample_squared_error_sum_mm2 for piece in pieces
+    )
+    segments = tuple(piece.segment for piece in pieces)
     return _FittedContour(
-        segments=tuple(segments),
+        segments=segments,
         smoothing_displacement_mm=smoothing_displacement,
         max_fitting_error_mm=max(
             segment.fitting_error_mm for segment in segments
+        ),
+        mean_fitting_error_mm=sample_sum / sample_count if sample_count else 0.0,
+        rms_fitting_error_mm=(
+            math.sqrt(sample_squared_sum / sample_count) if sample_count else 0.0
+        ),
+        fitting_error_sample_count=sample_count,
+        hard_corner_count=len(corners),
+        recursive_split_count=budget.recursive_splits - split_start,
+        merged_segment_count=budget.merged_segments - merged_start,
+        longest_smooth_span_segment_count=(
+            _longest_smooth_span_segment_count(pieces)
         ),
     )
 
@@ -3007,6 +3761,15 @@ def vectorize_prepared_raster(
                 max_fitting_error_mm=fitted.max_fitting_error_mm,
                 smoothing_displacement_mm=fitted.smoothing_displacement_mm,
                 max_estimated_deviation_mm=deviation,
+                mean_fitting_error_mm=fitted.mean_fitting_error_mm,
+                rms_fitting_error_mm=fitted.rms_fitting_error_mm,
+                fitting_error_sample_count=fitted.fitting_error_sample_count,
+                hard_corner_count=fitted.hard_corner_count,
+                recursive_split_count=fitted.recursive_split_count,
+                merged_segment_count=fitted.merged_segment_count,
+                longest_smooth_span_segment_count=(
+                    fitted.longest_smooth_span_segment_count
+                ),
             )
         )
     if not results:

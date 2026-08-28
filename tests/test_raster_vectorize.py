@@ -207,6 +207,16 @@ def test_solid_rectangle_uses_corner_preserving_few_point_geometry(
     assert result.foreground_mask.shape == (64, 64)
     assert result.overlay_rgba.shape == (64, 64, 4)
     assert np.any(result.overlay_rgba != result.source_rgba)
+    metadata = result.metadata()
+    assert metadata["raster_vectorization_fitting_error_samples"] > 0
+    assert metadata["raster_vectorization_detected_hard_corners"] == 4
+    assert metadata["raster_vectorization_recursive_splits"] >= 0
+    assert metadata["raster_vectorization_merged_segments"] >= 0
+    assert (
+        metadata["raster_vectorization_mean_fitting_error_mm"]
+        <= metadata["raster_vectorization_rms_fitting_error_mm"]
+        <= metadata["raster_vectorization_max_fitting_error_mm"]
+    )
 
 
 def test_auto_threshold_reports_the_otsu_value_and_foreground(tmp_path: Path) -> None:

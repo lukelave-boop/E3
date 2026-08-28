@@ -582,13 +582,23 @@ while persistent stencil corners retain their exact samples. Generic long
 straight runs also supply seam-independent anchors. Smooth anchors and recursive
 non-corner splits share tangent directions across joins. Corner-bounded spans
 become straight segments where the error and tangent evidence permit and
-otherwise become bounded cubic Béziers. Those fitted segments are validated and
-stored as the authoritative native subpath. Separate adaptive flattening supplies
-only overlay, topology, diagnostics, and complexity estimates. Straight runs
+otherwise become bounded cubic Béziers. Cubic candidates use a positive,
+tangent-constrained handle solve followed by bounded Newton reparameterization.
+Every accepted line or cubic has a conservative continuous error proof: each
+target edge and the corresponding restricted Bézier interval form a difference
+cubic whose control hull bounds all between-sample deviation. A candidate with
+a hidden lobe, a current-main exact cubic self-topology ambiguity, or excessive
+error is split instead. Adjacent like-kind pieces may merge only after a fresh
+solve, the same continuous proof, current frame constraints, and the current
+adjacent-native-arc topology check all pass. Those fitted segments are stored as
+the authoritative native subpath. Separate adaptive flattening supplies only
+overlay, topology, diagnostics, and complexity estimates. Straight runs
 therefore remain native lines while curved regions remain cubic segments. The
-result reports raw contour points, fitted segments, preview-flattened points, and
-maximum estimated deviation. That deviation is relative to threshold-derived
-and optionally smoothed contours; it is not a
+result reports raw contour points, fitted segments, preview-flattened points,
+validated maximum/mean/RMS fit error, detected hard corners, recursive splits,
+verified merges, longest smooth-span size, and maximum estimated deviation.
+That deviation is relative to threshold-derived and optionally smoothed
+contours; it is not a
 physical-accuracy certification of the source image. Highly pixel-constrained
 `A` and `S` glyphs remain an accepted first-release quality limitation because
 narrow counters and curved shoulders can still vary with raster phase and
@@ -626,14 +636,15 @@ topology polylines are ephemeral analysis data and are never persisted beside
 the native path.
 
 The portable vectorizer rejects work above these production limits and returns
-guidance to increase minimum feature size or simplification, adjust threshold,
-or use cleaner artwork:
+guidance to increase minimum feature size or native fitting tolerance, adjust
+threshold, or use cleaner artwork:
 
 - 67,108,864 pixels in the 4× internal contour workspace;
 - 4,096 retained connected foreground components;
 - 8,192 extracted contours;
 - 1,000,000 total extracted raw contour points before simplification;
-- 100,000 fitted line/cubic segments; and
+- 100,000 fitted line/cubic segments;
+- 5,000,000 bounded continuous fit-validation steps; and
 - 250,000 preview/topology flattened points.
 
 The native path model independently caps one object at 8,192 subpaths and

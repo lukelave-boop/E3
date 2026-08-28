@@ -78,6 +78,12 @@ def _result(*, has_alpha: bool = True) -> Any:
             dtype=np.float64,
         ),
         is_hole=False,
+        max_fitting_error_mm=0.009,
+        rms_fitting_error_mm=0.006,
+        fitting_error_sample_count=24,
+        hard_corner_count=4,
+        recursive_split_count=3,
+        merged_segment_count=2,
     )
     return SimpleNamespace(
         source_rgba=rgba,
@@ -152,7 +158,11 @@ def test_dialog_previews_controls_stats_and_acceptance_contract(
     assert "fitted segments 4" in dialog.stats_label.text()
     assert "preview-flattened points 5" in dialog.stats_label.text()
     assert "final E3 points" not in dialog.stats_label.text()
+    assert "validated fit max / RMS 0.009 / 0.006 mm" in dialog.stats_label.text()
     assert "0.018 mm" in dialog.stats_label.text()
+    assert "hard corners 4" in dialog.stats_label.text()
+    assert "recursive splits 3" in dialog.stats_label.text()
+    assert "verified merges 2" in dialog.stats_label.text()
     assert not dialog.threshold_row.isEnabled()
     assert dialog.alpha_row.isEnabled()
     assert dialog.detection_combo.model().item(dialog._alpha_mode_index).isEnabled()

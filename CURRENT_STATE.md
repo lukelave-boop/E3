@@ -158,6 +158,33 @@ reject pathological masks before full allocation. Parent/depth/hole state and
 quality metrics remain attached to each native subpath; no fitted cubic is
 replaced by persisted polyline samples.
 
+The raster fitter now incorporates only the compatible quality ideas from
+historical reference commit `4310769`; that commit was neither merged nor used
+as a whole-file source. Current-main canonicalization, physical-distance/
+tolerance-aware corner classification, three-sample hard-corner anchoring,
+generic straight-run anchors, shared non-corner tangents, frame-constrained
+handles, exact extrema checking, native self/adjacent-arc topology, compound
+clearance, hierarchy validation, native persistence, preview flattening, and
+planning/cache identities remain authoritative. Inside those boundaries,
+positive tangent-constrained cubic handles are refined by bounded Newton
+reparameterization. Every accepted line/cubic receives a conservative
+continuous proof against its target polyline using the convex hull of the
+corresponding difference cubic, so a candidate that agrees only at stored
+samples but forms a between-sample lobe is split. Adjacent like-kind pieces
+merge only after a fresh fit proof and the current adjacent-native-arc check
+pass. A separate 5,000,000-step fit-validation budget bounds that work.
+
+Contour and metadata diagnostics now record conservative maximum fit error,
+sampled mean/RMS fit error, fit-validation sample count, current-classifier hard
+corners, recursive splits, verified merges, and the longest smooth fitted span;
+the review dialog exposes the most useful values. Historical index/span corner
+classification, historical frame/topology substitutes, the implicit
+source-pixel trace-cleanup target and retry loop, the historical 0.01 mm default,
+and its alternate preview/fit-error boundary were rejected as obsolete or as
+unproven against current compound-contour safeguards. The current 0.10 mm
+default, explicit user smoothing, current preview contribution to maximum
+estimated deviation, and all downstream safeguards remain unchanged.
+
 One compound native path preserves all selected outers and holes in the original
 image-local frame with the source Transform and SHA-256. Replace/Keep/hide,
 vector insertion, and any safe-layer creation are one undoable command. The
@@ -198,9 +225,9 @@ flattened output points, 18 recursive subdivisions, and coordinate magnitude
 segment totals before mutation, and failed commands preserve both document and
 history state. Existing raster caps remain 67,108,864 pixels in the 4× workspace,
 4,096 retained connected components, 8,192 contours, 1,000,000 raw
-pre-simplification points, 100,000 fitted segments, and 250,000 transient
-preview-flattened points. Limit failures recommend simplifying or cleaning the
-source artwork.
+pre-simplification points, 100,000 fitted segments, 5,000,000 bounded continuous
+fit-validation steps, and 250,000 transient preview-flattened points. Limit
+failures recommend simplifying or cleaning the source artwork.
 
 This remains offline authoring and guarded planning behavior. It does not
 connect, Home, move, arm, enable output, generate a job automatically, or start
@@ -221,6 +248,16 @@ Ruff, `compileall -q laser_aligner`, `git diff --check`, and
 `git diff --check origin/main..HEAD` also passed. No controller, camera, motion,
 homing, arming, laser-output, physical tracing-quality, or physical accuracy
 verification is performed or claimed.
+
+The historical-fitter consolidation passed **93 focused tests** across raster,
+fitter, dialog, and desktop integration plus **311 native-path, topology, frame,
+project/history, preflight, planning-stage, digest, cache, and golden tests**.
+The complete Windows Python 3.14.4 suite passed **2,599 tests** with **14 expected
+platform/capability skips**. Repository-wide Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` passed. This is
+automated Qt-free and offscreen-widget verification only; no interactive GUI,
+camera, controller, motion, homing, arming, laser-output, physical tracing-
+quality, or physical accuracy test was performed or is claimed.
 
 ## Active Windows updater hardening
 

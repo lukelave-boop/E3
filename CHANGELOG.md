@@ -41,6 +41,20 @@ not current product capability.
   fields. No controller spline command, node editor, SVG native-curve import,
   machine authority, or physical verification is added.
 
+- Consolidated the useful fitting behavior from historical reference commit
+  `4310769` without merging or restoring that branch. Current-main physical
+  corner classification, canonical anchors, frame/extrema checks, native arc
+  topology, compound clearance, preview/planning boundaries, cache identities,
+  and native path persistence remain authoritative. Cubic candidates now use
+  constrained tangent handles with bounded Newton reparameterization, a
+  conservative continuous control-hull error proof that rejects between-sample
+  lobes, and topology-checked adjacent merging. A separate five-million-step
+  validation budget and maximum/mean/RMS error, hard-corner, split, merge, and
+  smooth-span diagnostics make quality and failure work explicit. The obsolete
+  historical corner classifier, frame/topology substitutes, implicit trace
+  cleanup target, 0.01 mm default, and historical preview/fit boundary were not
+  restored.
+
 - Added a dedicated imported-raster vectorization workflow without replacing
   raster import or engraving. Exactly one selected IMAGE exposes **Trace image
   to vectors…** in Objects; its modal, coalesced worker preview shows the exact
