@@ -64,7 +64,7 @@ jobs:
       - name: Compile Python sources
         run: python tools/ci_timed.py "compileall" -- python -m compileall -q laser_aligner
       - name: Run full compatibility tests
-        run: python tools/ci_timed.py "Full pytest (Windows, Python ${{ matrix.python-version }})" -- python -m pytest -q
+        run: python tools/ci_timed.py "Full pytest (Windows, Python ${{ matrix.python-version }})" -- python -m pytest -q -n 4
 
   lint:
     runs-on: windows-latest
