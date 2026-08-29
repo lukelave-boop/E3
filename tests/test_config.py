@@ -85,9 +85,63 @@ def test_load_partial_config_and_relative_data_dir(tmp_path: Path) -> None:
     assert settings.machine.grbl_step_idle_delay_ms == 250
     assert settings.machine.max_travel_feed_mm_min == pytest.approx(6000.0)
     assert settings.machine.max_work_feed_mm_min == pytest.approx(6000.0)
+    assert settings.machine.z_axis.safe_max_mm == pytest.approx(80.0)
+    assert settings.machine.z_axis.probe_offset_x_mm == pytest.approx(-3.302)
+    assert settings.machine.z_axis.probe_offset_y_mm == pytest.approx(-38.608)
+    assert settings.machine.z_axis.mechanical_probe_z_offset_mm == pytest.approx(7.747)
+    assert settings.machine.z_axis.laser_focus_offset_from_probe_mm is None
     assert settings.laser.spot_offset_x_mm == 0.0
     assert settings.laser.spot_offset_y_mm == 0.0
     assert (settings.app.data_dir / "captures").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("override", "message"),
+    [
+        ({"safe_max_mm": 80.001}, "cannot exceed"),
+        ({"prehome_feed_mm_min": 600.1}, "feed ceiling"),
+        ({"work_surface_height_mm": -0.1}, "non-negative"),
+        (
+            {"work_surface_height_mm": 76.0},
+            "leaves no verified safe Z range",
+        ),
+        ({"reference_mode": "printer_mesh"}, "reference_mode"),
+    ],
+)
+def test_z_axis_configuration_rejects_unsafe_values(
+    tmp_path: Path,
+    override: dict[str, object],
+    message: str,
+) -> None:
+    config = tmp_path / "unsafe-z.json"
+    config.write_text(
+        json.dumps({"machine": {"z_axis": override}}),
+        encoding="utf-8",
+    )
+    with pytest.raises(ConfigError, match=message):
+        load_settings(config)
+
+
+def test_z_axis_timing_settings_are_exposed_in_public_settings(tmp_path: Path) -> None:
+    config = tmp_path / "z-timing.json"
+    config.write_text(
+        json.dumps(
+            {
+                "machine": {
+                    "z_axis": {
+                        "read_timeout": 3.25,
+                        "homing_timeout": 147.0,
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    serialized = load_settings(config).public_dict()["machine"]["z_axis"]
+
+    assert serialized["read_timeout"] == pytest.approx(3.25)
+    assert serialized["homing_timeout"] == pytest.approx(147.0)
 
 
 def test_all_python_and_packaged_defaults_require_controller_selection(

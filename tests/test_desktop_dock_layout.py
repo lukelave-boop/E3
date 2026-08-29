@@ -16,6 +16,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop dock test
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from laser_aligner.config import ZAxisSettings
 from laser_aligner.desktop.main_window import E3MainWindow
 from laser_aligner.desktop.theme import DARK_STYLESHEET
 
@@ -61,7 +62,10 @@ class _DockLayoutHarness(QtWidgets.QMainWindow):
                     tool_head_profile_id="simulated-laser-head",
                 ),
             ),
-            settings=SimpleNamespace(camera=SimpleNamespace(controls={})),
+            settings=SimpleNamespace(
+                camera=SimpleNamespace(controls={}),
+                machine=SimpleNamespace(z_axis=ZAxisSettings()),
+            ),
         )
         self._create_docks()
         self._create_status_bar()

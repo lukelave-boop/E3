@@ -362,6 +362,15 @@ class AppContext:
             hardware_enabled=self.hardware_enabled,
             laser_lockout=self.laser_lockout,
         )
+        from .z_axis.controller import ZHomingController
+        from .z_axis.remote import RemoteZAxisService
+
+        self.z_axis = ZHomingController(
+            settings.machine.z_axis,
+            self.machine,
+            RemoteZAxisService(settings.machine.z_axis),
+            hardware_enabled=self.hardware_enabled,
+        )
         self.bed_reference_path = calibration_dir / "bed_reference.png"
         self.legacy_bed_reference_path = calibration_dir / "bed_reference.jpg"
         self.base_bed_mapping_path = calibration_dir / "base_bed_mapping.json"
@@ -749,7 +758,10 @@ class AppContext:
 
     def stop(self) -> None:
         try:
-            self.machine.disconnect()
+            try:
+                self.z_axis.close()
+            finally:
+                self.machine.disconnect()
         finally:
             self.camera.stop()
 
@@ -4128,6 +4140,7 @@ class AppContext:
             "lens": lens_status,
             "bed": self.bed_status(lens_model_id=lens_model_id),
             "machine": self.machine.status(),
+            "z_axis": self.z_axis.status(),
             "devices": {
                 "cameras": list_video_devices(),
                 "serial_ports": list_serial_ports(),

@@ -474,6 +474,10 @@ class DesktopController(QtCore.QObject):
             self.runtime.context.machine.request_stop(emergency=False)
         except Exception as exc:
             self.errorOccurred.emit(f"Shutdown laser-off request failed: {exc}")
+        try:
+            self.runtime.context.z_axis.request_stop()
+        except Exception as exc:
+            self.errorOccurred.emit(f"Shutdown Z-stop request failed: {exc}")
 
     @property
     def has_active_tasks(self) -> bool:
@@ -2346,6 +2350,41 @@ class DesktopController(QtCore.QObject):
             requires_controller=True,
         )
 
+    def test_z_probe(self) -> None:
+        self._run(
+            self.runtime.context.z_axis.test_probe,
+            on_success=lambda result: self._machine_changed(
+                f"CR Touch test passed: z_min {result['z_min']}"
+            ),
+            label="CR Touch test",
+        )
+
+    def home_z(self, request: dict[str, Any], *, confirmed_unknown: bool) -> None:
+        mode = str(request.get("reference_mode", "fixed_edge"))
+        probe_x = request.get("work_probe_x_mm")
+        probe_y = request.get("work_probe_y_mm")
+        surface_height = request.get("surface_height_mm")
+
+        def operation() -> dict[str, Any]:
+            return self.runtime.context.z_axis.home(
+                reference_mode=mode,
+                work_probe_x_mm=probe_x,
+                work_probe_y_mm=probe_y,
+                surface_height_mm=surface_height,
+                confirmed_unknown=confirmed_unknown,
+            )
+
+        self._run(
+            operation,
+            on_success=lambda result: self._machine_changed(
+                "Z reference complete: "
+                f"Z{float(result['current_z_mm']):.3f} mm, ceiling "
+                f"{float(result['effective_safe_max_mm']):.3f} mm"
+            ),
+            label="Z reference",
+            requires_controller=True,
+        )
+
 
     def run_job(
         self,
@@ -2407,11 +2446,18 @@ class DesktopController(QtCore.QObject):
 
     def emergency_stop(self) -> None:
         self.stopInitiated.emit()
+        z_error: Exception | None = None
+        try:
+            self.runtime.context.z_axis.request_stop()
+        except Exception as exc:
+            z_error = exc
         try:
             self.runtime.context.machine.request_stop(emergency=True)
         except Exception as exc:
             self.errorOccurred.emit(f"Software stop failed: {exc}")
             return
+        if z_error is not None:
+            self.errorOccurred.emit(f"Software Z stop failed: {z_error}")
         self._machine_changed("Software stop sent; laser-off requested")
 
     def send_diagnostic(self, command: str) -> None:

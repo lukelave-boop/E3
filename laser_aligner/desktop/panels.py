@@ -4,6 +4,7 @@ import math
 from collections.abc import Sequence
 from typing import Any
 
+from ..config import ZAxisSettings
 from ..project import (
     LayerMode,
     ObjectKind,
@@ -2614,6 +2615,8 @@ class TracePanel(QtWidgets.QWidget):
 class MachinePanel(QtWidgets.QWidget):
     parkRequested = QtCore.Signal()
     jogRequested = QtCore.Signal(float, float, float)
+    zTestRequested = QtCore.Signal()
+    zHomeRequested = QtCore.Signal(object)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -2624,6 +2627,10 @@ class MachinePanel(QtWidgets.QWidget):
         self._jog_ready = False
         self._armed = False
         self._job_running = False
+        self._z_enabled = False
+        self._z_known = False
+        self._z_safe_max_mm = 80.0
+        self._z_expected_home_mm = 5.0
         layout = _dense_panel_layout(self)
 
         self.state_label = QtWidgets.QLabel("Disconnected")
@@ -2670,6 +2677,53 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_group.setEnabled(False)
         layout.addWidget(self.jog_group)
 
+        self.z_group = QtWidgets.QGroupBox("S1 Pro Z / CR Touch")
+        z_layout = QtWidgets.QVBoxLayout(self.z_group)
+        z_layout.setContentsMargins(6, 10, 6, 6)
+        z_layout.setSpacing(5)
+        self.z_state_label = QtWidgets.QLabel("Z controller disabled")
+        self.z_state_label.setObjectName("statusCard")
+        self.z_state_label.setWordWrap(True)
+        z_layout.addWidget(self.z_state_label)
+        z_form = QtWidgets.QFormLayout()
+        self.z_reference_mode = QtWidgets.QComboBox()
+        self.z_reference_mode.addItem("Fixed Edge Reference", "fixed_edge")
+        self.z_reference_mode.addItem(
+            "Work Area / Material Surface",
+            "work_surface",
+        )
+        self.z_probe_x = MeasurementSpinBox("length")
+        self.z_probe_x.setRange(0.0, 1000.0)
+        self.z_probe_x.setValue(20.0)
+        self.z_probe_x.setSuffix(" mm")
+        self.z_probe_y = MeasurementSpinBox("length")
+        self.z_probe_y.setRange(0.0, 1000.0)
+        self.z_probe_y.setValue(20.0)
+        self.z_probe_y.setSuffix(" mm")
+        self.z_surface_height = QtWidgets.QLineEdit()
+        self.z_surface_height.setPlaceholderText("required for material surface")
+        self.z_effective_max = QtWidgets.QLabel("80.000 mm")
+        z_form.addRow("Reference location", self.z_reference_mode)
+        z_form.addRow("Probe X", self.z_probe_x)
+        z_form.addRow("Probe Y", self.z_probe_y)
+        z_form.addRow("Surface above fixed", self.z_surface_height)
+        z_form.addRow("Effective Z maximum", self.z_effective_max)
+        z_layout.addLayout(z_form)
+        z_buttons = QtWidgets.QHBoxLayout()
+        self.z_test_button = QtWidgets.QPushButton("Test CR Touch")
+        self.z_home_button = QtWidgets.QPushButton("Home Z / Reference Z")
+        z_buttons.addWidget(self.z_test_button)
+        z_buttons.addWidget(self.z_home_button)
+        z_layout.addLayout(z_buttons)
+        z_layout.addWidget(
+            _muted(
+                "The Creality board controls only Z and CR Touch. Real X/Y stays "
+                "on E3's laser controller. Autofocus remains disabled until its "
+                "optical offset is calibrated."
+            )
+        )
+        layout.addWidget(self.z_group)
+
         self.safety_note = _muted(
             "Software stop requests feed hold, controller reset, and laser off. "
             "It does not replace the physical emergency stop."
@@ -2678,10 +2732,95 @@ class MachinePanel(QtWidgets.QWidget):
         layout.addStretch(1)
 
         self.park_button.clicked.connect(self.parkRequested)
+        self.z_test_button.clicked.connect(self.zTestRequested)
+        self.z_home_button.clicked.connect(self._request_z_home)
+        self.z_reference_mode.currentIndexChanged.connect(self._sync_z_mode)
+        self.z_surface_height.textChanged.connect(self._sync_z_effective_max)
         self.jog_up.clicked.connect(lambda: self._jog(0.0, 1.0))
         self.jog_down.clicked.connect(lambda: self._jog(0.0, -1.0))
         self.jog_left.clicked.connect(lambda: self._jog(-1.0, 0.0))
         self.jog_right.clicked.connect(lambda: self._jog(1.0, 0.0))
+        self._sync_z_mode()
+
+    def set_z_settings(self, settings: ZAxisSettings) -> None:
+        self._z_enabled = bool(settings.enabled)
+        self._z_safe_max_mm = float(settings.safe_max_mm)
+        self._z_expected_home_mm = float(settings.expected_homed_z_mm)
+        self._set_combo_data(self.z_reference_mode, settings.reference_mode)
+        self.z_probe_x.setValue(float(settings.work_probe_x_mm))
+        self.z_probe_y.setValue(float(settings.work_probe_y_mm))
+        self.z_surface_height.setText(
+            ""
+            if settings.work_surface_height_mm is None
+            else f"{float(settings.work_surface_height_mm):g}"
+        )
+        self._sync_z_mode()
+        self._sync_action_buttons()
+
+    @staticmethod
+    def _set_combo_data(combo: QtWidgets.QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        if index >= 0:
+            combo.setCurrentIndex(index)
+
+    def _surface_height_value(self) -> float | None:
+        if self.z_reference_mode.currentData() != "work_surface":
+            return None
+        text = self.z_surface_height.text().strip()
+        if not text:
+            return None
+        try:
+            value = parse_to_mm(text, "mm")
+        except ValueError:
+            return None
+        return value if math.isfinite(value) and value >= 0.0 else None
+
+    def _sync_z_mode(self) -> None:
+        work_surface = self.z_reference_mode.currentData() == "work_surface"
+        self.z_probe_x.setEnabled(work_surface)
+        self.z_probe_y.setEnabled(work_surface)
+        self.z_surface_height.setEnabled(work_surface)
+        self._sync_z_effective_max()
+
+    def _sync_z_effective_max(self) -> None:
+        if self.z_reference_mode.currentData() == "fixed_edge":
+            maximum = self._z_safe_max_mm
+            self.z_effective_max.setText(f"{maximum:.3f} mm")
+            self.z_home_button.setToolTip(
+                "Reference Z over the configured fixed-edge Home / Capture position"
+            )
+            self._sync_action_buttons()
+            return
+        height = self._surface_height_value()
+        if height is None:
+            self.z_effective_max.setText("Surface height required")
+            self.z_home_button.setToolTip(
+                "Enter a valid non-negative surface height before material-surface homing"
+            )
+            self._sync_action_buttons()
+            return
+        maximum = self._z_safe_max_mm - height
+        self.z_effective_max.setText(
+            f"{maximum:.3f} mm" if maximum >= 0.0 else "No safe Z range"
+        )
+        self._sync_action_buttons()
+
+    def _request_z_home(self) -> None:
+        mode = str(self.z_reference_mode.currentData())
+        height = self._surface_height_value()
+        if mode == "work_surface" and height is None:
+            self.z_state_label.setText(
+                "Enter a valid non-negative surface height above the fixed reference"
+            )
+            return
+        self.zHomeRequested.emit(
+            {
+                "reference_mode": mode,
+                "work_probe_x_mm": self.z_probe_x.value(),
+                "work_probe_y_mm": self.z_probe_y.value(),
+                "surface_height_mm": height,
+            }
+        )
 
     def _jog(self, x_direction: float, y_direction: float) -> None:
         try:
@@ -2697,7 +2836,11 @@ class MachinePanel(QtWidgets.QWidget):
             self.jog_speed.value(),
         )
 
-    def set_status(self, status: dict[str, Any] | None) -> None:
+    def set_status(
+        self,
+        status: dict[str, Any] | None,
+        z_status: dict[str, Any] | None = None,
+    ) -> None:
         if not status:
             self.state_label.setText("Controller unavailable")
             self._connected = False
@@ -2706,6 +2849,7 @@ class MachinePanel(QtWidgets.QWidget):
             self._jog_ready = False
             self._armed = False
             self._job_running = False
+            self._set_z_status(z_status)
             self._sync_action_buttons()
             return
         connected = bool(status.get("connected", False))
@@ -2744,7 +2888,41 @@ class MachinePanel(QtWidgets.QWidget):
             f"{status.get('protocol', 'unknown')} | {state} | "
             + motion_state
         )
+        self._set_z_status(z_status)
         self._sync_action_buttons()
+
+    def _set_z_status(self, status: dict[str, Any] | None) -> None:
+        if not status:
+            self._z_known = False
+            self.z_state_label.setText(
+                "Z controller disabled" if not self._z_enabled else "Z controller disconnected | UNKNOWN"
+            )
+            return
+        self._z_enabled = bool(status.get("enabled", self._z_enabled))
+        self._z_known = bool(status.get("z_known", False))
+        if not self._z_enabled:
+            self.z_state_label.setText("Z controller disabled")
+            return
+        connected = bool(status.get("connected", False))
+        state = str(status.get("state", "UNKNOWN"))
+        current = status.get("current_z_mm")
+        maximum = status.get("effective_safe_max_mm", self._z_safe_max_mm)
+        if type(maximum) in {int, float} and math.isfinite(float(maximum)):
+            maximum_text = f"{float(maximum):.3f}"
+        else:
+            maximum_text = "—"
+        current_text = (
+            f"{float(current):.3f} mm"
+            if type(current) in {int, float} and math.isfinite(float(current))
+            else "—"
+        )
+        message = (
+            f"{'Connected' if connected else 'Disconnected'} | {state} | "
+            f"Z {current_text} | max {maximum_text} mm"
+        )
+        if status.get("last_error"):
+            message += f"\n{status['last_error']}"
+        self.z_state_label.setText(message)
 
     def set_busy(self, busy: bool) -> None:
         """Prevent overlapping machine actions."""
@@ -2793,6 +2971,25 @@ class MachinePanel(QtWidgets.QWidget):
                 if not self._connected
                 else "Home and park at the configured camera pose"
             )
+        )
+        z_enabled = (
+            not self._busy
+            and self._z_enabled
+            and self._allow_motion
+            and not self._armed
+            and not self._job_running
+        )
+        self.z_test_button.setEnabled(z_enabled)
+        work_height_valid = (
+            self.z_reference_mode.currentData() != "work_surface"
+            or (
+                self._surface_height_value() is not None
+                and self._z_safe_max_mm - float(self._surface_height_value())
+                >= self._z_expected_home_mm
+            )
+        )
+        self.z_home_button.setEnabled(
+            z_enabled and self._connected and work_height_valid
         )
 
 

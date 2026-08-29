@@ -955,6 +955,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             dict(self.runtime.settings.camera.controls)
         )
         self.machine_panel = MachinePanel()
+        self.machine_panel.set_z_settings(self.runtime.settings.machine.z_axis)
         machine_profile_id, tool_head_profile_id = (
             E3MainWindow._running_material_profile_ids(self)
         )
@@ -1204,6 +1205,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         self.machine_panel.parkRequested.connect(self.controller.park_at_camera_pose)
         self.machine_panel.jogRequested.connect(self.controller.jog)
+        self.machine_panel.zTestRequested.connect(self.controller.test_z_probe)
+        self.machine_panel.zHomeRequested.connect(self._request_z_home)
         self.console_panel.commandSubmitted.connect(self.controller.send_diagnostic)
         self.material_panel.applyPresetRequested.connect(self.apply_material_preset)
         self.material_panel.notice.connect(self.show_notice)
@@ -5237,6 +5240,42 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "bed calibration before precision work."
             )
 
+    def _request_z_home(self, request: dict[str, Any]) -> None:
+        z_status = self.runtime.context.z_axis.status()
+        was_known = bool(z_status.get("z_known", False))
+        confirmed_unknown = False
+        if not was_known:
+            lift_mm = float(self.runtime.settings.machine.z_axis.prehome_lift_mm)
+            message = QtWidgets.QMessageBox(self)
+            message.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+            message.setWindowTitle("Z Position Unknown")
+            message.setText("E3 does not currently know the physical Z position.")
+            message.setInformativeText(
+                "Before continuing, make sure the laser gantry has at least "
+                f"{lift_mm:g} mm "
+                "of clear upward travel and will not contact the camera or anything "
+                "above it.\n\nThe machine will first raise Z by "
+                f"{lift_mm:g} mm and then begin the homing procedure."
+            )
+            cancel = message.addButton(
+                "Cancel",
+                QtWidgets.QMessageBox.ButtonRole.RejectRole,
+            )
+            proceed = message.addButton(
+                "Gantry Is Clear — Continue",
+                QtWidgets.QMessageBox.ButtonRole.AcceptRole,
+            )
+            message.setDefaultButton(cancel)
+            message.setEscapeButton(cancel)
+            message.exec()
+            if message.clickedButton() is not proceed:
+                return
+            confirmed_unknown = True
+        self.controller.home_z(
+            dict(request),
+            confirmed_unknown=confirmed_unknown,
+        )
+
     def _runtime_status(self, status: dict[str, Any]) -> None:
         state = status.get("runtime_state", "unknown")
         camera = status.get("camera")
@@ -5254,7 +5293,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.camera_panel.set_calibration_ready(calibration_ready)
         self.trace_panel.set_calibration_ready(calibration_ready)
         self.template_panel.set_calibration_ready(calibration_ready)
-        self.machine_panel.set_status(machine)
+        self.machine_panel.set_status(machine, status.get("z_axis"))
         self.runtime_strip.set_status(status)
         if machine:
             self.console_panel.set_lines(list(machine.get("log", [])))

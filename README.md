@@ -20,6 +20,12 @@ stationary overhead **Logitech C920**.
 > Windows-to-Pi path is software-tested but is not physically verified; see
 > [docs/NETWORK_MACHINE.md](docs/NETWORK_MACHINE.md).
 
+> The optional S1 Pro Z / CR Touch reference path uses a second authenticated
+> high-level Pi service while retaining the laser controller as the only real
+> X/Y authority. Its software ceiling and cold-start confirmation do not replace
+> a physical Z-max switch. See
+> [docs/S1_PRO_Z_HOMING.md](docs/S1_PRO_Z_HOMING.md).
+
 Read [CURRENT_STATE.md](CURRENT_STATE.md) for the active branch and verification
 boundary. [PROJECT_STATUS.md](PROJECT_STATUS.md) is the dated 2026-08-06 Windows
 portability snapshot retained as historical evidence. Read [SAFETY.md](SAFETY.md)
@@ -55,6 +61,9 @@ Shared core and browser workflow:
 
 Native desktop workflow:
 
+- Pi-owned S1 Pro Z/CR Touch status, self-test, fixed-edge or material-surface
+  reference homing, unknown-position confirmation, and a dynamic Z ceiling;
+  autofocus remains disabled until its optical offset is physically calibrated
 - Dimensional inputs accept either metric or imperial suffixes (`25.4 mm` or
   `1 in`; likewise `mm²`/`in²` and `mm/min`/`in/min`) while project geometry,
   calibration, safety bounds, and generated G-code remain in millimetres
@@ -415,6 +424,7 @@ laser_aligner/
   geometry/      SVG parsing, curves, transforms, units
   gcode/         placement, validation, generation, preview parsing
   machine/       POSIX/network serial and controller safety service
+  z_axis/        Pi-owned S1 Pro Z/CR Touch protocol and homing state machine
   materials/     SQLite material-recipe library and compatibility model
   project/       project model, history, persistence, alignment, toolpaths
   templates/     reusable templates, grid authoring, library, and rigid placement

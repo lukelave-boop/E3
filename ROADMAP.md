@@ -41,6 +41,9 @@ The following foundations are implemented and automated-test covered:
   execution authority;
 - neutral machine transports separated from immutable GRBL and Marlin dialect
   policy;
+- a Pi-owned, high-level S1 Pro Z/CR Touch reference service with memory-only
+  position trust, fixed/material reference modes, mesh suppression, dynamic
+  ceiling math, and fake-hardware coverage;
 - profile-driven real-machine first-run and Machine Manager flows with multiple
   saved physical machine instances;
 - immutable running-versus-next-launch machine identity;
@@ -97,6 +100,14 @@ configuration, environment, and result for each step:
    supervised low-risk armed test on suitable sacrificial material.
 10. Repeat calibration/alignment measurements to establish repeatability for the
     accepted camera, work plane, and support.
+
+For the Z reference system, separately validate the stable 1a86 by-id device,
+Marlin identity, CR Touch deploy/stow/readiness, unknown-position clearance,
+fixed-edge repeatability, offset signs, work-surface height math, 80 mm physical
+margin, USB/network loss, and emergency interruption with laser output disabled.
+Add and validate the planned normally-closed physical Z-max switch before
+treating the upper travel boundary as production-ready. Then measure the CR
+Touch-trigger-to-optical-focus offset before implementing autofocus movement.
 
 This sequence is not a safety certification. Enclosure, extraction, interlocks,
 hardware emergency stop, fire controls, and an attending operator remain

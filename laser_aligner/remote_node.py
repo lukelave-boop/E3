@@ -12,10 +12,14 @@ from .config import load_settings
 from .errors import MachineError
 from .machine.bridge import BridgeServer as MachineBridgeServer
 from .machine.network_transport import is_bridge_uri
+from .z_axis.bridge import ZAxisBridgeServer
+from .z_axis.remote import is_z_axis_uri
+from .z_axis.service import ZAxisHardwareService
 
 LOGGER = logging.getLogger(__name__)
 _DEFAULT_MACHINE_PORT = 8765
 _DEFAULT_CAMERA_PORT = 8766
+_DEFAULT_Z_PORT = 8767
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -35,6 +39,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--machine-port", type=int, default=_DEFAULT_MACHINE_PORT)
     parser.add_argument("--camera-port", type=int, default=_DEFAULT_CAMERA_PORT)
+    parser.add_argument("--z-port", type=int, default=_DEFAULT_Z_PORT)
     parser.add_argument(
         "--protocol",
         choices=("grbl", "marlin"),
@@ -74,10 +79,29 @@ def main(argv: list[str] | None = None) -> int:
         port=args.camera_port,
         token=token,
     )
+    z_server: ZAxisBridgeServer | None = None
+    if settings.machine.z_axis.enabled:
+        if is_z_axis_uri(settings.machine.z_axis.endpoint):
+            raise MachineError(
+                "The Pi hardware-node Z endpoint must be a Pi-local serial device or auto"
+            )
+        z_server = ZAxisBridgeServer(
+            ZAxisHardwareService(
+                settings.machine.z_axis,
+                allow_motion=settings.machine.allow_motion,
+            ),
+            host=args.host,
+            port=args.z_port,
+            token=token,
+        )
     workers = [
         Thread(target=machine_server.serve_forever, name="e3-machine-bridge", daemon=True),
         Thread(target=camera_server.serve_forever, name="e3-camera-bridge", daemon=True),
     ]
+    if z_server is not None:
+        workers.append(
+            Thread(target=z_server.serve_forever, name="e3-z-bridge", daemon=True)
+        )
     for worker in workers:
         worker.start()
     try:
@@ -90,6 +114,8 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         machine_server.stop()
         camera_server.stop()
+        if z_server is not None:
+            z_server.stop()
         for worker in workers:
             worker.join(timeout=2.0)
     return 0

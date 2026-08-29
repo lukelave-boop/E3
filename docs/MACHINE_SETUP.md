@@ -73,6 +73,15 @@ editor; that editor is not part of the current interface.
 Fixture-reach evidence remains diagnostic only and does not change GRBL
 settings, work areas, guarded polygons, G-code, arming, laser power, or motion.
 
+For the modified S1 Pro, Machine Manager also stores the optional Pi-owned
+Z/CR Touch endpoint and its advanced timing, ceiling, clearance, probe-offset,
+mechanical-geometry, work-probe, and reference-mode values. The desktop endpoint
+must use `e3z://`; the Pi-local hardware-node config uses `auto` or a stable
+`/dev/serial/by-id/...` device. Saving these values performs no connection or
+motion. The mechanical probe Z value is not optical focus calibration, and the
+desktop exposes no autofocus movement while that calibration is unset. See
+[S1_PRO_Z_HOMING.md](S1_PRO_Z_HOMING.md).
+
 Home / park, stable and precision captures, checkerboard capture and solve, and
 camera diagnostics run as one owned background operation at a time. The footer
 shows indeterminate progress while the remaining setup controls and Close action

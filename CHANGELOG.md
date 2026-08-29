@@ -6,6 +6,25 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added an optional production-oriented Raspberry-Pi-owned Ender-3 S1 Pro
+  Z/CR Touch reference path. A second authenticated high-level `e3z` service
+  retains the sole persistent Creality serial owner, auto-detects a unique
+  stable 1a86 by-id device, serializes operations, accepts Marlin busy replies,
+  and invalidates memory-only Z trust on restart, reconnect, disconnect, STOP,
+  timeout, malformed response, or failed probe/home. The desktop coordinates
+  fixed-edge or material-surface referencing while real X/Y remains exclusively
+  on the existing laser `MachineService`; work probe coordinates use explicit
+  configurable probe offsets. Every home stows CR Touch, disables the obsolete
+  printer mesh before and after `G28`, and verifies `M114` near Z=5.00 before
+  publishing KNOWN. Known-Z clearance clamps at the configured ceiling no
+  greater than 80 mm; unknown Z requires an explicit gantry-clear modal before
+  the exceptional relative lift, and material-surface homing reduces the
+  visible ceiling by the supplied surface height. Machine Manager exposes the
+  advanced geometry/timing values, while autofocus remains disabled with no
+  optical focus offset. Fake-Marlin, fake-X/Y, loopback bridge, configuration,
+  and offscreen UI tests move no hardware. Integrated physical acceptance and
+  a real normally-closed Z-max switch remain outstanding.
+
 - Fixed the desktop Camera Trace **Mask** display for corrected camera areas
   with a fractional final pixel strip. The source frame is rounded to integer
   dimensions before the immutable production mask is reconstructed at exactly

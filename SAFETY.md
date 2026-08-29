@@ -175,6 +175,33 @@ measurements, but are not safety functions or proof of beam location.
 
 These controls reduce accidental commands. They do not meet any functional-safety performance level and do not make an open Class 4 laser safe.
 
+### S1 Pro Z and CR Touch
+
+The optional Raspberry-Pi-owned S1 Pro Z service is also experimental software,
+not a safety-rated height limit. The Creality board controls only Z and CR
+Touch; E3's laser controller remains authoritative for real X/Y. Never use
+Marlin's reported X/Y as physical machine position.
+
+There is currently no physical upper Z switch. After a verified fixed-reference
+home, E3 applies a hard application ceiling no greater than 80 mm. Homing on a
+material surface `H` millimetres above the fixed reference reduces the reported
+ceiling to `80 - H` mm. Before Z is known, that ceiling cannot protect the
+temporary upward clearance move: the operator must explicitly confirm at least
+the configured lift distance is clear above the gantry. This modal confirmation
+is a temporary procedural guard, not collision protection. Install and
+physically validate the planned normally-closed Z-max switch.
+
+Every Z home stows the probe, disables the obsolete printer mesh before motion,
+disables it again after `G28`, and verifies the final logical Z with `M114`.
+Disconnect, reset, timeout, STOP, malformed response, failed probe readiness,
+or failed/interrupted homing clears Z knowledge. The CR Touch self-test action
+deploys/queries/stows the probe but does not move Z. Neither Z homing nor probe
+testing arms or enables the laser. Active-operation disconnect, STOP, and
+uncertain Z-motion failure attempt `M112` and require a fresh serial connection;
+this best-effort software request is not a substitute for the physical
+emergency stop. See
+[docs/S1_PRO_Z_HOMING.md](docs/S1_PRO_Z_HOMING.md).
+
 The desktop graphical Preview is constructed from the exact finalized G-code
 text and is invalidated when the project changes. Its display and playback
 controls cannot edit that text or bypass generation, homing, motion, arming,

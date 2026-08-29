@@ -222,6 +222,37 @@ def effective_laser_output_area(
 
 
 @dataclass(slots=True)
+class ZAxisSettings:
+    """Machine-scoped S1 Pro Z/CR Touch configuration.
+
+    ``endpoint`` is an authenticated ``e3z://`` address on the desktop and a
+    Pi-local serial device (or ``auto``) in the Raspberry Pi node config.  The
+    Pi remains the only owner of the Creality serial connection.
+    """
+
+    enabled: bool = False
+    endpoint: str = "e3z://e3-laser.local:8767"
+    baudrate: int = 115200
+    startup_delay: float = 2.0
+    read_timeout: float = 2.0
+    homing_timeout: float = 120.0
+    safe_max_mm: float = 80.0
+    prehome_lift_mm: float = 10.0
+    prehome_feed_mm_min: float = 480.0
+    expected_homed_z_mm: float = 5.0
+    verification_tolerance_mm: float = 0.25
+    probe_offset_x_mm: float = -3.302
+    probe_offset_y_mm: float = -38.608
+    mechanical_probe_z_offset_mm: float = 7.747
+    work_probe_x_mm: float = 20.0
+    work_probe_y_mm: float = 20.0
+    reference_mode: str = "fixed_edge"
+    work_surface_height_mm: float | None = None
+    # Deliberately unset until CR Touch trigger -> optical focus is measured.
+    laser_focus_offset_from_probe_mm: float | None = None
+
+
+@dataclass(slots=True)
 class MachineSettings:
     backend: str = "serial"
     protocol: str = "auto"
@@ -240,6 +271,7 @@ class MachineSettings:
     controller_startup_delay: float = 2.0
     max_travel_feed_mm_min: float = 6000.0
     max_work_feed_mm_min: float = 6000.0
+    z_axis: ZAxisSettings = field(default_factory=ZAxisSettings)
 
 
 @dataclass(slots=True)
@@ -360,6 +392,35 @@ class Settings:
                 "grbl_step_idle_delay_ms": self.machine.grbl_step_idle_delay_ms,
                 "max_travel_feed_mm_min": self.machine.max_travel_feed_mm_min,
                 "max_work_feed_mm_min": self.machine.max_work_feed_mm_min,
+                "z_axis": {
+                    "enabled": self.machine.z_axis.enabled,
+                    "endpoint": self.machine.z_axis.endpoint,
+                    "baudrate": self.machine.z_axis.baudrate,
+                    "startup_delay": self.machine.z_axis.startup_delay,
+                    "read_timeout": self.machine.z_axis.read_timeout,
+                    "homing_timeout": self.machine.z_axis.homing_timeout,
+                    "safe_max_mm": self.machine.z_axis.safe_max_mm,
+                    "prehome_lift_mm": self.machine.z_axis.prehome_lift_mm,
+                    "prehome_feed_mm_min": self.machine.z_axis.prehome_feed_mm_min,
+                    "expected_homed_z_mm": self.machine.z_axis.expected_homed_z_mm,
+                    "verification_tolerance_mm": (
+                        self.machine.z_axis.verification_tolerance_mm
+                    ),
+                    "probe_offset_x_mm": self.machine.z_axis.probe_offset_x_mm,
+                    "probe_offset_y_mm": self.machine.z_axis.probe_offset_y_mm,
+                    "mechanical_probe_z_offset_mm": (
+                        self.machine.z_axis.mechanical_probe_z_offset_mm
+                    ),
+                    "work_probe_x_mm": self.machine.z_axis.work_probe_x_mm,
+                    "work_probe_y_mm": self.machine.z_axis.work_probe_y_mm,
+                    "reference_mode": self.machine.z_axis.reference_mode,
+                    "work_surface_height_mm": (
+                        self.machine.z_axis.work_surface_height_mm
+                    ),
+                    "laser_focus_offset_from_probe_mm": (
+                        self.machine.z_axis.laser_focus_offset_from_probe_mm
+                    ),
+                },
             },
             "calibration": {
                 "lens": {
@@ -454,6 +515,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "controller_startup_delay": 2.0,
         "max_travel_feed_mm_min": 6000.0,
         "max_work_feed_mm_min": 6000.0,
+        "z_axis": {
+            "enabled": False,
+            "endpoint": "e3z://e3-laser.local:8767",
+            "baudrate": 115200,
+            "startup_delay": 2.0,
+            "read_timeout": 2.0,
+            "homing_timeout": 120.0,
+            "safe_max_mm": 80.0,
+            "prehome_lift_mm": 10.0,
+            "prehome_feed_mm_min": 480.0,
+            "expected_homed_z_mm": 5.0,
+            "verification_tolerance_mm": 0.25,
+            "probe_offset_x_mm": -3.302,
+            "probe_offset_y_mm": -38.608,
+            "mechanical_probe_z_offset_mm": 7.747,
+            "work_probe_x_mm": 20.0,
+            "work_probe_y_mm": 20.0,
+            "reference_mode": "fixed_edge",
+            "work_surface_height_mm": None,
+            "laser_focus_offset_from_probe_mm": None,
+        },
     },
     "calibration": {
         "lens": {
@@ -499,6 +581,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
     precision = raw["camera"]["precision_capture"]
     area = raw["machine"]["work_area"]
     photo = raw["machine"]["photo_position"]
+    z_axis = raw["machine"]["z_axis"]
     lens = raw["calibration"]["lens"]
     bed = raw["calibration"]["bed"]
     laser = raw["laser"]
@@ -518,6 +601,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
         ),
         ("camera.precision_capture.consensus_frames", precision["consensus_frames"]),
         ("machine.baudrate", raw["machine"]["baudrate"]),
+        ("machine.z_axis.baudrate", z_axis["baudrate"]),
         (
             "machine.grbl_step_idle_delay_ms",
             raw["machine"]["grbl_step_idle_delay_ms"],
@@ -560,6 +644,28 @@ def _validate(raw: Mapping[str, Any]) -> None:
             raw["machine"]["max_travel_feed_mm_min"],
         ),
         ("machine.max_work_feed_mm_min", raw["machine"]["max_work_feed_mm_min"]),
+        ("machine.z_axis.read_timeout", z_axis["read_timeout"]),
+        ("machine.z_axis.startup_delay", z_axis["startup_delay"]),
+        ("machine.z_axis.homing_timeout", z_axis["homing_timeout"]),
+        ("machine.z_axis.safe_max_mm", z_axis["safe_max_mm"]),
+        ("machine.z_axis.prehome_lift_mm", z_axis["prehome_lift_mm"]),
+        (
+            "machine.z_axis.prehome_feed_mm_min",
+            z_axis["prehome_feed_mm_min"],
+        ),
+        ("machine.z_axis.expected_homed_z_mm", z_axis["expected_homed_z_mm"]),
+        (
+            "machine.z_axis.verification_tolerance_mm",
+            z_axis["verification_tolerance_mm"],
+        ),
+        ("machine.z_axis.probe_offset_x_mm", z_axis["probe_offset_x_mm"]),
+        ("machine.z_axis.probe_offset_y_mm", z_axis["probe_offset_y_mm"]),
+        (
+            "machine.z_axis.mechanical_probe_z_offset_mm",
+            z_axis["mechanical_probe_z_offset_mm"],
+        ),
+        ("machine.z_axis.work_probe_x_mm", z_axis["work_probe_x_mm"]),
+        ("machine.z_axis.work_probe_y_mm", z_axis["work_probe_y_mm"]),
         ("calibration.lens.square_size_mm", lens["square_size_mm"]),
         ("calibration.bed.pixels_per_mm", bed["pixels_per_mm"]),
         ("calibration.bed.ransac_threshold_mm", bed["ransac_threshold_mm"]),
@@ -600,6 +706,9 @@ def _validate(raw: Mapping[str, Any]) -> None:
             raise ConfigError(str(exc)) from exc
     if photo.get("z") is not None:
         _require_number(photo["z"], "machine.photo_position.z")
+    for key in ("work_surface_height_mm", "laser_focus_offset_from_probe_mm"):
+        if z_axis.get(key) is not None:
+            _require_number(z_axis[key], f"machine.z_axis.{key}")
     controls = raw["camera"].get("controls", {})
     if not isinstance(controls, Mapping) or any(
         not isinstance(key, str) or type(value) not in {bool, int}
@@ -621,10 +730,14 @@ def _validate(raw: Mapping[str, Any]) -> None:
         ("machine", "home_before_photo"),
         ("machine", "home_and_release_after_powered_job"),
         ("machine", "allow_motion"),
+        ("machine.z_axis", "enabled"),
         ("laser", "allow_low_power_frame"),
         ("laser", "return_to_photo_position"),
     ):
-        _require_boolean(raw[section][key], f"{section}.{key}")
+        section_value = raw
+        for component in section.split("."):
+            section_value = section_value[component]
+        _require_boolean(section_value[key], f"{section}.{key}")
     validate_http_port(raw["app"]["port"])
     if _require_integer(
         raw["app"]["max_request_bytes"],
@@ -707,6 +820,58 @@ def _validate(raw: Mapping[str, Any]) -> None:
     for key in ("max_travel_feed_mm_min", "max_work_feed_mm_min"):
         if float(raw["machine"][key]) <= 0:
             raise ConfigError(f"machine.{key} must be positive")
+    if type(z_axis["endpoint"]) is not str or not z_axis["endpoint"].strip():
+        raise ConfigError("machine.z_axis.endpoint must be a non-empty string")
+    if int(z_axis["baudrate"]) <= 0:
+        raise ConfigError("machine.z_axis.baudrate must be positive")
+    if float(z_axis["read_timeout"]) <= 0:
+        raise ConfigError("machine.z_axis.read_timeout must be positive")
+    if float(z_axis["startup_delay"]) < 0:
+        raise ConfigError("machine.z_axis.startup_delay must be non-negative")
+    if float(z_axis["homing_timeout"]) <= 0:
+        raise ConfigError("machine.z_axis.homing_timeout must be positive")
+    safe_max = float(z_axis["safe_max_mm"])
+    if not 0 < safe_max <= 80.0:
+        raise ConfigError(
+            "machine.z_axis.safe_max_mm must be positive and cannot exceed the "
+            "measured 80 mm application ceiling"
+        )
+    prehome_lift = float(z_axis["prehome_lift_mm"])
+    if not 0 < prehome_lift <= safe_max:
+        raise ConfigError(
+            "machine.z_axis.prehome_lift_mm must be positive and no greater than safe_max_mm"
+        )
+    prehome_feed = float(z_axis["prehome_feed_mm_min"])
+    if not 0 < prehome_feed <= 600.0:
+        raise ConfigError(
+            "machine.z_axis.prehome_feed_mm_min must be positive and no greater "
+            "than the verified S1 Pro Z feed ceiling of 600 mm/min"
+        )
+    expected_home = float(z_axis["expected_homed_z_mm"])
+    if not 0 <= expected_home <= safe_max:
+        raise ConfigError(
+            "machine.z_axis.expected_homed_z_mm must be within the configured safe range"
+        )
+    tolerance = float(z_axis["verification_tolerance_mm"])
+    if not 0 < tolerance <= 5.0:
+        raise ConfigError(
+            "machine.z_axis.verification_tolerance_mm must be positive and no greater than 5 mm"
+        )
+    if z_axis["reference_mode"] not in {"fixed_edge", "work_surface"}:
+        raise ConfigError(
+            "machine.z_axis.reference_mode must be fixed_edge or work_surface"
+        )
+    surface_height = z_axis.get("work_surface_height_mm")
+    if surface_height is not None:
+        height = float(surface_height)
+        if height < 0:
+            raise ConfigError(
+                "machine.z_axis.work_surface_height_mm must be non-negative"
+            )
+        if safe_max - height < expected_home:
+            raise ConfigError(
+                "machine.z_axis.work_surface_height_mm leaves no verified safe Z range"
+            )
     if str(raw["laser"]["power_mode"]).upper() not in {"M3", "M4"}:
         raise ConfigError("laser.power_mode must be M3 or M4")
     power_max = int(raw["laser"]["power_max"])
@@ -820,6 +985,7 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
 
     area_raw = raw["machine"]["work_area"]
     photo = raw["machine"]["photo_position"]
+    z_axis = raw["machine"]["z_axis"]
 
     settings = Settings(
         source_path=source_path,
@@ -898,6 +1064,42 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             controller_startup_delay=float(raw["machine"]["controller_startup_delay"]),
             max_travel_feed_mm_min=float(raw["machine"]["max_travel_feed_mm_min"]),
             max_work_feed_mm_min=float(raw["machine"]["max_work_feed_mm_min"]),
+            z_axis=ZAxisSettings(
+                enabled=_require_boolean(
+                    z_axis["enabled"],
+                    "machine.z_axis.enabled",
+                ),
+                endpoint=str(z_axis["endpoint"]).strip(),
+                baudrate=int(z_axis["baudrate"]),
+                startup_delay=float(z_axis["startup_delay"]),
+                read_timeout=float(z_axis["read_timeout"]),
+                homing_timeout=float(z_axis["homing_timeout"]),
+                safe_max_mm=float(z_axis["safe_max_mm"]),
+                prehome_lift_mm=float(z_axis["prehome_lift_mm"]),
+                prehome_feed_mm_min=float(z_axis["prehome_feed_mm_min"]),
+                expected_homed_z_mm=float(z_axis["expected_homed_z_mm"]),
+                verification_tolerance_mm=float(
+                    z_axis["verification_tolerance_mm"]
+                ),
+                probe_offset_x_mm=float(z_axis["probe_offset_x_mm"]),
+                probe_offset_y_mm=float(z_axis["probe_offset_y_mm"]),
+                mechanical_probe_z_offset_mm=float(
+                    z_axis["mechanical_probe_z_offset_mm"]
+                ),
+                work_probe_x_mm=float(z_axis["work_probe_x_mm"]),
+                work_probe_y_mm=float(z_axis["work_probe_y_mm"]),
+                reference_mode=str(z_axis["reference_mode"]),
+                work_surface_height_mm=(
+                    None
+                    if z_axis.get("work_surface_height_mm") is None
+                    else float(z_axis["work_surface_height_mm"])
+                ),
+                laser_focus_offset_from_probe_mm=(
+                    None
+                    if z_axis.get("laser_focus_offset_from_probe_mm") is None
+                    else float(z_axis["laser_focus_offset_from_probe_mm"])
+                ),
+            ),
         ),
         calibration=CalibrationSettings(
             lens=LensCalibrationSettings(

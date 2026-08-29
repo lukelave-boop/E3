@@ -8,6 +8,7 @@ from ..errors import MachineError
 from ..machine.controller_dialects import CONTROLLER_DIALECT_REGISTRY
 from ..machine.network_transport import is_bridge_uri, parse_bridge_uri
 from ..machine.profiles import MachineInstance, MachineRegistryError
+from ..z_axis.remote import is_z_axis_uri, parse_z_axis_uri
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -290,6 +291,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self._build_identity_group()
         self._build_connection_group()
         self._build_geometry_group()
+        self._build_z_axis_group()
         self._build_laser_group()
         self._build_camera_group()
         self.editor_layout.addStretch(1)
@@ -503,6 +505,101 @@ class MachineManagerDialog(QtWidgets.QDialog):
         grid.addWidget(self.allow_motion, len(rows) + 1, 0, 1, 4)
         self.editor_layout.addWidget(group)
 
+    def _build_z_axis_group(self) -> None:
+        group = QtWidgets.QGroupBox("S1 Pro Z / CR Touch (Raspberry Pi owned)")
+        grid = QtWidgets.QGridLayout(group)
+        self.z_enabled = QtWidgets.QCheckBox(
+            "Enable the separate Pi-owned S1 Pro Z controller"
+        )
+        self.z_endpoint = QtWidgets.QLineEdit()
+        self.z_endpoint.setPlaceholderText("e3z://e3-laser.local:8767")
+        self.z_endpoint.setToolTip(
+            "Desktop endpoint for the Pi Z service. The desktop never opens the "
+            "Creality serial device directly."
+        )
+        self.z_baudrate = QtWidgets.QSpinBox()
+        self.z_baudrate.setRange(1, 4_000_000)
+        self.z_startup_delay = _double_spin(0.0, 120.0, decimals=2, step=0.25)
+        self.z_read_timeout = _double_spin(0.01, 120.0, decimals=2, step=0.25)
+        self.z_homing_timeout = _double_spin(1.0, 600.0, decimals=1, step=5.0)
+        self.z_safe_max = _double_spin(0.001, 80.0, decimals=3, step=1.0)
+        self.z_prehome_lift = _double_spin(0.001, 80.0, decimals=3, step=1.0)
+        self.z_prehome_feed = _double_spin(0.001, 600.0, decimals=1, step=10.0)
+        self.z_expected_home = _double_spin(0.0, 80.0, decimals=3, step=0.25)
+        self.z_verify_tolerance = _double_spin(0.001, 5.0, decimals=3, step=0.05)
+        self.z_probe_offset_x = _double_spin(-1000.0, 1000.0, decimals=3, step=0.1)
+        self.z_probe_offset_y = _double_spin(-1000.0, 1000.0, decimals=3, step=0.1)
+        self.z_mechanical_offset = _double_spin(-1000.0, 1000.0, decimals=3, step=0.1)
+        self.z_work_probe_x = _double_spin(-1000.0, 1000.0, decimals=3, step=1.0)
+        self.z_work_probe_y = _double_spin(-1000.0, 1000.0, decimals=3, step=1.0)
+        self.z_reference_mode = QtWidgets.QComboBox()
+        self.z_reference_mode.addItem("Fixed Edge Reference", "fixed_edge")
+        self.z_reference_mode.addItem(
+            "Work Area / Material Surface",
+            "work_surface",
+        )
+        self.z_surface_height = QtWidgets.QLineEdit()
+        self.z_surface_height.setPlaceholderText("blank until material-surface height is known")
+        self.z_focus_status = QtWidgets.QLabel(
+            "Unconfigured — autofocus movement is disabled"
+        )
+        self.z_focus_status.setWordWrap(True)
+
+        grid.addWidget(self.z_enabled, 0, 0, 1, 4)
+        rows = (
+            ("Pi Z endpoint", self.z_endpoint, "Baud rate", self.z_baudrate),
+            ("Startup delay", self.z_startup_delay, "Read timeout", self.z_read_timeout),
+            ("Homing timeout", self.z_homing_timeout, "Safe maximum", self.z_safe_max),
+            ("Pre-home lift", self.z_prehome_lift, "Pre-home feed", self.z_prehome_feed),
+            ("Expected homed Z", self.z_expected_home, "Verify tolerance", self.z_verify_tolerance),
+            ("Probe offset X", self.z_probe_offset_x, "Probe offset Y", self.z_probe_offset_y),
+            ("Mechanical probe Z", self.z_mechanical_offset, "Reference mode", self.z_reference_mode),
+            ("Work probe X", self.z_work_probe_x, "Work probe Y", self.z_work_probe_y),
+            ("Surface above fixed", self.z_surface_height, "Focus calibration", self.z_focus_status),
+        )
+        for row, (left_label, left, right_label, right) in enumerate(rows, start=1):
+            grid.addWidget(QtWidgets.QLabel(left_label), row, 0)
+            grid.addWidget(left, row, 1)
+            grid.addWidget(QtWidgets.QLabel(right_label), row, 2)
+            grid.addWidget(right, row, 3)
+        note = QtWidgets.QLabel(
+            "Probe offset convention: probe position = laser-axis position + offset. "
+            "The mechanical Z value is geometry only and is not an optical focus calibration."
+        )
+        note.setWordWrap(True)
+        note.setObjectName("profileExplanation")
+        grid.addWidget(note, len(rows) + 1, 0, 1, 4)
+        self.editor_layout.addWidget(group)
+
+    def _load_z_axis_settings(self, settings: Any) -> None:
+        self.z_enabled.setChecked(bool(settings.enabled))
+        self.z_endpoint.setText(str(settings.endpoint))
+        self.z_baudrate.setValue(int(settings.baudrate))
+        self.z_startup_delay.setValue(float(settings.startup_delay))
+        self.z_read_timeout.setValue(float(settings.read_timeout))
+        self.z_homing_timeout.setValue(float(settings.homing_timeout))
+        self.z_safe_max.setValue(float(settings.safe_max_mm))
+        self.z_prehome_lift.setValue(float(settings.prehome_lift_mm))
+        self.z_prehome_feed.setValue(float(settings.prehome_feed_mm_min))
+        self.z_expected_home.setValue(float(settings.expected_homed_z_mm))
+        self.z_verify_tolerance.setValue(float(settings.verification_tolerance_mm))
+        self.z_probe_offset_x.setValue(float(settings.probe_offset_x_mm))
+        self.z_probe_offset_y.setValue(float(settings.probe_offset_y_mm))
+        self.z_mechanical_offset.setValue(float(settings.mechanical_probe_z_offset_mm))
+        self.z_work_probe_x.setValue(float(settings.work_probe_x_mm))
+        self.z_work_probe_y.setValue(float(settings.work_probe_y_mm))
+        self._set_combo_data(self.z_reference_mode, settings.reference_mode)
+        self.z_surface_height.setText(
+            ""
+            if settings.work_surface_height_mm is None
+            else f"{float(settings.work_surface_height_mm):g}"
+        )
+        self.z_focus_status.setText(
+            "Unconfigured — autofocus movement is disabled"
+            if settings.laser_focus_offset_from_probe_mm is None
+            else "Calibrated value stored; autofocus movement is not implemented"
+        )
+
     def _build_laser_group(self) -> None:
         group = QtWidgets.QGroupBox("Laser / tool-head settings")
         grid = QtWidgets.QGridLayout(group)
@@ -698,6 +795,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
                 machine.machine.home_and_release_after_powered_job
             )
             self.allow_motion.setChecked(machine.machine.allow_motion)
+            self._load_z_axis_settings(machine.machine.z_axis)
             self._set_combo_data(self.power_mode, machine.laser.power_mode)
             self.power_max.setValue(machine.laser.power_max)
             self.default_power.setValue(machine.laser.default_power)
@@ -806,6 +904,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
             defaults.home_and_release_after_powered_job
         )
         self.allow_motion.setChecked(defaults.allow_motion)
+        self._load_z_axis_settings(defaults.z_axis)
         self.status_label.setText(
             f"Loaded {profile.name} machine defaults into the form. "
             "Review them, then click Save changes if they are correct."
@@ -900,6 +999,35 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self.release_after_job.isChecked()
         )
         candidate.machine.allow_motion = self.allow_motion.isChecked()
+        z_axis = candidate.machine.z_axis
+        z_axis.enabled = self.z_enabled.isChecked()
+        z_axis.endpoint = self.z_endpoint.text().strip()
+        if z_axis.enabled:
+            if not is_z_axis_uri(z_axis.endpoint):
+                raise MachineRegistryError(
+                    "The desktop S1 Pro Z endpoint must use e3z:// so the Raspberry Pi "
+                    "remains the sole Creality serial owner"
+                )
+            parse_z_axis_uri(z_axis.endpoint)
+        z_axis.baudrate = self.z_baudrate.value()
+        z_axis.startup_delay = self.z_startup_delay.value()
+        z_axis.read_timeout = self.z_read_timeout.value()
+        z_axis.homing_timeout = self.z_homing_timeout.value()
+        z_axis.safe_max_mm = self.z_safe_max.value()
+        z_axis.prehome_lift_mm = self.z_prehome_lift.value()
+        z_axis.prehome_feed_mm_min = self.z_prehome_feed.value()
+        z_axis.expected_homed_z_mm = self.z_expected_home.value()
+        z_axis.verification_tolerance_mm = self.z_verify_tolerance.value()
+        z_axis.probe_offset_x_mm = self.z_probe_offset_x.value()
+        z_axis.probe_offset_y_mm = self.z_probe_offset_y.value()
+        z_axis.mechanical_probe_z_offset_mm = self.z_mechanical_offset.value()
+        z_axis.work_probe_x_mm = self.z_work_probe_x.value()
+        z_axis.work_probe_y_mm = self.z_work_probe_y.value()
+        z_axis.reference_mode = str(self.z_reference_mode.currentData())
+        surface_height = self.z_surface_height.text().strip()
+        z_axis.work_surface_height_mm = (
+            None if not surface_height else float(surface_height)
+        )
 
         candidate.laser.power_mode = str(self.power_mode.currentData())
         candidate.laser.power_max = self.power_max.value()

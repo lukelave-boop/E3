@@ -7,6 +7,54 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-29**
 
+## Active S1 Pro Z / CR Touch reference system
+
+E3 now has an optional second high-level Raspberry Pi hardware-node service for
+the modified Ender-3 S1 Pro's stock Z drivers, dual Z motors, and CR Touch. The
+Pi retains the sole persistent Creality serial owner; the desktop uses an
+authenticated `e3z://` session and cannot issue raw Marlin commands through
+that RPC. The existing laser `MachineService` remains the only normal path to
+the real X/Y controller. Fixed-edge Z reference reuses its Home / Capture
+position, while material-surface mode centrally converts the desired probe point
+to a laser-axis target and reaches it through the existing guarded jog and
+motion-completion path. Marlin logical X/Y is never consumed.
+
+The Pi service prefers one stable by-id device containing `1a86_USB_Serial` when
+configured as `auto`, verifies Marlin / Ender-3 S1 Pro identity, holds one
+exclusive high-level operation, handles repeated busy responses within bounded
+timeouts, and retains its serial transport across desktop client sessions when
+healthy. Z trust is memory-only at both ends. E3/Pi restart, new client session,
+USB/network disconnect, serial reconnect, STOP, communication uncertainty,
+malformed position/endstop data, failed probe readiness, or failed/interrupted
+home leaves `z_known=false`.
+
+Every home stows CR Touch with `M280 P0 S90`, disables the obsolete printer mesh
+with `M420 S0`, performs a known absolute lift clamped to the active ceiling or
+the explicitly confirmed unknown relative clearance, positions real X/Y, checks
+deployed `M119` for `z_min: open`, stows, sends `G28`, disables the mesh again,
+and accepts KNOWN only after `M114` reports the configured `5.000 ± 0.250 mm`.
+The fixed-reference software ceiling cannot exceed 80 mm. Material-surface
+homing requires a non-negative height `H` above fixed reference and visibly uses
+`80-H`; an input leaving no verified home range is rejected before motion. The
+CR Touch self-test never moves Z. The measured mechanical probe geometry is
+configurable, but the optical focus offset remains unset and autofocus movement
+is disabled.
+
+The command behavior and geometry inputs come from the operator-recorded
+physical S1 Pro observations in the feature request. The new integrated
+desktop -> Pi -> Creality implementation has **not** been physically exercised.
+The focused fake-serial, fake-X/Y, authenticated-loopback, and offscreen
+Z/UI/layout subset passes **51 tests**. The complete Windows suite, including
+configuration, saved-profile, remote-node, laser-control, camera, and import
+regressions, passes **2,788 tests** with **14 expected platform skips** and four
+workers. Repository Ruff and Python compilation pass. No real controller, Z
+motion, CR Touch action, laser output, camera, or physical collision/limit test
+was performed. Physical validation must cover serial detection, offset signs,
+fixed/material reference repeatability, the measured 80 mm margin, network/USB
+loss, best-effort `M112` interruption, and the future normally-closed Z-max
+switch. See
+[docs/S1_PRO_Z_HOMING.md](docs/S1_PRO_Z_HOMING.md).
+
 ## Active development-update publication continuity
 
 The `Publish E3 development update` workflow no longer deletes and recreates

@@ -85,6 +85,13 @@ each axis. These values are operator-reported/derived and are not physically
 verified controller limits until the direction and boundary checks are
 recorded.
 
+The separate Creality-board Z/CR Touch reference path has its own acceptance
+boundary. Its Pi-local serial device, verified firmware behavior, mesh
+suppression, unknown-position warning, 80 mm fixed-reference ceiling, dynamic
+material-surface ceiling, and missing physical Z-max switch are documented in
+[S1_PRO_Z_HOMING.md](S1_PRO_Z_HOMING.md). Perform that sequence with laser
+output disabled; never treat Marlin X/Y as the real laser-controller X/Y.
+
 ## Phase 4: direction and coordinate check
 
 Set `machine.allow_motion` to `true` and restart the normal desktop with

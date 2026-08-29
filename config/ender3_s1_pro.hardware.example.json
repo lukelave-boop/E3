@@ -61,7 +61,28 @@
     "allow_motion": false,
     "controller_startup_delay": 2.0,
     "max_travel_feed_mm_min": 3000.0,
-    "max_work_feed_mm_min": 3000.0
+    "max_work_feed_mm_min": 3000.0,
+    "z_axis": {
+      "enabled": false,
+      "endpoint": "auto",
+      "baudrate": 115200,
+      "startup_delay": 2.0,
+      "read_timeout": 2.0,
+      "homing_timeout": 120.0,
+      "safe_max_mm": 80.0,
+      "prehome_lift_mm": 10.0,
+      "prehome_feed_mm_min": 480.0,
+      "expected_homed_z_mm": 5.0,
+      "verification_tolerance_mm": 0.25,
+      "probe_offset_x_mm": -3.302,
+      "probe_offset_y_mm": -38.608,
+      "mechanical_probe_z_offset_mm": 7.747,
+      "work_probe_x_mm": 20.0,
+      "work_probe_y_mm": 20.0,
+      "reference_mode": "fixed_edge",
+      "work_surface_height_mm": null,
+      "laser_focus_offset_from_probe_mm": null
+    }
   },
   "laser": {
     "power_mode": "M4",

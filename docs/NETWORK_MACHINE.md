@@ -7,10 +7,13 @@ physical USB controller and camera onto a Raspberry Pi beside the machine.
 ```text
 Windows or Linux E3 desktop
   |-- e3bridge://...  authenticated controller transport
-  |       -> Raspberry Pi -> local POSIX serial -> controller
+  |       -> Raspberry Pi -> local POSIX serial -> laser controller (real X/Y)
   |
-  `-- e3camera://...  authenticated camera RPC
-          -> Raspberry Pi -> CameraService -> V4L2/OpenCV camera
+  |-- e3camera://...  authenticated camera RPC
+  |       -> Raspberry Pi -> CameraService -> V4L2/OpenCV camera
+  |
+  `-- e3z://...       authenticated S1 Pro Z RPC
+          -> Raspberry Pi -> persistent local serial -> Z motors / CR Touch
 ```
 
 Direct USB hardware remains available on Linux. The network path is intended to
@@ -117,7 +120,10 @@ repeatability before any powered test.
 Both services use a shared secret from `E3_BRIDGE_TOKEN` and a fresh
 HMAC-SHA256 challenge before access. The secret is never stored in the E3 JSON
 configuration or sent as plaintext during the challenge/response exchange.
-Only one controller client can own the serial device at a time.
+Only one laser-controller client can own that bridge at a time. The separate Z
+bridge likewise accepts one authenticated E3 client and owns one persistent
+Creality serial transport; neither connection creates a second command path in
+the desktop.
 
 The transport does not provide TLS encryption or protect against every active
 machine-in-the-middle attack. Bind it only to a trusted/firewalled LAN or carry
@@ -156,7 +162,14 @@ as Marlin. If the Pi configuration already sets `machine.protocol` to `grbl` or
 `marlin`, the command-line protocol override is unnecessary.
 
 The node serves controller traffic on TCP 8765 and camera traffic on TCP 8766
-by default. Its default bind address is loopback; `--host 0.0.0.0` is therefore
+by default. When `machine.z_axis.enabled=true`, it serves the high-level Z/CR
+Touch service on TCP 8767. That service accepts no raw G-code RPC and the Pi
+remains the sole Creality serial owner. Its configured `auto` device selects a
+unique stable by-id entry containing `1a86_USB_Serial`; otherwise configure the
+exact `/dev/serial/by-id/...` path. See
+[S1_PRO_Z_HOMING.md](S1_PRO_Z_HOMING.md).
+
+The node's default bind address is loopback; `--host 0.0.0.0` is therefore
 an intentional opt-in and should be used only on the trusted machine network.
 
 ## Windows client configuration
@@ -175,7 +188,11 @@ On the Windows copy, change only the hardware endpoints:
   },
   "machine": {
     "backend": "serial",
-    "port": "e3bridge://e3-laser.local:8765"
+    "port": "e3bridge://e3-laser.local:8765",
+    "z_axis": {
+      "enabled": true,
+      "endpoint": "e3z://e3-laser.local:8767"
+    }
   }
 }
 ```

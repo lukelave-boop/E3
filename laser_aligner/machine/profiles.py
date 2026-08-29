@@ -18,6 +18,7 @@ from ..config import (
     MachineSettings,
     Settings,
     WorkArea,
+    ZAxisSettings,
     _deep_merge,
     _validate,
     _validate_override_keys,
@@ -146,6 +147,7 @@ def _validated_pair(
         machine_raw = raw["machine"]
         area = machine_raw["work_area"]
         photo = machine_raw["photo_position"]
+        z_axis_raw = machine_raw["z_axis"]
         machine = MachineSettings(
             backend=str(machine_raw["backend"]),
             protocol=str(machine_raw["protocol"]),
@@ -184,6 +186,39 @@ def _validated_pair(
             ),
             max_work_feed_mm_min=float(
                 machine_raw["max_work_feed_mm_min"]
+            ),
+            z_axis=ZAxisSettings(
+                enabled=z_axis_raw["enabled"],
+                endpoint=str(z_axis_raw["endpoint"]),
+                baudrate=int(z_axis_raw["baudrate"]),
+                startup_delay=float(z_axis_raw["startup_delay"]),
+                read_timeout=float(z_axis_raw["read_timeout"]),
+                homing_timeout=float(z_axis_raw["homing_timeout"]),
+                safe_max_mm=float(z_axis_raw["safe_max_mm"]),
+                prehome_lift_mm=float(z_axis_raw["prehome_lift_mm"]),
+                prehome_feed_mm_min=float(z_axis_raw["prehome_feed_mm_min"]),
+                expected_homed_z_mm=float(z_axis_raw["expected_homed_z_mm"]),
+                verification_tolerance_mm=float(
+                    z_axis_raw["verification_tolerance_mm"]
+                ),
+                probe_offset_x_mm=float(z_axis_raw["probe_offset_x_mm"]),
+                probe_offset_y_mm=float(z_axis_raw["probe_offset_y_mm"]),
+                mechanical_probe_z_offset_mm=float(
+                    z_axis_raw["mechanical_probe_z_offset_mm"]
+                ),
+                work_probe_x_mm=float(z_axis_raw["work_probe_x_mm"]),
+                work_probe_y_mm=float(z_axis_raw["work_probe_y_mm"]),
+                reference_mode=str(z_axis_raw["reference_mode"]),
+                work_surface_height_mm=(
+                    None
+                    if z_axis_raw.get("work_surface_height_mm") is None
+                    else float(z_axis_raw["work_surface_height_mm"])
+                ),
+                laser_focus_offset_from_probe_mm=(
+                    None
+                    if z_axis_raw.get("laser_focus_offset_from_probe_mm") is None
+                    else float(z_axis_raw["laser_focus_offset_from_probe_mm"])
+                ),
             ),
         )
         laser_raw = raw["laser"]
@@ -486,6 +521,15 @@ def _machine_defaults(
     )
 
 
+def _ender_s1_pro_defaults() -> MachineSettings:
+    settings = _machine_defaults("serial", "auto", maximum_feed=3000.0)
+    # The connection remains inert until the operator explicitly connects with
+    # hardware authority and motion permission.  The hostname is an editable
+    # starting value for the existing Raspberry Pi hardware-node convention.
+    settings.z_axis.enabled = True
+    return settings
+
+
 def builtin_machine_profiles() -> dict[str, MachineProfile]:
     profiles = (
         MachineProfile(
@@ -510,14 +554,14 @@ def builtin_machine_profiles() -> dict[str, MachineProfile]:
         MachineProfile(
             "ender-3-s1-pro",
             "Creality Ender-3 S1 Pro",
-            _machine_defaults("serial", "auto", maximum_feed=3000.0),
+            _ender_s1_pro_defaults(),
             manufacturer="Creality",
             model="Ender-3 S1 Pro",
             description=(
                 "Starting profile for the existing E3-mounted Cartesian "
                 "setup."
             ),
-            capabilities=("gcode", "homing", "xy-motion"),
+            capabilities=("gcode", "homing", "xy-motion", "z-axis", "cr-touch"),
         ),
         MachineProfile(
             "custom-machine",

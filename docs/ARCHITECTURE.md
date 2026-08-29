@@ -1279,6 +1279,35 @@ physical evidence remains historical; the refactored paths have not been
 re-verified against physical GRBL or Marlin hardware. No new machine or
 controller support is claimed.
 
+### Independent S1 Pro Z / CR Touch boundary
+
+The optional Z reference path extends the existing Raspberry Pi hardware node;
+it is not another desktop application and does not open a second owner for the
+laser controller:
+
+```text
+ZHomingController (desktop, UI-neutral orchestration)
+  |-- MachineService -> e3bridge -> laser controller -> authoritative real X/Y
+  `-- RemoteZAxisService -> e3z -> Pi ZAxisHardwareService
+                                   -> persistent Creality serial -> Z / CR Touch
+```
+
+`ZHomingController` validates the reference mode, surface height, offset
+transform, work-area target, hardware/motion authority, laser-job state, and
+dynamic Z ceiling before either controller moves. The Pi service owns Marlin
+command/response serialization and keeps an exclusive high-level homing session
+across the desktop's intervening real-X/Y positioning. The `e3z` RPC exposes
+only connect/status, probe test, bounded prepare/complete/abort home, and guarded
+absolute Z move operations; it has no raw-command or laser-output surface.
+
+Fixed-edge mode delegates physical X/Y to the existing Home / Capture path.
+Work-surface mode converts the desired physical CR Touch point into a laser-axis
+target and delegates the absolute completion-guaranteed movement to the existing
+MachineService jog path. Marlin logical X/Y is never consumed. Z knowledge is
+memory-only at both boundaries and is invalidated by a new client session,
+restart, disconnect, communication uncertainty, STOP, or failed operation.
+See [S1_PRO_Z_HOMING.md](S1_PRO_Z_HOMING.md) for commands and limits.
+
 ## Machine safety boundary
 
 `MachineService` is the only normal path to the controller. It:
