@@ -20,6 +20,7 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 from laser_aligner.calibration.support import HoneycombSupportReference
 from laser_aligner.config import WorkArea
 from laser_aligner.core import CoreRuntime
+from laser_aligner.desktop import controller as controller_module
 from laser_aligner.desktop import main_window as main_window_module
 from laser_aligner.desktop.controller import DesktopController
 from laser_aligner.desktop.job_preview import JobPreviewCanvas
@@ -779,6 +780,382 @@ def test_trace_self_heals_pristine_stale_local_project_before_strict_check() -> 
     assert fake.document is new_document
     assert requests == [options]
     assert errors == []
+
+
+def test_new_trace_request_retires_candidates_before_detect_and_keeps_project() -> None:
+    document = ProjectDocument.new()
+    project_object = SceneObject.rectangle(
+        document.active_layer_id,
+        name="Existing artwork",
+    )
+    document.add_object(project_object)
+    events: list[str] = []
+
+    def detect(_options: dict[str, object]) -> int:
+        events.append("detect")
+        assert document.objects == [project_object]
+        return 42
+
+    fake = SimpleNamespace(
+        document=document,
+        controller=SimpleNamespace(
+            detect_trace_objects=detect,
+            review_signature_is_current=lambda _signature: False,
+        ),
+        workspace=SimpleNamespace(
+            clear_trace_preview=lambda: events.append("clear candidates")
+        ),
+        trace_panel=SimpleNamespace(
+            clear_result=lambda: events.append("clear panel"),
+            begin_detection=lambda: events.append("begin detection"),
+        ),
+        _trace_result={"detections": [{"id": "old-candidate"}]},
+        _active_trace_request_id=41,
+        _trace_raster_preview_images={},
+        _trace_raster_preview_area=None,
+        _trace_raster_preview_signature=None,
+        _reconcile_pristine_project_frame=lambda: None,
+        _require_project_machine_work_area_match=lambda: None,
+        _clear_template_preview=lambda **_kwargs: events.append("clear template"),
+    )
+
+    E3MainWindow._detect_trace_objects(fake, {"detection_mode": "auto"})
+
+    assert events == [
+        "clear candidates",
+        "clear panel",
+        "clear template",
+        "begin detection",
+        "detect",
+    ]
+    assert fake._active_trace_request_id == 42
+    assert fake._trace_result is None
+    assert document.objects == [project_object]
+
+
+def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    displayed: list[tuple[QtGui.QImage, object]] = []
+    strategies: list[str] = []
+    failures: list[tuple[str, bool]] = []
+    candidate_clears: list[bool] = []
+    selected_panels: list[str] = []
+    cancellations: list[bool] = []
+    panel = SimpleNamespace(
+        set_raster_preview_available=strategies.append,
+        raster_preview_mode=lambda: "mask",
+        set_detection_failed=lambda message, *, retain_preview: failures.append(
+            (message, retain_preview)
+        ),
+    )
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            review_signature_is_current=lambda signature: signature == ("current",),
+            cancel_trace_detection=lambda: cancellations.append(True),
+        ),
+        trace_panel=panel,
+        workspace=SimpleNamespace(
+            clear_trace_preview=lambda: candidate_clears.append(True)
+        ),
+        inspector_tabs=SimpleNamespace(select_panel=selected_panels.append),
+        _trace_result=None,
+        _active_trace_request_id=8,
+        _trace_raster_preview_images={},
+        _trace_raster_preview_area=None,
+        _trace_raster_preview_signature=None,
+        _trace_raster_preview_value=E3MainWindow._trace_raster_preview_value,
+        _camera_image_area=E3MainWindow._camera_image_area,
+        _camera_image_ready=lambda image, **kwargs: displayed.append(
+            (image, kwargs.get("image_area"))
+        ),
+    )
+    fake._trace_raster_preview_mode_changed = lambda mode: (
+        E3MainWindow._trace_raster_preview_mode_changed(fake, mode)
+    )
+    preview = SimpleNamespace(
+        camera_bgr=np.array([[[10, 20, 30], [40, 50, 60]]], dtype=np.uint8),
+        normalized_grayscale=np.array([[42, 84]], dtype=np.uint8),
+        foreground_mask=np.array([[0, 255]], dtype=np.uint8),
+        contour_mask=np.pad(
+            np.full((4, 4), 255, dtype=np.uint8),
+            ((0, 0), (4, 0)),
+        ),
+        strategy="raster_dark",
+    )
+    payload = {
+        "preview": preview,
+        "review_signature": ("current",),
+        "camera_image_area": {
+            "x_min": 0.0,
+            "x_max": 2.0,
+            "y_min": 0.0,
+            "y_max": 1.0,
+        },
+    }
+
+    E3MainWindow._trace_raster_preview_ready(fake, 7, payload)
+    assert displayed == []
+    E3MainWindow._trace_raster_preview_ready(fake, 8, payload)
+
+    assert strategies == ["raster_dark"]
+    assert set(fake._trace_raster_preview_images) == {
+        "camera",
+        "normalized",
+        "mask",
+    }
+    assert fake._trace_raster_preview_images["camera"].pixelColor(0, 0) == (
+        QtGui.QColor(30, 20, 10)
+    )
+    assert (
+        fake._trace_raster_preview_images["normalized"].pixelColor(0, 0).red()
+        == 42
+    )
+    assert fake._trace_raster_preview_images["mask"].size() == QtCore.QSize(8, 4)
+    assert fake._trace_raster_preview_images["mask"].pixelColor(7, 3).red() == 255
+    assert displayed[-1][0].pixelColor(7, 3).red() == 255
+    assert displayed[-1][1] == main_window_module.Bounds(0.0, 0.0, 2.0, 1.0)
+
+    before = dict(fake._trace_raster_preview_images)
+    E3MainWindow._trace_detection_failed(
+        fake,
+        8,
+        "native fit did not converge",
+        True,
+    )
+    assert fake._active_trace_request_id is None
+    assert fake._trace_raster_preview_images == before
+    assert failures == [("native fit did not converge", True)]
+    assert candidate_clears == [True]
+    assert selected_panels == ["trace"]
+    assert cancellations == []
+
+    E3MainWindow._trace_raster_preview_ready(fake, 8, payload)
+    assert fake._trace_raster_preview_images == before
+    assert len(displayed) == 1
+
+    fake._active_trace_request_id = 9
+    E3MainWindow._trace_detection_failed(fake, 9, "capture failed", False)
+    assert fake._active_trace_request_id is None
+    assert fake._trace_raster_preview_images == {}
+    assert failures[-1] == ("capture failed", False)
+    assert cancellations == []
+    qt_application.processEvents()
+
+
+def test_trace_completion_reports_mapping_change_as_request_failure() -> None:
+    failures: list[tuple[int, str, bool]] = []
+    errors: list[str] = []
+    results: list[object] = []
+    resumed: list[bool] = []
+    fake = SimpleNamespace(
+        _trace_request_id=12,
+        _trace_review_active=True,
+        _trace_sample_image=np.zeros((1, 1, 3), dtype=np.uint8),
+        _trace_sample_area=WorkArea(0.0, 1.0, 0.0, 1.0),
+        _trace_sample_signature=("old",),
+        _current_review_signature=lambda: ("current",),
+        _camera_review_active=lambda: True,
+        _resume_live_camera_after_review=resumed.append,
+        traceDetectionFailed=SimpleNamespace(
+            emit=lambda request_id, message, retain: failures.append(
+                (request_id, message, retain)
+            )
+        ),
+        errorOccurred=SimpleNamespace(emit=errors.append),
+        traceResultReady=SimpleNamespace(emit=results.append),
+    )
+    payload = {
+        "_trace_sample_image": np.zeros((1, 1, 3), dtype=np.uint8),
+        "_trace_sample_area": WorkArea(0.0, 1.0, 0.0, 1.0),
+        "_trace_sample_signature": ("old",),
+    }
+
+    DesktopController._trace_detection_complete(fake, 12, payload)
+
+    assert failures == [
+        (
+            12,
+            "the honeycomb or bed mapping changed during capture; run detection again",
+            False,
+        )
+    ]
+    assert errors == [
+        "Detect and trace objects failed: the honeycomb or bed mapping changed "
+        "during capture; run detection again"
+    ]
+    assert results == []
+    assert resumed == [True]
+    assert fake._trace_review_active is False
+    assert fake._trace_sample_image is None
+    assert fake._trace_sample_area is None
+    assert fake._trace_sample_signature is None
+
+
+def test_controller_publishes_request_scoped_raster_preview_and_timings(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    camera_area = WorkArea(0.0, 2.0, 0.0, 1.0)
+    captured_options: list[dict[str, object]] = []
+
+    class Context:
+        bed = SimpleNamespace(calibration=object())
+        honeycomb_support = SimpleNamespace(reference=None)
+
+        @staticmethod
+        def bed_mapping_digest() -> str:
+            return "bed-map"
+
+        @staticmethod
+        def trace_camera_work_area() -> WorkArea:
+            return camera_area
+
+        @staticmethod
+        def capture_parked_trace_frame(**options: object) -> np.ndarray:
+            captured_options.append(options)
+            timing = options["timing"]
+            assert isinstance(timing, dict)
+            timing.update(
+                {
+                    "capture_seconds": 0.10,
+                    "rectification_seconds": 0.20,
+                    "capture_rectification_total_seconds": 0.30,
+                }
+            )
+            return np.array([[[1, 2, 3], [4, 5, 6]]], dtype=np.uint8)
+
+    runtime = SimpleNamespace(
+        running=False,
+        context=Context(),
+        settings=SimpleNamespace(
+            calibration=SimpleNamespace(
+                bed=SimpleNamespace(pixels_per_mm=1.0)
+            ),
+            machine=SimpleNamespace(work_area=camera_area),
+            laser=SimpleNamespace(
+                boundary_margin_mm=0.0,
+                spot_offset_x_mm=0.0,
+                spot_offset_y_mm=0.0,
+                guarded_output_polygon_mm=None,
+            ),
+        ),
+    )
+    preview = SimpleNamespace(
+        camera_bgr=np.zeros((1, 2, 3), dtype=np.uint8),
+        normalized_grayscale=np.zeros((1, 2), dtype=np.uint8),
+        foreground_mask=np.zeros((1, 2), dtype=np.uint8),
+        contour_mask=np.zeros((4, 8), dtype=np.uint8),
+        strategy="raster_dark",
+    )
+
+    class Result:
+        detections: list[object] = []
+        message = "Detection complete"
+
+        @staticmethod
+        def to_dict() -> dict[str, object]:
+            return {
+                "message": "Detection complete",
+                "detections": [],
+                "diagnostics": {"kept": True},
+            }
+
+    def detect_objects(
+        _image: np.ndarray,
+        _options: object,
+        _camera_area: WorkArea,
+        _pixels_per_mm: float,
+        **kwargs: object,
+    ) -> Result:
+        callback = kwargs["raster_preview_callback"]
+        assert callable(callback)
+        callback(preview)
+        return Result()
+
+    monkeypatch.setattr(controller_module, "detect_objects", detect_objects)
+    controller = DesktopController(runtime)
+    previews: list[tuple[int, object]] = []
+    results: list[dict[str, object]] = []
+    failures: list[tuple[int, str, bool]] = []
+    controller.traceRasterPreviewReady.connect(
+        lambda request_id, payload: previews.append((request_id, payload))
+    )
+    controller.traceResultReady.connect(results.append)
+    controller.traceDetectionFailed.connect(
+        lambda request_id, message, retain_preview: failures.append(
+            (request_id, message, retain_preview)
+        )
+    )
+
+    def run_now(
+        operation,
+        *,
+        on_success,
+        on_failure,
+        **_kwargs: object,
+    ) -> None:
+        try:
+            on_success(operation())
+        except RuntimeError as exc:
+            on_failure(str(exc))
+
+    controller._run = run_now
+    request_id = controller.detect_trace_objects({})
+
+    assert request_id == 1
+    assert len(previews) == 1
+    assert previews[0][0] == request_id
+    preview_payload = previews[0][1]
+    assert isinstance(preview_payload, dict)
+    assert preview_payload["preview"] is preview
+    assert preview_payload["review_signature"] == ("machine", None, "bed-map")
+    assert captured_options[0]["timing"] is not None
+    timing = results[0]["diagnostics"]["timing"]
+    assert timing["capture_seconds"] == pytest.approx(0.10)
+    assert timing["rectification_seconds"] == pytest.approx(0.20)
+    assert timing["capture_rectification_total_seconds"] == pytest.approx(0.30)
+    assert timing["detect_objects_seconds"] >= 0.0
+    assert timing["request_total_seconds"] >= timing["detect_objects_seconds"]
+
+    controller.cancel_trace_detection()
+
+    def fail_after_preview(
+        _image: np.ndarray,
+        _options: object,
+        _camera_area: WorkArea,
+        _pixels_per_mm: float,
+        **kwargs: object,
+    ) -> Result:
+        callback = kwargs["raster_preview_callback"]
+        assert callable(callback)
+        callback(preview)
+        raise RuntimeError("native fit did not converge")
+
+    monkeypatch.setattr(controller_module, "detect_objects", fail_after_preview)
+    failed_request_id = controller.detect_trace_objects({})
+
+    assert failures[-1] == (
+        failed_request_id,
+        "native fit did not converge",
+        True,
+    )
+    assert controller._trace_review_active is True
+    assert previews[-1][0] == failed_request_id
+
+    controller.cancel_trace_detection()
+    assert controller._trace_review_active is False
+
+    def fail_before_preview(*_args: object, **_kwargs: object) -> Result:
+        raise RuntimeError("normalization failed")
+
+    monkeypatch.setattr(controller_module, "detect_objects", fail_before_preview)
+    failed_request_id = controller.detect_trace_objects({})
+
+    assert failures[-1] == (failed_request_id, "normalization failed", False)
+    assert controller._trace_review_active is False
+    controller.deleteLater()
+    qt_application.processEvents()
 
 
 def test_nonempty_machine_project_is_not_reinterpreted_after_detection() -> None:

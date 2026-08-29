@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -324,6 +325,8 @@ class DesktopController(QtCore.QObject):
     busyChanged = QtCore.Signal(bool)
     cameraFocusChanged = QtCore.Signal(dict)
     traceResultReady = QtCore.Signal(dict)
+    traceRasterPreviewReady = QtCore.Signal(int, object)
+    traceDetectionFailed = QtCore.Signal(int, str, bool)
     traceColorReady = QtCore.Signal(dict)
     traceColorFailed = QtCore.Signal(str)
     templateMatchReady = QtCore.Signal(dict)
@@ -1368,10 +1371,15 @@ class DesktopController(QtCore.QObject):
     def detect_trace_objects(self, raw_options: dict[str, Any]) -> int:
         self._trace_request_id += 1
         request_id = self._trace_request_id
+        preview_emitted = False
         self._trace_review_active = True
+        self._trace_sample_image = None
+        self._trace_sample_area = None
+        self._trace_sample_signature = None
         self._sync_camera_timer()
 
         def operation() -> dict[str, Any]:
+            request_started = time.perf_counter()
             context = self.runtime.context
             if context.bed.calibration is None:
                 raise ValueError(
@@ -1427,6 +1435,8 @@ class DesktopController(QtCore.QObject):
             capture_options: dict[str, Any] = {"work_area": camera_area}
             if coordinate_frame is not None:
                 capture_options["coordinate_frame"] = coordinate_frame
+            capture_timing: dict[str, float] = {}
+            capture_options["timing"] = capture_timing
             image = context.capture_parked_trace_frame(**capture_options)
             background_image = None
             background_provider = getattr(
@@ -1442,6 +1452,29 @@ class DesktopController(QtCore.QObject):
             options = TraceOptions.from_mapping(raw_options)
             guarded_output = _guarded_output_work_area(self.runtime)
             guarded_polygon = _configured_guarded_output_polygon(self.runtime)
+
+            def raster_preview_ready(preview: object) -> None:
+                """Publish immutable production arrays without doing Qt image work."""
+
+                nonlocal preview_emitted
+                if request_id != self._trace_request_id:
+                    return
+                preview_emitted = True
+                self.traceRasterPreviewReady.emit(
+                    request_id,
+                    {
+                        "preview": preview,
+                        "camera_image_area": {
+                            "x_min": float(camera_area.x_min),
+                            "x_max": float(camera_area.x_max),
+                            "y_min": float(camera_area.y_min),
+                            "y_max": float(camera_area.y_max),
+                        },
+                        "review_signature": review_signature,
+                    },
+                )
+
+            detection_started = time.perf_counter()
             result = detect_objects(
                 image,
                 options,
@@ -1453,7 +1486,9 @@ class DesktopController(QtCore.QObject):
                     else camera_area
                 ),
                 background_image=background_image,
+                raster_preview_callback=raster_preview_ready,
             )
+            detection_seconds = time.perf_counter() - detection_started
             output_polygon = None
             if coordinate_frame is not None:
                 output_polygon, outside = _apply_local_output_review(
@@ -1472,6 +1507,16 @@ class DesktopController(QtCore.QObject):
                 coordinate_space=self._workspace_coordinate_space,
             )
             payload = result.to_dict()
+            diagnostics = payload.setdefault("diagnostics", {})
+            if not isinstance(diagnostics, dict):
+                diagnostics = {}
+                payload["diagnostics"] = diagnostics
+            timing = diagnostics.get("timing")
+            if not isinstance(timing, dict):
+                timing = {}
+                diagnostics["timing"] = timing
+            timing.update(capture_timing)
+            timing["detect_objects_seconds"] = detection_seconds
             if output_polygon is not None:
                 payload["output_work_area"] = None
                 payload["output_polygon_local_mm"] = output_polygon
@@ -1493,6 +1538,9 @@ class DesktopController(QtCore.QObject):
             payload["_trace_sample_area"] = camera_area
             payload["_trace_sample_signature"] = review_signature
             payload["review_signature"] = review_signature
+            timing["request_total_seconds"] = (
+                time.perf_counter() - request_started
+            )
             return payload
 
         self._run(
@@ -1504,6 +1552,7 @@ class DesktopController(QtCore.QObject):
             on_failure=lambda message: self._trace_detection_failed(
                 request_id,
                 message,
+                preview_emitted,
             ),
             label="Detect and trace objects",
             requires_controller=True,
@@ -1541,10 +1590,12 @@ class DesktopController(QtCore.QObject):
             self._trace_sample_area = None
             self._trace_sample_signature = None
             self._resume_live_camera_after_review(was_held)
-            self.errorOccurred.emit(
-                "Detect and trace objects failed: the honeycomb or bed mapping "
-                "changed during capture; run detection again"
+            message = (
+                "the honeycomb or bed mapping changed during capture; "
+                "run detection again"
             )
+            self.traceDetectionFailed.emit(request_id, message, False)
+            self.errorOccurred.emit(f"Detect and trace objects failed: {message}")
             return
         if request_id != self._trace_request_id:
             return
@@ -1559,16 +1610,32 @@ class DesktopController(QtCore.QObject):
         self._trace_sample_signature = tuple(sample_signature)
         self.traceResultReady.emit(payload)
 
-    @QtCore.Slot(int, str)
-    def _trace_detection_failed(self, request_id: int, message: str) -> None:
+    @QtCore.Slot(int, str, bool)
+    def _trace_detection_failed(
+        self,
+        request_id: int,
+        message: str,
+        retain_preview: bool,
+    ) -> None:
         if request_id != self._trace_request_id:
             return
-        was_held = self._camera_review_active()
-        self._trace_review_active = False
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
-        self._resume_live_camera_after_review(was_held)
+        if retain_preview:
+            # The exact production raster is useful failure evidence. Keep the
+            # corrected camera review frozen until Clear or another Detect.
+            self._trace_review_active = True
+            self._sync_camera_timer()
+        else:
+            was_held = self._camera_review_active()
+            self._trace_review_active = False
+            self._resume_live_camera_after_review(was_held)
+        self.traceDetectionFailed.emit(
+            request_id,
+            message,
+            bool(retain_preview),
+        )
         self.errorOccurred.emit(f"Detect and trace objects failed: {message}")
 
     @staticmethod

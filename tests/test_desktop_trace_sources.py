@@ -25,6 +25,13 @@ def test_trace_panel_and_controller_are_wired():
     assert "def detect_trace_objects" in controller
     assert "context.capture_parked_trace_frame(**capture_options)" in controller
     assert 'capture_options["coordinate_frame"] = coordinate_frame' in controller
+    assert 'capture_options["timing"] = capture_timing' in controller
+    assert "traceRasterPreviewReady = QtCore.Signal(int, object)" in controller
+    assert "traceDetectionFailed = QtCore.Signal(int, str, bool)" in controller
+    assert "raster_preview_callback=raster_preview_ready" in controller
+    assert "QtCore.Qt.ConnectionType.QueuedConnection" in window
+    assert 'addItem("Normalized", "normalized")' in panels
+    assert 'addItem("Mask", "mask")' in panels
     assert "def sample_trace_color" in controller
     assert "select_trace_cutout" not in controller
     assert "prepare_cutout_frame" not in controller

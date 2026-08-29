@@ -1149,21 +1149,31 @@ class AppContext:
         *,
         work_area: WorkArea | None = None,
         coordinate_frame: HoneycombCoordinateFrame | None = None,
+        timing: dict[str, float] | None = None,
     ) -> np.ndarray:
         """Home, park, hold, and capture the frame used for object tracing."""
 
+        total_started = time.perf_counter()
         self._require_valid_bed_calibration()
+        capture_started = time.perf_counter()
         with self.machine.temporary_stepper_hold():
             self.machine.prepare_photo_position()
             burst = self._stable_camera_burst()
         burst = self._prepare_camera_burst(burst, undistort=False)
         image = burst.sharpest_frame
+        if timing is not None:
+            timing["capture_seconds"] = time.perf_counter() - capture_started
         rectify_options: dict[str, Any] = {}
         if work_area is not None:
             rectify_options["work_area"] = work_area
         if coordinate_frame is not None:
             rectify_options["coordinate_frame"] = coordinate_frame
+        rectification_started = time.perf_counter()
         rectified = self._rectify_camera_image(image, **rectify_options)
+        if timing is not None:
+            timing["rectification_seconds"] = (
+                time.perf_counter() - rectification_started
+            )
         uses_configured_area = coordinate_frame is None and work_area is None
         if coordinate_frame is None and work_area is not None:
             configured = self.settings.machine.work_area
@@ -1176,6 +1186,10 @@ class AppContext:
         if uses_configured_area:
             self._cache_workspace(rectified)
             self._persist_workspace(rectified)
+        if timing is not None:
+            timing["capture_rectification_total_seconds"] = (
+                time.perf_counter() - total_started
+            )
         return rectified
 
     @staticmethod

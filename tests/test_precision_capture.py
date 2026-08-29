@@ -403,7 +403,8 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
         AppContext._prepare_camera_burst(harness, value, undistort=undistort)
     )
 
-    result = AppContext.capture_parked_trace_frame(harness)
+    timing: dict[str, float] = {}
+    result = AppContext.capture_parked_trace_frame(harness, timing=timing)
 
     assert calls == [
         "validate",
@@ -418,6 +419,15 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
     ]
     assert np.array_equal(result, frame)
     assert harness.workspace_path.exists()
+    assert timing.keys() == {
+        "capture_seconds",
+        "rectification_seconds",
+        "capture_rectification_total_seconds",
+    }
+    assert all(value >= 0.0 for value in timing.values())
+    assert timing["capture_rectification_total_seconds"] >= (
+        timing["capture_seconds"] + timing["rectification_seconds"]
+    )
 
 
 def _removed_simulation_workspace_trace_capture_case() -> None:

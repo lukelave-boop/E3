@@ -21,6 +21,8 @@ from laser_aligner.project import (
     PathFillRule,
     PathLineSegment,
     PathSubpath,
+    PixelVectorizationMaskPreview,
+    PixelVectorizationRootReviewFilter,
     RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationComplexityError,
@@ -29,10 +31,13 @@ from laser_aligner.project import (
     RasterVectorizationTiming,
     flatten_native_path,
     native_path_bounds,
+    prepare_pixel_vectorization_mask,
+    prepare_pixel_vectorization_source,
     prepare_raster_vectorization_source,
     quick_preview_prepared_raster,
     raster_payload_has_usable_alpha,
     read_raster_asset_payload,
+    vectorize_pixel_source,
     vectorize_pixel_source_forest,
     vectorize_prepared_raster,
     vectorize_raster_payload,
@@ -114,6 +119,8 @@ def test_quick_preview_is_preview_only_and_subsecond_for_logo_artwork(
     assert {
         "quick_preview_total",
         "mask_generation",
+        "component_cleanup",
+        "raster_4x_preparation",
         "contour_extraction",
     } <= timing.stage_seconds.keys()
     assert "source_edge_refinement" not in timing.stage_seconds
@@ -170,7 +177,10 @@ def test_timing_instrumentation_preserves_authoritative_geometry(
     assert preparation_timing.stage_calls == {"image_decode_preparation": 1}
     assert {
         "verified_vectorization_total",
+        "mask_preparation_total",
         "mask_generation",
+        "component_cleanup",
+        "raster_4x_preparation",
         "contour_extraction",
         "corner_classification",
         "source_edge_refinement",
@@ -181,11 +191,260 @@ def test_timing_instrumentation_preserves_authoritative_geometry(
         "adjacent_merging",
         "preview_flattening",
         "raster_hierarchy_validation",
+        "native_fitting",
     } <= fit_timing.stage_seconds.keys()
     assert all(value >= 0.0 for value in fit_timing.stage_seconds.values())
     assert "mask_generation" not in reuse_timing.stage_seconds
+    assert "mask_preparation_total" not in reuse_timing.stage_seconds
+    assert "component_cleanup" not in reuse_timing.stage_seconds
+    assert "raster_4x_preparation" not in reuse_timing.stage_seconds
     assert "contour_extraction" not in reuse_timing.stage_seconds
+    assert "native_fitting" in reuse_timing.stage_seconds
     assert "source_edge_refinement" in reuse_timing.stage_seconds
+
+
+def test_source_neutral_mask_preparation_is_exact_immutable_and_reusable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grayscale = np.full((48, 64), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (12, 10), (50, 38), 0, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = _manual_options(threshold=121)
+    timing = RasterVectorizationTiming()
+
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=32.0,
+        displayed_height_mm=24.0,
+        timing=timing,
+    )
+
+    assert isinstance(prepared, PixelVectorizationMaskPreview)
+    assert prepared.source_key == source.source_key
+    assert prepared.options == options
+    assert prepared.threshold_used == 121
+    assert prepared.connected_component_count == 1
+    assert prepared.foreground_mask.shape == grayscale.shape
+    assert prepared.contour_mask.shape == (192, 256)
+    assert not prepared.foreground_mask.flags.writeable
+    assert not prepared.contour_mask.flags.writeable
+    for values in (
+        source.source_rgba,
+        source.grayscale,
+        source.composited_grayscale,
+        source.alpha,
+        prepared.foreground_mask,
+        prepared.contour_mask,
+    ):
+        with pytest.raises(ValueError):
+            values.setflags(write=True)
+    assert not hasattr(prepared, "contours")
+    assert {
+        "mask_preparation_total",
+        "mask_generation",
+        "component_cleanup",
+        "raster_4x_preparation",
+    } <= timing.stage_seconds.keys()
+
+    def reject_mask_recomputation(*_args, **_kwargs):
+        raise AssertionError("an exact prepared mask must not be recomputed")
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_prepare_vectorization_masks",
+        reject_mask_recomputation,
+    )
+    original_extract = raster_vectorize_module._extract_vectorization_contours
+    extracted_masks: list[np.ndarray] = []
+    events: list[str] = []
+
+    def record_contour_input(mask: np.ndarray, *args, **kwargs):
+        events.append("contour extraction")
+        extracted_masks.append(mask)
+        return original_extract(mask, *args, **kwargs)
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_extract_vectorization_contours",
+        record_contour_input,
+    )
+    received: list[PixelVectorizationMaskPreview] = []
+
+    def mutation_rejecting_callback(
+        preview: PixelVectorizationMaskPreview,
+    ) -> None:
+        events.append("mask callback")
+        with pytest.raises(ValueError):
+            preview.contour_mask.setflags(write=True)
+        received.append(preview)
+
+    result = vectorize_pixel_source(
+        source,
+        options,
+        displayed_width_mm=32.0,
+        displayed_height_mm=24.0,
+        prepared_mask=prepared,
+        mask_ready=mutation_rejecting_callback,
+    )
+
+    assert received == [prepared]
+    assert len(extracted_masks) == 1
+    assert extracted_masks[0] is prepared.contour_mask
+    assert events[:2] == ["mask callback", "contour extraction"]
+    assert result.foreground_mask is prepared.foreground_mask
+    assert np.array_equal(result.foreground_mask, prepared.foreground_mask)
+    with pytest.raises(ValueError, match="different physical dimensions"):
+        vectorize_pixel_source(
+            source,
+            options,
+            displayed_width_mm=33.0,
+            displayed_height_mm=24.0,
+            prepared_mask=prepared,
+        )
+    with pytest.raises(ValueError, match="different vectorization options"):
+        vectorize_pixel_source(
+            source,
+            _manual_options(threshold=122),
+            displayed_width_mm=32.0,
+            displayed_height_mm=24.0,
+            prepared_mask=prepared,
+        )
+    different_grayscale = grayscale.copy()
+    different_grayscale[0, 0] = 0
+    different_source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(different_grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    with pytest.raises(ValueError, match="different pixel source"):
+        vectorize_pixel_source(
+            different_source,
+            options,
+            displayed_width_mm=32.0,
+            displayed_height_mm=24.0,
+            prepared_mask=prepared,
+        )
+
+
+def test_empty_prepared_mask_is_emitted_before_existing_foreground_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grayscale = np.full((32, 32), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (14, 14), (16, 16), 0, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = _manual_options(minimum_feature_area_mm2=100.0)
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+    )
+
+    assert prepared.connected_component_count == 0
+    assert not np.any(prepared.foreground_mask)
+    assert not np.any(prepared.contour_mask)
+
+    def reject_contour_extraction(*_args, **_kwargs):
+        raise AssertionError("empty preparation must fail before contour extraction")
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_extract_vectorization_contours",
+        reject_contour_extraction,
+    )
+    received: list[PixelVectorizationMaskPreview] = []
+    with pytest.raises(
+        RasterVectorizationError,
+        match="No foreground features remain at the selected threshold",
+    ):
+        vectorize_pixel_source(
+            source,
+            options,
+            displayed_width_mm=32.0,
+            displayed_height_mm=32.0,
+            prepared_mask=prepared,
+            mask_ready=received.append,
+        )
+
+    assert received == [prepared]
+
+
+def test_otsu_endpoint_plateau_nudge_preserves_mask_and_real_hole_tree() -> None:
+    grayscale = np.full((400, 600), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (60, 70), (190, 180), 68, thickness=-1)
+    cv2.circle(grayscale, (360, 125), 60, 68, thickness=-1)
+    cv2.circle(grayscale, (360, 125), 25, 255, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = RasterVectorizationOptions(
+        detection_mode=RasterDetectionMode.AUTO_THRESHOLD,
+        minimum_feature_area_mm2=50.0,
+        smoothing_mm=0.0,
+        simplification_tolerance_mm=0.1,
+        contour_output=RasterContourOutput.ALL_CONTOURS,
+    )
+
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=150.0,
+        displayed_height_mm=100.0,
+    )
+    contours, hierarchy = cv2.findContours(
+        prepared.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    assert prepared.threshold_used == 70
+    assert np.array_equal(prepared._masks.source_mask > 0, grayscale == 68)
+    assert len(contours) == 3
+    assert hierarchy is not None
+    parents = hierarchy[0, :, 3].tolist()
+    assert parents.count(-1) == 2
+    assert sum(parent >= 0 for parent in parents) == 1
+
+
+def test_inverted_otsu_endpoint_plateau_nudge_preserves_mask_and_hole_tree() -> None:
+    grayscale = np.zeros((400, 600), dtype=np.uint8)
+    cv2.rectangle(grayscale, (60, 70), (190, 180), 187, thickness=-1)
+    cv2.circle(grayscale, (360, 125), 60, 187, thickness=-1)
+    cv2.circle(grayscale, (360, 125), 25, 0, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = RasterVectorizationOptions(
+        detection_mode=RasterDetectionMode.AUTO_THRESHOLD,
+        invert=True,
+        minimum_feature_area_mm2=50.0,
+        smoothing_mm=0.0,
+        simplification_tolerance_mm=0.1,
+        contour_output=RasterContourOutput.ALL_CONTOURS,
+    )
+
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=150.0,
+        displayed_height_mm=100.0,
+    )
+    contours, hierarchy = cv2.findContours(
+        prepared.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    assert prepared.threshold_used == 2
+    assert np.array_equal(prepared._masks.source_mask > 0, grayscale == 187)
+    assert len(contours) == 3
+    assert hierarchy is not None
+    parents = hierarchy[0, :, 3].tolist()
+    assert parents.count(-1) == 2
+    assert sum(parent >= 0 for parent in parents) == 1
 
 
 def _normalized_bounds(contour) -> tuple[float, float, float, float]:
@@ -1158,6 +1417,173 @@ def _pruning_forest_source(tmp_path: Path, filename: str):
     pixels = np.full((32, 32), 255, dtype=np.uint8)
     cv2.rectangle(pixels, (18, 3), (27, 13), 0, thickness=-1)
     return prepare_raster_vectorization_source(_write_payload(tmp_path / filename, pixels))
+
+
+def test_forest_review_filter_rejects_only_provably_oversized_complete_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels = _compound_tree_and_independent_root_pixels()
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(pixels, cv2.COLOR_BGR2RGBA)
+    )
+    options = _manual_options(simplification_tolerance_mm=0.10)
+    original_fit = raster_vectorize_module._fit_forest_contour
+    fit_calls: list[int] = []
+
+    def record_fit(original_index, **kwargs):
+        fit_calls.append(original_index)
+        return original_fit(original_index, **kwargs)
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_fit_forest_contour",
+        record_fit,
+    )
+    received: list[PixelVectorizationMaskPreview] = []
+    timing = RasterVectorizationTiming()
+    forest = vectorize_pixel_source_forest(
+        source,
+        options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=48.0,
+        timing=timing,
+        mask_ready=received.append,
+        root_review_filter=PixelVectorizationRootReviewFilter(
+            maximum_area_mm2=700.0
+        ),
+    )
+
+    assert forest.result is not None
+    assert forest.root_tree_count == 2
+    assert forest.valid_root_tree_count == 1
+    assert forest.invalid_root_tree_count == 1
+    assert len(fit_calls) == 1
+    assert len(forest.result.contours) == 1
+    assert len(received) == 1
+    assert received[0].foreground_mask[15, 15] == 255
+    assert received[0].foreground_mask[30, 120] == 255
+    failure = forest.failures[0]
+    assert failure.stage == "review_filter"
+    assert failure.contour_count == 3
+    assert "conservative area lower bound" in failure.reason
+    assert timing.stage_calls["root_review_filter"] == 1
+    assert timing.stage_calls["native_fitting"] == 1
+
+    # The compound threshold tree is just above this limit, but its full
+    # edge/fitting displacement allowance crosses it. It must reach native fit
+    # and the existing post-fit review instead of being rejected prematurely.
+    fit_calls.clear()
+    near_limit = vectorize_pixel_source_forest(
+        source,
+        options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=48.0,
+        root_review_filter=PixelVectorizationRootReviewFilter(
+            maximum_area_mm2=950.0
+        ),
+    )
+
+    assert near_limit.result is not None
+    assert near_limit.failures == ()
+    assert len(fit_calls) == 4
+    contours = near_limit.result.contours
+    compound_root = next(
+        index
+        for index, contour in enumerate(contours)
+        if contour.parent_index is None
+        and any(child.parent_index == index for child in contours)
+    )
+
+    def belongs_to_compound(index: int) -> bool:
+        current: int | None = index
+        while current is not None:
+            if current == compound_root:
+                return True
+            current = contours[current].parent_index
+        return False
+
+    compound_area_mm2 = 0.0
+    root_depth = contours[compound_root].depth
+    for index, contour in enumerate(contours):
+        if not belongs_to_compound(index):
+            continue
+        physical = np.asarray(contour.threshold_points, dtype=np.float32)
+        physical *= np.asarray((80.0, 48.0), dtype=np.float32)
+        area = abs(float(cv2.contourArea(physical)))
+        compound_area_mm2 += (
+            area if (contour.depth - root_depth) % 2 == 0 else -area
+        )
+    assert compound_area_mm2 > 950.0
+
+
+def test_forest_review_filter_uses_full_margin_for_minimum_dimensions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grayscale = np.full((64, 96), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (5, 5), (7, 7), 0, thickness=-1)
+    cv2.rectangle(grayscale, (20, 5), (28, 13), 0, thickness=-1)
+    cv2.rectangle(grayscale, (50, 5), (70, 25), 0, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = _manual_options(simplification_tolerance_mm=0.10)
+    original_fit = raster_vectorize_module._fit_forest_contour
+    fit_calls: list[int] = []
+
+    def record_fit(original_index, **kwargs):
+        fit_calls.append(original_index)
+        return original_fit(original_index, **kwargs)
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_fit_forest_contour",
+        record_fit,
+    )
+    forest = vectorize_pixel_source_forest(
+        source,
+        options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=32.0,
+        root_review_filter=PixelVectorizationRootReviewFilter(
+            minimum_width_mm=5.0,
+            minimum_height_mm=5.0,
+        ),
+    )
+
+    assert forest.result is not None
+    assert forest.root_tree_count == 3
+    assert forest.valid_root_tree_count == 2
+    assert forest.invalid_root_tree_count == 1
+    assert len(fit_calls) == 2
+    assert forest.failures[0].stage == "review_filter"
+    assert "threshold width" in forest.failures[0].reason
+    assert "threshold height" in forest.failures[0].reason
+    retained_threshold_sizes = [
+        (
+            float(np.ptp(np.asarray(contour.threshold_points)[:, 0])) * 48.0,
+            float(np.ptp(np.asarray(contour.threshold_points)[:, 1])) * 32.0,
+        )
+        for contour in forest.result.contours
+        if contour.parent_index is None
+    ]
+    assert any(width < 5.0 and height < 5.0 for width, height in retained_threshold_sizes)
+    assert any(width > 5.0 and height > 5.0 for width, height in retained_threshold_sizes)
+
+    fit_calls.clear()
+    all_rejected = vectorize_pixel_source_forest(
+        source,
+        options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=32.0,
+        root_review_filter=PixelVectorizationRootReviewFilter(
+            minimum_width_mm=100.0,
+            minimum_height_mm=100.0,
+        ),
+    )
+    assert all_rejected.result is None
+    assert all_rejected.invalid_root_tree_count == 3
+    assert all(failure.stage == "review_filter" for failure in all_rejected.failures)
+    assert fit_calls == []
 
 
 def test_auto_forest_reports_exact_pruning_failure_and_keeps_valid_root(

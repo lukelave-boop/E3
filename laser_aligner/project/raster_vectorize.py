@@ -286,6 +286,36 @@ class RasterVectorizationOptions:
         object.__setattr__(self, "simplification_tolerance_mm", tolerance)
 
 
+@dataclass(frozen=True, slots=True)
+class PixelVectorizationRootReviewFilter:
+    """Optional physical review limits applied to complete raster root trees.
+
+    These limits never mutate the threshold mask or contour hierarchy.  A root
+    is omitted before native fitting only when its complete threshold tree and
+    the fitter's full bounded displacement prove that it cannot pass a limit.
+    Near-limit and smoothed roots are left for the authoritative post-fit
+    review.  Every rejected root remains indivisible with all holes and islands.
+    """
+
+    maximum_area_mm2: float | None = None
+    minimum_width_mm: float = 0.0
+    minimum_height_mm: float = 0.0
+
+    def __post_init__(self) -> None:
+        maximum_area = self.maximum_area_mm2
+        if maximum_area is not None:
+            maximum_area = _finite(maximum_area, "maximum_area_mm2")
+            if maximum_area <= 0.0:
+                raise ValueError("maximum_area_mm2 must be positive when supplied")
+        minimum_width = _finite(self.minimum_width_mm, "minimum_width_mm")
+        minimum_height = _finite(self.minimum_height_mm, "minimum_height_mm")
+        if minimum_width < 0.0 or minimum_height < 0.0:
+            raise ValueError("minimum root dimensions cannot be negative")
+        object.__setattr__(self, "maximum_area_mm2", maximum_area)
+        object.__setattr__(self, "minimum_width_mm", minimum_width)
+        object.__setattr__(self, "minimum_height_mm", minimum_height)
+
+
 @dataclass(frozen=True, slots=True, eq=False)
 class PixelVectorizationSource:
     """Immutable decoded pixels shared by raster assets and live raster sources."""
@@ -333,6 +363,71 @@ class PixelVectorizationSource:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
+class PixelVectorizationMaskPreview:
+    """Exact immutable threshold preparation available before native fitting.
+
+    ``contour_mask`` is the production 4x binary mask passed to RETR_TREE.
+    ``foreground_mask`` is its source-resolution display representation and is
+    byte-identical to the mask returned with a successful vectorization.  This
+    temporary value has no project, planning, G-code, or output authority.
+    """
+
+    source_key: str
+    options: RasterVectorizationOptions
+    foreground_mask: np.ndarray
+    contour_mask: np.ndarray
+    threshold_used: int | None
+    connected_component_count: int
+    displayed_width_mm: float
+    displayed_height_mm: float
+    _masks: _RasterMaskPreparation = field(repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_key, str) or not self.source_key:
+            raise ValueError("A mask preview requires a pixel source key")
+        if not isinstance(self.options, RasterVectorizationOptions):
+            raise TypeError("A mask preview requires raster vectorization options")
+        for values, label in (
+            (self.foreground_mask, "foreground_mask"),
+            (self.contour_mask, "contour_mask"),
+        ):
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"{label} must be a numpy array")
+            if values.dtype != np.uint8 or values.ndim != 2:
+                raise ValueError(f"{label} must be a two-dimensional uint8 array")
+            if values.flags.writeable:
+                raise ValueError(f"{label} must be read-only")
+        expected_shape = (
+            self.foreground_mask.shape[0] * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR,
+            self.foreground_mask.shape[1] * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR,
+        )
+        if self.contour_mask.shape != expected_shape:
+            raise ValueError("contour_mask must be the exact 4x foreground workspace")
+        if self.threshold_used is not None:
+            _bounded_byte(self.threshold_used, "threshold_used")
+        if (
+            type(self.connected_component_count) is not int
+            or self.connected_component_count < 0
+        ):
+            raise ValueError("connected_component_count must be non-negative")
+        width_mm, height_mm = _display_dimensions(
+            self.displayed_width_mm,
+            self.displayed_height_mm,
+        )
+        if not isinstance(self._masks, _RasterMaskPreparation):
+            raise TypeError("A mask preview requires its immutable mask preparation")
+        if (
+            self._masks.preview_mask is not self.foreground_mask
+            or self._masks.working_mask is not self.contour_mask
+            or self._masks.threshold_used != self.threshold_used
+            or self._masks.component_count != self.connected_component_count
+        ):
+            raise ValueError("Mask preview fields do not match its exact preparation")
+        object.__setattr__(self, "displayed_width_mm", width_mm)
+        object.__setattr__(self, "displayed_height_mm", height_mm)
+
+
+@dataclass(frozen=True, slots=True, eq=False)
 class RasterVectorizationSource(PixelVectorizationSource):
     """Verified imported-asset provenance around source-neutral decoded pixels."""
 
@@ -350,6 +445,7 @@ class _RasterMaskPreparation:
     source_mask: np.ndarray
     cleaned_mask: np.ndarray
     working_mask: np.ndarray
+    preview_mask: np.ndarray
     component_count: int
 
 
@@ -368,6 +464,7 @@ class _RasterRootSelection:
     root_index: int
     source_root_index: int
     contour_indices: tuple[int, ...]
+    all_contour_indices: tuple[int, ...]
     bounds_px: tuple[int, int, int, int]
 
 
@@ -796,6 +893,7 @@ class PixelVectorizationResult:
 _PIXEL_VECTORIZATION_FAILURE_STAGES = frozenset(
     {
         "contour_pruning",
+        "review_filter",
         "native_fit",
         "native_topology",
         "raster_hierarchy",
@@ -814,7 +912,7 @@ def _sanitize_vectorization_failure_reason(value: object) -> str:
 
 @dataclass(frozen=True, slots=True)
 class PixelVectorizationRootFailure:
-    """One rejected, indivisible root contour tree from Auto vectorization."""
+    """One rejected, indivisible root contour tree from forest vectorization."""
 
     root_index: int
     contour_count: int
@@ -864,7 +962,7 @@ class PixelVectorizationRootFailure:
 
 @dataclass(frozen=True, slots=True)
 class PixelVectorizationForestResult:
-    """Auto-only result that can retain independently verified root trees."""
+    """Result that can retain independently verified raster root trees."""
 
     result: PixelVectorizationResult | None
     failures: tuple[PixelVectorizationRootFailure, ...]
@@ -1067,9 +1165,11 @@ def _raise_complexity(message: str) -> None:
 
 
 def _readonly(array: np.ndarray) -> np.ndarray:
-    output = np.ascontiguousarray(array)
-    output.setflags(write=False)
-    return output
+    contiguous = np.ascontiguousarray(array)
+    return np.frombuffer(
+        contiguous.tobytes(order="C"),
+        dtype=contiguous.dtype,
+    ).reshape(contiguous.shape)
 
 
 def prepare_pixel_vectorization_source(
@@ -1303,7 +1403,28 @@ def _threshold_value(
         255,
         cv2.THRESH_BINARY | cv2.THRESH_OTSU,
     )
-    return int(round(float(value)))
+    threshold = int(round(float(value)))
+    # OpenCV chooses the lowest member of an equally optimal Otsu plateau. For
+    # a one- or two-level source that can put the threshold exactly on the low
+    # class endpoint. Bicubic 4x reconstruction then has no upward rounding
+    # headroom and can introduce tiny false pinholes or islands. Move by at most
+    # two unused grayscale levels inside the same empty histogram gap;
+    # source-resolution classification and all ordinary Otsu cases remain
+    # unchanged. For normal polarity the low class is foreground and its full
+    # intensity span already supplies headroom. For inverted polarity the low
+    # class is background, so headroom is measured above its highest level.
+    eligible = source.alpha >= options.alpha_cutoff
+    low_class = grayscale[eligible & (grayscale <= threshold)]
+    high_class = grayscale[eligible & (grayscale > threshold)]
+    if not low_class.size or not high_class.size:
+        return threshold
+    low_endpoint = (
+        int(np.max(low_class)) if options.invert else int(np.min(low_class))
+    )
+    high_minimum = int(np.min(high_class))
+    needed_headroom = max(0, 2 - (threshold - low_endpoint))
+    available_gap = max(0, high_minimum - threshold - 1)
+    return threshold + min(needed_headroom, available_gap)
 
 
 def _mask_at_resolution(
@@ -1342,6 +1463,7 @@ def _mask_at_resolution(
     return foreground.astype(np.uint8) * 255
 
 
+@_timed_stage("component_cleanup")
 def _clean_components(
     mask: np.ndarray,
     minimum_area_mm2: float,
@@ -1363,14 +1485,10 @@ def _clean_components(
             f"{exc.count:,} connected foreground components, exceeding "
             f"the {MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS:,}-component limit"
         )
-    if component_count == 0:
-        raise RasterVectorizationError(
-            "No foreground features remain at the selected threshold and minimum "
-            "feature size"
-        )
     return cleaned, component_count
 
 
+@_timed_stage("raster_4x_preparation")
 def _oversampled_mask(
     source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
@@ -3659,6 +3777,7 @@ def _longest_smooth_span_segment_count(pieces: list[_FittedPiece]) -> int:
     )
 
 
+@_timed_stage("native_fitting")
 def _fit_contour(
     raw_points: np.ndarray,
     options: RasterVectorizationOptions,
@@ -5091,7 +5210,8 @@ def _prepare_vectorization_masks(
         width_mm,
         height_mm,
     )
-    _preflight_contour_complexity(cleaned_mask)
+    if component_count:
+        _preflight_contour_complexity(cleaned_mask)
     working_mask = _oversampled_mask(
         source,
         options,
@@ -5106,8 +5226,122 @@ def _prepare_vectorization_masks(
         source_mask=_readonly(source_mask),
         cleaned_mask=_readonly(cleaned_mask),
         working_mask=_readonly(working_mask),
+        preview_mask=_readonly(
+            _preview_mask(
+                working_mask,
+                source.width_px,
+                source.height_px,
+            )
+        ),
         component_count=component_count,
     )
+
+
+def _pixel_mask_preview(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    masks: _RasterMaskPreparation,
+    width_mm: float,
+    height_mm: float,
+) -> PixelVectorizationMaskPreview:
+    return PixelVectorizationMaskPreview(
+        source_key=source.source_key,
+        options=options,
+        foreground_mask=masks.preview_mask,
+        contour_mask=masks.working_mask,
+        threshold_used=masks.threshold_used,
+        connected_component_count=masks.component_count,
+        displayed_width_mm=width_mm,
+        displayed_height_mm=height_mm,
+        _masks=masks,
+    )
+
+
+def _require_prepared_foreground(masks: _RasterMaskPreparation) -> None:
+    if masks.component_count == 0:
+        raise RasterVectorizationError(
+            "No foreground features remain at the selected threshold and minimum "
+            "feature size"
+        )
+
+
+@_timed_stage("mask_preparation_total")
+def _prepare_pixel_vectorization_mask(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    width_mm: float,
+    height_mm: float,
+) -> PixelVectorizationMaskPreview:
+    masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
+    return _pixel_mask_preview(
+        source,
+        options,
+        masks,
+        width_mm,
+        height_mm,
+    )
+
+
+def prepare_pixel_vectorization_mask(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+    timing: RasterVectorizationTiming | None = None,
+) -> PixelVectorizationMaskPreview:
+    """Build the exact source-neutral production mask without fitting contours."""
+
+    if not isinstance(source, PixelVectorizationSource):
+        raise TypeError("source must be a PixelVectorizationSource")
+    options = (
+        options
+        if isinstance(options, RasterVectorizationOptions)
+        else RasterVectorizationOptions(**dict(options))
+    )
+    width_mm, height_mm = _display_dimensions(
+        displayed_width_mm,
+        displayed_height_mm,
+    )
+    token = _TIMING_STAGE.set(timing)
+    try:
+        return _prepare_pixel_vectorization_mask(
+            source,
+            options,
+            width_mm,
+            height_mm,
+        )
+    finally:
+        _TIMING_STAGE.reset(token)
+
+
+def _validated_prepared_mask(
+    prepared_mask: PixelVectorizationMaskPreview,
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    width_mm: float,
+    height_mm: float,
+) -> PixelVectorizationMaskPreview:
+    if not isinstance(prepared_mask, PixelVectorizationMaskPreview):
+        raise TypeError("prepared_mask must be a PixelVectorizationMaskPreview")
+    if prepared_mask.source_key != source.source_key:
+        raise ValueError("prepared_mask belongs to a different pixel source")
+    if prepared_mask.options != options:
+        raise ValueError("prepared_mask was built with different vectorization options")
+    if (
+        prepared_mask.displayed_width_mm != width_mm
+        or prepared_mask.displayed_height_mm != height_mm
+    ):
+        raise ValueError("prepared_mask was built for different physical dimensions")
+    return prepared_mask
+
+
+def _emit_mask_ready(
+    callback: Callable[[PixelVectorizationMaskPreview], None] | None,
+    preview: PixelVectorizationMaskPreview,
+) -> None:
+    if callback is not None:
+        callback(preview)
 
 
 @_timed_stage("contour_extraction")
@@ -5150,6 +5384,7 @@ def _quick_preview_prepared_raster(
     height_mm: float,
 ) -> RasterVectorizationQuickPreview:
     masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
+    _require_prepared_foreground(masks)
     contour_extraction = _extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
@@ -5248,13 +5483,7 @@ def _quick_preview_prepared_raster(
     return RasterVectorizationQuickPreview(
         source_identity=source.identity,
         source_rgba=source.source_rgba,
-        foreground_mask=_readonly(
-            _preview_mask(
-                masks.working_mask,
-                source.width_px,
-                source.height_px,
-            )
-        ),
+        foreground_mask=masks.preview_mask,
         contours=tuple(contours),
         threshold_used=masks.threshold_used,
         has_usable_alpha=source.has_usable_alpha,
@@ -5326,6 +5555,8 @@ def _vectorize_pixel_source(
     displayed_width_mm: float,
     displayed_height_mm: float,
     prepared_preview: RasterVectorizationQuickPreview | None = None,
+    prepared_mask: PixelVectorizationMaskPreview | None = None,
+    mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
 ) -> PixelVectorizationResult:
     """Vectorize one immutable decoded pixel source without asset assumptions."""
 
@@ -5348,13 +5579,44 @@ def _vectorize_pixel_source(
         prepared_preview,
     )
     if prepared_trace is None:
-        masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
+        mask_preview = (
+            _prepare_pixel_vectorization_mask(
+                source,
+                options,
+                width_mm,
+                height_mm,
+            )
+            if prepared_mask is None
+            else _validated_prepared_mask(
+                prepared_mask,
+                source,
+                options,
+                width_mm,
+                height_mm,
+            )
+        )
+        masks = mask_preview._masks
+        _emit_mask_ready(mask_ready, mask_preview)
+        _require_prepared_foreground(masks)
         contour_extraction = _extract_vectorization_contours(
             masks.working_mask,
             cv2.CHAIN_APPROX_NONE,
         )
     else:
+        if prepared_mask is not None:
+            raise ValueError(
+                "prepared_mask and a reusable imported quick preview cannot be combined"
+            )
         masks = prepared_trace.masks
+        mask_preview = _pixel_mask_preview(
+            source,
+            options,
+            masks,
+            width_mm,
+            height_mm,
+        )
+        _emit_mask_ready(mask_ready, mask_preview)
+        _require_prepared_foreground(masks)
         contour_extraction = prepared_trace.contour_extraction
     raw_contours = contour_extraction.contours
     hierarchy = contour_extraction.hierarchy
@@ -5516,11 +5778,6 @@ def _vectorize_pixel_source(
     result_contours = tuple(results)
     _validate_authoritative_native_topology(result_contours, width_mm, height_mm)
     _validate_rasterized_topology(result_contours, working_mask.shape)
-    mask_preview = _preview_mask(
-        working_mask,
-        source.width_px,
-        source.height_px,
-    )
     overlay = _overlay_preview(source.source_rgba, result_contours)
     maximum_deviation = max(
         contour.max_estimated_deviation_mm for contour in result_contours
@@ -5528,7 +5785,7 @@ def _vectorize_pixel_source(
     return PixelVectorizationResult(
         source_key=source.source_key,
         source_rgba=source.source_rgba,
-        foreground_mask=_readonly(mask_preview),
+        foreground_mask=mask_preview.foreground_mask,
         overlay_rgba=_readonly(overlay),
         contours=result_contours,
         threshold_used=threshold_used,
@@ -5552,9 +5809,7 @@ def _forest_root_selections(
     raw_contours: tuple[np.ndarray, ...],
     contour_extraction: ForegroundContourPruneResult,
 ) -> tuple[_RasterRootSelection, ...]:
-    grouped: dict[int, list[int]] = {}
-    root_order: list[int] = []
-    for index in selected_indices:
+    def resolved_root(index: int) -> int:
         current = index
         visited = 0
         while int(parents[current]) >= 0:
@@ -5564,18 +5819,31 @@ def _forest_root_selections(
                 raise RasterVectorizationError(
                     "Raster contour hierarchy does not resolve to a bounded root"
                 )
+        return current
+
+    grouped: dict[int, list[int]] = {}
+    root_order: list[int] = []
+    for index in selected_indices:
+        current = resolved_root(index)
         if current not in grouped:
             grouped[current] = []
             root_order.append(current)
         grouped[current].append(index)
 
+    all_grouped: dict[int, list[int]] = {root: [] for root in root_order}
+    for index in range(len(parents)):
+        root = resolved_root(index)
+        if root in all_grouped:
+            all_grouped[root].append(index)
+
     selections: list[_RasterRootSelection] = []
     for root_index in root_order:
         contour_indices = tuple(grouped[root_index])
+        all_contour_indices = tuple(all_grouped[root_index])
         points = np.concatenate(
             [
                 np.asarray(raw_contours[index]).reshape(-1, 2)
-                for index in contour_indices
+                for index in all_contour_indices
             ],
             axis=0,
         )
@@ -5588,6 +5856,7 @@ def _forest_root_selections(
                     root_index
                 ],
                 contour_indices=contour_indices,
+                all_contour_indices=all_contour_indices,
                 bounds_px=(
                     int(x_min),
                     int(y_min),
@@ -5597,6 +5866,142 @@ def _forest_root_selections(
             )
         )
     return tuple(selections)
+
+
+@_timed_stage("root_review_filter")
+def _filter_forest_roots_before_fitting(
+    roots: tuple[_RasterRootSelection, ...],
+    review_filter: PixelVectorizationRootReviewFilter | None,
+    *,
+    raw_contours: tuple[np.ndarray, ...],
+    depths: tuple[int, ...],
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    width_mm: float,
+    height_mm: float,
+) -> tuple[
+    tuple[_RasterRootSelection, ...],
+    tuple[PixelVectorizationRootFailure, ...],
+]:
+    if review_filter is None:
+        return roots, ()
+    if (
+        review_filter.maximum_area_mm2 is None
+        and review_filter.minimum_width_mm == 0.0
+        and review_filter.minimum_height_mm == 0.0
+    ):
+        return roots, ()
+
+    source_edge_margin_mm = (
+        _SOURCE_EDGE_MAXIMUM_DISPLACEMENT_SOURCE_PIXELS
+        * max(width_mm / source.width_px, height_mm / source.height_px)
+    )
+    fit_margin_mm = options.simplification_tolerance_mm * 0.80
+    maximum_boundary_displacement_mm = source_edge_margin_mm + fit_margin_mm
+    numeric_margin_mm = max(1e-12, max(width_mm, height_mm) * 1e-12)
+    numeric_area_margin_mm2 = max(1e-12, width_mm * height_mm * 1e-12)
+    # Source-edge refinement and continuous native fitting each have a hard
+    # displacement bound. Smoothing reports its displacement only after the
+    # work, so a smoothed root cannot be rejected safely at this earlier stage.
+    can_bound_native_geometry = options.smoothing_mm == 0.0
+    survivors: list[_RasterRootSelection] = []
+    failures: list[PixelVectorizationRootFailure] = []
+
+    for root in roots:
+        physical_by_index = {
+            index: _physical_contour(
+                raw_contours[index],
+                source.width_px,
+                source.height_px,
+                width_mm,
+                height_mm,
+            )
+            for index in root.all_contour_indices
+        }
+        combined = np.concatenate(tuple(physical_by_index.values()), axis=0)
+        threshold_width_mm = float(np.ptp(combined[:, 0]))
+        threshold_height_mm = float(np.ptp(combined[:, 1]))
+        root_depth = depths[root.root_index]
+        net_area_mm2 = 0.0
+        total_boundary_area_allowance_mm2 = 0.0
+        for index in root.all_contour_indices:
+            physical = physical_by_index[index]
+            contour_area = abs(_signed_area(physical))
+            perimeter_mm = float(
+                np.sum(
+                    np.linalg.norm(
+                        np.roll(physical, -1, axis=0) - physical,
+                        axis=1,
+                    )
+                )
+            )
+            # The parallel-set bound for moving one closed boundary by at most
+            # d is perimeter*d + pi*d^2. Summing it for every even-odd boundary
+            # gives a conservative loss allowance for the complete root area.
+            total_boundary_area_allowance_mm2 += (
+                perimeter_mm * maximum_boundary_displacement_mm
+                + math.pi * maximum_boundary_displacement_mm**2
+            )
+            relative_depth = depths[index] - root_depth
+            net_area_mm2 += contour_area if relative_depth % 2 == 0 else -contour_area
+        net_area_mm2 = max(0.0, net_area_mm2)
+        minimum_native_area_mm2 = max(
+            0.0,
+            net_area_mm2
+            - total_boundary_area_allowance_mm2
+            - numeric_area_margin_mm2,
+        )
+
+        reasons: list[str] = []
+        maximum_area = review_filter.maximum_area_mm2
+        if (
+            can_bound_native_geometry
+            and maximum_area is not None
+            and minimum_native_area_mm2 > maximum_area
+        ):
+            reasons.append(
+                f"conservative area lower bound {minimum_native_area_mm2:.6g} "
+                f"mm^2 (from {net_area_mm2:.6g} mm^2 threshold area) exceeds "
+                f"the {maximum_area:.6g} mm^2 review maximum"
+            )
+        if can_bound_native_geometry:
+            maximum_width_mm = (
+                threshold_width_mm + 2.0 * maximum_boundary_displacement_mm
+            )
+            maximum_height_mm = (
+                threshold_height_mm + 2.0 * maximum_boundary_displacement_mm
+            )
+            if (
+                maximum_width_mm + numeric_margin_mm
+                < review_filter.minimum_width_mm
+            ):
+                reasons.append(
+                    f"threshold width {threshold_width_mm:.6g} mm remains below the "
+                    f"{review_filter.minimum_width_mm:.6g} mm review minimum even "
+                    "after the full edge/fitting margin"
+                )
+            if (
+                maximum_height_mm + numeric_margin_mm
+                < review_filter.minimum_height_mm
+            ):
+                reasons.append(
+                    f"threshold height {threshold_height_mm:.6g} mm remains below the "
+                    f"{review_filter.minimum_height_mm:.6g} mm review minimum even "
+                    "after the full edge/fitting margin"
+                )
+        if not reasons:
+            survivors.append(root)
+            continue
+        failures.append(
+            PixelVectorizationRootFailure(
+                root_index=root.source_root_index,
+                contour_count=len(root.all_contour_indices),
+                stage="review_filter",
+                reason="; ".join(reasons),
+                bounds_px=root.bounds_px,
+            )
+        )
+    return tuple(survivors), tuple(failures)
 
 
 def _fit_forest_contour(
@@ -5819,6 +6224,9 @@ def _vectorize_pixel_source_forest(
     *,
     displayed_width_mm: float,
     displayed_height_mm: float,
+    prepared_mask: PixelVectorizationMaskPreview | None = None,
+    mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
+    root_review_filter: PixelVectorizationRootReviewFilter | None = None,
 ) -> PixelVectorizationForestResult:
     if not isinstance(source, PixelVectorizationSource):
         raise TypeError("source must be a PixelVectorizationSource")
@@ -5831,7 +6239,25 @@ def _vectorize_pixel_source_forest(
         displayed_width_mm,
         displayed_height_mm,
     )
-    masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
+    mask_preview = (
+        _prepare_pixel_vectorization_mask(
+            source,
+            options,
+            width_mm,
+            height_mm,
+        )
+        if prepared_mask is None
+        else _validated_prepared_mask(
+            prepared_mask,
+            source,
+            options,
+            width_mm,
+            height_mm,
+        )
+    )
+    masks = mask_preview._masks
+    _emit_mask_ready(mask_ready, mask_preview)
+    _require_prepared_foreground(masks)
     contour_extraction = _extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
@@ -5884,6 +6310,17 @@ def _vectorize_pixel_source_forest(
         for removed in contour_extraction.removed_root_trees
     ]
     root_tree_count = len(roots) + len(failures)
+    roots, review_failures = _filter_forest_roots_before_fitting(
+        roots,
+        root_review_filter,
+        raw_contours=raw_contours,
+        depths=depths,
+        source=source,
+        options=options,
+        width_mm=width_mm,
+        height_mm=height_mm,
+    )
+    failures.extend(review_failures)
     budget = _ComplexityBudget()
     fitted_by_original_index: dict[int, RasterVectorizedContour] = {}
     accepted_roots: list[_RasterRootSelection] = []
@@ -5978,15 +6415,10 @@ def _vectorize_pixel_source_forest(
         fitted_by_original_index=fitted_by_original_index,
         contour_output=options.contour_output,
     )
-    mask_preview = _preview_mask(
-        masks.working_mask,
-        source.width_px,
-        source.height_px,
-    )
     result = PixelVectorizationResult(
         source_key=source.source_key,
         source_rgba=source.source_rgba,
-        foreground_mask=_readonly(mask_preview),
+        foreground_mask=mask_preview.foreground_mask,
         overlay_rgba=_readonly(_overlay_preview(source.source_rgba, result_contours)),
         contours=result_contours,
         threshold_used=masks.threshold_used,
@@ -6024,9 +6456,13 @@ def vectorize_pixel_source(
     displayed_width_mm: float,
     displayed_height_mm: float,
     timing: RasterVectorizationTiming | None = None,
+    prepared_mask: PixelVectorizationMaskPreview | None = None,
+    mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
 ) -> PixelVectorizationResult:
     """Vectorize source-neutral pixels through the authoritative raster path."""
 
+    if mask_ready is not None and not callable(mask_ready):
+        raise TypeError("mask_ready must be callable or None")
     token = _TIMING_STAGE.set(timing)
     try:
         return _vectorize_pixel_source(
@@ -6035,6 +6471,8 @@ def vectorize_pixel_source(
             displayed_width_mm=displayed_width_mm,
             displayed_height_mm=displayed_height_mm,
             prepared_preview=None,
+            prepared_mask=prepared_mask,
+            mask_ready=mask_ready,
         )
     finally:
         _TIMING_STAGE.reset(token)
@@ -6047,9 +6485,21 @@ def vectorize_pixel_source_forest(
     displayed_width_mm: float,
     displayed_height_mm: float,
     timing: RasterVectorizationTiming | None = None,
+    prepared_mask: PixelVectorizationMaskPreview | None = None,
+    mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
+    root_review_filter: PixelVectorizationRootReviewFilter | None = None,
 ) -> PixelVectorizationForestResult:
-    """Vectorize Auto candidates while isolating invalid complete root trees."""
+    """Vectorize root-isolated candidates through the shared raster pipeline."""
 
+    if mask_ready is not None and not callable(mask_ready):
+        raise TypeError("mask_ready must be callable or None")
+    if root_review_filter is not None and not isinstance(
+        root_review_filter,
+        PixelVectorizationRootReviewFilter,
+    ):
+        raise TypeError(
+            "root_review_filter must be a PixelVectorizationRootReviewFilter or None"
+        )
     token = _TIMING_STAGE.set(timing)
     try:
         return _vectorize_pixel_source_forest(
@@ -6057,6 +6507,9 @@ def vectorize_pixel_source_forest(
             options,
             displayed_width_mm=displayed_width_mm,
             displayed_height_mm=displayed_height_mm,
+            prepared_mask=prepared_mask,
+            mask_ready=mask_ready,
+            root_review_filter=root_review_filter,
         )
     finally:
         _TIMING_STAGE.reset(token)
@@ -6140,8 +6593,10 @@ __all__ = [
     "MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION",
     "MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION",
     "PixelVectorizationForestResult",
+    "PixelVectorizationMaskPreview",
     "PixelVectorizationResult",
     "PixelVectorizationRootFailure",
+    "PixelVectorizationRootReviewFilter",
     "PixelVectorizationSource",
     "PhysicalContourFitContour",
     "PhysicalContourFitResult",
@@ -6158,6 +6613,7 @@ __all__ = [
     "RasterVectorizationTiming",
     "RasterVectorizedContour",
     "fit_physical_contours_to_native_path",
+    "prepare_pixel_vectorization_mask",
     "prepare_pixel_vectorization_source",
     "prepare_raster_vectorization_source",
     "quick_preview_prepared_raster",

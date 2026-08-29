@@ -96,7 +96,7 @@ from ..templates import (
     template_from_rectangle_grid,
 )
 from .context_bar import ContextPropertyBar
-from .controller import DesktopController
+from .controller import DesktopController, image_to_qimage
 from .controls import InspectorTabs, WheelGuard
 from .icons import action_icon, apply_action_icons
 from .import_review import review_import_manifest
@@ -370,6 +370,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._close_requested = False
         self._expanding_group_selection = False
         self._trace_result: dict[str, Any] | None = None
+        self._active_trace_request_id: int | None = None
+        self._trace_raster_preview_images: dict[str, QtGui.QImage] = {}
+        self._trace_raster_preview_area: Bounds | None = None
+        self._trace_raster_preview_signature: object | None = None
         self._template_match_result: dict[str, Any] | None = None
 
         self._application_identity = application_identity()
@@ -1122,6 +1126,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.selectionChanged.connect(
             self._trace_selection_changed
         )
+        self.trace_panel.rasterPreviewModeChanged.connect(
+            self._trace_raster_preview_mode_changed
+        )
         self.workspace.traceSelectionIdsChanged.connect(
             self._trace_canvas_selection_changed
         )
@@ -1207,6 +1214,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.controller.traceResultReady.connect(
             self._trace_result_ready
+        )
+        self.controller.traceRasterPreviewReady.connect(
+            self._trace_raster_preview_ready,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        self.controller.traceDetectionFailed.connect(
+            self._trace_detection_failed
         )
         self.controller.traceColorReady.connect(
             self._trace_color_ready
@@ -4494,14 +4508,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
+        # A new request immediately retires any old, non-project candidate
+        # overlays. Workspace project objects are owned separately and remain.
+        E3MainWindow._retire_trace_preview_ui(self)
         self._reconcile_pristine_project_frame()
         try:
             self._require_project_machine_work_area_match()
         except Exception as exc:
+            self.controller.cancel_trace_detection()
             self.show_error(f"Object detection unavailable: {exc}")
             return
         self._clear_template_preview(show_message=False)
-        self.controller.detect_trace_objects(raw_options)
+        if hasattr(self, "trace_panel"):
+            self.trace_panel.begin_detection()
+        self._active_trace_request_id = self.controller.detect_trace_objects(
+            raw_options
+        )
 
     def _begin_trace_color_pick(self) -> None:
         if self.runtime.context.bed.calibration is None:
@@ -4547,10 +4569,126 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.set_color_pick_failed(message)
         self.show_error(f"Sample trace color failed: {message}")
 
+    @staticmethod
+    def _trace_raster_preview_value(preview: object, name: str) -> object:
+        """Adapt the frozen vision value without coupling the UI to its class."""
+
+        if isinstance(preview, dict):
+            return preview.get(name)
+        return getattr(preview, name, None)
+
+    @QtCore.Slot(int, object)
+    def _trace_raster_preview_ready(
+        self,
+        request_id: int,
+        payload: object,
+    ) -> None:
+        if request_id != self._active_trace_request_id:
+            return
+        if not isinstance(payload, dict):
+            return
+        signature = payload.get("review_signature")
+        if signature is None or not self.controller.review_signature_is_current(
+            signature
+        ):
+            return
+        preview = payload.get("preview")
+        if preview is None:
+            return
+        arrays = {
+            "camera": self._trace_raster_preview_value(preview, "camera_bgr"),
+            "normalized": self._trace_raster_preview_value(
+                preview,
+                "normalized_grayscale",
+            ),
+            "mask": self._trace_raster_preview_value(
+                preview,
+                "contour_mask",
+            ),
+        }
+        if any(value is None for value in arrays.values()):
+            return
+        try:
+            images = {
+                name: image_to_qimage(value)
+                for name, value in arrays.items()
+            }
+        except (AttributeError, TypeError, ValueError):
+            return
+        if any(image.isNull() for image in images.values()):
+            return
+        area = self._camera_image_area(payload.get("camera_image_area"))
+        if area is None:
+            return
+        self._trace_raster_preview_images = images
+        self._trace_raster_preview_area = area
+        self._trace_raster_preview_signature = signature
+        strategy = self._trace_raster_preview_value(preview, "strategy")
+        self.trace_panel.set_raster_preview_available(
+            "" if strategy is None else str(strategy)
+        )
+        self._trace_raster_preview_mode_changed(
+            self.trace_panel.raster_preview_mode()
+        )
+
+    def _trace_raster_preview_mode_changed(self, mode: str) -> None:
+        image = self._trace_raster_preview_images.get(str(mode))
+        if image is None or image.isNull():
+            return
+        self._camera_image_ready(
+            image,
+            image_area=self._trace_raster_preview_area,
+        )
+
+    @QtCore.Slot(int, str, bool)
+    def _trace_detection_failed(
+        self,
+        request_id: int,
+        message: str,
+        retain_preview: bool,
+    ) -> None:
+        if request_id != self._active_trace_request_id:
+            return
+        self._active_trace_request_id = None
+        self._trace_result = None
+        retained = bool(
+            retain_preview
+            and self._trace_raster_preview_images
+            and self._trace_raster_preview_area is not None
+        )
+        if not retained:
+            self._trace_raster_preview_images = {}
+            self._trace_raster_preview_area = None
+            self._trace_raster_preview_signature = None
+            if retain_preview:
+                # A retained controller hold without a delivered diagnostic
+                # would be invisible to the operator, so fail back to live view.
+                self.controller.cancel_trace_detection()
+        self.workspace.clear_trace_preview()
+        self.trace_panel.set_detection_failed(
+            message,
+            retain_preview=retained,
+        )
+        self.inspector_tabs.select_panel("trace")
+
     def _trace_result_ready(self, result: dict[str, Any]) -> None:
+        request_id = result.get("request_id")
+        if request_id is not None and request_id != self._active_trace_request_id:
+            return
+        self._active_trace_request_id = None
         camera_image = result.get("camera_image")
         if isinstance(camera_image, QtGui.QImage) and not camera_image.isNull():
-            if result.get("camera_image_area") is None:
+            if self._trace_raster_preview_images:
+                self._trace_raster_preview_images["camera"] = camera_image.copy()
+                area = E3MainWindow._camera_image_area(
+                    result.get("camera_image_area")
+                )
+                if area is not None:
+                    self._trace_raster_preview_area = area
+                self._trace_raster_preview_mode_changed(
+                    self.trace_panel.raster_preview_mode()
+                )
+            elif result.get("camera_image_area") is None:
                 self._camera_image_ready(camera_image)
             else:
                 self._camera_image_ready(
@@ -4594,12 +4732,46 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self.trace_panel.set_selected_ids(selected_ids)
 
-    def _clear_trace_preview(self) -> None:
-        self.controller.cancel_trace_detection()
+    def _retire_trace_preview_ui(self) -> None:
+        preview_camera = getattr(self, "_trace_raster_preview_images", {}).get(
+            "camera"
+        )
+        preview_area = getattr(self, "_trace_raster_preview_area", None)
+        preview_signature = getattr(
+            self,
+            "_trace_raster_preview_signature",
+            None,
+        )
+        signature_checker = getattr(
+            self.controller,
+            "review_signature_is_current",
+            None,
+        )
+        restore_camera = bool(
+            isinstance(preview_camera, QtGui.QImage)
+            and not preview_camera.isNull()
+            and preview_signature is not None
+            and callable(signature_checker)
+            and signature_checker(preview_signature)
+        )
+        self._active_trace_request_id = None
+        self._trace_raster_preview_images = {}
+        self._trace_raster_preview_area = None
+        self._trace_raster_preview_signature = None
         self._trace_result = None
-        self.workspace.clear_trace_preview()
+        workspace = getattr(self, "workspace", None)
+        workspace_clear = getattr(workspace, "clear_trace_preview", None)
+        if callable(workspace_clear):
+            workspace_clear()
         if hasattr(self, "trace_panel"):
             self.trace_panel.clear_result()
+        camera_publisher = getattr(self, "_camera_image_ready", None)
+        if restore_camera and callable(camera_publisher):
+            camera_publisher(preview_camera, image_area=preview_area)
+
+    def _clear_trace_preview(self) -> None:
+        E3MainWindow._retire_trace_preview_ui(self)
+        self.controller.cancel_trace_detection()
 
     def _trace_detection_to_object(
         self,
@@ -5383,6 +5555,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _calibration_review_evidence_invalidated(self) -> None:
         """Remove camera evidence whose coordinates belonged to the old map/pose."""
 
+        self._active_trace_request_id = None
+        self._trace_raster_preview_images = {}
+        self._trace_raster_preview_area = None
+        self._trace_raster_preview_signature = None
         self._trace_result = None
         self._template_match_result = None
         self.workspace.clear_trace_preview()
