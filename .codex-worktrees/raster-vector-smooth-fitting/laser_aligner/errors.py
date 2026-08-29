@@ -1,0 +1,30 @@
+class LaserAlignerError(Exception):
+    """Base application exception."""
+
+
+class RealMachineSetupRequired(ValueError):
+    """A product runtime cannot start until a real saved machine is selected."""
+
+
+class CameraError(LaserAlignerError):
+    """Camera could not be opened or read."""
+
+
+class CalibrationError(LaserAlignerError):
+    """Calibration data is missing or invalid."""
+
+
+class MachineError(LaserAlignerError):
+    """Motion controller operation failed."""
+
+
+class TransientConnectionError(MachineError):
+    """A transport failed before a controller session was established."""
+
+
+class SafetyError(MachineError):
+    """Operation was blocked by a software safety gate."""
+
+
+class SvgError(LaserAlignerError):
+    """SVG could not be parsed or converted."""

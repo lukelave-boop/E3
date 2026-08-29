@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-CAMERA_RASTER_NORMALIZATION_VERSION = "e3-camera-raster-normalization-v4"
+CAMERA_RASTER_NORMALIZATION_VERSION = "e3-camera-raster-normalization-v5"
 CAMERA_BACKGROUND_MODEL_MAX_DIMENSION_PX = 512
 CAMERA_BACKGROUND_MODEL_MAX_PIXELS_PER_MM = 1.0
 CAMERA_BACKGROUND_ENVELOPE_DIAMETER_MM = 35.0
@@ -96,6 +96,10 @@ class CameraRasterNormalizationDiagnostics:
     robust_response_level: float
     response_scale_levels: float
     response_transfer: str
+    eligibility_supplied: bool
+    eligible_pixel_count: int
+    eligible_fraction: float
+    eligibility_fill_kind: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -351,8 +355,15 @@ def _flat_field_assessment(
     )
 
 
-def _robust_response_scale(response: np.ndarray) -> tuple[float, float]:
-    flattened = np.ravel(response)
+def _robust_response_scale(
+    response: np.ndarray,
+    eligibility: np.ndarray | None = None,
+) -> tuple[float, float]:
+    flattened = (
+        np.ravel(response)
+        if eligibility is None
+        else np.asarray(response)[np.asarray(eligibility) > 0]
+    )
     rank = max(
         0,
         min(
@@ -385,7 +396,11 @@ def _artwork_raster(response: np.ndarray, scale: float) -> np.ndarray:
     return np.clip(np.rint(normalized), 0.0, 255.0).astype(np.uint8)
 
 
-def _normalization_key(corrected_bgr: np.ndarray, pixels_per_mm: float) -> str:
+def _normalization_key(
+    corrected_bgr: np.ndarray,
+    pixels_per_mm: float,
+    eligibility_mask: np.ndarray | None,
+) -> str:
     digest = hashlib.sha256()
     digest.update(CAMERA_RASTER_NORMALIZATION_VERSION.encode("ascii"))
     digest.update(b"\0")
@@ -398,6 +413,9 @@ def _normalization_key(corrected_bgr: np.ndarray, pixels_per_mm: float) -> str:
         )
     )
     digest.update(corrected_bgr.tobytes(order="C"))
+    if eligibility_mask is not None:
+        digest.update(b"\0eligibility-v1\0")
+        digest.update(eligibility_mask.tobytes(order="C"))
     return digest.hexdigest()
 
 
@@ -405,6 +423,7 @@ def normalize_camera_trace_frame(
     corrected_bgr: np.ndarray,
     pixels_per_mm: float,
     *,
+    eligibility_mask: np.ndarray | None = None,
     timing: CameraRasterNormalizationTiming | None = None,
 ) -> CameraRasterNormalizationResult:
     """Remove low-frequency photographic variation before raster vectorization.
@@ -426,6 +445,24 @@ def normalize_camera_trace_frame(
             ppm = _require_pixels_per_mm(pixels_per_mm)
             grayscale = cv2.cvtColor(pixels, cv2.COLOR_BGR2GRAY)
             intensity = grayscale.astype(np.float32)
+            eligibility: np.ndarray | None = None
+            if eligibility_mask is not None:
+                candidate = np.asarray(eligibility_mask)
+                if candidate.ndim != 2 or candidate.shape != grayscale.shape:
+                    raise ValueError(
+                        "Camera normalization eligibility must match the corrected frame"
+                    )
+                if candidate.dtype not in (np.bool_, np.uint8):
+                    raise ValueError(
+                        "Camera normalization eligibility must be boolean or uint8"
+                    )
+                eligibility = (candidate > 0).astype(np.uint8) * 255
+                if not np.any(eligibility):
+                    raise ValueError(
+                        "Camera normalization eligibility contains no material pixels"
+                    )
+                if np.all(eligibility):
+                    eligibility = None
         finally:
             if timing is not None:
                 timing.record(
@@ -468,13 +505,30 @@ def normalize_camera_trace_frame(
 
         background_started = time.perf_counter()
         try:
+            fill_started = time.perf_counter()
+            if eligibility is None or np.all(eligibility):
+                model_input = intensity
+                eligibility_fill_kind = "none"
+            else:
+                model_input = cv2.inpaint(
+                    grayscale,
+                    cv2.bitwise_not(eligibility),
+                    max(1.0, min(12.0, 2.0 * ppm)),
+                    cv2.INPAINT_TELEA,
+                ).astype(np.float32)
+                eligibility_fill_kind = "telea_model_only"
+            if timing is not None and eligibility is not None:
+                timing.record(
+                    "eligibility_fill",
+                    time.perf_counter() - fill_started,
+                )
             model = cv2.resize(
-                intensity,
+                model_input,
                 (model_width_px, model_height_px),
                 interpolation=cv2.INTER_AREA,
             )
             flat_field = _flat_field_assessment(
-                grayscale,
+                np.clip(np.rint(model_input), 0.0, 255.0).astype(np.uint8),
                 model,
                 model_ppm_x,
                 model_ppm_y,
@@ -529,15 +583,23 @@ def normalize_camera_trace_frame(
         normalization_started = time.perf_counter()
         try:
             signed_residual = intensity - background
+            if eligibility is not None:
+                signed_residual[eligibility == 0] = np.float32(0.0)
             noise_floor = np.float32(CAMERA_NORMALIZATION_NOISE_FLOOR)
             zero = np.float32(0.0)
             magnitude = np.maximum(np.abs(signed_residual) - noise_floor, zero)
-            robust_level, response_scale = _robust_response_scale(magnitude)
+            robust_level, response_scale = _robust_response_scale(
+                magnitude,
+                eligibility,
+            )
             dark_response = np.maximum(-signed_residual - noise_floor, zero)
             light_response = np.maximum(signed_residual - noise_floor, zero)
             dark_raster = _artwork_raster(dark_response, response_scale)
             light_raster = _artwork_raster(light_response, response_scale)
-            normalization_key = _normalization_key(pixels, ppm)
+            if eligibility is not None:
+                dark_raster[eligibility == 0] = 255
+                light_raster[eligibility == 0] = 255
+            normalization_key = _normalization_key(pixels, ppm, eligibility)
         finally:
             if timing is not None:
                 timing.record(
@@ -599,6 +661,18 @@ def normalize_camera_trace_frame(
             robust_response_level=robust_level,
             response_scale_levels=response_scale,
             response_transfer=CAMERA_NORMALIZATION_RESPONSE_TRANSFER,
+            eligibility_supplied=eligibility is not None,
+            eligible_pixel_count=(
+                int(grayscale.size)
+                if eligibility is None
+                else int(np.count_nonzero(eligibility))
+            ),
+            eligible_fraction=(
+                1.0
+                if eligibility is None
+                else float(np.count_nonzero(eligibility)) / float(eligibility.size)
+            ),
+            eligibility_fill_kind=eligibility_fill_kind,
         )
         return CameraRasterNormalizationResult(
             corrected_bgr=_immutable_array(pixels),

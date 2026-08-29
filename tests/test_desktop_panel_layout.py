@@ -226,10 +226,27 @@ def test_trace_raster_selector_is_diagnostic_and_does_not_stale_result(
     panel.begin_detection()
     assert "preparing" in panel.status_label.text().lower()
 
-    panel.set_raster_preview_available("raster_dark")
+    panel.set_raster_preview_available(
+        "raster_dark",
+        selected_strategy=False,
+    )
     assert panel.raster_preview_combo.isEnabled()
     assert panel.raster_preview_mode() == "mask"
+    assert "Auto evaluation is still running" in panel.status_label.text()
+
+    panel.set_raster_preview_available(
+        "raster_dark",
+        selected_strategy=True,
+        native_fitting_completed=False,
+    )
     assert "native fitting is still running" in panel.status_label.text()
+
+    panel.set_raster_preview_available(
+        "raster_dark",
+        selected_strategy=True,
+        native_fitting_completed=True,
+    )
+    assert "native fitting completed" in panel.status_label.text()
 
     panel.set_result(
         {

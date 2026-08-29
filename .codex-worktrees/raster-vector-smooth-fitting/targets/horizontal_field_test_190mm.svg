@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="190mm" height="190mm" viewBox="0 0 190 190">
+  <!--
+    Nine identical 46 x 18 mm rounded rectangles.
+
+    Column bounds:
+      left   X5..51
+      center X72..118
+      right  X139..185
+
+    Row bounds in the imported honeycomb-local project:
+      bottom Y15..33
+      center Y86..104
+      top    Y157..175
+
+    The desktop SVG importer flips SVG Y into the project coordinate system.
+    Cut this only on a restrained sacrificial sheet using a reviewed material
+    operation. Measure each physical rectangle against 46.00 x 18.00 mm and
+    compare its inner and outer X edges.
+  -->
+  <g fill="none" stroke="#000000" stroke-width="0.1">
+    <rect x="5" y="15" width="46" height="18" rx="4" ry="4"/>
+    <rect x="72" y="15" width="46" height="18" rx="4" ry="4"/>
+    <rect x="139" y="15" width="46" height="18" rx="4" ry="4"/>
+
+    <rect x="5" y="86" width="46" height="18" rx="4" ry="4"/>
+    <rect x="72" y="86" width="46" height="18" rx="4" ry="4"/>
+    <rect x="139" y="86" width="46" height="18" rx="4" ry="4"/>
+
+    <rect x="5" y="157" width="46" height="18" rx="4" ry="4"/>
+    <rect x="72" y="157" width="46" height="18" rx="4" ry="4"/>
+    <rect x="139" y="157" width="46" height="18" rx="4" ry="4"/>
+  </g>
+</svg>

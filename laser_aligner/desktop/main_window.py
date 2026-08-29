@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import logging
 import threading
 import time
 from pathlib import Path
@@ -127,6 +129,21 @@ from .text_geometry import create_vector_text_object
 from .workspace import WorkspaceFrame, WorkspaceView
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+LOGGER = logging.getLogger(__name__)
+
+
+def _qimage_content_sha256(image: QtGui.QImage) -> str:
+    """Hash active QImage bytes without format-dependent row padding."""
+
+    digest = hashlib.sha256()
+    pixels = image.constBits()
+    active_row_bytes = (image.width() * image.depth() + 7) // 8
+    stride = image.bytesPerLine()
+    for row in range(image.height()):
+        start = row * stride
+        digest.update(pixels[start : start + active_row_bytes])
+    return digest.hexdigest()
 
 _DESIGN_DOCK_MIN_WIDTH = 360
 _DESIGN_DOCK_DEFAULT_WIDTH = 420
@@ -4597,6 +4614,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         arrays = {
             "camera": self._trace_raster_preview_value(preview, "camera_bgr"),
+            "eligible": self._trace_raster_preview_value(
+                preview,
+                "eligible_mask",
+            ),
             "normalized": self._trace_raster_preview_value(
                 preview,
                 "normalized_grayscale",
@@ -4620,12 +4641,35 @@ class E3MainWindow(QtWidgets.QMainWindow):
         area = self._camera_image_area(payload.get("camera_image_area"))
         if area is None:
             return
+        # Temporary physical-build evidence for the Camera-to-Mask display
+        # boundary. Avoid hashing full frames when INFO diagnostics are disabled.
+        if LOGGER.isEnabledFor(logging.INFO):
+            for name, image in images.items():
+                image_format = image.format()
+                LOGGER.info(
+                    "Camera Trace preview slot %s: %d x %d, format=%s, "
+                    "bytes=%d, pixel_sha256=%s",
+                    name,
+                    image.width(),
+                    image.height(),
+                    getattr(image_format, "name", str(image_format)),
+                    image.sizeInBytes(),
+                    _qimage_content_sha256(image),
+                )
         self._trace_raster_preview_images = images
         self._trace_raster_preview_area = area
         self._trace_raster_preview_signature = signature
         strategy = self._trace_raster_preview_value(preview, "strategy")
+        selected_strategy = bool(
+            self._trace_raster_preview_value(preview, "selected_strategy")
+        )
+        native_fitting_completed = bool(
+            self._trace_raster_preview_value(preview, "native_fitting_completed")
+        )
         self.trace_panel.set_raster_preview_available(
-            "" if strategy is None else str(strategy)
+            "" if strategy is None else str(strategy),
+            selected_strategy=selected_strategy,
+            native_fitting_completed=native_fitting_completed,
         )
         self._trace_raster_preview_mode_changed(
             self.trace_panel.raster_preview_mode()
@@ -4635,10 +4679,65 @@ class E3MainWindow(QtWidgets.QMainWindow):
         image = self._trace_raster_preview_images.get(str(mode))
         if image is None or image.isNull():
             return
-        self._camera_image_ready(
-            image,
-            image_area=self._trace_raster_preview_area,
-        )
+        camera = self._trace_raster_preview_images.get("camera")
+        display_ppm: float | None = None
+        source_resolution_multiplier = 1
+        if camera is not None and not camera.isNull() and camera.width() > 0:
+            if (
+                camera.height() <= 0
+                or image.width() % camera.width() != 0
+                or image.height() % camera.height() != 0
+            ):
+                self._trace_raster_preview_display_failed(
+                    mode,
+                    "the selected image is not an integer-resolution derivative "
+                    "of the corrected Camera frame",
+                )
+                return
+            source_resolution_multiplier = image.width() // camera.width()
+            if (
+                source_resolution_multiplier < 1
+                or image.height() // camera.height()
+                != source_resolution_multiplier
+            ):
+                self._trace_raster_preview_display_failed(
+                    mode,
+                    "the selected image has inconsistent horizontal and vertical "
+                    "resolution multipliers",
+                )
+                return
+            scale = float(source_resolution_multiplier)
+            runtime = getattr(self, "runtime", None)
+            settings = getattr(runtime, "settings", None)
+            calibration = getattr(settings, "calibration", None)
+            bed = getattr(calibration, "bed", None)
+            base_ppm = getattr(bed, "pixels_per_mm", None)
+            if base_ppm is not None:
+                display_ppm = float(base_ppm) * scale
+            elif self._trace_raster_preview_area is not None:
+                display_ppm = (
+                    camera.width() / self._trace_raster_preview_area.width * scale
+                )
+        try:
+            self._camera_image_ready(
+                image,
+                image_area=self._trace_raster_preview_area,
+                pixels_per_mm=display_ppm,
+                source_resolution_multiplier=source_resolution_multiplier,
+            )
+        except ValueError as exc:
+            self._trace_raster_preview_display_failed(mode, str(exc))
+
+    def _trace_raster_preview_display_failed(self, mode: str, reason: str) -> None:
+        message = f"Could not display Camera Trace {str(mode).title()} preview: {reason}"
+        LOGGER.error(message)
+        workspace = getattr(self, "workspace", None)
+        image_setter = getattr(workspace, "set_camera_image", None)
+        if callable(image_setter):
+            image_setter(None)
+        notice = getattr(self, "show_notice", None)
+        if callable(notice):
+            notice(message)
 
     @QtCore.Slot(int, str, bool)
     def _trace_detection_failed(
@@ -5091,6 +5190,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         payload: object,
         *,
         image_area: Bounds | None = None,
+        pixels_per_mm: float | None = None,
+        source_resolution_multiplier: int = 1,
         fit: bool = False,
     ) -> None:
         image = payload
@@ -5114,8 +5215,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
         ) != effective_area
         self.workspace.set_camera_image(
             image,
-            pixels_per_mm=self.runtime.settings.calibration.bed.pixels_per_mm,
+            pixels_per_mm=(
+                self.runtime.settings.calibration.bed.pixels_per_mm
+                * source_resolution_multiplier
+                if pixels_per_mm is None
+                else pixels_per_mm
+            ),
             image_area=image_area,
+            source_resolution_multiplier=source_resolution_multiplier,
         )
         if fit or area_changed:
             self.workspace.fit_camera_image()

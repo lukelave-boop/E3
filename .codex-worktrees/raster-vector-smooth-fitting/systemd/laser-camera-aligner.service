@@ -1,0 +1,18 @@
+[Unit]
+Description=Laser Camera Aligner local web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=REPLACE_USER
+Group=REPLACE_USER
+WorkingDirectory=/home/REPLACE_USER/laser-camera-aligner
+ExecStart=/home/REPLACE_USER/laser-camera-aligner/.venv/bin/python -m laser_aligner --config config/local.json --no-browser
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

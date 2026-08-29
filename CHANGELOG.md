@@ -6,6 +6,46 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed the desktop Camera Trace **Mask** display for corrected camera areas
+  with a fractional final pixel strip. The source frame is rounded to integer
+  dimensions before the immutable production mask is reconstructed at exactly
+  4×, so validating that mask by independently rounding `area × 4 × pixels/mm`
+  could reject its correct dimensions after the selector and status had already
+  changed, leaving the prior Camera pixmap visible. The workspace now validates
+  an explicit 4× display against four times the already-rounded source raster
+  and retains the true 4× pixels/mm transform without resizing or mutating the
+  mask. A real-workspace regression checks the complete selected pixel arrays
+  for Camera, Eligible, Normalized, and Mask, including the fractional-edge
+  case. Temporary per-slot dimensions, format, byte count, and pixel SHA-256
+  diagnostics are written to the application log for physical verification.
+  Segmentation, thresholding, contour extraction, and native fitting are
+  unchanged.
+
+- Rebuilt ordinary non-grid Camera Trace around physical material eligibility.
+  The full corrected frame keeps its established pixel-to-millimetre transform,
+  but a hard Trace ROI is now created from existing guarded-output geometry; a
+  honeycomb-local project additionally intersects that geometry with its
+  recorded support rectangle. The already validated, rectified empty-honeycomb
+  reference is compared with the current frame using bounded locally detrended
+  luminance correlation, normalized patch error, and compatible texture. Only
+  strong exposed-bed evidence is excluded; changed or uncertain pixels remain
+  material-eligible and do not become foreground. Normalization derives its
+  model and response scale from eligible material. A new optional immutable
+  `PixelVectorizationSource.eligibility_mask` excludes impossible pixels from
+  Otsu and gates both source and exact 4× masks, while absent eligibility retains
+  imported-raster keys, thresholding, masks, hierarchy, and geometry. All
+  non-grid Auto paths and explicit Color obey the same hard ROI. Implicit Color
+  is bounded to at most 35% of eligible material and 25% of its boundary and
+  must beat a credible raster result by eight points; every Auto strategy now
+  has a 70-point absolute quality floor. The Trace display adds the exact
+  **Eligible** mask, displays the immutable 4× production **Mask** over the same
+  physical area, and distinguishes provisional Auto masks from the selected
+  strategy. Synthetic reflective-honeycomb, lighting-drift, empty-bed,
+  blank-sheet, stencil, dark/light, warm-false-Color, real-Color, hard-ROI,
+  coordinate, import-parity, and display-size regressions cover the new
+  boundary. This is vision preprocessing only and adds no laser authority;
+  physical Coleman-camera acceptance testing remains required.
+
 - Moved normal `e3bridge://` job execution ownership from Windows raw-serial
   streaming to the Raspberry Pi. The explicit authenticated `E3MACHINE/2`
   protocol separates bounded upload/finalize from START, persists canonical
@@ -27,7 +67,7 @@ not current product capability.
   stale-monitoring states, preserves direct local serial execution, and records
   upload throughput, finalization time, and START latency. Ordinary desktop
   shutdown always detaches the remote observer—even before its first status
-  refresh—so only explicit STOP cancels Pi execution. Automated protocol,
+  refresh—and does not substitute for an explicit STOP. Automated protocol,
   atomicity, disconnect, reconnect with persisted in-flight progress, STOP,
   failure, restart, completion, interference, combined camera-node, and real
   socket-stack tests were added; no physical Pi/controller/laser verification is

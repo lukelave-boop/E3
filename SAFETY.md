@@ -9,8 +9,8 @@ This repository controls equipment capable of causing permanent eye injury, fire
 A Raspberry Pi network hardware node does not change that boundary. Wi-Fi, the
 Pi, TCP, and the USB links can fail independently. For the current Pi-owned job
 protocol, loss of Windows, Wi-Fi, or the authenticated monitoring connection is
-deliberately **not** a run-enable failure after the Pi has acknowledged START for
-the exact uploaded job. The Pi continues that job locally. A connected software
+deliberately **not** a run-enable failure after the Pi has durably accepted START
+for the exact uploaded job. The Pi continues that job locally. A connected software
 STOP remains available, but its network and serial delivery can fail. A Pi
 process crash, reboot, or power loss never auto-resumes a persisted job; the next
 service start marks it interrupted, but a sudden failure may also prevent any

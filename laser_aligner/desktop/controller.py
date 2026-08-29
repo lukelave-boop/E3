@@ -66,6 +66,38 @@ def _configured_guarded_output_polygon(
     )
 
 
+def _work_area_polygon(area: WorkArea) -> tuple[tuple[float, float], ...]:
+    return (
+        (float(area.x_min), float(area.y_min)),
+        (float(area.x_max), float(area.y_min)),
+        (float(area.x_max), float(area.y_max)),
+        (float(area.x_min), float(area.y_max)),
+    )
+
+
+def _trace_roi_polygons(
+    runtime: CoreRuntime,
+    coordinate_frame: Any | None,
+) -> tuple[tuple[tuple[float, float], ...], ...]:
+    """Return trusted physical polygons whose intersection is the hard Trace ROI."""
+
+    guarded_polygon = _configured_guarded_output_polygon(runtime)
+    guarded_output = _guarded_output_work_area(runtime)
+    if coordinate_frame is None:
+        return (guarded_polygon or _work_area_polygon(guarded_output),)
+    support = (
+        (0.0, 0.0),
+        (float(coordinate_frame.width_mm), 0.0),
+        (float(coordinate_frame.width_mm), float(coordinate_frame.height_mm)),
+        (0.0, float(coordinate_frame.height_mm)),
+    )
+    machine_authority = guarded_polygon or _work_area_polygon(guarded_output)
+    local_authority = tuple(
+        coordinate_frame.machine_to_local(*point) for point in machine_authority
+    )
+    return support, local_authority
+
+
 def _honeycomb_support_metadata(
     runtime: CoreRuntime,
     *,
@@ -1487,6 +1519,25 @@ class DesktopController(QtCore.QObject):
                     else camera_area
                 ),
                 background_image=background_image,
+                trace_roi_polygons_mm=_trace_roi_polygons(
+                    self.runtime,
+                    coordinate_frame,
+                ),
+                trace_output_polygon_mm=_trace_roi_polygons(
+                    self.runtime,
+                    coordinate_frame,
+                )[-1],
+                trace_roi_source=(
+                    "guarded output geometry"
+                    if coordinate_frame is None
+                    else "honeycomb support intersected with guarded output geometry"
+                ),
+                reference_required=coordinate_frame is not None,
+                reference_identity=(
+                    None
+                    if coordinate_frame is None
+                    else coordinate_frame.provenance_digest
+                ),
                 raster_preview_callback=raster_preview_ready,
             )
             detection_seconds = time.perf_counter() - detection_started
@@ -1872,6 +1923,17 @@ class DesktopController(QtCore.QObject):
         image = context.rectified_frame(**frame_options)
         if image is None or image.size == 0:
             raise ValueError("The corrected camera frame is empty")
+        background_image = None
+        background_provider = getattr(
+            context,
+            "honeycomb_trace_background",
+            None,
+        )
+        if coordinate_frame is not None and callable(background_provider):
+            background_image = background_provider(
+                work_area=camera_area,
+                coordinate_frame=coordinate_frame,
+            )
 
         option_groups: dict[
             str,
@@ -1904,6 +1966,26 @@ class DesktopController(QtCore.QObject):
                     guarded_output
                     if coordinate_frame is None
                     else camera_area
+                ),
+                background_image=background_image,
+                trace_roi_polygons_mm=_trace_roi_polygons(
+                    self.runtime,
+                    coordinate_frame,
+                ),
+                trace_output_polygon_mm=_trace_roi_polygons(
+                    self.runtime,
+                    coordinate_frame,
+                )[-1],
+                trace_roi_source=(
+                    "guarded output geometry"
+                    if coordinate_frame is None
+                    else "honeycomb support intersected with guarded output geometry"
+                ),
+                reference_required=coordinate_frame is not None,
+                reference_identity=(
+                    None
+                    if coordinate_frame is None
+                    else coordinate_frame.provenance_digest
                 ),
             )
             if coordinate_frame is not None:

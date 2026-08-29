@@ -1,0 +1,52 @@
+{
+  "bed_calibration_created_at": 1786710231.863386,
+  "corner_topology": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "corner_topology_semantics": [
+    "origin",
+    "+x",
+    "opposite",
+    "+y"
+  ],
+  "created_at": 1786757158.6309502,
+  "measurement_method": "automatic-four-edge-fit",
+  "raw_corners_machine_mm": [
+    [
+      27.979583902411136,
+      39.25699656788737
+    ],
+    [
+      218.31472830505453,
+      38.92105888115143
+    ],
+    [
+      217.35464468653402,
+      229.76534833270514
+    ],
+    [
+      27.594713386467777,
+      229.92318206497418
+    ]
+  ],
+  "ruler_mark_mm": 191.0,
+  "ruler_origin_machine_mm": [
+    27.979583902411136,
+    39.25699656788737
+  ],
+  "ruler_x_mark_machine_mm": [
+    218.31472830505453,
+    38.92105888115143
+  ],
+  "ruler_xy_mark_machine_mm": [
+    217.35464468653402,
+    229.76534833270514
+  ],
+  "schema_version": 2,
+  "support_height_mm": 191.0,
+  "support_width_mm": 191.0,
+  "taught_reference_digest": "7a5c9f99ba197c8c7a35bd1aface942174e35c24be1f7f50c0202a8874e41360"
+}

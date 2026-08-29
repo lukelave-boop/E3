@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    35.0,
+    40.0,
+    65.0,
+    55.0
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 120.0,
+  "estimated_seconds": 7.474809453068,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 120.0,
+      "layer_id": "layer-golden-fill",
+      "name": "Golden Fill",
+      "passes": 1,
+      "path_count": 4,
+      "power": 180,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1300.0,
+      "travel_length_mm": 68.150729063673,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 4,
+  "point_count": 8,
+  "raster_assets": [],
+  "travel_length_mm": 68.150729063673
+}

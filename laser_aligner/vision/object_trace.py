@@ -18,6 +18,11 @@ from ..geometry.foreground import (
     extract_foreground_contours,
     foreground_contour_trees,
 )
+from ..geometry.polygon import (
+    ConvexPolygon,
+    convex_polygon_violation_normalized_mm,
+    normalize_convex_polygon,
+)
 from ..project.native_contour_fit import fit_physical_contours_to_native_path
 from ..project.path_geometry import (
     NativePathGeometry,
@@ -46,6 +51,11 @@ from .camera_raster_normalization import (
     CameraRasterNormalizationTiming,
     normalize_camera_trace_frame,
 )
+from .camera_trace_eligibility import (
+    CameraTraceEligibilityResult,
+    CameraTraceEligibilityTiming,
+    prepare_camera_trace_eligibility,
+)
 
 TRACE_MODES = {"auto", "color", "contrast"}
 OUTPUT_MODES = {"rounded", "native", "smoothed", "exact"}
@@ -53,6 +63,8 @@ BORDER_OFFSET_MODES = {"uniform", "custom"}
 NORMALIZE_ANCHORS = {"center", "top"}
 CONTRAST_THRESHOLD_MODES = {"auto", "manual"}
 MAX_TRACE_CONTOURS = 8_192
+AUTO_MINIMUM_CREDIBLE_SCORE = 70.0
+AUTO_COLOR_RASTER_MARGIN = 8.0
 
 
 def _finite_option(value: Any, label: str) -> float:
@@ -321,12 +333,14 @@ class CameraTraceRasterPreview:
     strategy: str
     polarity: str
     camera_bgr: np.ndarray
+    eligible_mask: np.ndarray
     normalized_grayscale: np.ndarray
     foreground_mask: np.ndarray
     contour_mask: np.ndarray
     threshold_used: int | None
     connected_component_count: int
     selected_strategy: bool = False
+    native_fitting_completed: bool = False
 
     def __post_init__(self) -> None:
         strategy = str(self.strategy).strip()
@@ -337,6 +351,7 @@ class CameraTraceRasterPreview:
             raise ValueError("Unknown Camera Trace preview polarity")
         arrays = (
             (self.camera_bgr, "camera_bgr", 3),
+            (self.eligible_mask, "eligible_mask", 2),
             (self.normalized_grayscale, "normalized_grayscale", 2),
             (self.foreground_mask, "foreground_mask", 2),
         )
@@ -352,7 +367,11 @@ class CameraTraceRasterPreview:
         if self.camera_bgr.shape[2] != 3:
             raise ValueError("camera_bgr must contain three BGR channels")
         shape = self.camera_bgr.shape[:2]
-        if self.normalized_grayscale.shape != shape or self.foreground_mask.shape != shape:
+        if (
+            self.eligible_mask.shape != shape
+            or self.normalized_grayscale.shape != shape
+            or self.foreground_mask.shape != shape
+        ):
             raise ValueError("Camera Trace preview arrays must have one image shape")
         if not isinstance(self.contour_mask, np.ndarray):
             raise TypeError("contour_mask must be a numpy array")
@@ -385,6 +404,8 @@ class CameraTraceRasterPreview:
             raise ValueError("connected_component_count must be non-negative")
         if type(self.selected_strategy) is not bool:
             raise ValueError("selected_strategy must be a boolean")
+        if type(self.native_fitting_completed) is not bool:
+            raise ValueError("native_fitting_completed must be a boolean")
         object.__setattr__(self, "strategy", strategy)
         object.__setattr__(self, "polarity", polarity)
 
@@ -409,7 +430,12 @@ def _hue_distance(hue: np.ndarray, target: float) -> np.ndarray:
     return np.minimum(delta, 180.0 - delta)
 
 
-def auto_target_hue(image: np.ndarray, min_saturation: int = 45) -> float | None:
+def auto_target_hue(
+    image: np.ndarray,
+    min_saturation: int = 45,
+    *,
+    eligibility_mask: np.ndarray | None = None,
+) -> float | None:
     """Find the dominant chromatic hue while discounting neutral backgrounds."""
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
@@ -423,7 +449,14 @@ def auto_target_hue(image: np.ndarray, min_saturation: int = 45) -> float | None
         0.0,
         1.0,
     ) * np.clip((chroma - 5.0) / 70.0, 0.0, 1.0)
-    if float(weight.sum()) < image.shape[0] * image.shape[1] * 0.005:
+    pixel_count = image.shape[0] * image.shape[1]
+    if eligibility_mask is not None:
+        eligible = np.asarray(eligibility_mask) > 0
+        if eligible.shape != image.shape[:2]:
+            raise ValueError("Color eligibility must match the camera image")
+        weight[~eligible] = 0.0
+        pixel_count = int(np.count_nonzero(eligible))
+    if not pixel_count or float(weight.sum()) < pixel_count * 0.005:
         return None
     histogram = np.bincount(
         hue.reshape(-1), weights=weight.reshape(-1), minlength=180
@@ -457,24 +490,35 @@ class _AutoColorSuitability:
         }
 
 
-def _mask_occupancy(mask: np.ndarray) -> tuple[float, float]:
-    """Return whole-frame and one-pixel-border foreground occupancy."""
+def _mask_occupancy(
+    mask: np.ndarray,
+    eligibility_mask: np.ndarray | None = None,
+) -> tuple[float, float]:
+    """Return eligible-area and eligible-boundary foreground occupancy."""
 
     values = np.asarray(mask) > 0
     if values.ndim != 2 or not values.size:
         raise ValueError("Auto strategy masks must be non-empty and two-dimensional")
-    height, width = values.shape
-    border_parts = [values[0]]
-    if height > 1:
-        border_parts.append(values[-1])
-    if height > 2:
-        border_parts.append(values[1:-1, 0])
-        if width > 1:
-            border_parts.append(values[1:-1, -1])
-    border = np.concatenate([part.reshape(-1) for part in border_parts])
+    if eligibility_mask is None:
+        eligible = np.ones(values.shape, dtype=bool)
+    else:
+        eligible = np.asarray(eligibility_mask) > 0
+        if eligible.shape != values.shape:
+            raise ValueError("Auto strategy eligibility must match its mask")
+    eligible_count = int(np.count_nonzero(eligible))
+    if not eligible_count:
+        return 0.0, 0.0
+    eroded = cv2.erode(
+        eligible.astype(np.uint8) * 255,
+        np.ones((3, 3), dtype=np.uint8),
+        borderType=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    ) > 0
+    border = eligible & ~eroded
     return (
-        float(np.count_nonzero(values)) / float(values.size),
-        float(np.count_nonzero(border)) / float(max(1, border.size)),
+        float(np.count_nonzero(values & eligible)) / float(eligible_count),
+        float(np.count_nonzero(values & border))
+        / float(max(1, np.count_nonzero(border))),
     )
 
 
@@ -482,6 +526,7 @@ def _analyze_auto_color_suitability(
     image: np.ndarray,
     options: TraceOptions,
     pixels_per_mm: float,
+    eligibility_mask: np.ndarray,
 ) -> _AutoColorSuitability:
     """Gate Auto's Color attempt on coherent, non-background chroma evidence."""
 
@@ -497,7 +542,11 @@ def _analyze_auto_color_suitability(
         0.0,
         1.0,
     )
-    pixel_count = int(image.shape[0] * image.shape[1])
+    eligible = np.asarray(eligibility_mask) > 0
+    if eligible.shape != image.shape[:2]:
+        raise ValueError("Auto Color eligibility must match the camera image")
+    weight[~eligible] = 0.0
+    pixel_count = int(np.count_nonzero(eligible))
     total_weight = float(weight.sum())
     chromatic_fraction = float(np.count_nonzero(weight > 0.0)) / float(pixel_count)
     if total_weight < pixel_count * 0.005:
@@ -540,8 +589,17 @@ def _analyze_auto_color_suitability(
         hue_tolerance=float(tolerance),
         min_saturation=45,
     )
-    color_mask = _color_mask(image, float(target), color_options, pixels_per_mm)
-    foreground_fraction, border_fraction = _mask_occupancy(color_mask)
+    color_mask = _color_mask(
+        image,
+        float(target),
+        color_options,
+        pixels_per_mm,
+        eligibility_mask=eligibility_mask,
+    )
+    foreground_fraction, border_fraction = _mask_occupancy(
+        color_mask,
+        eligibility_mask,
+    )
     reason = "suitable"
     suitable = True
     if dominant_fraction < 0.60:
@@ -553,12 +611,12 @@ def _analyze_auto_color_suitability(
     elif foreground_fraction < 0.002:
         suitable = False
         reason = "chromatic foreground is too small"
-    elif foreground_fraction > 0.60:
+    elif foreground_fraction > 0.35:
         suitable = False
         reason = "chromatic foreground is background-dominated"
-    elif border_fraction > 0.50:
+    elif border_fraction > 0.25:
         suitable = False
-        reason = "chromatic foreground dominates the frame border"
+        reason = "chromatic foreground dominates the eligible-material boundary"
     return _AutoColorSuitability(
         suitable,
         float(target),
@@ -647,6 +705,11 @@ def _auto_strategy_quality(
     )
     if foreground_fraction >= 0.95 and border_fraction >= 0.75:
         return None, terms, "foreground is dominated by the frame background"
+    if score < AUTO_MINIMUM_CREDIBLE_SCORE:
+        return None, terms, (
+            f"quality score {score:.1f} is below the absolute credible floor "
+            f"{AUTO_MINIMUM_CREDIBLE_SCORE:.1f}"
+        )
     return round(float(score), 9), terms, None
 
 
@@ -693,6 +756,8 @@ def _color_mask(
     target_hue: float,
     options: TraceOptions,
     pixels_per_mm: float,
+    *,
+    eligibility_mask: np.ndarray | None = None,
 ) -> np.ndarray:
     hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
     lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
@@ -729,7 +794,13 @@ def _color_mask(
         cv2.MORPH_ELLIPSE, (radius * 2 + 1, radius * 2 + 1)
     )
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-    return cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
+    if eligibility_mask is not None:
+        eligible = np.asarray(eligibility_mask) > 0
+        if eligible.shape != mask.shape:
+            raise ValueError("Color eligibility must match the camera image")
+        mask[~eligible] = 0
+    return mask
 
 
 def _contrast_mask(image: np.ndarray, pixels_per_mm: float) -> np.ndarray:
@@ -1522,6 +1593,83 @@ def _work_area_overruns_mm(
         "bottom": max(0.0, float(work_area.y_min - np.min(coordinates[:, 1]))),
         "top": max(0.0, float(np.max(coordinates[:, 1]) - work_area.y_max)),
     }
+
+
+def _detection_within_output_polygon(
+    detection: TraceDetection,
+    output_polygon: ConvexPolygon | None,
+) -> bool:
+    if output_polygon is None:
+        return True
+    contours = detection.vector_contours_mm or [detection.vector_contour_mm]
+    return all(
+        convex_polygon_violation_normalized_mm(point, output_polygon) <= 1e-9
+        for contour in contours
+        for point in contour
+    )
+
+
+def _hard_roi_boundary_component_labels(
+    foreground_mask: np.ndarray,
+    eligibility_mask: np.ndarray,
+) -> tuple[np.ndarray, frozenset[int]]:
+    eligible = np.asarray(eligibility_mask) > 0
+    eroded = cv2.erode(
+        eligible.astype(np.uint8) * 255,
+        np.ones((3, 3), dtype=np.uint8),
+        borderType=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    ) > 0
+    boundary = eligible & ~eroded
+    _count, labels = cv2.connectedComponents(
+        (np.asarray(foreground_mask) > 0).astype(np.uint8),
+        connectivity=8,
+    )
+    touching = frozenset(
+        int(value)
+        for value in np.unique(labels[boundary & (labels > 0)])
+    )
+    return labels, touching
+
+
+def _detection_uses_component_labels(
+    detection: TraceDetection,
+    labels: np.ndarray,
+    rejected_labels: frozenset[int],
+    work_area: WorkArea,
+    pixels_per_mm: float,
+) -> bool:
+    if not rejected_labels:
+        return False
+    contours = detection.raw_contours_mm or [detection.contour_mm]
+    height, width = labels.shape
+    for contour in contours:
+        points = np.asarray(contour, dtype=np.float64).reshape(-1, 2)
+        columns = np.rint(
+            (points[:, 0] - float(work_area.x_min)) * pixels_per_mm
+        ).astype(np.int64)
+        rows = np.rint(
+            (float(work_area.y_max) - points[:, 1]) * pixels_per_mm
+        ).astype(np.int64)
+        inside = (
+            (columns >= 0)
+            & (columns < width)
+            & (rows >= 0)
+            & (rows < height)
+        )
+        for row, column in zip(rows[inside], columns[inside], strict=True):
+            row_min = max(0, int(row) - 1)
+            row_max = min(height, int(row) + 2)
+            column_min = max(0, int(column) - 1)
+            column_max = min(width, int(column) + 2)
+            if any(
+                int(value) in rejected_labels
+                for value in np.unique(
+                    labels[row_min:row_max, column_min:column_max]
+                )
+            ):
+                return True
+    return False
 
 
 def _candidate(
@@ -3292,6 +3440,7 @@ def _normalized_camera_candidate_geometry(
 def _camera_raster_vector_source(
     normalization: CameraRasterNormalizationResult,
     polarity: str,
+    eligibility: CameraTraceEligibilityResult,
 ) -> PixelVectorizationSource:
     """Adapt one normalized polarity to the shared artwork-raster contract."""
 
@@ -3305,11 +3454,18 @@ def _camera_raster_vector_source(
         else cv2.bitwise_not(artwork_raster)
     )
     rgba = cv2.cvtColor(vector_grayscale, cv2.COLOR_GRAY2RGBA)
-    return prepare_pixel_vectorization_source(rgba)
+    eligibility_mask = eligibility.material_eligible_mask
+    return prepare_pixel_vectorization_source(
+        rgba,
+        eligibility_mask=(
+            None if np.all(eligibility_mask) else eligibility_mask
+        ),
+    )
 
 
 def _camera_raster_diagnostics(
     normalization: CameraRasterNormalizationResult,
+    eligibility: CameraTraceEligibilityResult,
     *,
     polarity: str,
     normalization_reused: bool,
@@ -3318,6 +3474,7 @@ def _camera_raster_diagnostics(
         **asdict(normalization.diagnostics),
         "polarity": polarity,
         "normalization_reused": normalization_reused,
+        "eligibility": eligibility.diagnostics.to_dict(),
     }
 
 
@@ -3328,6 +3485,9 @@ def _detect_non_grid_contrast_raster(
     output_work_area: WorkArea,
     pixels_per_mm: float,
     *,
+    eligibility: CameraTraceEligibilityResult,
+    output_polygon: ConvexPolygon | None = None,
+    eligibility_timing: CameraTraceEligibilityTiming | None = None,
     prepared_normalization: CameraRasterNormalizationResult | None = None,
     normalization_timing: CameraRasterNormalizationTiming | None = None,
     vectorization_timing: RasterVectorizationTiming | None = None,
@@ -3345,10 +3505,11 @@ def _detect_non_grid_contrast_raster(
         normalization = normalize_camera_trace_frame(
             image,
             pixels_per_mm,
+            eligibility_mask=eligibility.material_eligible_mask,
             timing=normalization_timing,
         )
     polarity = "light" if options.contrast_invert else "dark"
-    source = _camera_raster_vector_source(normalization, polarity)
+    source = _camera_raster_vector_source(normalization, polarity, eligibility)
     raster_width_mm = source.width_px / pixels_per_mm
     raster_height_mm = source.height_px / pixels_per_mm
     camera_center_mm = (
@@ -3377,10 +3538,16 @@ def _detect_non_grid_contrast_raster(
         return {
             "camera_raster": _camera_raster_diagnostics(
                 normalization,
+                eligibility,
                 polarity=polarity,
                 normalization_reused=normalization_reused,
             ),
             "timing": {
+                "trace_eligibility": (
+                    {}
+                    if eligibility_timing is None
+                    else eligibility_timing.snapshot()
+                ),
                 "camera_normalization": normalization_timing.snapshot(),
                 "raster_vectorization": vectorization_timing.snapshot(),
                 "trace_detection_total_seconds": time.perf_counter() - trace_started,
@@ -3395,6 +3562,7 @@ def _detect_non_grid_contrast_raster(
                 strategy=strategy_name,
                 polarity=polarity,
                 camera_bgr=normalization.corrected_bgr,
+                eligible_mask=eligibility.material_eligible_mask,
                 normalized_grayscale=source.composited_grayscale,
                 foreground_mask=mask_preview.foreground_mask,
                 contour_mask=mask_preview.contour_mask,
@@ -3704,6 +3872,44 @@ def _detect_non_grid_contrast_raster(
             )
         )
 
+    component_labels, boundary_component_labels = (
+        _hard_roi_boundary_component_labels(
+            result.foreground_mask,
+            eligibility.hard_roi_mask,
+        )
+    )
+    hard_roi_boundary_rejected_count = sum(
+        _detection_uses_component_labels(
+            item,
+            component_labels,
+            boundary_component_labels,
+            work_area,
+            pixels_per_mm,
+        )
+        for item in detections
+    )
+    if hard_roi_boundary_rejected_count:
+        detections = [
+            item
+            for item in detections
+            if not _detection_uses_component_labels(
+                item,
+                component_labels,
+                boundary_component_labels,
+                work_area,
+                pixels_per_mm,
+            )
+        ]
+    polygon_rejected_count = sum(
+        not _detection_within_output_polygon(item, output_polygon)
+        for item in detections
+    )
+    if polygon_rejected_count:
+        detections = [
+            item
+            for item in detections
+            if _detection_within_output_polygon(item, output_polygon)
+        ]
     detections.sort(key=lambda item: (-item.center_mm[1], item.center_mm[0]))
     for index, detection in enumerate(detections, 1):
         detection.index = index
@@ -3750,7 +3956,8 @@ def _detect_non_grid_contrast_raster(
     if not detections:
         message = "No raster trace candidates passed the current review filters"
     foreground_fraction, border_foreground_fraction = _mask_occupancy(
-        result.foreground_mask
+        result.foreground_mask,
+        eligibility.material_eligible_mask,
     )
     failures = forest_result.failures
     root_tree_count = forest_result.root_tree_count
@@ -3771,6 +3978,10 @@ def _detect_non_grid_contrast_raster(
         "verified_candidate_count": sum(item.native_verified for item in detections),
         "invalid_candidate_count": unavailable_candidate_count,
         "review_filtered_candidate_count": review_filtered_candidate_count,
+        "output_polygon_rejected_candidate_count": polygon_rejected_count,
+        "hard_roi_boundary_rejected_candidate_count": (
+            hard_roi_boundary_rejected_count
+        ),
         "prefit_review_filtered_candidate_count": prefit_review_failure_count,
         "valid_area_mm2": sum(item.area_mm2 for item in detections),
         "microscopic_candidate_count": sum(
@@ -3782,7 +3993,10 @@ def _detect_non_grid_contrast_raster(
             for item in detections
         ),
         "minimum_area_mm2": options.min_area_mm2,
-        "frame_area_mm2": raster_width_mm * raster_height_mm,
+        "frame_area_mm2": (
+            float(np.count_nonzero(eligibility.material_eligible_mask))
+            / pixels_per_mm**2
+        ),
         "threshold": result.threshold_used,
         "polarity": "light" if options.contrast_invert else "dark",
         "pruned_contour_count": getattr(
@@ -3886,6 +4100,8 @@ def _auto_attempt_diagnostics(
         "microscopic_candidate_count",
         "within_frame_candidate_count",
         "review_filtered_candidate_count",
+        "output_polygon_rejected_candidate_count",
+        "hard_roi_boundary_rejected_candidate_count",
         "pruned_contour_count",
         "degenerate_contour_count",
         "rejected_contour_tree_count",
@@ -3902,6 +4118,9 @@ def _detect_non_grid_auto(
     output_work_area: WorkArea,
     pixels_per_mm: float,
     *,
+    eligibility: CameraTraceEligibilityResult,
+    output_polygon: ConvexPolygon | None = None,
+    eligibility_timing: CameraTraceEligibilityTiming | None = None,
     raster_preview_callback: CameraTraceRasterPreviewCallback | None = None,
 ) -> TraceResult:
     """Choose among production non-grid strategies after one normalization."""
@@ -3911,6 +4130,7 @@ def _detect_non_grid_auto(
     normalization = normalize_camera_trace_frame(
         image,
         pixels_per_mm,
+        eligibility_mask=eligibility.material_eligible_mask,
         timing=normalization_timing,
     )
     attempts: list[dict[str, Any]] = []
@@ -3954,6 +4174,9 @@ def _detect_non_grid_auto(
                 work_area,
                 output_work_area,
                 pixels_per_mm,
+                eligibility=eligibility,
+                output_polygon=output_polygon,
+                eligibility_timing=eligibility_timing,
                 prepared_normalization=normalization,
                 normalization_timing=normalization_timing,
                 vectorization_timing=vectorization_timing,
@@ -4012,7 +4235,12 @@ def _detect_non_grid_auto(
         attempts.append(attempt)
         successful.append((score, -order, name, result))
 
-    color_evidence = _analyze_auto_color_suitability(image, options, pixels_per_mm)
+    color_evidence = _analyze_auto_color_suitability(
+        image,
+        options,
+        pixels_per_mm,
+        eligibility.material_eligible_mask,
+    )
     color_name = "color"
     color_label = "Color"
     color_order = 2
@@ -4053,9 +4281,13 @@ def _detect_non_grid_auto(
                 work_area,
                 pixels_per_mm,
                 output_work_area=output_work_area,
+                background_image=None,
+                trace_roi_polygons_mm=None,
+                trace_output_polygon_mm=output_polygon,
                 raster_preview_callback=auto_preview,
                 _isolate_native_candidates=True,
                 _camera_normalization=normalization,
+                _camera_eligibility=eligibility,
             )
         except (RasterVectorizationError, ValueError) as exc:
             attempts.append(
@@ -4082,6 +4314,24 @@ def _detect_non_grid_auto(
             color_score, color_terms, color_rejection = _auto_strategy_quality(
                 color_metrics
             )
+            if color_result.detected and color_score is not None:
+                best_raster_score = max(
+                    (
+                        score
+                        for score, _tie, name, _result in successful
+                        if name.startswith("raster_")
+                    ),
+                    default=None,
+                )
+                if (
+                    best_raster_score is not None
+                    and color_score < best_raster_score + AUTO_COLOR_RASTER_MARGIN
+                ):
+                    color_rejection = (
+                        "Color is not materially better than the credible raster "
+                        f"interpretation (requires +{AUTO_COLOR_RASTER_MARGIN:.0f})"
+                    )
+                    color_score = None
             if not color_result.detected or color_score is None:
                 color_reason = (
                     color_result.message
@@ -4129,7 +4379,7 @@ def _detect_non_grid_auto(
             f"{attempt['label']}: {attempt['reason']}" for attempt in attempts
         )
         raise ValueError(
-            "Auto could not produce a verified trace. " + summaries
+            "No credible trace interpretation was found. " + summaries
         )
 
     selected_score, _tie_break, selected_name, selected = max(successful)
@@ -4147,6 +4397,11 @@ def _detect_non_grid_auto(
         **selected.diagnostics,
         "timing": {
             **dict(selected.diagnostics.get("timing", {})),
+            "trace_eligibility": (
+                {}
+                if eligibility_timing is None
+                else eligibility_timing.snapshot()
+            ),
             "camera_normalization": normalization_timing.snapshot(),
             "auto_raster_attempts": {
                 name: timing.snapshot()
@@ -4169,7 +4424,13 @@ def _detect_non_grid_auto(
         detection.diagnostics["auto_selected_score"] = selected_score
     selected_preview = attempt_previews.get(selected_name)
     if selected_preview is not None and raster_preview_callback is not None:
-        raster_preview_callback(replace(selected_preview, selected_strategy=True))
+        raster_preview_callback(
+            replace(
+                selected_preview,
+                selected_strategy=True,
+                native_fitting_completed=True,
+            )
+        )
     if selected_name.startswith("raster_"):
         polarity = str(selected_attempt["polarity"])
         threshold = int(selected_attempt["threshold"])
@@ -4203,10 +4464,17 @@ def detect_objects(
     *,
     output_work_area: WorkArea | None = None,
     background_image: np.ndarray | None = None,
+    trace_roi_polygons_mm: Sequence[Sequence[Sequence[float]]] | None = None,
+    trace_output_polygon_mm: Sequence[Sequence[float]] | None = None,
+    trace_roi_source: str = "guarded output area",
+    reference_required: bool = False,
+    reference_identity: str | None = None,
     mask_override: np.ndarray | None = None,
     raster_preview_callback: CameraTraceRasterPreviewCallback | None = None,
     _isolate_native_candidates: bool = False,
     _camera_normalization: CameraRasterNormalizationResult | None = None,
+    _camera_eligibility: CameraTraceEligibilityResult | None = None,
+    _camera_eligibility_timing: CameraTraceEligibilityTiming | None = None,
 ) -> TraceResult:
     options = (
         options
@@ -4256,6 +4524,88 @@ def detect_objects(
         or output_work_area.y_max > work_area.y_max
     ):
         raise ValueError("output_work_area must lie inside the camera work area")
+    output_polygon = (
+        None
+        if trace_output_polygon_mm is None
+        else normalize_convex_polygon(
+            trace_output_polygon_mm,
+            label="Camera Trace output polygon",
+        )
+    )
+    camera_eligibility = _camera_eligibility
+    eligibility_timing = _camera_eligibility_timing
+    if not options.regular_grid:
+        if camera_eligibility is None:
+            if reference_required and options.detection_mode == "auto" and background_image is None:
+                raise ValueError(
+                    "Auto requires the validated empty-honeycomb reference for this "
+                    "honeycomb-local Trace request"
+                )
+            polygons = trace_roi_polygons_mm
+            if polygons is None:
+                polygons = (
+                    (
+                        (output_work_area.x_min, output_work_area.y_min),
+                        (output_work_area.x_max, output_work_area.y_min),
+                        (output_work_area.x_max, output_work_area.y_max),
+                        (output_work_area.x_min, output_work_area.y_max),
+                    ),
+                )
+            eligibility_timing = CameraTraceEligibilityTiming()
+            camera_eligibility = prepare_camera_trace_eligibility(
+                image,
+                work_area,
+                pixels_per_mm,
+                roi_polygons_mm=polygons,
+                roi_source=trace_roi_source,
+                reference_bgr=background_image,
+                reference_identity=reference_identity,
+                timing=eligibility_timing,
+            )
+        elif camera_eligibility.material_eligible_mask.shape != image.shape[:2]:
+            raise ValueError("Prepared Camera Trace eligibility does not match the image")
+        if not np.any(camera_eligibility.material_eligible_mask):
+            if options.detection_mode == "auto":
+                raise ValueError(
+                    "Auto found no eligible material after hard ROI and trusted "
+                    "empty-bed suppression"
+                )
+            return TraceResult(
+                detected=False,
+                detections=[],
+                mode_used=options.detection_mode,
+                target_hue=options.target_hue,
+                image_width=image.shape[1],
+                image_height=image.shape[0],
+                direct_count=0,
+                inferred_count=0,
+                grid=None,
+                message=(
+                    "No eligible material remains after hard ROI and trusted "
+                    "empty-bed suppression"
+                ),
+                options=options,
+                camera_work_area={
+                    "x_min": float(work_area.x_min),
+                    "x_max": float(work_area.x_max),
+                    "y_min": float(work_area.y_min),
+                    "y_max": float(work_area.y_max),
+                },
+                output_work_area={
+                    "x_min": float(output_work_area.x_min),
+                    "x_max": float(output_work_area.x_max),
+                    "y_min": float(output_work_area.y_min),
+                    "y_max": float(output_work_area.y_max),
+                },
+                diagnostics={
+                    "camera_eligibility": camera_eligibility.diagnostics.to_dict(),
+                    "timing": {
+                        "trace_eligibility": (
+                            {} if eligibility_timing is None else eligibility_timing.snapshot()
+                        )
+                    },
+                },
+            )
     camera_work_area_payload = {
         "x_min": float(work_area.x_min),
         "x_max": float(work_area.x_max),
@@ -4279,6 +4629,9 @@ def detect_objects(
             work_area,
             output_work_area,
             pixels_per_mm,
+            eligibility=camera_eligibility,
+            output_polygon=output_polygon,
+            eligibility_timing=eligibility_timing,
             raster_preview_callback=raster_preview_callback,
         )
     if (
@@ -4292,6 +4645,9 @@ def detect_objects(
             work_area,
             output_work_area,
             pixels_per_mm,
+            eligibility=camera_eligibility,
+            output_polygon=output_polygon,
+            eligibility_timing=eligibility_timing,
             prepared_normalization=_camera_normalization,
             raster_preview_callback=raster_preview_callback,
         )
@@ -4310,19 +4666,44 @@ def detect_objects(
             (
                 "mask",
                 "exact_mask",
-                (mask_override > 0).astype(np.uint8) * 255,
+                cv2.bitwise_and(
+                    (mask_override > 0).astype(np.uint8) * 255,
+                    (
+                        camera_eligibility.material_eligible_mask
+                        if camera_eligibility is not None
+                        else np.full(mask_override.shape, 255, dtype=np.uint8)
+                    ),
+                ),
                 None,
             )
         )
     elif options.detection_mode in {"auto", "color"}:
         if target_hue is None:
-            target_hue = auto_target_hue(image, options.min_saturation)
+            target_hue = auto_target_hue(
+                image,
+                options.min_saturation,
+                eligibility_mask=(
+                    None
+                    if camera_eligibility is None
+                    else camera_eligibility.material_eligible_mask
+                ),
+            )
         if target_hue is not None:
             masks.append(
                 (
                     "color",
                     "color",
-                    _color_mask(image, target_hue, options, pixels_per_mm),
+                    _color_mask(
+                        image,
+                        target_hue,
+                        options,
+                        pixels_per_mm,
+                        eligibility_mask=(
+                            None
+                            if camera_eligibility is None
+                            else camera_eligibility.material_eligible_mask
+                        ),
+                    ),
                     target_hue,
                 )
             )
@@ -4491,6 +4872,13 @@ def detect_objects(
                 strategy="color",
                 polarity="color",
                 camera_bgr=preview_camera,
+                eligible_mask=(
+                    _immutable_trace_preview_array(
+                        np.full(image.shape[:2], 255, dtype=np.uint8)
+                    )
+                    if camera_eligibility is None
+                    else camera_eligibility.material_eligible_mask
+                ),
                 normalized_grayscale=preview_grayscale,
                 foreground_mask=preview_mask,
                 contour_mask=preview_mask,
@@ -4570,6 +4958,48 @@ def detect_objects(
             direct_detections = retained_detections
         for detection in inferred_detections:
             detection.diagnostics["native_fit_status"] = "inferred_geometry"
+    hard_roi_boundary_rejected_count = 0
+    if camera_eligibility is not None and direct_detections:
+        component_labels, boundary_component_labels = (
+            _hard_roi_boundary_component_labels(
+                chosen_mask,
+                camera_eligibility.hard_roi_mask,
+            )
+        )
+        retained = [
+            (candidate, detection)
+            for candidate, detection in zip(
+                candidates,
+                direct_detections,
+                strict=True,
+            )
+            if not _detection_uses_component_labels(
+                detection,
+                component_labels,
+                boundary_component_labels,
+                work_area,
+                pixels_per_mm,
+            )
+        ]
+        hard_roi_boundary_rejected_count = len(direct_detections) - len(
+            retained
+        )
+        candidates = [candidate for candidate, _detection in retained]
+        direct_detections = [detection for _candidate, detection in retained]
+    polygon_rejected_count = 0
+    if output_polygon is not None and direct_detections:
+        retained = [
+            (candidate, detection)
+            for candidate, detection in zip(
+                candidates,
+                direct_detections,
+                strict=True,
+            )
+            if _detection_within_output_polygon(detection, output_polygon)
+        ]
+        polygon_rejected_count = len(direct_detections) - len(retained)
+        candidates = [candidate for candidate, _detection in retained]
+        direct_detections = [detection for _candidate, detection in retained]
     detections = [*direct_detections, *inferred_detections]
     detections.sort(
         key=lambda item: (
@@ -4709,7 +5139,14 @@ def detect_objects(
     if not detections:
         message = "No objects passed the current filters"
 
-    foreground_fraction, border_foreground_fraction = _mask_occupancy(chosen_mask)
+    foreground_fraction, border_foreground_fraction = _mask_occupancy(
+        chosen_mask,
+        (
+            None
+            if camera_eligibility is None
+            else camera_eligibility.material_eligible_mask
+        ),
+    )
     unavailable_candidate_count = max(
         native_candidate_failure_count,
         chosen_root_tree_count - direct_count,
@@ -4728,6 +5165,10 @@ def detect_objects(
         ),
         "invalid_candidate_count": unavailable_candidate_count,
         "review_filtered_candidate_count": review_filtered_candidate_count,
+        "output_polygon_rejected_candidate_count": polygon_rejected_count,
+        "hard_roi_boundary_rejected_candidate_count": (
+            hard_roi_boundary_rejected_count
+        ),
         "valid_area_mm2": sum(item.area_mm2 for item in direct_detections),
         "microscopic_candidate_count": sum(
             item.area_mm2 < 4.0 * options.min_area_mm2
@@ -4741,6 +5182,9 @@ def detect_objects(
         "minimum_area_mm2": options.min_area_mm2,
         "frame_area_mm2": (
             image.shape[1] / pixels_per_mm * image.shape[0] / pixels_per_mm
+            if camera_eligibility is None
+            else float(np.count_nonzero(camera_eligibility.material_eligible_mask))
+            / pixels_per_mm**2
         ),
     }
     return TraceResult(
@@ -4753,5 +5197,15 @@ def detect_objects(
             "candidate_failures": native_candidate_failures,
             "candidate_failure_count": native_candidate_failure_count,
             "strategy_metrics": strategy_metrics,
+            "camera_eligibility": (
+                None
+                if camera_eligibility is None
+                else camera_eligibility.diagnostics.to_dict()
+            ),
+            "timing": {
+                "trace_eligibility": (
+                    {} if eligibility_timing is None else eligibility_timing.snapshot()
+                )
+            },
         },
     )

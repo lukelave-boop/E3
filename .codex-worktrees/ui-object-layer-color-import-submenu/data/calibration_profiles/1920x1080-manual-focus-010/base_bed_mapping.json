@@ -1,0 +1,670 @@
+{
+  "applied_at": 1786538270.2635212,
+  "applied_calibration": {
+    "axis_mapping": {
+      "reverse_x": false,
+      "reverse_y": false
+    },
+    "created_at": 1786538269.5836515,
+    "fine_registration": {
+      "created_at": null,
+      "homography_refinement": null,
+      "translation_x_mm": 0.0,
+      "translation_y_mm": 0.0
+    },
+    "image_height": 1080,
+    "image_to_machine": [
+      [
+        0.0019496435063411563,
+        -0.18437370376878226,
+        220.19808191826712
+      ],
+      [
+        -0.18336342914726192,
+        -0.0038571129477475907,
+        302.0190561829137
+      ],
+      [
+        -3.0199747107071428e-06,
+        -1.1660442912141523e-05,
+        1.0
+      ]
+    ],
+    "image_width": 1920,
+    "inlier_count": 25,
+    "machine_to_image": [
+      [
+        0.010112160746450896,
+        -5.480768541186903,
+        1653.069863565855
+      ],
+      [
+        -5.500220174411602,
+        -0.07882142457370638,
+        1234.943504790335
+      ],
+      [
+        -6.410446487821068e-05,
+        -1.7470875111119095e-05,
+        1.0193922174203287
+      ]
+    ],
+    "max_error_mm": 0.30795118435211016,
+    "point_count": 25,
+    "provenance": {
+      "camera": {
+        "controls": {
+          "auto_exposure": 1,
+          "exposure_auto": 1,
+          "exposure_time_absolute": 250,
+          "focus_absolute": 10,
+          "focus_auto": 0,
+          "focus_automatic_continuous": 0,
+          "gain": 0,
+          "white_balance_automatic": 0,
+          "white_balance_temperature": 4500
+        },
+        "device": "/dev/v4l/by-id/usb-046d_HD_Pro_Webcam_C920_EB89129F-video-index0",
+        "fourcc": "MJPG",
+        "height": 1080,
+        "synthetic": false,
+        "width": 1920
+      },
+      "lens_model_id": "46cbe8b1f6def5ff9ed7bca4911dc5cfffda7d91df0347bd2141acc02a0e5146",
+      "pixels_per_mm": 4.0,
+      "schema_version": 1,
+      "work_area": {
+        "x_max": 210.0,
+        "x_min": 10.0,
+        "y_max": 210.0,
+        "y_min": 10.0
+      }
+    },
+    "residual_mesh": null,
+    "rms_error_mm": 0.1582342556672096
+  },
+  "captured_at": 1786538255.2278655,
+  "created_at": 1786537904.1943762,
+  "detection": {
+    "candidate": {
+      "axis_mapping": {
+        "reverse_x": null,
+        "reverse_y": null
+      },
+      "can_apply": true,
+      "candidate_max_error_mm": 0.30795118435211016,
+      "created_at": 1786538255.2205245,
+      "fine_registration": {
+        "created_at": null,
+        "homography_refinement": null,
+        "translation_x_mm": 0.0,
+        "translation_y_mm": 0.0
+      },
+      "image_height": 1080,
+      "image_to_machine": [
+        [
+          0.0019496435063411563,
+          -0.18437370376878226,
+          220.19808191826712
+        ],
+        [
+          -0.18336342914726192,
+          -0.0038571129477475907,
+          302.0190561829137
+        ],
+        [
+          -3.0199747107071428e-06,
+          -1.1660442912141523e-05,
+          1.0
+        ]
+      ],
+      "image_width": 1920,
+      "inlier_count": 25,
+      "inliers": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ],
+      "machine_to_image": [
+        [
+          0.010112160746450896,
+          -5.480768541186903,
+          1653.069863565855
+        ],
+        [
+          -5.500220174411602,
+          -0.07882142457370638,
+          1234.943504790335
+        ],
+        [
+          -6.410446487821068e-05,
+          -1.7470875111119095e-05,
+          1.0193922174203287
+        ]
+      ],
+      "max_error_mm": 0.30795118435211016,
+      "point_count": 25,
+      "point_errors_mm": [
+        0.11064145239841654,
+        0.1962555160445927,
+        0.11556138681431552,
+        0.04111967626023561,
+        0.28413969552529617,
+        0.1292217773166091,
+        0.1777131901811987,
+        0.11057319685792963,
+        0.30795118435211016,
+        0.11320642994045764,
+        0.180286145467861,
+        0.16772986213643507,
+        0.2300503145343874,
+        0.21308257314908946,
+        0.0467189093584274,
+        0.09250382095335559,
+        0.06667940020219983,
+        0.18796766356942418,
+        0.07891933620638779,
+        0.08153608144581447,
+        0.14254543443255518,
+        0.1384997743863375,
+        0.08422831797922137,
+        0.08998093419858208,
+        0.18495191063147498
+      ],
+      "provenance": null,
+      "reason": "All 25 keyed crosses passed the base-map fit gates",
+      "residual_mesh": null,
+      "rms_error_mm": 0.1582342556672096
+    },
+    "confidence": "high",
+    "detected": true,
+    "key_sizes_px": {
+      "large": 88.0,
+      "medium": 66.0,
+      "regular_maximum": 47.0,
+      "regular_median": 45.0
+    },
+    "orientation": "rotation=270, mirrored=True",
+    "points": [
+      {
+        "id": 1,
+        "image_x": 1412.0,
+        "image_y": 996.0,
+        "label": "Automatic base mark 1",
+        "machine_x": 40.0,
+        "machine_y": 40.0
+      },
+      {
+        "id": 2,
+        "image_x": 1415.0,
+        "image_y": 807.0,
+        "label": "Automatic base mark 2",
+        "machine_x": 75.0,
+        "machine_y": 40.0
+      },
+      {
+        "id": 3,
+        "image_x": 1418.0,
+        "image_y": 620.0,
+        "label": "Automatic base mark 3",
+        "machine_x": 110.0,
+        "machine_y": 40.0
+      },
+      {
+        "id": 4,
+        "image_x": 1422.0,
+        "image_y": 430.0,
+        "label": "Automatic base mark 4",
+        "machine_x": 145.0,
+        "machine_y": 40.0
+      },
+      {
+        "id": 5,
+        "image_x": 1427.0,
+        "image_y": 240.0,
+        "label": "Automatic base mark 5",
+        "machine_x": 180.0,
+        "machine_y": 40.0
+      },
+      {
+        "id": 6,
+        "image_x": 1224.0,
+        "image_y": 994.0,
+        "label": "Automatic base mark 6",
+        "machine_x": 40.0,
+        "machine_y": 75.0
+      },
+      {
+        "id": 7,
+        "image_x": 1226.0,
+        "image_y": 805.0,
+        "label": "Automatic base mark 7",
+        "machine_x": 75.0,
+        "machine_y": 75.0
+      },
+      {
+        "id": 8,
+        "image_x": 1229.0,
+        "image_y": 617.0,
+        "label": "Automatic base mark 8",
+        "machine_x": 110.0,
+        "machine_y": 75.0
+      },
+      {
+        "id": 9,
+        "image_x": 1231.0,
+        "image_y": 428.0,
+        "label": "Automatic base mark 9",
+        "machine_x": 145.0,
+        "machine_y": 75.0
+      },
+      {
+        "id": 10,
+        "image_x": 1236.0,
+        "image_y": 238.0,
+        "label": "Automatic base mark 10",
+        "machine_x": 180.0,
+        "machine_y": 75.0
+      },
+      {
+        "id": 11,
+        "image_x": 1036.0,
+        "image_y": 991.0,
+        "label": "Automatic base mark 11",
+        "machine_x": 40.0,
+        "machine_y": 110.0
+      },
+      {
+        "id": 12,
+        "image_x": 1037.0,
+        "image_y": 804.0,
+        "label": "Automatic base mark 12",
+        "machine_x": 75.0,
+        "machine_y": 110.0
+      },
+      {
+        "id": 13,
+        "image_x": 1040.0,
+        "image_y": 616.0,
+        "label": "Automatic base mark 13",
+        "machine_x": 110.0,
+        "machine_y": 110.0
+      },
+      {
+        "id": 14,
+        "image_x": 1042.0,
+        "image_y": 425.0,
+        "label": "Automatic base mark 14",
+        "machine_x": 145.0,
+        "machine_y": 110.0
+      },
+      {
+        "id": 15,
+        "image_x": 1046.0,
+        "image_y": 235.0,
+        "label": "Automatic base mark 15",
+        "machine_x": 180.0,
+        "machine_y": 110.0
+      },
+      {
+        "id": 16,
+        "image_x": 847.0,
+        "image_y": 989.0,
+        "label": "Automatic base mark 16",
+        "machine_x": 40.0,
+        "machine_y": 145.0
+      },
+      {
+        "id": 17,
+        "image_x": 849.0,
+        "image_y": 801.0,
+        "label": "Automatic base mark 17",
+        "machine_x": 75.0,
+        "machine_y": 145.0
+      },
+      {
+        "id": 18,
+        "image_x": 852.0,
+        "image_y": 613.0,
+        "label": "Automatic base mark 18",
+        "machine_x": 110.0,
+        "machine_y": 145.0
+      },
+      {
+        "id": 19,
+        "image_x": 853.0,
+        "image_y": 423.0,
+        "label": "Automatic base mark 19",
+        "machine_x": 145.0,
+        "machine_y": 145.0
+      },
+      {
+        "id": 20,
+        "image_x": 856.0,
+        "image_y": 232.0,
+        "label": "Automatic base mark 20",
+        "machine_x": 180.0,
+        "machine_y": 145.0
+      },
+      {
+        "id": 21,
+        "image_x": 658.0,
+        "image_y": 988.0,
+        "label": "Automatic base mark 21",
+        "machine_x": 40.0,
+        "machine_y": 180.0
+      },
+      {
+        "id": 22,
+        "image_x": 659.0,
+        "image_y": 799.0,
+        "label": "Automatic base mark 22",
+        "machine_x": 75.0,
+        "machine_y": 180.0
+      },
+      {
+        "id": 23,
+        "image_x": 662.0,
+        "image_y": 610.0,
+        "label": "Automatic base mark 23",
+        "machine_x": 110.0,
+        "machine_y": 180.0
+      },
+      {
+        "id": 24,
+        "image_x": 663.0,
+        "image_y": 420.0,
+        "label": "Automatic base mark 24",
+        "machine_x": 145.0,
+        "machine_y": 180.0
+      },
+      {
+        "id": 25,
+        "image_x": 666.0,
+        "image_y": 229.0,
+        "label": "Automatic base mark 25",
+        "machine_x": 180.0,
+        "machine_y": 180.0
+      }
+    ],
+    "precision_capture": {
+      "camera": {
+        "analysis_complete": true,
+        "camera_generation": 0,
+        "controls_applied": {
+          "auto_exposure": 1,
+          "exposure_time_absolute": 250,
+          "focus_absolute": 10,
+          "focus_automatic_continuous": 0,
+          "gain": 0,
+          "white_balance_automatic": 0,
+          "white_balance_temperature": 4500
+        },
+        "controls_critical_unverified": {},
+        "controls_satisfied": {
+          "exposure_mode": "auto_exposure",
+          "exposure_value": "exposure_time_absolute",
+          "focus_mode": "focus_automatic_continuous",
+          "focus_value": "focus_absolute",
+          "white_balance_mode": "white_balance_automatic",
+          "white_balance_value": "white_balance_temperature"
+        },
+        "controls_skipped": {
+          "exposure_auto": "alias resolved through auto_exposure",
+          "focus_auto": "alias resolved through focus_automatic_continuous"
+        },
+        "controls_verified": {
+          "auto_exposure": 1,
+          "exposure_time_absolute": 250,
+          "focus_absolute": 10,
+          "focus_automatic_continuous": 0,
+          "gain": 0,
+          "white_balance_automatic": 0,
+          "white_balance_temperature": 4500
+        },
+        "discarded_frames": 8,
+        "elapsed_seconds": 3.3881590490000235,
+        "negotiated_fps": 30.0,
+        "observed_fps": 29.989894393885656,
+        "sample_frames": 45,
+        "sequence_end": 34549,
+        "sequence_gaps": 0,
+        "sequence_start": 34505,
+        "settle_seconds": 1.5,
+        "sharpest_index": 20,
+        "sharpness_scores": [
+          84.77466203038351,
+          84.81546725751576,
+          84.82924955307863,
+          84.79021098103463,
+          84.82810064717826,
+          84.8182884435155,
+          84.78009857368417,
+          84.85362875097248,
+          84.76277197616129,
+          84.798967145978,
+          84.76368439339335,
+          84.83879546943227,
+          84.82714252587718,
+          84.78862452068563,
+          84.79283600022617,
+          84.79591531275764,
+          84.80944286184221,
+          84.82505020745721,
+          84.80750732921898,
+          84.79377959175245,
+          84.86412126327444,
+          84.743137597336,
+          84.82534957663849,
+          84.7837361720616,
+          84.77909060832114,
+          84.79784838650528,
+          84.83228045577063,
+          84.78322405764708,
+          84.77593340180789,
+          84.7781301012811,
+          84.80586766872513,
+          84.7763850725255,
+          84.75794060107991,
+          84.78665885143143,
+          84.82713754545588,
+          84.76450459023725,
+          84.81132269563027,
+          84.78810153271618,
+          84.83115531155634,
+          84.7411591751643,
+          84.76421337692825,
+          84.75357799876556,
+          84.68952372800516,
+          84.76939388618042,
+          84.74226263796959
+        ],
+        "timeout_seconds": 8.0
+      }
+    }
+  },
+  "execution_receipt": {
+    "backend": "serial",
+    "completed_lines": 204,
+    "finished_at": 1786537976.4084454,
+    "hardware_enabled": true,
+    "name": "base-bed-mapping-20260812-063143-00000002-949e81aee408.gcode",
+    "powered": true,
+    "program_digest": "066cb66b29247ec789b1c46a60130564e5eddbd55bb168849b0dfd33f16f6b30",
+    "protocol": "grbl",
+    "started_at": 1786537939.5559673,
+    "total_lines": 204
+  },
+  "filename": "base-bed-mapping-20260812-063143-00000002-949e81aee408.gcode",
+  "generation_geometry": {
+    "boundary_margin_mm": 5.0,
+    "spot_offset_x_mm": 0.0,
+    "spot_offset_y_mm": 0.0,
+    "work_area": {
+      "x_max": 210.0,
+      "x_min": 10.0,
+      "y_max": 210.0,
+      "y_min": 10.0
+    }
+  },
+  "keyed_mark_sizes_mm": {
+    "7": 8.0,
+    "8": 6.0
+  },
+  "kind": "base_bed_mapping",
+  "mark_size_mm": 4.0,
+  "power_percent": 40.0,
+  "powered": true,
+  "program_digest": "066cb66b29247ec789b1c46a60130564e5eddbd55bb168849b0dfd33f16f6b30",
+  "schema_version": 2,
+  "speed_mm_min": 1200.0,
+  "targets": [
+    {
+      "id": 1,
+      "machine_x": 40.0,
+      "machine_y": 40.0
+    },
+    {
+      "id": 2,
+      "machine_x": 75.0,
+      "machine_y": 40.0
+    },
+    {
+      "id": 3,
+      "machine_x": 110.0,
+      "machine_y": 40.0
+    },
+    {
+      "id": 4,
+      "machine_x": 145.0,
+      "machine_y": 40.0
+    },
+    {
+      "id": 5,
+      "machine_x": 180.0,
+      "machine_y": 40.0
+    },
+    {
+      "id": 6,
+      "machine_x": 40.0,
+      "machine_y": 75.0
+    },
+    {
+      "id": 7,
+      "machine_x": 75.0,
+      "machine_y": 75.0
+    },
+    {
+      "id": 8,
+      "machine_x": 110.0,
+      "machine_y": 75.0
+    },
+    {
+      "id": 9,
+      "machine_x": 145.0,
+      "machine_y": 75.0
+    },
+    {
+      "id": 10,
+      "machine_x": 180.0,
+      "machine_y": 75.0
+    },
+    {
+      "id": 11,
+      "machine_x": 40.0,
+      "machine_y": 110.0
+    },
+    {
+      "id": 12,
+      "machine_x": 75.0,
+      "machine_y": 110.0
+    },
+    {
+      "id": 13,
+      "machine_x": 110.0,
+      "machine_y": 110.0
+    },
+    {
+      "id": 14,
+      "machine_x": 145.0,
+      "machine_y": 110.0
+    },
+    {
+      "id": 15,
+      "machine_x": 180.0,
+      "machine_y": 110.0
+    },
+    {
+      "id": 16,
+      "machine_x": 40.0,
+      "machine_y": 145.0
+    },
+    {
+      "id": 17,
+      "machine_x": 75.0,
+      "machine_y": 145.0
+    },
+    {
+      "id": 18,
+      "machine_x": 110.0,
+      "machine_y": 145.0
+    },
+    {
+      "id": 19,
+      "machine_x": 145.0,
+      "machine_y": 145.0
+    },
+    {
+      "id": 20,
+      "machine_x": 180.0,
+      "machine_y": 145.0
+    },
+    {
+      "id": 21,
+      "machine_x": 40.0,
+      "machine_y": 180.0
+    },
+    {
+      "id": 22,
+      "machine_x": 75.0,
+      "machine_y": 180.0
+    },
+    {
+      "id": 23,
+      "machine_x": 110.0,
+      "machine_y": 180.0
+    },
+    {
+      "id": 24,
+      "machine_x": 145.0,
+      "machine_y": 180.0
+    },
+    {
+      "id": 25,
+      "machine_x": 180.0,
+      "machine_y": 180.0
+    }
+  ]
+}

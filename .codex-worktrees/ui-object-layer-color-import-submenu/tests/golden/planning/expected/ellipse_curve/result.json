@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    32.0,
+    33.0,
+    68.0,
+    57.0
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 95.162434853022,
+  "estimated_seconds": 9.132274247715,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 95.162434853022,
+      "layer_id": "layer-golden-ellipse",
+      "name": "Golden Ellipse",
+      "passes": 1,
+      "path_count": 1,
+      "power": 200,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1500.0,
+      "travel_length_mm": 81.541400527585,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 1,
+  "point_count": 73,
+  "raster_assets": [],
+  "travel_length_mm": 81.541400527585
+}

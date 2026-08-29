@@ -1,0 +1,26 @@
+{
+  "bed_mapping_digest": "4264a9160b41aa85fc35da83dcf62e6ac5892cb30492e59d11b6835fe65e092c",
+  "created_at": 1786757158.6309502,
+  "cutting_surface_corners_px": [
+    [
+      1413.7537841796875,
+      1060.69482421875
+    ],
+    [
+      1435.594482421875,
+      30.54454231262207
+    ],
+    [
+      390.6640625,
+      13.984704971313477
+    ],
+    [
+      385.48736572265625,
+      1052.877197265625
+    ]
+  ],
+  "image_sha256": "ec04b8cc32f8dded045b3a154b77ee723b0c0e3fc3573b1f4bd1b6a8dac79e2d",
+  "kind": "accepted-automatic-honeycomb-teaching-reference",
+  "schema_version": 2,
+  "support_coordinate_frame_digest": "99da601429d319c3a50352995390292f24725cdb221612213154b32d416160bb"
+}

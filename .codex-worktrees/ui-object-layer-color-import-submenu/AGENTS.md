@@ -1,0 +1,168 @@
+# Repository development instructions
+
+## Start here
+
+These instructions apply to the entire repository. Before changing code, read:
+
+1. `CURRENT_STATE.md`
+2. `SAFETY.md`
+3. the relevant document under `docs/`
+4. `git status --short`
+
+Preserve unrelated and pre-existing working-tree changes. Do not normalize line
+endings or rewrite files outside the task's scope.
+
+## Safety invariants
+
+This application controls hazardous laser and motion hardware. Maintain these
+invariants:
+
+- Simulation is the default.
+- `MachineService` is the only normal path to a controller.
+- Serial hardware requires an explicitly hardware-enabled process.
+- Motion requires `machine.allow_motion`.
+- Positive laser output requires temporary arming.
+- Manual commands remain limited to read-only queries and `M5`.
+- Streamed jobs remain bounded, absolute-millimetre programs using the guarded
+  allowlist.
+- Rapid travel must not occur while laser output is enabled.
+- Programs must establish `G21`, `G90`, and an initial `M5`, and end with a
+  standalone `M5`.
+- Stop, disconnect, disarm, and job-failure paths must attempt `M5`.
+- Software controls must never be described as safety-rated.
+- Hardware behavior or configuration values are not verified until a physical
+  test is recorded with the controller, firmware, configuration, and result.
+
+Any change to motion, arming, laser output, parsing, bounds, or stop behavior
+requires focused tests for both acceptance and rejection paths.
+
+## Architecture boundaries
+
+- Keep configuration, geometry, project, calibration, vision, and G-code
+  modules independent of Qt and HTTP.
+- `AppContext` owns the shared camera, calibration, vision, and machine
+  services.
+- `CoreRuntime` is the UI-neutral lifecycle wrapper used by the desktop.
+- Browser behavior belongs in `server.py` and `web/`.
+- Desktop behavior belongs in `desktop/`.
+- Persistent project state belongs in `project/`; never put Qt objects in the
+  `.e3laser` model.
+- Platform-specific camera and serial implementations must be imported lazily
+  through portable interfaces. Windows is the supported desktop/simulator CI
+  target; Linux-specific Raspberry Pi node/bridge code must remain isolated from
+  Windows imports.
+- The browser's single-SVG pipeline and desktop project pipeline are currently
+  distinct. Identify which pipeline a change affects and test both when shared
+  behavior changes.
+- A loaded project's work area and the configured machine work area must not
+  silently disagree at execution time.
+
+## Platform contract
+
+Windows is the supported desktop and automated-CI target. Linux remains in
+scope for explicitly Linux/Raspberry-Pi components such as the remote hardware
+node, bridge, native camera backend, and their directly relevant tests. Linux
+desktop compatibility is not an automated compatibility gate; legacy Linux
+packaging may remain until it is removed separately.
+
+Linux-only hardware behavior must fail clearly and must not prevent supported
+Windows modules or simulator tests from importing. Use platform-native paths
+for new user data. Do not add new hard-coded `~/.local`, `/dev`, `.venv/bin`,
+or `.venv/Scripts` assumptions to portable code. POSIX-only tests must skip
+explicitly on Windows rather than failing during collection. New desktop or
+portable-backend behavior requires Windows coverage; Pi-specific changes require
+focused Linux/Pi verification when applicable.
+
+The current platform boundary and known blockers are recorded in
+`CURRENT_STATE.md`.
+
+## Development workflow
+
+1. Inspect the working tree and `CURRENT_STATE.md`.
+2. Make the smallest coherent change.
+3. Add or update focused tests.
+4. For an ordinary localized change, run the directly affected focused tests,
+   Ruff on the affected code or repository as appropriate, and `compileall`.
+5. Push development branches and rely on Fast Development CI, when the branch
+   pattern enables it, for the complete Windows Python 3.12 desktop suite.
+6. Update `CURRENT_STATE.md` when verification, supported behavior, known gaps,
+   platform status, or active working-tree work changes.
+7. Update the README, architecture, roadmap, and changelog when user-visible
+   behavior changes.
+
+Do not run the complete local suite after every small iterative fix unless the
+change is broad or cross-cutting, focused tests expose unexpected regressions,
+the user explicitly requests it, or the branch is being prepared for a merge or
+release. Before merge or release, run the Windows compatibility CI tier. The
+current compatibility workflow covers Windows Python 3.10 core/non-desktop,
+Windows Python 3.12 desktop, and repository Ruff.
+
+Do not commit captures, calibration photographs, logs, generated G-code, trace
+previews, or local configuration unless a task explicitly makes them curated
+fixtures.
+
+## Verification commands
+
+For ordinary localized work, select the directly affected test files or test
+expression instead of defaulting to the complete suite:
+
+```bash
+.venv/bin/python -m pytest -q tests/test_relevant_module.py
+.venv/bin/python -m ruff check .
+.venv/bin/python -m compileall -q laser_aligner
+```
+
+The complete local commands below are for broad changes, unexpected focused
+regressions, explicit user requests, and merge/release preparation. Full local
+pytest runs use four xdist workers by default; use serial execution only when
+diagnosing ordering, shared-state, or worker-specific behavior.
+
+Linux/Pi-specific work, when relevant (not a desktop compatibility gate):
+
+```bash
+.venv/bin/python -m pytest -q -n 4
+.venv/bin/python -m ruff check .
+```
+
+Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q -n 4
+.\.venv\Scripts\python.exe -m ruff check .
+```
+
+The full suite must collect on Windows. POSIX pseudoterminal tests should report
+explicit skips there; application and simulator tests must still run.
+
+For desktop changes, distinguish among:
+
+- source parsing or static assertions;
+- offscreen widget smoke tests;
+- interactive GUI tests;
+- real camera tests;
+- real controller or laser tests.
+
+State exactly which level was performed.
+
+## Project and persistence compatibility
+
+- Keep `.e3laser` schema changes explicit and versioned.
+- Add migration or rejection tests for schema changes.
+- Preserve atomic save, backup, and autosave behavior.
+- Treat project files, calibration data, material databases, and Qt settings as
+  separate persistence domains.
+- Never silently drop unsupported object or layer types during toolpath
+  generation; reject them with a useful message.
+
+## Definition of done
+
+A change is complete only when:
+
+- relevant automated tests pass;
+- supported Windows imports remain valid, and touched Linux/Pi-specific modules
+  retain their focused platform coverage when applicable;
+- safety invariants are preserved;
+- generated or local artifacts are not accidentally included;
+- user-facing documentation matches the implementation;
+- `CURRENT_STATE.md` records what is tested, smoke-tested, implemented but
+  unverified, historically verified, and physically verified.

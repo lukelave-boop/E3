@@ -614,10 +614,9 @@ def test_auto_quality_penalizes_background_noise_and_invalid_roots() -> None:
     )
 
     assert meaningful is not None
-    assert background is not None
-    assert noisy is not None
-    assert meaningful > background
-    assert meaningful > noisy
+    assert background is None
+    assert noisy is None
+    assert meaningful > 70.0
 
 
 def test_non_grid_auto_continues_after_one_raster_strategy_fails(
@@ -655,7 +654,7 @@ def test_non_grid_auto_continues_after_one_raster_strategy_fails(
 def test_non_grid_auto_reports_bounded_reasons_when_all_strategies_fail() -> None:
     image = np.full((80, 120, 3), 128, dtype=np.uint8)
 
-    with pytest.raises(ValueError, match="Auto could not produce a verified trace") as error:
+    with pytest.raises(ValueError, match="No credible trace interpretation was found") as error:
         detect_objects(
             image,
             _non_grid_auto_options(),
@@ -702,7 +701,7 @@ def test_non_grid_auto_all_pruned_summary_preserves_root_failure_reason(
         return_all_pruned,
     )
 
-    with pytest.raises(ValueError, match="Auto could not produce a verified trace") as error:
+    with pytest.raises(ValueError, match="No credible trace interpretation was found") as error:
         detect_objects(
             np.full((80, 120, 3), 128, dtype=np.uint8),
             _non_grid_auto_options(),
@@ -1273,7 +1272,7 @@ def test_normalized_grid_retains_and_flags_cells_crossing_work_area() -> None:
     assert "outside the work area" in result.message
 
 
-def test_edge_cropped_observation_is_flagged_and_not_preselected() -> None:
+def test_non_grid_edge_cropped_observation_is_rejected_by_hard_roi() -> None:
     image = np.full((400, 400, 3), 230, dtype=np.uint8)
     cv2.rectangle(image, (300, 120), (399, 220), (35, 35, 35), -1)
 
@@ -1290,12 +1289,14 @@ def test_edge_cropped_observation_is_flagged_and_not_preselected() -> None:
         4.0,
     )
 
-    assert result.direct_count == 1
-    detection = result.detections[0]
-    assert detection.diagnostics["touches_image_edge"] is True
-    assert detection.diagnostics["image_edge_sides"] == ["right"]
-    assert detection.selected_default is False
-    assert "may be cropped" in result.message
+    assert result.direct_count == 0
+    assert result.detected is False
+    assert (
+        result.diagnostics["strategy_metrics"][
+            "hard_roi_boundary_rejected_candidate_count"
+        ]
+        == 1
+    )
 
 
 def test_non_grid_concentric_foreground_preserves_one_raster_contour_tree() -> None:
@@ -1418,14 +1419,11 @@ def test_guarded_output_area_is_distinct_from_camera_work_area() -> None:
         output_work_area=WorkArea(5.0, 85.0, 5.0, 95.0),
     )
 
-    assert result.direct_count == 1
-    detection = result.detections[0]
-    assert detection.diagnostics["within_camera_work_area"] is True
-    assert detection.diagnostics["within_work_area"] is False
-    assert detection.diagnostics["work_area_overruns_mm"]["right"] > 0.0
-    assert detection.selected_default is False
-    assert "guarded output area" in result.message
-    assert "right by" in result.message
+    assert result.direct_count == 0
+    assert (
+        result.diagnostics["camera_raster"]["eligibility"]["hard_roi_fraction"]
+        < 1.0
+    )
     payload = result.to_dict()
     assert payload["camera_work_area"] == {
         "x_min": 0.0,

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=E3 Positioning System
+Comment=Camera-assisted laser positioning and control
+Exec=E3
+Icon=e3-positioning-system
+Categories=Graphics;Engineering;
+Terminal=false

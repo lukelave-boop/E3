@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    36.40538319445,
+    33.66072607389,
+    63.59461680555,
+    46.33927392611
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 30.0,
+  "estimated_seconds": 2.645554444761,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 30.0,
+      "layer_id": "layer-golden-spot",
+      "name": "Golden Spot Offset",
+      "passes": 1,
+      "path_count": 1,
+      "power": 300,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1200.0,
+      "travel_length_mm": 50.276627064887,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 1,
+  "point_count": 2,
+  "raster_assets": [],
+  "travel_length_mm": 50.276627064887
+}
