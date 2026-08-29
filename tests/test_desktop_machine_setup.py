@@ -55,7 +55,7 @@ def _runtime(
     payload["app"]["data_dir"] = str(tmp_path / "data")
     payload["app"]["open_browser"] = False
     payload["camera"]["autostart"] = False
-    payload["machine"]["port"] = "e3bridge://127.0.0.1:9"
+    payload["machine"]["port"] = "COM_TEST"
     payload["machine"]["allow_motion"] = True
     payload["machine"]["honeycomb_span_mm"] = honeycomb_span_mm
     path = tmp_path / "config.json"

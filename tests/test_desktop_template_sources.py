@@ -39,11 +39,12 @@ def test_hardware_job_start_homes_once_without_camera_parking_before_arming() ->
     controller = source("controller.py")
     operation = controller[controller.index("    def run_job(") : controller.index("    def pause_resume(")]
 
-    assert 'machine.settings.backend == "serial"' in operation
     assert "machine.prepare_photo_position()" not in operation
-    assert operation.index("machine.preflight_program(gcode)") < operation.index("machine.prepare_job_start()")
-    assert operation.index("machine.prepare_job_start()") < operation.index("machine.arm_program(arm_phrase, program)")
-    assert operation.index("machine.arm_program(arm_phrase, program)") < operation.index("machine.start_validated_program(program, name)")
+    assert operation.index("machine.preflight_program(gcode)") < operation.index(
+        "machine.start_preflighted_program("
+    )
+    assert "authorization_phrase=arm_phrase" in operation
+    assert "abandon_start_attempt" in operation
     assert "machine.disarm()" in operation
 
 

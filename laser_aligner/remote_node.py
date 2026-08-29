@@ -10,8 +10,11 @@ from .camera.remote_protocol import camera_token_from_environment
 from .camera.service import CameraService
 from .config import load_settings
 from .errors import MachineError
-from .machine.bridge import BridgeServer as MachineBridgeServer
 from .machine.network_transport import is_bridge_uri
+from .machine.pi_job_service import PiJobService
+from .machine.pi_job_store import PiJobStore
+from .machine.pi_machine_server import PiMachineServer
+from .machine.service import MachineService
 
 LOGGER = logging.getLogger(__name__)
 _DEFAULT_MACHINE_PORT = 8765
@@ -59,13 +62,23 @@ def main(argv: list[str] | None = None) -> int:
         raise MachineError(
             "Set machine.protocol to grbl/marlin in the Pi config or pass --protocol"
         )
+    settings.machine.protocol = protocol
+    settings.ensure_directories()
     token = camera_token_from_environment()
-    machine_server = MachineBridgeServer(
+    machine = MachineService(
+        settings.machine,
+        settings.laser,
+        hardware_enabled=True,
+        laser_lockout=False,
+    )
+    job_service = PiJobService(
+        machine,
+        PiJobStore(settings.app.data_dir / "pi_machine_jobs"),
+    )
+    machine_server = PiMachineServer(
+        job_service,
         host=args.host,
         port=args.machine_port,
-        serial_path=settings.machine.port,
-        baudrate=settings.machine.baudrate,
-        protocol=protocol,
         token=token,
     )
     camera_server = CameraBridgeServer(
@@ -75,7 +88,11 @@ def main(argv: list[str] | None = None) -> int:
         token=token,
     )
     workers = [
-        Thread(target=machine_server.serve_forever, name="e3-machine-bridge", daemon=True),
+        Thread(
+            target=machine_server.serve_forever,
+            name="e3-pi-machine-service",
+            daemon=True,
+        ),
         Thread(target=camera_server.serve_forever, name="e3-camera-bridge", daemon=True),
     ]
     for worker in workers:
@@ -89,6 +106,7 @@ def main(argv: list[str] | None = None) -> int:
         LOGGER.info("Stopping E3 hardware node")
     finally:
         machine_server.stop()
+        job_service.shutdown(stop_machine=True)
         camera_server.stop()
         for worker in workers:
             worker.join(timeout=2.0)

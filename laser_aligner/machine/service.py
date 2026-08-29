@@ -2230,6 +2230,34 @@ class MachineService:
                         self._clear_arm_authorization()
                 raise
 
+    def start_preflighted_program(
+        self,
+        program: ValidatedProgram,
+        name: str = "generated.gcode",
+        *,
+        authorization_phrase: str | None = None,
+    ) -> dict[str, Any]:
+        """Run the complete guarded local start sequence for one exact program.
+
+        Remote Pi-owned execution implements the same public seam, but transfers
+        the immutable program to the node before its local MachineService performs
+        these controller-side steps.  Keeping the desktop handoff at this level
+        prevents UI code from pretending that a network transport owns execution.
+        """
+
+        # Revalidate before Home can move the controller.  Arm and Start repeat
+        # the same integrity check at their own hazardous boundaries.
+        self._require_current_safety_profile(program)
+        if self.settings.backend == "serial":
+            self.prepare_job_start()
+        if program.requires_laser_authorization:
+            if authorization_phrase is None:
+                raise SafetyError(
+                    "This powered program requires explicit START authorization"
+                )
+            self.arm_program(authorization_phrase, program)
+        return self.start_validated_program(program, name)
+
     def start_job(self, text: str, name: str = "generated.gcode") -> dict[str, Any]:
         start_stop_epoch = self._operation_stop_epoch()
         try:
@@ -2340,7 +2368,43 @@ class MachineService:
                     name="gcode-streamer",
                     daemon=True,
                 )
-                self._job_thread.start()
+                try:
+                    self._job_thread.start()
+                except Exception as exc:
+                    # No command worker exists to run the normal failure
+                    # cleanup.  Revoke the exact job authority, publish a real
+                    # terminal failure instead of a phantom running job, and
+                    # still attempt laser-off before returning the error.
+                    self._job.finished_at = time.time()
+                    self._job.error = f"Job runner could not start: {exc}"
+                    self._job.phase = "failed"
+                    self._job.running = False
+                    # The cleanup M5 below is intentionally unacknowledged.  Its
+                    # eventual `ok` must never be allowed to satisfy a later
+                    # command exchange, so revoke this controller session before
+                    # attempting the write (we already hold _stop_epoch_lock).
+                    transport = self._transport
+                    if transport is not None:
+                        self._controller_reconnect_required = True
+                    self._coordinate_reference_ready = False
+                    self._coordinate_state_reference = None
+                    self._jog_position_mm = None
+                    self._authorization_epoch += 1
+                    self._clear_arm_authorization()
+                    self._job_laser_authorized = False
+                    try:
+                        if transport is None:
+                            raise MachineError("Controller is not connected")
+                        with self._transport_write_lock:
+                            transport.write_line("M5")
+                        self._append_log("TX", "M5 (job-start failure cleanup)")
+                    except Exception as cleanup_error:
+                        self._append_log(
+                            "ERROR",
+                            "Job-start failure laser-off request failed: "
+                            f"{cleanup_error}",
+                        )
+                    raise
             return self._job.to_dict()
 
     def _execute_running_job_command(
@@ -2438,7 +2502,7 @@ class MachineService:
                 dialect.motion_barrier_command,
                 timeout=max(120.0, self.settings.read_timeout),
             )
-        except Exception as exc:
+        except BaseException as exc:
             positioning_error = exc
 
         release_error: Exception | None = None
@@ -2555,7 +2619,7 @@ class MachineService:
                 )
             if self._job_stop.is_set():
                 raise MachineError("Job stopped")
-        except Exception as exc:
+        except BaseException as exc:
             error = str(exc)
             # After any failed streamed command, the controller's receive queue
             # and planner acknowledgement position are not provable. Keep the

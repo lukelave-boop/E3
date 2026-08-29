@@ -53,7 +53,7 @@ def _runtime(tmp_path: Path) -> CoreRuntime:
     payload["app"]["data_dir"] = str(tmp_path / "data")
     payload["app"]["open_browser"] = False
     payload["camera"]["autostart"] = False
-    payload["machine"]["port"] = "e3bridge://127.0.0.1:9"
+    payload["machine"]["port"] = "COM_TEST"
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     runtime = CoreRuntime.from_config(path, hardware_enabled=False)

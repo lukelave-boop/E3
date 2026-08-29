@@ -1876,6 +1876,91 @@ def test_powered_arm_is_hash_bound_and_consumed() -> None:
         machine.disconnect()
 
 
+def test_job_runner_thread_start_failure_is_terminal_and_attempts_m5(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl"),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    transport = machine._transport
+    assert transport is not None
+    writes: list[str] = []
+    original_write_line = transport.write_line
+
+    def record_write(line: str) -> None:
+        writes.append(line)
+        original_write_line(line)
+
+    monkeypatch.setattr(transport, "write_line", record_write)
+    program = machine.preflight_program(
+        "G21\nG90\nM5\nG0 X10 Y10 F500\nM4 S100\nG1 X20 Y20 F500\nM5\n"
+    )
+    machine.arm_program(machine.ARM_PHRASE, program)
+
+    def fail_to_start(_thread: threading.Thread) -> None:
+        raise RuntimeError("thread unavailable")
+
+    monkeypatch.setattr(threading.Thread, "start", fail_to_start)
+    with pytest.raises(RuntimeError, match="thread unavailable"):
+        machine.start_validated_program(program, "thread-failure.gcode")
+
+    status = machine.status()["job"]
+    assert status["running"] is False
+    assert status["phase"] == "failed"
+    assert status["error"] == "Job runner could not start: thread unavailable"
+    assert writes[-1] == "M5"
+    assert machine.status()["controller_reconnect_required"] is True
+    with pytest.raises(MachineError, match="Controller command state is untrusted"):
+        machine.send_command("$I")
+    assert machine.status()["last_successful_job"] is None
+    machine.disconnect()
+
+
+def test_start_preflighted_program_preserves_local_home_arm_start_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl"),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    program = machine.preflight_program(
+        "G21\nG90\nM5\nG0 X10 Y10 F500\nM4 S100\nG1 X20 Y20 F500\nM5\n"
+    )
+    calls: list[object] = []
+    monkeypatch.setattr(
+        machine,
+        "prepare_job_start",
+        lambda: calls.append("home"),
+    )
+    monkeypatch.setattr(
+        machine,
+        "arm_program",
+        lambda phrase, exact: calls.append(("arm", phrase, exact.digest)),
+    )
+    monkeypatch.setattr(
+        machine,
+        "start_validated_program",
+        lambda exact, name: calls.append(("start", name, exact.digest)) or {"running": True},
+    )
+
+    result = machine.start_preflighted_program(
+        program,
+        "ordered.gcode",
+        authorization_phrase=machine.ARM_PHRASE,
+    )
+
+    assert result == {"running": True}
+    assert calls == [
+        "home",
+        ("arm", machine.ARM_PHRASE, program.digest),
+        ("start", "ordered.gcode", program.digest),
+    ]
+
+
 def test_preflight_is_invalidated_when_safety_profile_changes() -> None:
     machine = MachineService(
         MachineSettings(backend="serial"),
