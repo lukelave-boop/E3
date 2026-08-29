@@ -6,6 +6,16 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed a Pi-owned parked-camera deadlock that delayed Camera Trace and other
+  Home-first precision captures until the 120-second remote stepper-hold lease
+  expired. Trace, base-bed mapping, coordinate audit, dense calibration,
+  accuracy validation, and fine registration now complete Home / park and any
+  ordinary position RPC before acquiring the capture-only hold. No-home
+  recaptures still hold the machine for their raw burst. The Pi ordinary lock,
+  same-channel authenticated release, finite lease, job exclusion, and priority
+  STOP remain unchanged. Trace diagnostics now report prepare-photo,
+  hold-acquisition, raw-burst, and complete precision-capture timing separately.
+
 - Fixed Camera Trace false empty-bed suppression when dark or differently
   colored material happens to correlate with the locally normalized honeycomb
   texture. The bounded reference model now derives deterministic robust Lab

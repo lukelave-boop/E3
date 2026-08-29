@@ -461,7 +461,8 @@ component count, and normalization/mask timings.
 
 Trace timing is opt-in diagnostic metadata under `diagnostics.timing`; it is not
 persisted and does not alter scoring or validation. The request boundary records
-`capture_seconds`, `rectification_seconds`,
+`prepare_photo_seconds`, `hold_acquisition_seconds`, `camera_burst_seconds`,
+`precision_capture_total_seconds`, `capture_seconds`, `rectification_seconds`,
 `capture_rectification_total_seconds`, `detect_objects_seconds`, and
 `request_total_seconds`. The camera adapter records
 `hard_roi_preparation`, `structural_reference_match`,
@@ -602,6 +603,10 @@ the pixels that produced the vectors. Clearing the preview, creating the
 objects, changing the camera/calibration evidence, or stopping the controller
 invalidates outstanding trace work. Late results from an older request are
 ignored.
+
+On hardware, Trace completes Home / park before acquiring the temporary stepper
+hold. The hold covers only the short settle/discard/stable raw-frame burst and
+is released before sharpness selection, rectification, or detection.
 
 The displayed candidate items are review-only scene objects. A newer detection
 replaces them as one set, and clearing or creating removes them without adding

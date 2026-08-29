@@ -55,6 +55,13 @@ has bounded same-boot replay handling, repeated identical upload chunks are
 idempotent, FINALIZE revalidates an existing prepared job, and duplicate START
 returns the durable state without running it again.
 
+The stepper hold is a capture-only lease. A caller must complete Home / park,
+realtime-position sampling, and every other ordinary machine operation before
+acquiring it. The Pi deliberately keeps `_ordinary_lock` for the full held
+session, so an ordinary request on another connection waits until release; this
+prevents conflicting motion and is not a supported nesting mechanism. STOP
+continues to bypass that lock and can cancel an active hold.
+
 On the Pi, `PiJobService` owns exactly one local `MachineService`, so a remote
 client never opens, steals, or interleaves the controller serial port. Status and
 STOP remain available during execution; another START, connect/reconnect/

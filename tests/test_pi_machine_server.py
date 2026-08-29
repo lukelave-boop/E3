@@ -5,13 +5,24 @@ import socket
 import threading
 import time
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
+import numpy as np
 import pytest
 
-from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
+from laser_aligner.app import AppContext
+from laser_aligner.camera.controls import ControlResult
+from laser_aligner.camera.service import FrameBurst
+from laser_aligner.config import (
+    LaserSettings,
+    MachineSettings,
+    PrecisionCaptureSettings,
+    WorkArea,
+)
 from laser_aligner.errors import MachineError
 from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_ACTIVE,
@@ -45,6 +56,7 @@ from laser_aligner.machine.pi_machine_server import (
     ACTION_MACHINE_STEPPER_HOLD_RELEASE,
     PiMachineServer,
 )
+from laser_aligner.machine.remote_service import RemoteMachineService
 from laser_aligner.machine.service import MachineService, ValidatedProgram
 from tests.fakes.simulator_transport import SimulatedTransport
 
@@ -663,6 +675,240 @@ def test_same_channel_stepper_hold_releases_on_client_request(
         assert released["request_id"] == release_request_id
         assert released["state"] == "released"
     assert server_harness.transport.step_idle_delay_ms == 250
+
+
+def test_pi_rpc_ordinary_operation_waits_for_stepper_hold_release(
+    server_harness: ServerHarness,
+) -> None:
+    assert _rpc(server_harness, ACTION_MACHINE_CONNECT)["ok"] is True
+    enter_request_id = str(uuid.uuid4())
+    release_request_id = str(uuid.uuid4())
+    ordinary_started = threading.Event()
+    ordinary_result: dict[str, Any] = {}
+
+    with socket.create_connection(
+        ("127.0.0.1", server_harness.server.bound_port),
+        timeout=3.0,
+    ) as sock:
+        sock.settimeout(5.0)
+        channel = authenticate_client(sock, _TOKEN)
+        channel.send_json(
+            {
+                "action": ACTION_MACHINE_STEPPER_HOLD,
+                "request_id": enter_request_id,
+            }
+        )
+        held = channel.receive_json()
+        assert held["state"] == "held"
+
+        def prepare_photo_position() -> None:
+            ordinary_started.set()
+            ordinary_result.update(
+                _rpc(server_harness, ACTION_MACHINE_PREPARE_PHOTO_POSITION)
+            )
+
+        ordinary = threading.Thread(target=prepare_photo_position, daemon=True)
+        ordinary.start()
+        assert ordinary_started.wait(timeout=1.0)
+        ordinary.join(timeout=0.1)
+        assert ordinary.is_alive(), (
+            "The Pi ordinary-operation lock must not permit Home / park inside "
+            "another session's active stepper hold"
+        )
+
+        channel.send_json(
+            {
+                "action": ACTION_MACHINE_STEPPER_HOLD_RELEASE,
+                "request_id": release_request_id,
+                "lease_id": held["lease_id"],
+            }
+        )
+        assert channel.receive_json()["state"] == "released"
+        ordinary.join(timeout=2.0)
+
+    assert not ordinary.is_alive()
+    assert ordinary_result["ok"] is True
+
+
+def test_stepper_hold_does_not_block_pi_stop_authority(
+    server_harness: ServerHarness,
+) -> None:
+    assert _rpc(server_harness, ACTION_MACHINE_CONNECT)["ok"] is True
+    with socket.create_connection(
+        ("127.0.0.1", server_harness.server.bound_port),
+        timeout=3.0,
+    ) as sock:
+        sock.settimeout(5.0)
+        channel = authenticate_client(sock, _TOKEN)
+        channel.send_json(
+            {
+                "action": ACTION_MACHINE_STEPPER_HOLD,
+                "request_id": str(uuid.uuid4()),
+            }
+        )
+        held = channel.receive_json()
+        assert held["state"] == "held"
+
+        stop_started = time.perf_counter()
+        stopped = _rpc(server_harness, ACTION_JOB_STOP)
+        stop_elapsed = time.perf_counter() - stop_started
+
+        assert stopped["ok"] is True
+        assert stop_elapsed < 1.0
+        channel.send_json(
+            {
+                "action": ACTION_MACHINE_STEPPER_HOLD_RELEASE,
+                "request_id": str(uuid.uuid4()),
+                "lease_id": held["lease_id"],
+            }
+        )
+        release = channel.receive_json()
+        assert release["ok"] is False
+        assert "STOP" in release["error"]
+
+
+def test_trace_capture_prepares_before_remote_hold_without_lease_timeout(
+    server_harness: ServerHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", _TOKEN)
+    remote_settings = MachineSettings(
+        backend="serial",
+        protocol="grbl",
+        port=f"e3bridge://127.0.0.1:{server_harness.server.bound_port}",
+        baudrate=115200,
+        read_timeout=0.1,
+        work_area=WorkArea(0, 220, 0, 220),
+        photo_x=110,
+        photo_y=110,
+        home_before_photo=True,
+        allow_motion=True,
+        controller_startup_delay=0.0,
+        max_travel_feed_mm_min=6000,
+        max_work_feed_mm_min=6000,
+    )
+    remote = RemoteMachineService(
+        remote_settings,
+        LaserSettings(arm_timeout_seconds=60),
+        hardware_enabled=True,
+        laser_lockout=False,
+        monitor_interval_seconds=0.01,
+    )
+    events: list[str] = []
+    pi_hold_active = False
+    original_prepare = server_harness.service.prepare_photo_position
+    original_hold = server_harness.service.temporary_stepper_hold
+
+    def observed_prepare_photo_position(
+        *, capture_home_position: bool = False
+    ) -> dict[str, Any]:
+        events.append("pi:prepare:start")
+        result = original_prepare(capture_home_position=capture_home_position)
+        events.append("pi:prepare:complete")
+        return result
+
+    @contextmanager
+    def observed_stepper_hold():
+        nonlocal pi_hold_active
+        events.append("pi:hold:request")
+        with original_hold():
+            pi_hold_active = True
+            events.append("pi:hold:active")
+            try:
+                yield
+            finally:
+                pi_hold_active = False
+                events.append("pi:hold:release")
+
+    monkeypatch.setattr(
+        server_harness.service,
+        "prepare_photo_position",
+        observed_prepare_photo_position,
+    )
+    monkeypatch.setattr(
+        server_harness.service,
+        "temporary_stepper_hold",
+        observed_stepper_hold,
+    )
+
+    frame = np.full((8, 8, 3), 73, dtype=np.uint8)
+    burst = FrameBurst(
+        frames=(frame,),
+        sequence_numbers=(1,),
+        discarded_frames=2,
+        settle_seconds=0.1,
+        elapsed_seconds=0.2,
+        sharpness_scores=(),
+        controls=ControlResult({}, {}, {}),
+    )
+
+    def capture_burst(_profile: object, *, score_frames: bool) -> FrameBurst:
+        assert score_frames is False
+        assert pi_hold_active
+        assert server_harness.transport.step_idle_delay_ms == 255
+        events.append("camera:burst")
+        return burst
+
+    context = SimpleNamespace(
+        _require_valid_bed_calibration=lambda: events.append("calibration:valid"),
+        machine=remote,
+        settings=SimpleNamespace(
+            machine=remote_settings,
+            camera=SimpleNamespace(precision_capture=PrecisionCaptureSettings()),
+        ),
+        camera=SimpleNamespace(
+            capture_burst=capture_burst,
+            _sharpness_score=lambda _image: 4.0,
+        ),
+        lens=SimpleNamespace(model=None),
+        _rectify_camera_image=lambda image: image.copy(),
+        _cache_workspace=lambda _image: None,
+        _persist_workspace=lambda _image: None,
+    )
+    context._stable_camera_burst = lambda: AppContext._stable_camera_burst(context)
+    context._prepare_camera_burst = lambda value, *, undistort: (
+        AppContext._prepare_camera_burst(context, value, undistort=undistort)
+    )
+    result: dict[str, Any] = {}
+    timing: dict[str, float] = {}
+
+    def capture_trace() -> None:
+        try:
+            result["image"] = AppContext.capture_parked_trace_frame(
+                context,
+                timing=timing,
+            )
+        except BaseException as exc:
+            result["error"] = exc
+
+    worker = threading.Thread(target=capture_trace, daemon=True)
+    try:
+        remote.connect()
+        total_started = time.perf_counter()
+        worker.start()
+        worker.join(timeout=2.0)
+        total_elapsed = time.perf_counter() - total_started
+        if worker.is_alive():
+            server_harness.server.stop()
+            worker.join(timeout=2.0)
+            pytest.fail(
+                "Trace precision capture blocked behind the Pi stepper-hold lease"
+            )
+        if "error" in result:
+            raise result["error"]
+
+        assert np.array_equal(result["image"], frame)
+        assert total_elapsed < 2.0
+        assert events.index("pi:prepare:complete") < events.index("pi:hold:active")
+        assert events.index("pi:hold:active") < events.index("camera:burst")
+        assert events.index("camera:burst") < events.index("pi:hold:release")
+        assert server_harness.transport.step_idle_delay_ms == 250
+        assert timing["prepare_photo_seconds"] < 2.0
+        assert timing["hold_acquisition_seconds"] < 2.0
+        assert timing["camera_burst_seconds"] < 2.0
+        assert timing["precision_capture_total_seconds"] < 2.0
+    finally:
+        remote.detach()
 
 
 def test_stepper_hold_client_disconnect_unwinds_local_context(

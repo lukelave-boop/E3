@@ -153,12 +153,13 @@ Network FPS from every worker-thread receipt, and calculates Display FPS only
 from frames Qt presents after latest-frame replacement.
 
 Parked hardware workflows request an unscored raw burst while the temporary
-stepper hold is active. The hold ends immediately after the last frame has been
-copied; lens correction and clarity scoring then populate the same `FrameBurst`
-outside that scope. The short parked Trace workflow uses the same two-phase
-capture/selection path. Each burst retains its camera-session generation, so a
-stop or reopen during deferred processing rejects the stale result. Callers
-never choose a representative frame from an unscored burst.
+stepper hold is active. Home / park and any other ordinary machine RPC complete
+before that hold is acquired. The hold ends immediately after the last frame
+has been copied; lens correction and clarity scoring then populate the same
+`FrameBurst` outside that scope. The short parked Trace workflow uses the same
+two-phase capture/selection path. Each burst retains its camera-session
+generation, so a stop or reopen during deferred processing rejects the stale
+result. Callers never choose a representative frame from an unscored burst.
 
 The desktop camera panel and workspace share one presentation constant for the
 initial corrected-overlay opacity. It is 70%, remains operator-adjustable from
@@ -319,9 +320,9 @@ should own a physical camera at a time.
   this same repeated-object/lattice architecture rather than literal raster
   components; **By color** remains the explicit operator override.
 - Live desktop trace capture establishes the photography pose rather than
-  trusting prior machine state: temporary hold encloses Home / park and the
-  stable camera frame set, while rectification and vision analysis run only
-  after the controller's original idle behavior has been restored.
+  trusting prior machine state: Home / park completes first, temporary hold
+  encloses only the stable camera frame set, and rectification and vision
+  analysis run after the controller's original idle behavior has been restored.
 - Rounded-rectangle output fits center, dimensions, rotation, and radius and
   emits an analytic rounded vector. Simplified and exact modes preserve
   pixel-derived contours; simplification is a bounded polygon reduction, not a

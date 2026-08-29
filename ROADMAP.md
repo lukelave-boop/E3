@@ -119,6 +119,8 @@ physical requirements.
 ### Camera, calibration, and material height
 
 - Curated real-camera template and Trace datasets with measured geometry.
+- Investigate the separately reported ordinary corrected live-overlay failure;
+  the Raw Live Monitor remained usable during the Pi-owned Trace reproduction.
 - Repeatability and coverage visualization after camera remounting.
 - Material-thickness input connected to calibration profiles.
 - Camera-height and optical-center modeling, multiple calibration planes, or

@@ -13,7 +13,7 @@ from laser_aligner.app import AppContext
 from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.service import CameraService, FrameBurst
 from laser_aligner.config import CameraSettings, PrecisionCaptureSettings
-from laser_aligner.errors import CameraError
+from laser_aligner.errors import CameraError, MachineError
 from laser_aligner.imaging import write_image_atomic
 from laser_aligner.vision import fiducials
 
@@ -238,8 +238,8 @@ def test_registration_capture_homes_before_burst_and_can_skip_rehoming(
         "camera:ready",
         "receipt",
         "map",
-        "hold:start",
         "home",
+        "hold:start",
         "burst:False",
         "hold:end",
         "process:True",
@@ -328,8 +328,8 @@ def test_dense_capture_uses_precision_burst_and_explicit_grid_mode() -> None:
     assert calls == [
         "camera:ready",
         "receipt",
-        "hold:start",
         "home",
+        "hold:start",
         "burst:False",
         "hold:end",
         "process:True",
@@ -408,8 +408,8 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
 
     assert calls == [
         "validate",
-        "hold:start",
         "home",
+        "hold:start",
         "capture:raw",
         "hold:end",
         "score:False",
@@ -420,14 +420,92 @@ def test_trace_capture_homes_and_holds_only_through_camera_frames(tmp_path) -> N
     assert np.array_equal(result, frame)
     assert harness.workspace_path.exists()
     assert timing.keys() == {
+        "prepare_photo_seconds",
+        "hold_acquisition_seconds",
+        "camera_burst_seconds",
+        "precision_capture_total_seconds",
         "capture_seconds",
         "rectification_seconds",
         "capture_rectification_total_seconds",
     }
     assert all(value >= 0.0 for value in timing.values())
+    assert timing["precision_capture_total_seconds"] >= (
+        timing["prepare_photo_seconds"]
+        + timing["hold_acquisition_seconds"]
+        + timing["camera_burst_seconds"]
+    )
+    assert timing["capture_seconds"] >= timing["precision_capture_total_seconds"]
     assert timing["capture_rectification_total_seconds"] >= (
         timing["capture_seconds"] + timing["rectification_seconds"]
     )
+
+
+def test_trace_capture_home_failure_never_acquires_stepper_hold() -> None:
+    calls: list[str] = []
+
+    @contextmanager
+    def unexpected_hold():
+        calls.append("hold:start")
+        yield
+
+    def fail_home() -> None:
+        calls.append("home")
+        raise MachineError("simulated Home / park failure")
+
+    harness = SimpleNamespace(
+        _require_valid_bed_calibration=lambda: calls.append("validate"),
+        machine=SimpleNamespace(
+            prepare_photo_position=fail_home,
+            temporary_stepper_hold=unexpected_hold,
+        ),
+    )
+
+    with pytest.raises(MachineError, match="Home / park failure"):
+        AppContext.capture_parked_trace_frame(harness)
+
+    assert calls == ["validate", "home"]
+
+
+def test_trace_capture_exception_releases_stepper_hold() -> None:
+    calls: list[str] = []
+    holding = False
+
+    @contextmanager
+    def temporary_hold():
+        nonlocal holding
+        calls.append("hold:start")
+        holding = True
+        try:
+            yield
+        finally:
+            holding = False
+            calls.append("hold:end")
+
+    def fail_capture() -> None:
+        assert holding
+        calls.append("capture:raw")
+        raise CameraError("simulated capture cancellation")
+
+    harness = SimpleNamespace(
+        _require_valid_bed_calibration=lambda: calls.append("validate"),
+        machine=SimpleNamespace(
+            prepare_photo_position=lambda: calls.append("home"),
+            temporary_stepper_hold=temporary_hold,
+        ),
+        _stable_camera_burst=fail_capture,
+    )
+
+    with pytest.raises(CameraError, match="capture cancellation"):
+        AppContext.capture_parked_trace_frame(harness)
+
+    assert holding is False
+    assert calls == [
+        "validate",
+        "home",
+        "hold:start",
+        "capture:raw",
+        "hold:end",
+    ]
 
 
 def _removed_simulation_workspace_trace_capture_case() -> None:
@@ -496,7 +574,7 @@ def test_work_area_reference_holds_only_through_raw_frame_capture(
     }
 
     def prepare_photo_position(**kwargs: object) -> dict[str, object]:
-        assert holding
+        assert not holding
         assert kwargs == {"capture_home_position": True}
         calls.append("home")
         return {
@@ -538,7 +616,7 @@ def test_work_area_reference_holds_only_through_raw_frame_capture(
 
     def sample_position() -> dict[str, object]:
         nonlocal sample_count
-        assert holding
+        assert not holding
         calls.append(f"position:{sample_count + 1}")
         result = positions[sample_count]
         sample_count += 1
@@ -596,12 +674,12 @@ def test_work_area_reference_holds_only_through_raw_frame_capture(
     assert calls == [
         "camera:ready",
         "bed:ready",
-        "hold:start",
         "home",
         "position:1",
+        "hold:start",
         "capture:raw",
-        "position:2",
         "hold:end",
+        "position:2",
         "score:released",
     ]
     assert np.array_equal(result, frame)
@@ -691,12 +769,12 @@ def test_coordinate_audit_snapshot_is_not_published_when_image_write_fails(
     assert calls == [
         "camera:ready",
         "bed:ready",
-        "hold:start",
         "home",
         "position",
+        "hold:start",
         "capture:raw",
-        "position",
         "hold:end",
+        "position",
         "process:True",
         "write",
     ]

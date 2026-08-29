@@ -430,7 +430,7 @@ def test_base_capture_holds_home_parks_and_releases_before_detection(
 
         captured, detection = context.capture_base_bed_mapping()
 
-        assert events == ["hold", "home/park", "capture", "release", "undistort"]
+        assert events == ["home/park", "hold", "capture", "release", "undistort"]
         assert np.array_equal(captured, image)
         assert detection["candidate"]["can_apply"] is True
         assert [asdict(point) for point in context.bed.points] == previous_points

@@ -126,9 +126,9 @@ Diagnostics identify the complete consensus subset and its sharpest
 representative image. The older `sharpest_inlier_frame` single-frame experiment
 and the full-inlier `median` strategy remain available for explicit comparison.
 On a serial GRBL machine, the application reads the controller's current `$1`
-step-idle delay, temporarily selects continuous motor hold before Home / park,
-keeps that hold through the complete precision burst, and restores the saved
-delay immediately after the last frame. It then explicitly disables the motors;
+step-idle delay after Home / park has completed, temporarily selects continuous
+motor hold for the complete precision burst, and restores the saved delay
+immediately after the last frame. It then explicitly disables the motors;
 raw-frame sharpness scoring, lens correction, mark analysis, fitting, and
 rendering all happen after release, so CPU work does not extend motor heating.
 A process or power failure can interrupt software

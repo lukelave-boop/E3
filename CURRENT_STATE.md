@@ -7,6 +7,68 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-29**
 
+## Active Pi-owned parked-camera hold ordering correction
+
+Physical reproduction on `main` commit `66a704653ddabee7f352b4c5eaa779d2bc3688ce`
+showed Camera Trace enter Working while the controller was HOME REQUIRED, remain
+motionless for about two minutes, then Home/park and complete normally. The
+delay matched the Pi server's 120-second stepper-hold lease.
+
+The exact cause was a cross-session ordinary-operation deadlock. Windows
+`RemoteMachineService.temporary_stepper_hold()` establishes one long-lived
+authenticated `E3MACHINE/2` session. The Pi server enters
+`PiJobService.temporary_stepper_hold()`, which deliberately owns
+`_ordinary_lock` across the complete yielded lease. `AppContext` then sent Home /
+park through a second ordinary RPC while the first session still owned that
+lock. Windows could not release the hold until Home / park returned, and Home /
+park could not return until the hold released. Only the server's finite lease
+timeout broke the cycle.
+
+All six `AppContext` hold call sites have been audited and now keep the hold
+capture-only. Object Trace and fresh base-bed mapping always complete Home /
+park before hold acquisition. Dense calibration, accuracy validation, and fine
+registration do so when `home_first=True`; their intentional no-home recaptures
+acquire the hold directly and send no machine motion inside it. Coordinate audit
+completes Home / park and its before-capture position sample before the hold,
+captures the raw burst while held, releases, then takes its after-capture sample.
+No ordinary machine RPC is nested in a remote hold. Raw-frame capture remains
+inside the hold; sharpness scoring, lens correction, rectification, detection,
+and analysis remain outside it. A failed Home / park never acquires a hold, and
+a capture exception still exits the same-channel release path.
+
+The Pi lock, same-channel hold/release authentication, finite 120-second lease,
+idle requirement, Pi-owned job exclusion, controller authority checks, and STOP
+bypass were not weakened or retimed. A direct server regression proves an
+ordinary Home / park request remains serialized until another session releases
+its hold. A second regression proves STOP still returns immediately during a
+hold; the canceled held session reports failure rather than claiming a normal
+release.
+
+One deterministic full-stack loopback capture runs
+`AppContext → RemoteMachineService → E3MACHINE/2 → PiMachineServer →
+PiJobService → MachineService`. It proves prepare completion precedes hold
+acquisition, the GRBL hold is active during the camera burst, and normal release
+restores the finite idle delay. On the local simulated controller/camera sample,
+prepare-photo took **0.0171 s**, hold acquisition **0.0138 s**, the stubbed raw
+burst **0.000055 s**, the complete precision-capture scope **0.0316 s**, and the
+already-connected end-to-end Trace capture **0.0321 s**. These are deterministic
+software-loopback timings, not a physical camera-performance measurement. The
+previous approximately 120-second value is the physical failure observation;
+the corrected sequence has not yet been re-run on the Pi/controller/camera.
+
+Focused Windows verification passes **149 tests** across RemoteMachineService,
+PiMachineServer/PiJobService locking and STOP behavior, local MachineService
+hold/Home behavior, Camera Trace precision capture, base mapping, coordinate
+audit, fine registration, dense/accuracy workflows, and desktop Trace capture.
+The complete Windows four-worker suite passes **2,848 tests** with **14 expected
+platform/privilege skips**. Repository Ruff, `python -m compileall -q
+laser_aligner`, and `git diff --check` pass. No timeout constant changed, and no
+new physical motion, laser, camera, or accuracy verification is claimed.
+
+The ordinary corrected live overlay was separately reported unavailable during
+the physical reproduction, so the operator used Raw Live Monitor. That overlay
+issue was not investigated or changed here and remains a separate follow-up.
+
 ## Active development-update publication continuity
 
 The `Publish E3 development update` workflow no longer deletes and recreates

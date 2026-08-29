@@ -115,6 +115,9 @@ emission has stopped or that the area is safe to enter.
   coordinates. It remains machine-bounded. Review its exact pattern and use a
   rigidly restrained sacrificial sheet that covers every displayed target.
 - Parked-bed precision capture temporarily keeps GRBL motors energized and
+  begins that scoped hold only after Home / park and every other required
+  ordinary controller operation have completed. The hold covers the camera
+  burst, not the motion required to reach the trusted photography pose, and
   explicitly disables them after its final frame, using FluidNC motor-disable
   or standard GRBL sleep/reset as available, while preserving the prior
   step-idle setting. Releasing motors invalidates trusted position and requires

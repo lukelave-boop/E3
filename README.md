@@ -238,6 +238,8 @@ irregular objects. Ordinary non-grid Auto and By contrast freeze one corrected
 frame, apply the guarded Trace ROI, suppress only trusted empty bed whose
 structure and compensated Lab appearance both match the reference, normalize
 eligible material, and use the shared raster Otsu/4× contour/native-fit path.
+On hardware, Trace completes Home / park before acquiring the temporary
+capture-only stepper hold; only the short settle/discard/raw-frame burst is held.
 The Camera display selector exposes the exact **Camera**, **Exposed bed**,
 **Eligible**, **Normalized**, and production **Mask** stages without granting
 project or laser authority. The physical Coleman scene still requires a new

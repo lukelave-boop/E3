@@ -271,9 +271,9 @@ authorize this step.
    its **START JOB** control to submit it through the normal guarded job path.
 3. On successful completion, Setup reopens automatically and starts
    **Home / park, capture and detect base grid**. The machine holds through
-   Home / park and the precision burst, then restores normal idle behavior and
-   releases the motors before image analysis. Use the button manually only to
-   retry.
+   the precision burst only after Home / park has completed, then restores
+   normal idle behavior and releases the motors before image analysis. Use the
+   button manually only to retry.
 4. Inspect the numbered overlay. Apply only when every circle is centered on
    its mark and the reported 25-point fit passes.
 5. After applying the map, choose **Home / park, capture ruler overlay**. The
@@ -621,7 +621,8 @@ the drain, home, park, and release phases; a completion-command failure also
  normal completion sequence.
 
 GRBL continuous hold (`$1=255`) is used only around a camera capture. Normal
-cleanup restores the value that preceded the capture. If an interrupted run
+Home / park motion completes before the hold is acquired. Normal cleanup
+restores the value that preceded the capture. If an interrupted run
 leaves `255` persisted across a controller restart, the next serial connection
 restores `machine.grbl_step_idle_delay_ms`, which defaults to 250 ms. This
 recovery then explicitly releases the motors. Connection requests motor release

@@ -1151,17 +1151,30 @@ class AppContext:
         coordinate_frame: HoneycombCoordinateFrame | None = None,
         timing: dict[str, float] | None = None,
     ) -> np.ndarray:
-        """Home, park, hold, and capture the frame used for object tracing."""
+        """Home, park, then hold only while capturing the object-trace frame."""
 
         total_started = time.perf_counter()
         self._require_valid_bed_calibration()
         capture_started = time.perf_counter()
+        prepare_started = time.perf_counter()
+        self.machine.prepare_photo_position()
+        prepare_finished = time.perf_counter()
+        hold_started = time.perf_counter()
         with self.machine.temporary_stepper_hold():
-            self.machine.prepare_photo_position()
+            hold_acquired = time.perf_counter()
+            burst_started = time.perf_counter()
             burst = self._stable_camera_burst()
+            burst_finished = time.perf_counter()
+        precision_capture_finished = time.perf_counter()
         burst = self._prepare_camera_burst(burst, undistort=False)
         image = burst.sharpest_frame
         if timing is not None:
+            timing["prepare_photo_seconds"] = prepare_finished - prepare_started
+            timing["hold_acquisition_seconds"] = hold_acquired - hold_started
+            timing["camera_burst_seconds"] = burst_finished - burst_started
+            timing["precision_capture_total_seconds"] = (
+                precision_capture_finished - prepare_started
+            )
             timing["capture_seconds"] = time.perf_counter() - capture_started
         rectify_options: dict[str, Any] = {}
         if work_area is not None:
@@ -1345,15 +1358,13 @@ class AppContext:
             raise CalibrationError("Bed calibration is unavailable")
         with self._coordinate_audit_lock:
             self._coordinate_audit_capture_snapshot = None
+        park_result = self.machine.prepare_photo_position(capture_home_position=True)
+        before_position = self._sample_coordinate_audit_position()
         with self.machine.temporary_stepper_hold():
-            park_result = self.machine.prepare_photo_position(
-                capture_home_position=True
-            )
-            before_position = self._sample_coordinate_audit_position()
             capture_started_at = time.time()
             burst = self._stable_camera_burst()
             capture_finished_at = time.time()
-            after_position = self._sample_coordinate_audit_position()
+        after_position = self._sample_coordinate_audit_position()
         burst = self._prepare_camera_burst(burst, undistort=True)
         if self.bed.calibration is not calibration:
             raise CalibrationError(
@@ -2808,8 +2819,8 @@ class AppContext:
         self._require_camera_calibration_ready()
         self._base_bed_mapping_session(require_powered=True)
         self._require_accepted_lens_calibration()
+        self.machine.prepare_photo_position()
         with self.machine.temporary_stepper_hold():
-            self.machine.prepare_photo_position()
             burst = self.precision_camera_burst(undistort=False)
         burst = self._prepare_camera_burst(burst, undistort=True)
         image = burst.sharpest_frame.copy()
@@ -3234,9 +3245,9 @@ class AppContext:
             if validation
             else "dense calibration",
         )
+        if home_first:
+            self.machine.prepare_photo_position()
         with self.machine.temporary_stepper_hold():
-            if home_first:
-                self.machine.prepare_photo_position()
             burst = self.precision_camera_burst(undistort=False)
         burst = self._prepare_camera_burst(burst, undistort=True)
         analysis = self._analyze_dense_calibration_capture(
@@ -3535,9 +3546,9 @@ class AppContext:
             calibration,
             "accuracy-validation",
         )
+        if home_first:
+            self.machine.prepare_photo_position()
         with self.machine.temporary_stepper_hold():
-            if home_first:
-                self.machine.prepare_photo_position()
             burst = self.precision_camera_burst(undistort=False)
         burst = self._prepare_camera_burst(burst, undistort=True)
         analysis = self.analyze_accuracy_validation_burst(burst)
@@ -3730,9 +3741,9 @@ class AppContext:
             calibration,
             "fine-registration",
         )
+        if home_first:
+            self.machine.prepare_photo_position()
         with self.machine.temporary_stepper_hold():
-            if home_first:
-                self.machine.prepare_photo_position()
             burst = self.precision_camera_burst(undistort=False)
         burst = self._prepare_camera_burst(burst, undistort=True)
         analysis = self.analyze_fine_registration_burst(burst)
