@@ -7,12 +7,18 @@ This file defines safety boundaries and does not replace that operator sequence.
 This repository controls equipment capable of causing permanent eye injury, fire, toxic smoke exposure, and mechanical injury. It is experimental software and is not a safety-rated control system.
 
 A Raspberry Pi network hardware node does not change that boundary. Wi-Fi, the
-Pi, TCP, and the USB links can fail independently. On loss of its authenticated
-controller client the node makes a best-effort controller-specific realtime stop
-and `M5`, but that software cleanup is not a substitute for a physical emergency
-stop, interlock, or removal of hazardous energy. Never expose the bridge directly
-to the public Internet, and never rely on reconnection or software status as proof
-that motion or laser energy has stopped.
+Pi, TCP, and the USB links can fail independently. For the current Pi-owned job
+protocol, loss of Windows, Wi-Fi, or the authenticated monitoring connection is
+deliberately **not** a run-enable failure after the Pi has acknowledged START for
+the exact uploaded job. The Pi continues that job locally. A connected software
+STOP remains available, but its network and serial delivery can fail. A Pi
+process crash, reboot, or power loss never auto-resumes a persisted job; the next
+service start marks it interrupted, but a sudden failure may also prevent any
+software `M5` or reset from being delivered. These semantics make the physical
+emergency stop, enclosure/interlock, and removal of hazardous energy more—not
+less—important. Never expose the service directly to the public Internet, and
+never rely on reconnection or software status as proof that motion or laser
+energy has stopped.
 
 ## Required physical safeguards
 
@@ -74,6 +80,13 @@ emission has stopped or that the area is safe to enter.
   fan or coolant state. Keep the complete homing and parking path clear until
   the job reports completion. Stops, job failures, emergency actions,
   disconnects, and zero-power jobs do not initiate this convenience motion.
+  For a START-accepted Pi-owned job this complete stream and completion sequence
+  run on the Pi and therefore do not depend on the Windows connection. Closing
+  the monitoring client is not a job disconnect. Explicit STOP prevents normal
+  completion motion and attempts the configured controller stop plus `M5`.
+  Detected execution/controller failures halt further streaming and attempt a
+  best-effort `M5`; sudden Pi process or power failure can prevent all software
+  cleanup.
 - On GRBL, Home / park records the active `G54`-`G59` and `G92` offsets. Every
   subsequent absolute-motion job re-reads them and is blocked if they changed
   after the parked camera alignment. This detects coordinate-state drift but
@@ -144,6 +157,19 @@ program lines and recomputes their digest, motion/power flags, and safety
 profile at both Arm and Start. A forged, stale, or altered preflight object is
 rejected before controller output, and rejection does not suppress cleanup
 `M5`.
+
+For an `e3bridge://` machine, Windows uploads bounded canonical G-code to an
+application-owned Pi job store before START. The Pi independently verifies the
+byte count, SHA-256 digest, UTF-8 program, exact controller/safety-policy binding,
+guarded output polygon, motion and power flags, and the normal `MachineService`
+  preflight. Partial or merely prepared uploads are inert. The ownership boundary
+  is the Pi's durable `ownership_accepted` record; the later START response only
+  reports that boundary to Windows. After START is sent, a missing or failed
+  response is ownership-uncertain and Windows must query the same UUID rather
+  than cancelling or retrying blindly. Once accepted, the one Pi-local
+  `MachineService` owns serial writes and acknowledgements until a local terminal
+  result. No Windows heartbeat is required or interpreted as permission to keep
+  emitting.
 
 Ordinary serial operations own their complete command/ack exchange, and
 multi-command Home / park and camera-hold sequences cannot interleave with

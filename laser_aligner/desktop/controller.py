@@ -438,12 +438,13 @@ class DesktopController(QtCore.QObject):
         self._template_review_active = False
         self._template_review_signature = None
         machine = self.runtime.context.machine
-        # A START-accepted Pi job is deliberately independent of this process.
-        # Closing the desktop detaches monitoring; only the explicit red STOP
-        # action is allowed to cancel Pi-owned execution.  Local serial retains
-        # the longstanding shutdown laser-off path.
+        # Pi execution is deliberately independent of this process.  Always
+        # detach a remote facade on ordinary desktop shutdown, even before its
+        # first status refresh: an empty cache cannot prove that this Pi is idle.
+        # Only the explicit red STOP action may cancel Pi-owned execution. Local
+        # serial retains the longstanding shutdown laser-off path.
         try:
-            if bool(getattr(machine, "pi_owned_job_active", False)):
+            if bool(getattr(machine, "pi_owned_execution", False)):
                 machine.detach()
             else:
                 machine.request_stop(emergency=False)

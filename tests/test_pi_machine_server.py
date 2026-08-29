@@ -396,12 +396,17 @@ def test_authenticated_client_disconnect_does_not_stop_accepted_powered_job(
     assert started["job"]["ownership_accepted"] is True
     assert started["start_latency_seconds"] >= 0.0
     assert server_harness.transport.gated.wait(timeout=2.0)
+    _wait_until(
+        lambda: server_harness.service.get(job_id)["completed_lines"] == 5
+    )
 
     reattached = _rpc(server_harness, ACTION_JOB_ACTIVE)
     assert reattached["ok"] is True
     assert reattached["job"]["job_id"] == job_id
     assert reattached["job"]["program_digest"] == program.digest
     assert reattached["job"]["state"] == "running"
+    assert reattached["job"]["completed_lines"] == 5
+    assert reattached["job"]["total_lines"] == len(program.lines)
     assert b"!\x18" not in server_harness.transport.raw_writes
     assert server_harness.transport.commands[-1] == _GATED_COMMAND
 

@@ -843,6 +843,72 @@ Repository-wide Ruff, `compileall -q laser_aligner`, and `git diff --check`
 passed. No interactive GUI, real camera, physical controller, motion, arming, or
 laser-output test was performed or is claimed.
 
+## Active Pi-owned remote job execution
+
+Normal `e3bridge://` machine jobs now use the explicit high-level
+`E3MACHINE/2` protocol and never silently fall back to the incompatible legacy
+`E3BRIDGE/1` raw serial bridge. Windows `RemoteMachineService` owns exact program
+preflight, bounded 64 KiB chunk upload, FINALIZE, operator START authorization,
+monitoring, reconnect, and explicit STOP. The combined Pi node owns a persistent
+`PiJobStore`, one `PiJobService`, and exactly one local `MachineService`/serial
+session. Direct local serial continues through the original desktop
+`MachineService` path.
+
+Upload and START are separate. The Pi maps a client-generated canonical UUID to
+a server-owned `.part` path, fsyncs bounded chunks, checks the declared
+size/SHA-256 and strict UTF-8, runs independent local program validation,
+journals the commit, and atomically renames only a verified job to `.gcode`.
+FINALIZE binds the exact program digest, guarded output polygon, motion/power
+flags, explicit GRBL/Marlin dialect, and current execution-policy digest. START
+hashes and preflights the committed bytes again, writes `starting`, then performs
+Pi-local connect/Home/park/arm/start. The later durable
+`ownership_accepted = true` plus `start_accepted_at` transfers execution
+ownership; the subsequent START response only reports that fact. After START is
+sent, a lost or failed response is ownership-uncertain and is recovered by
+querying that UUID; START is never retried blindly.
+
+After acceptance, loss of Windows, Wi-Fi, TCP, or a monitoring client has no
+controller effect and no heartbeat is required. The Pi locally streams one
+command and waits for its acknowledgement before persisting progress; normal
+powered completion still performs `M5`, planner barrier, Home, park, step-idle
+restoration, and motor release. Explicit STOP halts further streaming and
+attempts the configured controller stop plus `M5`. Detected controller
+error/alarm, serial write/read failure, ACK timeout, corrupt stored data, or
+runner/completion failure halts further streaming, attempts a best-effort `M5`,
+invalidates controller trust as applicable, and records a terminal result while
+the Pi service remains alive. STOP bypasses ordinary command/store serialization.
+While active, another START, connect/reconnect/disconnect, Home/park, jog, manual
+command, calibration motion, realtime sample, and stepper hold are rejected;
+status and STOP remain allowed.
+
+The durable states are receiving, prepared, starting, running, stopping,
+complete, failed, stopped, and interrupted. A Pi process restart converts any
+persisted active state to interrupted and never restores execution authority or
+auto-resumes. This does not guarantee that a sudden process/power failure can
+deliver software cleanup to an independently powered controller; physical
+E-stop/interlock authority and operator attendance remain mandatory. Retention
+is bounded to eight metadata records and the latest two terminal G-code files,
+with receiving/prepared/active artifacts protected and stale `.part` files
+cleaned after 24 hours. Job size is capped at 64 MiB, frame payload at 128 KiB,
+and client paths are never accepted.
+
+Protocol/store/server/desktop tests cover authentication and counted HMAC frames,
+incompatible versions, traversal/malformed metadata, atomic crash recovery,
+complete/partial/wrong uploads, duplicate FINALIZE/START, accepted-client
+disconnect through complete remaining execution, prepared/upload disconnect,
+reattach with exact persisted in-flight ACK progress, completed-offline discovery,
+ordinary remote desktop shutdown with an empty observer cache, priority STOP
+during ACK wait, all specified controller/serial failures, reboot interruption,
+active-operation blocking, camera-client independence, local execution
+preservation, and one real
+`RemoteMachineService → E3MACHINE/2 → PiMachineServer → PiJobService →
+MachineService` socket stack. After merging Camera Trace main, the complete
+Windows Python 3.14 four-worker suite passed **2,815 tests** with **14 expected
+platform/privilege skips**. Repository Ruff, bytecode compilation, and diff
+checking passed. No interactive desktop, physical Pi, physical controller,
+motion, laser output, process-kill recovery, or real network-disconnect test was
+performed; those remain required before merge/deployment.
+
 ## Current repository validation and deferred package check
 
 Fast Development CI runs Windows Python 3.12 Ruff, desktop dependency/bytecode
@@ -1462,10 +1528,12 @@ Configuration, protocol, and bridge-authentication errors are not retried, and
 an established session that becomes uncertain is never automatically
 reconnected or resumed.
 
-A Windows-to-Raspberry-Pi hardware-node candidate now places authenticated
-controller and camera transports underneath the existing guarded services. The
-controller path preserves `MachineService` as the only normal command path and
-uses a Pi-local realtime stop/reset plus `M5` after client loss. The camera path
+This historical entry describes the superseded `E3BRIDGE/1` raw-serial
+candidate, not the current `E3MACHINE/2` ownership semantics. That earlier
+Windows-to-Raspberry-Pi candidate placed authenticated controller and camera
+transports underneath the existing guarded services. Its controller path kept
+the desktop `MachineService` as the command owner and used a Pi-local realtime
+stop/reset plus `M5` after client loss. The camera path
 keeps V4L2 ownership and precision acquisition on the Pi, transfers retained
 frames to the desktop, preserves sequence/generation/control diagnostics, and
 rejects mismatched Pi/desktop capture profiles before startup. Twelve focused

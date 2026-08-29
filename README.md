@@ -8,16 +8,18 @@ stationary overhead **Logitech C920**.
 
 > **Project status: early alpha.** The portable geometry, calibration, project,
 > tracing, and G-code layers are under active development. Windows supports the
-> authenticated Raspberry Pi controller/camera bridge; direct local serial and
+> authenticated Raspberry Pi job-execution/camera node; direct local serial and
 > Linux-specific camera controls remain Linux-only. E3 has no simulated hardware
 > runtime: unavailable hardware remains unavailable. Powered alignment experiments are recorded in
 > `CURRENT_STATE.md`, but the controller/profile and final physical accuracy
 > are not yet verified configurations.
 
-> The network-hardware candidate also allows a Windows desktop to keep the guarded
-> `MachineService` locally while using an authenticated Raspberry Pi hardware node
-> for the controller and camera. Direct USB hardware remains Linux-only. The
-> Windows-to-Pi path is software-tested but is not physically verified; see
+> The network-hardware candidate lets Windows prepare/upload an exact job while
+> the Raspberry Pi owns one guarded `MachineService`, the controller serial port,
+> and execution after START acceptance. An accepted job continues through loss
+> of Windows or Wi-Fi; the connection is not a run-enable heartbeat. Pi failure
+> never auto-resumes. Direct USB hardware remains Linux-only. This new ownership
+> path is software-tested but is not physically verified; see
 > [docs/NETWORK_MACHINE.md](docs/NETWORK_MACHINE.md).
 
 Read [CURRENT_STATE.md](CURRENT_STATE.md) for the active branch and verification
@@ -173,6 +175,10 @@ Native desktop workflow:
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop; successful powered jobs drain queued motion, Home/park, and
   only then release the motors, with visible completion phases and failure alert
+- Authenticated, versioned Pi-owned job upload/execution with atomic local job
+  storage, independent Pi preflight, durable START ownership, reconnect/status/
+  terminal-result discovery, priority STOP, bounded retention, and no fallback
+  to the incompatible legacy raw-serial bridge
 - Validated G-code export; no operator capability requires the browser UI
 
 Follow the [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
@@ -315,6 +321,9 @@ hardware-capable processes. Windows supports configured `e3bridge://` and
 remain Linux-specific and are imported lazily. Missing real hardware remains
 offline rather than being replaced with simulation or synthetic camera state.
 Autosaves and material recipes use a writable OS-native per-user data root.
+Remote machine profiles require an explicit matching `grbl` or `marlin`
+dialect. `E3MACHINE/2` is not compatible with the old `E3BRIDGE/1` raw serial
+service and E3 never silently falls back to Windows-side powered streaming.
 
 Windows packaging and automatic-update assets are implemented and
 automated-test covered. The installed frozen PyInstaller E3 to visible Inno
@@ -414,7 +423,7 @@ laser_aligner/
   desktop/       native PySide6 project workspace
   geometry/      SVG parsing, curves, transforms, units
   gcode/         placement, validation, generation, preview parsing
-  machine/       POSIX/network serial and controller safety service
+  machine/       local controller service plus Pi-owned job protocol/store/runner
   materials/     SQLite material-recipe library and compatibility model
   project/       project model, history, persistence, alignment, toolpaths
   templates/     reusable templates, grid authoring, library, and rigid placement
@@ -468,7 +477,8 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 ## Current limitations
 
 - Direct local serial/camera hardware remains Linux-only; Windows uses the
-  authenticated Raspberry Pi controller/camera bridge.
+  authenticated Raspberry Pi job-execution/camera node. Its Pi-owned execution
+  path still requires physical Pi/controller/laser acceptance testing.
 - Line vectors, generated vector text, closed-vector fills, binary vector
   rasters, and imported grayscale images with deterministic ordered dithering
   are supported. Existing generated text cannot yet be reopened for editable
