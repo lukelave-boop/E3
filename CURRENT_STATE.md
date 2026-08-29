@@ -285,9 +285,10 @@ are deterministic Qt-free, source-level, and offscreen-widget checks; no
 interactive GUI, live camera, or hardware validation is implied.
 
 On the 640 × 480 reflective-honeycomb stencil fixture at 2 pixels/mm, one
-instrumented Manual Contrast run took **2.32 seconds** total, including about
-0.04 seconds for ROI/reference eligibility and 0.11 seconds for normalization.
-The full Auto run selected raster-dark and took **20.37 seconds**; its rejected
+instrumented Manual Contrast run took **2.36 seconds** including about 0.04
+seconds for ROI/reference eligibility and 0.11 seconds for normalization. The
+full Auto run selected raster-dark and took **20.41 seconds** including about
+0.05 seconds for eligibility; its rejected
 light-polarity topology work dominated that synthetic run. These timings are
 single development-machine samples, not performance guarantees or physical-
 camera measurements.
