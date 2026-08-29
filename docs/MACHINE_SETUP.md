@@ -29,7 +29,9 @@ Restart E3 to run another saved instance.
 
 Connection fields are conditional: endpoint and baud apply to the serial/
 `e3bridge://` backend, while GRBL step-idle applies only to GRBL or an automatic
-selection that may resolve to GRBL. The current built-ins are Generic GRBL,
+direct-local selection that may resolve to GRBL. A remote `e3bridge://` machine
+must select explicit `grbl` or `marlin`; `auto` cannot bind the Windows and Pi
+execution policies. The current built-ins are Generic GRBL,
 Generic Marlin, Ender-3 S1 Pro, and Custom Machine, with Generic 10 W Diode and
 Custom Laser Head tool profiles. This UI
 does not claim compatibility with an untested printer or controller.
@@ -105,21 +107,23 @@ offsets, and guarded-boundary settings. Applying or selecting either profile
 does not connect, home, move, arm, or enable output; the running settings and
 `MachineService` safety gates remain authoritative.
 
-At connection time, one construction-only factory maps the saved `backend`,
-`port`, and `baudrate` to local POSIX serial or
-authenticated `e3bridge://` network transport. Transport objects carry only raw
-bytes and lines; they do not interpret commands or grant controller access. The
-bridge URI is recognized before the local-platform check, so Windows can use an
-authenticated bridge while direct local serial remains unavailable there.
-Platform transports are imported lazily, preserving portable imports on Windows.
+At connection time, a normal local serial endpoint retains the construction-only
+transport factory and local `MachineService`. An `e3bridge://` endpoint instead
+selects `RemoteMachineService` and the high-level authenticated `E3MACHINE/2`
+job service before the local-platform check, so Windows needs no native serial
+backend. The combined Pi node owns one local `MachineService` and the physical
+serial port. The legacy raw `E3BRIDGE/1` server is incompatible and is never an
+automatic fallback. Platform-specific transports remain lazy.
 
-GRBL and Marlin behavior is described by immutable, UI-neutral dialect policy,
-but `MachineService` still owns connection timing, command writes, response
-ownership, retries, safety checks, and cleanup. Exact `grbl` or `marlin` settings
-select only their existing semantics. `auto` remains deterministic and sends no
-new probes: after the configured startup delay and drain it recognizes the GRBL
-banner, otherwise tries `$I` for 1.0 seconds and then `M115` for 1.5 seconds,
-using the same accepted identity markers and failing closed if neither matches.
+GRBL and Marlin behavior is described by immutable, UI-neutral dialect policy.
+For direct serial the desktop `MachineService` owns connection timing, command
+writes, response ownership, retries, safety checks, and cleanup; its deterministic
+`auto` probing remains unchanged. For a remote profile, Windows and Pi must use
+the same explicit dialect and safety settings. Windows owns preparation/upload;
+the Pi-local `MachineService` takes execution ownership when the Pi durably
+records acceptance after starting the exact job. The later START response
+reports that boundary, and Pi streaming remains independent if the Windows
+monitor disappears.
 
 This architecture change adds no controller or machine compatibility. It has
 automated verification only; physical GRBL and Marlin behavior through the
@@ -589,11 +593,19 @@ Connect, Disconnect, and Home / park unavailable until the settings check and
 motor-release cleanup finish. Software Stop remains available. Do not interpret
 an open serial port as a ready controller before this state completes.
 
-For serial-hardware jobs, Preview's **START JOB** enters a guarded run path that
-performs `M5`, Home, camera-pose parking, and an idle wait before arming and
-streaming the job. A failed preflight blocks the run. This removes the need to
-press **Home / park** manually before every job; it does not replace the
-operator's laser-off origin/direction checks.
+For direct serial jobs, Preview's **START JOB** enters the existing guarded run
+path that performs `M5`, Home, camera-pose parking, and an idle wait before
+arming and streaming. For `e3bridge://`, the desktop first shows
+Preparing/Uploading, the Pi atomically commits and independently preflights the
+exact bytes, and the same guarded run sequence occurs in the Pi-local
+`MachineService`. The UI does not show Running until the Pi has durably accepted
+ownership. A failed upload, READY-only job, or START rejected before local
+execution begins is inert. Once Windows sends START, a lost or failed response
+is ownership-uncertain: query the same UUID and treat it as potentially running.
+After acceptance, loss of the desktop/Wi-Fi shows stale monitoring while the Pi
+job continues; only explicit STOP or a Pi/controller/local execution failure
+stops further Pi streaming. No heartbeat keeps it running, and no Pi restart
+auto-resumes it.
 
 After a successful powered job, `machine.home_and_release_after_powered_job`
 keeps the job in its running state while the controller acknowledges `M5`,
@@ -601,10 +613,12 @@ drains all accepted toolpath motion, homes, returns to the configured camera
 pose, waits for the park move to finish, and releases the motors. It does not
 send fan or coolant commands. The default is enabled. The Laser panel labels
 the drain, home, park, and release phases; a completion-command failure also
-raises a one-time desktop error. The engraving may already be complete, so
-inspect the controller log and machine state before retrying. Zero-power jobs, stopped
-or failed jobs, emergency actions, and disconnects skip the additional homing
-and parking motion.
+ raises a one-time desktop error. The engraving may already be complete, so
+ inspect the controller log and machine state before retrying. Zero-power jobs, stopped
+ or failed jobs, emergency actions, and controller/serial disconnects skip the
+ additional homing and parking motion. A Windows monitoring disconnect after Pi
+ START acceptance is different: it does not interrupt the job or its Pi-local
+ normal completion sequence.
 
 GRBL continuous hold (`$1=255`) is used only around a camera capture. Normal
 cleanup restores the value that preceded the capture. If an interrupted run

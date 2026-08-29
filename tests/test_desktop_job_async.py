@@ -57,7 +57,9 @@ def _runtime(tmp_path: Path) -> CoreRuntime:
     payload["app"]["data_dir"] = str(tmp_path / "data")
     payload["app"]["open_browser"] = False
     payload["camera"]["autostart"] = False
-    payload["machine"]["port"] = "e3bridge://127.0.0.1:9"
+    # Generic desktop behavior in this module exercises the direct-local
+    # MachineService path. Pi-owned execution has dedicated protocol/UI tests.
+    payload["machine"]["port"] = "COM_TEST"
     path = tmp_path / "config.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
     return CoreRuntime.from_config(path, hardware_enabled=True)

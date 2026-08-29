@@ -3996,7 +3996,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.last_job_name,
             **run_options,
         )
-        if self.runtime.settings.machine.backend == "serial":
+        if bool(
+            getattr(self.runtime.context.machine, "pi_owned_execution", False)
+        ):
+            self.show_notice(
+                "Preparing and uploading the exact job to the Raspberry Pi…"
+            )
+        elif self.runtime.settings.machine.backend == "serial":
             self.show_notice("Homing and parking before job start…")
 
     @staticmethod
@@ -5266,11 +5272,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.job_progress.set_job_status(machine.get("job"))
         if state == "running":
             camera_state = "camera online" if camera and camera.get("connected") else "camera offline"
-            machine_state = (
-                f"{machine.get('protocol')} connected"
-                if machine and machine.get("connected")
-                else "controller offline"
-            )
+            machine_job = (machine or {}).get("job") or {}
+            if (
+                machine_job.get("running")
+                and machine_job.get("execution_owner") == "pi"
+                and machine
+                and machine.get("monitor_connected") is False
+            ):
+                machine_state = "Pi job running · connection lost"
+            else:
+                machine_state = (
+                    f"{machine.get('protocol')} connected"
+                    if machine and machine.get("connected")
+                    else "controller offline"
+                )
             self.runtime_label.setText(f"{camera_state} · {machine_state}")
         else:
             self.runtime_label.setText(f"Runtime {state}")
@@ -5319,6 +5334,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
     @staticmethod
     def _machine_job_identity(job: Any) -> tuple[Any, Any, str, str]:
         payload = job if isinstance(job, dict) else {}
+        job_id = payload.get("job_id")
+        if isinstance(job_id, str) and job_id:
+            return (
+                job_id,
+                None,
+                str(payload.get("program_digest") or ""),
+                str(payload.get("name") or ""),
+            )
         return (
             payload.get("started_at"),
             payload.get("finished_at"),

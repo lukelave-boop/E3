@@ -66,7 +66,7 @@ from .camera.service import (
     list_video_devices,
 )
 from .config import Settings, WorkArea
-from .errors import CalibrationError
+from .errors import CalibrationError, MachineError
 from .gcode.generator import (
     DesignPlacement,
     ToolpathOptions,
@@ -86,6 +86,7 @@ from .imaging import (
     read_image,
     write_image_atomic,
 )
+from .machine.network_transport import is_bridge_uri
 from .machine.service import MachineService, list_serial_ports
 from .storage import (
     atomic_write_bytes,
@@ -356,12 +357,26 @@ class AppContext:
                 and identity.created_from == "legacy-config"
             ),
         )
-        self.machine = MachineService(
-            settings.machine,
-            settings.laser,
-            hardware_enabled=self.hardware_enabled,
-            laser_lockout=self.laser_lockout,
-        )
+        if settings.machine.backend == "serial" and is_bridge_uri(
+            settings.machine.port
+        ):
+            # Import lazily so the direct-local-serial desktop path never loads
+            # the Pi job client or server-side persistence modules.
+            from .machine.remote_service import RemoteMachineService
+
+            self.machine = RemoteMachineService(
+                settings.machine,
+                settings.laser,
+                hardware_enabled=self.hardware_enabled,
+                laser_lockout=self.laser_lockout,
+            )
+        else:
+            self.machine = MachineService(
+                settings.machine,
+                settings.laser,
+                hardware_enabled=self.hardware_enabled,
+                laser_lockout=self.laser_lockout,
+            )
         self.bed_reference_path = calibration_dir / "bed_reference.png"
         self.legacy_bed_reference_path = calibration_dir / "bed_reference.jpg"
         self.base_bed_mapping_path = calibration_dir / "base_bed_mapping.json"
@@ -740,6 +755,11 @@ class AppContext:
         return status
 
     def start(self) -> None:
+        start_monitoring = getattr(self.machine, "start_monitoring", None)
+        if callable(start_monitoring):
+            # Remote status refresh is background-only so Qt polling remains a
+            # cache read even while the Pi is offline or reconnecting.
+            start_monitoring()
         if self.settings.camera.autostart:
             try:
                 self.camera.start()
@@ -749,7 +769,20 @@ class AppContext:
 
     def stop(self) -> None:
         try:
-            self.machine.disconnect()
+            # RemoteMachineService.disconnect() releases an idle Pi controller
+            # but turns into a non-destructive detach for accepted/uncertain
+            # execution. Direct local serial retains its M5/disconnect cleanup.
+            try:
+                self.machine.disconnect()
+            except MachineError as exc:
+                if getattr(self.machine, "pi_owned_execution", False) is not True:
+                    raise
+                # Shutdown remains best-effort when the saved Pi is offline or
+                # credentials are unavailable. The disconnect RPC was still
+                # attempted; detach only stops this process's observer and does
+                # not convert an unreachable idle/unknown job into a STOP.
+                LOGGER.warning("Remote machine disconnect during shutdown failed: %s", exc)
+                self.machine.detach()
         finally:
             self.camera.stop()
 

@@ -2918,6 +2918,12 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         self.progress.setValue(int(round(progress * 1000)))
         phase = str(job.get("phase", "streaming" if running else "idle"))
         finishing_labels = {
+            "receiving": "Uploading to Pi",
+            "uploading": "Uploading to Pi",
+            "verifying": "Verifying on Pi",
+            "prepared": "Ready on Pi",
+            "starting": "Starting on Pi",
+            "stopping": "Stopping on Pi",
             "draining": "Finishing · motion",
             "homing": "Finishing · homing",
             "parking": "Finishing · parking",
@@ -2935,10 +2941,26 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
                 "parking": "Homing complete · moving to park position",
                 "releasing": "Park complete · releasing motors",
             }
-            self._execution_summary = execution_labels.get(
-                phase,
-                f"Running {job.get('name', 'job')} · {completed}/{total} lines",
-            )
+            if (
+                job.get("execution_owner") == "pi"
+                and job.get("status_stale") is True
+            ):
+                self._execution_summary = (
+                    "Connection lost — the START-accepted Pi job continues locally"
+                )
+            else:
+                self._execution_summary = execution_labels.get(
+                    phase,
+                    f"Running {job.get('name', 'job')} · {completed}/{total} lines",
+                )
+        elif phase in {"receiving", "uploading"}:
+            self._execution_summary = "Uploading the exact job to the Raspberry Pi"
+        elif phase == "verifying":
+            self._execution_summary = "Raspberry Pi is verifying the uploaded job"
+        elif phase == "prepared":
+            self._execution_summary = "Raspberry Pi verified the job; waiting for START"
+        elif phase == "starting":
+            self._execution_summary = "Raspberry Pi is performing final START checks"
         elif job.get("error"):
             self._execution_summary = f"Controller stopped: {job['error']}"
         elif total:

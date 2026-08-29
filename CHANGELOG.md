@@ -62,6 +62,33 @@ not current product capability.
   boundary. This is vision preprocessing only and adds no laser authority;
   physical Coleman-camera acceptance testing remains required.
 
+- Moved normal `e3bridge://` job execution ownership from Windows raw-serial
+  streaming to the Raspberry Pi. The explicit authenticated `E3MACHINE/2`
+  protocol separates bounded upload/finalize from START, persists canonical
+  G-code and atomic metadata in a Pi-owned store, independently repeats
+  `MachineService` preflight and safety-policy binding, and acknowledges START
+  only after durable Pi ownership exists. The one Pi-local `MachineService`
+  retains command/ACK streaming, priority STOP, failure cleanup, powered-job
+  Home/park/release completion, and the sole controller serial session. A
+  START-accepted job now continues through Windows, Wi-Fi, TCP, or monitoring-
+  client loss; the network is not a run-enable heartbeat. Reconnect discovers
+  the same UUID/digest/progress or a completed-offline result. Pi restart marks
+  unfinished execution interrupted and never auto-resumes it.
+
+- Added bounded HMAC-authenticated/counted JSON frames, canonical UUID/path and
+  SHA protections, 64 KiB upload chunks, a 64 MiB job limit, deterministic
+  eight-record/two-terminal-program retention, stale-part cleanup, idempotent
+  retry behavior, and explicit incompatibility with legacy `E3BRIDGE/1` rather
+  than unsafe fallback. The desktop now shows Pi upload/verification/START and
+  stale-monitoring states, preserves direct local serial execution, and records
+  upload throughput, finalization time, and START latency. Ordinary desktop
+  shutdown always detaches the remote observer—even before its first status
+  refresh—and does not substitute for an explicit STOP. Automated protocol,
+  atomicity, disconnect, reconnect with persisted in-flight progress, STOP,
+  failure, restart, completion, interference, combined camera-node, and real
+  socket-stack tests were added; no physical Pi/controller/laser verification is
+  claimed.
+
 - Corrected the camera-photo-to-raster boundary for non-grid Camera Trace. The
   earlier shared-raster reuse converged one stage too early and treated a
   rectified photograph as finished artwork, allowing global Otsu to promote

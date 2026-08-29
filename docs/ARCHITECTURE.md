@@ -29,18 +29,22 @@ laser_aligner.__main__                  laser_aligner.desktop.main
           |                                       |
           +-------------------+-------------------+
                               v
-                         MachineService
-                 safety / authorization / orchestration
+                         AppContext machine
                               |
                 +-------------+-------------+
                 v                           v
-       machine transport factory     controller-dialect registry
-                |                    (immutable GRBL / Marlin policy)
-       +-----------------+
-       v                 v
-     local            e3bridge
-     POSIX             network
-     serial            transport
+       local MachineService          RemoteMachineService
+       safety / execution            Windows preflight/upload/
+                |                    monitor/STOP facade
+                v                           |
+       local POSIX serial                    v  E3MACHINE/2
+                                     PiJobStore + PiJobService
+                                                |
+                                                v
+                                     one Pi-local MachineService
+                                                |
+                                                v
+                                         local POSIX serial
 ```
 
 Both entry points use `CoreRuntime` as the UI-neutral lifecycle and active
@@ -49,13 +53,23 @@ context to `AppHTTPServer`; the desktop performs blocking camera/controller work
 through `DesktopController` worker tasks. Neither entry point substitutes raw
 configuration machine values for an existing active saved-machine snapshot.
 
-For a network-attached machine, `MachineService` remains on the desktop and
-selects `NetworkSerialTransport` when `machine.port` uses `e3bridge://`. The Pi
-node terminates that authenticated connection and opens the local POSIX serial
-device. A configured `e3camera://` device selects `RemoteCameraService`; the Pi
-retains sole ownership of the real `CameraService`, `VideoCapture`, and V4L2
-controls. Neither network service bypasses the desktop's project or machine
-safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
+For a network-attached machine, `AppContext` selects `RemoteMachineService` when
+the serial endpoint uses `e3bridge://`. Windows owns exact program preparation,
+local preflight, bounded upload, START authorization, monitoring, and explicit
+STOP. The authenticated `E3MACHINE/2` node persists and independently validates
+the immutable program, then its one Pi-local `MachineService` owns controller
+connection, Home/park, arming, command/ACK streaming, completion, and failure
+cleanup. A successful START response is issued only after durable
+`ownership_accepted` state exists; monitoring-client loss afterward does not
+stop or steal the serial session. The old `E3BRIDGE/1` raw serial bridge remains
+a separately importable legacy component, but the combined node does not host it
+and new clients never fall back to it. Direct local serial continues to use the
+original local `MachineService` path.
+
+A configured `e3camera://` device independently selects `RemoteCameraService`;
+the Pi retains sole ownership of the real `CameraService`, `VideoCapture`, and
+V4L2 controls. Camera-client loss has no machine-execution meaning. See
+[NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 
 ## Module ownership
 
@@ -77,7 +91,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `templates/` | Shared semantic shape geometry, versioned multi-shape grid authoring, atomic library storage, project normalization, and rigid instantiation |
 | `materials/` | SQLite material-recipe library, scoped compatibility, and legacy database migration |
 | `project/power_correction.py` | Qt-free bounded power mapping, corner analysis, and sparse vector/raster correction profiles |
-| `machine/` | MachineService safety/orchestration, real neutral transports and their construction factory, immutable controller dialects, and the versioned saved-machine/profile registry |
+| `machine/` | Local `MachineService`; authenticated Pi job protocol, durable store, Pi runner/server, and Windows remote facade; neutral transports; immutable controller dialects; and the versioned saved-machine/profile registry |
 | `server.py` + `web/` | Local HTTP API and browser UI |
 | `core/` | Shared runtime lifecycle for non-HTTP consumers |
 | `desktop/` | PySide6 window, workspace, panels, tasks, and presentation logic |
@@ -1207,26 +1221,29 @@ execution authority:
 |---|---|---|
 | `MachineTransport` | Open/close, raw/line writes, line reads, and drain mechanics | Controller command meaning, identity decisions, safety gates, retries, or execution authorization |
 | immutable `ControllerDialect` | Pure GRBL or Marlin identity, response classification, command-policy, and parsing semantics | Opening or writing transports, locking, mutable service state, authorization, or starting work |
-| `MachineService` | Safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data or delegating authority to a transport or dialect |
+| local `MachineService` | Safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data or delegating authority to a transport or dialect |
+| Windows `RemoteMachineService` | Exact local preflight, upload/START client, acceptance recovery, cached monitoring, reconnect identity, and priority STOP RPC | Owning Pi serial, streaming an accepted program, or falling back to raw bridge execution |
+| Pi `PiJobStore` / `PiJobService` | Atomic verified program/state persistence, repeat local preflight, one local `MachineService`, durable ownership, progress/result retention | Trusting client paths/metadata or resuming interrupted execution |
 
 `create_machine_transport(backend, port, baudrate)` is the single explicit,
-construction-only transport factory. It accepts the real `serial` backend and
-delegates to the serial selector. That selector recognizes `e3bridge://` before applying the
-local platform gate, so authenticated bridge transport remains available on
-Windows while local POSIX serial remains unavailable there with the same clear
-failure. POSIX serial and network transport implementations remain
-lazy imports. The former `machine.serial_backend` protocol and factory imports
-remain compatibility entry points. Protocol is deliberately not a factory
-input: choosing a byte/line carrier cannot select controller semantics.
+construction-only factory for direct and explicitly legacy raw serial carriers.
+`AppContext` recognizes `e3bridge://` first and selects the high-level remote
+facade, so Windows can use the Pi job service while local POSIX serial remains
+unavailable there with the same clear failure. POSIX and legacy network transport
+implementations remain lazy imports, and the former `machine.serial_backend`
+exports remain compatibility entry points. The current combined node does not
+construct `NetworkSerialTransport` or host the legacy raw server.
 
 The frozen controller-dialect registry contains only the already supported
-GRBL and Marlin policies. With `machine.protocol = auto`, `MachineService`
+GRBL and Marlin policies. With direct-local `machine.protocol = auto`, `MachineService`
 retains the same deterministic sequence: configured startup delay and drain,
 GRBL startup-banner recognition, then `$I` with a 1.0-second response window,
 then `M115` with a 1.5-second response window, using the existing accepted
 identity markers and fail-closed result. The dialect values describe those
 semantics; `MachineService` decides when each probe may be written and owns the
 exchange. No additional probe or controller command was introduced.
+Remote profiles reject `auto` before controller/network operations and require
+the same explicit GRBL or Marlin policy on both hosts.
 
 A saved machine profile supplies reusable physical motion-platform defaults,
 including backend, protocol, connection, envelope, homing, and feed settings. A
@@ -1317,14 +1334,26 @@ controller support is claimed.
   release cleanup, even when mutable configuration or controller state is
   already untrusted.
 
-The desktop job-start path performs `M5 → home → park → idle wait → arm → run`.
+The common guarded job-start seam performs `M5 → home → park → idle wait → arm
+→ run`. Direct serial executes that seam in the desktop process. Remote serial
+first uploads and commits the exact program; the Pi repeats current local
+preflight and executes the seam in its local `MachineService`. The durable
+`starting` state is not an ownership transfer. The later atomic
+`ownership_accepted = true` / `start_accepted_at` record makes the job Pi-owned;
+the subsequent START response only reports that durable fact. After START is
+sent, a lost or failed response is ownership-uncertain, so Windows queries the
+same UUID and never retries START blindly.
+
 After successful powered streaming, the job remains active through
 `M5 → planner-complete barrier → home → G21/G90 → park → motion-complete
 barrier → motor release`. Stream acknowledgements use a cancellation-aware
 completion timeout because GRBL can delay `ok` while its planner drains; the
 short interactive-command timeout is not evidence that a queued job failed.
-Zero-power jobs and stop, failure, emergency, or disconnect paths do not request this
-completion motion. Controller reset, reconnect, emergency stop, motor release,
+For Pi-owned execution this sequence is local and survives monitoring-client or
+Windows-network loss. Zero-power jobs and stop, local failure, emergency, or
+controller-disconnect paths do not request this completion motion. A Pi process
+restart marks persisted `starting`, `running`, or `stopping` state interrupted
+and never resumes it. Controller reset, reconnect, emergency stop, motor release,
 or job failure invalidates the session reference. Connection status remains non-ready throughout
 protocol detection and GRBL startup cleanup. GRBL startup cleanup ordinarily
 requires an acknowledged `M5`; only the exact consumed alarm-lock rejection
@@ -1343,6 +1372,7 @@ This is an accidental-command boundary, not functional safety.
 | Main configuration | `config/default.json` plus ignored `config/local.json` |
 | Calibration JSON/images | configured `app.data_dir` |
 | Captures, logs, generated G-code | configured `app.data_dir` |
+| Pi-owned uploaded jobs/results | Pi-local configured `app.data_dir/pi_machine_jobs` (bounded metadata and G-code retention) |
 | Desktop projects | user-selected `.e3laser` paths |
 | Project backups | adjacent `.e3laser.bak` files |
 | Autosaves | OS-native per-user data root under `backups/` by default |
@@ -1359,17 +1389,18 @@ to that source so existing operator data does not disappear.
 
 ## Platform boundary
 
-The portable core and authenticated `e3bridge://` client run on
+The portable core and authenticated `E3MACHINE/2` `e3bridge://` client run on
 Windows and Linux. Direct local serial and camera hardware remain Linux-only:
 
 - `machine.transport` exposes the neutral byte/line protocol.
-- `machine.transport_factory` constructs serial-family transports;
-  the serial selector checks bridge URIs before the local POSIX platform gate.
+- `machine.transport_factory` still constructs direct/legacy serial-family
+  transports, while `AppContext` routes `e3bridge://` to the high-level remote
+  facade before any local POSIX platform gate.
 - `machine.serial_backend` retains its compatibility exports and imports the
   POSIX implementation only when local serial hardware is selected.
 - Unsupported systems report no local serial ports and reject local serial
-  selection clearly; an authenticated bridge URI remains a supported transport
-  selection on Windows.
+  selection clearly; an authenticated Pi job endpoint remains supported on
+  Windows.
 - Camera enumeration and controls use `/dev/video*`, V4L2, and `v4l2-ctl`.
 - Linux shell launch/install assets support the direct local-hardware path.
   Windows packaging and update assets support the normal hardware-capable

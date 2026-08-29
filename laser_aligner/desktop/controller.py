@@ -469,11 +469,19 @@ class DesktopController(QtCore.QObject):
         self._template_match_request_id += 1
         self._template_review_active = False
         self._template_review_signature = None
-        # Request laser-off before waiting for unrelated background work.
+        machine = self.runtime.context.machine
+        # Pi execution is deliberately independent of this process.  Always
+        # detach a remote facade on ordinary desktop shutdown, even before its
+        # first status refresh: an empty cache cannot prove that this Pi is idle.
+        # Only the explicit red STOP action may cancel Pi-owned execution. Local
+        # serial retains the longstanding shutdown laser-off path.
         try:
-            self.runtime.context.machine.request_stop(emergency=False)
+            if bool(getattr(machine, "pi_owned_execution", False)):
+                machine.detach()
+            else:
+                machine.request_stop(emergency=False)
         except Exception as exc:
-            self.errorOccurred.emit(f"Shutdown laser-off request failed: {exc}")
+            self.errorOccurred.emit(f"Shutdown machine cleanup failed: {exc}")
 
     @property
     def has_active_tasks(self) -> bool:
@@ -577,7 +585,10 @@ class DesktopController(QtCore.QObject):
         self.statusChanged.emit(status)
         machine = status.get("machine") or {}
         job = machine.get("job") or {}
-        terminal_key = (job.get("started_at"), job.get("finished_at"))
+        terminal_key = (
+            job.get("job_id") or job.get("started_at"),
+            job.get("finished_at"),
+        )
         if (
             not job.get("running", False)
             and job.get("finished_at") is not None
@@ -2377,20 +2388,29 @@ class DesktopController(QtCore.QObject):
                     self.runtime.context.validate_honeycomb_execution_binding(
                         honeycomb_signature
                     )
-                if machine.settings.backend == "serial":
-                    machine.prepare_job_start()
-                if arm_phrase is not None:
-                    machine.arm_program(arm_phrase, program)
-                return machine.start_validated_program(program, name)
+                return machine.start_preflighted_program(
+                    program,
+                    name,
+                    authorization_phrase=arm_phrase,
+                )
             except Exception:
-                # A failure after preflight must not leave a reusable temporary
-                # arm grant. disarm() also makes a best-effort M5 request.
-                machine.disarm()
+                # A local failure must consume arming and attempt M5.  A remote
+                # START response can be lost after the Pi accepted ownership;
+                # abandoning that client attempt must never become an implicit
+                # STOP of an otherwise healthy Pi-owned job.
+                abandon = getattr(machine, "abandon_start_attempt", None)
+                if callable(abandon):
+                    abandon()
+                else:
+                    machine.disarm()
                 raise
 
         def started(result: dict[str, Any]) -> None:
             self.jobStarted.emit(dict(result))
-            self._machine_changed(f"Homed and started {name}")
+            if result.get("execution_owner") == "pi":
+                self._machine_changed(f"Pi accepted and started {name}")
+            else:
+                self._machine_changed(f"Homed and started {name}")
 
         self._run(
             operation,
