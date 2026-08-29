@@ -546,6 +546,7 @@ def test_cancel_during_worker_retains_task_without_late_dialog_callbacks(
     started = threading.Event()
     release = threading.Event()
     callback_finished = threading.Event()
+    dialog_destroyed = threading.Event()
 
     def vectorize(*_args: Any, **_kwargs: Any) -> Any:
         started.set()
@@ -560,6 +561,7 @@ def test_cancel_during_worker_retains_task_without_late_dialog_callbacks(
         debounce_ms=0,
         vectorizer=vectorize,
     )
+    dialog.destroyed.connect(lambda *_args: dialog_destroyed.set())
     dialog.show()
     _wait_until(qt_application, started.is_set)
     task = dialog._active_task
@@ -571,10 +573,12 @@ def test_cancel_during_worker_retains_task_without_late_dialog_callbacks(
     assert dialog.vectorization_result is None
     dialog.deleteLater()
     QtCore.QCoreApplication.sendPostedEvents(
-        None,
+        dialog,
         QtCore.QEvent.Type.DeferredDelete,
     )
-    qt_application.processEvents()
+    assert dialog_destroyed.is_set()
+    assert task in _LIVE_PREVIEW_TASKS
+    assert not callback_finished.is_set()
 
     release.set()
     _wait_until(qt_application, callback_finished.is_set)

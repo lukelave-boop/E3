@@ -199,16 +199,17 @@ offscreen review/create/panel group passes **30 tests** with four workers, and
 three repeated four-worker runs of the new raster-equivalence, grid-Auto, and
 Auto-control routes each pass **3 tests**.
 
-The post-review local Windows test inventory passes **2,687 tests** with **14
-expected platform skips** under four-worker xdist: **2,686** pass together with
-the unchanged Qt worker-cancellation test deselected, and that test passes
-separately under the same `-n 4` worker configuration. Two attempts to run all
-2,687 at once on the local Python 3.14/PySide environment emitted a native access
-violation while that test synchronously deleted a dialog with its worker still
-blocked, then stalled xdist near completion. The test passes both in-process and
-through xdist when isolated; no Camera Trace test failed. Supported Windows
-Python 3.12 CI remains the compatibility gate. Repository Ruff,
-`python -m compileall -q laser_aligner`, and `git diff --check` pass.
+The post-review local Windows suite passes **2,687 tests** with **14 expected
+platform skips** in **4 minutes 42 seconds** using the required four-worker
+command. Final integration exposed a test-harness-only Qt lifetime race: the
+raster-dialog cancellation test globally flushed every pending `DeferredDelete`
+in its xdist worker while one preview worker was deliberately blocked. The test
+now dispatches deletion only to its dialog and explicitly proves that the dialog
+is destroyed while the task remains retained and unfinished, then that the task
+completes and drains after release. The complete raster-dialog module passes all
+**10 tests** both serially and with four workers. No production task ownership or
+callback behavior changed. Repository Ruff, `python -m compileall -q
+laser_aligner`, and `git diff --check` pass.
 
 This is implementation and automated-test status only. The reported Coleman
 stencil scene has not been recaptured or replayed through a physical camera for
