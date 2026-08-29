@@ -7,6 +7,49 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-29**
 
+## Active Pi-owned desktop Disconnect generation correction
+
+A physical Pi-owned desktop run reproduced **Disconnect** failing with
+`Operation was cancelled by software STOP` before the controller-disconnect RPC
+was sent. The exact cause was the interaction between request-time cancellation
+and Disconnect's intentional revocation. `DesktopController._run()` captured and
+thread-bound generation N; `RemoteMachineService.disconnect()` advanced the
+STOP epoch to N+1 so queued and in-flight pre-START work would become stale;
+`_machine_status_action()` then read the still-bound N and rejected Disconnect's
+own cleanup before network transport.
+
+Idle Disconnect now captures N+1 while performing that same revocation and
+binds only its `machine.disconnect` cleanup RPC to N+1. Ordinary connect,
+Home/park, jog, manual-command, upload/FINALIZE/START, and all other operation
+paths retain their request-time generation. A later STOP or detach advances the
+epoch again and still rejects the cleanup at its existing pre/post-RPC checks;
+STOP remains an independent priority RPC. If upload/START preparation already
+owns the operation lock, Disconnect retains the prior local detach behavior: it
+cancels the stale preparation without sending controller Disconnect or STOP. An
+accepted or ownership-uncertain Pi job likewise remains non-destructively
+detached and continues under Pi authority.
+
+The related lifecycle paths do not have the same inversion. Remote
+`replace_connection()` is one Pi-side atomic ordinary action and does not advance
+the Windows facade's generation. Direct `detach()` advances the generation but
+has no cleanup RPC to self-cancel. Desktop shutdown calls detach first to revoke
+workers; accepted/uncertain Pi execution stays detach-only, while later idle
+`AppContext.stop()` invokes Disconnect outside the stale desktop worker scope.
+
+A deterministic offscreen desktop regression exercises the exact
+`DesktopController._run() → operation_scope() →
+RemoteMachineService.disconnect()` path and observes one and only one
+`machine.disconnect` RPC with no UI error. Remote-service regressions separately
+cover blocked CHUNK and FINALIZE cancellation, accepted-job detach without an
+RPC, idle disconnect, idle runtime shutdown, accepted-job runtime shutdown, and
+a STOP overtaking an in-flight Disconnect RPC. The focused desktop, remote
+facade, and Pi server batch passes **48 tests**. The complete combined-branch
+Windows four-worker suite passes **2,851 tests** with **14 expected
+platform/privilege skips**; repository Ruff, `python -m compileall -q
+laser_aligner`, and `git diff --check` pass. The corrected Disconnect path has
+automated Windows verification only; it has not yet been re-run against the
+physical Pi/controller.
+
 ## Active Pi-owned parked-camera hold ordering correction
 
 Physical reproduction on `main` commit `66a704653ddabee7f352b4c5eaa779d2bc3688ce`

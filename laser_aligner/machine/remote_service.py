@@ -763,7 +763,14 @@ class RemoteMachineService:
                 return
             with self._stop_epoch_lock:
                 self._stop_epoch += 1
-            self._machine_status_action(ACTION_MACHINE_DISCONNECT)
+                disconnect_generation = self._stop_epoch
+            # A desktop worker remains bound to the generation captured before
+            # this deliberate revocation. Bind only our cleanup RPC to the new
+            # generation so disconnect cannot cancel itself. A later STOP (or
+            # detach) advances the epoch again and still cancels this RPC at the
+            # ordinary pre/post-transport generation checks.
+            with self.operation_scope(disconnect_generation):
+                self._machine_status_action(ACTION_MACHINE_DISCONNECT)
             with self._state_lock:
                 self._authorization_epoch += 1
                 self._clear_arm_locked()

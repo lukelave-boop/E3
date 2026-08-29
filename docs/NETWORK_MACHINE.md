@@ -36,6 +36,15 @@ run-enable heartbeat. Explicit STOP attempts the configured controller stop plus
 and attempts a best-effort `M5`; sudden Pi process or power failure can prevent
 cleanup and result persistence. No interrupted job auto-resumes.
 
+Before START, an explicit desktop **Disconnect** advances the Windows facade's
+operation generation so queued or in-flight preparation cannot later reach
+START. When idle, only Disconnect's own cleanup RPC is rebound to that newly
+created generation and exactly one `machine.disconnect` action is sent. A later
+STOP advances the generation again and retains priority over that cleanup. If a
+pre-START upload already owns preparation, or if execution is accepted or
+ownership-uncertain, Disconnect instead detaches the monitoring client and sends
+neither controller Disconnect nor STOP.
+
 ## Transport, dialect, and profile separation
 
 `E3MACHINE/2` is a bounded, high-level JSON protocol. It is deliberately

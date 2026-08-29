@@ -6,6 +6,15 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed Pi-owned desktop **Disconnect** self-cancellation. The remote facade
+  still advances its STOP generation to revoke queued and in-flight pre-START
+  work, but binds only its own idle `machine.disconnect` cleanup RPC to that
+  newly created generation instead of reusing the desktop worker's stale one. A
+  later STOP still supersedes the cleanup, blocked upload/finalize work remains
+  cancelled, and accepted or ownership-uncertain Pi jobs retain non-destructive
+  monitoring-client detach. Remote replace, shutdown, and detach paths were
+  audited for the same generation inversion.
+
 - Fixed a Pi-owned parked-camera deadlock that delayed Camera Trace and other
   Home-first precision captures until the 120-second remote stepper-hold lease
   expired. Trace, base-bed mapping, coordinate audit, dense calibration,

@@ -5,6 +5,7 @@ import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -13,7 +14,19 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from PySide6 import QtWidgets
 
+from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.desktop.controller import DesktopController
+from laser_aligner.machine import remote_service as remote_service_module
+from laser_aligner.machine.pi_job_protocol import (
+    CAPABILITY_PI_OWNED_JOBS,
+    PROTOCOL_VERSION,
+)
+from laser_aligner.machine.pi_machine_server import (
+    ACTION_MACHINE_DISCONNECT,
+    ACTION_SERVICE_CAPABILITIES,
+    SERVER_ACTION_SCHEMAS,
+)
+from laser_aligner.machine.remote_service import RemoteMachineService
 
 
 @pytest.fixture
@@ -94,7 +107,7 @@ def _wait_for_tasks(
     application.processEvents()
 
 
-def _controller(machine: _Machine) -> DesktopController:
+def _controller(machine: Any) -> DesktopController:
     context = SimpleNamespace(machine=machine)
     runtime = SimpleNamespace(
         context=context,
@@ -138,3 +151,68 @@ def test_failed_explicit_reconnect_remains_disconnected_and_does_not_loop(
     assert not machine.connected
     assert not machine.coordinate_reference_ready
     assert errors == ["Controller reconnection failed: controller unavailable"]
+
+
+def test_desktop_disconnect_rebinds_remote_cleanup_after_revoking_worker_generation(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", "desktop-disconnect-regression-token")
+    machine = RemoteMachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            port="e3bridge://pi.test:9876",
+            allow_motion=True,
+            controller_startup_delay=0.0,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    requests: list[dict[str, Any]] = []
+
+    def request_response(
+        host: str,
+        port: int,
+        token: str,
+        request: dict[str, Any],
+        *,
+        timeout: float,
+    ) -> dict[str, Any]:
+        assert (host, port) == ("pi.test", 9876)
+        assert token == "desktop-disconnect-regression-token"
+        assert timeout > 0.0
+        requests.append(dict(request))
+        if request["action"] == ACTION_SERVICE_CAPABILITIES:
+            return {
+                "ok": True,
+                "request_id": request["request_id"],
+                "protocol_version": PROTOCOL_VERSION,
+                "capabilities": [CAPABILITY_PI_OWNED_JOBS],
+                "actions": SERVER_ACTION_SCHEMAS,
+            }
+        assert request["action"] == ACTION_MACHINE_DISCONNECT
+        status = machine.status()
+        status["connected"] = False
+        return {
+            "ok": True,
+            "request_id": request["request_id"],
+            "status": status,
+        }
+
+    monkeypatch.setattr(remote_service_module, "request_response", request_response)
+    controller = _controller(machine)
+    errors: list[str] = []
+    notices: list[str] = []
+    controller.errorOccurred.connect(errors.append)
+    controller.notice.connect(notices.append)
+    queued_generation = machine.operation_generation()
+
+    controller.disconnect_machine()
+    _wait_for_tasks(qt_application, controller)
+
+    actions = [request["action"] for request in requests]
+    assert machine.operation_generation() == queued_generation + 1
+    assert actions.count(ACTION_MACHINE_DISCONNECT) == 1
+    assert errors == []
+    assert notices == ["Controller disconnected"]

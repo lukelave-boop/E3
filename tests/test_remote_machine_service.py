@@ -820,6 +820,77 @@ def test_idle_disconnect_may_release_the_pi_controller(
     assert service.connected is False
 
 
+def test_disconnect_revocation_keeps_stale_ordinary_scopes_cancelled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    stale_generation = service.operation_generation()
+
+    with service.operation_scope(stale_generation):
+        service.disconnect()
+    fake.requests.clear()
+
+    with service.operation_scope(stale_generation):
+        for operation in (
+            service.connect,
+            service.replace_connection,
+            service.prepare_photo_position,
+            lambda: service.jog(1.0, 0.0, 100.0),
+            lambda: service.send_command("?"),
+        ):
+            with pytest.raises(MachineError, match="cancelled by software STOP"):
+                operation()
+
+    assert fake.requests == []
+
+
+def test_stop_during_idle_disconnect_still_invalidates_cleanup_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    entered_disconnect = threading.Event()
+    release_disconnect = threading.Event()
+
+    def block_disconnect(action: str, _request: dict[str, Any]) -> None:
+        if action == ACTION_MACHINE_DISCONNECT:
+            entered_disconnect.set()
+            assert release_disconnect.wait(2.0)
+
+    fake.before_request = block_disconnect
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    requested_generation = service.operation_generation()
+    errors: list[BaseException] = []
+
+    def disconnect() -> None:
+        try:
+            with service.operation_scope(requested_generation):
+                service.disconnect()
+        except BaseException as exc:  # captured for the test thread
+            errors.append(exc)
+
+    worker = threading.Thread(target=disconnect)
+    worker.start()
+    assert entered_disconnect.wait(2.0)
+
+    service.request_stop(emergency=True)
+    release_disconnect.set()
+    worker.join(2.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], MachineError)
+    assert "cancelled by software STOP" in str(errors[0])
+    actions = [request["action"] for request in fake.requests]
+    assert actions == [
+        ACTION_SERVICE_CAPABILITIES,
+        ACTION_MACHINE_DISCONNECT,
+        ACTION_JOB_STOP,
+    ]
+
+
 def test_process_hardware_gate_blocks_remote_controller_actions_before_rpc(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
