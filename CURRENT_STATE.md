@@ -321,13 +321,15 @@ imported-normalized-camera parity; request/signature staleness; retained failure
 diagnostics; immediate old-candidate retirement; Trace panel controls; capture
 and rectification timing; and the standalone raster diagnostic command.
 
-The broader eligibility, normalization, object-Trace, native-raster, and desktop
-preview selection passes **231 tests** in **78.47 seconds**. The complete local
-Windows four-worker suite passes **2,750 tests** with **14 expected platform
-skips** in **163.53 seconds**. Repository
-Ruff, `python -m compileall -q laser_aligner`, and `git diff --check` pass. These
-are deterministic Qt-free, source-level, and offscreen-widget checks; no
-interactive GUI, live camera, or hardware validation is implied.
+Before integration, the broader eligibility, normalization, object-Trace,
+native-raster, and desktop preview selection passed **231 tests** in **78.47
+seconds**. After merging the Pi-owned execution mainline, one combined focused
+Trace/Pi batch passed **383 tests** in **73.38 seconds**, and the complete local
+Windows four-worker suite passed **2,843 tests** with **14 expected platform
+skips** in **146.84 seconds**. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass. These are
+deterministic Qt-free, source-level, loopback/simulator, and offscreen-widget
+checks; no interactive GUI, live camera, or hardware validation is implied.
 
 On the 640 × 480 correlated-texture stencil fixture at 2 pixels/mm, ten
 post-warmup eligibility samples had median stage times of **25.081 ms** for
@@ -1002,14 +1004,14 @@ during ACK wait, all specified controller/serial failures, reboot interruption,
 active-operation blocking, camera-client independence, local execution
 preservation, and one real
 `RemoteMachineService → E3MACHINE/2 → PiMachineServer → PiJobService →
-MachineService` socket stack. After integrating Camera Trace material eligibility
-and exact 4× Mask display through main `daa077f`, the complete Windows Python
-3.14 four-worker suite passed **2,834 tests** with **14 expected
-platform/privilege skips**. Repository Ruff, bytecode compilation, and diff
-checking passed. No interactive desktop, physical Pi, physical controller,
-motion, laser output, process-kill recovery, or real network-disconnect test was
-performed; those remain required before physical deployment and hardware
-acceptance.
+MachineService` socket stack. After merging the complete Camera Trace
+appearance-veto and exact Exposed-bed/4× Mask display work, the combined focused
+Trace/Pi batch passed **383 tests** and the complete Windows Python 3.14
+four-worker suite passed **2,843 tests** with **14 expected platform/privilege
+skips**. Repository Ruff, bytecode compilation, and diff checking passed. No
+interactive desktop, physical Pi, physical controller, motion, laser output,
+process-kill recovery, or real network-disconnect test was performed; those
+remain required before physical deployment and hardware acceptance.
 
 ## Current repository validation and deferred package check
 
