@@ -10,6 +10,10 @@ import numpy as np
 import pytest
 
 import laser_aligner.project.raster_vectorize as raster_vectorize_module
+from laser_aligner.geometry.foreground import (
+    extract_foreground_contours,
+    prune_degenerate_foreground_contours,
+)
 from laser_aligner.project import (
     NativePathGeometry,
     PathAffineTransform,
@@ -29,6 +33,7 @@ from laser_aligner.project import (
     quick_preview_prepared_raster,
     raster_payload_has_usable_alpha,
     read_raster_asset_payload,
+    vectorize_pixel_source_forest,
     vectorize_prepared_raster,
     vectorize_raster_payload,
 )
@@ -610,6 +615,226 @@ def test_minimum_feature_area_removes_tiny_pinhole_but_keeps_larger_hole(
     assert [contour.is_hole for contour in filtered.contours] == [False, True]
 
 
+def test_4x_degenerate_fragment_is_pruned_without_losing_valid_features(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((16, 16), 220, dtype=np.uint8)
+    pixels[2:9, 2:9] = 30
+    pixels[12:15, 12:15] = np.asarray(
+        (
+            (132, 108, 109),
+            (113, 147, 132),
+            (136, 144, 137),
+        ),
+        dtype=np.uint8,
+    )
+    payload = _write_payload(tmp_path / "degenerate-4x-fragment.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(
+        threshold=128,
+        minimum_feature_area_mm2=0.05,
+        simplification_tolerance_mm=0.10,
+    )
+    masks = raster_vectorize_module._prepare_vectorization_masks(
+        source,
+        options,
+        4.0,
+        4.0,
+    )
+    unpruned, _hierarchy = extract_foreground_contours(
+        masks.working_mask,
+        approximation=cv2.CHAIN_APPROX_NONE,
+    )
+
+    assert masks.component_count == 2
+    assert [
+        (len(contour), cv2.contourArea(contour))
+        for contour in unpruned
+    ] == [(2, 0.0), (28, 40.0), (104, 727.0)]
+
+    preview = quick_preview_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=4.0,
+        displayed_height_mm=4.0,
+    )
+    result = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=4.0,
+        displayed_height_mm=4.0,
+        prepared_preview=preview,
+    )
+
+    assert len(preview.contours) == 2
+    assert len(result.contours) == 2
+    assert [contour.raw_point_count for contour in result.contours] == [28, 104]
+    assert [contour.parent_index for contour in result.contours] == [None, None]
+    assert result.connected_component_count == 2
+    assert result.pruned_contour_count == 1
+    assert result.degenerate_contour_count == 1
+    assert result.rejected_contour_tree_count == 0
+    assert result.metadata()["raster_vectorization_pruned_contours"] == 1
+
+
+def test_4x_interpolation_artifact_is_pruned_after_component_cleanup(
+    tmp_path: Path,
+) -> None:
+    pixels = np.asarray(
+        (
+            (210, 210, 210, 210, 210),
+            (210, 50, 50, 50, 210),
+            (210, 50, 50, 50, 210),
+            (210, 50, 50, 50, 210),
+            (210, 210, 210, 210, 145),
+        ),
+        dtype=np.uint8,
+    )
+    payload = _write_payload(tmp_path / "interpolation-artifact.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(
+        threshold=128,
+        minimum_feature_area_mm2=9.0,
+        simplification_tolerance_mm=0.10,
+    )
+    masks = raster_vectorize_module._prepare_vectorization_masks(
+        source,
+        options,
+        5.0,
+        5.0,
+    )
+    unpruned, _hierarchy = extract_foreground_contours(
+        masks.working_mask,
+        approximation=cv2.CHAIN_APPROX_NONE,
+    )
+
+    assert masks.component_count == 1
+    assert [(len(contour), cv2.contourArea(contour)) for contour in unpruned] == [
+        (1, 0.0),
+        (40, 119.0),
+    ]
+
+    result = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=5.0,
+        displayed_height_mm=5.0,
+    )
+
+    assert len(result.contours) == 1
+    assert result.contours[0].raw_point_count == 40
+    assert result.pruned_contour_count == 1
+    assert result.degenerate_contour_count == 1
+    assert result.rejected_contour_tree_count == 0
+
+
+def _test_contour(*points: tuple[int, int]) -> np.ndarray:
+    return np.asarray(points, dtype=np.int32).reshape(-1, 1, 2)
+
+
+def test_degenerate_contour_pruning_repairs_the_complete_retr_tree() -> None:
+    contours = (
+        _test_contour((0, 0), (20, 0), (20, 20), (0, 20)),
+        _test_contour((3, 3), (7, 3), (7, 7), (3, 7)),
+        _test_contour((10, 10), (11, 10)),
+        _test_contour((12, 12), (17, 12), (17, 17), (12, 17)),
+        _test_contour((30, 0), (40, 0), (40, 10), (30, 10)),
+    )
+    # Root order is 4 -> 0. Child order under 0 is 3 -> 2 -> 1, so numeric
+    # tuple order cannot be used as a substitute for authoritative links.
+    hierarchy = np.asarray(
+        [
+            [
+                [-1, 4, 3, -1],
+                [-1, 2, -1, 0],
+                [1, 3, -1, 0],
+                [2, -1, -1, 0],
+                [0, -1, -1, -1],
+            ]
+        ],
+        dtype=np.int32,
+    )
+
+    result = prune_degenerate_foreground_contours(contours, hierarchy)
+
+    assert result.retained_original_indices == (0, 1, 3, 4)
+    assert result.degenerate_original_indices == (2,)
+    assert result.rejected_root_indices == ()
+    assert result.pruned_contour_count == 1
+    assert result.hierarchy.tolist() == [
+        [
+            [-1, 3, 2, -1],
+            [-1, 2, -1, 0],
+            [1, -1, -1, 0],
+            [0, -1, -1, -1],
+        ]
+    ]
+
+
+def test_degenerate_pruning_keeps_the_smallest_positive_area_contour() -> None:
+    contours = (
+        _test_contour((0, 0), (1, 0), (0, 1)),
+        _test_contour((5, 5)),
+    )
+    hierarchy = np.asarray(
+        [[[1, -1, -1, -1], [-1, 0, -1, -1]]],
+        dtype=np.int32,
+    )
+
+    result = prune_degenerate_foreground_contours(contours, hierarchy)
+
+    assert cv2.contourArea(result.contours[0]) == 0.5
+    assert result.retained_original_indices == (0,)
+    assert result.degenerate_original_indices == (1,)
+    assert result.hierarchy.tolist() == [[[-1, -1, -1, -1]]]
+
+
+def test_degenerate_nested_island_is_removed_without_losing_its_hole() -> None:
+    mask = np.zeros((32, 32), dtype=np.uint8)
+    cv2.rectangle(mask, (2, 2), (29, 29), 255, thickness=-1)
+    cv2.rectangle(mask, (6, 6), (25, 25), 0, thickness=-1)
+    mask[15, 15] = 255
+    contours, hierarchy = extract_foreground_contours(mask)
+
+    assert [len(contour) for contour in contours] == [108, 80, 1]
+    result = prune_degenerate_foreground_contours(contours, hierarchy)
+
+    assert result.retained_original_indices == (0, 1)
+    assert result.degenerate_original_indices == (2,)
+    assert result.rejected_root_indices == ()
+    assert result.hierarchy.tolist() == [
+        [[-1, -1, 1, -1], [-1, -1, -1, 0]]
+    ]
+
+
+def test_degenerate_ancestor_rejects_its_root_instead_of_reparenting() -> None:
+    contours = (
+        _test_contour((0, 0), (20, 0), (20, 20), (0, 20)),
+        _test_contour((5, 5)),
+        _test_contour((7, 7), (12, 7), (12, 12), (7, 12)),
+        _test_contour((30, 0), (40, 0), (40, 10), (30, 10)),
+    )
+    hierarchy = np.asarray(
+        [
+            [
+                [3, -1, 1, -1],
+                [-1, -1, 2, 0],
+                [-1, -1, -1, 1],
+                [-1, 0, -1, -1],
+            ]
+        ],
+        dtype=np.int32,
+    )
+
+    result = prune_degenerate_foreground_contours(contours, hierarchy)
+
+    assert result.retained_original_indices == (3,)
+    assert result.degenerate_original_indices == (1,)
+    assert result.rejected_root_indices == (0,)
+    assert result.pruned_contour_count == 3
+    assert result.hierarchy.tolist() == [[[-1, -1, -1, -1]]]
+
+
 def test_smoothing_and_tolerance_reduce_points_while_curves_remain_adaptive(
     tmp_path: Path,
 ) -> None:
@@ -880,6 +1105,302 @@ def test_authoritative_topology_rejects_fitted_hole_excursion(
             width_mm=96.0,
             height_mm=24.0,
         )
+
+
+def _compound_tree_and_independent_root_pixels() -> np.ndarray:
+    pixels = np.full((96, 160, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (10, 10), (82, 84), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (25, 25), (67, 69), (255, 255, 255), thickness=-1)
+    cv2.rectangle(pixels, (38, 37), (54, 57), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (112, 20), (148, 76), (0, 0, 0), thickness=-1)
+    return pixels
+
+
+def _inject_pruning_rejected_tree(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    include_independent_root: bool,
+) -> None:
+    contours = [
+        _test_contour((8, 8), (44, 8), (44, 44), (8, 44)),
+        _test_contour((18, 18)),
+        _test_contour((22, 22), (30, 22), (30, 30), (22, 30)),
+    ]
+    hierarchy_entries = [
+        [3 if include_independent_root else -1, -1, 1, -1],
+        [-1, -1, 2, 0],
+        [-1, -1, -1, 1],
+    ]
+    if include_independent_root:
+        contours.append(
+            _test_contour((72, 12), (108, 12), (108, 52), (72, 52))
+        )
+        hierarchy_entries.append([-1, 0, -1, -1])
+    hierarchy = np.asarray([hierarchy_entries], dtype=np.int32)
+
+    def extract_injected_contours(
+        _mask,
+        *,
+        approximation=cv2.CHAIN_APPROX_NONE,
+        maximum_contours=None,
+    ):
+        del approximation, maximum_contours
+        return tuple(contours), hierarchy
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "extract_foreground_contours",
+        extract_injected_contours,
+    )
+
+
+def _pruning_forest_source(tmp_path: Path, filename: str):
+    pixels = np.full((32, 32), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (18, 3), (27, 13), 0, thickness=-1)
+    return prepare_raster_vectorization_source(_write_payload(tmp_path / filename, pixels))
+
+
+def test_auto_forest_reports_exact_pruning_failure_and_keeps_valid_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _inject_pruning_rejected_tree(monkeypatch, include_independent_root=True)
+    forest = vectorize_pixel_source_forest(
+        _pruning_forest_source(tmp_path, "mixed-pruning-forest.png"),
+        _manual_options(),
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+    )
+
+    assert forest.result is not None
+    assert len(forest.result.contours) == 1
+    assert forest.root_tree_count == 2
+    assert forest.valid_root_tree_count == 1
+    assert forest.invalid_root_tree_count == 1
+    failure = forest.failures[0]
+    assert failure.root_index == 0
+    assert failure.contour_count == 3
+    assert failure.bounds_px == (8, 8, 37, 37)
+    assert failure.stage == "contour_pruning"
+    assert failure.to_dict()["bounds_px"] == [8, 8, 37, 37]
+    assert "complete root tree was rejected" in failure.reason
+
+
+def test_auto_forest_returns_complete_failures_when_pruning_removes_every_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _inject_pruning_rejected_tree(monkeypatch, include_independent_root=False)
+    forest = vectorize_pixel_source_forest(
+        _pruning_forest_source(tmp_path, "all-pruned-forest.png"),
+        _manual_options(),
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+    )
+
+    assert forest.result is None
+    assert forest.root_tree_count == 1
+    assert forest.valid_root_tree_count == 0
+    assert forest.invalid_root_tree_count == 1
+    assert len(forest.failures) == forest.root_tree_count
+    failure = forest.failures[0]
+    assert failure.root_index == 0
+    assert failure.contour_count == 3
+    assert failure.bounds_px == (8, 8, 37, 37)
+    assert failure.stage == "contour_pruning"
+
+
+def test_auto_forest_rejects_complete_compound_tree_and_keeps_independent_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _write_payload(
+        tmp_path / "compound-and-independent.png",
+        _compound_tree_and_independent_root_pixels(),
+    )
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(simplification_tolerance_mm=0.10)
+    authoritative_validator = (
+        raster_vectorize_module._validate_authoritative_native_topology
+    )
+
+    def reject_compound_tree(contours, width_mm, height_mm):
+        authoritative_validator(contours, width_mm, height_mm)
+        if any(contour.depth >= 2 for contour in contours):
+            raise RasterVectorizationError(
+                "Injected compound tree\n   topology failure"
+            )
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_validate_authoritative_native_topology",
+        reject_compound_tree,
+    )
+
+    with pytest.raises(RasterVectorizationError, match="Injected compound tree"):
+        _vectorize(payload, options, width_mm=80.0, height_mm=48.0)
+
+    forest = vectorize_pixel_source_forest(
+        source,
+        options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=48.0,
+    )
+
+    assert forest.root_tree_count == 2
+    assert forest.valid_root_tree_count == 1
+    assert forest.invalid_root_tree_count == 1
+    assert forest.result is not None
+    assert len(forest.result.contours) == 1
+    assert forest.result.contours[0].parent_index is None
+    assert forest.result.raw_contour_point_count == sum(
+        contour.raw_point_count for contour in forest.result.contours
+    )
+    assert forest.result.fitted_segment_count == sum(
+        contour.fitted_segment_count for contour in forest.result.contours
+    )
+    assert forest.result.preview_flattened_point_count == sum(
+        contour.preview_flattened_point_count for contour in forest.result.contours
+    )
+    failure = forest.failures[0]
+    assert failure.stage == "native_topology"
+    assert failure.contour_count == 3
+    assert failure.reason == "Injected compound tree topology failure"
+    assert failure.bounds_px is not None
+    assert failure.to_dict() == {
+        "root_index": failure.root_index,
+        "contour_count": 3,
+        "stage": "native_topology",
+        "reason": "Injected compound tree topology failure",
+        "bounds_px": list(failure.bounds_px),
+    }
+
+
+def test_auto_forest_treats_cross_root_ambiguity_as_strategy_fatal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _write_payload(
+        tmp_path / "cross-root-ambiguity.png",
+        _compound_tree_and_independent_root_pixels(),
+    )
+    source = prepare_raster_vectorization_source(payload)
+    authoritative_validator = (
+        raster_vectorize_module._validate_authoritative_native_topology
+    )
+    validated_root_counts: list[int] = []
+
+    def reject_only_combined_forest(contours, width_mm, height_mm):
+        authoritative_validator(contours, width_mm, height_mm)
+        root_count = sum(contour.parent_index is None for contour in contours)
+        validated_root_counts.append(root_count)
+        if root_count > 1:
+            raise RasterVectorizationError("Injected cross-root ambiguity")
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_validate_authoritative_native_topology",
+        reject_only_combined_forest,
+    )
+
+    with pytest.raises(RasterVectorizationError, match="cross-root ambiguity"):
+        vectorize_pixel_source_forest(
+            source,
+            _manual_options(),
+            displayed_width_mm=80.0,
+            displayed_height_mm=48.0,
+        )
+
+    assert validated_root_counts == [2, 1, 1]
+
+
+def test_auto_forest_revalidates_both_topologies_after_raster_tree_rejection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _write_payload(
+        tmp_path / "raster-tree-rejection.png",
+        _compound_tree_and_independent_root_pixels(),
+    )
+    source = prepare_raster_vectorization_source(payload)
+    authoritative_validator = (
+        raster_vectorize_module._validate_authoritative_native_topology
+    )
+    raster_validator = raster_vectorize_module._validate_rasterized_topology
+    authoritative_root_counts: list[int] = []
+    raster_root_counts: list[int] = []
+
+    def record_authoritative(contours, width_mm, height_mm):
+        authoritative_root_counts.append(
+            sum(contour.parent_index is None for contour in contours)
+        )
+        authoritative_validator(contours, width_mm, height_mm)
+
+    def reject_compound_raster(contours, shape):
+        raster_validator(contours, shape)
+        raster_root_counts.append(
+            sum(contour.parent_index is None for contour in contours)
+        )
+        if any(contour.depth >= 2 for contour in contours):
+            raise RasterVectorizationError("Injected raster hierarchy failure")
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_validate_authoritative_native_topology",
+        record_authoritative,
+    )
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_validate_rasterized_topology",
+        reject_compound_raster,
+    )
+
+    forest = vectorize_pixel_source_forest(
+        source,
+        _manual_options(),
+        displayed_width_mm=80.0,
+        displayed_height_mm=48.0,
+    )
+
+    assert forest.result is not None
+    assert len(forest.result.contours) == 1
+    assert forest.failures[0].stage == "raster_hierarchy"
+    assert forest.failures[0].contour_count == 3
+    assert authoritative_root_counts == [2, 1]
+    assert raster_root_counts == [2, 1, 1, 1]
+
+
+def test_auto_forest_keeps_complexity_failures_strategy_fatal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _write_payload(
+        tmp_path / "forest-complexity.png",
+        _compound_tree_and_independent_root_pixels(),
+    )
+    source = prepare_raster_vectorization_source(payload)
+    call_count = 0
+
+    def reject_for_complexity(_contours, _width_mm, _height_mm):
+        nonlocal call_count
+        call_count += 1
+        raise RasterVectorizationComplexityError("Injected bounded complexity")
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_validate_authoritative_native_topology",
+        reject_for_complexity,
+    )
+
+    with pytest.raises(RasterVectorizationComplexityError, match="bounded complexity"):
+        vectorize_pixel_source_forest(
+            source,
+            _manual_options(),
+            displayed_width_mm=80.0,
+            displayed_height_mm=48.0,
+        )
+
+    assert call_count == 1
 
 
 @pytest.mark.parametrize(

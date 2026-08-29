@@ -14,7 +14,11 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 > physically cut. A later 2026-08-14 C920 recovery frame replays as a direct
 > 2 x 7 grid: the accepted empty-honeycomb teaching image leaves its four
 > already-open cells unchecked and selects the ten remaining labels. See
-> [../CURRENT_STATE.md](../CURRENT_STATE.md).
+> [../CURRENT_STATE.md](../CURRENT_STATE.md). The new non-grid Auto orchestrator,
+> hierarchy-safe degenerate-contour pruning, strategy fallback, and independent-
+> root isolation have deterministic automated coverage, but the Coleman stencil
+> failure frame has not been rerun on the physical camera. Do not treat this
+> implementation status as a physical-camera validation.
 
 ## Recommended Trace workflow
 
@@ -26,9 +30,13 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
      output layers;
    - **Stock boundary (layout only)** creates exactly one locked construction
      outline and never sends that outline to the laser.
-4. Choose **Auto detect**, **By color**, or **By contrast**. With **By contrast**
-   and **Use grid** off, choose automatic Otsu or a manual 0–255 threshold and
-   whether dark or light pixels are foreground; hue controls are visibly
+4. Choose **Auto detect**, **By color**, or **By contrast**. With **Use grid**
+   off, Auto tries authoritative raster Otsu with both dark and light foreground
+   and conditionally tries Color when the image has a strong coherent chromatic
+   target; the result message says which strategy won. Auto's hue, threshold,
+   and polarity controls are inactive because Auto owns those choices. With
+   **By contrast** and **Use grid** off, choose automatic Otsu or a manual 0–255
+   threshold and whether dark or light pixels are foreground; hue controls are
    inactive because this path is literal raster vectorization. To sample for
    **By color**, press **Pick color**, wait for the button to read **Cancel color
    pick**, then click the center of the object in the corrected camera image.
@@ -42,8 +50,9 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    one parent-stock outline.
 7. Choose the vector output described below and set either a uniform **Border
    offset** or the rounded rectangle's individual edge offsets. Non-grid **By
-   contrast** uses its authoritative native raster-vector result, so that route
-   fixes output to **Native lines / Béziers** and border offset to `0.00 mm`.
+   contrast** and non-grid **Auto detect** use authoritative native results, so
+   those routes fix output to **Native lines / Béziers** and border offset to
+   `0.00 mm`.
    For specialized detector routes, start a line-following cleanup pass at
    `0.00 mm`: a negative uniform value trims that amount from every edge and
    therefore cannot follow the detected border.
@@ -135,11 +144,13 @@ nested contours are not forced into washers.
   preview is this proposed vector, not the jagged camera-pixel boundary. The
   **Geometry** column reports the fitted dimensions and radius. If a detection
   is not sufficiently rectangle-like, this mode falls back to its contour.
-- **Native lines / Béziers** is the required output for non-grid Contrast. It
-  comes directly from the shared raster vectorizer. Specialized Auto, Color, and
-  grid candidates use the same underlying physical fitter through their existing
-  contour-tree adapter. Independent candidates remain independent, and each
-  candidate retains its outer/hole hierarchy.
+- **Native lines / Béziers** is the required output for non-grid Contrast and
+  non-grid Auto. Auto's dark/light attempts come directly from the shared raster
+  vectorizer; its conditional Color attempt and explicit Color use the same
+  authoritative physical fitter through the contour-tree adapter. Grid routes
+  retain their specialized output choices. Independent candidates remain
+  independent, and each candidate retains its complete outer/hole/island
+  hierarchy.
 - **Simplified contours** follows the detected pixel boundary and removes
   points within the **Simplify tolerance**. A lower tolerance preserves more
   edge detail. This is polygon simplification; it does not turn an irregular
@@ -157,10 +168,10 @@ outline is the exact fitted geometry that will be created: real straight runs
 remain lines and curved runs use constrained cubic Béziers. No camera-specific
 outline finder, second contour extraction, or refit occurs afterward.
 
-Specialized Auto, Color, and grid routes still fit their chosen detector masks
-through the physical contour-tree adapter. Analytic circle, ellipse,
+Auto's conditional Color, explicit Color, and grid routes fit chosen detector
+masks through the physical contour-tree adapter. Analytic circle, ellipse,
 rounded-rectangle, and washer evidence keeps its semantic path when analytic
-output is chosen on those routes.
+output is chosen on the explicit Color and grid routes.
 
 **Offset mode** defaults to **Uniform**, which applies the existing single
 **Border offset** equally on all sides. Positive values expand the output and
@@ -180,9 +191,20 @@ when created, so rotated or asymmetric traces do not shift after approval.
 
 ## Detection modes
 
-- **Auto detect** evaluates color and contrast hypotheses and uses the strongest
-  coherent object family. Repeated-grid fits are ranked from the observed
-  filled-region support, not merely the number of clean contours.
+- **Auto detect**, with **Use grid** off, is an orchestrator over production
+  tracing tools. It captures and rectifies once, reuses one immutable pixel
+  source for shared-raster Otsu dark and Otsu light, and runs Color only when
+  weighted HSV/Lab evidence finds a coherent target. The Color gate requires at
+  least `0.005 × pixel count` total normalized chroma weight, at least 60% of
+  that weight in one ±14-hue window, at least 1.5× separation from the strongest
+  hue window more than 28 hue bins away, 0.2–60% resulting foreground, and no
+  more than 50% foreground on the frame border. Auto uses hue tolerance 14 and
+  minimum saturation 45 for this attempt; disabled manual Color values do not
+  steer it.
+- **Auto detect**, with **Use grid** on, retains the specialized repeated-object
+  detector. Repeated-grid fits are ranked from observed filled-region support,
+  not merely the number of clean contours, then proceed through lattice fitting,
+  normalization, inference, and damaged/open-cell evidence.
 - **By color** uses hue for automatic/manual numeric targets. **Pick color**
   additionally retains the sampled BGR/Lab color, allowing neutral gray and
   low-saturation objects to be separated from a warmer or cooler backing
@@ -197,6 +219,60 @@ when created, so rotated or asymmetric traces do not shift after approval.
   Otsu, illumination-corrected, adaptive, signed-local, and closed-outline
   evidence, ranks coherent repeated bodies, classifies cells, normalizes the
   fitted lattice, and can infer gaps.
+
+### Auto scoring and fallback
+
+Auto requires authoritative verified native geometry and never rewards a
+strategy simply for returning more candidates. Its deterministic score is
+`40V + 20F + 15B + 10A + 10S + 5W - P`, where:
+
+- `V` is the fraction of independent roots that are valid;
+- `F` rewards a useful foreground fraction and tapers to zero for a nearly full
+  frame;
+- `B` rewards a clean, non-foreground image border;
+- `A` rewards useful retained physical foreground area;
+- `S` penalizes results dominated by roots smaller than four times the selected
+  minimum feature area;
+- `W` is the fraction of valid candidates fully inside the reviewed frame; and
+- `P` is a 35-point penalty when foreground and border occupancy both reach 75%.
+
+A result with at least 95% foreground and at least 75% foreground border is
+rejected as a background interpretation. Stable equal-score ties prefer dark
+raster, then light raster, then Color. Status reports the selected polarity and
+Otsu threshold or the selected hue/tolerance. Internal diagnostics retain each
+attempt's success, rejection, or skip reason plus occupancy, root counts, valid
+and invalid counts, and score terms; the inspector does not display a debug dump.
+
+One failed strategy does not end Auto. Likewise, one failed independent contour
+tree does not have to discard verified peers. Isolation occurs only at a root
+tree boundary: the root and every hole or island descendant are fitted and
+validated together, then all are accepted or all are omitted. E3 never detaches
+a hole or island to evade topology validation. The existing fitting-error,
+frame/extrema, self-intersection, adjacent-arc, compound-clearance, even-odd, and
+rasterized-hierarchy checks are unchanged. Raster validation begins with the
+complete forest and uses per-root checks only to diagnose a failed global pass.
+The complete survivor forest is rebased and globally revalidated. If every root
+passes alone but the roots fail together, or a complexity limit fails, the
+strategy remains rejected. If all meaningful strategies fail, the operator
+receives one bounded summary instead of a modal for each attempt.
+
+### Degenerate 4× contours
+
+The reproduced cause of the real-camera `fewer than three distinct points`
+failure is not a large stencil-letter contour. Bicubic grayscale reconstruction
+at 4× can overshoot near a retained edge inside the one-source-pixel component
+halo. A nominal-background sample may cross the threshold and form an isolated
+one-pixel fragment whose OpenCV contour has one or two points and zero polygon
+area.
+
+The shared pixel pipeline now prunes only contours with fewer than three
+distinct trace points or zero trace-pixel polygon area after `RETR_TREE`
+extraction. Positive-area features remain eligible. Removing a degenerate leaf
+rebuilds all `next`, `previous`, `first_child`, and `parent` links in original
+sibling order. If a degenerate contour has a legitimate descendant, its complete
+root tree is rejected rather than reparenting the descendant and changing its
+even-odd depth. Imported raster Quick Preview, exact imported vectorization,
+manual camera Contrast, and Auto raster attempts share this behavior.
 
 ## Regular-grid inference
 
@@ -336,9 +412,10 @@ than one corrected camera pixel does not establish equivalent physical accuracy.
 Eligible independent contours may move a non-corner threshold sample toward one
 strong source-intensity crossing by at most 0.6 source pixel; nested contours
 remain on the threshold. Reported deviation includes accepted edge-centering
-shift and continuously validated native fit error. Specialized Auto, Color, and
-grid paths retain their camera-mask physical adapter and corrected-pixel
-resolution floor.
+shift and continuously validated native fit error. Auto raster strategies use
+the shared raster coordinate contract; Auto Color, explicit Color, and grid
+paths retain their camera-mask physical adapter and corrected-pixel resolution
+floor.
 
 The desktop registers the center of each displayed camera pixel to the same
 OpenCV/BedMapper coordinate used by the detector. At very high zoom, a smooth

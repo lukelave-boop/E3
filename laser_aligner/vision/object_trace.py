@@ -4,7 +4,7 @@ import hashlib
 import math
 import uuid
 from collections.abc import Mapping, Sequence
-from dataclasses import asdict, dataclass, field, fields
+from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
 import cv2
@@ -26,13 +26,16 @@ from ..project.path_geometry import (
     transform_native_path,
 )
 from ..project.raster_vectorize import (
+    PixelVectorizationForestResult,
     PixelVectorizationResult,
+    PixelVectorizationSource,
     RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationError,
     RasterVectorizationOptions,
     prepare_pixel_vectorization_source,
     vectorize_pixel_source,
+    vectorize_pixel_source_forest,
 )
 
 TRACE_MODES = {"auto", "color", "contrast"}
@@ -277,6 +280,7 @@ class TraceResult:
     options: TraceOptions
     camera_work_area: dict[str, float] = field(default_factory=dict)
     output_work_area: dict[str, float] = field(default_factory=dict)
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -293,6 +297,7 @@ class TraceResult:
             "options": self.options.to_dict(),
             "camera_work_area": self.camera_work_area,
             "output_work_area": self.output_work_area,
+            "diagnostics": self.diagnostics,
         }
 
 
@@ -330,6 +335,220 @@ def auto_target_hue(image: np.ndarray, min_saturation: int = 45) -> float | None
     kernel /= max(float(kernel.sum()), 1e-12)
     smoothed = np.convolve(padded, kernel, mode="same")[radius:-radius]
     return float(np.argmax(smoothed))
+
+
+@dataclass(frozen=True, slots=True)
+class _AutoColorSuitability:
+    suitable: bool
+    target_hue: float | None
+    reason: str
+    chromatic_fraction: float
+    dominant_weight_fraction: float
+    dominance_ratio: float
+    foreground_fraction: float
+    border_foreground_fraction: float
+
+    def diagnostics(self) -> dict[str, Any]:
+        return {
+            "chromatic_fraction": self.chromatic_fraction,
+            "dominant_weight_fraction": self.dominant_weight_fraction,
+            "dominance_ratio": self.dominance_ratio,
+            "foreground_fraction": self.foreground_fraction,
+            "border_foreground_fraction": self.border_foreground_fraction,
+        }
+
+
+def _mask_occupancy(mask: np.ndarray) -> tuple[float, float]:
+    """Return whole-frame and one-pixel-border foreground occupancy."""
+
+    values = np.asarray(mask) > 0
+    if values.ndim != 2 or not values.size:
+        raise ValueError("Auto strategy masks must be non-empty and two-dimensional")
+    height, width = values.shape
+    border_parts = [values[0]]
+    if height > 1:
+        border_parts.append(values[-1])
+    if height > 2:
+        border_parts.append(values[1:-1, 0])
+        if width > 1:
+            border_parts.append(values[1:-1, -1])
+    border = np.concatenate([part.reshape(-1) for part in border_parts])
+    return (
+        float(np.count_nonzero(values)) / float(values.size),
+        float(np.count_nonzero(border)) / float(max(1, border.size)),
+    )
+
+
+def _analyze_auto_color_suitability(
+    image: np.ndarray,
+    options: TraceOptions,
+    pixels_per_mm: float,
+) -> _AutoColorSuitability:
+    """Gate Auto's Color attempt on coherent, non-background chroma evidence."""
+
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+    hue = hsv[:, :, 0]
+    saturation = hsv[:, :, 1].astype(np.float32)
+    a = lab[:, :, 1].astype(np.float32) - 128.0
+    b = lab[:, :, 2].astype(np.float32) - 128.0
+    chroma = np.hypot(a, b)
+    weight = np.clip((saturation - 24.75) / 180.0, 0.0, 1.0) * np.clip(
+        (chroma - 5.0) / 70.0,
+        0.0,
+        1.0,
+    )
+    pixel_count = int(image.shape[0] * image.shape[1])
+    total_weight = float(weight.sum())
+    chromatic_fraction = float(np.count_nonzero(weight > 0.0)) / float(pixel_count)
+    if total_weight < pixel_count * 0.005:
+        return _AutoColorSuitability(
+            False,
+            None,
+            "insufficient chroma",
+            chromatic_fraction,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+        )
+
+    histogram = np.bincount(
+        hue.reshape(-1), weights=weight.reshape(-1), minlength=180
+    ).astype(np.float64)
+    tolerance = 14
+    window_mass = np.asarray(
+        [
+            sum(histogram[(center + offset) % 180] for offset in range(-tolerance, tolerance + 1))
+            for center in range(180)
+        ],
+        dtype=np.float64,
+    )
+    target = int(np.argmax(window_mass))
+    dominant_weight = float(window_mass[target])
+    dominant_fraction = dominant_weight / max(total_weight, 1e-12)
+    competitors = [
+        float(window_mass[index])
+        for index in range(180)
+        if min(abs(index - target), 180 - abs(index - target)) > tolerance * 2
+    ]
+    competing_weight = max(competitors, default=0.0)
+    dominance_ratio = dominant_weight / max(competing_weight, 1e-12)
+    color_options = replace(
+        options,
+        target_hue=float(target),
+        target_bgr=None,
+        hue_tolerance=float(tolerance),
+        min_saturation=45,
+    )
+    color_mask = _color_mask(image, float(target), color_options, pixels_per_mm)
+    foreground_fraction, border_fraction = _mask_occupancy(color_mask)
+    reason = "suitable"
+    suitable = True
+    if dominant_fraction < 0.60:
+        suitable = False
+        reason = "no coherent dominant hue"
+    elif dominance_ratio < 1.50:
+        suitable = False
+        reason = "dominant hue is not distinct"
+    elif foreground_fraction < 0.002:
+        suitable = False
+        reason = "chromatic foreground is too small"
+    elif foreground_fraction > 0.60:
+        suitable = False
+        reason = "chromatic foreground is background-dominated"
+    elif border_fraction > 0.50:
+        suitable = False
+        reason = "chromatic foreground dominates the frame border"
+    return _AutoColorSuitability(
+        suitable,
+        float(target),
+        reason,
+        chromatic_fraction,
+        dominant_fraction,
+        dominance_ratio,
+        foreground_fraction,
+        border_fraction,
+    )
+
+
+def _auto_strategy_quality(
+    metrics: Mapping[str, Any],
+) -> tuple[float | None, dict[str, float], str | None]:
+    """Score one completed Auto strategy without rewarding candidate count."""
+
+    valid_count = max(0, int(metrics.get("valid_candidate_count", 0)))
+    invalid_count = max(0, int(metrics.get("invalid_candidate_count", 0)))
+    root_count = max(valid_count + invalid_count, int(metrics.get("root_tree_count", 0)))
+    unusable_count = max(invalid_count, root_count - valid_count)
+    verified_count = max(0, int(metrics.get("verified_candidate_count", 0)))
+    if not valid_count or verified_count != valid_count:
+        return None, {}, "no authoritative verified native candidates"
+
+    foreground_fraction = min(
+        1.0, max(0.0, float(metrics.get("foreground_fraction", 0.0)))
+    )
+    border_fraction = min(
+        1.0, max(0.0, float(metrics.get("border_foreground_fraction", 0.0)))
+    )
+    frame_area_mm2 = max(1e-12, float(metrics.get("frame_area_mm2", 0.0)))
+    minimum_area_mm2 = max(1e-12, float(metrics.get("minimum_area_mm2", 0.0)))
+    valid_area_mm2 = max(0.0, float(metrics.get("valid_area_mm2", 0.0)))
+    microscopic_count = min(
+        valid_count,
+        max(0, int(metrics.get("microscopic_candidate_count", 0))),
+    )
+    within_count = min(
+        valid_count,
+        max(0, int(metrics.get("within_frame_candidate_count", 0))),
+    )
+
+    useful_floor = min(
+        0.08,
+        max(0.002, 0.25 * minimum_area_mm2 / frame_area_mm2),
+    )
+    if foreground_fraction < useful_floor:
+        foreground_quality = foreground_fraction / useful_floor
+    elif foreground_fraction <= 0.60:
+        foreground_quality = 1.0
+    elif foreground_fraction < 0.95:
+        foreground_quality = (0.95 - foreground_fraction) / 0.35
+    else:
+        foreground_quality = 0.0
+    valid_ratio = valid_count / max(1, valid_count + unusable_count)
+    border_quality = 1.0 - border_fraction
+    area_quality = min(
+        1.0,
+        valid_area_mm2 / max(4.0 * minimum_area_mm2, 0.01 * frame_area_mm2),
+    )
+    significant_root_quality = 1.0 - microscopic_count / valid_count
+    within_quality = within_count / valid_count
+    frame_penalty = (
+        35.0
+        if foreground_fraction >= 0.75 and border_fraction >= 0.75
+        else 0.0
+    )
+    terms = {
+        "valid_ratio": float(valid_ratio),
+        "foreground_quality": float(foreground_quality),
+        "border_quality": float(border_quality),
+        "useful_area_quality": float(area_quality),
+        "significant_root_quality": float(significant_root_quality),
+        "within_frame_quality": float(within_quality),
+        "frame_background_penalty": float(frame_penalty),
+    }
+    score = (
+        40.0 * valid_ratio
+        + 20.0 * foreground_quality
+        + 15.0 * border_quality
+        + 10.0 * area_quality
+        + 10.0 * significant_root_quality
+        + 5.0 * within_quality
+        - frame_penalty
+    )
+    if foreground_fraction >= 0.95 and border_fraction >= 0.75:
+        return None, terms, "foreground is dominated by the frame background"
+    return round(float(score), 9), terms, None
 
 
 def sample_color(
@@ -2977,11 +3196,16 @@ def _detect_non_grid_contrast_raster(
     work_area: WorkArea,
     output_work_area: WorkArea,
     pixels_per_mm: float,
+    *,
+    prepared_source: PixelVectorizationSource | None = None,
+    isolate_candidates: bool = False,
 ) -> TraceResult:
     """Trace corrected camera pixels through the imported-raster vector path."""
 
-    rgba = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
-    source = prepare_pixel_vectorization_source(rgba)
+    source = prepared_source
+    if source is None:
+        rgba = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
+        source = prepare_pixel_vectorization_source(rgba)
     raster_width_mm = source.width_px / pixels_per_mm
     raster_height_mm = source.height_px / pixels_per_mm
     camera_center_mm = (
@@ -3002,13 +3226,66 @@ def _detect_non_grid_contrast_raster(
         simplification_tolerance_mm=effective_tolerance,
         contour_output=RasterContourOutput.ALL_CONTOURS,
     )
+    forest_result: PixelVectorizationForestResult | None = None
     try:
-        result = vectorize_pixel_source(
-            source,
-            raster_options,
-            displayed_width_mm=raster_width_mm,
-            displayed_height_mm=raster_height_mm,
-        )
+        if isolate_candidates:
+            forest_result = vectorize_pixel_source_forest(
+                source,
+                raster_options,
+                displayed_width_mm=raster_width_mm,
+                displayed_height_mm=raster_height_mm,
+            )
+            result = forest_result.result
+            if result is None:
+                reasons = [failure.reason for failure in forest_result.failures]
+                message = reasons[0] if reasons else "No root contour tree produced verified geometry"
+                return TraceResult(
+                    detected=False,
+                    detections=[],
+                    mode_used="contrast",
+                    target_hue=options.target_hue,
+                    image_width=image.shape[1],
+                    image_height=image.shape[0],
+                    direct_count=0,
+                    inferred_count=0,
+                    grid=None,
+                    message=message,
+                    options=options,
+                    camera_work_area={
+                        "x_min": float(work_area.x_min),
+                        "x_max": float(work_area.x_max),
+                        "y_min": float(work_area.y_min),
+                        "y_max": float(work_area.y_max),
+                    },
+                    output_work_area={
+                        "x_min": float(output_work_area.x_min),
+                        "x_max": float(output_work_area.x_max),
+                        "y_min": float(output_work_area.y_min),
+                        "y_max": float(output_work_area.y_max),
+                    },
+                    diagnostics={
+                        "candidate_failures": [
+                            failure.to_dict()
+                            for failure in forest_result.failures[:64]
+                        ],
+                        "candidate_failure_count": len(forest_result.failures),
+                        "strategy_metrics": {
+                            "valid_candidate_count": 0,
+                            "verified_candidate_count": 0,
+                            "invalid_candidate_count": len(forest_result.failures),
+                            "root_tree_count": forest_result.root_tree_count,
+                            "minimum_area_mm2": options.min_area_mm2,
+                            "frame_area_mm2": raster_width_mm * raster_height_mm,
+                        },
+                    },
+                )
+        else:
+            result = vectorize_pixel_source(
+                source,
+                raster_options,
+                displayed_width_mm=raster_width_mm,
+                displayed_height_mm=raster_height_mm,
+            )
     except RasterVectorizationError as exc:
         message = str(exc)
         if not (
@@ -3041,6 +3318,7 @@ def _detect_non_grid_contrast_raster(
                 "y_max": float(output_work_area.y_max),
             },
         )
+    assert result is not None
     root_groups = _pixel_result_root_groups(result)
     detections: list[TraceDetection] = []
     edge_tolerance_x = 1.0 / (source.width_px * 4.0) + 1e-12
@@ -3158,7 +3436,11 @@ def _detect_non_grid_contrast_raster(
                     "threshold_mode": options.contrast_threshold_mode,
                     "invert": options.contrast_invert,
                     "connected_component_count": result.connected_component_count,
-                    "root_tree_count": len(root_groups),
+                    "root_tree_count": (
+                        forest_result.root_tree_count
+                        if forest_result is not None
+                        else len(root_groups)
+                    ),
                     "raw_contour_count": len(result.contours),
                     "raw_contour_point_count": sum(
                         contour.raw_point_count for contour in group_contours
@@ -3200,6 +3482,21 @@ def _detect_non_grid_contrast_raster(
                     ),
                     "work_area_overruns_mm": output_overruns,
                     "border_offset_ignored": abs(options.border_offset_mm) > 1e-12,
+                    "pruned_contour_count": getattr(
+                        result,
+                        "pruned_contour_count",
+                        0,
+                    ),
+                    "degenerate_contour_count": getattr(
+                        result,
+                        "degenerate_contour_count",
+                        0,
+                    ),
+                    "rejected_contour_tree_count": getattr(
+                        result,
+                        "rejected_contour_tree_count",
+                        0,
+                    ),
                 },
                 raw_contours_mm=raw_contours_mm,
                 native_path=normalized_geometry.to_dict(),
@@ -3255,6 +3552,57 @@ def _detect_non_grid_contrast_raster(
         )
     if not detections:
         message = "No raster trace candidates passed the current review filters"
+    foreground_fraction, border_foreground_fraction = _mask_occupancy(
+        result.foreground_mask
+    )
+    failures = () if forest_result is None else forest_result.failures
+    root_tree_count = (
+        len(root_groups)
+        if forest_result is None
+        else forest_result.root_tree_count
+    )
+    review_filtered_candidate_count = max(
+        0,
+        root_tree_count - len(failures) - len(detections),
+    )
+    unavailable_candidate_count = max(0, root_tree_count - len(detections))
+    strategy_metrics = {
+        "foreground_fraction": foreground_fraction,
+        "border_foreground_fraction": border_foreground_fraction,
+        "root_tree_count": root_tree_count,
+        "valid_candidate_count": len(detections),
+        "verified_candidate_count": sum(item.native_verified for item in detections),
+        "invalid_candidate_count": unavailable_candidate_count,
+        "review_filtered_candidate_count": review_filtered_candidate_count,
+        "valid_area_mm2": sum(item.area_mm2 for item in detections),
+        "microscopic_candidate_count": sum(
+            item.area_mm2 < 4.0 * options.min_area_mm2 for item in detections
+        ),
+        "within_frame_candidate_count": sum(
+            bool(item.diagnostics.get("within_work_area", False))
+            and not bool(item.diagnostics.get("touches_image_edge", False))
+            for item in detections
+        ),
+        "minimum_area_mm2": options.min_area_mm2,
+        "frame_area_mm2": raster_width_mm * raster_height_mm,
+        "threshold": result.threshold_used,
+        "polarity": "light" if options.contrast_invert else "dark",
+        "pruned_contour_count": getattr(
+            result,
+            "pruned_contour_count",
+            0,
+        ),
+        "degenerate_contour_count": getattr(
+            result,
+            "degenerate_contour_count",
+            0,
+        ),
+        "rejected_contour_tree_count": getattr(
+            result,
+            "rejected_contour_tree_count",
+            0,
+        ),
+    }
     return TraceResult(
         detected=bool(detections),
         detections=detections,
@@ -3279,7 +3627,342 @@ def _detect_non_grid_contrast_raster(
             "y_min": float(output_work_area.y_min),
             "y_max": float(output_work_area.y_max),
         },
+        diagnostics={
+            "candidate_failures": [failure.to_dict() for failure in failures[:64]],
+            "candidate_failure_count": len(failures),
+            "strategy_metrics": strategy_metrics,
+        },
     )
+
+
+def _concise_auto_reason(value: object) -> str:
+    reason = " ".join(str(value).split())
+    if not reason:
+        return "strategy produced no verified candidates"
+    return reason if len(reason) <= 240 else reason[:237] + "..."
+
+
+def _auto_attempt_diagnostics(
+    *,
+    name: str,
+    label: str,
+    status: str,
+    reason: str,
+    metrics: Mapping[str, Any] | None = None,
+    score: float | None = None,
+    score_terms: Mapping[str, float] | None = None,
+    threshold: int | None = None,
+    polarity: str | None = None,
+    target_hue: float | None = None,
+    hue_tolerance: float | None = None,
+) -> dict[str, Any]:
+    values = dict(metrics or {})
+    valid_count = int(values.get("valid_candidate_count", 0))
+    invalid_count = int(values.get("invalid_candidate_count", 0))
+    root_count = int(values.get("root_tree_count", valid_count + invalid_count))
+    output: dict[str, Any] = {
+        "name": name,
+        "label": label,
+        "status": status,
+        "reason": _concise_auto_reason(reason),
+        "candidate_count": root_count,
+        "valid_candidate_count": valid_count,
+        "invalid_candidate_count": invalid_count,
+        "root_tree_count": root_count,
+        "foreground_fraction": values.get("foreground_fraction"),
+        "border_foreground_fraction": values.get("border_foreground_fraction"),
+        "score": score,
+        "score_terms": dict(score_terms or {}),
+    }
+    if threshold is not None:
+        output["threshold"] = int(threshold)
+    if polarity is not None:
+        output["polarity"] = polarity
+    if target_hue is not None:
+        output["target_hue"] = float(target_hue)
+    if hue_tolerance is not None:
+        output["hue_tolerance"] = float(hue_tolerance)
+    for key in (
+        "valid_area_mm2",
+        "microscopic_candidate_count",
+        "within_frame_candidate_count",
+        "review_filtered_candidate_count",
+        "pruned_contour_count",
+        "degenerate_contour_count",
+        "rejected_contour_tree_count",
+    ):
+        if key in values:
+            output[key] = values[key]
+    return output
+
+
+def _detect_non_grid_auto(
+    image: np.ndarray,
+    options: TraceOptions,
+    work_area: WorkArea,
+    output_work_area: WorkArea,
+    pixels_per_mm: float,
+) -> TraceResult:
+    """Choose among production non-grid tracing strategies on one pixel source."""
+
+    rgba = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
+    source = prepare_pixel_vectorization_source(rgba)
+    auto_otsu_value, _auto_otsu_mask = cv2.threshold(
+        source.composited_grayscale,
+        0,
+        255,
+        cv2.THRESH_BINARY | cv2.THRESH_OTSU,
+    )
+    auto_otsu_threshold = int(round(float(auto_otsu_value)))
+    attempts: list[dict[str, Any]] = []
+    successful: list[tuple[float, int, str, TraceResult]] = []
+
+    for order, (name, polarity, invert) in enumerate(
+        (
+            ("raster_dark", "dark", False),
+            ("raster_light", "light", True),
+        )
+    ):
+        label = f"Raster · {polarity} foreground"
+        raster_options = replace(
+            options,
+            detection_mode="contrast",
+            contrast_threshold_mode="auto",
+            contrast_invert=invert,
+            regular_grid=False,
+            output_mode="native",
+            border_offset_mode="uniform",
+            border_offset_mm=0.0,
+            border_offset_top_mm=0.0,
+            border_offset_right_mm=0.0,
+            border_offset_bottom_mm=0.0,
+            border_offset_left_mm=0.0,
+        )
+        try:
+            result = _detect_non_grid_contrast_raster(
+                image,
+                raster_options,
+                work_area,
+                output_work_area,
+                pixels_per_mm,
+                prepared_source=source,
+                isolate_candidates=True,
+            )
+        except (RasterVectorizationError, ValueError) as exc:
+            attempts.append(
+                _auto_attempt_diagnostics(
+                    name=name,
+                    label=label,
+                    status="failed",
+                    reason=_concise_auto_reason(exc),
+                    threshold=auto_otsu_threshold,
+                    polarity=polarity,
+                )
+            )
+            continue
+        metrics = dict(result.diagnostics.get("strategy_metrics", {}))
+        threshold = metrics.get("threshold", auto_otsu_threshold)
+        score, terms, rejection = _auto_strategy_quality(metrics)
+        if not result.detected or score is None:
+            reason = (
+                result.message
+                if not result.detected
+                else rejection or result.message
+            )
+            attempts.append(
+                _auto_attempt_diagnostics(
+                    name=name,
+                    label=label,
+                    status="rejected",
+                    reason=reason,
+                    metrics=metrics,
+                    score_terms=terms,
+                    threshold=None if threshold is None else int(threshold),
+                    polarity=polarity,
+                )
+            )
+            continue
+        attempts.append(
+            _auto_attempt_diagnostics(
+                name=name,
+                label=label,
+                status="success",
+                reason="verified native geometry",
+                metrics=metrics,
+                score=score,
+                score_terms=terms,
+                threshold=None if threshold is None else int(threshold),
+                polarity=polarity,
+            )
+        )
+        successful.append((score, -order, name, result))
+
+    color_evidence = _analyze_auto_color_suitability(image, options, pixels_per_mm)
+    color_name = "color"
+    color_label = "Color"
+    color_order = 2
+    if not color_evidence.suitable or color_evidence.target_hue is None:
+        attempts.append(
+            {
+                **_auto_attempt_diagnostics(
+                    name=color_name,
+                    label=color_label,
+                    status="skipped",
+                    reason=color_evidence.reason,
+                    metrics=color_evidence.diagnostics(),
+                ),
+                **color_evidence.diagnostics(),
+            }
+        )
+    else:
+        color_options = replace(
+            options,
+            detection_mode="color",
+            target_hue=color_evidence.target_hue,
+            target_bgr=None,
+            hue_tolerance=14.0,
+            min_saturation=45,
+            regular_grid=False,
+            output_mode="native",
+            border_offset_mode="uniform",
+            border_offset_mm=0.0,
+            border_offset_top_mm=0.0,
+            border_offset_right_mm=0.0,
+            border_offset_bottom_mm=0.0,
+            border_offset_left_mm=0.0,
+        )
+        try:
+            color_result = detect_objects(
+                image,
+                color_options,
+                work_area,
+                pixels_per_mm,
+                output_work_area=output_work_area,
+                _isolate_native_candidates=True,
+            )
+        except (RasterVectorizationError, ValueError) as exc:
+            attempts.append(
+                {
+                    **_auto_attempt_diagnostics(
+                        name=color_name,
+                        label=color_label,
+                        status="failed",
+                        reason=_concise_auto_reason(exc),
+                        target_hue=color_evidence.target_hue,
+                        hue_tolerance=14.0,
+                    ),
+                    **color_evidence.diagnostics(),
+                }
+            )
+        else:
+            color_metrics = dict(
+                color_result.diagnostics.get("strategy_metrics", {})
+            )
+            color_metrics["foreground_fraction"] = color_evidence.foreground_fraction
+            color_metrics["border_foreground_fraction"] = (
+                color_evidence.border_foreground_fraction
+            )
+            color_score, color_terms, color_rejection = _auto_strategy_quality(
+                color_metrics
+            )
+            if not color_result.detected or color_score is None:
+                color_reason = (
+                    color_result.message
+                    if not color_result.detected
+                    else color_rejection or color_result.message
+                )
+                attempts.append(
+                    {
+                        **_auto_attempt_diagnostics(
+                            name=color_name,
+                            label=color_label,
+                            status="rejected",
+                            reason=color_reason,
+                            metrics=color_metrics,
+                            score_terms=color_terms,
+                            target_hue=color_evidence.target_hue,
+                            hue_tolerance=14.0,
+                        ),
+                        **color_evidence.diagnostics(),
+                    }
+                )
+            else:
+                attempts.append(
+                    {
+                        **_auto_attempt_diagnostics(
+                            name=color_name,
+                            label=color_label,
+                            status="success",
+                            reason="verified native geometry",
+                            metrics=color_metrics,
+                            score=color_score,
+                            score_terms=color_terms,
+                            target_hue=color_evidence.target_hue,
+                            hue_tolerance=14.0,
+                        ),
+                        **color_evidence.diagnostics(),
+                    }
+                )
+                successful.append(
+                    (color_score, -color_order, color_name, color_result)
+                )
+
+    if not successful:
+        summaries = "; ".join(
+            f"{attempt['label']}: {attempt['reason']}" for attempt in attempts
+        )
+        raise ValueError(
+            "Auto could not produce a verified trace. " + summaries
+        )
+
+    selected_score, _tie_break, selected_name, selected = max(successful)
+    selected_attempt = next(
+        attempt for attempt in attempts if attempt["name"] == selected_name
+    )
+    effective_options = replace(selected.options, detection_mode="auto")
+    if selected_name.startswith("raster_"):
+        effective_options = replace(
+            effective_options,
+            contrast_threshold=int(selected_attempt["threshold"]),
+        )
+    selected.options = effective_options
+    selected.diagnostics = {
+        **selected.diagnostics,
+        "auto": {
+            "selected_strategy": selected_name,
+            "selected_score": selected_score,
+            "attempts": attempts,
+            "source_key": source.source_key,
+            "requested_options": options.to_dict(),
+            "effective_options": effective_options.to_dict(),
+        },
+    }
+    for detection in selected.detections:
+        detection.diagnostics["auto_selected_strategy"] = selected_name
+        detection.diagnostics["auto_selected_score"] = selected_score
+    if selected_name.startswith("raster_"):
+        polarity = str(selected_attempt["polarity"])
+        threshold = int(selected_attempt["threshold"])
+        strategy_summary = (
+            f"Raster · {polarity} foreground · Otsu {threshold}"
+        )
+    else:
+        strategy_summary = (
+            f"Color · hue {float(selected_attempt['target_hue']):.0f} · "
+            f"tolerance {float(selected_attempt['hue_tolerance']):.0f}"
+        )
+    invalid_count = int(selected_attempt["invalid_candidate_count"])
+    object_count = selected.direct_count
+    selected.message = (
+        f"Auto chose: {strategy_summary}; {object_count} valid object"
+        f"{'s' if object_count != 1 else ''}"
+    )
+    if invalid_count:
+        selected.message += (
+            f"; {invalid_count} invalid or filtered independent candidate"
+            f"{'s were' if invalid_count != 1 else ' was'} omitted"
+        )
+    return selected
 
 
 def detect_objects(
@@ -3291,6 +3974,7 @@ def detect_objects(
     output_work_area: WorkArea | None = None,
     background_image: np.ndarray | None = None,
     mask_override: np.ndarray | None = None,
+    _isolate_native_candidates: bool = False,
 ) -> TraceResult:
     options = (
         options
@@ -3343,6 +4027,18 @@ def detect_objects(
         "y_min": float(output_work_area.y_min),
         "y_max": float(output_work_area.y_max),
     }
+    if (
+        options.detection_mode == "auto"
+        and not options.regular_grid
+        and mask_override is None
+    ):
+        return _detect_non_grid_auto(
+            image,
+            options,
+            work_area,
+            output_work_area,
+            pixels_per_mm,
+        )
     if (
         options.detection_mode == "contrast"
         and not options.regular_grid
@@ -3539,7 +4235,12 @@ def detect_objects(
     )
     direct_detections = [_to_detection(item, "direct", options) for item in candidates]
     inferred_detections = [_to_detection(item, "inferred", options) for item in inferred]
-    if options.output_mode == "native" and direct_detections:
+    native_candidate_failures: list[dict[str, Any]] = []
+    native_candidate_failure_count = 0
+    chosen_root_tree_count = len(candidates)
+    if options.output_mode == "native" and (
+        direct_detections or _isolate_native_candidates
+    ):
         try:
             native_contours, native_hierarchy = extract_foreground_contours(
                 chosen_mask,
@@ -3547,29 +4248,54 @@ def detect_objects(
             )
         except (ForegroundContourLimitError, ValueError) as exc:
             raise ValueError(
-                "The selected contrast result has no bounded contour hierarchy"
+                "The selected trace result has no bounded contour hierarchy"
             ) from exc
         native_trees = foreground_contour_trees(
             native_contours,
             native_hierarchy,
             chosen_mask.shape,
         )
+        chosen_root_tree_count = len(native_trees)
+        retained_candidates: list[dict[str, Any]] = []
+        retained_detections: list[TraceDetection] = []
         for candidate, detection in zip(
             candidates,
             direct_detections,
             strict=True,
         ):
-            tree = _trace_candidate_tree(candidate, native_contours, native_trees)
-            _fit_trace_candidate_native(
-                image,
-                detection,
-                options,
-                work_area,
-                output_work_area,
-                pixels_per_mm,
-                native_contours,
-                tree,
-            )
+            tree: ForegroundContourTree | None = None
+            try:
+                tree = _trace_candidate_tree(candidate, native_contours, native_trees)
+                _fit_trace_candidate_native(
+                    image,
+                    detection,
+                    options,
+                    work_area,
+                    output_work_area,
+                    pixels_per_mm,
+                    native_contours,
+                    tree,
+                )
+            except RasterVectorizationError as exc:
+                if not _isolate_native_candidates:
+                    raise
+                native_candidate_failure_count += 1
+                if len(native_candidate_failures) < 64:
+                    native_candidate_failures.append(
+                        {
+                            "root_index": None if tree is None else tree.root_index,
+                            "contour_count": (
+                                0 if tree is None else len(tree.contour_indices)
+                            ),
+                            "reason": _concise_auto_reason(exc),
+                        }
+                    )
+                continue
+            retained_candidates.append(candidate)
+            retained_detections.append(detection)
+        if _isolate_native_candidates:
+            candidates = retained_candidates
+            direct_detections = retained_detections
         for detection in inferred_detections:
             detection.diagnostics["native_fit_status"] = "inferred_geometry"
     detections = [*direct_detections, *inferred_detections]
@@ -3711,10 +4437,49 @@ def detect_objects(
     if not detections:
         message = "No objects passed the current filters"
 
+    foreground_fraction, border_foreground_fraction = _mask_occupancy(chosen_mask)
+    unavailable_candidate_count = max(
+        native_candidate_failure_count,
+        chosen_root_tree_count - direct_count,
+    )
+    review_filtered_candidate_count = max(
+        0,
+        unavailable_candidate_count - native_candidate_failure_count,
+    )
+    strategy_metrics = {
+        "foreground_fraction": foreground_fraction,
+        "border_foreground_fraction": border_foreground_fraction,
+        "root_tree_count": chosen_root_tree_count,
+        "valid_candidate_count": direct_count,
+        "verified_candidate_count": sum(
+            item.native_verified for item in direct_detections
+        ),
+        "invalid_candidate_count": unavailable_candidate_count,
+        "review_filtered_candidate_count": review_filtered_candidate_count,
+        "valid_area_mm2": sum(item.area_mm2 for item in direct_detections),
+        "microscopic_candidate_count": sum(
+            item.area_mm2 < 4.0 * options.min_area_mm2
+            for item in direct_detections
+        ),
+        "within_frame_candidate_count": sum(
+            bool(item.diagnostics.get("within_work_area", False))
+            and not bool(item.diagnostics.get("touches_image_edge", False))
+            for item in direct_detections
+        ),
+        "minimum_area_mm2": options.min_area_mm2,
+        "frame_area_mm2": (
+            image.shape[1] / pixels_per_mm * image.shape[0] / pixels_per_mm
+        ),
+    }
     return TraceResult(
         bool(detections), detections, mode_used, target_hue,
         image.shape[1], image.shape[0], direct_count, inferred_count,
         grid, message, options,
         camera_work_area_payload,
         output_work_area_payload,
+        {
+            "candidate_failures": native_candidate_failures,
+            "candidate_failure_count": native_candidate_failure_count,
+            "strategy_metrics": strategy_metrics,
+        },
     )

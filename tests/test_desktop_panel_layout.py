@@ -164,6 +164,7 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     assert not panel.snap_grid_cells.isEnabled()
 
     panel.regular_grid.setChecked(True)
+    panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
     panel.normalize_grid.setChecked(False)
     qt_application.processEvents()
     assert panel.repair_grid_edges.isEnabled()
@@ -727,11 +728,46 @@ def test_trace_modes_share_filters_and_native_output_creation_controls(
     qt_application.processEvents()
 
 
-def test_trace_contrast_controls_match_raster_and_grid_paths(
+def test_trace_mode_controls_match_auto_raster_color_and_grid_paths(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     panel = TracePanel()
     panel.set_calibration_ready(True)
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("color"))
+    panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
+    panel.border_offset.setValue(1.25)
+    panel.regular_grid.setChecked(False)
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("auto"))
+    qt_application.processEvents()
+
+    assert not panel.target_hue.isEnabled()
+    assert not panel.hue_tolerance.isEnabled()
+    assert not panel.min_saturation.isEnabled()
+    assert not panel.pick_color_button.isEnabled()
+    assert not panel.contrast_threshold_mode.isEnabled()
+    assert not panel.contrast_threshold.isEnabled()
+    assert not panel.contrast_invert.isEnabled()
+    assert panel.output_mode.currentData() == "native"
+    assert not panel.output_mode.isEnabled()
+    assert panel.border_offset.value() == pytest.approx(0.0)
+    assert not panel.border_offset.isEnabled()
+    assert panel.native_fitting_tolerance.isEnabled()
+
+    panel.regular_grid.setChecked(True)
+    panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))
+    qt_application.processEvents()
+
+    assert panel.output_mode.isEnabled()
+    assert panel.output_mode.currentData() == "rounded"
+    assert panel.border_offset.isEnabled()
+    assert panel.infer_missing.isEnabled()
+    assert panel.normalize_grid.isEnabled()
+    assert not panel.target_hue.isEnabled()
+    assert not panel.pick_color_button.isEnabled()
+    assert not panel.contrast_threshold_mode.isEnabled()
+    assert not panel.contrast_invert.isEnabled()
+
     panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("contrast"))
     panel.regular_grid.setChecked(False)
     qt_application.processEvents()
@@ -770,6 +806,24 @@ def test_trace_contrast_controls_match_raster_and_grid_paths(
     assert panel.min_saturation.isEnabled()
     assert panel.pick_color_button.isEnabled()
     assert not panel.contrast_threshold_mode.isEnabled()
+    assert not panel.contrast_threshold.isEnabled()
+    assert not panel.contrast_invert.isEnabled()
+
+    panel.set_color_pick_active(True, sampling=True)
+    panel.set_calibration_ready(True)
+    qt_application.processEvents()
+    assert not panel.pick_color_button.isEnabled()
+
+    panel.set_color_pick_active(False)
+    qt_application.processEvents()
+    assert panel.pick_color_button.isEnabled()
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("auto"))
+    panel.set_calibration_ready(False)
+    panel.set_calibration_ready(True)
+    panel.set_color_pick_active(False)
+    qt_application.processEvents()
+    assert not panel.pick_color_button.isEnabled()
 
     panel.close()
     panel.deleteLater()

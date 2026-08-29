@@ -1225,6 +1225,7 @@ class TracePanel(QtWidgets.QWidget):
         self._sampled_bgr: list[int] | None = None
         self._sampled_hue: float | None = None
         self._color_pick_active = False
+        self._color_pick_sampling = False
         self._calibration_ready = False
         self._generate_enabled = True
         self._trace_settings = QtCore.QSettings("E3", "PositioningSystem")
@@ -1956,19 +1957,18 @@ class TracePanel(QtWidgets.QWidget):
 
     def set_color_pick_active(self, active: bool, *, sampling: bool = False) -> None:
         self._color_pick_active = bool(active)
+        self._color_pick_sampling = bool(active and sampling)
         if sampling:
             self.pick_color_button.setText("Sampling…")
-            self.pick_color_button.setEnabled(False)
             self.status_label.setText("Sampling the selected camera point…")
         elif active:
             self.pick_color_button.setText("Cancel color pick")
-            self.pick_color_button.setEnabled(True)
             self.status_label.setText(
                 "COLOR PICK ACTIVE — click inside the target on the camera image."
             )
         else:
             self.pick_color_button.setText("Pick color")
-            self.pick_color_button.setEnabled(self._calibration_ready)
+        self._sync_output_controls()
 
     def set_color_pick_failed(self, message: str) -> None:
         self.set_color_pick_active(False)
@@ -2212,13 +2212,11 @@ class TracePanel(QtWidgets.QWidget):
     def set_calibration_ready(self, ready: bool) -> None:
         self._calibration_ready = bool(ready)
         self.detect_button.setEnabled(bool(ready))
-        if not self._color_pick_active:
-            self.pick_color_button.setEnabled(bool(ready))
+        self._sync_output_controls()
         if not ready:
             self.status_label.setText(
                 "Bed mapping is required before camera objects can be traced."
             )
-        self._sync_output_controls()
 
     def detections(self) -> list[dict[str, Any]]:
         return list(self._detections)
@@ -2282,12 +2280,17 @@ class TracePanel(QtWidgets.QWidget):
     def _sync_output_controls(self, *args: Any) -> None:
         del args
         stock_mode = self.trace_purpose.currentData() == "stock"
-        contrast_mode = self.mode_combo.currentData() == "contrast"
+        trace_mode = self.mode_combo.currentData()
+        auto_mode = trace_mode == "auto"
+        color_mode = trace_mode == "color"
+        contrast_mode = trace_mode == "contrast"
         grid_enabled = self.regular_grid.isChecked()
-        raster_contrast = contrast_mode and not grid_enabled
-        if raster_contrast and self.output_mode.currentData() != "native":
+        manual_raster_contrast = contrast_mode and not grid_enabled
+        auto_raster = auto_mode and not grid_enabled
+        raster_native = manual_raster_contrast or auto_raster
+        if raster_native and self.output_mode.currentData() != "native":
             self.output_mode.setCurrentIndex(self.output_mode.findData("native"))
-        if raster_contrast and abs(float(self.border_offset.value())) > 1e-12:
+        if raster_native and abs(float(self.border_offset.value())) > 1e-12:
             self.border_offset.setValue(0.0)
         native_output = self.output_mode.currentData() == "native"
         self.detect_button.setText("Detect objects")
@@ -2295,17 +2298,21 @@ class TracePanel(QtWidgets.QWidget):
             self.target_hue,
             self.hue_tolerance,
             self.min_saturation,
-            self.pick_color_button,
             self.color_swatch,
         ):
-            widget.setEnabled(self._calibration_ready and not contrast_mode)
-        self.contrast_threshold_mode.setEnabled(raster_contrast)
+            widget.setEnabled(self._calibration_ready and color_mode)
+        self.pick_color_button.setEnabled(
+            self._calibration_ready
+            and color_mode
+            and not self._color_pick_sampling
+        )
+        self.contrast_threshold_mode.setEnabled(manual_raster_contrast)
         self.contrast_threshold.setEnabled(
-            raster_contrast
+            manual_raster_contrast
             and self.contrast_threshold_mode.currentData() == "manual"
         )
-        self.contrast_invert.setEnabled(raster_contrast)
-        self.output_mode.setEnabled(not raster_contrast)
+        self.contrast_invert.setEnabled(manual_raster_contrast)
+        self.output_mode.setEnabled(not raster_native)
         self.native_fitting_tolerance_label.setEnabled(native_output)
         self.native_fitting_tolerance.setEnabled(native_output)
         self.replace_previous.setText(
@@ -2331,10 +2338,10 @@ class TracePanel(QtWidgets.QWidget):
             rounded_output
             and self.border_offset_mode.currentData() == "custom"
         )
-        self.border_offset_mode.setEnabled(rounded_output and not raster_contrast)
+        self.border_offset_mode.setEnabled(rounded_output and not raster_native)
         self.border_offset_label.setVisible(not custom_offset)
         self.border_offset.setVisible(not custom_offset)
-        self.border_offset.setEnabled(not raster_contrast)
+        self.border_offset.setEnabled(not raster_native)
         self.edge_offsets_label.setVisible(custom_offset)
         self.edge_offsets.setVisible(custom_offset)
         smoothing_enabled = self.output_mode.currentData() == "smoothed"

@@ -6,9 +6,16 @@ import cv2
 import numpy as np
 import pytest
 
+import laser_aligner.vision.object_trace as object_trace_module
 from laser_aligner.config import WorkArea
+from laser_aligner.project import (
+    PixelVectorizationForestResult,
+    PixelVectorizationRootFailure,
+    RasterVectorizationError,
+)
 from laser_aligner.vision.object_trace import (
     TraceOptions,
+    _auto_strategy_quality,
     _grid_cell_review_evidence,
     _long_axis_rect,
     _machine_geometry,
@@ -342,6 +349,398 @@ def test_auto_hue_finds_red_labels():
     hue = auto_target_hue(_label_scene(), min_saturation=40)
     assert hue is not None
     assert hue <= 5 or hue >= 175
+
+
+def _auto_raster_scene(*, light_foreground: bool) -> np.ndarray:
+    background = 28 if light_foreground else 228
+    foreground = 228 if light_foreground else 28
+    image = np.full((160, 240, 3), background, dtype=np.uint8)
+    cv2.rectangle(image, (25, 30), (85, 125), (foreground,) * 3, -1)
+    cv2.circle(image, (165, 80), 36, (foreground,) * 3, -1, lineType=cv2.LINE_AA)
+    cv2.circle(image, (165, 80), 15, (background,) * 3, -1, lineType=cv2.LINE_AA)
+    return image
+
+
+def _non_grid_auto_options() -> TraceOptions:
+    return TraceOptions(
+        detection_mode="auto",
+        regular_grid=False,
+        min_area_mm2=2.0,
+        max_area_mm2=2_000.0,
+        min_width_mm=1.0,
+        min_height_mm=1.0,
+        confidence_threshold=0.0,
+        native_fitting_tolerance_mm=0.20,
+    )
+
+
+@pytest.mark.parametrize(
+    ("light_foreground", "expected_strategy", "expected_polarity"),
+    (
+        (False, "raster_dark", "dark"),
+        (True, "raster_light", "light"),
+    ),
+)
+def test_non_grid_auto_selects_the_correct_otsu_polarity(
+    light_foreground: bool,
+    expected_strategy: str,
+    expected_polarity: str,
+) -> None:
+    result = detect_objects(
+        _auto_raster_scene(light_foreground=light_foreground),
+        _non_grid_auto_options(),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == expected_strategy
+    selected = next(
+        attempt
+        for attempt in auto["attempts"]
+        if attempt["name"] == expected_strategy
+    )
+    assert selected["status"] == "success"
+    assert selected["polarity"] == expected_polarity
+    assert isinstance(selected["threshold"], int)
+    assert result.direct_count == 2
+    assert all(item.native_verified for item in result.detections)
+    assert f"{expected_polarity} foreground" in result.message
+    color = next(
+        attempt for attempt in auto["attempts"] if attempt["name"] == "color"
+    )
+    assert color["status"] == "skipped"
+
+
+def test_non_grid_auto_reports_effective_winner_options_not_ignored_inputs() -> None:
+    requested = _non_grid_auto_options().to_dict()
+    requested.update(
+        {
+            "contrast_threshold_mode": "manual",
+            "contrast_threshold": 17,
+            "contrast_invert": True,
+            "output_mode": "rounded",
+            "border_offset_mode": "custom",
+            "border_offset_mm": 4.0,
+            "border_offset_top_mm": 1.0,
+            "border_offset_right_mm": 2.0,
+            "border_offset_bottom_mm": 3.0,
+            "border_offset_left_mm": 4.0,
+        }
+    )
+    result = detect_objects(
+        _auto_raster_scene(light_foreground=False),
+        TraceOptions(**requested),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == "raster_dark"
+    selected = next(
+        attempt
+        for attempt in auto["attempts"]
+        if attempt["name"] == "raster_dark"
+    )
+    effective = result.options
+    assert effective.detection_mode == "auto"
+    assert effective.regular_grid is False
+    assert effective.output_mode == "native"
+    assert effective.border_offset_mode == "uniform"
+    assert (
+        effective.border_offset_mm,
+        effective.border_offset_top_mm,
+        effective.border_offset_right_mm,
+        effective.border_offset_bottom_mm,
+        effective.border_offset_left_mm,
+    ) == (0.0, 0.0, 0.0, 0.0, 0.0)
+    assert effective.contrast_threshold_mode == "auto"
+    assert effective.contrast_threshold == selected["threshold"]
+    assert effective.contrast_invert is False
+    assert auto["effective_options"] == effective.to_dict()
+    assert auto["requested_options"]["contrast_threshold_mode"] == "manual"
+    assert auto["requested_options"]["output_mode"] == "rounded"
+
+
+def test_raster_auto_counts_review_filtered_roots_as_unavailable() -> None:
+    requested = _non_grid_auto_options().to_dict()
+    requested["max_area_mm2"] = 250.0
+    result = detect_objects(
+        _auto_raster_scene(light_foreground=False),
+        TraceOptions(**requested),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == "raster_dark"
+    selected = next(
+        attempt
+        for attempt in auto["attempts"]
+        if attempt["name"] == "raster_dark"
+    )
+    assert result.direct_count == 1
+    assert result.diagnostics["candidate_failure_count"] == 0
+    assert selected["root_tree_count"] == 2
+    assert selected["candidate_count"] == 2
+    assert selected["valid_candidate_count"] == 1
+    assert selected["invalid_candidate_count"] == 1
+    assert selected["review_filtered_candidate_count"] == 1
+    assert "1 invalid or filtered independent candidate was omitted" in result.message
+
+
+def test_non_grid_auto_selects_color_when_luminance_is_nearly_equal() -> None:
+    image = np.full((180, 240, 3), 128, dtype=np.uint8)
+    chromatic = (20, 102, 220)
+    cv2.rectangle(image, (35, 35), (100, 140), chromatic, -1)
+    cv2.circle(image, (175, 88), 38, chromatic, -1, lineType=cv2.LINE_8)
+
+    result = detect_objects(
+        image,
+        _non_grid_auto_options(),
+        WorkArea(0.0, 60.0, 0.0, 45.0),
+        4.0,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == "color"
+    color = next(
+        attempt for attempt in auto["attempts"] if attempt["name"] == "color"
+    )
+    assert color["status"] == "success"
+    assert color["dominant_weight_fraction"] >= 0.60
+    assert result.mode_used == "color"
+    assert result.direct_count == 2
+    assert all(item.native_verified for item in result.detections)
+    assert "Auto chose: Color" in result.message
+
+
+def test_color_auto_counts_review_filtered_roots_as_unavailable() -> None:
+    image = np.full((180, 240, 3), 128, dtype=np.uint8)
+    chromatic = (20, 102, 220)
+    cv2.rectangle(image, (35, 35), (100, 140), chromatic, -1)
+    cv2.circle(image, (175, 88), 38, chromatic, -1, lineType=cv2.LINE_8)
+    requested = _non_grid_auto_options().to_dict()
+    requested["max_area_mm2"] = 350.0
+
+    result = detect_objects(
+        image,
+        TraceOptions(**requested),
+        WorkArea(0.0, 60.0, 0.0, 45.0),
+        4.0,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == "color"
+    selected = next(
+        attempt for attempt in auto["attempts"] if attempt["name"] == "color"
+    )
+    assert result.direct_count == 1
+    assert result.diagnostics["candidate_failure_count"] == 0
+    assert selected["root_tree_count"] == 2
+    assert selected["candidate_count"] == 2
+    assert selected["valid_candidate_count"] == 1
+    assert selected["invalid_candidate_count"] == 1
+    assert selected["review_filtered_candidate_count"] == 1
+    assert "1 invalid or filtered independent candidate was omitted" in result.message
+
+
+def test_auto_quality_penalizes_background_noise_and_invalid_roots() -> None:
+    common = {
+        "verified_candidate_count": 2,
+        "valid_candidate_count": 2,
+        "valid_area_mm2": 200.0,
+        "within_frame_candidate_count": 2,
+        "minimum_area_mm2": 2.0,
+        "frame_area_mm2": 2_400.0,
+    }
+    meaningful, _terms, _reason = _auto_strategy_quality(
+        {
+            **common,
+            "root_tree_count": 2,
+            "invalid_candidate_count": 0,
+            "foreground_fraction": 0.10,
+            "border_foreground_fraction": 0.0,
+            "microscopic_candidate_count": 0,
+        }
+    )
+    background, _terms, _reason = _auto_strategy_quality(
+        {
+            **common,
+            "root_tree_count": 2,
+            "invalid_candidate_count": 0,
+            "foreground_fraction": 0.88,
+            "border_foreground_fraction": 1.0,
+            "microscopic_candidate_count": 0,
+        }
+    )
+    noisy, _terms, _reason = _auto_strategy_quality(
+        {
+            **common,
+            "root_tree_count": 202,
+            "invalid_candidate_count": 80,
+            "foreground_fraction": 0.10,
+            "border_foreground_fraction": 0.0,
+            "microscopic_candidate_count": 2,
+        }
+    )
+
+    assert meaningful is not None
+    assert background is not None
+    assert noisy is not None
+    assert meaningful > background
+    assert meaningful > noisy
+
+
+def test_non_grid_auto_continues_after_one_raster_strategy_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original = object_trace_module.vectorize_pixel_source_forest
+
+    def fail_dark(source, options, **kwargs):
+        if not options.invert:
+            raise RasterVectorizationError("controlled dark-strategy failure")
+        return original(source, options, **kwargs)
+
+    monkeypatch.setattr(
+        object_trace_module,
+        "vectorize_pixel_source_forest",
+        fail_dark,
+    )
+    result = detect_objects(
+        _auto_raster_scene(light_foreground=True),
+        _non_grid_auto_options(),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == "raster_light"
+    dark = next(
+        attempt for attempt in auto["attempts"] if attempt["name"] == "raster_dark"
+    )
+    assert dark["status"] == "failed"
+    assert dark["reason"] == "controlled dark-strategy failure"
+    assert result.detected
+
+
+def test_non_grid_auto_reports_bounded_reasons_when_all_strategies_fail() -> None:
+    image = np.full((80, 120, 3), 128, dtype=np.uint8)
+
+    with pytest.raises(ValueError, match="Auto could not produce a verified trace") as error:
+        detect_objects(
+            image,
+            _non_grid_auto_options(),
+            WorkArea(0.0, 30.0, 0.0, 20.0),
+            4.0,
+        )
+
+    message = str(error.value)
+    assert "Raster · dark foreground:" in message
+    assert "Raster · light foreground:" in message
+    assert "Color: insufficient chroma" in message
+    assert "Traceback" not in message
+
+
+def test_non_grid_auto_all_pruned_summary_preserves_root_failure_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exact_reason = (
+        "A degenerate contour had non-degenerate descendants; the complete root "
+        "tree was rejected to preserve even-odd hierarchy"
+    )
+    all_pruned = PixelVectorizationForestResult(
+        result=None,
+        failures=(
+            PixelVectorizationRootFailure(
+                root_index=4,
+                contour_count=3,
+                stage="contour_pruning",
+                reason=exact_reason,
+                bounds_px=(12, 18, 7, 9),
+            ),
+        ),
+        root_tree_count=1,
+    )
+    attempted_polarities: list[bool] = []
+
+    def return_all_pruned(_source, options, **_kwargs):
+        attempted_polarities.append(options.invert)
+        return all_pruned
+
+    monkeypatch.setattr(
+        object_trace_module,
+        "vectorize_pixel_source_forest",
+        return_all_pruned,
+    )
+
+    with pytest.raises(ValueError, match="Auto could not produce a verified trace") as error:
+        detect_objects(
+            np.full((80, 120, 3), 128, dtype=np.uint8),
+            _non_grid_auto_options(),
+            WorkArea(0.0, 30.0, 0.0, 20.0),
+            4.0,
+        )
+
+    message = str(error.value)
+    assert attempted_polarities == [False, True]
+    assert message.count(exact_reason) == 2
+    assert "Raster · dark foreground: " + exact_reason in message
+    assert "Raster · light foreground: " + exact_reason in message
+    assert "Color: insufficient chroma" in message
+    assert "no authoritative verified native candidates" not in message
+
+
+def test_non_grid_auto_omits_one_invalid_compound_tree_and_keeps_independent_root() -> None:
+    image = np.full((96, 160, 3), 255, dtype=np.uint8)
+    cv2.rectangle(image, (10, 10), (82, 84), (0, 0, 0), -1)
+    cv2.rectangle(image, (25, 25), (67, 69), (255, 255, 255), -1)
+    cv2.rectangle(image, (38, 37), (54, 57), (0, 0, 0), -1)
+    cv2.rectangle(image, (112, 20), (148, 76), (0, 0, 0), -1)
+    common = {
+        "regular_grid": False,
+        "min_area_mm2": 1.0,
+        "max_area_mm2": 5_000.0,
+        "min_width_mm": 0.5,
+        "min_height_mm": 0.5,
+        "confidence_threshold": 0.0,
+        "native_fitting_tolerance_mm": 0.10,
+    }
+    with pytest.raises(
+        RasterVectorizationError,
+        match="Authoritative native-path topology remains ambiguous",
+    ):
+        detect_objects(
+            image,
+            TraceOptions(detection_mode="contrast", **common),
+            WorkArea(0.0, 80.0, 0.0, 48.0),
+            2.0,
+        )
+    result = detect_objects(
+        image,
+        TraceOptions(detection_mode="auto", **common),
+        WorkArea(0.0, 80.0, 0.0, 48.0),
+        2.0,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == "raster_dark"
+    selected = next(
+        attempt
+        for attempt in auto["attempts"]
+        if attempt["name"] == "raster_dark"
+    )
+    assert selected["valid_candidate_count"] == 1
+    assert selected["invalid_candidate_count"] == 1
+    assert result.direct_count == 1
+    assert len(result.detections[0].vector_contours_mm) == 1
+    assert result.diagnostics["candidate_failure_count"] == 1
+    failure = result.diagnostics["candidate_failures"][0]
+    assert failure["contour_count"] >= 3
+    assert failure["stage"] == "native_topology"
+    assert "Authoritative native-path topology remains ambiguous" in failure["reason"]
+    assert failure["bounds_px"] is not None
+    assert "1 invalid or filtered independent candidate was omitted" in result.message
 
 
 def test_color_sample_returns_red_hue():

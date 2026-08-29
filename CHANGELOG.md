@@ -6,6 +6,32 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Reworked non-grid Camera Trace **Auto detect** from a separate legacy mask
+  detector into a deterministic orchestrator over production tracing paths. One
+  immutable corrected frame now feeds shared-raster Otsu dark and light
+  strategies plus a Color strategy only when coherent HSV/Lab evidence is not
+  background- or border-dominated. Auto reports the selected threshold/polarity
+  or hue, scores verified results from valid-root ratio, useful foreground and
+  physical area, clean borders, non-microscopic roots, and in-frame geometry,
+  and continues after a failed strategy or independent root tree. Compound
+  root/hole/island trees remain indivisible and every native/topology validator
+  remains authoritative. Grid Auto deliberately retains repeated-object/lattice
+  detection, normalization, inference, and damaged/open-cell review. Auto-owned
+  hue and threshold controls are disabled; non-grid Auto fixes output to native
+  lines/Béziers with zero border offset while manual Color and Contrast remain
+  operator overrides. The winning candidates remain temporary review-only scene
+  data until the operator explicitly creates project geometry.
+
+- Fixed shared imported-raster and camera pixel vectorization so a microscopic
+  non-geometric 4× contour cannot abort valid large artwork. The reproduced root
+  cause is bicubic interpolation overshoot inside the one-source-pixel component
+  halo, which can create an isolated threshold fragment and a one- or two-point,
+  zero-area OpenCV contour after base-resolution cleanup. The shared pipeline now
+  prunes only contours with fewer than three distinct points or zero trace-pixel
+  area, preserves positive-area features, rebuilds the complete `RETR_TREE`
+  sibling/child/parent structure, and rejects a whole tree instead of reparenting
+  legitimate descendants across a degenerate boundary.
+
 - Corrected non-grid Camera Trace **By contrast** to use the complete
   imported-raster pixel-vectorization pipeline instead of selecting a mask with
   the specialized object finder and only sharing its final fitter. Corrected

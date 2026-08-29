@@ -252,11 +252,25 @@ should own a physical camera at a time.
   vectorization pipeline. It does not ask the object detector to choose among
   object hypotheses. Each root `RETR_TREE` contour plus all descendants is one
   temporary review candidate.
+- Non-grid Camera Trace **Auto detect** is orchestration, not a fourth detector.
+  One corrected capture becomes one immutable `PixelVectorizationSource`; Auto
+  evaluates shared-raster Otsu with dark foreground, the same Otsu result with
+  light foreground, and a production Color attempt only when weighted HSV/Lab
+  evidence identifies a coherent hue that is neither negligible nor background-
+  or border-dominated. Every successful attempt returns authoritative native
+  candidates through its ordinary production path, and deterministic quality
+  scoring chooses one prepared result for review.
+- The Trace panel treats those non-grid Auto choices as strategy-owned: hue,
+  sample, threshold, and polarity controls are inactive, output is native
+  lines/Béziers, and border offset is zero. Explicit Color owns hue/sample;
+  explicit non-grid Contrast owns manual threshold/polarity. Grid Auto preserves
+  the specialized output and normalization controls.
 - Camera Trace **By contrast** with grid enabled retains the specialized
   global/illumination-corrected/adaptive and signed-local multi-mask detector. It
   ranks repeated-grid hypotheses by coherent filled-region support, can classify
-  and normalize cells, and can infer missing cells. Auto and By color retain
-  their existing specialized detector routes.
+  and normalize cells, and can infer missing cells. Auto with grid enabled uses
+  this same repeated-object/lattice architecture rather than literal raster
+  components; **By color** remains the explicit operator override.
 - Live desktop trace capture establishes the photography pose rather than
   trusting prior machine state: temporary hold encloses Home / park and the
   stable camera frame set, while rectification and vision analysis run only
@@ -274,8 +288,9 @@ should own a physical camera at a time.
   though the upstream raw-camera homography has a spatially varying Jacobian.
   Non-grid contrast uses the raster vectorizer's pixel-center mapping and exact
   requested fit-tolerance semantics before one final local-to-machine affine.
-  Specialized Auto, By color, and grid paths still convert contours to physical
-  machine or honeycomb millimetres before their classification or fitting.
+  Auto's raster attempts use that same path. Auto Color, explicit By color, and
+  grid paths convert detector contours to physical machine or honeycomb
+  millimetres before classification or fitting.
 - Identical-grid normalization derives its shared orientation from populated
   row-center baselines and refits the lattice in that orientation. Grid pose
   snapping is independent of dimension normalization: direct cells may retain
@@ -610,9 +625,20 @@ camera, planning, G-code, or execution paths.
 
 `geometry.foreground` owns source-neutral binary connected-component cleanup,
 bounded `RETR_TREE` extraction, deterministic outer-tree decomposition, and
-even-odd tree rendering. The shared pixel vectorizer consumes those primitives
-for both imported images and non-grid camera contrast. The imported dialog and
-camera Trace UI remain separate consumers of the same portable result.
+even-odd tree rendering. It also owns conservative post-extraction pruning of
+non-geometric contour nodes. Bicubic 4× grayscale reconstruction can overshoot
+near a retained edge inside the one-source-pixel component halo and create an
+isolated threshold pixel; OpenCV then reports a one- or two-point, zero-area
+contour even though base-resolution component cleanup already ran. Pruning
+removes only contours with fewer than three distinct trace points or zero
+trace-pixel polygon area. It retains every positive-area contour, rebuilds the
+complete `next`/`previous`/`first_child`/`parent` array in original sibling order,
+and rejects a complete root when a degenerate ancestor has a non-degenerate
+descendant instead of changing even-odd depth by reparenting. Quick Preview and
+exact vectorization consume the same repaired tree, so imported images, manual
+camera Contrast, and Auto raster attempts receive identical behavior and
+diagnostics. The imported dialog and camera Trace UI remain separate consumers
+of the same portable result.
 
 The one authoritative fitter remains in `project.raster_vectorize`:
 hard-corner and rotation-independent straight-run classification, persistent
@@ -621,8 +647,42 @@ continuous error proof, frame/extrema checks, self/adjacent-arc validation,
 compound clearance, and outer/hole hierarchy are identical for imported and
 camera pixels because both now enter the complete pixel pipeline.
 `project.native_contour_fit` remains the source-neutral adapter for specialized
-Auto, By color, and grid detector masks that already exist as ordered physical
-contour trees; it does not reconstruct non-grid contrast geometry.
+Color and grid detector masks that already exist as ordered physical contour
+trees; Auto's conditional Color attempt uses that adapter, while Auto's raster
+attempts use `PixelVectorizationSource` directly. The adapter does not
+reconstruct non-grid raster geometry.
+
+Auto strategy failure and candidate failure are separate. A failed attempt is a
+bounded diagnostic and does not stop later strategies. Raster Auto asks the
+shared vectorizer for root-isolated results; Color Auto isolates fitting at the
+same root-tree boundary. In both cases one root plus every hole and island
+descendant is indivisible. A rejected compound tree is never split into fake
+objects. The raster forest first runs each ordinary global validator. Only a
+non-complexity global failure starts per-root diagnosis; complete surviving
+trees are rebased and the unchanged global validator runs again. A cross-root
+failure for which every tree passes alone and every complexity-limit failure
+remain fatal to the strategy. Valid independent roots may therefore remain
+without weakening the frame/extrema, continuous fitting-error,
+self/adjacent-arc, compound-clearance, even-odd, or rasterized-hierarchy
+authority.
+
+Completed strategies are scored without rewarding raw candidate count. For
+normalized terms `V` (valid-root ratio), `F` (useful foreground occupancy), `B`
+(non-foreground border quality), `A` (useful retained physical area), `S`
+(non-microscopic-root fraction), and `W` (in-frame fraction), the score is
+`40V + 20F + 15B + 10A + 10S + 5W - P`. `P` is 35 when foreground and border
+occupancy both reach 75%; a result at or above 95% foreground with at least 75%
+border foreground is rejected outright. More exactly, with foreground fraction
+`f`, minimum feature area `m`, and frame area `r`, the useful floor is
+`u = min(0.08, max(0.002, 0.25m/r))`. `F` is `f/u` below `u`, `1` from `u`
+through `0.60`, `(0.95-f)/0.35` between `0.60` and `0.95`, and `0` afterward.
+`B = 1 - border_fraction`; `A = min(1, valid_area / max(4m, 0.01r))`;
+`S = 1 - roots_below_4m / valid_roots`; and
+`W = roots_inside_frame / valid_roots`. `V` is the valid-root count divided by
+valid plus unusable roots. Exact-score ties have stable priority: dark raster,
+light raster, then Color. The selected result records compact attempt status,
+reason, threshold/polarity or hue, occupancy, root counts, invalid counts, score,
+and score terms; the operator sees only the selected-strategy summary.
 
 `RasterVectorizationTiming` is opt-in development/test instrumentation and is
 never attached to project data. It accumulates inclusive elapsed time and call

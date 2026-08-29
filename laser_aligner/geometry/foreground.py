@@ -43,6 +43,33 @@ class ForegroundContourTree:
     touches_image_edge: bool
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class ForegroundRemovedContourTree:
+    """One original root tree removed while pruning non-geometric contours."""
+
+    root_index: int
+    contour_count: int
+    bounds_px: tuple[int, int, int, int]
+    topology_rejected: bool
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class ForegroundContourPruneResult:
+    """One contour forest after conservative non-geometric-node pruning."""
+
+    contours: tuple[np.ndarray, ...]
+    hierarchy: np.ndarray
+    original_contour_count: int
+    retained_original_indices: tuple[int, ...]
+    degenerate_original_indices: tuple[int, ...]
+    rejected_root_indices: tuple[int, ...]
+    removed_root_trees: tuple[ForegroundRemovedContourTree, ...]
+
+    @property
+    def pruned_contour_count(self) -> int:
+        return self.original_contour_count - len(self.contours)
+
+
 def _binary_mask(mask: np.ndarray) -> np.ndarray:
     source = np.asarray(mask)
     if source.ndim != 2:
@@ -146,6 +173,194 @@ def extract_foreground_contours(
     return (
         tuple(readonly_array(contour) for contour in contours),
         readonly_array(hierarchy),
+    )
+
+
+def _has_three_distinct_points(points: np.ndarray) -> bool:
+    if len(points) < 3:
+        return False
+    first = points[0]
+    differs_from_first = np.any(points != first, axis=1)
+    if not np.any(differs_from_first):
+        return False
+    second = points[int(np.flatnonzero(differs_from_first)[0])]
+    return bool(
+        np.any(
+            differs_from_first
+            & np.any(points != second, axis=1)
+        )
+    )
+
+
+def prune_degenerate_foreground_contours(
+    contours: tuple[np.ndarray, ...],
+    hierarchy: np.ndarray,
+) -> ForegroundContourPruneResult:
+    """Remove only non-geometric OpenCV contours without inventing topology.
+
+    A zero-area contour may be removed when its complete subtree is also
+    degenerate.  If it has a non-degenerate descendant, its complete root tree
+    is rejected instead: reparenting across one removed boundary would change
+    even-odd depth and fabricate a different region.  The returned RETR_TREE
+    array is rebuilt in full, including sibling and first-child links.
+    """
+
+    values = tuple(contours)
+    tree = np.asarray(hierarchy)
+    if tree.ndim != 3 or tree.shape != (1, len(values), 4):
+        raise ValueError("Contour hierarchy must have OpenCV RETR_TREE shape")
+    entries = tree[0]
+    count = len(values)
+    links = entries[:, :3].astype(np.int64, copy=False)
+    if np.any(links < -1) or np.any(links >= count):
+        raise ValueError("Contour hierarchy contains an out-of-range link")
+    parents = entries[:, 3].astype(np.int64, copy=False)
+    if np.any(parents < -1) or np.any(parents >= count):
+        raise ValueError("Contour hierarchy contains an out-of-range parent")
+
+    depths = tuple(contour_depth(index, entries) for index in range(count))
+    children: list[list[int]] = [[] for _index in range(count)]
+    for index, parent in enumerate(parents):
+        if int(parent) >= 0:
+            children[int(parent)].append(index)
+    roots = [index for index, parent in enumerate(parents) if int(parent) < 0]
+
+    sibling_orders: dict[int, tuple[int, ...]] = {}
+    for parent in (-1, *range(count)):
+        siblings = roots if parent < 0 else children[parent]
+        if not siblings:
+            if parent >= 0 and int(entries[parent, 2]) >= 0:
+                raise ValueError(
+                    "Contour hierarchy first-child link has no matching child"
+                )
+            continue
+        if parent < 0:
+            starts = [index for index in siblings if int(entries[index, 1]) < 0]
+            if len(starts) != 1:
+                raise ValueError("Contour hierarchy root sibling links are invalid")
+            current = starts[0]
+        else:
+            current = int(entries[parent, 2])
+            if current not in siblings:
+                raise ValueError(
+                    "Contour hierarchy first-child link has the wrong parent"
+                )
+        expected = set(siblings)
+        ordered: list[int] = []
+        seen: set[int] = set()
+        previous = -1
+        while current >= 0:
+            if current not in expected or current in seen:
+                raise ValueError("Contour hierarchy sibling links are invalid")
+            if int(entries[current, 1]) != previous:
+                raise ValueError("Contour hierarchy previous-sibling link is invalid")
+            ordered.append(current)
+            seen.add(current)
+            following = int(entries[current, 0])
+            if following >= 0 and int(entries[following, 1]) != current:
+                raise ValueError("Contour hierarchy sibling links are not reciprocal")
+            previous = current
+            current = following
+        if seen != expected:
+            raise ValueError("Contour hierarchy sibling chain is incomplete")
+        sibling_orders[parent] = tuple(ordered)
+
+    degenerate: list[bool] = []
+    for contour in values:
+        points = np.asarray(contour).reshape(-1, 2)
+        degenerate.append(
+            not _has_three_distinct_points(points)
+            or float(cv2.contourArea(np.asarray(contour))) == 0.0
+        )
+
+    subtree_has_nondegenerate = [not value for value in degenerate]
+    for index in sorted(range(count), key=lambda item: depths[item], reverse=True):
+        if any(subtree_has_nondegenerate[child] for child in children[index]):
+            subtree_has_nondegenerate[index] = True
+
+    root_for = [-1] * count
+    for index in sorted(range(count), key=lambda item: depths[item]):
+        parent = int(parents[index])
+        root_for[index] = index if parent < 0 else root_for[parent]
+    rejected_roots = {
+        root_for[index]
+        for index, is_degenerate in enumerate(degenerate)
+        if is_degenerate
+        and any(subtree_has_nondegenerate[child] for child in children[index])
+    }
+    if any(root < 0 for root in rejected_roots):
+        raise ValueError("Contour hierarchy does not resolve to a root")
+
+    retained_original_indices = tuple(
+        index
+        for index in range(count)
+        if root_for[index] not in rejected_roots and not degenerate[index]
+    )
+    retained = set(retained_original_indices)
+    for original_index in retained_original_indices:
+        parent = int(parents[original_index])
+        if parent >= 0 and parent not in retained:
+            raise ValueError(
+                "Contour pruning would leave a retained contour without its parent"
+            )
+
+    old_to_new = {
+        original_index: new_index
+        for new_index, original_index in enumerate(retained_original_indices)
+    }
+    rebuilt = np.full((1, len(retained_original_indices), 4), -1, dtype=np.int32)
+    for original_parent, original_siblings in sibling_orders.items():
+        siblings = [index for index in original_siblings if index in retained]
+        if not siblings:
+            continue
+        for offset, original_index in enumerate(siblings):
+            new_index = old_to_new[original_index]
+            if offset + 1 < len(siblings):
+                rebuilt[0, new_index, 0] = old_to_new[siblings[offset + 1]]
+            if offset > 0:
+                rebuilt[0, new_index, 1] = old_to_new[siblings[offset - 1]]
+            if original_parent >= 0:
+                rebuilt[0, new_index, 3] = old_to_new[original_parent]
+        if original_parent >= 0 and siblings:
+            if original_parent not in retained:
+                raise ValueError(
+                    "Contour pruning would leave children of a removed parent"
+                )
+            rebuilt[0, old_to_new[original_parent], 2] = old_to_new[siblings[0]]
+
+    removed_root_trees: list[ForegroundRemovedContourTree] = []
+    for root_index in roots:
+        members = [
+            index for index, member_root in enumerate(root_for) if member_root == root_index
+        ]
+        if any(index in retained for index in members):
+            continue
+        bounds = [cv2.boundingRect(values[index]) for index in members]
+        left = min(x for x, _y, _width, _height in bounds)
+        top = min(y for _x, y, _width, _height in bounds)
+        right = max(x + width for x, _y, width, _height in bounds)
+        bottom = max(y + height for _x, y, _width, height in bounds)
+        removed_root_trees.append(
+            ForegroundRemovedContourTree(
+                root_index=root_index,
+                contour_count=len(members),
+                bounds_px=(left, top, right - left, bottom - top),
+                topology_rejected=root_index in rejected_roots,
+            )
+        )
+
+    return ForegroundContourPruneResult(
+        contours=tuple(values[index] for index in retained_original_indices),
+        hierarchy=readonly_array(rebuilt),
+        original_contour_count=count,
+        retained_original_indices=retained_original_indices,
+        degenerate_original_indices=tuple(
+            index for index, value in enumerate(degenerate) if value
+        ),
+        rejected_root_indices=tuple(
+            index for index in roots if index in rejected_roots
+        ),
+        removed_root_trees=tuple(removed_root_trees),
     )
 
 
@@ -274,12 +489,15 @@ def render_contour_tree_mask(
 __all__ = [
     "ForegroundComponentLimitError",
     "ForegroundContourLimitError",
+    "ForegroundContourPruneResult",
+    "ForegroundRemovedContourTree",
     "ForegroundContourTree",
     "clean_foreground_components",
     "contour_depth",
     "contour_tree_at_point",
     "extract_foreground_contours",
     "foreground_contour_trees",
+    "prune_degenerate_foreground_contours",
     "readonly_array",
     "render_contour_tree_mask",
 ]

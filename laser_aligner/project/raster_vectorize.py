@@ -6,7 +6,7 @@ import struct
 import time
 from collections.abc import Callable
 from contextvars import ContextVar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from functools import wraps
 from numbers import Real
@@ -19,8 +19,10 @@ import numpy as np
 from ..geometry.foreground import (
     ForegroundComponentLimitError,
     ForegroundContourLimitError,
+    ForegroundContourPruneResult,
     clean_foreground_components,
     extract_foreground_contours,
+    prune_degenerate_foreground_contours,
 )
 from .path_geometry import (
     NativePathGeometry,
@@ -358,8 +360,15 @@ class _RasterTracePreparation:
     width_mm: float
     height_mm: float
     masks: _RasterMaskPreparation
-    raw_contours: tuple[np.ndarray, ...]
-    hierarchy: np.ndarray
+    contour_extraction: ForegroundContourPruneResult
+
+
+@dataclass(frozen=True, slots=True)
+class _RasterRootSelection:
+    root_index: int
+    source_root_index: int
+    contour_indices: tuple[int, ...]
+    bounds_px: tuple[int, int, int, int]
 
 
 @dataclass(frozen=True, slots=True)
@@ -596,6 +605,9 @@ class PixelVectorizationResult:
     fitted_segment_count: int
     preview_flattened_point_count: int
     max_estimated_deviation_mm: float
+    pruned_contour_count: int
+    degenerate_contour_count: int
+    rejected_contour_tree_count: int
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_key, str) or not self.source_key:
@@ -637,9 +649,24 @@ class PixelVectorizationResult:
                 "preview_flattened_point_count",
                 3,
             ),
+            (self.pruned_contour_count, "pruned_contour_count", 0),
+            (self.degenerate_contour_count, "degenerate_contour_count", 0),
+            (
+                self.rejected_contour_tree_count,
+                "rejected_contour_tree_count",
+                0,
+            ),
         ):
             if type(value) is not int or value < minimum:
                 raise ValueError(f"{label} must be an integer >= {minimum}")
+        if self.degenerate_contour_count > self.pruned_contour_count:
+            raise ValueError(
+                "degenerate_contour_count cannot exceed pruned_contour_count"
+            )
+        if self.rejected_contour_tree_count > self.degenerate_contour_count:
+            raise ValueError(
+                "rejected_contour_tree_count cannot exceed degenerate_contour_count"
+            )
         expected_counts = (
             sum(contour.raw_point_count for contour in contours),
             sum(contour.fitted_segment_count for contour in contours),
@@ -714,6 +741,13 @@ class PixelVectorizationResult:
                 self.connected_component_count
             ),
             "raster_vectorization_contours": len(self.contours),
+            "raster_vectorization_pruned_contours": self.pruned_contour_count,
+            "raster_vectorization_degenerate_contours": (
+                self.degenerate_contour_count
+            ),
+            "raster_vectorization_rejected_degenerate_trees": (
+                self.rejected_contour_tree_count
+            ),
             "raster_vectorization_raw_contour_points": (
                 self.raw_contour_point_count
             ),
@@ -757,6 +791,120 @@ class PixelVectorizationResult:
                 for contour in self.contours
             ],
         }
+
+
+_PIXEL_VECTORIZATION_FAILURE_STAGES = frozenset(
+    {
+        "contour_pruning",
+        "native_fit",
+        "native_topology",
+        "raster_hierarchy",
+    }
+)
+
+
+def _sanitize_vectorization_failure_reason(value: object) -> str:
+    reason = " ".join(str(value).split())
+    if not reason:
+        reason = "The contour tree could not be vectorized"
+    if len(reason) > 512:
+        reason = reason[:509].rstrip() + "..."
+    return reason
+
+
+@dataclass(frozen=True, slots=True)
+class PixelVectorizationRootFailure:
+    """One rejected, indivisible root contour tree from Auto vectorization."""
+
+    root_index: int
+    contour_count: int
+    stage: str
+    reason: str
+    bounds_px: tuple[int, int, int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.root_index) is not int or self.root_index < 0:
+            raise ValueError("root_index must be a non-negative integer")
+        if type(self.contour_count) is not int or self.contour_count < 0:
+            raise ValueError("contour_count must be a non-negative integer")
+        stage = str(self.stage)
+        if stage not in _PIXEL_VECTORIZATION_FAILURE_STAGES:
+            raise ValueError(f"Unsupported pixel vectorization failure stage: {stage}")
+        bounds = self.bounds_px
+        if bounds is not None:
+            bounds = tuple(bounds)
+            if (
+                len(bounds) != 4
+                or any(type(value) is not int for value in bounds)
+                or min(bounds[:2]) < 0
+                or min(bounds[2:]) <= 0
+            ):
+                raise ValueError(
+                    "bounds_px must contain non-negative x/y and positive width/height"
+                )
+        object.__setattr__(self, "stage", stage)
+        object.__setattr__(
+            self,
+            "reason",
+            _sanitize_vectorization_failure_reason(self.reason),
+        )
+        object.__setattr__(self, "bounds_px", bounds)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return bounded JSON-ready diagnostics without exception internals."""
+
+        return {
+            "root_index": self.root_index,
+            "contour_count": self.contour_count,
+            "stage": self.stage,
+            "reason": self.reason,
+            "bounds_px": None if self.bounds_px is None else list(self.bounds_px),
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PixelVectorizationForestResult:
+    """Auto-only result that can retain independently verified root trees."""
+
+    result: PixelVectorizationResult | None
+    failures: tuple[PixelVectorizationRootFailure, ...]
+    root_tree_count: int
+
+    def __post_init__(self) -> None:
+        failures = tuple(self.failures)
+        if any(
+            not isinstance(failure, PixelVectorizationRootFailure)
+            for failure in failures
+        ):
+            raise TypeError("failures must contain PixelVectorizationRootFailure values")
+        if type(self.root_tree_count) is not int or self.root_tree_count < 1:
+            raise ValueError("root_tree_count must be a positive integer")
+        if len(failures) > self.root_tree_count:
+            raise ValueError("failures cannot exceed root_tree_count")
+        if self.result is not None and not isinstance(
+            self.result,
+            PixelVectorizationResult,
+        ):
+            raise TypeError("result must be a PixelVectorizationResult or None")
+        valid_root_count = self.root_tree_count - len(failures)
+        if self.result is None:
+            if valid_root_count:
+                raise ValueError("A forest without a result cannot contain valid roots")
+        else:
+            result_root_count = sum(
+                contour.parent_index is None for contour in self.result.contours
+            )
+            if result_root_count != valid_root_count:
+                raise ValueError("Forest root counts do not match the accepted result")
+        object.__setattr__(self, "failures", failures)
+
+    @property
+    def valid_root_tree_count(self) -> int:
+        return self.root_tree_count - len(self.failures)
+
+    @property
+    def invalid_root_tree_count(self) -> int:
+        return len(self.failures)
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -4966,9 +5114,11 @@ def _prepare_vectorization_masks(
 def _extract_vectorization_contours(
     mask: np.ndarray,
     approximation: int,
-) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
+    *,
+    require_retained: bool = True,
+) -> ForegroundContourPruneResult:
     try:
-        return extract_foreground_contours(
+        contours, hierarchy = extract_foreground_contours(
             mask,
             approximation=approximation,
             maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
@@ -4983,6 +5133,13 @@ def _extract_vectorization_contours(
         raise RasterVectorizationError(
             "No closed contours were produced by the selected raster settings"
         ) from exc
+    pruned = prune_degenerate_foreground_contours(contours, hierarchy)
+    if require_retained and not pruned.contours:
+        raise RasterVectorizationError(
+            "No closed contours were produced by the selected raster settings "
+            "after discarding non-geometric artifacts"
+        )
+    return pruned
 
 
 @_timed_stage("quick_preview_total")
@@ -4993,18 +5150,19 @@ def _quick_preview_prepared_raster(
     height_mm: float,
 ) -> RasterVectorizationQuickPreview:
     masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
-    raw_contours, hierarchy = _extract_vectorization_contours(
+    contour_extraction = _extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
     )
+    raw_contours = contour_extraction.contours
+    hierarchy = contour_extraction.hierarchy
     prepared_trace = _RasterTracePreparation(
         source_key=source.source_key,
         options=options,
         width_mm=width_mm,
         height_mm=height_mm,
         masks=masks,
-        raw_contours=raw_contours,
-        hierarchy=hierarchy,
+        contour_extraction=contour_extraction,
     )
     parents = hierarchy[0, :, 3]
     depths = [_hierarchy_depth(index, parents) for index in range(len(raw_contours))]
@@ -5191,14 +5349,15 @@ def _vectorize_pixel_source(
     )
     if prepared_trace is None:
         masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
-        raw_contours, hierarchy = _extract_vectorization_contours(
+        contour_extraction = _extract_vectorization_contours(
             masks.working_mask,
             cv2.CHAIN_APPROX_NONE,
         )
     else:
         masks = prepared_trace.masks
-        raw_contours = prepared_trace.raw_contours
-        hierarchy = prepared_trace.hierarchy
+        contour_extraction = prepared_trace.contour_extraction
+    raw_contours = contour_extraction.contours
+    hierarchy = contour_extraction.hierarchy
     threshold_used = masks.threshold_used
     component_count = masks.component_count
     working_mask = masks.working_mask
@@ -5379,6 +5538,482 @@ def _vectorize_pixel_source(
         fitted_segment_count=budget.fitted_segments,
         preview_flattened_point_count=budget.preview_points,
         max_estimated_deviation_mm=maximum_deviation,
+        pruned_contour_count=contour_extraction.pruned_contour_count,
+        degenerate_contour_count=len(
+            contour_extraction.degenerate_original_indices
+        ),
+        rejected_contour_tree_count=len(contour_extraction.rejected_root_indices),
+    )
+
+
+def _forest_root_selections(
+    selected_indices: tuple[int, ...],
+    parents: np.ndarray,
+    raw_contours: tuple[np.ndarray, ...],
+    contour_extraction: ForegroundContourPruneResult,
+) -> tuple[_RasterRootSelection, ...]:
+    grouped: dict[int, list[int]] = {}
+    root_order: list[int] = []
+    for index in selected_indices:
+        current = index
+        visited = 0
+        while int(parents[current]) >= 0:
+            current = int(parents[current])
+            visited += 1
+            if current < 0 or current >= len(parents) or visited > len(parents):
+                raise RasterVectorizationError(
+                    "Raster contour hierarchy does not resolve to a bounded root"
+                )
+        if current not in grouped:
+            grouped[current] = []
+            root_order.append(current)
+        grouped[current].append(index)
+
+    selections: list[_RasterRootSelection] = []
+    for root_index in root_order:
+        contour_indices = tuple(grouped[root_index])
+        points = np.concatenate(
+            [
+                np.asarray(raw_contours[index]).reshape(-1, 2)
+                for index in contour_indices
+            ],
+            axis=0,
+        )
+        x_min, y_min = np.min(points, axis=0)
+        x_max, y_max = np.max(points, axis=0)
+        selections.append(
+            _RasterRootSelection(
+                root_index=root_index,
+                source_root_index=contour_extraction.retained_original_indices[
+                    root_index
+                ],
+                contour_indices=contour_indices,
+                bounds_px=(
+                    int(x_min),
+                    int(y_min),
+                    int(x_max - x_min + 1),
+                    int(y_max - y_min + 1),
+                ),
+            )
+        )
+    return tuple(selections)
+
+
+def _fit_forest_contour(
+    original_index: int,
+    *,
+    raw_contours: tuple[np.ndarray, ...],
+    hierarchy: np.ndarray,
+    depth: int,
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    threshold_used: int | None,
+    width_mm: float,
+    height_mm: float,
+    budget: _ComplexityBudget,
+) -> RasterVectorizedContour:
+    is_hole = bool(depth % 2)
+    physical = _physical_contour(
+        raw_contours[original_index],
+        source.width_px,
+        source.height_px,
+        width_mm,
+        height_mm,
+    )
+    if len(physical) < 3:
+        raise RasterVectorizationError(
+            "A retained raster contour has fewer than three distinct points"
+        )
+    area = _signed_area(physical)
+    if abs(area) <= 1e-15:
+        raise RasterVectorizationError(
+            "A retained raster contour has zero physical area"
+        )
+    if (not is_hole and area < 0.0) or (is_hole and area > 0.0):
+        physical = physical[::-1].copy()
+    hierarchy_entry = hierarchy[0, original_index]
+    threshold_physical = physical
+    source_edge = (
+        _unchanged_source_edge(physical)
+        if int(hierarchy_entry[2]) >= 0 or int(hierarchy_entry[3]) >= 0
+        else _refine_contour_source_edges(
+            physical,
+            source,
+            options,
+            threshold_used,
+            width_mm,
+            height_mm,
+        )
+    )
+    physical = source_edge.points
+    fitted = _fit_contour(
+        physical,
+        options,
+        width_mm,
+        height_mm,
+        budget,
+        source_pixel_spacing_mm=(
+            width_mm / source.width_px,
+            height_mm / source.height_px,
+        ),
+        classification_points=threshold_physical,
+    )
+    native_subpath = _native_subpath_from_fitted_contour(
+        fitted,
+        width_mm,
+        height_mm,
+    )
+    _validate_native_subpath_in_frame(native_subpath, width_mm, height_mm)
+    preview_tolerance_mm = options.simplification_tolerance_mm * 0.20
+    final_physical = _flatten_native_subpath_for_preview(
+        native_subpath,
+        preview_tolerance_mm,
+        width_mm,
+        height_mm,
+        budget,
+    )
+    deviation = (
+        source_edge.maximum_displacement_mm
+        + fitted.smoothing_displacement_mm
+        + fitted.max_fitting_error_mm
+        + preview_tolerance_mm
+    )
+    final_area = _signed_area(final_physical)
+    if (not is_hole and final_area < 0.0) or (is_hole and final_area > 0.0):
+        native_subpath = reverse_subpath(native_subpath)
+        final_physical = final_physical[::-1].copy()
+    normalized = tuple(
+        (float(point[0] / width_mm), float(point[1] / height_mm))
+        for point in final_physical
+    )
+    threshold_normalized = tuple(
+        (float(point[0] / width_mm), float(point[1] / height_mm))
+        for point in threshold_physical
+    )
+    return RasterVectorizedContour(
+        native_subpath=native_subpath,
+        preview_points=normalized,
+        parent_index=None,
+        depth=depth if options.contour_output is RasterContourOutput.ALL_CONTOURS else 0,
+        is_hole=is_hole if options.contour_output is RasterContourOutput.ALL_CONTOURS else False,
+        raw_point_count=len(raw_contours[original_index]),
+        fitted_segment_count=len(native_subpath.segments),
+        preview_flattened_point_count=len(normalized),
+        max_fitting_error_mm=fitted.max_fitting_error_mm,
+        smoothing_displacement_mm=fitted.smoothing_displacement_mm,
+        max_estimated_deviation_mm=deviation,
+        mean_fitting_error_mm=fitted.mean_fitting_error_mm,
+        rms_fitting_error_mm=fitted.rms_fitting_error_mm,
+        fitting_error_sample_count=fitted.fitting_error_sample_count,
+        hard_corner_count=fitted.hard_corner_count,
+        recursive_split_count=fitted.recursive_split_count,
+        merged_segment_count=fitted.merged_segment_count,
+        longest_smooth_span_segment_count=(
+            fitted.longest_smooth_span_segment_count
+        ),
+        threshold_points=threshold_normalized,
+    )
+
+
+def _assemble_forest_contours(
+    roots: tuple[_RasterRootSelection, ...],
+    *,
+    selected_indices: tuple[int, ...],
+    parents: np.ndarray,
+    fitted_by_original_index: dict[int, RasterVectorizedContour],
+    contour_output: RasterContourOutput,
+) -> tuple[RasterVectorizedContour, ...]:
+    retained_indices = {
+        index for root in roots for index in root.contour_indices
+    }
+    ordered_indices = tuple(
+        index for index in selected_indices if index in retained_indices
+    )
+    result_index = {
+        original_index: index
+        for index, original_index in enumerate(ordered_indices)
+    }
+    contours: list[RasterVectorizedContour] = []
+    for original_index in ordered_indices:
+        try:
+            contour = fitted_by_original_index[original_index]
+        except KeyError as exc:
+            raise RasterVectorizationError(
+                "Raster contour-tree isolation lost fitted geometry"
+            ) from exc
+        parent_original = int(parents[original_index])
+        parent_index = result_index.get(parent_original) if parent_original >= 0 else None
+        if (
+            contour_output is RasterContourOutput.ALL_CONTOURS
+            and parent_original >= 0
+            and parent_index is None
+        ):
+            raise RasterVectorizationError(
+                "Raster contour-tree isolation lost a parent relationship"
+            )
+        contours.append(replace(contour, parent_index=parent_index))
+    return tuple(contours)
+
+
+def _isolate_invalid_forest_roots(
+    roots: tuple[_RasterRootSelection, ...],
+    *,
+    validator: Callable[[tuple[RasterVectorizedContour, ...]], None],
+    stage: str,
+    selected_indices: tuple[int, ...],
+    parents: np.ndarray,
+    fitted_by_original_index: dict[int, RasterVectorizedContour],
+    contour_output: RasterContourOutput,
+    failures: list[PixelVectorizationRootFailure],
+) -> tuple[_RasterRootSelection, ...]:
+    def assembled(
+        values: tuple[_RasterRootSelection, ...],
+    ) -> tuple[RasterVectorizedContour, ...]:
+        return _assemble_forest_contours(
+            values,
+            selected_indices=selected_indices,
+            parents=parents,
+            fitted_by_original_index=fitted_by_original_index,
+            contour_output=contour_output,
+        )
+
+    try:
+        validator(assembled(roots))
+    except RasterVectorizationComplexityError:
+        raise
+    except RasterVectorizationError as global_failure:
+        rejected: list[_RasterRootSelection] = []
+        for root in roots:
+            try:
+                validator(assembled((root,)))
+            except RasterVectorizationComplexityError:
+                raise
+            except RasterVectorizationError as exc:
+                rejected.append(root)
+                failures.append(
+                    PixelVectorizationRootFailure(
+                        root_index=root.source_root_index,
+                        contour_count=len(root.contour_indices),
+                        stage=stage,
+                        reason=str(exc),
+                        bounds_px=root.bounds_px,
+                    )
+                )
+        if not rejected:
+            raise global_failure
+        rejected_indices = {root.root_index for root in rejected}
+        survivors = tuple(
+            root for root in roots if root.root_index not in rejected_indices
+        )
+        if survivors:
+            # This unchanged global validator is authoritative after rebasing.
+            validator(assembled(survivors))
+        return survivors
+    return roots
+
+
+@_timed_stage("verified_vectorization_forest_total")
+def _vectorize_pixel_source_forest(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+) -> PixelVectorizationForestResult:
+    if not isinstance(source, PixelVectorizationSource):
+        raise TypeError("source must be a PixelVectorizationSource")
+    options = (
+        options
+        if isinstance(options, RasterVectorizationOptions)
+        else RasterVectorizationOptions(**dict(options))
+    )
+    width_mm, height_mm = _display_dimensions(
+        displayed_width_mm,
+        displayed_height_mm,
+    )
+    masks = _prepare_vectorization_masks(source, options, width_mm, height_mm)
+    contour_extraction = _extract_vectorization_contours(
+        masks.working_mask,
+        cv2.CHAIN_APPROX_NONE,
+        require_retained=False,
+    )
+    raw_contours = contour_extraction.contours
+    hierarchy = contour_extraction.hierarchy
+    parents = hierarchy[0, :, 3]
+    depths = tuple(
+        _hierarchy_depth(index, parents) for index in range(len(raw_contours))
+    )
+    total_raw_point_count = sum(len(contour) for contour in raw_contours)
+    if total_raw_point_count > MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION:
+        _raise_complexity(
+            "Raster vectorization produced "
+            f"{total_raw_point_count:,} raw contour points, exceeding the "
+            f"{MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION:,}-point "
+            "pre-simplification limit"
+        )
+    selected_indices = tuple(
+        sorted(
+            (
+                index
+                for index, depth in enumerate(depths)
+                if options.contour_output is RasterContourOutput.ALL_CONTOURS
+                or depth == 0
+            ),
+            key=lambda index: (depths[index], index),
+        )
+    )
+    roots = _forest_root_selections(
+        selected_indices,
+        parents,
+        raw_contours,
+        contour_extraction,
+    )
+    failures = [
+        PixelVectorizationRootFailure(
+            root_index=removed.root_index,
+            contour_count=removed.contour_count,
+            stage="contour_pruning",
+            reason=(
+                "A degenerate contour had non-degenerate descendants; the complete "
+                "root tree was rejected to preserve even-odd hierarchy"
+                if removed.topology_rejected
+                else "The complete root tree contained only non-geometric contours"
+            ),
+            bounds_px=removed.bounds_px,
+        )
+        for removed in contour_extraction.removed_root_trees
+    ]
+    root_tree_count = len(roots) + len(failures)
+    budget = _ComplexityBudget()
+    fitted_by_original_index: dict[int, RasterVectorizedContour] = {}
+    accepted_roots: list[_RasterRootSelection] = []
+    for root in roots:
+        try:
+            for original_index in root.contour_indices:
+                fitted_by_original_index[original_index] = _fit_forest_contour(
+                    original_index,
+                    raw_contours=raw_contours,
+                    hierarchy=hierarchy,
+                    depth=depths[original_index],
+                    source=source,
+                    options=options,
+                    threshold_used=masks.threshold_used,
+                    width_mm=width_mm,
+                    height_mm=height_mm,
+                    budget=budget,
+                )
+        except RasterVectorizationComplexityError:
+            raise
+        except RasterVectorizationError as exc:
+            for original_index in root.contour_indices:
+                fitted_by_original_index.pop(original_index, None)
+            failures.append(
+                PixelVectorizationRootFailure(
+                    root_index=root.source_root_index,
+                    contour_count=len(root.contour_indices),
+                    stage="native_fit",
+                    reason=str(exc),
+                    bounds_px=root.bounds_px,
+                )
+            )
+        else:
+            accepted_roots.append(root)
+
+    active_roots = tuple(accepted_roots)
+    if active_roots:
+        active_roots = _isolate_invalid_forest_roots(
+            active_roots,
+            validator=lambda contours: _validate_authoritative_native_topology(
+                contours,
+                width_mm,
+                height_mm,
+            ),
+            stage="native_topology",
+            selected_indices=selected_indices,
+            parents=parents,
+            fitted_by_original_index=fitted_by_original_index,
+            contour_output=options.contour_output,
+            failures=failures,
+        )
+    before_raster_validation = len(active_roots)
+    if active_roots:
+        active_roots = _isolate_invalid_forest_roots(
+            active_roots,
+            validator=lambda contours: _validate_rasterized_topology(
+                contours,
+                masks.working_mask.shape,
+            ),
+            stage="raster_hierarchy",
+            selected_indices=selected_indices,
+            parents=parents,
+            fitted_by_original_index=fitted_by_original_index,
+            contour_output=options.contour_output,
+            failures=failures,
+        )
+    if active_roots and len(active_roots) != before_raster_validation:
+        # Removing a raster-invalid tree never bypasses authoritative compound checks.
+        _validate_authoritative_native_topology(
+            _assemble_forest_contours(
+                active_roots,
+                selected_indices=selected_indices,
+                parents=parents,
+                fitted_by_original_index=fitted_by_original_index,
+                contour_output=options.contour_output,
+            ),
+            width_mm,
+            height_mm,
+        )
+
+    failures.sort(key=lambda failure: (failure.root_index, failure.stage))
+    if not active_roots:
+        return PixelVectorizationForestResult(
+            result=None,
+            failures=tuple(failures),
+            root_tree_count=root_tree_count,
+        )
+    result_contours = _assemble_forest_contours(
+        active_roots,
+        selected_indices=selected_indices,
+        parents=parents,
+        fitted_by_original_index=fitted_by_original_index,
+        contour_output=options.contour_output,
+    )
+    mask_preview = _preview_mask(
+        masks.working_mask,
+        source.width_px,
+        source.height_px,
+    )
+    result = PixelVectorizationResult(
+        source_key=source.source_key,
+        source_rgba=source.source_rgba,
+        foreground_mask=_readonly(mask_preview),
+        overlay_rgba=_readonly(_overlay_preview(source.source_rgba, result_contours)),
+        contours=result_contours,
+        threshold_used=masks.threshold_used,
+        has_usable_alpha=source.has_usable_alpha,
+        connected_component_count=masks.component_count,
+        raw_contour_point_count=sum(
+            contour.raw_point_count for contour in result_contours
+        ),
+        fitted_segment_count=sum(
+            contour.fitted_segment_count for contour in result_contours
+        ),
+        preview_flattened_point_count=sum(
+            contour.preview_flattened_point_count for contour in result_contours
+        ),
+        max_estimated_deviation_mm=max(
+            contour.max_estimated_deviation_mm for contour in result_contours
+        ),
+        pruned_contour_count=contour_extraction.pruned_contour_count,
+        degenerate_contour_count=len(
+            contour_extraction.degenerate_original_indices
+        ),
+        rejected_contour_tree_count=len(contour_extraction.rejected_root_indices),
+    )
+    return PixelVectorizationForestResult(
+        result=result,
+        failures=tuple(failures),
+        root_tree_count=root_tree_count,
     )
 
 
@@ -5400,6 +6035,28 @@ def vectorize_pixel_source(
             displayed_width_mm=displayed_width_mm,
             displayed_height_mm=displayed_height_mm,
             prepared_preview=None,
+        )
+    finally:
+        _TIMING_STAGE.reset(token)
+
+
+def vectorize_pixel_source_forest(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+    timing: RasterVectorizationTiming | None = None,
+) -> PixelVectorizationForestResult:
+    """Vectorize Auto candidates while isolating invalid complete root trees."""
+
+    token = _TIMING_STAGE.set(timing)
+    try:
+        return _vectorize_pixel_source_forest(
+            source,
+            options,
+            displayed_width_mm=displayed_width_mm,
+            displayed_height_mm=displayed_height_mm,
         )
     finally:
         _TIMING_STAGE.reset(token)
@@ -5447,6 +6104,9 @@ def vectorize_prepared_raster(
         fitted_segment_count=pixel_result.fitted_segment_count,
         preview_flattened_point_count=pixel_result.preview_flattened_point_count,
         max_estimated_deviation_mm=pixel_result.max_estimated_deviation_mm,
+        pruned_contour_count=pixel_result.pruned_contour_count,
+        degenerate_contour_count=pixel_result.degenerate_contour_count,
+        rejected_contour_tree_count=pixel_result.rejected_contour_tree_count,
         source_identity=source.identity,
         source_sha256=source.identity.sha256,
     )
@@ -5479,7 +6139,9 @@ __all__ = [
     "MAX_RASTER_VECTORIZATION_OVERSAMPLED_PIXELS",
     "MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION",
     "MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION",
+    "PixelVectorizationForestResult",
     "PixelVectorizationResult",
+    "PixelVectorizationRootFailure",
     "PixelVectorizationSource",
     "PhysicalContourFitContour",
     "PhysicalContourFitResult",
@@ -5502,5 +6164,6 @@ __all__ = [
     "raster_payload_has_usable_alpha",
     "vectorize_prepared_raster",
     "vectorize_pixel_source",
+    "vectorize_pixel_source_forest",
     "vectorize_raster_payload",
 ]

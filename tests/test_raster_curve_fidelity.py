@@ -113,10 +113,12 @@ def _fit_raster_outer_contours(
         width_mm,
         height_mm,
     )
-    contours, hierarchy = fitter._extract_vectorization_contours(
+    extraction = fitter._extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
     )
+    contours = extraction.contours
+    hierarchy = extraction.hierarchy
     parents = hierarchy[0, :, 3]
     results: list[_ContourFit] = []
     for index, contour in enumerate(contours):

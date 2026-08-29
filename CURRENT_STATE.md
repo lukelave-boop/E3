@@ -49,12 +49,19 @@ installer and Linux AppImage for this change have not yet been built or
 published, and no controller, motion, arming, laser-output, or physical test
 was performed or is claimed.
 
-## Active Camera Trace review and non-grid raster-vector parity
+## Active Camera Trace Auto orchestration, review, and raster-vector parity
 
 Camera Trace now has one detection-and-review workflow. The former seeded
 **Cutout / silhouette** mode, prepared-frame state, Add-click lifecycle, quick
 blue outline, and second asynchronous verification state have been removed.
-Auto, By color, and By contrast produce the candidates. A stored legacy
+Auto, By color, and By contrast produce the candidates. With **Use grid** off,
+Auto is now an orchestrator over production tracing paths rather than another
+independent detector: it prepares the corrected frame once, tries shared-raster
+Otsu with dark foreground and light foreground, conditionally tries Color only
+when the frame contains coherent non-background chroma, and chooses the best
+verified result. With **Use grid** on, Auto deliberately retains the specialized
+repeated-object detector, lattice fitting, cell normalization, missing-cell
+inference, and damaged/open-cell review. A stored legacy
 `cutout` preference is migrated once to `contrast`; the old value cannot leave
 the color picker disabled. Desktop tests redirect organization/application
 `QSettings` into a unique per-worker INI file, so parallel runs neither inherit
@@ -76,7 +83,7 @@ Non-grid **By contrast** no longer enters the multi-hypothesis object detector.
 The corrected BGR frame is converted to immutable source-neutral RGBA pixels and
 sent through the same production pipeline as an imported raster: grayscale and
 white-composited grayscale preparation, Otsu or manual thresholding with explicit
-polarity, physical connected-component and pinhole cleanup, 4x mask
+polarity, physical connected-component and pinhole cleanup, 4× mask
 reconstruction, bounded `RETR_TREE` extraction, physical contour mapping,
 source-edge refinement, and the authoritative native line/cubic fitter plus all
 topology checks. Each root foreground contour and all descendants form one
@@ -86,6 +93,21 @@ raster-local-to-camera affine accounts for Y direction, pixel centers, work-area
 origin, exact pixels/mm, and a possible fractional edge strip; there is no
 camera-side contour extraction, second fit, or post-map refit.
 
+The physical stencil failure `A retained raster contour has fewer than three
+distinct points` was traced to the 4× reconstruction itself. Bicubic grayscale
+interpolation can overshoot near a retained edge inside the deliberately dilated
+one-source-pixel component gate; one nominal-background sample can therefore
+cross the threshold and become a one- or two-point, zero-area `RETR_TREE`
+contour even after base-resolution component cleanup. Shared source-neutral
+contour pruning now removes only nodes with fewer than three distinct trace
+points or exactly zero trace-pixel polygon area. Positive-area contours remain
+eligible regardless of size. The complete `next`, `previous`, `first_child`,
+and `parent` hierarchy is rebuilt in original sibling order. A degenerate node
+whose subtree contains legitimate geometry causes its entire root tree to be
+rejected rather than reparenting descendants and inventing a new even-odd
+topology. Quick Preview, exact imported-raster vectorization, and camera raster
+strategies all receive the same repair and diagnostics.
+
 The pixel-vectorization input and result are source-neutral. Imported assets wrap
 that contract with their real `RasterAssetIdentity` and exact encoded-byte
 verification; live corrected camera pixels use a content-derived pixel key and
@@ -94,7 +116,59 @@ Otsu/manual threshold and light/dark polarity controls, visibly disables the hue
 controls, and uses the native raster-vector output without a border offset. With
 **Use grid** enabled, By contrast deliberately retains the specialized
 multi-mask object/grid detector, classification, normalization, and gap
-inference. Auto and By color retain their existing specialized behavior.
+inference. By color remains the explicit operator-controlled color path.
+
+For non-grid Auto, both raster polarities reuse the same immutable
+`PixelVectorizationSource`, automatic Otsu threshold, physical minimum-feature
+cleanup, 4× reconstruction, hierarchy, source-edge refinement, and native
+validator. Color is attempted only when weighted HSV/Lab evidence covers enough
+of the frame, at least 60% of the chroma weight lies in one ±14-hue window,
+that window is at least 1.5× the strongest separated competitor, its resulting
+mask covers 0.2–60% of the frame, and no more than half of the frame border is
+foreground. Auto ignores saved manual color samples and uses hue tolerance 14
+and minimum saturation 45 for this bounded attempt; explicit **By color**
+continues to honor the operator's controls.
+
+Completed strategies are scored deterministically without a positive candidate-
+count term. The score is `40V + 20F + 15B + 10A + 10S + 5W - P`: `V` is the
+valid independent-root ratio, `F` is useful foreground occupancy, `B` is
+non-foreground border quality, `A` is useful retained physical area, `S` is the
+fraction of retained roots at least four times the minimum feature area, `W`
+is the in-frame candidate fraction, and `P` is a 35-point frame/background
+penalty when both foreground and border occupancy reach 75%. A strategy with no
+authoritative native candidate is rejected, and one with at least 95% foreground
+plus at least 75% border occupancy is rejected as background-dominated. Stable
+ties prefer dark raster, then light raster, then Color. The result message names
+the selected strategy, Otsu threshold or hue/tolerance, valid count, and omitted
+invalid/filtered count; bounded per-attempt metrics and failure reasons remain
+internal. Serialized Auto results retain `detection_mode=auto` while reporting
+the effective selected native/Otsu-or-Color options; the original request and
+effective options are both preserved in diagnostics. Review-filtered roots count
+as unavailable even when they did not reach topology fitting, and an all-pruned
+raster attempt retains exact root count, bounds, stage, and failure reason.
+
+A failed strategy does not abort Auto. Native fitting and every existing
+frame/extrema, continuous-error, self/adjacent-arc, compound-clearance, even-odd,
+and rasterized-hierarchy validator remain authoritative. Auto isolates a
+failure only at an independent root-tree boundary: one root plus all holes and
+islands is fitted and accepted or rejected as one indivisible unit. It never
+separates a compound tree to escape validation. Other verified roots remain
+available for review, while the rejected tree and its bounded reason stay in
+diagnostics and are not selectable or creatable. The raster path first runs each
+ordinary validator against the complete forest; only a non-complexity failure
+triggers per-root diagnosis. Survivors are rebased and the unchanged global
+validators run again. If all roots pass alone but fail together, the survivor
+forest still fails, and every complexity-limit failure remains fatal to the
+strategy.
+
+In the Trace panel, non-grid Auto owns polarity, Otsu threshold, and optional
+color selection. Hue/sample and threshold/polarity controls are therefore
+inactive, output is fixed to authoritative **Native lines / Béziers**, and border
+offset is fixed at zero. Explicit **By color** alone enables hue/sample controls;
+explicit non-grid **By contrast** alone enables manual threshold and polarity.
+Auto with grid enabled preserves the specialized grid output and normalization
+controls. Minimum feature area, review filters, native fit tolerance, output/work
+authority, grid toggle, and selection controls remain available where applicable.
 
 Cut geometry offers two explicit commits. **Create separate vectors** creates
 one editable object per selected candidate. **Create one combined vector**
@@ -105,21 +179,41 @@ single-outline, non-output path.
 
 Focused Qt-free and offscreen regressions cover mode removal and migration,
 literal non-grid raster components, gaps, long lines, multiple roots, holes,
-tiny-feature cleanup, Otsu/manual polarity, post-vector review filters, exact
-imported-raster/camera mask-hierarchy-segment-geometry equivalence, all four
-coordinate corners and one-pixel offsets, contrast-grid routing, line/cubic
-persistence, click,
+4× degenerate-leaf pruning and hierarchy repair, positive-area tiny-feature
+retention, unsafe degenerate-ancestor rejection, Otsu/manual polarity, Auto
+dark/light/Color choice and deterministic scoring, neutral-image Color skip,
+strategy fallback, independent compound-tree isolation, global survivor
+revalidation and cross-root/complexity fatality, post-vector review filters,
+exact imported-raster/camera mask-hierarchy-segment-geometry equivalence, all
+four coordinate corners and one-pixel offsets, contrast-grid routing, Auto-grid
+routing, Auto-owned control enablement, line/cubic persistence, click,
 Ctrl-click, empty click, rubber band, inferred-candidate gating, list/canvas
 synchronization, overlap priority, zoom/pan stability, detection invalidation,
 project-selection restoration, separate and combined creation, compound
-topology, one-step undo, and the real-color picker path. Physical camera and
-controller behavior has not been retested for this correction. The directly
-affected focused group passes **183 tests**. A fresh post-suite equivalence and
-offscreen review/create group passes **31 tests**. The complete Windows suite
-passes **2,662 tests** with **14 expected platform skips** and four workers.
-Repository Ruff, `python -m compileall -q laser_aligner`, and
-`git diff --check` pass. No real camera, controller, motion, arming,
-laser-output, cutting, or physical-accuracy test was performed or is claimed.
+topology, one-step undo, and the real-color picker path. Current focused runs
+pass **79 raster/fidelity regressions**, **8 camera-raster regressions**, **82
+object-trace/native regressions**, **6 forest-isolation regressions**, and **15
+Trace-panel regressions**; the forest group is part of the raster total. The
+combined focused raster/camera/object/native group passes **169 tests**. The
+offscreen review/create/panel group passes **30 tests** with four workers, and
+three repeated four-worker runs of the new raster-equivalence, grid-Auto, and
+Auto-control routes each pass **3 tests**.
+
+The post-review local Windows test inventory passes **2,687 tests** with **14
+expected platform skips** under four-worker xdist: **2,686** pass together with
+the unchanged Qt worker-cancellation test deselected, and that test passes
+separately under the same `-n 4` worker configuration. Two attempts to run all
+2,687 at once on the local Python 3.14/PySide environment emitted a native access
+violation while that test synchronously deleted a dialog with its worker still
+blocked, then stalled xdist near completion. The test passes both in-process and
+through xdist when isolated; no Camera Trace test failed. Supported Windows
+Python 3.12 CI remains the compatibility gate. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass.
+
+This is implementation and automated-test status only. The reported Coleman
+stencil scene has not been recaptured or replayed through a physical camera for
+this correction. No real camera, controller, motion, arming, laser-output,
+cutting, or physical-accuracy test was performed or is claimed.
 
 ## Active development-release trigger filtering
 

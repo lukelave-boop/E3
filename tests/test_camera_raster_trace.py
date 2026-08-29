@@ -309,6 +309,77 @@ def test_imported_and_camera_pixels_produce_equivalent_native_geometry(
         ] == detection.diagnostics["native_sequences"]
 
 
+def test_imported_and_camera_pixels_share_degenerate_4x_pruning(
+    tmp_path: Path,
+) -> None:
+    grayscale = np.full((16, 16), 220, dtype=np.uint8)
+    grayscale[2:9, 2:9] = 30
+    grayscale[12:15, 12:15] = np.asarray(
+        ((132, 108, 109), (113, 147, 132), (136, 144, 137)),
+        dtype=np.uint8,
+    )
+    pixels = cv2.cvtColor(grayscale, cv2.COLOR_GRAY2BGR)
+    source_path = tmp_path / "camera-degenerate-equivalence.png"
+    assert cv2.imwrite(str(source_path), pixels)
+    payload = read_raster_asset_payload(source_path)
+    raster_options = RasterVectorizationOptions(
+        detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+        threshold=128,
+        invert=False,
+        minimum_feature_area_mm2=0.05,
+        smoothing_mm=0.0,
+        simplification_tolerance_mm=0.10,
+        contour_output=RasterContourOutput.ALL_CONTOURS,
+    )
+    imported = vectorize_raster_payload(
+        payload,
+        raster_options,
+        displayed_width_mm=4.0,
+        displayed_height_mm=4.0,
+    )
+    camera = detect_objects(
+        pixels,
+        TraceOptions(
+            detection_mode="contrast",
+            contrast_threshold_mode="manual",
+            contrast_threshold=128,
+            regular_grid=False,
+            output_mode="native",
+            min_area_mm2=0.05,
+            max_area_mm2=100.0,
+            min_width_mm=0.1,
+            min_height_mm=0.1,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.10,
+        ),
+        WorkArea(0.0, 4.0, 0.0, 4.0),
+        4.0,
+    )
+
+    assert imported.pruned_contour_count == 1
+    assert imported.degenerate_contour_count == 1
+    assert imported.rejected_contour_tree_count == 0
+    assert imported.connected_component_count == camera.direct_count == 2
+    assert len(imported.contours) == 2
+    assert {item.diagnostics["pixel_source_key"] for item in camera.detections} == {
+        imported.source_key
+    }
+    assert {
+        item.diagnostics["foreground_mask_sha256"] for item in camera.detections
+    } == {
+        hashlib.sha256(imported.foreground_mask.tobytes(order="C")).hexdigest()
+    }
+    assert {
+        item.diagnostics["pruned_contour_count"] for item in camera.detections
+    } == {1}
+    assert {
+        item.diagnostics["degenerate_contour_count"] for item in camera.detections
+    } == {1}
+    assert [
+        item.diagnostics["contour_parents"] for item in camera.detections
+    ] == [[None], [None]]
+
+
 def test_non_grid_contrast_supports_otsu_and_light_foreground() -> None:
     image = np.full((200, 200, 3), 30, dtype=np.uint8)
     cv2.circle(image, (100, 100), 45, (220, 220, 220), -1, lineType=cv2.LINE_AA)
@@ -394,4 +465,38 @@ def test_grid_contrast_does_not_enter_raster_pixel_vectorizer(
 
     assert result.grid is not None
     assert result.direct_count == 6
+    assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)
+
+
+def test_grid_auto_retains_the_specialized_detector(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("grid Auto must not enter the raster Auto forest")
+
+    monkeypatch.setattr(
+        "laser_aligner.vision.object_trace.vectorize_pixel_source_forest",
+        fail,
+    )
+    image = np.full((360, 480, 3), 225, dtype=np.uint8)
+    for row in range(2):
+        for column in range(3):
+            x, y = 30 + column * 145, 45 + row * 145
+            cv2.rectangle(image, (x, y), (x + 100, y + 70), (35, 35, 35), -1)
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="auto",
+            regular_grid=True,
+            min_area_mm2=40.0,
+            min_width_mm=10.0,
+            min_height_mm=8.0,
+        ),
+        WorkArea(0.0, 120.0, 0.0, 90.0),
+        4.0,
+    )
+
+    assert result.grid is not None
+    assert result.direct_count == 6
+    assert result.grid["observed_cells"] == 6
     assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)
