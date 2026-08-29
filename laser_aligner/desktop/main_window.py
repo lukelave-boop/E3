@@ -4608,6 +4608,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         arrays = {
             "camera": self._trace_raster_preview_value(preview, "camera_bgr"),
+            "exposed_bed": self._trace_raster_preview_value(
+                preview,
+                "exposed_bed_mask",
+            ),
             "eligible": self._trace_raster_preview_value(
                 preview,
                 "eligible_mask",

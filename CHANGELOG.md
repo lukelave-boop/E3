@@ -6,6 +6,22 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed Camera Trace false empty-bed suppression when dark or differently
+  colored material happens to correlate with the locally normalized honeycomb
+  texture. The bounded reference model now derives deterministic robust Lab
+  exposure, white-balance, and planar-gradient compensation only from strong
+  reference-like seeds, then requires both the existing structural match and a
+  compensated luminance/chroma appearance match before excluding a pixel. The
+  existing 3 mm-radius closing is retained at model resolution but now starts
+  only from strong combined seeds and may bridge only appearance-consistent,
+  structurally supported pixels, so it cannot cross clearly changed material.
+  The Trace selector adds **Exposed bed** between Camera and Eligible and shows
+  the exact immutable production suppression mask. Correlated-texture dark/light
+  stencil, appearance mismatch, closing amplification/continuity, blank stock,
+  photometric drift, exact 4× mask, imported-raster, and grid regressions cover
+  the change. This is authority-free vision preprocessing; physical Coleman
+  validation is still required.
+
 - Fixed the desktop Camera Trace **Mask** display for corrected camera areas
   with a fractional final pixel strip. The source frame is rounded to integer
   dimensions before the immutable production mask is reconstructed at exactly

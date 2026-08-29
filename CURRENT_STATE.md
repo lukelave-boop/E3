@@ -71,10 +71,24 @@ background path, after schema/kind, encoded-image SHA-256, complete bed-map
 digest, support-frame digest, coordinate-frame, rectification, and final-image
 dimensions validate. The comparison model is bounded to 800 pixels and at most
 2 pixels/mm. It uses correlated locally detrended luminance, normalized patch
-error, and compatible texture, then excludes only strong exposed-bed structure.
-Broad brightness, white-balance-related luminance drift, gradient, mild blur,
-noise, and local reflections are covered by deterministic fixtures. Changed or
-uncertain pixels remain eligible; the stock is eligibility, not foreground.
+error, and compatible texture to propose structural bed evidence, but structure
+alone no longer excludes pixels. Strong reference-like seeds with uncompensated
+Lab luminance/chroma deltas no larger than 32/24 levels drive deterministic
+Tukey-weighted compensation. Luminance uses a bounded 0.72–1.28 reference gain,
+±48 offset, and ±32 whole-frame X/Y gradients; chroma uses ±24 offsets and ±16
+gradients. The compensated point residual must meet 34/22/38
+luminance/chroma/combined limits and its 1.5 mm patch mean must meet 26/18/30,
+except that a strict 12/8/14 point match preserves true bed immediately beside a
+changed boundary.
+
+The 3 mm-radius exposed-evidence closing remains for real honeycomb continuity,
+but now runs at bounded model resolution only from strong structural-plus-
+appearance seeds. It may add only appearance-consistent pixels with loose
+structural support. A single false seed cannot expand and closing cannot bridge
+through clearly changed material. Broad brightness, white-balance-related drift,
+gradient, mild blur, noise, and local reflections are covered by deterministic
+fixtures. Changed or uncertain pixels remain eligible; the stock is eligibility,
+not foreground.
 Honeycomb-local Auto fails closed when no valid reference is available. Manual
 Contrast and explicit Color may use clearly diagnosed hard-ROI-only fallback
 when no reference exists; a supplied mismatched reference is rejected.
@@ -113,8 +127,10 @@ execution paths.
 Starting a new detection immediately removes the preceding temporary candidates
 while leaving project objects untouched. Before native fitting, the Trace panel
 can switch the frozen camera display among the corrected **Camera**, exact
-source-resolution **Eligible** mask, normalized grayscale, and exact production
-**Mask**. Raster Mask is the immutable 4× binary workspace passed to `RETR_TREE`,
+source-resolution production **Exposed bed** mask, exact source-resolution
+**Eligible** mask, normalized grayscale, and exact production **Mask**. Exposed
+bed is the same immutable array inverted to form material eligibility, not a UI
+approximation. Raster Mask is the immutable 4× binary workspace passed to `RETR_TREE`,
 not a reconstructed UI approximation. Its display uses its actual 4× pixel scale
 so all four images occupy the same physical area. Request
 IDs and the camera-review signature reject stale preview, completion, and failure
@@ -136,7 +152,7 @@ rounded source raster, and retains the actual 4× transform. No preview image is
 resized and the immutable production mask is not copied back into or changed by
 the display path. Temporary application-log diagnostics record dimensions,
 format, byte count, and a padding-neutral pixel SHA-256 for every stored Camera,
-Eligible, Normalized, and Mask image.
+Exposed bed, Eligible, Normalized, and Mask image.
 
 Focused offscreen verification passes **93 tests** across the asynchronous
 desktop camera/Trace path, real workspace rendering, and Trace panel behavior.
@@ -286,9 +302,11 @@ single-outline, non-output path.
 Focused Qt-free and offscreen regressions cover a reflective periodic honeycomb,
 trusted empty-bed reference, machine surround, 20/50/84% stock coverage,
 exposure/gradient/white-balance-related drift, blur/noise/highlight, empty bed,
-blank stock, dark/light stencil artwork, holes, narrow gaps, underline, hard-ROI
+blank stock, dark/light stencil artwork, a dark nearly vertical stencil with
+reference-correlated normalized texture, appearance mismatch, closing
+amplification and true-bed continuity, holes, narrow gaps, underline, hard-ROI
 invariance, false warm Auto Color, real bounded Color, Auto fail-closed,
-four-edge coordinate mapping, and exact Camera/Eligible/Normalized/4× Mask
+four-edge coordinate mapping, and exact Camera/Exposed-bed/Eligible/Normalized/4× Mask
 switching, including complete stored-QImage and actual workspace-pixmap pixel
 identity across a fractional-edge display case. Existing coverage also includes
 the low-frequency background
@@ -303,21 +321,23 @@ imported-normalized-camera parity; request/signature staleness; retained failure
 diagnostics; immediate old-candidate retirement; Trace panel controls; capture
 and rectification timing; and the standalone raster diagnostic command.
 
-The final eligibility/Auto/display acceptance selection passes **30 tests** in
-**46.09 seconds**. The complete local Windows four-worker suite passes **2,741
-tests** with **14 expected platform skips** in **253.92 seconds**. Repository
+The broader eligibility, normalization, object-Trace, native-raster, and desktop
+preview selection passes **231 tests** in **78.47 seconds**. The complete local
+Windows four-worker suite passes **2,750 tests** with **14 expected platform
+skips** in **163.53 seconds**. Repository
 Ruff, `python -m compileall -q laser_aligner`, and `git diff --check` pass. These
 are deterministic Qt-free, source-level, and offscreen-widget checks; no
 interactive GUI, live camera, or hardware validation is implied.
 
-On the 640 × 480 reflective-honeycomb stencil fixture at 2 pixels/mm, one
-instrumented Manual Contrast run took **2.36 seconds** including about 0.04
-seconds for ROI/reference eligibility and 0.11 seconds for normalization. The
-full Auto run selected raster-dark and took **20.41 seconds** including about
-0.05 seconds for eligibility; its rejected
-light-polarity topology work dominated that synthetic run. These timings are
-single development-machine samples, not performance guarantees or physical-
-camera measurements.
+On the 640 × 480 correlated-texture stencil fixture at 2 pixels/mm, ten
+post-warmup eligibility samples had median stage times of **25.081 ms** for
+structural reference matching, **56.212 ms** for photometric compensation,
+**8.871 ms** for the appearance veto, **2.258 ms** for guarded closing, and
+**108.828 ms** total eligibility. Observed total eligibility ranged from
+101.808–113.935 ms. The comparison remains bounded to 800 pixels, 2 pixels/mm,
+and at most 50,000 deterministic photometric-fit samples. These timings are
+development-machine samples, not performance guarantees or physical-camera
+measurements.
 
 This is implementation and automated-test status only. The reported Coleman
 stencil scene has not been recaptured or replayed through a physical camera for

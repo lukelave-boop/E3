@@ -333,6 +333,7 @@ class CameraTraceRasterPreview:
     strategy: str
     polarity: str
     camera_bgr: np.ndarray
+    exposed_bed_mask: np.ndarray
     eligible_mask: np.ndarray
     normalized_grayscale: np.ndarray
     foreground_mask: np.ndarray
@@ -351,6 +352,7 @@ class CameraTraceRasterPreview:
             raise ValueError("Unknown Camera Trace preview polarity")
         arrays = (
             (self.camera_bgr, "camera_bgr", 3),
+            (self.exposed_bed_mask, "exposed_bed_mask", 2),
             (self.eligible_mask, "eligible_mask", 2),
             (self.normalized_grayscale, "normalized_grayscale", 2),
             (self.foreground_mask, "foreground_mask", 2),
@@ -368,7 +370,8 @@ class CameraTraceRasterPreview:
             raise ValueError("camera_bgr must contain three BGR channels")
         shape = self.camera_bgr.shape[:2]
         if (
-            self.eligible_mask.shape != shape
+            self.exposed_bed_mask.shape != shape
+            or self.eligible_mask.shape != shape
             or self.normalized_grayscale.shape != shape
             or self.foreground_mask.shape != shape
         ):
@@ -3562,6 +3565,7 @@ def _detect_non_grid_contrast_raster(
                 strategy=strategy_name,
                 polarity=polarity,
                 camera_bgr=normalization.corrected_bgr,
+                exposed_bed_mask=eligibility.exposed_bed_mask,
                 eligible_mask=eligibility.material_eligible_mask,
                 normalized_grayscale=source.composited_grayscale,
                 foreground_mask=mask_preview.foreground_mask,
@@ -4872,6 +4876,13 @@ def detect_objects(
                 strategy="color",
                 polarity="color",
                 camera_bgr=preview_camera,
+                exposed_bed_mask=(
+                    _immutable_trace_preview_array(
+                        np.zeros(image.shape[:2], dtype=np.uint8)
+                    )
+                    if camera_eligibility is None
+                    else camera_eligibility.exposed_bed_mask
+                ),
                 eligible_mask=(
                     _immutable_trace_preview_array(
                         np.full(image.shape[:2], 255, dtype=np.uint8)

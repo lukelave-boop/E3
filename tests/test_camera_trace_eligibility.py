@@ -15,10 +15,13 @@ from laser_aligner.project.raster_vectorize import (
     prepare_pixel_vectorization_source,
     vectorize_pixel_source,
 )
+from laser_aligner.vision import object_trace as object_trace_module
 from laser_aligner.vision.camera_raster_normalization import (
     normalize_camera_trace_frame,
 )
 from laser_aligner.vision.camera_trace_eligibility import (
+    CameraTraceEligibilityTiming,
+    _appearance_guarded_closing,
     prepare_camera_trace_eligibility,
 )
 from laser_aligner.vision.object_trace import TraceOptions, detect_objects
@@ -70,9 +73,7 @@ def _reflective_honeycomb_scene(
     highlight = np.zeros((height, width), dtype=np.float32)
     yy, xx = np.indices((height, width), dtype=np.float32)
     highlight = 18.0 * np.exp(-((xx - 505.0) ** 2 + (yy - 105.0) ** 2) / 4200.0)
-    reference = np.clip(
-        reference.astype(np.float32) + highlight[:, :, None], 0, 255
-    ).astype(np.uint8)
+    reference = np.clip(reference.astype(np.float32) + highlight[:, :, None], 0, 255).astype(np.uint8)
 
     current = reference.astype(np.float32) * brightness
     current += np.asarray((7.0, 1.0, -3.0), dtype=np.float32)
@@ -84,9 +85,7 @@ def _reflective_honeycomb_scene(
     if stock_fraction > 0.0:
         sheet[105:405, left:right] = 255
     sheet_level = np.asarray((194.0, 199.0, 214.0), dtype=np.float32)
-    current[sheet > 0] = sheet_level + (
-        (xx[sheet > 0] / width) * 9.0 - (yy[sheet > 0] / height) * 5.0
-    )[:, None]
+    current[sheet > 0] = sheet_level + ((xx[sheet > 0] / width) * 9.0 - (yy[sheet > 0] / height) * 5.0)[:, None]
 
     artwork_mask = np.zeros((height, width), dtype=np.uint8)
     if artwork is not None:
@@ -140,6 +139,56 @@ def _eligibility(scene: _Scene):
         roi_source="synthetic support intersected with guarded output",
         reference_bgr=scene.reference,
         reference_identity="synthetic-reference-v1",
+    )
+
+
+def _correlated_stencil_scene(*, polarity: str = "dark") -> _Scene:
+    scene = _reflective_honeycomb_scene(
+        stock_fraction=0.70,
+        brightness=1.08,
+        noise_sigma=0.0,
+    )
+    current = scene.current.astype(np.float32)
+    if polarity == "light":
+        current[scene.sheet_mask > 0] = (54.0, 64.0, 76.0)
+        ink_level = np.asarray((230.0, 237.0, 245.0), dtype=np.float32)
+    else:
+        current[scene.sheet_mask > 0] = (194.0, 201.0, 216.0)
+        ink_level = np.asarray((34.0, 43.0, 54.0), dtype=np.float32)
+
+    artwork = np.zeros(scene.sheet_mask.shape, dtype=np.uint8)
+    cv2.fillConvexPoly(
+        artwork,
+        np.asarray(((295, 145), (320, 141), (329, 356), (304, 360)), np.int32),
+        255,
+        lineType=cv2.LINE_8,
+    )
+    reference_gray = cv2.cvtColor(scene.reference, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    reference_residual = reference_gray - cv2.GaussianBlur(
+        reference_gray,
+        (0, 0),
+        10.0,
+        borderType=cv2.BORDER_REFLECT_101,
+    )
+    # The low-amplitude pattern is spatially identical to the trusted bed. Local
+    # detrending and normalization can therefore correlate even though the
+    # actual patch remains plainly dark brown (or plainly light) in Camera.
+    copied_texture = np.clip(reference_residual * 0.46, -24.0, 24.0)
+    current[artwork > 0] = ink_level + copied_texture[artwork > 0, None]
+    current = cv2.GaussianBlur(
+        current,
+        (0, 0),
+        0.55,
+        borderType=cv2.BORDER_REFLECT_101,
+    )
+    rng = np.random.default_rng(2026082902)
+    current += rng.normal(0.0, 1.1, current.shape).astype(np.float32)
+    return _Scene(
+        reference=scene.reference,
+        current=np.clip(np.rint(current), 0, 255).astype(np.uint8),
+        roi_mask=scene.roi_mask,
+        sheet_mask=scene.sheet_mask,
+        artwork_mask=artwork,
     )
 
 
@@ -311,6 +360,211 @@ def test_sheet_artwork_reaches_exact_eligibility_gated_production_mask(
         "raster_hierarchy_validation",
     } <= timing["raster_vectorization"].keys()
     assert timing["trace_detection_total_seconds"] >= 0.0
+
+
+@pytest.mark.parametrize("polarity", ("dark", "light"))
+def test_correlated_stencil_appearance_veto_keeps_changed_ink_eligible(
+    polarity: str,
+) -> None:
+    scene = _correlated_stencil_scene(polarity=polarity)
+    timing = CameraTraceEligibilityTiming()
+    eligibility = prepare_camera_trace_eligibility(
+        scene.current,
+        _AREA,
+        _PPM,
+        roi_polygons_mm=_ROI,
+        roi_source="synthetic correlated-stencil ROI",
+        reference_bgr=scene.reference,
+        reference_identity="synthetic-reference-v1",
+        timing=timing,
+    )
+    ink_core = (
+        cv2.erode(
+            scene.artwork_mask,
+            np.ones((7, 7), dtype=np.uint8),
+        )
+        > 0
+    )
+
+    assert np.count_nonzero(ink_core) > 2_500
+    assert np.count_nonzero(eligibility.exposed_bed_mask[ink_core]) == 0
+    assert np.all(eligibility.material_eligible_mask[ink_core] == 255)
+    assert (
+        eligibility.diagnostics.structural_match_pixel_count - eligibility.diagnostics.exposed_bed_pixel_count
+        > np.count_nonzero(ink_core) * 0.20
+    )
+    assert {
+        "photometric_compensation",
+        "structural_reference_match",
+        "appearance_veto",
+        "morphology_closing",
+        "trace_eligibility_total",
+    } <= timing.snapshot().keys()
+
+
+def test_correlated_stencil_veto_survives_bounded_model_downsampling() -> None:
+    scene = _correlated_stencil_scene(polarity="dark")
+    doubled = _Scene(
+        reference=cv2.resize(
+            scene.reference,
+            (1280, 960),
+            interpolation=cv2.INTER_CUBIC,
+        ),
+        current=cv2.resize(
+            scene.current,
+            (1280, 960),
+            interpolation=cv2.INTER_CUBIC,
+        ),
+        roi_mask=cv2.resize(
+            scene.roi_mask,
+            (1280, 960),
+            interpolation=cv2.INTER_NEAREST,
+        ),
+        sheet_mask=cv2.resize(
+            scene.sheet_mask,
+            (1280, 960),
+            interpolation=cv2.INTER_NEAREST,
+        ),
+        artwork_mask=cv2.resize(
+            scene.artwork_mask,
+            (1280, 960),
+            interpolation=cv2.INTER_NEAREST,
+        ),
+    )
+    eligibility = prepare_camera_trace_eligibility(
+        doubled.current,
+        _AREA,
+        4.0,
+        roi_polygons_mm=_ROI,
+        roi_source="synthetic high-resolution correlated-stencil ROI",
+        reference_bgr=doubled.reference,
+        reference_identity="synthetic-reference-v1",
+    )
+    ink_core = cv2.erode(
+        doubled.artwork_mask,
+        np.ones((13, 13), dtype=np.uint8),
+    ) > 0
+
+    assert eligibility.diagnostics.reference_model_width_px == 640
+    assert eligibility.diagnostics.reference_model_height_px == 480
+    assert eligibility.diagnostics.photometric_fit_sample_pixel_count <= 50_000
+    assert np.count_nonzero(eligibility.exposed_bed_mask[ink_core]) == 0
+    assert np.all(eligibility.material_eligible_mask[ink_core] == 255)
+
+
+def test_near_equal_luminance_correlated_chroma_mismatch_is_not_bed() -> None:
+    scene = _correlated_stencil_scene(polarity="dark")
+    current = scene.current.astype(np.float32)
+    reference_gray = cv2.cvtColor(scene.reference, cv2.COLOR_BGR2GRAY).astype(
+        np.float32
+    )
+    reference_residual = reference_gray - cv2.GaussianBlur(
+        reference_gray,
+        (0, 0),
+        10.0,
+        borderType=cv2.BORDER_REFLECT_101,
+    )
+    copied_texture = np.clip(reference_residual * 0.46, -24.0, 24.0)
+    purple = np.asarray((155.0, 55.0, 125.0), dtype=np.float32)
+    artwork = scene.artwork_mask > 0
+    current[artwork] = purple + copied_texture[artwork, None]
+    changed = _Scene(
+        reference=scene.reference,
+        current=np.clip(np.rint(current), 0, 255).astype(np.uint8),
+        roi_mask=scene.roi_mask,
+        sheet_mask=scene.sheet_mask,
+        artwork_mask=scene.artwork_mask,
+    )
+    eligibility = _eligibility(changed)
+    ink_core = cv2.erode(
+        changed.artwork_mask,
+        np.ones((7, 7), dtype=np.uint8),
+    ) > 0
+    current_gray = cv2.cvtColor(changed.current, cv2.COLOR_BGR2GRAY)
+
+    assert abs(
+        float(np.median(current_gray[ink_core]))
+        - float(np.median(reference_gray[ink_core]))
+    ) < 18.0
+    assert np.count_nonzero(eligibility.exposed_bed_mask[ink_core]) == 0
+    assert np.all(eligibility.material_eligible_mask[ink_core] == 255)
+
+
+def test_dark_correlated_stencil_remains_continuous_through_exact_4x_mask() -> None:
+    scene = _correlated_stencil_scene(polarity="dark")
+    eligibility = _eligibility(scene)
+    previews = []
+    result = detect_objects(
+        scene.current,
+        TraceOptions(
+            detection_mode="contrast",
+            contrast_threshold_mode="auto",
+            regular_grid=False,
+            output_mode="native",
+            min_area_mm2=1.0,
+            max_area_mm2=8_000.0,
+            min_width_mm=0.5,
+            min_height_mm=0.5,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.20,
+        ),
+        _AREA,
+        _PPM,
+        output_work_area=_AREA,
+        background_image=scene.reference,
+        trace_roi_polygons_mm=_ROI,
+        reference_required=True,
+        raster_preview_callback=previews.append,
+        _camera_eligibility=eligibility,
+    )
+    preview = previews[-1]
+    ink_core = (
+        cv2.erode(
+            scene.artwork_mask,
+            np.ones((9, 9), dtype=np.uint8),
+        )
+        > 0
+    )
+    ink_core_4x = (
+        cv2.resize(
+            ink_core.astype(np.uint8),
+            (scene.current.shape[1] * 4, scene.current.shape[0] * 4),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        > 0
+    )
+
+    assert result.detected
+    assert preview.exposed_bed_mask is eligibility.exposed_bed_mask
+    assert preview.eligible_mask is eligibility.material_eligible_mask
+    assert np.all(preview.foreground_mask[ink_core] == 255)
+    assert np.all(preview.contour_mask[ink_core_4x] == 255)
+
+
+def test_closing_does_not_amplify_one_isolated_false_seed() -> None:
+    direct = np.zeros((80, 100), dtype=bool)
+    direct[40, 50] = True
+    strong = direct.copy()
+    support = np.ones_like(direct)
+
+    closed = _appearance_guarded_closing(direct, strong, support, 2.0)
+
+    assert np.array_equal(closed, direct)
+
+
+def test_closing_bridges_real_bed_gap_but_not_changed_material_barrier() -> None:
+    direct = np.zeros((80, 100), dtype=bool)
+    direct[32:49, 30:44] = True
+    direct[32:49, 48:62] = True
+    strong = direct.copy()
+    support = np.ones_like(direct)
+
+    continuous = _appearance_guarded_closing(direct, strong, support, 2.0)
+    assert np.all(continuous[37:44, 44:48])
+
+    support[:, 45:47] = False
+    guarded = _appearance_guarded_closing(direct, strong, support, 2.0)
+    assert np.count_nonzero(guarded[:, 45:47]) == 0
 
 
 def test_outside_machine_features_cannot_change_eligible_otsu_or_mask() -> None:
@@ -487,6 +741,62 @@ def test_shared_vectorizer_otsu_and_4x_mask_ignore_ineligible_pixels() -> None:
 
     assert np.count_nonzero(preview.foreground_mask[eligibility == 0]) == 0
     assert np.count_nonzero(preview.contour_mask[gate_4x == 0]) == 0
+
+
+def test_imported_raster_without_eligibility_retains_shared_mask_contract() -> None:
+    gray = np.full((36, 52), 232, dtype=np.uint8)
+    gray[9:28, 17:36] = 31
+    source = prepare_pixel_vectorization_source(cv2.cvtColor(gray, cv2.COLOR_GRAY2RGBA))
+    previews: list[PixelVectorizationMaskPreview] = []
+    vectorize_pixel_source(
+        source,
+        RasterVectorizationOptions(
+            detection_mode=RasterDetectionMode.AUTO_THRESHOLD,
+            minimum_feature_area_mm2=0.0,
+            simplification_tolerance_mm=0.10,
+            contour_output=RasterContourOutput.ALL_CONTOURS,
+        ),
+        displayed_width_mm=26.0,
+        displayed_height_mm=18.0,
+        mask_ready=previews.append,
+    )
+
+    assert source.eligibility_mask is None
+    assert np.all(previews[-1].foreground_mask[11:26, 19:34] == 255)
+    assert np.count_nonzero(previews[-1].foreground_mask[:6]) == 0
+
+
+def test_grid_mode_does_not_enter_non_grid_reference_suppression(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unexpected_eligibility(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("grid mode entered non-grid eligibility")
+
+    monkeypatch.setattr(
+        object_trace_module,
+        "prepare_camera_trace_eligibility",
+        unexpected_eligibility,
+    )
+    image = np.full((200, 200, 3), 220, dtype=np.uint8)
+    mask = np.zeros(image.shape[:2], dtype=np.uint8)
+    cv2.rectangle(mask, (60, 70), (140, 130), 255, -1)
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            regular_grid=True,
+            min_area_mm2=10.0,
+            max_area_mm2=5_000.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+        ),
+        WorkArea(0.0, 100.0, 0.0, 100.0),
+        _PPM,
+        mask_override=mask,
+    )
+
+    assert result.direct_count == 1
 
 
 def test_full_frame_eligibility_preserves_physical_mapping_near_every_roi_edge() -> None:

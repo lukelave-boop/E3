@@ -890,6 +890,7 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     )
     preview = SimpleNamespace(
         camera_bgr=np.array([[[10, 20, 30], [40, 50, 60]]], dtype=np.uint8),
+        exposed_bed_mask=np.array([[0, 255]], dtype=np.uint8),
         eligible_mask=np.array([[255, 0]], dtype=np.uint8),
         normalized_grayscale=np.array([[42, 84]], dtype=np.uint8),
         foreground_mask=np.array([[0, 255]], dtype=np.uint8),
@@ -918,12 +919,17 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     assert strategies == [("raster_dark", False, False)]
     assert set(fake._trace_raster_preview_images) == {
         "camera",
+        "exposed_bed",
         "eligible",
         "normalized",
         "mask",
     }
     assert fake._trace_raster_preview_images["camera"].pixelColor(0, 0) == (
         QtGui.QColor(30, 20, 10)
+    )
+    assert (
+        fake._trace_raster_preview_images["exposed_bed"].pixelColor(1, 0).red()
+        == 255
     )
     assert fake._trace_raster_preview_images["eligible"].pixelColor(0, 0).red() == 255
     assert (
@@ -1004,6 +1010,9 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
         camera_values[3:, :4] = (225, 35, 65)
         camera_values[3:, 4:] = (105, 75, 155)
         camera = immutable(camera_values)
+        exposed_values = np.zeros((6, 8), dtype=np.uint8)
+        exposed_values[1:3, 4:7] = 255
+        exposed = immutable(exposed_values)
         eligible_values = np.zeros((6, 8), dtype=np.uint8)
         eligible_values[1:5, 2:4] = 255
         eligible_values[4:, 5:8] = 255
@@ -1024,6 +1033,7 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
             strategy="raster_dark",
             polarity="dark",
             camera_bgr=camera,
+            exposed_bed_mask=exposed,
             eligible_mask=eligible,
             normalized_grayscale=normalized,
             foreground_mask=foreground,
@@ -1037,6 +1047,13 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
                 (
                     camera[..., ::-1],
                     np.full((*camera.shape[:2], 1), 255, dtype=np.uint8),
+                ),
+                axis=2,
+            ),
+            "exposed_bed": np.concatenate(
+                (
+                    np.repeat(exposed[..., None], 3, axis=2),
+                    np.full((*exposed.shape, 1), 255, dtype=np.uint8),
                 ),
                 axis=2,
             ),
@@ -1092,6 +1109,7 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
 
         expected_sizes = {
             "camera": QtCore.QSize(8, 6),
+            "exposed_bed": QtCore.QSize(8, 6),
             "eligible": QtCore.QSize(8, 6),
             "normalized": QtCore.QSize(8, 6),
             "mask": QtCore.QSize(32, 24),
@@ -1102,7 +1120,7 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
             if record.name == main_window_module.__name__
             and record.getMessage().startswith("Camera Trace preview slot ")
         ]
-        assert len(slot_messages) == 4
+        assert len(slot_messages) == 5
         for mode, expected_size in expected_sizes.items():
             assert any(
                 f"slot {mode}: {expected_size.width()} x "
@@ -1115,7 +1133,7 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
             )[1]
             for message in slot_messages
         }
-        assert len(set(slot_hashes.values())) == 4
+        assert len(set(slot_hashes.values())) == 5
         assert slot_hashes["mask"] != slot_hashes["camera"]
         displayed_pixels: dict[str, bytes] = {}
         for mode, expected_size in expected_sizes.items():
@@ -1141,7 +1159,7 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
             )
             assert mapped_pixels.width() == pytest.approx(camera.shape[1] / base_ppm)
             assert mapped_pixels.height() == pytest.approx(camera.shape[0] / base_ppm)
-        assert len(set(displayed_pixels.values())) == 4
+        assert len(set(displayed_pixels.values())) == 5
         assert displayed_pixels["mask"] != displayed_pixels["camera"]
         assert production_mask.tobytes(order="C") == original_mask
         assert not production_mask.flags.writeable

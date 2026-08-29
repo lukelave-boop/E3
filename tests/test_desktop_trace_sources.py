@@ -30,6 +30,7 @@ def test_trace_panel_and_controller_are_wired():
     assert "traceDetectionFailed = QtCore.Signal(int, str, bool)" in controller
     assert "raster_preview_callback=raster_preview_ready" in controller
     assert "QtCore.Qt.ConnectionType.QueuedConnection" in window
+    assert 'addItem("Exposed bed", "exposed_bed")' in panels
     assert 'addItem("Normalized", "normalized")' in panels
     assert 'addItem("Mask", "mask")' in panels
     assert "def sample_trace_color" in controller

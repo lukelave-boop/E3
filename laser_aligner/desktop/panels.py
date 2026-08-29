@@ -1540,15 +1540,16 @@ class TracePanel(QtWidgets.QWidget):
         self.raster_preview_combo = QtWidgets.QComboBox()
         self.raster_preview_combo.setObjectName("traceRasterPreviewSelector")
         self.raster_preview_combo.addItem("Camera", "camera")
+        self.raster_preview_combo.addItem("Exposed bed", "exposed_bed")
         self.raster_preview_combo.addItem("Eligible", "eligible")
         self.raster_preview_combo.addItem("Normalized", "normalized")
         self.raster_preview_combo.addItem("Mask", "mask")
         self.raster_preview_combo.setEnabled(False)
         raster_preview_tip = (
-            "Inspect the corrected camera image, exact material eligibility, "
-            "normalized grayscale, or exact production foreground mask used by "
-            "this Trace request. These views are diagnostic only and do not "
-            "change vector geometry."
+            "Inspect the corrected camera image, exact exposed-bed suppression, "
+            "exact material eligibility, normalized grayscale, or exact production "
+            "foreground mask used by this Trace request. These views are diagnostic "
+            "only and do not change vector geometry."
         )
         raster_preview_label.setToolTip(raster_preview_tip)
         self.raster_preview_combo.setToolTip(raster_preview_tip)
@@ -2258,7 +2259,8 @@ class TracePanel(QtWidgets.QWidget):
         value = self.raster_preview_combo.currentData()
         return (
             str(value)
-            if value in {"camera", "eligible", "normalized", "mask"}
+            if value
+            in {"camera", "exposed_bed", "eligible", "normalized", "mask"}
             else "camera"
         )
 

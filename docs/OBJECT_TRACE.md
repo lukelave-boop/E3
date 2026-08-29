@@ -229,10 +229,29 @@ intersects that geometry with the recorded support rectangle in the existing
 local frame. The accepted empty-bed reference is used only after its stored
 image hash, bed-map digest, support-frame digest, coordinate frame,
 rectification, and final dimensions validate. Locally detrended luminance
-correlation, normalized patch error, and compatible texture exclude only strong
-exposed-bed evidence; changed or uncertain pixels remain eligible. Thus a sheet
-becomes material that may be inspected, not foreground, and its perimeter is not
-created by the reference stage. Honeycomb-local Auto requires valid reference
+correlation, normalized patch error, and compatible texture first identify
+structural candidates on a model bounded to 800 pixels and 2 pixels/mm. Strong
+candidates whose uncompensated Lab luminance/chroma distances are at most 32/24
+levels seed a deterministic robust lighting model: current Lab
+luminance is fitted from reference luminance with a 0.72–1.28 gain, ±48-level
+offset, and ±32-level whole-frame X/Y gradients, while each chroma channel uses
+a ±24-level offset and ±16-level gradients. At most 50,000 deterministic seed
+samples enter the Tukey-weighted fits, so changed stock or ink outliers cannot
+dominate ordinary exposed-bed evidence.
+
+The fitted reference appearance is compared with the current image after a
+0.35 mm mild-blur allowance. Point luminance/chroma/combined residuals must be
+at most 34/22/38 levels and the existing 1.5 mm patch means must be at most
+26/18/30. A stricter 12/8/14 point match may bypass a contaminated patch mean,
+preserving real bed pixels immediately beside a changed-material boundary.
+Structural evidence alone can never exclude a pixel. The existing 3 mm-radius morphological closing is retained
+at bounded model resolution for real honeycomb continuity, but only strong
+structure-plus-appearance seeds are closed, and new bridge pixels must retain
+appearance consistency and loose structural support. Closing therefore cannot
+cross a clearly changed sheet or artwork region, and an isolated false seed does
+not expand. Changed or uncertain pixels remain eligible. Thus a sheet becomes
+material that may be inspected, not foreground, and its perimeter is not created
+by the reference stage. Honeycomb-local Auto requires valid reference
 evidence. Manual Contrast and explicit Color may fall back to hard-ROI-only
 eligibility when no reference exists; a supplied mismatched reference is an
 error.
@@ -392,6 +411,9 @@ The **Camera display** selector is an inspection surface for one frozen request,
 not a second image-processing path:
 
 - **Camera** is the corrected production BGR frame.
+- **Exposed bed** is the exact source-resolution immutable
+  `exposed_bed_mask` whose inverse is combined with the hard ROI. It is not a
+  UI reconstruction.
 - **Eligible** is the exact source-resolution hard-ROI plus reference-aware
   material mask used by that request.
 - **Normalized** is the exact polarity-specific grayscale delivered to the
@@ -402,8 +424,8 @@ not a second image-processing path:
   4× reconstruction.
 
 The workspace uses each image's actual pixels/mm: the exact 4× Mask therefore
-occupies the same machine area as Camera, Eligible, and Normalized without a
-display copy or mutation. Because corrected source dimensions are rounded once,
+occupies the same machine area as Camera, Exposed bed, Eligible, and Normalized
+without a display copy or mutation. Because corrected source dimensions are rounded once,
 the desktop validates the Mask as exactly four times that already-rounded source
 raster rather than independently rounding the physical area again at 4×. This
 preserves a possible fractional final pixel strip and never resizes the production
@@ -442,8 +464,10 @@ persisted and does not alter scoring or validation. The request boundary records
 `capture_seconds`, `rectification_seconds`,
 `capture_rectification_total_seconds`, `detect_objects_seconds`, and
 `request_total_seconds`. The camera adapter records
-`hard_roi_preparation`, `reference_comparison`, `material_eligibility`,
-`trace_eligibility_total`, `grayscale_preparation`, `background_estimation`,
+`hard_roi_preparation`, `structural_reference_match`,
+`photometric_compensation`, `appearance_veto`, `morphology_closing`,
+`reference_comparison`, `material_eligibility`, `trace_eligibility_total`,
+`grayscale_preparation`, `background_estimation`,
 `normalization`, and
 `camera_normalization_total`. Shared raster timing separately records mask
 generation/preparation, threshold, component cleanup, 4× preparation, contour extraction,

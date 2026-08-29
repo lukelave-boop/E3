@@ -228,15 +228,14 @@ remaining excluded from all laser output and framing. Repeated rounded-label
 grids can share one fitted cell geometry and
 lattice so damaged observations and inferred gaps produce corresponding
 identical row/column objects, while pixel contours remain available for
-irregular objects. **Cutout / silhouette** instead freezes one corrected frame
-and lets the operator click inside only the physical objects, holes, or stencils
-they intend to trace. Disconnected high-contrast lettering is ignored unless it
-is clicked. A blue raw contour appears first; a worker then applies the shared
-physical contour-to-native-path fitter, preserves holes and islands with
-even-odd topology, and replaces it with verified native lines/cubics before
-Create is enabled. Grid filters, normalization, and missing-cell inference
-remain unchanged and are disabled only while this seeded mode is active. The
-real-camera GUI flow is not yet verified. See
+irregular objects. Ordinary non-grid Auto and By contrast freeze one corrected
+frame, apply the guarded Trace ROI, suppress only trusted empty bed whose
+structure and compensated Lab appearance both match the reference, normalize
+eligible material, and use the shared raster Otsu/4× contour/native-fit path.
+The Camera display selector exposes the exact **Camera**, **Exposed bed**,
+**Eligible**, **Normalized**, and production **Mask** stages without granting
+project or laser authority. The physical Coleman scene still requires a new
+camera validation. See
 [docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
 
 Reusable label-sheet cutting templates can be created from visible project

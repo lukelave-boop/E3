@@ -262,12 +262,16 @@ should own a physical camera at a time.
   encoded-image SHA-256, bed-mapping digest, support-frame digest, coordinate
   frame, rectification, and final dimensions validate. Correlated locally
   detrended luminance, normalized patch error, and compatible local texture on a
-  bounded model classify only strong exposed-bed evidence. Changed or uncertain
-  pixels remain material-eligible. A changed sheet is therefore eligibility,
-  not foreground. Manual Contrast and explicit Color may fall back to hard-ROI-
-  only eligibility when no current reference exists; honeycomb-local Auto fails
-  closed instead of claiming a reference-aware result. A supplied mismatched
-  reference is rejected.
+  bounded model produce structural evidence but cannot classify bed alone.
+  Strong reference-like seeds drive a bounded robust Lab luminance-affine plus
+  chroma-offset planar lighting model. Compensated point and patch appearance
+  must also match. The retained 3 mm-radius closing starts only from strong
+  combined seeds at model resolution and can add only appearance-consistent,
+  structurally supported bridge pixels. Changed or uncertain pixels remain
+  material-eligible. A changed sheet is therefore eligibility, not foreground.
+  Manual Contrast and explicit Color may fall back to hard-ROI-only eligibility
+  when no current reference exists; honeycomb-local Auto fails closed instead of
+  claiming a reference-aware result. A supplied mismatched reference is rejected.
 - Non-grid Camera Trace **By contrast** fills ineligible pixels only in the
   temporary low-frequency background model, derives scale from eligible
   material, forces excluded response white, then uses the complete source-neutral
@@ -314,9 +318,10 @@ should own a physical camera at a time.
   review ends. The temporary layer never mutates `ProjectDocument` and has no
   planning, G-code, or execution consumer.
 - For a current non-grid request, the Trace **Camera display** selector can show
-  the immutable corrected **Camera** frame, exact material **Eligible** mask,
-  exact polarity-specific **Normalized** threshold input (or grayscale context
-  for Color), or the exact 4× production contour **Mask** used by `RETR_TREE`.
+  the immutable corrected **Camera** frame, exact production **Exposed bed**
+  mask, exact material **Eligible** mask, exact polarity-specific **Normalized**
+  threshold input (or grayscale context for Color), or the exact 4× production
+  contour **Mask** used by `RETR_TREE`.
   The workspace validates 4× dimensions from the already-rounded source raster,
   not by re-rounding the physical area at the higher display density, so a
   fractional final pixel strip cannot reject the exact mask. Raster mask
