@@ -1540,13 +1540,15 @@ class TracePanel(QtWidgets.QWidget):
         self.raster_preview_combo = QtWidgets.QComboBox()
         self.raster_preview_combo.setObjectName("traceRasterPreviewSelector")
         self.raster_preview_combo.addItem("Camera", "camera")
+        self.raster_preview_combo.addItem("Eligible", "eligible")
         self.raster_preview_combo.addItem("Normalized", "normalized")
         self.raster_preview_combo.addItem("Mask", "mask")
         self.raster_preview_combo.setEnabled(False)
         raster_preview_tip = (
-            "Inspect the corrected camera image, normalized grayscale, or exact "
-            "production foreground mask used by this Trace request. These views "
-            "are diagnostic only and do not change vector geometry."
+            "Inspect the corrected camera image, exact material eligibility, "
+            "normalized grayscale, or exact production foreground mask used by "
+            "this Trace request. These views are diagnostic only and do not "
+            "change vector geometry."
         )
         raster_preview_label.setToolTip(raster_preview_tip)
         self.raster_preview_combo.setToolTip(raster_preview_tip)
@@ -2254,7 +2256,11 @@ class TracePanel(QtWidgets.QWidget):
 
     def raster_preview_mode(self) -> str:
         value = self.raster_preview_combo.currentData()
-        return str(value) if value in {"camera", "normalized", "mask"} else "camera"
+        return (
+            str(value)
+            if value in {"camera", "eligible", "normalized", "mask"}
+            else "camera"
+        )
 
     def begin_detection(self) -> None:
         self.clear_result()
@@ -2262,7 +2268,13 @@ class TracePanel(QtWidgets.QWidget):
             "Capturing and preparing the corrected camera raster…"
         )
 
-    def set_raster_preview_available(self, strategy: str = "") -> None:
+    def set_raster_preview_available(
+        self,
+        strategy: str = "",
+        *,
+        selected_strategy: bool = True,
+        native_fitting_completed: bool = False,
+    ) -> None:
         was_enabled = self.raster_preview_combo.isEnabled()
         self.raster_preview_combo.setEnabled(True)
         if not was_enabled:
@@ -2276,10 +2288,21 @@ class TracePanel(QtWidgets.QWidget):
         if not self._result_is_current:
             strategy_text = str(strategy).strip().replace("_", " ")
             suffix = f" ({strategy_text})" if strategy_text else ""
-            self.status_label.setText(
-                "Production mask ready"
-                f"{suffix}; verified native fitting is still running."
-            )
+            if native_fitting_completed:
+                self.status_label.setText(
+                    "Production mask ready"
+                    f"{suffix}; verified native fitting completed."
+                )
+            elif not selected_strategy:
+                self.status_label.setText(
+                    "Previewing"
+                    f"{suffix or ' candidate'} mask; Auto evaluation is still running."
+                )
+            else:
+                self.status_label.setText(
+                    "Production mask ready"
+                    f"{suffix}; verified native fitting is still running."
+                )
 
     def clear_raster_preview(self) -> None:
         previous = self.raster_preview_combo.blockSignals(True)

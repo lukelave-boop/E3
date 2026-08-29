@@ -118,6 +118,7 @@ def test_quick_preview_is_preview_only_and_subsecond_for_logo_artwork(
     assert all(not hasattr(contour, "native_subpath") for contour in preview.contours)
     assert {
         "quick_preview_total",
+        "threshold",
         "mask_generation",
         "component_cleanup",
         "raster_4x_preparation",
@@ -178,6 +179,7 @@ def test_timing_instrumentation_preserves_authoritative_geometry(
     assert {
         "verified_vectorization_total",
         "mask_preparation_total",
+        "threshold",
         "mask_generation",
         "component_cleanup",
         "raster_4x_preparation",

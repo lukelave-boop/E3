@@ -67,6 +67,7 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets, bounded fine registration, holdout accuracy scoring, and Qt-free read-only coordinate auditing |
 | `vision/` | Workpiece, fiducial, crosshair-grid, camera-object detection, and camera-photo normalization |
 | `vision/camera_raster_normalization.py` | Qt-free, authority-free low-frequency illumination modeling and symmetric dark/light raster adaptation for non-grid Camera Trace |
+| `vision/camera_trace_eligibility.py` | Qt-free hard physical Trace ROI and trusted empty-bed comparison that produces immutable material eligibility without creating foreground geometry |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
@@ -248,22 +249,46 @@ should own a physical camera at a time.
   placement hints when a current support frame drives the desktop canvas.
 - ArUco, keyed unseeded cross-grid, and rough-map-seeded crosshair detection
   support bed mapping.
-- Non-grid Camera Trace **By contrast** first converts the corrected photograph
-  into a local-contrast raster with the camera-specific illumination model, then
-  uses the complete source-neutral imported-raster vectorization pipeline. Auto
-  Otsu or the operator's manual threshold applies to that normalized raster, not
-  to absolute camera brightness. Each root `RETR_TREE` contour plus all
-  descendants is one indivisible temporary review candidate; unrelated failing
-  roots do not discard verified peers.
+- Every ordinary non-grid Camera Trace request keeps the full corrected raster
+  and established pixel-to-physical transform, but builds an immutable
+  eligibility mask. In machine coordinates the hard ROI is the existing guarded
+  output polygon or guarded rectangle. In honeycomb-local coordinates it is the
+  intersection of the recorded support rectangle and that same guarded output
+  geometry transformed into the existing local frame. This restricts vision
+  evidence only; it does not enlarge support, planning, G-code, or laser
+  authority. Pixels outside the hard ROI cannot enter color analysis,
+  normalization statistics, Otsu, components, scoring, or fitting.
+- The accepted empty-honeycomb reference is supplied only after its schema,
+  encoded-image SHA-256, bed-mapping digest, support-frame digest, coordinate
+  frame, rectification, and final dimensions validate. Correlated locally
+  detrended luminance, normalized patch error, and compatible local texture on a
+  bounded model classify only strong exposed-bed evidence. Changed or uncertain
+  pixels remain material-eligible. A changed sheet is therefore eligibility,
+  not foreground. Manual Contrast and explicit Color may fall back to hard-ROI-
+  only eligibility when no current reference exists; honeycomb-local Auto fails
+  closed instead of claiming a reference-aware result. A supplied mismatched
+  reference is rejected.
+- Non-grid Camera Trace **By contrast** fills ineligible pixels only in the
+  temporary low-frequency background model, derives scale from eligible
+  material, forces excluded response white, then uses the complete source-neutral
+  imported-raster vectorization pipeline. Auto Otsu or the operator's manual
+  threshold applies to that normalized raster, not absolute camera brightness.
+  Each root `RETR_TREE` contour plus all descendants is one indivisible temporary
+  review candidate; unrelated failing roots do not discard verified peers.
 - Non-grid Camera Trace **Auto detect** is orchestration, not a fourth detector.
-  One corrected capture becomes one immutable camera-normalization result. Auto
+  One corrected capture and one eligibility result become one immutable camera-
+  normalization result. Auto
   estimates the background once and derives both the dark and light
   `PixelVectorizationSource` values from it, then evaluates ordinary shared-
   raster Otsu for each polarity. It also runs a production Color attempt only
-  when weighted HSV/Lab evidence identifies a coherent hue that is neither
-  negligible nor background- or border-dominated. Every successful attempt
+  when eligibility-scoped HSV/Lab evidence identifies a coherent hue that is
+  neither negligible nor material-background- or boundary-dominated. A Color
+  mask above 35% of eligible material or 25% of its boundary is rejected, and
+  Color must beat a credible raster result by eight points. Every successful attempt
   returns authoritative native candidates through its ordinary production path,
-  and deterministic quality scoring chooses one prepared result for review.
+  and deterministic quality scoring chooses one prepared result for review. A
+  score below 70 is not credible, so Auto may return no interpretation rather
+  than choosing the least-bad strategy.
 - The Trace panel treats those non-grid Auto choices as strategy-owned: hue,
   sample, threshold, and polarity controls are inactive, output is native
   lines/Béziers, and border offset is zero. Explicit Color owns hue/sample;
@@ -727,8 +752,12 @@ selected IMAGE + workspace payload identity
 ```
 
 `PixelVectorizationSource` is the immutable decoded-pixel contract beneath asset
-provenance. It owns RGBA, grayscale, white-composited grayscale, alpha, and a
-content-derived pixel key. `RasterVectorizationSource` wraps those same pixels
+provenance. It owns RGBA, grayscale, white-composited grayscale, alpha, an
+optional source-neutral eligibility mask, and a content-derived pixel key. With
+eligibility, excluded pixels do not enter Otsu and can never become foreground;
+the nearest-neighbor 4× eligibility gate is applied again after component-hole
+reconstruction, so interpolation cannot resurrect an excluded pixel.
+`RasterVectorizationSource` wraps those same pixels
 with a legitimate `RasterAssetIdentity`; only that wrapper performs exact
 encoded-byte, path, format, size, and SHA-256 verification. Camera Trace's
 normalized dark/light rasters enter through the source-neutral contract; the
@@ -742,6 +771,8 @@ imported-asset provenance and preserves existing project metadata.
 uses Otsu thresholding over the white-composited image and applies alpha as an
 independent mask gate; manual mode uses the selected 0–255 threshold; alpha mode
 is available only when decoded opacity contains spatially useful variation.
+When eligibility is absent—as it is for ordinary imported rasters—the histogram,
+source key, mask, hierarchy, and geometry retain their prior behavior exactly.
 For camera Contrast, that image is the selected normalized response, so Otsu or
 the manual value measures local contrast rather than absolute exposure.
 Inversion changes foreground polarity, and
@@ -821,14 +852,15 @@ through `0.60`, `(0.95-f)/0.35` between `0.60` and `0.95`, and `0` afterward.
 `B = 1 - border_fraction`; `A = min(1, valid_area / max(4m, 0.01r))`;
 `S = 1 - roots_below_4m / valid_roots`; and
 `W = roots_inside_frame / valid_roots`. `V` is the valid-root count divided by
-valid plus unusable roots. Exact-score ties have stable priority: dark raster,
+valid plus unusable roots. Any score below 70 is rejected. Exact-score ties have
+stable priority: dark raster,
 light raster, then Color. The selected result records compact attempt status,
 reason, threshold/polarity or hue, occupancy, root counts, invalid counts, score,
 and score terms; the operator sees only the selected-strategy summary.
 
 `RasterVectorizationTiming` is opt-in development/test instrumentation and is
 never attached to project data. It accumulates inclusive elapsed time and call
-counts for image decode/preparation, mask generation, contour extraction,
+counts for image decode/preparation, threshold, mask generation, contour extraction,
 corner classification, source-edge refinement, cubic fitting, Newton
 reparameterization, continuous fit validation, adjacent merging, authoritative
 topology, preview flattening, and rasterized hierarchy validation. Timing does

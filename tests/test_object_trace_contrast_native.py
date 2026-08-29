@@ -103,7 +103,7 @@ def test_native_contrast_preview_contours_match_fitted_geometry_envelopes() -> N
         )
 
 
-def test_native_contrast_keeps_outside_candidate_visible_but_unselected() -> None:
+def test_native_contrast_excludes_candidate_clipped_by_hard_output_roi() -> None:
     result = detect_objects(
         _independent_shapes_with_hole(),
         _native_contrast_options(),
@@ -112,10 +112,13 @@ def test_native_contrast_keeps_outside_candidate_visible_but_unselected() -> Non
         output_work_area=WorkArea(20.0, 140.0, 0.0, 100.0),
     )
 
-    rectangle = min(result.detections, key=lambda detection: detection.center_mm[0])
-    washer = max(result.detections, key=lambda detection: detection.center_mm[0])
-    assert rectangle.native_verified
-    assert rectangle.diagnostics["within_work_area"] is False
-    assert rectangle.selected_default is False
+    assert len(result.detections) == 1
+    washer = result.detections[0]
     assert washer.diagnostics["within_work_area"] is True
     assert washer.selected_default is True
+    assert (
+        result.diagnostics["strategy_metrics"][
+            "hard_roi_boundary_rejected_candidate_count"
+        ]
+        == 1
+    )

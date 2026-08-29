@@ -4591,6 +4591,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         arrays = {
             "camera": self._trace_raster_preview_value(preview, "camera_bgr"),
+            "eligible": self._trace_raster_preview_value(
+                preview,
+                "eligible_mask",
+            ),
             "normalized": self._trace_raster_preview_value(
                 preview,
                 "normalized_grayscale",
@@ -4618,8 +4622,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._trace_raster_preview_area = area
         self._trace_raster_preview_signature = signature
         strategy = self._trace_raster_preview_value(preview, "strategy")
+        selected_strategy = bool(
+            self._trace_raster_preview_value(preview, "selected_strategy")
+        )
+        native_fitting_completed = bool(
+            self._trace_raster_preview_value(preview, "native_fitting_completed")
+        )
         self.trace_panel.set_raster_preview_available(
-            "" if strategy is None else str(strategy)
+            "" if strategy is None else str(strategy),
+            selected_strategy=selected_strategy,
+            native_fitting_completed=native_fitting_completed,
         )
         self._trace_raster_preview_mode_changed(
             self.trace_panel.raster_preview_mode()
@@ -4629,9 +4641,25 @@ class E3MainWindow(QtWidgets.QMainWindow):
         image = self._trace_raster_preview_images.get(str(mode))
         if image is None or image.isNull():
             return
+        camera = self._trace_raster_preview_images.get("camera")
+        display_ppm: float | None = None
+        if camera is not None and not camera.isNull() and camera.width() > 0:
+            scale = image.width() / camera.width()
+            runtime = getattr(self, "runtime", None)
+            settings = getattr(runtime, "settings", None)
+            calibration = getattr(settings, "calibration", None)
+            bed = getattr(calibration, "bed", None)
+            base_ppm = getattr(bed, "pixels_per_mm", None)
+            if base_ppm is not None:
+                display_ppm = float(base_ppm) * scale
+            elif self._trace_raster_preview_area is not None:
+                display_ppm = (
+                    camera.width() / self._trace_raster_preview_area.width * scale
+                )
         self._camera_image_ready(
             image,
             image_area=self._trace_raster_preview_area,
+            pixels_per_mm=display_ppm,
         )
 
     @QtCore.Slot(int, str, bool)
@@ -5085,6 +5113,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         payload: object,
         *,
         image_area: Bounds | None = None,
+        pixels_per_mm: float | None = None,
         fit: bool = False,
     ) -> None:
         image = payload
@@ -5108,7 +5137,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
         ) != effective_area
         self.workspace.set_camera_image(
             image,
-            pixels_per_mm=self.runtime.settings.calibration.bed.pixels_per_mm,
+            pixels_per_mm=(
+                self.runtime.settings.calibration.bed.pixels_per_mm
+                if pixels_per_mm is None
+                else pixels_per_mm
+            ),
             image_area=image_area,
         )
         if fit or area_changed:

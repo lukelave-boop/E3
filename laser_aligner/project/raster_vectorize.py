@@ -326,6 +326,7 @@ class PixelVectorizationSource:
     composited_grayscale: np.ndarray
     alpha: np.ndarray
     has_usable_alpha: bool
+    eligibility_mask: np.ndarray | None
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_key, str) or not self.source_key:
@@ -352,6 +353,18 @@ class PixelVectorizationSource:
             raise ValueError("Pixel vectorization source arrays must have one shape")
         if type(self.has_usable_alpha) is not bool:
             raise ValueError("has_usable_alpha must be a boolean")
+        eligibility = self.eligibility_mask
+        if eligibility is not None:
+            if not isinstance(eligibility, np.ndarray):
+                raise TypeError("eligibility_mask must be a numpy array or None")
+            if eligibility.dtype != np.uint8 or eligibility.ndim != 2:
+                raise ValueError("eligibility_mask must be a 2D uint8 array")
+            if eligibility.shape != shape:
+                raise ValueError("eligibility_mask must match the pixel source")
+            if eligibility.flags.writeable:
+                raise ValueError("eligibility_mask must be read-only")
+            if not np.any(eligibility):
+                raise ValueError("eligibility_mask must include at least one pixel")
 
     @property
     def width_px(self) -> int:
@@ -1174,6 +1187,8 @@ def _readonly(array: np.ndarray) -> np.ndarray:
 
 def prepare_pixel_vectorization_source(
     source_rgba: np.ndarray,
+    *,
+    eligibility_mask: np.ndarray | None = None,
 ) -> PixelVectorizationSource:
     """Prepare immutable decoded RGBA pixels without inventing asset provenance."""
 
@@ -1196,10 +1211,23 @@ def prepare_pixel_vectorization_source(
     ).astype(np.uint8)
     alpha_min = int(np.min(alpha))
     alpha_max = int(np.max(alpha))
+    eligibility: np.ndarray | None = None
+    if eligibility_mask is not None:
+        candidate = np.asarray(eligibility_mask)
+        if candidate.ndim != 2 or candidate.shape != rgba.shape[:2]:
+            raise ValueError("eligibility_mask must be a 2-D mask matching the pixels")
+        if candidate.dtype not in (np.bool_, np.uint8):
+            raise ValueError("eligibility_mask must contain boolean or uint8 values")
+        eligibility = (candidate > 0).astype(np.uint8) * 255
+        if not np.any(eligibility):
+            raise ValueError("eligibility_mask must include at least one pixel")
     digest = hashlib.sha256()
     digest.update(b"e3-pixel-vectorization-source-v1\0")
     digest.update(struct.pack(">II", int(rgba.shape[1]), int(rgba.shape[0])))
     digest.update(rgba.tobytes(order="C"))
+    if eligibility is not None:
+        digest.update(b"\0eligibility-v1\0")
+        digest.update(eligibility.tobytes(order="C"))
     return PixelVectorizationSource(
         source_key=digest.hexdigest(),
         source_rgba=_readonly(rgba),
@@ -1208,6 +1236,9 @@ def prepare_pixel_vectorization_source(
         alpha=_readonly(alpha),
         has_usable_alpha=(
             alpha_min < alpha_max and alpha_min < 255 and alpha_max > 0
+        ),
+        eligibility_mask=(
+            None if eligibility is None else _readonly(eligibility)
         ),
     )
 
@@ -1331,6 +1362,7 @@ def _decode_payload(payload: RasterAssetPayload) -> RasterVectorizationSource:
         composited_grayscale=pixels.composited_grayscale,
         alpha=pixels.alpha,
         has_usable_alpha=pixels.has_usable_alpha,
+        eligibility_mask=pixels.eligibility_mask,
     )
 
 
@@ -1374,6 +1406,7 @@ def _composited_grayscale(source: PixelVectorizationSource) -> np.ndarray:
     return source.composited_grayscale
 
 
+@_timed_stage("threshold")
 def _threshold_value(
     source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
@@ -1393,12 +1426,23 @@ def _threshold_value(
     # transparent silhouette appear single-valued, which yields threshold zero
     # and incorrectly removes every non-black foreground pixel.  Alpha remains
     # an independent gate when the mask is built below.
-    if not np.any(source.alpha >= options.alpha_cutoff):
+    eligibility = (
+        np.ones(grayscale.shape, dtype=bool)
+        if source.eligibility_mask is None
+        else source.eligibility_mask > 0
+    )
+    alpha_eligible = source.alpha >= options.alpha_cutoff
+    if not np.any(alpha_eligible & eligibility):
         raise RasterVectorizationError(
-            "The alpha cutoff excludes every source pixel"
+            "The alpha cutoff and eligibility mask exclude every source pixel"
         )
+    otsu_values = (
+        grayscale
+        if source.eligibility_mask is None
+        else grayscale[eligibility]
+    )
     value, _mask = cv2.threshold(
-        grayscale,
+        otsu_values,
         0,
         255,
         cv2.THRESH_BINARY | cv2.THRESH_OTSU,
@@ -1413,7 +1457,7 @@ def _threshold_value(
     # unchanged. For normal polarity the low class is foreground and its full
     # intensity span already supplies headroom. For inverted polarity the low
     # class is background, so headroom is measured above its highest level.
-    eligible = source.alpha >= options.alpha_cutoff
+    eligible = alpha_eligible & eligibility
     low_class = grayscale[eligible & (grayscale <= threshold)]
     high_class = grayscale[eligible & (grayscale > threshold)]
     if not low_class.size or not high_class.size:
@@ -1447,6 +1491,17 @@ def _mask_at_resolution(
             (width, height),
             interpolation=cv2.INTER_LINEAR,
         )
+    eligibility = None
+    if source.eligibility_mask is not None:
+        eligibility = (
+            source.eligibility_mask
+            if size is None
+            else cv2.resize(
+                source.eligibility_mask,
+                (width, height),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        )
 
     if options.detection_mode is RasterDetectionMode.ALPHA:
         foreground = alpha >= options.alpha_cutoff
@@ -1460,6 +1515,8 @@ def _mask_at_resolution(
         # Transparency remains background for grayscale threshold modes even
         # when light/dark polarity is inverted.
         foreground &= alpha >= options.alpha_cutoff
+    if eligibility is not None:
+        foreground &= eligibility > 0
     return foreground.astype(np.uint8) * 255
 
 
@@ -1542,6 +1599,13 @@ def _oversampled_mask(
             interpolation=cv2.INTER_NEAREST,
         )
         cv2.bitwise_or(mask, fill_gate, dst=mask)
+    if source.eligibility_mask is not None:
+        eligibility_gate = cv2.resize(
+            source.eligibility_mask,
+            (width, height),
+            interpolation=cv2.INTER_NEAREST,
+        )
+        cv2.bitwise_and(mask, eligibility_gate, dst=mask)
     return mask
 
 

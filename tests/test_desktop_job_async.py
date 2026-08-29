@@ -834,14 +834,25 @@ def test_new_trace_request_retires_candidates_before_detect_and_keeps_project() 
 def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    displayed: list[tuple[QtGui.QImage, object]] = []
-    strategies: list[str] = []
+    displayed: list[tuple[QtGui.QImage, object, float | None]] = []
+    strategies: list[tuple[str, bool, bool]] = []
     failures: list[tuple[str, bool]] = []
     candidate_clears: list[bool] = []
     selected_panels: list[str] = []
     cancellations: list[bool] = []
+
+    def preview_available(
+        strategy: str,
+        *,
+        selected_strategy: bool,
+        native_fitting_completed: bool,
+    ) -> None:
+        strategies.append(
+            (strategy, selected_strategy, native_fitting_completed)
+        )
+
     panel = SimpleNamespace(
-        set_raster_preview_available=strategies.append,
+        set_raster_preview_available=preview_available,
         raster_preview_mode=lambda: "mask",
         set_detection_failed=lambda message, *, retain_preview: failures.append(
             (message, retain_preview)
@@ -865,7 +876,7 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
         _trace_raster_preview_value=E3MainWindow._trace_raster_preview_value,
         _camera_image_area=E3MainWindow._camera_image_area,
         _camera_image_ready=lambda image, **kwargs: displayed.append(
-            (image, kwargs.get("image_area"))
+            (image, kwargs.get("image_area"), kwargs.get("pixels_per_mm"))
         ),
     )
     fake._trace_raster_preview_mode_changed = lambda mode: (
@@ -873,6 +884,7 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     )
     preview = SimpleNamespace(
         camera_bgr=np.array([[[10, 20, 30], [40, 50, 60]]], dtype=np.uint8),
+        eligible_mask=np.array([[255, 0]], dtype=np.uint8),
         normalized_grayscale=np.array([[42, 84]], dtype=np.uint8),
         foreground_mask=np.array([[0, 255]], dtype=np.uint8),
         contour_mask=np.pad(
@@ -880,6 +892,7 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
             ((0, 0), (4, 0)),
         ),
         strategy="raster_dark",
+        selected_strategy=False,
     )
     payload = {
         "preview": preview,
@@ -896,15 +909,17 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     assert displayed == []
     E3MainWindow._trace_raster_preview_ready(fake, 8, payload)
 
-    assert strategies == ["raster_dark"]
+    assert strategies == [("raster_dark", False, False)]
     assert set(fake._trace_raster_preview_images) == {
         "camera",
+        "eligible",
         "normalized",
         "mask",
     }
     assert fake._trace_raster_preview_images["camera"].pixelColor(0, 0) == (
         QtGui.QColor(30, 20, 10)
     )
+    assert fake._trace_raster_preview_images["eligible"].pixelColor(0, 0).red() == 255
     assert (
         fake._trace_raster_preview_images["normalized"].pixelColor(0, 0).red()
         == 42
@@ -913,6 +928,7 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     assert fake._trace_raster_preview_images["mask"].pixelColor(7, 3).red() == 255
     assert displayed[-1][0].pixelColor(7, 3).red() == 255
     assert displayed[-1][1] == main_window_module.Bounds(0.0, 0.0, 2.0, 1.0)
+    assert displayed[-1][2] == 4.0
 
     before = dict(fake._trace_raster_preview_images)
     E3MainWindow._trace_detection_failed(
@@ -939,6 +955,79 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     assert failures[-1] == ("capture failed", False)
     assert cancellations == []
     qt_application.processEvents()
+
+
+def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, _errors, _notices = _window(tmp_path, monkeypatch)
+    try:
+        window._active_trace_request_id = 41
+        monkeypatch.setattr(
+            window.controller,
+            "review_signature_is_current",
+            lambda _signature: True,
+        )
+        camera = np.full((480, 640, 3), (12, 34, 56), dtype=np.uint8)
+        eligible = np.zeros((480, 640), dtype=np.uint8)
+        eligible[80:400, 120:520] = 255
+        normalized = np.full((480, 640), 173, dtype=np.uint8)
+        production_mask = np.zeros((1920, 2560), dtype=np.uint8)
+        production_mask[640:1280, 960:1600] = 255
+        production_mask.setflags(write=False)
+        original_mask = production_mask.tobytes(order="C")
+        preview = SimpleNamespace(
+            camera_bgr=camera,
+            eligible_mask=eligible,
+            normalized_grayscale=normalized,
+            foreground_mask=np.zeros((480, 640), dtype=np.uint8),
+            contour_mask=production_mask,
+            strategy="raster_dark",
+            selected_strategy=True,
+        )
+        E3MainWindow._trace_raster_preview_ready(
+            window,
+            41,
+            {
+                "preview": preview,
+                "review_signature": ("current",),
+                "camera_image_area": {
+                    "x_min": 0.0,
+                    "x_max": 160.0,
+                    "y_min": 0.0,
+                    "y_max": 120.0,
+                },
+            },
+        )
+
+        expected_sizes = {
+            "camera": QtCore.QSize(640, 480),
+            "eligible": QtCore.QSize(640, 480),
+            "normalized": QtCore.QSize(640, 480),
+            "mask": QtCore.QSize(2560, 1920),
+        }
+        expected_rect = QtCore.QRectF(0.0, -120.0, 160.0, 120.0)
+        for mode, expected_size in expected_sizes.items():
+            index = window.trace_panel.raster_preview_combo.findData(mode)
+            window.trace_panel.raster_preview_combo.setCurrentIndex(index)
+            qt_application.processEvents()
+            item = window.workspace._camera_item
+            assert item.pixmap().size() == expected_size
+            mapped_pixels = item.sceneTransform().mapRect(
+                QtCore.QRectF(
+                    0.0,
+                    0.0,
+                    float(expected_size.width()),
+                    float(expected_size.height()),
+                )
+            )
+            assert mapped_pixels == expected_rect
+        assert production_mask.tobytes(order="C") == original_mask
+        assert not production_mask.flags.writeable
+    finally:
+        _dispose(qt_application, window)
 
 
 def test_trace_completion_reports_mapping_change_as_request_failure() -> None:

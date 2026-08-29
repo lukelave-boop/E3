@@ -14,12 +14,15 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 > physically cut. A later 2026-08-14 C920 recovery frame replays as a direct
 > 2 x 7 grid: the accepted empty-honeycomb teaching image leaves its four
 > already-open cells unchecked and selects the ten remaining labels. See
-> [../CURRENT_STATE.md](../CURRENT_STATE.md). The new non-grid Auto orchestrator,
-> hierarchy-safe degenerate-contour pruning, independent-root isolation, and
-> camera-photo background normalization have deterministic synthetic coverage.
-> That coverage includes plausible gradients, a soft shadow, vignetting, an
-> edge-adjacent machine region, sensor noise, dark/light polarity, narrow gaps,
-> a hole, an underline, and clean-raster parity. The Coleman stencil failure
+> [../CURRENT_STATE.md](../CURRENT_STATE.md). The non-grid hard Trace ROI,
+> trusted-reference suppression, material eligibility, Auto orchestrator,
+> hierarchy-safe pruning, and camera-photo normalization have deterministic
+> synthetic coverage. That coverage includes reflective periodic honeycomb,
+> 20/50/84% stock coverage, lighting/white-balance-related drift, blur, sensor
+> noise, a highlight, machine surround, dark/light polarity, narrow gaps, a
+> hole, an underline, warm false-Color and real bounded-Color cases, exact 4×
+> display scaling, coordinate equivalence, and imported-raster parity. The
+> Coleman stencil failure
 > scene has not been rerun on the physical camera. Do not treat this
 > implementation status as a physical-camera validation.
 
@@ -34,10 +37,12 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    - **Stock boundary (layout only)** creates exactly one locked construction
      outline and never sends that outline to the laser.
 4. Choose **Auto detect**, **By color**, or **By contrast**. With **Use grid**
-   off, Auto corrects broad lighting variation once, then tries authoritative
-   raster Otsu against both its dark-feature and light-feature responses. It
-   conditionally tries Color when the image has a strong coherent chromatic
-   target; the result message says which strategy won. Auto's hue, threshold,
+   off, E3 first restricts all strategies to trusted physical Trace geometry,
+   suppresses only confidently matched empty-bed structure, and keeps changed
+   or uncertain material eligible. Auto corrects broad lighting variation once,
+   then tries authoritative raster Otsu against both dark- and light-feature
+   responses. It conditionally tries Color only for bounded eligible chroma;
+   the result message says which credible strategy won. Auto's hue, threshold,
    and polarity controls are inactive because Auto owns those choices. With
    **By contrast** and **Use grid** off, choose automatic Otsu or a manual 0–255
    threshold and whether dark or light local contrast is foreground. The
@@ -65,15 +70,20 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    temporary candidates, so a failed request cannot look like the previous
    mode's result. When non-grid mask preparation completes, **Camera display**
    becomes available and defaults to **Mask**. Switch among **Camera**,
-   **Normalized**, and **Mask** to inspect the corrected frame, the threshold
-   input, and the exact 4× production contour mask used by `RETR_TREE`. The mask can appear
-   before native fitting finishes; changing this selector is display-only.
+   **Eligible**, **Normalized**, and **Mask** to inspect the corrected frame, the
+   exact source-resolution hard-ROI/reference eligibility, the threshold input,
+   and the immutable exact 4× production contour mask used by `RETR_TREE`. The
+   desktop displays the 4× mask at 4× pixels/mm, so every mode covers the same
+   physical area without resizing production bytes. A provisional Auto message
+   says evaluation is still running; only the selected-strategy callback says
+   production/native fitting completed. Changing the selector is display-only.
 9. Review the numbered overlay and the **Geometry** column after fitting
    completes:
    - green: selected proposed vector output;
    - gray: unselected direct detection;
    - yellow or orange dashed: inferred grid position;
-   - red dash-dot: an outline that crosses the configured work area.
+   - red dash-dot: a specialized grid outline that crosses the configured work
+     area. Ordinary non-grid roots clipped by the hard Trace ROI are omitted.
    When a current automatic honeycomb teaching reference is available, direct
    grid cells that closely match its exposed honeycomb pixels are marked
    **likely cut/open** and left unchecked.
@@ -171,8 +181,9 @@ nested contours are not forced into washers.
   simplification tolerance. It can contain many points and will naturally look
   stair-stepped when magnified.
 
-For non-grid Contrast, E3 first removes low-frequency photographic background
-variation, then sends that normalized raster through the imported-raster pixel
+For non-grid Contrast, E3 first applies the hard physical ROI, suppresses
+confidently matched exposed bed, and removes low-frequency photographic
+background variation from eligible material. It then sends that normalized raster through the imported-raster pixel
 pipeline itself: Otsu or manual threshold and polarity, physical component and
 pinhole cleanup, 4× mask reconstruction, `RETR_TREE`, physical mapping,
 source-edge refinement, native fitting, and topology validation. Each root
@@ -211,7 +222,25 @@ route could therefore classify a shadowed blank sheet as foreground. Non-grid
 raster tracing now asks how far each pixel is above or below its slowly varying
 local background before any ordinary threshold is chosen.
 
-The background model is tied to corrected physical scale. It is downsampled to
+Before this model runs, ordinary non-grid Trace keeps the full corrected raster
+but creates one immutable material-eligibility mask. Machine-coordinate work
+uses the existing guarded output polygon or rectangle. Honeycomb-local work
+intersects that geometry with the recorded support rectangle in the existing
+local frame. The accepted empty-bed reference is used only after its stored
+image hash, bed-map digest, support-frame digest, coordinate frame,
+rectification, and final dimensions validate. Locally detrended luminance
+correlation, normalized patch error, and compatible texture exclude only strong
+exposed-bed evidence; changed or uncertain pixels remain eligible. Thus a sheet
+becomes material that may be inspected, not foreground, and its perimeter is not
+created by the reference stage. Honeycomb-local Auto requires valid reference
+evidence. Manual Contrast and explicit Color may fall back to hard-ROI-only
+eligibility when no reference exists; a supplied mismatched reference is an
+error.
+
+The background model is tied to corrected physical scale. Ineligible pixels are
+inpainted only in its temporary model input; the actual residual is zeroed
+outside eligibility and its robust scale is derived only from eligible pixels.
+It is downsampled to
 at most about 1 pixel/mm and 512 pixels on its longest axis. A deliberately
 conservative flat-field guard recognizes a low-noise, near-discrete clean frame:
 the eight most populated four-level histogram bins must cover at least 99.5%, a
@@ -249,13 +278,17 @@ the robust response scale. **Trace light pixels** selects the symmetric light
 response through the established raster inversion contract; it does not switch
 back to raw brightness.
 
-For automatic thresholding, OpenCV's lowest equally optimal Otsu plateau member
+For automatic thresholding, only eligible pixels enter Otsu's histogram;
+excluded pixels are forced background in the source mask. OpenCV's lowest
+equally optimal Otsu plateau member
 is advanced by at most two unused levels when its low class lacks interpolation
 headroom. Normal polarity measures that headroom across the selected foreground
 span; inverted light tracing measures it above the low background endpoint. The
 nudge stays inside an empty histogram gap, so source-pixel classification is
-unchanged. Manual thresholds, ordinary multi-level Otsu, polarity semantics, and
-the existing bicubic 4× reconstruction remain unchanged; the extra headroom
+unchanged. The eligibility mask is nearest-neighbor reconstructed to 4× and
+gates again after component-hole reconstruction, preventing interpolation from
+resurrecting machine or bed pixels. Manual thresholds, polarity semantics, and
+the existing bicubic 4× artwork reconstruction remain unchanged; the extra headroom
 prevents two-tone endpoints from producing false bicubic pinholes or islands.
 
 The frozen normalization value retains immutable-byte-backed corrected BGR,
@@ -271,8 +304,8 @@ all mask, hierarchy, and native geometry decisions remain in the established
 raster pipeline.
 
 This adapter is used only by non-grid **By contrast** and Auto's dark/light
-raster attempts. **By color** still uses chromatic evidence, Auto's conditional
-Color attempt remains the same production Color route, and **Use grid** retains
+raster attempts. **By color** still uses chromatic evidence but is hard-ROI
+gated, Auto's conditional Color attempt shares material eligibility, and **Use grid** retains
 its specialized repeated-object detector, normalization, classification, and
 inference behavior.
 
@@ -280,15 +313,17 @@ inference behavior.
 
 - **Auto detect**, with **Use grid** off, is an orchestrator over production
   tracing tools. It captures and rectifies once, estimates one low-frequency
-  background, derives immutable dark and light rasters from that same result,
+  material eligibility and background, derives immutable dark and light rasters
+  from that same result,
   and runs shared-raster Otsu on each. It runs Color only when weighted HSV/Lab
-  evidence finds a coherent target. The Color gate requires at
+  evidence finds a coherent target within eligible material. The Color gate requires at
   least `0.005 × pixel count` total normalized chroma weight, at least 60% of
   that weight in one ±14-hue window, at least 1.5× separation from the strongest
-  hue window more than 28 hue bins away, 0.2–60% resulting foreground, and no
-  more than 50% foreground on the frame border. Auto uses hue tolerance 14 and
-  minimum saturation 45 for this attempt; disabled manual Color values do not
-  steer it.
+  hue window more than 28 hue bins away, 0.2–35% resulting foreground, and no
+  more than 25% foreground on the eligibility boundary. A credible Color result
+  must exceed the best credible raster score by eight points. Auto uses hue
+  tolerance 14 and minimum saturation 45 for this attempt; disabled manual Color
+  values do not steer it.
 - **Auto detect**, with **Use grid** on, retains the specialized repeated-object
   detector. Repeated-grid fits are ranked from observed filled-region support,
   not merely the number of clean contours, then proceed through lattice fitting,
@@ -329,7 +364,10 @@ strategy simply for returning more candidates. Its deterministic score is
 - `P` is a 35-point penalty when foreground and border occupancy both reach 75%.
 
 A result with at least 95% foreground and at least 75% foreground border is
-rejected as a background interpretation. Stable equal-score ties prefer dark
+rejected as a background interpretation, and every result below the absolute
+score floor of 70 is rejected. Hard-ROI-clipped, confidently suppressed,
+outside-output, review-filtered, and invalid-native candidates contribute no
+positive score. Stable equal-score ties prefer dark
 raster, then light raster, then Color. Status reports the selected polarity and
 Otsu threshold or the selected hue/tolerance. Internal diagnostics retain each
 attempt's success, rejection, or skip reason plus occupancy, root counts, valid
@@ -354,6 +392,8 @@ The **Camera display** selector is an inspection surface for one frozen request,
 not a second image-processing path:
 
 - **Camera** is the corrected production BGR frame.
+- **Eligible** is the exact source-resolution hard-ROI plus reference-aware
+  material mask used by that request.
 - **Normalized** is the exact polarity-specific grayscale delivered to the
   shared threshold stage for raster Contrast/Auto. For Color it is grayscale
   context; the chromatic production route remains unchanged.
@@ -361,12 +401,15 @@ not a second image-processing path:
   including the production threshold, source-resolution component cleanup, and
   4× reconstruction.
 
-The mask callback runs synchronously in the worker as soon as exact mask
+The workspace uses each image's actual pixels/mm: the exact 4× Mask therefore
+occupies the same machine area as Camera, Eligible, and Normalized without a
+display copy or mutation. The mask callback runs synchronously in the worker as soon as exact mask
 preparation finishes and before contour extraction or native fitting. The
 desktop publishes the read-only arrays to the GUI through a queued signal,
 checks both request ID and review signature, creates display images only on the
 GUI thread, and defaults the selector to **Mask** on the first current preview.
-Auto may publish provisional dark/light masks while it evaluates them, then
+Auto may publish provisional dark/light masks with explicit evaluation-running
+wording while it evaluates them, then
 publishes the winning strategy again; the final selector state therefore
 matches the selected result. No preview is independently recomputed, and a late
 or stale callback cannot replace current pixels or geometry.
@@ -390,9 +433,11 @@ persisted and does not alter scoring or validation. The request boundary records
 `capture_seconds`, `rectification_seconds`,
 `capture_rectification_total_seconds`, `detect_objects_seconds`, and
 `request_total_seconds`. The camera adapter records
-`grayscale_preparation`, `background_estimation`, `normalization`, and
+`hard_roi_preparation`, `reference_comparison`, `material_eligibility`,
+`trace_eligibility_total`, `grayscale_preparation`, `background_estimation`,
+`normalization`, and
 `camera_normalization_total`. Shared raster timing separately records mask
-generation/preparation, component cleanup, 4× preparation, contour extraction,
+generation/preparation, threshold, component cleanup, 4× preparation, contour extraction,
 cheap root-review filtering, native fitting, and authoritative topology and
 raster-hierarchy validation. Manual Contrast retains one raster-vectorization
 snapshot; Auto retains per-dark/per-light snapshots, the common normalization

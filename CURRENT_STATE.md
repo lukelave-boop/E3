@@ -49,7 +49,35 @@ installer and Linux AppImage for this change have not yet been built or
 published, and no controller, motion, arming, laser-output, or physical test
 was performed or is claimed.
 
-## Active Camera Trace Auto orchestration, review, and raster-vector parity
+## Active Camera Trace material eligibility, Auto orchestration, and raster parity
+
+Ordinary non-grid Camera Trace now removes machine/background responsibility
+from the raster vectorizer. The production order is corrected frame, hard
+physical Trace ROI, trusted empty-honeycomb comparison, material eligibility,
+eligibility-scoped illumination normalization, dark/light threshold, eligibility
+gate, and the unchanged shared raster-vector geometry pipeline. The full frame
+and its established pixel-center transform are retained.
+
+In machine coordinates the hard ROI is the existing guarded output polygon, or
+its existing guarded rectangle when no polygon is configured. In current
+honeycomb-local coordinates it is the intersection of that guarded geometry
+with the recorded support rectangle in the already established local frame.
+This narrows vision evidence only. It does not expand support, output authority,
+planning, G-code, motion, arming, STOP, or machine execution. A foreground root
+clipped by that hard ROI is rejected before review and Auto scoring.
+
+The controller supplies an empty-bed image only through the existing accepted
+background path, after schema/kind, encoded-image SHA-256, complete bed-map
+digest, support-frame digest, coordinate-frame, rectification, and final-image
+dimensions validate. The comparison model is bounded to 800 pixels and at most
+2 pixels/mm. It uses correlated locally detrended luminance, normalized patch
+error, and compatible texture, then excludes only strong exposed-bed structure.
+Broad brightness, white-balance-related luminance drift, gradient, mild blur,
+noise, and local reflections are covered by deterministic fixtures. Changed or
+uncertain pixels remain eligible; the stock is eligibility, not foreground.
+Honeycomb-local Auto fails closed when no valid reference is available. Manual
+Contrast and explicit Color may use clearly diagnosed hard-ROI-only fallback
+when no reference exists; a supplied mismatched reference is rejected.
 
 Camera Trace now has one detection-and-review workflow. The former seeded
 **Cutout / silhouette** mode, prepared-frame state, Add-click lifecycle, quick
@@ -57,10 +85,12 @@ blue outline, and second asynchronous verification state have been removed.
 Auto, By color, and By contrast produce the candidates. With **Use grid** off,
 Auto is now an orchestrator over production tracing paths rather than another
 independent detector: it prepares the corrected frame once, estimates one
-camera-raster background, derives symmetric dark- and light-feature rasters,
+  material eligibility, estimates one camera-raster background, derives
+  symmetric dark- and light-feature rasters,
 tries shared-raster Otsu against both immutable results, conditionally tries
-Color only when the frame contains coherent non-background chroma, and chooses
-the best verified result. With **Use grid** on, Auto deliberately retains the specialized
+  Color only when eligible material contains bounded non-background chroma, and
+  chooses a credible verified result or fails closed. With **Use grid** on, Auto
+  deliberately retains the specialized
 repeated-object detector, lattice fitting, cell normalization, missing-cell
 inference, and damaged/open-cell review. A stored legacy
 `cutout` preference is migrated once to `contrast`; the old value cannot leave
@@ -82,17 +112,20 @@ execution paths.
 
 Starting a new detection immediately removes the preceding temporary candidates
 while leaving project objects untouched. Before native fitting, the Trace panel
-can switch the frozen camera display among the corrected **Camera**, normalized
-grayscale, and exact production **Mask**. Raster Mask is the immutable 4× binary
-workspace passed to `RETR_TREE`, not a reconstructed UI approximation. Request
+can switch the frozen camera display among the corrected **Camera**, exact
+source-resolution **Eligible** mask, normalized grayscale, and exact production
+**Mask**. Raster Mask is the immutable 4× binary workspace passed to `RETR_TREE`,
+not a reconstructed UI approximation. Its display uses its actual 4× pixel scale
+so all four images occupy the same physical area. Request
 IDs and the camera-review signature reject stale preview, completion, and failure
 callbacks. If fitting fails after mask preparation, the camera hold and diagnostic
 views remain available until Clear or the next detection; a failure before a
 deliverable preview returns to live camera state.
 
 Non-grid **By contrast** no longer enters the multi-hypothesis object detector.
-The corrected BGR frame is first converted to illumination-normalized raster
-artwork, then sent through the same production pipeline as an imported raster:
+The corrected BGR frame is first hard-gated and reference-suppressed, then
+converted to eligibility-normalized raster artwork and sent through the same
+production pipeline as an imported raster:
 source-neutral immutable RGBA preparation, Otsu or manual thresholding with
 explicit polarity, physical connected-component and pinhole cleanup, 4× mask
 reconstruction, bounded `RETR_TREE` extraction, physical contour mapping,
@@ -109,8 +142,10 @@ extraction, second fit, or post-map refit.
 
 The camera-specific normalization model is Qt-free and does not threshold or
 repair output geometry. It converts the corrected image to uint8 grayscale,
-builds a temporary model bounded to 1 pixel/mm and 512 pixels on its long axis,
-and normally estimates broad illumination from the midpoint of a 35 mm elliptical
+fills ineligible pixels only in the temporary background-model input, derives
+its robust response scale from eligible material, forces excluded response white,
+and builds a temporary model bounded to 1 pixel/mm and 512 pixels on its long
+axis. It normally estimates broad illumination from the midpoint of a 35 mm elliptical
 opening and closing plus 4 mm Gaussian smoothing. A narrowly gated clean/flat-
 field path instead uses one constant robust border level only when four-level
 histogram bins, a 2 mm border band, whole-model background dominance, and
@@ -126,9 +161,11 @@ is 128, and stronger response approaches black without hard clipping. Automatic
 Otsu alone can advance its lowest equally optimal plateau member by at most two
 unused levels inside an empty histogram gap when the low class lacks interpolation
 headroom. Normal polarity measures the selected foreground span; inverted light
-polarity measures above the low background endpoint. Source classification,
-manual thresholds, ordinary multi-level Otsu, and the existing 4× reconstruction
-remain unchanged.
+polarity measures above the low background endpoint. Camera Otsu uses only
+eligible pixels; ineligible pixels are forced background before cleanup and
+again by a nearest-neighbor gate at 4×. With no eligibility, ordinary imported-
+raster Otsu, manual thresholding, masks, hierarchy, keys, and geometry are
+unchanged.
 
 The physical stencil failure `A retained raster contour has fewer than three
 distinct points` was traced to the 4× reconstruction itself. Bicubic grayscale
@@ -155,19 +192,22 @@ disables the hue controls, and uses the native raster-vector output without a
 border offset. With
 **Use grid** enabled, By contrast deliberately retains the specialized
 multi-mask object/grid detector, classification, normalization, and gap
-inference. By color remains the explicit operator-controlled color path.
+  inference. By color remains the explicit operator-controlled color path and
+  obeys the hard ROI.
 
 For non-grid Auto, both raster polarities reuse one immutable normalization and
 background estimate while each owns its exact immutable
 `PixelVectorizationSource`, prepared mask, automatic Otsu threshold, physical
 minimum-feature cleanup, 4× reconstruction, hierarchy, source-edge refinement,
-and native validator. Color is attempted only when weighted HSV/Lab evidence covers enough
-of the frame, at least 60% of the chroma weight lies in one ±14-hue window,
-that window is at least 1.5× the strongest separated competitor, its resulting
-mask covers 0.2–60% of the frame, and no more than half of the frame border is
-foreground. Auto ignores saved manual color samples and uses hue tolerance 14
-and minimum saturation 45 for this bounded attempt; explicit **By color**
-continues to honor the operator's controls.
+  and native validator. Color is attempted only when eligibility-scoped weighted
+  HSV/Lab evidence covers enough material, at least 60% of the chroma weight lies
+  in one ±14-hue window, and that window is at least 1.5× the strongest separated
+  competitor. Its mask must cover 0.2–35% of eligible material and at most 25%
+  of the eligibility boundary. A credible Color result must beat the best
+  credible raster result by eight points. Auto ignores saved manual color
+  samples and uses hue tolerance 14 and minimum saturation 45 for this bounded
+  attempt; explicit **By color** keeps the operator's controls but obeys the hard
+  ROI.
 
 Completed strategies are scored deterministically without a positive candidate-
 count term. The score is `40V + 20F + 15B + 10A + 10S + 5W - P`: `V` is the
@@ -176,8 +216,10 @@ non-foreground border quality, `A` is useful retained physical area, `S` is the
 fraction of retained roots at least four times the minimum feature area, `W`
 is the in-frame candidate fraction, and `P` is a 35-point frame/background
 penalty when both foreground and border occupancy reach 75%. A strategy with no
-authoritative native candidate is rejected, and one with at least 95% foreground
-plus at least 75% border occupancy is rejected as background-dominated. Stable
+authoritative native candidate or a score below 70 is rejected, and one with at
+least 95% foreground plus at least 75% border occupancy is rejected as
+background-dominated. Only post-ROI, post-reference, within-output, verified
+candidates contribute positive evidence. Stable
 ties prefer dark raster, then light raster, then Color. The result message names
 the selected strategy, Otsu threshold or hue/tolerance, valid count, and omitted
 invalid/filtered count; bounded per-attempt metrics and failure reasons remain
@@ -217,7 +259,13 @@ overlaps are deliberately preserved and are not unioned. Either operation is a
 single undoable project edit. Stock-boundary creation remains a separate
 single-outline, non-output path.
 
-Focused Qt-free and offscreen regressions cover the low-frequency background
+Focused Qt-free and offscreen regressions cover a reflective periodic honeycomb,
+trusted empty-bed reference, machine surround, 20/50/84% stock coverage,
+exposure/gradient/white-balance-related drift, blur/noise/highlight, empty bed,
+blank stock, dark/light stencil artwork, holes, narrow gaps, underline, hard-ROI
+invariance, false warm Auto Color, real bounded Color, Auto fail-closed,
+four-edge coordinate mapping, and exact Camera/Eligible/Normalized/4× Mask
+switching. Existing coverage also includes the low-frequency background
 model and its adversarial flat-field gates; dark/light reciprocal responses;
 gradient, shadow, machine-border, gap, hole, dense-label, clean-raster, noisy-
 solid, and true two-level cases; symmetric Otsu plateau stabilization; immutable
@@ -229,15 +277,20 @@ imported-normalized-camera parity; request/signature staleness; retained failure
 diagnostics; immediate old-candidate retirement; Trace panel controls; capture
 and rectification timing; and the standalone raster diagnostic command.
 
-Current final focused results are: **22 normalization tests** in each of three
-consecutive runs; **74 raster-vectorization tests**; **78 object-trace tests**;
-**9 camera-raster integration tests**; **4 native-Contrast tests**; **1 diagnostic-
-command test**; and **108 desktop/capture tests**. The complete local Windows
-four-worker suite passes **2,722 tests** with **14 expected platform skips** in
-**2 minutes 59 seconds**. Repository Ruff, `python -m compileall -q
-laser_aligner`, and `git diff --check` pass. These are deterministic Qt-free,
-source-level, and offscreen-widget checks; no interactive GUI, live camera, or
-hardware test was performed.
+The final eligibility/Auto/display acceptance selection passes **30 tests** in
+**46.09 seconds**. The complete local Windows four-worker suite passes **2,741
+tests** with **14 expected platform skips** in **253.92 seconds**. Repository
+Ruff, `python -m compileall -q laser_aligner`, and `git diff --check` pass. These
+are deterministic Qt-free, source-level, and offscreen-widget checks; no
+interactive GUI, live camera, or hardware validation is implied.
+
+On the 640 × 480 reflective-honeycomb stencil fixture at 2 pixels/mm, one
+instrumented Manual Contrast run took **2.32 seconds** total, including about
+0.04 seconds for ROI/reference eligibility and 0.11 seconds for normalization.
+The full Auto run selected raster-dark and took **20.37 seconds**; its rejected
+light-polarity topology work dominated that synthetic run. These timings are
+single development-machine samples, not performance guarantees or physical-
+camera measurements.
 
 This is implementation and automated-test status only. The reported Coleman
 stencil scene has not been recaptured or replayed through a physical camera for
