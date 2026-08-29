@@ -261,16 +261,12 @@ should own a physical camera at a time.
   emits an analytic rounded vector. Simplified and exact modes preserve
   pixel-derived contours; simplification is a bounded polygon reduction, not a
   curve-fitting operation.
-- **Cutout / silhouette** is a separate click-guided camera path. Capture builds
-  one immutable `PreparedCutoutFrame`: camera-specific dark/light mask evidence
-  is resolved once, then source-neutral connected-component cleanup and
-  `RETR_TREE` decomposition fix every discrete outer/hole/island candidate
-  before the first click. Each click is only point containment against that
-  candidate forest, so selection cannot change the threshold or merge adjacent
-  roots. Quick and exact workers reuse the same preparation; exact completion is
-  stale-rejected and creation is gated on verified geometry. It does not call
-  the raster dialog or raster mask-generation path.
-- Camera cutout contours are converted from the corrected raster into physical
+- Trace review uses one temporary selectable-candidate scene layer. Candidate
+  clicks, Ctrl-clicks, and rubber bands update the same detection-ID set as the
+  inspector checkboxes; project objects are non-selectable and non-movable until
+  review ends. The temporary layer never mutates `ProjectDocument` and has no
+  planning, G-code, or execution consumer.
+- Native camera contours are converted from the corrected raster into physical
   machine or honeycomb millimetres before classification or fitting. The
   corrected raster has the rectifier's explicit constant pixels/mm even though
   the upstream raw camera homography has a spatially varying Jacobian. The
@@ -599,10 +595,10 @@ vectorizer do not call `DesktopController`, `MachineService`,
 camera, planning, G-code, or execution paths.
 
 `geometry.foreground` owns source-neutral binary connected-component cleanup,
-bounded `RETR_TREE` extraction, deterministic outer-tree decomposition,
-point-containment selection, and even-odd tree rendering. Raster vectorization
-and Camera Trace Cutout use those primitives after their source-specific mask
-construction; neither source imports the other's UI or thresholding workflow.
+bounded `RETR_TREE` extraction, deterministic outer-tree decomposition, and
+even-odd tree rendering. Raster vectorization and Camera Trace native output use
+those primitives after their source-specific mask construction; neither source
+imports the other's UI or thresholding workflow.
 
 `project.native_contour_fit` is the source-neutral boundary between segmentation
 and native geometry. Its input is an ordered physical contour tree, optional
@@ -612,7 +608,7 @@ and an explicit physical frame. It delegates to the one authoritative fitter in
 classification, persistent line decisions, constrained cubics, bounded Newton
 reparameterization/centering, continuous error proof, frame/extrema checks,
 self/adjacent-arc validation, compound clearance, and outer/hole hierarchy are
-therefore identical for raster and clicked camera consumers. Raster and camera
+therefore identical for raster and camera consumers. Raster and camera
 mask construction, edge evidence, worker lifecycles, and UI remain separate.
 
 `RasterVectorizationTiming` is opt-in development/test instrumentation and is

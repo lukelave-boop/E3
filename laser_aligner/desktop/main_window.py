@@ -36,8 +36,11 @@ from ..project import (
     JobPreflightContext,
     JobPreflightReport,
     LayerMode,
+    NativePathGeometry,
     ObjectKind,
     OperationLayer,
+    PathAffineTransform,
+    PathFillRule,
     ProjectDocument,
     ProjectJob,
     RasterVectorizationOptions,
@@ -70,6 +73,7 @@ from ..project import (
     load_project,
     load_svg_project,
     mark_stock_boundary,
+    native_path_bounds,
     read_raster_asset_payload,
     save_autosave,
     save_project,
@@ -79,6 +83,7 @@ from ..project import (
     scan_svg_file,
     snap_selection_rotation_to_stock,
     stock_boundaries,
+    transform_native_path,
     verify_project_job_assets,
 )
 from ..storage import atomic_write_text
@@ -1107,9 +1112,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.pickColorRequested.connect(
             self._begin_trace_color_pick
         )
-        self.trace_panel.pickCutoutRequested.connect(
-            self._begin_trace_cutout_pick
-        )
         self.trace_panel.clearRequested.connect(
             self._clear_trace_preview
         )
@@ -1119,6 +1121,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.generateRequested.connect(self.actions["generate"].trigger)
         self.trace_panel.selectionChanged.connect(
             self._trace_selection_changed
+        )
+        self.workspace.traceSelectionIdsChanged.connect(
+            self._trace_canvas_selection_changed
         )
 
         self.template_panel.saveRequested.connect(self.save_current_as_template)
@@ -1208,9 +1213,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         self.controller.traceColorFailed.connect(
             self._trace_color_failed
-        )
-        self.controller.traceCutoutFailed.connect(
-            self._trace_cutout_failed
         )
         self.controller.templateMatchReady.connect(
             self._template_match_ready
@@ -4481,8 +4483,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.runtime.context.bed.calibration is not None
         )
         self.show_notice(
-            "Trace mode: detect repeated objects, or capture Cutout / silhouette "
-            "and click inside only the physical outlines you want."
+            "Trace mode: detect candidates, then click, Ctrl-click, or drag on "
+            "the camera image to choose the outlines you want."
         )
 
     def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
@@ -4508,52 +4510,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if self.workspace.point_pick_active:
             self.workspace.cancel_point_pick()
             self.trace_panel.set_color_pick_active(False)
-            self.trace_panel.set_cutout_pick_active(False)
             self.show_notice("Color picking cancelled")
             return
         self._activate_selection_tool(show_message=False)
         self._clear_template_preview(show_message=False)
         self.inspector_tabs.select_panel("trace")
-        self.trace_panel.set_cutout_pick_active(False)
         self.workspace.begin_point_pick()
         self.trace_panel.set_color_pick_active(True)
         self.show_notice("Click the center of one target object in the camera image")
 
-    def _begin_trace_cutout_pick(self) -> None:
-        if self.runtime.context.bed.calibration is None:
-            self.show_error("Bed mapping is required before selecting camera cutouts")
-            return
-        if self._trace_result is None or self._trace_result.get("mode_used") != "cutout":
-            self.show_error(
-                "Capture a Cutout / silhouette frame before adding a cutout"
-            )
-            return
-        if self.workspace.point_pick_active:
-            self.workspace.cancel_point_pick()
-            self.trace_panel.set_color_pick_active(False)
-            self.trace_panel.set_cutout_pick_active(False)
-            self.show_notice("Cutout picking cancelled")
-            return
-        self._activate_selection_tool(show_message=False)
-        self._clear_template_preview(show_message=False)
-        self.inspector_tabs.select_panel("trace")
-        self.trace_panel.set_color_pick_active(False)
-        self.trace_panel.set_cutout_pick_active(False)
-        self.workspace.begin_point_pick()
-        self.trace_panel.set_cutout_pick_active(True)
-        self.show_notice(
-            "Click inside one desired physical cutout; disconnected lettering will be ignored"
-        )
-
     def _trace_point_picked(self, x_mm: float, y_mm: float) -> None:
-        if self.trace_panel.cutout_pick_active:
-            self.trace_panel.set_cutout_pick_active(False, segmenting=True)
-            self.controller.select_trace_cutout(
-                x_mm,
-                y_mm,
-                self.trace_panel.options(),
-            )
-            return
         self.trace_panel.set_color_pick_active(True, sampling=True)
         self.controller.sample_trace_color(x_mm, y_mm)
 
@@ -4574,9 +4540,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _trace_color_failed(self, message: str) -> None:
         self.trace_panel.set_color_pick_failed(message)
         self.show_error(f"Sample trace color failed: {message}")
-
-    def _trace_cutout_failed(self, message: str) -> None:
-        self.trace_panel.set_cutout_pick_failed(message)
 
     def _trace_result_ready(self, result: dict[str, Any]) -> None:
         camera_image = result.get("camera_image")
@@ -4618,25 +4581,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
     def _trace_selection_changed(self, selected_ids: list[str]) -> None:
         if self._trace_result is None:
             return
-        preview_args = (
-            list(self._trace_result.get("detections", [])),
-            selected_ids,
-            self._trace_result.get("honeycomb_support"),
-        )
-        if self._trace_result.get("output_work_area") is None:
-            output_polygon = self._trace_result.get("output_polygon_local_mm")
-            if output_polygon is None:
-                self.workspace.set_trace_preview(*preview_args)
-            else:
-                self.workspace.set_trace_preview(
-                    *preview_args,
-                    output_polygon=output_polygon,
-                )
-        else:
-            self.workspace.set_trace_preview(
-                *preview_args,
-                self._trace_result.get("output_work_area"),
-            )
+        self.workspace.set_trace_selected_ids(selected_ids)
+
+    def _trace_canvas_selection_changed(self, selected_ids: list[str]) -> None:
+        if self._trace_result is None:
+            return
+        self.trace_panel.set_selected_ids(selected_ids)
 
     def _clear_trace_preview(self) -> None:
         self.controller.cancel_trace_detection()
@@ -4699,7 +4649,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 ),
                 width_mm=float(detection["native_width_mm"]),
                 height_mm=float(detection["native_height_mm"]),
-                source_name="camera cutout trace",
+                source_name="camera trace",
             )
             item.metadata["trace_detector_center_mm"] = list(center)
         else:
@@ -4754,14 +4704,96 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
         return item
 
+    @staticmethod
+    def _trace_detection_world_geometry(
+        detection: dict[str, Any],
+    ) -> NativePathGeometry:
+        if detection.get("native_verified") and detection.get("native_path"):
+            geometry = NativePathGeometry.from_dict(detection["native_path"])
+            center = detection.get("native_center_mm") or detection["center_mm"]
+            return transform_native_path(
+                geometry,
+                PathAffineTransform.from_components(
+                    scale_x=float(detection["native_width_mm"]),
+                    scale_y=float(detection["native_height_mm"]),
+                    translate_x=float(center[0]),
+                    translate_y=float(center[1]),
+                ),
+            )
+        raw_contours = detection.get("vector_contours_mm") or [
+            detection.get("vector_contour_mm")
+            or detection.get("contour_mm")
+            or []
+        ]
+        contours = [
+            {
+                "points": [
+                    [float(point[0]), float(point[1])] for point in contour
+                ],
+                "closed": True,
+            }
+            for contour in raw_contours
+            if len(contour) >= 3
+        ]
+        if not contours:
+            raise ValueError(
+                f"Trace {detection.get('index', 0)} has no usable contour"
+            )
+        return NativePathGeometry.from_legacy_polylines(contours)
+
+    def _combined_trace_object(
+        self,
+        detections: list[dict[str, Any]],
+    ) -> SceneObject:
+        world_subpaths = []
+        for detection in detections:
+            world_subpaths.extend(
+                self._trace_detection_world_geometry(detection).subpaths
+            )
+        world_geometry = NativePathGeometry(
+            tuple(world_subpaths),
+            fill_rule=PathFillRule.EVENODD,
+        )
+        min_x, min_y, max_x, max_y = native_path_bounds(world_geometry)
+        width = max_x - min_x
+        height = max_y - min_y
+        if width <= 0.0 or height <= 0.0:
+            raise ValueError("Combined camera trace has zero width or height")
+        center_x = (min_x + max_x) / 2.0
+        center_y = (min_y + max_y) / 2.0
+        normalized = transform_native_path(
+            world_geometry,
+            PathAffineTransform.from_components(
+                scale_x=1.0 / width,
+                scale_y=1.0 / height,
+                translate_x=-center_x / width,
+                translate_y=-center_y / height,
+            ),
+        )
+        item = SceneObject.native_path(
+            self.active_layer_id,
+            normalized,
+            name="Combined camera trace",
+            center=(center_x, center_y),
+            width_mm=width,
+            height_mm=height,
+            source_name="combined camera trace",
+        )
+        item.metadata.update(
+            {
+                "trace_source": "combined",
+                "trace_compound": True,
+                "trace_detection_ids": [
+                    str(detection.get("id")) for detection in detections
+                ],
+                "trace_detection_count": len(detections),
+            }
+        )
+        return item
+
     def _create_traced_objects(self, payload: dict[str, Any]) -> None:
         if self._trace_result is None:
             self.show_error("Run object detection before creating vector paths")
-            return
-        if self._trace_result.get("native_fit_pending"):
-            self.show_notice(
-                "Wait for verified native cutout fitting before creating geometry"
-            )
             return
         signature = self._trace_result.get("review_signature")
         if signature is not None and not self.controller.review_signature_is_current(
@@ -4778,30 +4810,25 @@ class E3MainWindow(QtWidgets.QMainWindow):
             for item in self._trace_result.get("detections", [])
             if str(item.get("id")) in selected
         ]
-        if any(
-            item.get("source") == "seeded_cutout"
-            and not item.get("native_verified")
-            for item in detections
-        ):
-            self.show_error(
-                "A selected cutout has no verified native or analytic geometry; "
-                "capture and select it again"
-            )
-            return
         if not detections:
             self.show_notice("Select at least one detected outline")
             return
         output_mode = str(payload.get("output_mode", "rounded"))
         purpose = str(payload.get("purpose", "cut"))
+        combine = bool(payload.get("combine", False)) and purpose == "cut"
         if purpose == "stock" and len(detections) != 1:
             self.show_notice("Select exactly one outline for the Stock boundary")
             return
         replaced_count = 0
         try:
-            objects = [
-                self._trace_detection_to_object(item, output_mode)
-                for item in detections
-            ]
+            objects = (
+                [self._combined_trace_object(detections)]
+                if combine
+                else [
+                    self._trace_detection_to_object(item, output_mode)
+                    for item in detections
+                ]
+            )
             if purpose == "stock":
                 objects = [mark_stock_boundary(objects[0])]
             replace_previous = bool(payload.get("replace_previous", True))
@@ -4819,11 +4846,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 create_description = "Create Stock boundary"
                 replace_description = "Replace previous Stock boundary"
             else:
-                suffix = "" if len(objects) == 1 else "s"
-                create_description = f"Create {len(objects)} traced object{suffix}"
-                replace_description = (
-                    f"Replace previous Trace objects with {len(objects)} object{suffix}"
-                )
+                if combine:
+                    create_description = "Create combined Trace vector"
+                    replace_description = "Replace previous Trace objects with combined vector"
+                else:
+                    suffix = "" if len(objects) == 1 else "s"
+                    create_description = f"Create {len(objects)} traced object{suffix}"
+                    replace_description = (
+                        "Replace previous Trace objects with "
+                        f"{len(objects)} object{suffix}"
+                    )
             if replace_previous and previous_trace_ids:
                 replaced_count = len(previous_trace_ids)
                 command = ReplaceObjectsCommand(

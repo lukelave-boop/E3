@@ -137,7 +137,7 @@ def test_recognized_washer_trace_creates_one_compound_semantic_object() -> None:
     np.testing.assert_allclose(paths[1].points[:-1], inner)
 
 
-def test_verified_cutout_creation_persists_native_lines_and_cubics() -> None:
+def test_verified_contrast_creation_persists_native_lines_and_cubics() -> None:
     detection = _contour_detection()
     native = NativePathGeometry(
         (
@@ -155,7 +155,7 @@ def test_verified_cutout_creation_persists_native_lines_and_cubics() -> None:
     )
     detection.update(
         {
-            "source": "seeded_cutout",
+            "source": "direct",
             "native_verified": True,
             "native_path": native.to_dict(),
             "native_center_mm": [42.0, 51.0],
@@ -174,7 +174,7 @@ def test_verified_cutout_creation_persists_native_lines_and_cubics() -> None:
         item.transform.width_mm,
         item.transform.height_mm,
     ) == pytest.approx((42.0, 51.0, 28.0, 19.0))
-    assert item.metadata["source_name"] == "camera cutout trace"
+    assert item.metadata["source_name"] == "camera trace"
 
 
 def test_normalized_grid_trace_creates_named_grid_cell_with_metadata() -> None:
@@ -191,6 +191,138 @@ def test_normalized_grid_trace_creates_named_grid_cell_with_metadata() -> None:
     assert item.metadata["trace_grid_normalized"] is True
     assert item.metadata["trace_grid_row"] == 2
     assert item.metadata["trace_grid_column"] == 4
+
+
+def test_combined_trace_creation_is_one_evenodd_object_and_one_undo_step() -> None:
+    document = ProjectDocument.new()
+    first = _contour_detection()
+    first["id"] = "first"
+    first["vector_contour_mm"] = [
+        [10.0, 10.0],
+        [30.0, 10.0],
+        [30.0, 30.0],
+        [10.0, 30.0],
+    ]
+    first_native = NativePathGeometry(
+        (
+            PathSubpath(
+                start=(-0.5, -0.5),
+                segments=(
+                    PathLineSegment((0.5, -0.5)),
+                    PathCubicSegment((0.5, -0.2), (0.2, 0.5), (-0.5, 0.5)),
+                    PathLineSegment((-0.5, -0.5)),
+                ),
+                closed=True,
+            ),
+        ),
+        fill_rule=PathFillRule.EVENODD,
+    )
+    first.update(
+        {
+            "native_verified": True,
+            "native_path": first_native.to_dict(),
+            "native_center_mm": [20.0, 20.0],
+            "native_width_mm": 20.0,
+            "native_height_mm": 20.0,
+        }
+    )
+    second = _contour_detection()
+    second["id"] = "second"
+    second["vector_contour_mm"] = [
+        [20.0, 20.0],
+        [40.0, 20.0],
+        [40.0, 40.0],
+        [20.0, 40.0],
+    ]
+
+    class Harness:
+        def __init__(self) -> None:
+            self.document = document
+            self.active_layer_id = document.active_layer_id
+            self.history = CommandStack()
+            self._trace_result = {"detections": [first, second]}
+            self.controller = SimpleNamespace(cancel_trace_detection=lambda: None)
+            self.workspace = SimpleNamespace(
+                clear_trace_preview=lambda: None,
+                select_objects=lambda _ids: None,
+            )
+            self.trace_panel = SimpleNamespace(clear_result=lambda: None)
+
+        def _trace_detection_world_geometry(
+            self, detection: dict[str, object]
+        ) -> NativePathGeometry:
+            return E3MainWindow._trace_detection_world_geometry(detection)
+
+        def _trace_detection_to_object(
+            self,
+            detection: dict[str, object],
+            output_mode: str,
+        ) -> SceneObject:
+            return E3MainWindow._trace_detection_to_object(
+                self,
+                detection,
+                output_mode,
+            )
+
+        def _combined_trace_object(
+            self, detections: list[dict[str, object]]
+        ) -> SceneObject:
+            return E3MainWindow._combined_trace_object(self, detections)
+
+        def _clear_trace_preview(self) -> None:
+            E3MainWindow._clear_trace_preview(self)
+
+        def show_notice(self, _message: str) -> None:
+            pass
+
+        def show_error(self, message: str) -> None:
+            raise AssertionError(message)
+
+    harness = Harness()
+    E3MainWindow._create_traced_objects(
+        harness,
+        {
+            "selected_ids": ["first", "second"],
+            "output_mode": "exact",
+            "purpose": "cut",
+            "replace_previous": False,
+            "combine": True,
+        },
+    )
+
+    assert len(document.objects) == 1
+    combined = document.objects[0]
+    assert combined.kind == ObjectKind.PATH
+    assert combined.path_geometry().fill_rule is PathFillRule.EVENODD
+    assert len(combined.path_geometry().subpaths) == 2
+    assert any(
+        isinstance(segment, PathCubicSegment)
+        for subpath in combined.path_geometry().subpaths
+        for segment in subpath.segments
+    )
+    assert combined.metadata["trace_compound"] is True
+    assert combined.metadata["trace_detection_ids"] == ["first", "second"]
+    assert combined.bounds().x_min == pytest.approx(10.0)
+    assert combined.bounds().x_max == pytest.approx(40.0)
+
+    harness.history.undo()
+    assert document.objects == []
+
+    harness._trace_result = {"detections": [first, second]}
+    E3MainWindow._create_traced_objects(
+        harness,
+        {
+            "selected_ids": ["first", "second"],
+            "output_mode": "exact",
+            "purpose": "cut",
+            "replace_previous": False,
+            "combine": False,
+        },
+    )
+    assert len(document.objects) == 2
+    assert all(item.kind == ObjectKind.PATH for item in document.objects)
+    harness.history.undo()
+    assert document.objects == []
 
 
 def test_trace_creation_replaces_only_previous_trace_objects_and_is_undoable() -> None:

@@ -49,76 +49,58 @@ installer and Linux AppImage for this change have not yet been built or
 published, and no controller, motion, arming, laser-output, or physical test
 was performed or is claimed.
 
-## Active camera cutout object selection
+## Active Camera Trace review simplification
 
-The first reported interactive camera use of **Cutout / silhouette** exposed a
-selection error: the earlier click-local Lab/intensity and contrast-hypothesis
-ranking could choose one threshold region that joined a requested feature to
-adjacent lettering. Cutout capture now resolves one click-independent dark/light
-foreground consensus for the entire corrected frame, applies bounded
-source-neutral component cleanup, and decomposes the result into a stable forest
-of discrete OpenCV `RETR_TREE` candidates before the first Add click. A click is
-only point containment against those already-separated candidates; it cannot
-choose a new threshold or a best seed-local merged region. Adjacent roots stay
-independent, and each selected root retains its holes and nested islands through
-even-odd topology. Background and ambiguous clicks fail with guidance to click
-farther inside the object or improve the captured frame.
+Camera Trace now has one detection-and-review workflow. The former seeded
+**Cutout / silhouette** mode, prepared-frame state, Add-click lifecycle, quick
+blue outline, and second asynchronous verification state have been removed.
+Auto, By color, and By contrast produce the candidates. A stored legacy
+`cutout` preference is migrated once to `contrast`; the old value cannot leave
+the color picker disabled. Desktop tests redirect organization/application
+`QSettings` into a unique per-worker INI file, so parallel runs neither inherit
+nor mutate the operator's real preferences.
 
-The immutable `PreparedCutoutFrame` is retained by the desktop controller for
-the full review. Every Add click, bounded blue quick outline, and asynchronous
-green exact result reuses it; frame-wide thresholding and decomposition are not
-repeated for each click or each stage. Candidate IDs and detection IDs remain
-stable between quick and verified results. Multiple candidates accumulate,
-while repeated clicks on the same candidate coalesce by its precomputed ID.
-Creation remains disabled until the newest exact result is current and verified.
-Edge-cropped, outside-work-area, and otherwise invalid results remain
-unselected. The optional Trace ROI remains authoritative. Existing Auto, Color,
-Contrast, grid, missing-cell, normalization, analytic-template, and guarded
-output paths are unchanged; grid and global size/confidence controls remain
-disabled in Cutout mode.
+Temporary candidates are real selectable canvas items over the frozen corrected
+camera frame. Click selects one, Ctrl-click toggles, empty-space click clears,
+and a rubber band selects multiple direct candidates. Inferred grid positions
+remain explicit and are not silently promoted by a rubber band. The inspector
+checkboxes and canvas use the same detection-ID set. Smaller overlapping
+candidates receive deterministic hit priority; selection survives zoom and pan,
+and a new detection, Clear, camera/calibration invalidation, or creation removes
+the old temporary items. While review is active, normal project objects cannot
+be selected or moved; their prior selection and flags are restored afterward.
+Preview candidates never enter the project document, planning cache, G-code, or
+execution paths.
 
-`geometry.foreground` now supplies source-neutral binary component cleanup,
-bounded hierarchy extraction, deterministic outer-tree decomposition,
-point-containment selection, and even-odd rendering to both Camera Trace and
-raster vectorization. Camera and raster mask construction remain separate.
-Independent camera contours still receive bounded source-intensity edge
-localization; hard corners and ambiguous crossings remain at threshold evidence.
-Pixel-to-machine mapping consumes the calibration rectifier's explicit
-pixels/mm output, and the exact fit floor is never smaller than one corrected
-camera pixel.
+Native lines/Béziers are now an output choice for the global modes, including By
+contrast. The chosen detector mask is decomposed with the existing bounded
+source-neutral `RETR_TREE` infrastructure, then every independent direct contour
+tree is passed to the same authoritative physical contour fitter used by raster
+vectorization. The corrected camera pixel pitch remains the minimum tolerance.
+Persisted line/cubic geometry retains outer/hole hierarchy and the preview draws
+that exact native path. Analytic, simplified, exact, grid inference, and guarded
+output behavior remain available; no desktop-only fitter was introduced.
 
-The exact stage calls the same authoritative physical contour-to-native-path
-contract as raster vectorization. That shared Qt-free API produces persisted
-line and cubic subpaths and runs the existing continuous fit, frame/extrema,
-hierarchy, self-intersection, adjacent-arc, compound-topology, and clearance
-validation. Analytic circle, ellipse, rounded-rectangle, and washer results
-remain semantic where possible; washers use an even-odd pair of verified
-four-cubic rings. No alternate desktop-only line/Bézier fitter was introduced.
+Cut geometry offers two explicit commits. **Create separate vectors** creates
+one editable object per selected candidate. **Create one combined vector**
+creates one logical even-odd compound path containing all selected subpaths;
+overlaps are deliberately preserved and are not unioned. Either operation is a
+single undoable project edit. Stock-boundary creation remains a separate
+single-outline, non-output path.
 
-The main regression fixture uses three adjacent glyph-like objects with narrow
-real gaps, one internal hole, a separate long underline, mixed straight/curved
-boundaries, smaller unrelated text, uneven illumination, deterministic noise,
-and camera pixels/mm scaling. Four clicks return exactly the four intended
-objects with stable candidate IDs in both quick and verified stages; no selected
-bounds reach the unclicked text, the hole hierarchy survives, and the exact
-objects persist native line/cubic geometry. A duplicate click coalesces, and a
-click in a narrow inter-object gap is rejected as background. An offscreen
-desktop lifecycle regression covers Capture -> Add -> quick blue outline ->
-verified green result -> Add another -> both independent verified objects, and
-proves all four selection/fit calls reuse the identical prepared frame.
-
-Automated fixtures also cover single and multiple clicked silhouettes amid
-distracting text, circle, ellipse, washer, outer-hole-island topology, rotation,
-uneven illumination and noise, different camera resolutions, work-area
-rejection, and raw-versus-verified object creation. The affected core,
-vectorization, and offscreen desktop groups pass **221 tests** with four xdist
-workers. The complete Windows suite passes **2,658 tests** with **14 expected
-platform skips** and four workers. Repository Ruff,
-`python -m compileall -q laser_aligner`, and `git diff --check` pass. These are
-synthetic/automated Qt-free and offscreen-widget results. The original failure
-was reported from interactive camera use, but this corrected implementation has
-not yet been retested with the real camera or controller; no motion, arming,
-laser-output, or physical-accuracy test was performed or is claimed.
+Focused Qt-free and offscreen regressions cover mode removal and migration,
+contrast-native independent shapes and holes, line/cubic persistence, click,
+Ctrl-click, empty click, rubber band, inferred-candidate gating, list/canvas
+synchronization, overlap priority, zoom/pan stability, detection invalidation,
+project-selection restoration, separate and combined creation, compound
+topology, one-step undo, and the real-color picker path. Physical camera and
+controller behavior has not been retested for this redesign. The affected group
+passes **139 tests** with four xdist workers; the three offscreen canvas
+interaction tests also pass in **five consecutive four-worker runs**. The
+complete Windows suite passes **2,655 tests** with **14 expected platform
+skips**. Repository Ruff, `python -m compileall -q laser_aligner`, and
+`git diff --check` pass. No motion, arming, laser-output, cutting, or
+physical-accuracy test was performed or is claimed.
 
 ## Active development-release trigger filtering
 

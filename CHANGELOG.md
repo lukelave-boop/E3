@@ -6,6 +6,17 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Simplified Camera Trace to one candidate-review workflow. Removed the seeded
+  Cutout/silhouette mode and its separate capture, Add-click, quick-outline, and
+  verification state. Auto, Color, and Contrast candidates are now directly
+  selectable on the frozen camera canvas with click, Ctrl-click, empty click,
+  and rubber-band selection; the inspector checkboxes share the same selected-ID
+  set. Native line/Bézier output now uses the authoritative physical contour
+  fitter for global contrast candidates, including preserved holes. Creation is
+  explicit: separate editable vectors or one even-odd compound vector whose
+  overlaps are preserved rather than unioned. A legacy `cutout` preference
+  migrates to `contrast`, and desktop tests isolate QSettings per xdist worker.
+
 - Fixed Camera Trace **Cutout / silhouette** after the first interactive camera
   use exposed that per-click segmentation-hypothesis ranking could choose a
   merged neighboring-letter region. A corrected frame now produces one bounded,

@@ -36,6 +36,7 @@ def test_pick_color_button_drives_canvas_sample_and_updates_real_color(
     workspace.show()
     workspace.fit_work_area()
     panel = TracePanel()
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("color"))
     panel.set_calibration_ready(True)
     panel.show()
     qt_application.processEvents()

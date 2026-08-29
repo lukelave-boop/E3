@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +20,7 @@ from ..project import (
     read_raster_asset_payload,
 )
 from ..project.path_geometry import (
+    NativePathGeometry,
     PathCubicSegment,
     PathFillRule,
     PathLineSegment,
@@ -73,6 +74,141 @@ class _TraceIndexBadge(QtWidgets.QGraphicsItem):
             QtCore.Qt.AlignmentFlag.AlignCenter,
             self.text,
         )
+
+    def set_accent(self, accent: QtGui.QColor) -> None:
+        self.accent = QtGui.QColor(accent)
+        self.update()
+
+
+def _trace_candidate_path(
+    scene: WorkspaceScene,
+    detection: Mapping[str, Any],
+) -> QtGui.QPainterPath:
+    path = QtGui.QPainterPath()
+    native = detection.get("native_path")
+    if isinstance(native, Mapping):
+        try:
+            geometry = NativePathGeometry.from_dict(native)
+            center = detection.get("native_center_mm") or detection.get("center_mm")
+            width = float(
+                detection.get("native_width_mm") or detection.get("width_mm")
+            )
+            height = float(
+                detection.get("native_height_mm") or detection.get("height_mm")
+            )
+            center_x, center_y = float(center[0]), float(center[1])
+
+            def mapped(point: tuple[float, float]) -> QtCore.QPointF:
+                return scene.machine_to_scene(
+                    center_x + point[0] * width,
+                    center_y + point[1] * height,
+                )
+
+            path.setFillRule(
+                QtCore.Qt.FillRule.OddEvenFill
+                if geometry.fill_rule is PathFillRule.EVENODD
+                else QtCore.Qt.FillRule.WindingFill
+            )
+            for subpath in geometry.subpaths:
+                path.moveTo(mapped(subpath.start))
+                for segment in subpath.segments:
+                    if isinstance(segment, PathLineSegment):
+                        path.lineTo(mapped(segment.to))
+                    elif isinstance(segment, PathCubicSegment):
+                        control_1 = mapped(segment.control_1)
+                        control_2 = mapped(segment.control_2)
+                        end = mapped(segment.to)
+                        path.cubicTo(control_1, control_2, end)
+                if subpath.closed:
+                    path.closeSubpath()
+            return path
+        except (KeyError, TypeError, ValueError, IndexError):
+            path = QtGui.QPainterPath()
+
+    contours = detection.get("vector_contours_mm") or [[
+        *(
+            detection.get("vector_contour_mm")
+            or detection.get("contour_mm")
+            or detection.get("box_mm")
+            or []
+        )
+    ]]
+    path.setFillRule(QtCore.Qt.FillRule.OddEvenFill)
+    for points in contours:
+        if len(points) < 2:
+            continue
+        path.moveTo(scene.machine_to_scene(*points[0]))
+        for point in points[1:]:
+            path.lineTo(scene.machine_to_scene(*point))
+        path.closeSubpath()
+    return path
+
+
+class _TraceCandidateGraphicsItem(QtWidgets.QGraphicsPathItem):
+    """Temporary selectable candidate; it never becomes a project object."""
+
+    def __init__(
+        self,
+        detection: Mapping[str, Any],
+        path: QtGui.QPainterPath,
+    ) -> None:
+        super().__init__(path)
+        self.detection_id = str(detection["id"])
+        self.source = str(detection.get("source", "direct"))
+        self.diagnostics = dict(detection.get("diagnostics") or {})
+        self._hit_width_scene = 2.0
+        self.setFlag(
+            QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+            True,
+        )
+        self.setAcceptHoverEvents(True)
+        self.setToolTip(
+            f"Candidate {detection.get('index', '')}: click to select; "
+            "Ctrl-click to toggle"
+        )
+        self.refresh_style()
+
+    def set_hit_width_scene(self, width: float) -> None:
+        self.prepareGeometryChange()
+        self._hit_width_scene = max(0.01, float(width))
+
+    def shape(self) -> QtGui.QPainterPath:
+        stroker = QtGui.QPainterPathStroker()
+        stroker.setWidth(self._hit_width_scene)
+        return self.path().united(stroker.createStroke(self.path()))
+
+    def refresh_style(self) -> QtGui.QColor:
+        selected = self.isSelected()
+        inferred = self.source == "inferred"
+        outside = not bool(self.diagnostics.get("within_work_area", True))
+        cropped = bool(self.diagnostics.get("touches_image_edge", False))
+        damaged = bool(self.diagnostics.get("damage_suspected", False))
+        likely_open = bool(self.diagnostics.get("likely_open_cell", False))
+        flagged = outside or cropped or damaged or likely_open
+        if outside or cropped:
+            color = QtGui.QColor("#E06666")
+        elif likely_open:
+            color = QtGui.QColor("#45D7FF")
+        elif damaged:
+            color = QtGui.QColor("#E7B55C")
+        elif selected and not inferred:
+            color = QtGui.QColor("#4FE36F")
+        elif inferred:
+            color = QtGui.QColor("#E7B55C" if selected else "#D98A45")
+        else:
+            color = QtGui.QColor("#8998A3")
+        pen = QtGui.QPen(color)
+        pen.setWidthF(1.6 if selected else 1.0)
+        pen.setCosmetic(True)
+        if flagged:
+            pen.setStyle(QtCore.Qt.PenStyle.DashDotLine)
+        elif inferred:
+            pen.setStyle(QtCore.Qt.PenStyle.DashLine)
+        self.setPen(pen)
+        fill = QtGui.QColor(color)
+        fill.setAlpha(36 if selected else 12)
+        self.setBrush(fill)
+        return color
 
 
 class WorkspaceScene(QtWidgets.QGraphicsScene):
@@ -1390,6 +1526,7 @@ class _WorkspaceOverlayLegend(QtWidgets.QWidget):
 class WorkspaceView(QtWidgets.QGraphicsView):
     cursorPositionChanged = QtCore.Signal(float, float)
     selectionIdsChanged = QtCore.Signal(list)
+    traceSelectionIdsChanged = QtCore.Signal(list)
     objectMoveCommitted = QtCore.Signal(str, object, object)
     objectTransformCommitted = QtCore.Signal(str, object, object)
     templatePlacementEdited = QtCore.Signal(float, float, float)
@@ -1481,6 +1618,15 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             tuple[str, tuple[str, ...], int]
         ] = []
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
+        self._trace_candidates_by_id: dict[str, _TraceCandidateGraphicsItem] = {}
+        self._trace_badges_by_id: dict[str, _TraceIndexBadge] = {}
+        self._trace_review_active = False
+        self._trace_object_flags: dict[str, QtWidgets.QGraphicsItem.GraphicsItemFlags] = {}
+        self._trace_previous_object_selection: set[str] = set()
+        self._syncing_trace_selection = False
+        self._trace_drag_start = QtCore.QPoint()
+        self._trace_drag_inferred_selection: dict[str, bool] = {}
+        self._trace_pointer_select_active = False
         self._template_items: list[QtWidgets.QGraphicsItem] = []
         self._template_preview_item: _TemplatePreviewGraphicsItem | None = None
         self._template_rotation_handle: _TemplateRotationHandle | None = None
@@ -1500,6 +1646,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self.workspace_scene.selectionChanged.connect(self._emit_selection)
         self.zoomChanged.connect(self._template_zoom_changed)
         self.zoomChanged.connect(self._object_transform_zoom_changed)
+        self.zoomChanged.connect(self._trace_zoom_changed)
         self.fit_work_area()
 
     def drawBackground(
@@ -1835,12 +1982,85 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 item = item.parentItem()
         return False
 
+    def _begin_trace_review(self) -> None:
+        if self._trace_review_active:
+            return
+        self._trace_review_active = True
+        self._trace_previous_object_selection = set(self.selected_object_ids())
+        self._trace_object_flags = {
+            object_id: item.flags() for object_id, item in self._items_by_id.items()
+        }
+        self._syncing_trace_selection = True
+        try:
+            for item in self._items_by_id.values():
+                item.setSelected(False)
+                item.setFlag(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+                    False,
+                )
+                item.setFlag(
+                    QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                    False,
+                )
+        finally:
+            self._syncing_trace_selection = False
+        self._clear_object_transform_overlay()
+
+    def _end_trace_review(self) -> None:
+        if not self._trace_review_active:
+            return
+        previous_selection = set(self._trace_previous_object_selection)
+        self._syncing_trace_selection = True
+        try:
+            for object_id, item in self._items_by_id.items():
+                flags = self._trace_object_flags.get(object_id)
+                if flags is not None:
+                    item.setFlags(flags)
+                item.setSelected(object_id in previous_selection)
+        finally:
+            self._syncing_trace_selection = False
+        self._trace_object_flags.clear()
+        self._trace_previous_object_selection.clear()
+        self._trace_review_active = False
+        self._update_object_transform_overlay()
+        self.selectionIdsChanged.emit(self.selected_object_ids())
+
+    def _trace_zoom_changed(self, scale: float) -> None:
+        hit_width = 10.0 / max(0.01, float(scale))
+        for item in self._trace_candidates_by_id.values():
+            item.set_hit_width_scene(hit_width)
+
+    def _refresh_trace_candidate_styles(self) -> None:
+        for detection_id, item in self._trace_candidates_by_id.items():
+            color = item.refresh_style()
+            badge = self._trace_badges_by_id.get(detection_id)
+            if badge is not None:
+                badge.set_accent(color)
+
+    def set_trace_selected_ids(self, selected_ids: list[str] | set[str]) -> None:
+        selected = {str(detection_id) for detection_id in selected_ids}
+        self._syncing_trace_selection = True
+        try:
+            for detection_id, item in self._trace_candidates_by_id.items():
+                item.setSelected(detection_id in selected)
+        finally:
+            self._syncing_trace_selection = False
+        self._refresh_trace_candidate_styles()
+
     def clear_trace_preview(self) -> None:
+        self._syncing_trace_selection = True
+        self._trace_pointer_select_active = False
+        self._trace_drag_inferred_selection = {}
         for item in self._trace_items:
-            self.workspace_scene.removeItem(item)
+            if item.scene() is self.workspace_scene:
+                self.workspace_scene.removeItem(item)
         self._trace_items.clear()
+        self._trace_candidates_by_id.clear()
+        self._trace_badges_by_id.clear()
+        self._syncing_trace_selection = False
         self._overlay_entries["trace"] = []
         self._refresh_overlay_legend()
+        self._end_trace_review()
 
     def set_trace_preview(
         self,
@@ -1851,6 +2071,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         output_polygon: list[list[float]] | None = None,
     ) -> None:
         self.clear_trace_preview()
+        self._begin_trace_review()
         selected = set(selected_ids or [])
         has_output_boundary = False
         output = output_work_area or {}
@@ -1946,59 +2167,13 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         has_outside = False
         has_damaged = False
         has_likely_open = False
-        has_raw_cutout = False
-        has_verified_cutout = False
+        self._syncing_trace_selection = True
         for detection in detections:
             diagnostics = detection.get("diagnostics") or {}
-            native_status = str(diagnostics.get("native_fit_status", ""))
-            raw_contours = detection.get("raw_contours_mm") or []
-            if detection.get("source") == "seeded_cutout" and raw_contours:
-                raw_path = QtGui.QPainterPath()
-                for points in raw_contours:
-                    if len(points) < 2:
-                        continue
-                    raw_path.moveTo(self.workspace_scene.machine_to_scene(*points[0]))
-                    for point in points[1:]:
-                        raw_path.lineTo(self.workspace_scene.machine_to_scene(*point))
-                    raw_path.closeSubpath()
-                raw_item = QtWidgets.QGraphicsPathItem(raw_path)
-                raw_pen = QtGui.QPen(QtGui.QColor("#49A7D8"))
-                raw_pen.setWidthF(0.9)
-                raw_pen.setCosmetic(True)
-                raw_pen.setStyle(QtCore.Qt.PenStyle.DashLine)
-                raw_item.setPen(raw_pen)
-                raw_item.setBrush(QtCore.Qt.BrushStyle.NoBrush)
-                raw_item.setZValue(259.5)
-                raw_item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
-                self.workspace_scene.addItem(raw_item)
-                self._trace_items.append(raw_item)
-                has_raw_cutout = True
-                if native_status == "quick":
-                    continue
-                has_verified_cutout = has_verified_cutout or native_status in {
-                    "verified",
-                    "analytic",
-                }
-            contours = detection.get("vector_contours_mm") or [[
-                *(
-                    detection.get("vector_contour_mm")
-                    or detection.get("contour_mm")
-                    or detection.get("box_mm")
-                    or []
-                )
-            ]]
-            if not any(len(points) >= 2 for points in contours):
+            path = _trace_candidate_path(self.workspace_scene, detection)
+            if path.isEmpty():
                 continue
-            path = QtGui.QPainterPath()
-            for points in contours:
-                if len(points) < 2:
-                    continue
-                first = self.workspace_scene.machine_to_scene(*points[0])
-                path.moveTo(first)
-                for point in points[1:]:
-                    path.lineTo(self.workspace_scene.machine_to_scene(*point))
-                path.closeSubpath()
-            item = QtWidgets.QGraphicsPathItem(path)
+            item = _TraceCandidateGraphicsItem(detection, path)
             is_selected = detection.get("id") in selected
             is_inferred = detection.get("source") == "inferred"
             is_outside = not bool(diagnostics.get("within_work_area", True))
@@ -2016,35 +2191,14 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             has_unselected_direct = has_unselected_direct or (
                 not is_selected and not is_inferred and not is_flagged
             )
-            if is_outside or is_cropped:
-                color = QtGui.QColor("#E06666")
-            elif is_likely_open:
-                color = QtGui.QColor("#45D7FF")
-            elif is_damaged:
-                color = QtGui.QColor("#E7B55C")
-            elif is_selected and not is_inferred:
-                color = QtGui.QColor("#4FE36F")
-            elif is_selected and is_inferred:
-                color = QtGui.QColor("#E7B55C")
-            elif is_inferred:
-                color = QtGui.QColor("#D98A45")
-            else:
-                color = QtGui.QColor("#8998A3")
-            pen = QtGui.QPen(color)
-            pen.setWidthF(1.4 if is_selected else 1.0)
-            pen.setCosmetic(True)
-            if is_flagged:
-                pen.setStyle(QtCore.Qt.PenStyle.DashDotLine)
-            elif is_inferred:
-                pen.setStyle(QtCore.Qt.PenStyle.DashLine)
-            item.setPen(pen)
-            fill = QtGui.QColor(color)
-            fill.setAlpha(28 if is_selected else 10)
-            item.setBrush(fill)
-            item.setZValue(260.0)
-            item.setAcceptedMouseButtons(QtCore.Qt.MouseButton.NoButton)
+            area = max(0.0, float(detection.get("area_mm2", 0.0)))
+            index = int(detection.get("index", 0) or 0)
+            item.setZValue(260.0 + 1.0 / (1.0 + area) + index * 1e-9)
             self.workspace_scene.addItem(item)
             self._trace_items.append(item)
+            self._trace_candidates_by_id[item.detection_id] = item
+            item.setSelected(is_selected)
+            color = item.refresh_style()
 
             center = detection.get("center_mm")
             index_text = str(detection.get("index", ""))
@@ -2055,6 +2209,8 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                 label.setZValue(261.0)
                 self.workspace_scene.addItem(label)
                 self._trace_items.append(label)
+                self._trace_badges_by_id[item.detection_id] = label
+        self._syncing_trace_selection = False
 
         trace_entries: list[tuple[str, str, QtCore.Qt.PenStyle]] = []
         if has_support_boundary:
@@ -2081,14 +2237,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             trace_entries.append(
                 ("Likely already cut/open (cyan)", "#45D7FF", QtCore.Qt.PenStyle.DashDotLine)
             )
-        if has_raw_cutout:
-            trace_entries.append(
-                ("Raw clicked boundary (blue)", "#49A7D8", QtCore.Qt.PenStyle.DashLine)
-            )
-        if has_verified_cutout:
-            trace_entries.append(
-                ("Verified native cutout (green)", "#4FE36F", QtCore.Qt.PenStyle.SolidLine)
-            )
         if has_selected_direct:
             trace_entries.append(
                 ("Selected trace (green)", "#4FE36F", QtCore.Qt.PenStyle.SolidLine)
@@ -2111,6 +2259,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             )
         self._overlay_entries["trace"] = trace_entries
         self._refresh_overlay_legend()
+        self._trace_zoom_changed(abs(self.transform().m11()))
 
     def clear_template_preview(self) -> None:
         if self._template_preview_item is not None:
@@ -2542,6 +2691,18 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             for item in existing_items.values():
                 self.workspace_scene.removeItem(item)
             self._items_by_id = next_items
+            if self._trace_review_active:
+                for object_id, item in next_items.items():
+                    self._trace_object_flags.setdefault(object_id, item.flags())
+                    item.setSelected(False)
+                    item.setFlag(
+                        QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable,
+                        False,
+                    )
+                    item.setFlag(
+                        QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsMovable,
+                        False,
+                    )
             ObjectGraphicsItem.retain_item_cache(list(next_items.values()))
             if reuse_items and current_pixel_budget > previous_pixel_budget:
                 self._schedule_raster_preview_quality_restore(
@@ -2805,6 +2966,13 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             if isinstance(item, ObjectGraphicsItem)
         ]
 
+    def selected_trace_ids(self) -> list[str]:
+        return [
+            detection_id
+            for detection_id, item in self._trace_candidates_by_id.items()
+            if item.isSelected()
+        ]
+
     def select_objects(self, object_ids: list[str]) -> None:
         wanted = set(object_ids)
         for object_id, item in self._items_by_id.items():
@@ -2814,6 +2982,18 @@ class WorkspaceView(QtWidgets.QGraphicsView):
     def _emit_selection(self) -> None:
         # Qt may deliver a final selectionChanged while tearing the owned
         # scene down; its Python wrapper can already outlive the C++ scene.
+        if self._syncing_trace_selection:
+            return
+        if self._trace_review_active:
+            if self._syncing_document:
+                return
+            try:
+                selected_trace = self.selected_trace_ids()
+            except RuntimeError:
+                return
+            self._refresh_trace_candidate_styles()
+            self.traceSelectionIdsChanged.emit(selected_trace)
+            return
         try:
             selected = self.selected_object_ids()
         except RuntimeError:
@@ -2876,6 +3056,20 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                     self._update_rectangle_draft(snapped)
                 event.accept()
                 return
+        if (
+            self._trace_review_active
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
+            self._trace_drag_start = event.position().toPoint()
+            self._trace_drag_inferred_selection = {
+                detection_id: item.isSelected()
+                for detection_id, item in self._trace_candidates_by_id.items()
+                if item.source == "inferred"
+            }
+            self._trace_pointer_select_active = True
+            self._syncing_trace_selection = True
+            super().mousePressEvent(event)
+            return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -2921,6 +3115,27 @@ class WorkspaceView(QtWidgets.QGraphicsView):
                     bounds.height,
                 )
             event.accept()
+            return
+        if (
+            self._trace_pointer_select_active
+            and event.button() == QtCore.Qt.MouseButton.LeftButton
+        ):
+            super().mouseReleaseEvent(event)
+            distance = (
+                event.position().toPoint() - self._trace_drag_start
+            ).manhattanLength()
+            if distance >= QtWidgets.QApplication.startDragDistance():
+                for detection_id, was_selected in (
+                    self._trace_drag_inferred_selection.items()
+                ):
+                    item = self._trace_candidates_by_id.get(detection_id)
+                    if item is not None:
+                        item.setSelected(was_selected)
+            self._trace_pointer_select_active = False
+            self._syncing_trace_selection = False
+            self._trace_drag_inferred_selection = {}
+            self._refresh_trace_candidate_styles()
+            self.traceSelectionIdsChanged.emit(self.selected_trace_ids())
             return
         super().mouseReleaseEvent(event)
 

@@ -173,7 +173,7 @@ def test_trace_output_mode_enables_only_applicable_smoothing(
     legend_text = " ".join(
         label.text() for label in panel.findChildren(QtWidgets.QLabel)
     )
-    assert "Green outlines show the proposed vector output" in legend_text
+    assert "Green outlines are included" in legend_text
 
     panel.close()
     panel.deleteLater()
@@ -366,6 +366,7 @@ def test_trace_create_payload_can_keep_earlier_trace_batches(
             "output_mode": "rounded",
             "purpose": "cut",
             "replace_previous": False,
+            "combine": False,
         }
     ]
     panel.close()
@@ -382,7 +383,7 @@ def test_trace_generate_follows_create_and_emits_once(
 
     assert result_layout is not None
     assert result_layout.indexOf(panel.generate_button) == (
-        result_layout.indexOf(panel.create_button) + 1
+        result_layout.indexOf(panel.create_combined_button) + 1
     )
     panel.generate_button.click()
     qt_application.processEvents()
@@ -675,80 +676,73 @@ def test_non_grid_trace_names_the_guarded_output_boundary(
     qt_application.processEvents()
 
 
-def test_cutout_mode_disables_global_grid_filters_and_waits_for_native_fit(
+def test_trace_modes_share_filters_and_native_output_creation_controls(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     panel = TracePanel()
     panel.set_calibration_ready(True)
-    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("cutout"))
-    qt_application.processEvents()
-
-    assert panel.detect_button.text() == "Capture cutout frame"
-    assert panel.output_mode.currentData() == "native"
-    assert not panel.min_area.isEnabled()
-    assert not panel.max_area.isEnabled()
-    assert not panel.regular_grid.isEnabled()
-    assert not panel.infer_missing.isEnabled()
-    assert not panel.normalize_grid.isEnabled()
-    assert panel.native_fitting_tolerance.isEnabled()
-    assert not panel.pick_cutout_button.isEnabled()
-
-    panel.set_result(
-        {
-            "mode_used": "cutout",
-            "message": "Cutout frame captured",
-            "detections": [],
-            "grid": None,
-        }
-    )
-    assert panel.pick_cutout_button.isEnabled()
+    assert panel.mode_combo.findData("cutout") == -1
+    for mode in ("auto", "color", "contrast"):
+        panel.mode_combo.setCurrentIndex(panel.mode_combo.findData(mode))
+        panel.output_mode.setCurrentIndex(panel.output_mode.findData("native"))
+        qt_application.processEvents()
+        assert panel.detect_button.text() == "Detect objects"
+        assert panel.min_area.isEnabled()
+        assert panel.max_area.isEnabled()
+        assert panel.regular_grid.isEnabled()
+        assert panel.native_fitting_tolerance.isEnabled()
 
     detection = {
-        "id": "clicked-cutout",
+        "id": "contrast-candidate",
         "index": 1,
-        "source": "seeded_cutout",
+        "source": "direct",
         "confidence": 0.9,
         "selected_default": True,
         "shape": "contour",
         "width_mm": 25.0,
         "height_mm": 18.0,
         "rotation_deg": 0.0,
+        "native_verified": True,
         "diagnostics": {
             "within_work_area": True,
-            "native_fit_status": "quick",
+            "native_fit_status": "verified",
+            "native_sequences": ["LLCC"],
         },
     }
     panel.set_result(
         {
-            "mode_used": "cutout",
-            "message": "Quick segmentation outline",
-            "native_fit_pending": True,
+            "mode_used": "contrast",
+            "message": "Detected contrast candidate",
             "detections": [detection],
             "grid": None,
         }
     )
-    assert panel.selected_ids() == ["clicked-cutout"]
-    assert not panel.create_button.isEnabled()
-
-    detection["native_verified"] = True
-    detection["diagnostics"] = {
-        "within_work_area": True,
-        "native_fit_status": "verified",
-        "native_sequences": ["LLCC"],
-    }
-    panel.set_result(
-        {
-            "mode_used": "cutout",
-            "message": "Verified native geometry",
-            "native_fit_pending": False,
-            "detections": [detection],
-            "grid": None,
-        }
-    )
+    assert panel.selected_ids() == ["contrast-candidate"]
     assert panel.create_button.isEnabled()
+    assert panel.create_combined_button.isEnabled()
     assert "Verified native sequence" in panel.result_tree.topLevelItem(0).toolTip(4)
 
-    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("auto"))
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_preferences_migrate_removed_cutout_mode_to_contrast(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    settings = QtCore.QSettings("E3", "PositioningSystem")
+    settings.beginGroup("trace")
+    settings.setValue("detection_mode", "cutout")
+    settings.endGroup()
+    settings.sync()
+
+    panel = TracePanel()
+
+    assert panel.mode_combo.currentData() == "contrast"
+    settings.beginGroup("trace")
+    assert settings.value("detection_mode") == "contrast"
+    settings.endGroup()
+
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()

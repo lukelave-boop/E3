@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
 from typing import Any
 
 from ..project import (
@@ -1211,7 +1212,6 @@ class CameraPanel(QtWidgets.QWidget):
 class TracePanel(QtWidgets.QWidget):
     detectRequested = QtCore.Signal(dict)
     pickColorRequested = QtCore.Signal()
-    pickCutoutRequested = QtCore.Signal()
     clearRequested = QtCore.Signal()
     createRequested = QtCore.Signal(dict)
     generateRequested = QtCore.Signal()
@@ -1225,9 +1225,6 @@ class TracePanel(QtWidgets.QWidget):
         self._sampled_bgr: list[int] | None = None
         self._sampled_hue: float | None = None
         self._color_pick_active = False
-        self._cutout_pick_active = False
-        self._cutout_frame_ready = False
-        self._native_fit_pending = False
         self._calibration_ready = False
         self._generate_enabled = True
         self._trace_settings = QtCore.QSettings("E3", "PositioningSystem")
@@ -1252,10 +1249,9 @@ class TracePanel(QtWidgets.QWidget):
         self.mode_combo.addItem("Auto detect", "auto")
         self.mode_combo.addItem("By color", "color")
         self.mode_combo.addItem("By contrast", "contrast")
-        self.mode_combo.addItem("Cutout / silhouette", "cutout")
         self.mode_combo.setToolTip(
-            "Choose global repeated-object detection or seeded Cutout / silhouette "
-            "selection for arbitrary physical outlines."
+            "Choose automatic, color-based, or contrast-based candidate detection. "
+            "Detected candidates are selected directly on the camera image."
         )
         self.target_hue = QtWidgets.QDoubleSpinBox()
         self.target_hue.setRange(-1.0, 179.0)
@@ -1283,18 +1279,11 @@ class TracePanel(QtWidgets.QWidget):
         )
         sample_layout.addWidget(self.pick_color_button, 1)
         sample_layout.addWidget(self.color_swatch)
-        self.pick_cutout_button = QtWidgets.QPushButton("Add cutout")
-        self.pick_cutout_button.setEnabled(False)
-        self.pick_cutout_button.setToolTip(
-            "After capturing a Cutout / silhouette frame, click here and then "
-            "click inside one desired physical object. Repeat for more cutouts."
-        )
         _form_row(source_form, "Mode", self.mode_combo)
         _form_row(source_form, "Target hue", self.target_hue)
         _form_row(source_form, "Hue tolerance", self.hue_tolerance)
         _form_row(source_form, "Minimum saturation", self.min_saturation)
         _form_row(source_form, "Sample", sample_row)
-        _form_row(source_form, "Seeded selection", self.pick_cutout_button)
         layout.addWidget(source_group)
 
         filter_group = QtWidgets.QGroupBox("Object filters")
@@ -1412,8 +1401,8 @@ class TracePanel(QtWidgets.QWidget):
         )
         self.output_mode.setToolTip(
             "Choose recognized analytic geometry (including washers, circles, "
-            "ellipses, polygons, and rounded rectangles), verified native lines/"
-            "Béziers for clicked cutouts, simplified pixel contours, or exact "
+            "ellipses, polygons, and rounded rectangles), fitted native lines/"
+            "Béziers, simplified pixel contours, or exact "
             "pixel-derived contours."
         )
         self.border_offset_mode = QtWidgets.QComboBox()
@@ -1479,7 +1468,7 @@ class TracePanel(QtWidgets.QWidget):
         self.native_fitting_tolerance.setSuffix(" mm")
         self.native_fitting_tolerance.setToolTip(
             "Requested maximum native line/Bezier fitting tolerance. Camera "
-            "cutouts automatically use at least the corrected camera-pixel pitch."
+            "traces automatically use at least the corrected camera-pixel pitch."
         )
         self.native_fitting_tolerance_label = QtWidgets.QLabel("Native fit tolerance")
         self.native_fitting_tolerance_label.setToolTip(
@@ -1526,10 +1515,9 @@ class TracePanel(QtWidgets.QWidget):
         result_layout = QtWidgets.QVBoxLayout(result_group)
         result_layout.addWidget(
             _muted(
-                "Green outlines show the proposed vector output after verification. "
-                "In Cutout / silhouette mode, "
-                "a thin blue dashed line is the raw segmented boundary while native "
-                "line/Bezier fitting runs. Grid inference remains amber."
+                "Click candidates on the camera image to select them. Ctrl-click "
+                "toggles candidates and drag-selects multiple candidates. Green "
+                "outlines are included; grid inference remains amber."
             )
         )
         self.result_tree = QtWidgets.QTreeWidget()
@@ -1578,12 +1566,20 @@ class TracePanel(QtWidgets.QWidget):
         select_row.addWidget(self.select_all_button)
         select_row.addWidget(self.select_none_button)
         result_layout.addLayout(select_row)
-        self.create_button = QtWidgets.QPushButton("Create objects")
+        self.create_button = QtWidgets.QPushButton("Create separate vectors")
         self.create_button.setToolTip(
             "Create vector objects from the selected detected outlines."
         )
         self.create_button.setObjectName("primaryButton")
         self.create_button.setEnabled(False)
+        self.create_combined_button = QtWidgets.QPushButton(
+            "Create one combined vector"
+        )
+        self.create_combined_button.setToolTip(
+            "Create one compound even-odd vector containing every selected outline. "
+            "Overlaps are preserved; this does not union the shapes."
+        )
+        self.create_combined_button.setEnabled(False)
         self.replace_previous = QtWidgets.QCheckBox("Replace earlier Trace objects")
         self.replace_previous.setChecked(True)
         self.replace_previous.setToolTip(
@@ -1593,6 +1589,7 @@ class TracePanel(QtWidgets.QWidget):
         )
         result_layout.addWidget(self.replace_previous)
         result_layout.addWidget(self.create_button)
+        result_layout.addWidget(self.create_combined_button)
         self.generate_button = QtWidgets.QPushButton("Generate")
         self.generate_button.setObjectName("traceGenerateButton")
         self.generate_button.setToolTip("Generate the current project toolpath")
@@ -1603,12 +1600,14 @@ class TracePanel(QtWidgets.QWidget):
         self._restore_preferences()
 
         self.pick_color_button.clicked.connect(self.pickColorRequested)
-        self.pick_cutout_button.clicked.connect(self.pickCutoutRequested)
         self.detect_button.clicked.connect(
             lambda: self.detectRequested.emit(self.options())
         )
         self.clear_button.clicked.connect(self._clear_clicked)
-        self.create_button.clicked.connect(self._create_clicked)
+        self.create_button.clicked.connect(lambda: self._create_clicked(False))
+        self.create_combined_button.clicked.connect(
+            lambda: self._create_clicked(True)
+        )
         self.generate_button.clicked.connect(self.generateRequested)
         self.result_tree.itemChanged.connect(self._result_changed)
         self.select_all_checkbox.stateChanged.connect(
@@ -1686,9 +1685,16 @@ class TracePanel(QtWidgets.QWidget):
         settings = self._trace_settings
         settings.beginGroup("trace")
         try:
+            saved_mode = settings.value(
+                "detection_mode", self.mode_combo.currentData()
+            )
+            saved_mode = str(saved_mode).strip().lower()
+            if saved_mode == "cutout":
+                saved_mode = "contrast"
+                settings.setValue("detection_mode", saved_mode)
             self._set_combo_data(
                 self.mode_combo,
-                settings.value("detection_mode", self.mode_combo.currentData()),
+                saved_mode,
             )
             self.target_hue.setValue(
                 float(settings.value("target_hue", self.target_hue.value()))
@@ -1901,43 +1907,10 @@ class TracePanel(QtWidgets.QWidget):
         self.set_color_pick_active(False)
         self.status_label.setText(f"Color sampling failed: {message}")
 
-    @property
-    def cutout_pick_active(self) -> bool:
-        return self._cutout_pick_active
-
-    def set_cutout_pick_active(self, active: bool, *, segmenting: bool = False) -> None:
-        self._cutout_pick_active = bool(active)
-        if segmenting:
-            self.pick_cutout_button.setText("Segmenting…")
-            self.pick_cutout_button.setEnabled(False)
-            self.status_label.setText(
-                "Finding only the connected physical region containing the click…"
-            )
-        elif active:
-            self.pick_cutout_button.setText("Cancel cutout pick")
-            self.pick_cutout_button.setEnabled(True)
-            self.status_label.setText(
-                "CUTOUT PICK ACTIVE — click inside one desired physical silhouette."
-            )
-        else:
-            self.pick_cutout_button.setText("Add cutout")
-            self.pick_cutout_button.setEnabled(
-                self._calibration_ready
-                and self._cutout_frame_ready
-                and self.mode_combo.currentData() == "cutout"
-            )
-
-    def set_cutout_pick_failed(self, message: str) -> None:
-        self.set_cutout_pick_active(False)
-        self.status_label.setText(f"Cutout selection failed: {message}")
-
     def set_result(self, result: dict[str, Any]) -> None:
         previous_ids = {str(item.get("id")) for item in self._detections}
         previous_selected = set(self.selected_ids())
         self._detections = list(result.get("detections", []))
-        self._native_fit_pending = bool(result.get("native_fit_pending", False))
-        self._cutout_frame_ready = result.get("mode_used") == "cutout"
-        self.set_cutout_pick_active(False)
         grid = result.get("grid") or {}
         grid_normalized = bool(grid.get("normalized"))
         cells_snapped = bool(grid.get("cells_snapped"))
@@ -1985,8 +1958,6 @@ class TracePanel(QtWidgets.QWidget):
                     diagnostics.get("touches_image_edge", False)
                 )
                 source_text = source.title()
-                if source == "seeded_cutout":
-                    source_text = "Clicked cutout"
                 if touches_image_edge:
                     source_text += " · cropped"
                 if not within_work_area:
@@ -2176,12 +2147,6 @@ class TracePanel(QtWidgets.QWidget):
         self.detect_button.setEnabled(bool(ready))
         if not self._color_pick_active:
             self.pick_color_button.setEnabled(bool(ready))
-        if not self._cutout_pick_active:
-            self.pick_cutout_button.setEnabled(
-                bool(ready)
-                and self._cutout_frame_ready
-                and self.mode_combo.currentData() == "cutout"
-            )
         if not ready:
             self.status_label.setText(
                 "Bed mapping is required before camera objects can be traced."
@@ -2199,17 +2164,37 @@ class TracePanel(QtWidgets.QWidget):
                 selected.append(str(item.data(0, QtCore.Qt.ItemDataRole.UserRole)))
         return selected
 
+    def set_selected_ids(self, selected_ids: Sequence[str], *, emit: bool = False) -> None:
+        selected = {str(detection_id) for detection_id in selected_ids}
+        self._updating = True
+        try:
+            for row in range(self.result_tree.topLevelItemCount()):
+                item = self.result_tree.topLevelItem(row)
+                detection_id = str(
+                    item.data(0, QtCore.Qt.ItemDataRole.UserRole)
+                )
+                item.setCheckState(
+                    0,
+                    QtCore.Qt.CheckState.Checked
+                    if detection_id in selected
+                    else QtCore.Qt.CheckState.Unchecked,
+                )
+        finally:
+            self._updating = False
+        self._sync_select_all_checkbox()
+        self._update_create_button()
+        if emit:
+            self.selectionChanged.emit(self.selected_ids())
+
     def clear_result(self) -> None:
         self._detections = []
         self._result_is_current = False
-        self._native_fit_pending = False
-        self._cutout_frame_ready = False
-        self.set_cutout_pick_active(False)
         self.result_tree.clear()
         self.select_grid_button.setText("Select complete grid")
         self.select_grid_button.setEnabled(False)
         self._sync_select_all_checkbox()
         self.create_button.setEnabled(False)
+        self.create_combined_button.setEnabled(False)
         self.status_label.setText("Trace preview cleared.")
 
     def set_generate_enabled(self, enabled: bool) -> None:
@@ -2222,6 +2207,7 @@ class TracePanel(QtWidgets.QWidget):
             return
         self._result_is_current = False
         self.create_button.setEnabled(False)
+        self.create_combined_button.setEnabled(False)
         self.status_label.setText(
             "Trace settings changed. Run Detect objects again before creating paths."
         )
@@ -2229,22 +2215,8 @@ class TracePanel(QtWidgets.QWidget):
     def _sync_output_controls(self, *args: Any) -> None:
         del args
         stock_mode = self.trace_purpose.currentData() == "stock"
-        cutout_mode = self.mode_combo.currentData() == "cutout"
-        for mode, enabled in (
-            ("native", cutout_mode),
-            ("smoothed", not cutout_mode),
-            ("exact", not cutout_mode),
-        ):
-            item = self.output_mode.model().item(self.output_mode.findData(mode))
-            if item is not None:
-                item.setEnabled(enabled)
-        if cutout_mode and self.output_mode.currentData() not in {"rounded", "native"}:
-            self.output_mode.setCurrentIndex(self.output_mode.findData("native"))
-        elif not cutout_mode and self.output_mode.currentData() == "native":
-            self.output_mode.setCurrentIndex(self.output_mode.findData("rounded"))
-        self.detect_button.setText(
-            "Capture cutout frame" if cutout_mode else "Detect objects"
-        )
+        native_output = self.output_mode.currentData() == "native"
+        self.detect_button.setText("Detect objects")
         for widget in (
             self.target_hue,
             self.hue_tolerance,
@@ -2252,21 +2224,9 @@ class TracePanel(QtWidgets.QWidget):
             self.pick_color_button,
             self.color_swatch,
         ):
-            widget.setEnabled(not cutout_mode and self._calibration_ready)
-        for widget in (
-            self.min_area,
-            self.max_area,
-            self.min_width,
-            self.min_height,
-            self.confidence,
-            self.regular_grid,
-        ):
-            widget.setEnabled(not cutout_mode)
-        self.pick_cutout_button.setEnabled(
-            cutout_mode and self._cutout_frame_ready and self._calibration_ready
-        )
-        self.native_fitting_tolerance_label.setEnabled(cutout_mode)
-        self.native_fitting_tolerance.setEnabled(cutout_mode)
+            widget.setEnabled(self._calibration_ready)
+        self.native_fitting_tolerance_label.setEnabled(native_output)
+        self.native_fitting_tolerance.setEnabled(native_output)
         self.replace_previous.setText(
             "Replace earlier Stock boundary"
             if stock_mode
@@ -2275,11 +2235,12 @@ class TracePanel(QtWidgets.QWidget):
         self.create_button.setToolTip(
             "Create one locked, non-cutting Stock boundary from the selected outline."
             if stock_mode
-            else "Create vector objects from the selected detected outlines."
+            else "Create one vector object for each selected detected outline."
         )
+        self.create_combined_button.setVisible(not stock_mode)
         rounded_output = self.output_mode.currentData() == "rounded"
         if (
-            (not rounded_output or cutout_mode)
+            not rounded_output
             and self.border_offset_mode.currentData() == "custom"
         ):
             self.border_offset_mode.setCurrentIndex(
@@ -2287,20 +2248,17 @@ class TracePanel(QtWidgets.QWidget):
             )
         custom_offset = (
             rounded_output
-            and not cutout_mode
             and self.border_offset_mode.currentData() == "custom"
         )
-        self.border_offset_mode.setEnabled(rounded_output and not cutout_mode)
+        self.border_offset_mode.setEnabled(rounded_output)
         self.border_offset_label.setVisible(not custom_offset)
         self.border_offset.setVisible(not custom_offset)
         self.edge_offsets_label.setVisible(custom_offset)
         self.edge_offsets.setVisible(custom_offset)
-        smoothing_enabled = (
-            self.output_mode.currentData() == "smoothed" and not cutout_mode
-        )
+        smoothing_enabled = self.output_mode.currentData() == "smoothed"
         self.smoothing_label.setEnabled(smoothing_enabled)
         self.smoothing.setEnabled(smoothing_enabled)
-        grid_enabled = self.regular_grid.isChecked() and not cutout_mode
+        grid_enabled = self.regular_grid.isChecked()
         self.infer_missing.setEnabled(grid_enabled)
         self.repair_grid_edges.setEnabled(
             grid_enabled and self.output_mode.currentData() == "rounded"
@@ -2318,11 +2276,6 @@ class TracePanel(QtWidgets.QWidget):
         self._update_create_button()
 
     def _trace_mode_changed(self, *_args: Any) -> None:
-        cutout_mode = self.mode_combo.currentData() == "cutout"
-        if cutout_mode:
-            self.output_mode.setCurrentIndex(self.output_mode.findData("native"))
-        elif self.output_mode.currentData() == "native":
-            self.output_mode.setCurrentIndex(self.output_mode.findData("rounded"))
         self._sync_output_controls()
 
     def _result_changed(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
@@ -2372,19 +2325,22 @@ class TracePanel(QtWidgets.QWidget):
             )
             enabled = (
                 self._result_is_current
-                and not self._native_fit_pending
                 and count == 1
             )
         else:
             self.create_button.setText(
-                f"Create {count} object{'s' if count != 1 else ''}"
+                f"Create {count} separate vector{'s' if count != 1 else ''}"
             )
             enabled = (
                 self._result_is_current
-                and not self._native_fit_pending
                 and count > 0
             )
         self.create_button.setEnabled(enabled)
+        self.create_combined_button.setText(
+            f"Create one combined vector ({count} outline"
+            f"{'s' if count != 1 else ''})"
+        )
+        self.create_combined_button.setEnabled(enabled and not stock_mode)
 
     def _set_all_checked(self, checked: bool, include_inferred: bool) -> None:
         self._updating = True
@@ -2413,7 +2369,7 @@ class TracePanel(QtWidgets.QWidget):
                 detection = self._detections[row]
                 diagnostics = detection.get("diagnostics") or {}
                 direct = (
-                    detection.get("source") in {"direct", "seeded_cutout"}
+                    detection.get("source") == "direct"
                     and bool(diagnostics.get("within_work_area", True))
                     and not bool(diagnostics.get("touches_image_edge", False))
                 )
@@ -2433,7 +2389,7 @@ class TracePanel(QtWidgets.QWidget):
         self.clear_result()
         self.clearRequested.emit()
 
-    def _create_clicked(self) -> None:
+    def _create_clicked(self, combine: bool) -> None:
         if not self._result_is_current:
             return
         self.createRequested.emit(
@@ -2442,6 +2398,7 @@ class TracePanel(QtWidgets.QWidget):
                 "output_mode": str(self.output_mode.currentData()),
                 "purpose": str(self.trace_purpose.currentData()),
                 "replace_previous": self.replace_previous.isChecked(),
+                "combine": bool(combine),
             }
         )
 

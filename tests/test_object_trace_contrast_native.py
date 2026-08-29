@@ -1,0 +1,125 @@
+from __future__ import annotations
+
+import cv2
+import numpy as np
+import pytest
+
+from laser_aligner.config import WorkArea
+from laser_aligner.project import NativePathGeometry, PathCubicSegment, PathLineSegment
+from laser_aligner.vision import object_trace
+from laser_aligner.vision.object_trace import TraceOptions, detect_objects
+
+
+def _independent_shapes_with_hole() -> np.ndarray:
+    image = np.full((400, 600, 3), 225, dtype=np.uint8)
+    cv2.rectangle(image, (60, 70), (190, 180), (45, 45, 45), -1)
+    cv2.circle(image, (360, 125), 60, (40, 40, 40), -1)
+    cv2.circle(image, (360, 125), 25, (225, 225, 225), -1)
+    return image
+
+
+def _native_contrast_options() -> TraceOptions:
+    return TraceOptions(
+        detection_mode="contrast",
+        output_mode="native",
+        regular_grid=False,
+        min_area_mm2=50.0,
+        min_width_mm=5.0,
+        min_height_mm=5.0,
+        confidence_threshold=0.0,
+        native_fitting_tolerance_mm=0.10,
+    )
+
+
+def test_removed_cutout_mode_and_entrypoints_are_rejected() -> None:
+    with pytest.raises(ValueError, match="detection mode"):
+        TraceOptions.from_mapping({"detection_mode": "cutout"})
+    assert not hasattr(object_trace, "prepare_cutout_frame")
+    assert not hasattr(object_trace, "detect_prepared_cutouts")
+    assert not hasattr(object_trace, "detect_seeded_cutouts")
+
+
+def test_contrast_native_fits_independent_candidates_and_preserves_hole_tree() -> None:
+    result = detect_objects(
+        _independent_shapes_with_hole(),
+        _native_contrast_options(),
+        WorkArea(0.0, 150.0, 0.0, 100.0),
+        4.0,
+    )
+
+    assert result.mode_used == "contrast"
+    assert len(result.detections) == 2
+    assert all(detection.source == "direct" for detection in result.detections)
+    assert all(detection.selected_default for detection in result.detections)
+    assert all(detection.native_verified for detection in result.detections)
+    assert all(detection.diagnostics["native_fit_status"] == "verified" for detection in result.detections)
+
+    rectangle = next(
+        detection for detection in result.detections if detection.shape == "rounded_rectangle"
+    )
+    washer = next(detection for detection in result.detections if detection.shape == "washer")
+    rectangle_geometry = NativePathGeometry.from_dict(rectangle.native_path or {})
+    washer_geometry = NativePathGeometry.from_dict(washer.native_path or {})
+
+    assert len(rectangle_geometry.subpaths) == 1
+    assert len(washer_geometry.subpaths) == 2
+    assert washer.diagnostics["contour_depths"] == [0, 1]
+    assert washer.diagnostics["contour_parents"] == [None, 0]
+    segment_types = {
+        type(segment)
+        for subpath in washer_geometry.subpaths
+        for segment in subpath.segments
+    }
+    assert PathLineSegment in segment_types
+    assert PathCubicSegment in segment_types
+    assert washer.diagnostics["maximum_estimated_deviation_mm"] >= 0.25
+
+
+def test_native_contrast_preview_contours_match_fitted_geometry_envelopes() -> None:
+    result = detect_objects(
+        _independent_shapes_with_hole(),
+        _native_contrast_options(),
+        WorkArea(0.0, 150.0, 0.0, 100.0),
+        4.0,
+    )
+
+    for detection in result.detections:
+        assert detection.vector_contours_mm
+        all_points = np.asarray(
+            [
+                point
+                for contour in detection.vector_contours_mm
+                for point in contour
+            ],
+            dtype=np.float64,
+        )
+        center = np.asarray(detection.native_center_mm, dtype=np.float64)
+        assert all_points[:, 0].min() < center[0] < all_points[:, 0].max()
+        assert all_points[:, 1].min() < center[1] < all_points[:, 1].max()
+        assert detection.diagnostics["native_fitting_tolerance_mm"] == pytest.approx(
+            0.25
+        )
+
+
+def test_native_contrast_keeps_outside_candidate_visible_but_unselected() -> None:
+    result = detect_objects(
+        _independent_shapes_with_hole(),
+        _native_contrast_options(),
+        WorkArea(0.0, 150.0, 0.0, 100.0),
+        4.0,
+        output_work_area=WorkArea(20.0, 140.0, 0.0, 100.0),
+    )
+
+    rectangle = next(
+        detection
+        for detection in result.detections
+        if detection.shape == "rounded_rectangle"
+    )
+    washer = next(
+        detection for detection in result.detections if detection.shape == "washer"
+    )
+    assert rectangle.native_verified
+    assert rectangle.diagnostics["within_work_area"] is False
+    assert rectangle.selected_default is False
+    assert washer.diagnostics["within_work_area"] is True
+    assert washer.selected_default is True
