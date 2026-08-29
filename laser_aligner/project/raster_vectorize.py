@@ -774,7 +774,7 @@ class RasterVectorizationResult(PixelVectorizationResult):
             raise ValueError("Vectorization result SHA-256 must match its source identity")
 
     def metadata(self) -> dict[str, object]:
-        values = super().metadata()
+        values = super(RasterVectorizationResult, self).metadata()
         values.pop("pixel_vectorization_source_key", None)
         return {
             "raster_vectorization_source_sha256": self.source_sha256,
