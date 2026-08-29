@@ -526,6 +526,7 @@ def test_duplicate_start_never_reruns_and_replay_cache_echoes_request_id(
     assert duplicate["ok"] is True
     assert duplicate["accepted"] is True
     assert duplicate["duplicate"] is True
+    assert server_harness.transport.gated.wait(timeout=2.0)
     assert server_harness.transport.commands.count(_GATED_COMMAND) == 1
     server_harness.transport.release()
     _wait_until(lambda: server_harness.service.get(job_id)["state"] == "complete")

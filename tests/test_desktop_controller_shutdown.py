@@ -4,6 +4,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
+
 from laser_aligner.desktop.controller import DesktopController
 
 

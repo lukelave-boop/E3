@@ -988,7 +988,8 @@ and exact 4× Mask display through main `daa077f`, the complete Windows Python
 platform/privilege skips**. Repository Ruff, bytecode compilation, and diff
 checking passed. No interactive desktop, physical Pi, physical controller,
 motion, laser output, process-kill recovery, or real network-disconnect test was
-performed; those remain required before merge/deployment.
+performed; those remain required before physical deployment and hardware
+acceptance.
 
 ## Current repository validation and deferred package check
 
