@@ -54,10 +54,10 @@ def test_contrast_native_fits_independent_candidates_and_preserves_hole_tree() -
     assert all(detection.native_verified for detection in result.detections)
     assert all(detection.diagnostics["native_fit_status"] == "verified" for detection in result.detections)
 
-    rectangle = next(
-        detection for detection in result.detections if detection.shape == "rounded_rectangle"
-    )
-    washer = next(detection for detection in result.detections if detection.shape == "washer")
+    rectangle = min(result.detections, key=lambda detection: detection.center_mm[0])
+    washer = max(result.detections, key=lambda detection: detection.center_mm[0])
+    assert rectangle.shape == "contour"
+    assert washer.shape == "contour"
     rectangle_geometry = NativePathGeometry.from_dict(rectangle.native_path or {})
     washer_geometry = NativePathGeometry.from_dict(washer.native_path or {})
 
@@ -65,14 +65,16 @@ def test_contrast_native_fits_independent_candidates_and_preserves_hole_tree() -
     assert len(washer_geometry.subpaths) == 2
     assert washer.diagnostics["contour_depths"] == [0, 1]
     assert washer.diagnostics["contour_parents"] == [None, 0]
+    assert washer.diagnostics["mask_source"] == "raster_non_grid"
     segment_types = {
         type(segment)
-        for subpath in washer_geometry.subpaths
+        for geometry in (rectangle_geometry, washer_geometry)
+        for subpath in geometry.subpaths
         for segment in subpath.segments
     }
     assert PathLineSegment in segment_types
     assert PathCubicSegment in segment_types
-    assert washer.diagnostics["maximum_estimated_deviation_mm"] >= 0.25
+    assert washer.diagnostics["maximum_estimated_deviation_mm"] < 0.13
 
 
 def test_native_contrast_preview_contours_match_fitted_geometry_envelopes() -> None:
@@ -97,7 +99,7 @@ def test_native_contrast_preview_contours_match_fitted_geometry_envelopes() -> N
         assert all_points[:, 0].min() < center[0] < all_points[:, 0].max()
         assert all_points[:, 1].min() < center[1] < all_points[:, 1].max()
         assert detection.diagnostics["native_fitting_tolerance_mm"] == pytest.approx(
-            0.25
+            0.10
         )
 
 
@@ -110,14 +112,8 @@ def test_native_contrast_keeps_outside_candidate_visible_but_unselected() -> Non
         output_work_area=WorkArea(20.0, 140.0, 0.0, 100.0),
     )
 
-    rectangle = next(
-        detection
-        for detection in result.detections
-        if detection.shape == "rounded_rectangle"
-    )
-    washer = next(
-        detection for detection in result.detections if detection.shape == "washer"
-    )
+    rectangle = min(result.detections, key=lambda detection: detection.center_mm[0])
+    washer = max(result.detections, key=lambda detection: detection.center_mm[0])
     assert rectangle.native_verified
     assert rectangle.diagnostics["within_work_area"] is False
     assert rectangle.selected_default is False

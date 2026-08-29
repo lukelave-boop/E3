@@ -247,12 +247,16 @@ should own a physical camera at a time.
   placement hints when a current support frame drives the desktop canvas.
 - ArUco, keyed unseeded cross-grid, and rough-map-seeded crosshair detection
   support bed mapping.
-- The object-tracing pipeline evaluates color, global/illumination-corrected/
-  adaptive filled contrast, and signed local contrast hypotheses. It ranks a
-  repeated-grid hypothesis by coherent filled-region support so narrow gaps or
-  highlights cannot win merely by producing more clean contours, optionally
-  infers missing cells, then records both the observed raster contour and the
-  proposed vector geometry in the rectified image's active coordinate domain.
+- Non-grid Camera Trace **By contrast** treats the corrected frame as a physical
+  raster source and uses the complete source-neutral imported-raster
+  vectorization pipeline. It does not ask the object detector to choose among
+  object hypotheses. Each root `RETR_TREE` contour plus all descendants is one
+  temporary review candidate.
+- Camera Trace **By contrast** with grid enabled retains the specialized
+  global/illumination-corrected/adaptive and signed-local multi-mask detector. It
+  ranks repeated-grid hypotheses by coherent filled-region support, can classify
+  and normalize cells, and can infer missing cells. Auto and By color retain
+  their existing specialized detector routes.
 - Live desktop trace capture establishes the photography pose rather than
   trusting prior machine state: temporary hold encloses Home / park and the
   stable camera frame set, while rectification and vision analysis run only
@@ -266,12 +270,12 @@ should own a physical camera at a time.
   inspector checkboxes; project objects are non-selectable and non-movable until
   review ends. The temporary layer never mutates `ProjectDocument` and has no
   planning, G-code, or execution consumer.
-- Native camera contours are converted from the corrected raster into physical
-  machine or honeycomb millimetres before classification or fitting. The
-  corrected raster has the rectifier's explicit constant pixels/mm even though
-  the upstream raw camera homography has a spatially varying Jacobian. The
-  camera physical-resolution floor therefore comes from that corrected pixel
-  pitch, not from a guessed raw-sensor scale.
+- Corrected camera pixels have the rectifier's explicit constant pixels/mm even
+  though the upstream raw-camera homography has a spatially varying Jacobian.
+  Non-grid contrast uses the raster vectorizer's pixel-center mapping and exact
+  requested fit-tolerance semantics before one final local-to-machine affine.
+  Specialized Auto, By color, and grid paths still convert contours to physical
+  machine or honeycomb millimetres before their classification or fitting.
 - Identical-grid normalization derives its shared orientation from populated
   row-center baselines and refits the lattice in that orientation. Grid pose
   snapping is independent of dimension normalization: direct cells may retain
@@ -570,6 +574,16 @@ selected IMAGE + workspace payload identity
   -> one FunctionalCommand for layer + PATH + source replace/visibility choice
 ```
 
+`PixelVectorizationSource` is the immutable decoded-pixel contract beneath asset
+provenance. It owns RGBA, grayscale, white-composited grayscale, alpha, and a
+content-derived pixel key. `RasterVectorizationSource` wraps those same pixels
+with a legitimate `RasterAssetIdentity`; only that wrapper performs exact
+encoded-byte, path, format, size, and SHA-256 verification. Corrected camera
+frames enter through the source-neutral contract and never synthesize an asset
+identity. `PixelVectorizationResult` likewise owns shared mask, contour, native
+path, hierarchy, error, and preview data, while `RasterVectorizationResult` adds
+imported-asset provenance and preserves existing project metadata.
+
 `RasterVectorizationOptions` is a frozen validated value. Automatic detection
 uses Otsu thresholding over the white-composited image and applies alpha as an
 independent mask gate; manual mode uses the selected 0–255 threshold; alpha mode
@@ -596,20 +610,19 @@ camera, planning, G-code, or execution paths.
 
 `geometry.foreground` owns source-neutral binary connected-component cleanup,
 bounded `RETR_TREE` extraction, deterministic outer-tree decomposition, and
-even-odd tree rendering. Raster vectorization and Camera Trace native output use
-those primitives after their source-specific mask construction; neither source
-imports the other's UI or thresholding workflow.
+even-odd tree rendering. The shared pixel vectorizer consumes those primitives
+for both imported images and non-grid camera contrast. The imported dialog and
+camera Trace UI remain separate consumers of the same portable result.
 
-`project.native_contour_fit` is the source-neutral boundary between segmentation
-and native geometry. Its input is an ordered physical contour tree, optional
-same-shape classification evidence, physical source-pixel spacing, tolerance,
-and an explicit physical frame. It delegates to the one authoritative fitter in
-`project.raster_vectorize`: hard-corner and rotation-independent straight-run
-classification, persistent line decisions, constrained cubics, bounded Newton
-reparameterization/centering, continuous error proof, frame/extrema checks,
-self/adjacent-arc validation, compound clearance, and outer/hole hierarchy are
-therefore identical for raster and camera consumers. Raster and camera
-mask construction, edge evidence, worker lifecycles, and UI remain separate.
+The one authoritative fitter remains in `project.raster_vectorize`:
+hard-corner and rotation-independent straight-run classification, persistent
+line decisions, constrained cubics, bounded Newton reparameterization/centering,
+continuous error proof, frame/extrema checks, self/adjacent-arc validation,
+compound clearance, and outer/hole hierarchy are identical for imported and
+camera pixels because both now enter the complete pixel pipeline.
+`project.native_contour_fit` remains the source-neutral adapter for specialized
+Auto, By color, and grid detector masks that already exist as ordered physical
+contour trees; it does not reconstruct non-grid contrast geometry.
 
 `RasterVectorizationTiming` is opt-in development/test instrumentation and is
 never attached to project data. It accumulates inclusive elapsed time and call
@@ -622,7 +635,7 @@ continuous-validation limit remains authoritative;
 profiling the Coleman stencil showed that proof was inexpensive compared with
 Newton refinement, so it was not weakened or bypassed.
 
-Contour extraction interpolates the exact bounded payload to a 4× internal mask,
+Contour extraction interpolates the immutable pixel source to a 4× internal mask,
 uses `RETR_TREE` hierarchy, and maps contour samples into physical coordinates
 before fitting. The extracted contour and hierarchy remain the topology
 authority. For an independent contour, the exact stage estimates a local normal
@@ -634,7 +647,10 @@ crossing, sufficient endpoint margin, contrast and slope, bounded reverse
 variation, and a displacement no larger than 0.6 source pixel. Sampling is
 chunked to 8,192 contour points. Flat, noisy, multiple-crossing, out-of-frame,
 and otherwise unsupported profiles stay at their threshold position. Contours
-that participate in nesting are not refined.
+that participate in nesting are not refined. For imported assets those pixels
+come from the verified bounded payload; for non-grid Camera Trace they are the
+corrected frame pixels. Threshold, mask, hierarchy, source-edge evidence, and
+native fitting are otherwise the same computation.
 
 Hard corners and their adjacent support samples, along with every persistent or
 hard-anchor-promoted straight run, remain fixed. Corner and straight-run

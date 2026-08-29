@@ -6,6 +6,18 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Corrected non-grid Camera Trace **By contrast** to use the complete
+  imported-raster pixel-vectorization pipeline instead of selecting a mask with
+  the specialized object finder and only sharing its final fitter. Corrected
+  camera pixels now share grayscale/Otsu/manual/invert semantics, physical
+  component and pinhole cleanup, 4× `RETR_TREE` extraction, source-edge
+  refinement, native line/cubic fitting, hierarchy, and topology validation with
+  imported images. Each root contour tree is one review candidate; grid Contrast
+  deliberately retains classification, normalization, and gap inference. Added
+  source-neutral pixel inputs/results beneath real imported-asset provenance,
+  contrast threshold/polarity controls, and exact imported/camera
+  mask-hierarchy-segment-geometry equivalence tests.
+
 - Simplified Camera Trace to one candidate-review workflow. Removed the seeded
   Cutout/silhouette mode and its separate capture, Add-click, quick-outline, and
   verification state. Auto, Color, and Contrast candidates are now directly

@@ -26,8 +26,11 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
      output layers;
    - **Stock boundary (layout only)** creates exactly one locked construction
      outline and never sends that outline to the laser.
-4. Choose **Auto detect**, **By color**, or **By contrast**. To sample an
-   object, press **Pick color**, wait for the button to read **Cancel color
+4. Choose **Auto detect**, **By color**, or **By contrast**. With **By contrast**
+   and **Use grid** off, choose automatic Otsu or a manual 0–255 threshold and
+   whether dark or light pixels are foreground; hue controls are visibly
+   inactive because this path is literal raster vectorization. To sample for
+   **By color**, press **Pick color**, wait for the button to read **Cancel color
    pick**, then click the center of the object in the corrected camera image.
    The button reads **Sampling…** while the frame is read and the swatch updates
    when sampling succeeds. A failure is shown directly in the Trace inspector.
@@ -38,9 +41,12 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    positions for missing or obscured cells. Disable grid inference when tracing
    one parent-stock outline.
 7. Choose the vector output described below and set either a uniform **Border
-   offset** or the rounded rectangle's individual edge offsets. Start a
-   line-following cleanup pass at `0.00 mm`: a negative uniform value trims that
-   amount from every edge and therefore cannot follow the detected border.
+   offset** or the rounded rectangle's individual edge offsets. Non-grid **By
+   contrast** uses its authoritative native raster-vector result, so that route
+   fixes output to **Native lines / Béziers** and border offset to `0.00 mm`.
+   For specialized detector routes, start a line-following cleanup pass at
+   `0.00 mm`: a negative uniform value trims that amount from every edge and
+   therefore cannot follow the detected border.
 8. Press **Detect objects**.
 9. Review the numbered overlay and the **Geometry** column:
    - green: selected proposed vector output;
@@ -129,9 +135,11 @@ nested contours are not forced into washers.
   preview is this proposed vector, not the jagged camera-pixel boundary. The
   **Geometry** column reports the fitted dimensions and radius. If a detection
   is not sufficiently rectangle-like, this mode falls back to its contour.
-- **Native lines / Béziers** applies the shared physical fitter described below
-  to each direct candidate from Auto, Color, or Contrast. Independent candidates
-  remain independent, and each candidate retains its outer/hole hierarchy.
+- **Native lines / Béziers** is the required output for non-grid Contrast. It
+  comes directly from the shared raster vectorizer. Specialized Auto, Color, and
+  grid candidates use the same underlying physical fitter through their existing
+  contour-tree adapter. Independent candidates remain independent, and each
+  candidate retains its outer/hole hierarchy.
 - **Simplified contours** follows the detected pixel boundary and removes
   points within the **Simplify tolerance**. A lower tolerance preserves more
   edge detail. This is polygon simplification; it does not turn an irregular
@@ -140,14 +148,19 @@ nested contours are not forced into washers.
   simplification tolerance. It can contain many points and will naturally look
   stair-stepped when magnified.
 
-For native output, E3 fits the chosen detector mask's physical contour trees
-with the same line/cubic machinery used by raster vectorization. The green
-outline is the fitted geometry that will be created: real straight runs remain
-lines, curved runs use constrained cubic Béziers, and continuous maximum-error,
-frame/extrema, self/adjacent topology, compound-clearance, and hierarchy
-validation all remain authoritative. Analytic circle, ellipse,
+For non-grid Contrast, E3 sends the corrected pixels through the imported-raster
+pixel pipeline itself: grayscale/Otsu or manual threshold and polarity, physical
+component and pinhole cleanup, 4× mask reconstruction, `RETR_TREE`, physical
+mapping, source-edge refinement, native fitting, and topology validation. Each
+root foreground contour plus every descendant is one candidate. The green
+outline is the exact fitted geometry that will be created: real straight runs
+remain lines and curved runs use constrained cubic Béziers. No camera-specific
+outline finder, second contour extraction, or refit occurs afterward.
+
+Specialized Auto, Color, and grid routes still fit their chosen detector masks
+through the physical contour-tree adapter. Analytic circle, ellipse,
 rounded-rectangle, and washer evidence keeps its semantic path when analytic
-output is chosen.
+output is chosen on those routes.
 
 **Offset mode** defaults to **Uniform**, which applies the existing single
 **Border offset** equally on all sides. Positive values expand the output and
@@ -174,13 +187,16 @@ when created, so rotated or asymmetric traces do not shift after approval.
   additionally retains the sampled BGR/Lab color, allowing neutral gray and
   low-saturation objects to be separated from a warmer or cooler backing
   surface while tolerating moderate lighting variation.
-- **By contrast** evaluates dark and light filled-region hypotheses from global
-  Otsu, illumination-corrected, and adaptive thresholds. Signed local contrast
-  remains a fallback for difficult surfaces. Strong closed outlines are also
-  filled as candidates, allowing pale labels with thin dark borders and dense
-  interior printing to be treated as whole objects. Filled silhouettes are
-  preferred over narrow edge, highlight, or inter-object gap bands when both
-  pass the geometric filters.
+- **By contrast**, with **Use grid** off, is pixel-literal raster vectorization.
+  Automatic mode uses Otsu; manual mode uses the selected 0–255 threshold;
+  polarity chooses dark or light foreground. Minimum area controls physical
+  raster cleanup, including tiny islands and pinholes. Maximum area and minimum
+  dimensions filter complete vector candidates afterward.
+- **By contrast**, with **Use grid** on, retains the specialized object/grid
+  detector. It evaluates dark and light filled-region hypotheses from global
+  Otsu, illumination-corrected, adaptive, signed-local, and closed-outline
+  evidence, ranks coherent repeated bodies, classifies cells, normalizes the
+  fitted lattice, and can infer gaps.
 
 ## Regular-grid inference
 
@@ -311,13 +327,18 @@ spatially varying raw-camera Jacobian. Trace does not fit in those raw sensor
 coordinates. `capture_parked_trace_frame()` rectifies into the configured work
 area at one explicit pixels/mm, so the corrected image consumed here has a
 constant physical pixel pitch (apart from a possible fractional strip caused by
-integer raster dimensions). Native fitting converts every contour sample to the
-active machine or honeycomb millimetre frame first. Its tolerance is never finer
-than one corrected camera pixel. Eligible independent contours may move a
-non-corner threshold sample toward one strong camera-intensity crossing by at
-most 0.6 pixel; compound contours conservatively remain on the segmented
-threshold. Reported deviation includes the physical pixel floor, any accepted
-edge-centering shift, and the continuously validated native fit error.
+integer raster dimensions). Non-grid Contrast follows the imported-raster
+coordinate contract. The 4× contour sample center is mapped in the image-local
+physical frame, with Y inverted once, and the complete native path receives one
+final affine into the active machine or honeycomb frame. The user tolerance has
+the same meaning as in imported raster vectorization; selecting a value smaller
+than one corrected camera pixel does not establish equivalent physical accuracy.
+Eligible independent contours may move a non-corner threshold sample toward one
+strong source-intensity crossing by at most 0.6 source pixel; nested contours
+remain on the threshold. Reported deviation includes accepted edge-centering
+shift and continuously validated native fit error. Specialized Auto, Color, and
+grid paths retain their camera-mask physical adapter and corrected-pixel
+resolution floor.
 
 The desktop registers the center of each displayed camera pixel to the same
 OpenCV/BedMapper coordinate used by the detector. At very high zoom, a smooth

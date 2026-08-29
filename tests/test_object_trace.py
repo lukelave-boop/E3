@@ -851,7 +851,7 @@ def test_edge_cropped_observation_is_flagged_and_not_preselected() -> None:
     assert "may be cropped" in result.message
 
 
-def test_concentric_circular_parent_and_hole_are_recognized_as_one_washer() -> None:
+def test_non_grid_concentric_foreground_preserves_one_raster_contour_tree() -> None:
     image = np.full((400, 400, 3), 230, dtype=np.uint8)
     cv2.circle(image, (200, 200), 40, (30, 30, 30), -1)
     cv2.circle(image, (200, 200), 16, (230, 230, 230), -1)
@@ -860,7 +860,10 @@ def test_concentric_circular_parent_and_hole_are_recognized_as_one_washer() -> N
         image,
         TraceOptions(
             detection_mode="contrast",
+            contrast_threshold_mode="manual",
+            contrast_threshold=128,
             regular_grid=False,
+            output_mode="native",
             min_area_mm2=10.0,
             min_width_mm=2.0,
             min_height_mm=2.0,
@@ -871,13 +874,12 @@ def test_concentric_circular_parent_and_hole_are_recognized_as_one_washer() -> N
 
     assert result.direct_count == 1
     detection = result.detections[0]
-    assert detection.shape == "washer"
+    assert detection.shape == "contour"
     assert len(detection.vector_contours_mm) == 2
-    assert detection.width_mm == pytest.approx(20.0, abs=0.35)
-    assert detection.diagnostics["hole_ratio"] == pytest.approx(0.4, abs=0.03)
-    assert detection.diagnostics["center_offset_mm"] < 0.05
-    assert detection.diagnostics["outer_circle_residual"] < 0.035
-    assert detection.diagnostics["inner_circle_residual"] < 0.05
+    assert detection.width_mm == pytest.approx(20.0, abs=0.5)
+    assert detection.diagnostics["contour_parents"] == [None, 0]
+    assert detection.diagnostics["contour_depths"] == [0, 1]
+    assert detection.diagnostics["mask_source"] == "raster_non_grid"
 
 
 @pytest.mark.parametrize("inner_center", ((203, 200), (200, 206)))
@@ -890,6 +892,8 @@ def test_off_center_nested_circle_is_not_forced_to_washer(inner_center) -> None:
         image,
         TraceOptions(
             detection_mode="contrast",
+            contrast_threshold_mode="manual",
+            contrast_threshold=128,
             regular_grid=False,
             min_area_mm2=10.0,
             min_width_mm=2.0,
@@ -935,6 +939,8 @@ def test_circular_outer_with_square_hole_is_not_forced_to_washer() -> None:
         image,
         TraceOptions(
             detection_mode="contrast",
+            contrast_threshold_mode="manual",
+            contrast_threshold=128,
             regular_grid=False,
             min_area_mm2=10.0,
             min_width_mm=2.0,

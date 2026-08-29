@@ -1,8 +1,9 @@
-"""Source-neutral physical contour to native path fitting contract.
+"""Adapter from specialized physical contour trees to the native path fitter.
 
-Segmentation belongs to each source pipeline.  The implementation delegates to
-the one authoritative fitter developed with raster vectorization so camera and
-raster contours cannot drift into independent line/cubic fitting behavior.
+Imported rasters and non-grid camera Contrast enter the complete source-neutral
+pixel vectorizer. Auto, Color, and grid detectors already own physical contour
+trees; this adapter lets those specialized paths delegate to the same one
+authoritative line/cubic fitter without duplicating its behavior.
 """
 
 from __future__ import annotations

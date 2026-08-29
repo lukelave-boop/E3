@@ -49,7 +49,7 @@ installer and Linux AppImage for this change have not yet been built or
 published, and no controller, motion, arming, laser-output, or physical test
 was performed or is claimed.
 
-## Active Camera Trace review simplification
+## Active Camera Trace review and non-grid raster-vector parity
 
 Camera Trace now has one detection-and-review workflow. The former seeded
 **Cutout / silhouette** mode, prepared-frame state, Add-click lifecycle, quick
@@ -72,14 +72,29 @@ be selected or moved; their prior selection and flags are restored afterward.
 Preview candidates never enter the project document, planning cache, G-code, or
 execution paths.
 
-Native lines/Béziers are now an output choice for the global modes, including By
-contrast. The chosen detector mask is decomposed with the existing bounded
-source-neutral `RETR_TREE` infrastructure, then every independent direct contour
-tree is passed to the same authoritative physical contour fitter used by raster
-vectorization. The corrected camera pixel pitch remains the minimum tolerance.
-Persisted line/cubic geometry retains outer/hole hierarchy and the preview draws
-that exact native path. Analytic, simplified, exact, grid inference, and guarded
-output behavior remain available; no desktop-only fitter was introduced.
+Non-grid **By contrast** no longer enters the multi-hypothesis object detector.
+The corrected BGR frame is converted to immutable source-neutral RGBA pixels and
+sent through the same production pipeline as an imported raster: grayscale and
+white-composited grayscale preparation, Otsu or manual thresholding with explicit
+polarity, physical connected-component and pinhole cleanup, 4x mask
+reconstruction, bounded `RETR_TREE` extraction, physical contour mapping,
+source-edge refinement, and the authoritative native line/cubic fitter plus all
+topology checks. Each root foreground contour and all descendants form one
+review candidate. Maximum area and minimum dimensions are applied only after
+vectorization; minimum area remains the raster cleanup scale. The one final
+raster-local-to-camera affine accounts for Y direction, pixel centers, work-area
+origin, exact pixels/mm, and a possible fractional edge strip; there is no
+camera-side contour extraction, second fit, or post-map refit.
+
+The pixel-vectorization input and result are source-neutral. Imported assets wrap
+that contract with their real `RasterAssetIdentity` and exact encoded-byte
+verification; live corrected camera pixels use a content-derived pixel key and
+do not invent file metadata, paths, or SHA provenance. Non-grid contrast exposes
+Otsu/manual threshold and light/dark polarity controls, visibly disables the hue
+controls, and uses the native raster-vector output without a border offset. With
+**Use grid** enabled, By contrast deliberately retains the specialized
+multi-mask object/grid detector, classification, normalization, and gap
+inference. Auto and By color retain their existing specialized behavior.
 
 Cut geometry offers two explicit commits. **Create separate vectors** creates
 one editable object per selected candidate. **Create one combined vector**
@@ -89,18 +104,22 @@ single undoable project edit. Stock-boundary creation remains a separate
 single-outline, non-output path.
 
 Focused Qt-free and offscreen regressions cover mode removal and migration,
-contrast-native independent shapes and holes, line/cubic persistence, click,
+literal non-grid raster components, gaps, long lines, multiple roots, holes,
+tiny-feature cleanup, Otsu/manual polarity, post-vector review filters, exact
+imported-raster/camera mask-hierarchy-segment-geometry equivalence, all four
+coordinate corners and one-pixel offsets, contrast-grid routing, line/cubic
+persistence, click,
 Ctrl-click, empty click, rubber band, inferred-candidate gating, list/canvas
 synchronization, overlap priority, zoom/pan stability, detection invalidation,
 project-selection restoration, separate and combined creation, compound
 topology, one-step undo, and the real-color picker path. Physical camera and
-controller behavior has not been retested for this redesign. The affected group
-passes **139 tests** with four xdist workers; the three offscreen canvas
-interaction tests also pass in **five consecutive four-worker runs**. The
-complete Windows suite passes **2,655 tests** with **14 expected platform
-skips**. Repository Ruff, `python -m compileall -q laser_aligner`, and
-`git diff --check` pass. No motion, arming, laser-output, cutting, or
-physical-accuracy test was performed or is claimed.
+controller behavior has not been retested for this correction. The directly
+affected focused group passes **183 tests**. A fresh post-suite equivalence and
+offscreen review/create group passes **31 tests**. The complete Windows suite
+passes **2,662 tests** with **14 expected platform skips** and four workers.
+Repository Ruff, `python -m compileall -q laser_aligner`, and
+`git diff --check` pass. No real camera, controller, motion, arming,
+laser-output, cutting, or physical-accuracy test was performed or is claimed.
 
 ## Active development-release trigger filtering
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import math
 import uuid
 from collections.abc import Mapping, Sequence
@@ -17,11 +18,28 @@ from ..geometry.foreground import (
     foreground_contour_trees,
 )
 from ..project.native_contour_fit import fit_physical_contours_to_native_path
+from ..project.path_geometry import (
+    NativePathGeometry,
+    PathAffineTransform,
+    PathFillRule,
+    native_path_bounds,
+    transform_native_path,
+)
+from ..project.raster_vectorize import (
+    PixelVectorizationResult,
+    RasterContourOutput,
+    RasterDetectionMode,
+    RasterVectorizationError,
+    RasterVectorizationOptions,
+    prepare_pixel_vectorization_source,
+    vectorize_pixel_source,
+)
 
 TRACE_MODES = {"auto", "color", "contrast"}
 OUTPUT_MODES = {"rounded", "native", "smoothed", "exact"}
 BORDER_OFFSET_MODES = {"uniform", "custom"}
 NORMALIZE_ANCHORS = {"center", "top"}
+CONTRAST_THRESHOLD_MODES = {"auto", "manual"}
 MAX_TRACE_CONTOURS = 8_192
 
 
@@ -54,6 +72,9 @@ class TraceOptions:
     target_bgr: tuple[int, int, int] | list[int] | None = None
     hue_tolerance: float = 14.0
     min_saturation: int = 45
+    contrast_threshold_mode: str = "auto"
+    contrast_threshold: int = 128
+    contrast_invert: bool = False
     min_area_mm2: float = 30.0
     max_area_mm2: float = 20_000.0
     min_width_mm: float = 4.0
@@ -98,6 +119,15 @@ class TraceOptions:
             0,
             min(255, int(_finite_option(self.min_saturation, "min_saturation"))),
         )
+        self.contrast_threshold_mode = str(self.contrast_threshold_mode).lower()
+        if self.contrast_threshold_mode not in CONTRAST_THRESHOLD_MODES:
+            raise ValueError(
+                "contrast_threshold_mode must be either 'auto' or 'manual'"
+            )
+        if type(self.contrast_threshold) is not int or not 0 <= self.contrast_threshold <= 255:
+            raise ValueError("contrast_threshold must be an integer from 0 through 255")
+        if type(self.contrast_invert) is not bool:
+            raise ValueError("contrast_invert must be a JSON boolean")
         self.min_area_mm2 = max(
             0.01,
             _finite_option(self.min_area_mm2, "min_area_mm2"),
@@ -2862,6 +2892,396 @@ def _fit_trace_candidate_native(
     )
 
 
+def _pixel_result_root_groups(
+    result: PixelVectorizationResult,
+) -> tuple[tuple[int, ...], ...]:
+    """Return each raster root contour with all of its hierarchy descendants."""
+
+    groups: list[tuple[int, ...]] = []
+    for root_index, root in enumerate(result.contours):
+        if root.parent_index is not None:
+            continue
+        descendants: list[int] = []
+        for index, _contour in enumerate(result.contours):
+            ancestor = index
+            visited = 0
+            while result.contours[ancestor].parent_index is not None:
+                ancestor = int(result.contours[ancestor].parent_index)
+                visited += 1
+                if visited > len(result.contours):
+                    raise ValueError("Raster vectorization returned a cyclic hierarchy")
+            if ancestor == root_index:
+                descendants.append(index)
+        groups.append(tuple(descendants))
+    return tuple(groups)
+
+
+def _normalized_raster_points_to_camera(
+    points: Sequence[Sequence[float]],
+    *,
+    raster_width_mm: float,
+    raster_height_mm: float,
+    camera_center_mm: tuple[float, float],
+) -> list[list[float]]:
+    """Apply the one final raster-local to corrected-camera affine transform."""
+
+    values = np.asarray(points, dtype=np.float64).reshape(-1, 2)
+    output = np.empty_like(values)
+    output[:, 0] = camera_center_mm[0] + values[:, 0] * raster_width_mm
+    output[:, 1] = camera_center_mm[1] + values[:, 1] * raster_height_mm
+    return [[float(x), float(y)] for x, y in output]
+
+
+def _normalized_camera_candidate_geometry(
+    result: PixelVectorizationResult,
+    contour_indices: tuple[int, ...],
+    *,
+    raster_width_mm: float,
+    raster_height_mm: float,
+    camera_center_mm: tuple[float, float],
+) -> tuple[NativePathGeometry, tuple[float, float], float, float]:
+    source_geometry = NativePathGeometry(
+        tuple(result.contours[index].native_subpath for index in contour_indices),
+        fill_rule=PathFillRule.EVENODD,
+    )
+    world_geometry = transform_native_path(
+        source_geometry,
+        PathAffineTransform.from_components(
+            scale_x=raster_width_mm,
+            scale_y=raster_height_mm,
+            translate_x=camera_center_mm[0],
+            translate_y=camera_center_mm[1],
+        ),
+    )
+    x_min, y_min, x_max, y_max = native_path_bounds(world_geometry)
+    width_mm = float(x_max - x_min)
+    height_mm = float(y_max - y_min)
+    if width_mm <= 0.0 or height_mm <= 0.0:
+        raise ValueError("A raster Trace candidate has zero physical extent")
+    center_mm = ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0)
+    normalized = transform_native_path(
+        world_geometry,
+        PathAffineTransform.from_components(
+            scale_x=1.0 / width_mm,
+            scale_y=1.0 / height_mm,
+            translate_x=-center_mm[0] / width_mm,
+            translate_y=-center_mm[1] / height_mm,
+        ),
+    )
+    return normalized, center_mm, width_mm, height_mm
+
+
+def _detect_non_grid_contrast_raster(
+    image: np.ndarray,
+    options: TraceOptions,
+    work_area: WorkArea,
+    output_work_area: WorkArea,
+    pixels_per_mm: float,
+) -> TraceResult:
+    """Trace corrected camera pixels through the imported-raster vector path."""
+
+    rgba = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
+    source = prepare_pixel_vectorization_source(rgba)
+    raster_width_mm = source.width_px / pixels_per_mm
+    raster_height_mm = source.height_px / pixels_per_mm
+    camera_center_mm = (
+        work_area.x_min + raster_width_mm / 2.0,
+        work_area.y_max - raster_height_mm / 2.0,
+    )
+    effective_tolerance = options.native_fitting_tolerance_mm
+    raster_options = RasterVectorizationOptions(
+        detection_mode=(
+            RasterDetectionMode.AUTO_THRESHOLD
+            if options.contrast_threshold_mode == "auto"
+            else RasterDetectionMode.MANUAL_THRESHOLD
+        ),
+        threshold=options.contrast_threshold,
+        invert=options.contrast_invert,
+        minimum_feature_area_mm2=options.min_area_mm2,
+        smoothing_mm=0.0,
+        simplification_tolerance_mm=effective_tolerance,
+        contour_output=RasterContourOutput.ALL_CONTOURS,
+    )
+    try:
+        result = vectorize_pixel_source(
+            source,
+            raster_options,
+            displayed_width_mm=raster_width_mm,
+            displayed_height_mm=raster_height_mm,
+        )
+    except RasterVectorizationError as exc:
+        message = str(exc)
+        if not (
+            message.startswith("No foreground features remain")
+            or message.startswith("No closed contours were produced")
+        ):
+            raise
+        return TraceResult(
+            detected=False,
+            detections=[],
+            mode_used="contrast",
+            target_hue=options.target_hue,
+            image_width=image.shape[1],
+            image_height=image.shape[0],
+            direct_count=0,
+            inferred_count=0,
+            grid=None,
+            message=message,
+            options=options,
+            camera_work_area={
+                "x_min": float(work_area.x_min),
+                "x_max": float(work_area.x_max),
+                "y_min": float(work_area.y_min),
+                "y_max": float(work_area.y_max),
+            },
+            output_work_area={
+                "x_min": float(output_work_area.x_min),
+                "x_max": float(output_work_area.x_max),
+                "y_min": float(output_work_area.y_min),
+                "y_max": float(output_work_area.y_max),
+            },
+        )
+    root_groups = _pixel_result_root_groups(result)
+    detections: list[TraceDetection] = []
+    edge_tolerance_x = 1.0 / (source.width_px * 4.0) + 1e-12
+    edge_tolerance_y = 1.0 / (source.height_px * 4.0) + 1e-12
+    for contour_indices in root_groups:
+        normalized_geometry, center_mm, width_mm, height_mm = (
+            _normalized_camera_candidate_geometry(
+                result,
+                contour_indices,
+                raster_width_mm=raster_width_mm,
+                raster_height_mm=raster_height_mm,
+                camera_center_mm=camera_center_mm,
+            )
+        )
+        raw_contours_mm: list[list[list[float]]] = []
+        vector_contours_mm: list[list[list[float]]] = []
+        local_parents: list[int | None] = []
+        local_depths: list[int] = []
+        index_map = {
+            original: local for local, original in enumerate(contour_indices)
+        }
+        root_depth = result.contours[contour_indices[0]].depth
+        image_edge_sides: set[str] = set()
+        net_area_mm2 = 0.0
+        for original_index in contour_indices:
+            contour = result.contours[original_index]
+            threshold_points = contour.threshold_points or contour.preview_points
+            raw_contours_mm.append(
+                _normalized_raster_points_to_camera(
+                    threshold_points,
+                    raster_width_mm=raster_width_mm,
+                    raster_height_mm=raster_height_mm,
+                    camera_center_mm=camera_center_mm,
+                )
+            )
+            vector_contours_mm.append(
+                _normalized_raster_points_to_camera(
+                    contour.preview_points,
+                    raster_width_mm=raster_width_mm,
+                    raster_height_mm=raster_height_mm,
+                    camera_center_mm=camera_center_mm,
+                )
+            )
+            threshold_array = np.asarray(threshold_points, dtype=np.float64)
+            if float(np.min(threshold_array[:, 0])) <= -0.5 + edge_tolerance_x:
+                image_edge_sides.add("left")
+            if float(np.max(threshold_array[:, 0])) >= 0.5 - edge_tolerance_x:
+                image_edge_sides.add("right")
+            if float(np.max(threshold_array[:, 1])) >= 0.5 - edge_tolerance_y:
+                image_edge_sides.add("top")
+            if float(np.min(threshold_array[:, 1])) <= -0.5 + edge_tolerance_y:
+                image_edge_sides.add("bottom")
+            physical = np.asarray(raw_contours_mm[-1], dtype=np.float32)
+            signed_area = abs(float(cv2.contourArea(physical)))
+            relative_depth = contour.depth - root_depth
+            net_area_mm2 += signed_area if relative_depth % 2 == 0 else -signed_area
+            parent = contour.parent_index
+            local_parents.append(index_map.get(parent) if parent is not None else None)
+            local_depths.append(relative_depth)
+
+        if (
+            net_area_mm2 > options.max_area_mm2
+            or width_mm < options.min_width_mm
+            or height_mm < options.min_height_mm
+        ):
+            continue
+        flattened_points = [
+            point for contour in vector_contours_mm for point in contour
+        ]
+        camera_overruns = _work_area_overruns_mm(flattened_points, work_area)
+        output_overruns = _work_area_overruns_mm(flattened_points, output_work_area)
+        within_camera = max(camera_overruns.values(), default=0.0) <= 1e-9
+        within_output = max(output_overruns.values(), default=0.0) <= 1e-9
+        touches_image_edge = bool(image_edge_sides)
+        group_contours = [result.contours[index] for index in contour_indices]
+        box_mm = [
+            [center_mm[0] - width_mm / 2.0, center_mm[1] - height_mm / 2.0],
+            [center_mm[0] + width_mm / 2.0, center_mm[1] - height_mm / 2.0],
+            [center_mm[0] + width_mm / 2.0, center_mm[1] + height_mm / 2.0],
+            [center_mm[0] - width_mm / 2.0, center_mm[1] + height_mm / 2.0],
+        ]
+        detections.append(
+            TraceDetection(
+                id=_new_id(),
+                index=0,
+                source="direct",
+                confidence=1.0,
+                score=1.0,
+                shape="contour",
+                center_mm=center_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                rotation_deg=0.0,
+                corner_radius_mm=0.0,
+                area_mm2=max(0.0, net_area_mm2),
+                contour_mm=raw_contours_mm[0],
+                vector_contour_mm=vector_contours_mm[0],
+                vector_contours_mm=vector_contours_mm,
+                box_mm=box_mm,
+                selected_default=bool(
+                    options.confidence_threshold <= 1.0
+                    and within_output
+                    and not touches_image_edge
+                ),
+                diagnostics={
+                    "mask_source": "raster_non_grid",
+                    "foreground_mask_sha256": hashlib.sha256(
+                        result.foreground_mask.tobytes(order="C")
+                    ).hexdigest(),
+                    "foreground_pixel_count": int(
+                        np.count_nonzero(result.foreground_mask)
+                    ),
+                    "pixel_source_key": result.source_key,
+                    "threshold_used": result.threshold_used,
+                    "threshold_mode": options.contrast_threshold_mode,
+                    "invert": options.contrast_invert,
+                    "connected_component_count": result.connected_component_count,
+                    "root_tree_count": len(root_groups),
+                    "raw_contour_count": len(result.contours),
+                    "raw_contour_point_count": sum(
+                        contour.raw_point_count for contour in group_contours
+                    ),
+                    "fitted_segment_count": sum(
+                        contour.fitted_segment_count for contour in group_contours
+                    ),
+                    "native_sequences": [
+                        "".join(
+                            "L" if segment.__class__.__name__ == "PathLineSegment" else "C"
+                            for segment in contour.native_subpath.segments
+                        )
+                        for contour in group_contours
+                    ],
+                    "native_fitting_tolerance_mm": effective_tolerance,
+                    "maximum_fitting_error_mm": max(
+                        contour.max_fitting_error_mm for contour in group_contours
+                    ),
+                    "rms_fitting_error_mm": max(
+                        contour.rms_fitting_error_mm for contour in group_contours
+                    ),
+                    "maximum_estimated_deviation_mm": max(
+                        contour.max_estimated_deviation_mm
+                        for contour in group_contours
+                    ),
+                    "contour_parents": local_parents,
+                    "contour_depths": local_depths,
+                    "native_fit_status": "verified",
+                    "touches_image_edge": touches_image_edge,
+                    "image_edge_sides": sorted(image_edge_sides),
+                    "within_camera_work_area": within_camera,
+                    "camera_work_area_overrun_mm": max(
+                        camera_overruns.values(), default=0.0
+                    ),
+                    "camera_work_area_overruns_mm": camera_overruns,
+                    "within_work_area": within_output,
+                    "work_area_overrun_mm": max(
+                        output_overruns.values(), default=0.0
+                    ),
+                    "work_area_overruns_mm": output_overruns,
+                    "border_offset_ignored": abs(options.border_offset_mm) > 1e-12,
+                },
+                raw_contours_mm=raw_contours_mm,
+                native_path=normalized_geometry.to_dict(),
+                native_center_mm=center_mm,
+                native_width_mm=width_mm,
+                native_height_mm=height_mm,
+                native_verified=True,
+            )
+        )
+
+    detections.sort(key=lambda item: (-item.center_mm[1], item.center_mm[0]))
+    for index, detection in enumerate(detections, 1):
+        detection.index = index
+    selected_count = sum(item.selected_default for item in detections)
+    message = (
+        f"Found {len(detections)} direct raster trace candidate"
+        f"{'s' if len(detections) != 1 else ''}; "
+        f"threshold {result.threshold_used}; {selected_count} selected"
+    )
+    outside_count = sum(
+        not bool(item.diagnostics["within_work_area"]) for item in detections
+    )
+    if outside_count:
+        guarded = output_work_area != work_area
+        boundary_name = "guarded output area" if guarded else "work area"
+        maximum_by_side = {
+            side: max(
+                float(item.diagnostics["work_area_overruns_mm"].get(side, 0.0))
+                for item in detections
+            )
+            for side in ("left", "right", "bottom", "top")
+        }
+        side_summary = "; ".join(
+            f"{side} by {amount:.2f} mm"
+            for side, amount in maximum_by_side.items()
+            if amount > 1e-9
+        )
+        message += (
+            f"; WARNING: {outside_count} outline"
+            f"{'s extend' if outside_count != 1 else ' extends'} outside the "
+            f"{boundary_name} ({side_summary}) and "
+            f"{'were' if outside_count != 1 else 'was'} not preselected"
+        )
+    cropped_count = sum(
+        bool(item.diagnostics["touches_image_edge"]) for item in detections
+    )
+    if cropped_count:
+        message += (
+            f"; WARNING: {cropped_count} observed outline"
+            f"{'s touch' if cropped_count != 1 else ' touches'} the camera/work-area "
+            f"image edge, may be cropped, and "
+            f"{'were' if cropped_count != 1 else 'was'} not preselected"
+        )
+    if not detections:
+        message = "No raster trace candidates passed the current review filters"
+    return TraceResult(
+        detected=bool(detections),
+        detections=detections,
+        mode_used="contrast",
+        target_hue=options.target_hue,
+        image_width=image.shape[1],
+        image_height=image.shape[0],
+        direct_count=len(detections),
+        inferred_count=0,
+        grid=None,
+        message=message,
+        options=options,
+        camera_work_area={
+            "x_min": float(work_area.x_min),
+            "x_max": float(work_area.x_max),
+            "y_min": float(work_area.y_min),
+            "y_max": float(work_area.y_max),
+        },
+        output_work_area={
+            "x_min": float(output_work_area.x_min),
+            "x_max": float(output_work_area.x_max),
+            "y_min": float(output_work_area.y_min),
+            "y_max": float(output_work_area.y_max),
+        },
+    )
+
+
 def detect_objects(
     image: np.ndarray,
     options: TraceOptions | Mapping[str, Any] | None,
@@ -2923,6 +3343,18 @@ def detect_objects(
         "y_min": float(output_work_area.y_min),
         "y_max": float(output_work_area.y_max),
     }
+    if (
+        options.detection_mode == "contrast"
+        and not options.regular_grid
+        and mask_override is None
+    ):
+        return _detect_non_grid_contrast_raster(
+            image,
+            options,
+            work_area,
+            output_work_area,
+            pixels_per_mm,
+        )
     target_hue = options.target_hue
     masks: list[tuple[str, str, np.ndarray, float | None]] = []
     if mask_override is not None:

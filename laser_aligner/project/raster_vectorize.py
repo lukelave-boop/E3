@@ -285,13 +285,41 @@ class RasterVectorizationOptions:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
-class RasterVectorizationSource:
-    identity: RasterAssetIdentity
+class PixelVectorizationSource:
+    """Immutable decoded pixels shared by raster assets and live raster sources."""
+
+    source_key: str
     source_rgba: np.ndarray
     grayscale: np.ndarray
     composited_grayscale: np.ndarray
     alpha: np.ndarray
     has_usable_alpha: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.source_key, str) or not self.source_key:
+            raise ValueError("A pixel vectorization source requires a source key")
+        arrays = (
+            (self.source_rgba, "source_rgba", 3),
+            (self.grayscale, "grayscale", 2),
+            (self.composited_grayscale, "composited_grayscale", 2),
+            (self.alpha, "alpha", 2),
+        )
+        for values, label, dimensions in arrays:
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"{label} must be a numpy array")
+            if values.dtype != np.uint8 or values.ndim != dimensions:
+                raise ValueError(f"{label} must be an {dimensions}D uint8 array")
+            if values.flags.writeable:
+                raise ValueError(f"{label} must be read-only")
+        if self.source_rgba.shape[2] != 4:
+            raise ValueError("source_rgba must contain four channels")
+        shape = self.source_rgba.shape[:2]
+        if not shape[0] or not shape[1]:
+            raise ValueError("Pixel vectorization source cannot be empty")
+        if any(values.shape != shape for values, _label, _dimensions in arrays[1:]):
+            raise ValueError("Pixel vectorization source arrays must have one shape")
+        if type(self.has_usable_alpha) is not bool:
+            raise ValueError("has_usable_alpha must be a boolean")
 
     @property
     def width_px(self) -> int:
@@ -300,6 +328,18 @@ class RasterVectorizationSource:
     @property
     def height_px(self) -> int:
         return int(self.source_rgba.shape[0])
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class RasterVectorizationSource(PixelVectorizationSource):
+    """Verified imported-asset provenance around source-neutral decoded pixels."""
+
+    identity: RasterAssetIdentity
+
+    def __post_init__(self) -> None:
+        super(RasterVectorizationSource, self).__post_init__()
+        if not isinstance(self.identity, RasterAssetIdentity):
+            raise TypeError("identity must be a RasterAssetIdentity")
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -313,7 +353,7 @@ class _RasterMaskPreparation:
 
 @dataclass(frozen=True, slots=True, eq=False)
 class _RasterTracePreparation:
-    source_identity: RasterAssetIdentity
+    source_key: str
     options: RasterVectorizationOptions
     width_mm: float
     height_mm: float
@@ -409,6 +449,7 @@ class RasterVectorizedContour:
     recursive_split_count: int = 0
     merged_segment_count: int = 0
     longest_smooth_span_segment_count: int = 0
+    threshold_points: tuple[tuple[float, float], ...] = ()
 
     def __post_init__(self) -> None:
         if not isinstance(self.native_subpath, PathSubpath):
@@ -457,6 +498,21 @@ class RasterVectorizedContour:
             raise ValueError(
                 "contour preview_flattened_point_count must match its preview data"
             )
+        threshold_points = tuple(
+            (
+                _finite(point[0], "threshold contour point x"),
+                _finite(point[1], "threshold contour point y"),
+            )
+            for point in self.threshold_points
+        )
+        if threshold_points and len(threshold_points) < 3:
+            raise ValueError("A threshold contour requires at least three points")
+        if any(
+            abs(value) > 0.500000001
+            for point in threshold_points
+            for value in point
+        ):
+            raise ValueError("Threshold contour points must remain in the image frame")
         fitting_error = _finite(
             self.max_fitting_error_mm,
             "contour max_fitting_error_mm",
@@ -490,6 +546,7 @@ class RasterVectorizedContour:
                 "contour estimated deviation cannot be smaller than its components"
             )
         object.__setattr__(self, "preview_points", points)
+        object.__setattr__(self, "threshold_points", threshold_points)
         object.__setattr__(self, "max_fitting_error_mm", fitting_error)
         object.__setattr__(self, "mean_fitting_error_mm", mean_fitting_error)
         object.__setattr__(self, "rms_fitting_error_mm", rms_fitting_error)
@@ -524,9 +581,10 @@ class RasterVectorizedContour:
 
 
 @dataclass(frozen=True, slots=True, eq=False)
-class RasterVectorizationResult:
-    source_identity: RasterAssetIdentity
-    source_sha256: str
+class PixelVectorizationResult:
+    """Authoritative vectorization of one immutable source-neutral pixel raster."""
+
+    source_key: str
     source_rgba: np.ndarray
     foreground_mask: np.ndarray
     overlay_rgba: np.ndarray
@@ -540,10 +598,8 @@ class RasterVectorizationResult:
     max_estimated_deviation_mm: float
 
     def __post_init__(self) -> None:
-        if not isinstance(self.source_identity, RasterAssetIdentity):
-            raise TypeError("source_identity must be a RasterAssetIdentity")
-        if self.source_sha256 != self.source_identity.sha256:
-            raise ValueError("Vectorization result SHA-256 must match its source identity")
+        if not isinstance(self.source_key, str) or not self.source_key:
+            raise ValueError("A pixel vectorization result requires a source key")
         arrays = (
             (self.source_rgba, "source_rgba", 3),
             (self.foreground_mask, "foreground_mask", 2),
@@ -651,7 +707,7 @@ class RasterVectorizationResult:
             else 0.0
         )
         return {
-            "raster_vectorization_source_sha256": self.source_sha256,
+            "pixel_vectorization_source_key": self.source_key,
             "raster_vectorization_threshold": self.threshold_used,
             "raster_vectorization_has_usable_alpha": self.has_usable_alpha,
             "raster_vectorization_connected_components": (
@@ -700,6 +756,29 @@ class RasterVectorizationResult:
                 }
                 for contour in self.contours
             ],
+        }
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class RasterVectorizationResult(PixelVectorizationResult):
+    """Source-neutral vectorization plus verified imported-asset provenance."""
+
+    source_identity: RasterAssetIdentity
+    source_sha256: str
+
+    def __post_init__(self) -> None:
+        super(RasterVectorizationResult, self).__post_init__()
+        if not isinstance(self.source_identity, RasterAssetIdentity):
+            raise TypeError("source_identity must be a RasterAssetIdentity")
+        if self.source_sha256 != self.source_identity.sha256:
+            raise ValueError("Vectorization result SHA-256 must match its source identity")
+
+    def metadata(self) -> dict[str, object]:
+        values = super().metadata()
+        values.pop("pixel_vectorization_source_key", None)
+        return {
+            "raster_vectorization_source_sha256": self.source_sha256,
+            **values,
         }
 
 
@@ -845,6 +924,46 @@ def _readonly(array: np.ndarray) -> np.ndarray:
     return output
 
 
+def prepare_pixel_vectorization_source(
+    source_rgba: np.ndarray,
+) -> PixelVectorizationSource:
+    """Prepare immutable decoded RGBA pixels without inventing asset provenance."""
+
+    values = np.asarray(source_rgba)
+    if (
+        values.dtype != np.uint8
+        or values.ndim != 3
+        or values.shape[2] != 4
+        or not values.shape[0]
+        or not values.shape[1]
+    ):
+        raise ValueError("Pixel vectorization input must be a non-empty uint8 RGBA image")
+    rgba = np.ascontiguousarray(values).copy()
+    rgb = rgba[:, :, :3]
+    alpha = rgba[:, :, 3].copy()
+    grayscale = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
+    opacity = alpha.astype(np.float32) / 255.0
+    composited_grayscale = np.rint(
+        grayscale.astype(np.float32) * opacity + 255.0 * (1.0 - opacity)
+    ).astype(np.uint8)
+    alpha_min = int(np.min(alpha))
+    alpha_max = int(np.max(alpha))
+    digest = hashlib.sha256()
+    digest.update(b"e3-pixel-vectorization-source-v1\0")
+    digest.update(struct.pack(">II", int(rgba.shape[1]), int(rgba.shape[0])))
+    digest.update(rgba.tobytes(order="C"))
+    return PixelVectorizationSource(
+        source_key=digest.hexdigest(),
+        source_rgba=_readonly(rgba),
+        grayscale=_readonly(grayscale),
+        composited_grayscale=_readonly(composited_grayscale),
+        alpha=_readonly(alpha),
+        has_usable_alpha=(
+            alpha_min < alpha_max and alpha_min < 255 and alpha_max > 0
+        ),
+    )
+
+
 def _validate_payload(payload: RasterAssetPayload) -> None:
     if not isinstance(payload, RasterAssetPayload):
         raise TypeError("payload must be a RasterAssetPayload")
@@ -953,22 +1072,17 @@ def _decode_payload(payload: RasterAssetPayload) -> RasterVectorizationSource:
             f"Raster image has an unsupported channel layout: {source}"
         )
 
-    rgba = np.dstack((rgb, alpha)).astype(np.uint8, copy=False)
-    grayscale = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
-    opacity = alpha.astype(np.float32) / 255.0
-    composited_grayscale = np.rint(
-        grayscale.astype(np.float32) * opacity + 255.0 * (1.0 - opacity)
-    ).astype(np.uint8)
-    alpha_min = int(np.min(alpha))
-    alpha_max = int(np.max(alpha))
-    has_usable_alpha = alpha_min < alpha_max and alpha_min < 255 and alpha_max > 0
+    pixels = prepare_pixel_vectorization_source(
+        np.dstack((rgb, alpha)).astype(np.uint8, copy=False)
+    )
     return RasterVectorizationSource(
+        source_key=pixels.source_key,
         identity=payload.identity,
-        source_rgba=_readonly(rgba),
-        grayscale=_readonly(grayscale),
-        composited_grayscale=_readonly(composited_grayscale),
-        alpha=_readonly(alpha),
-        has_usable_alpha=has_usable_alpha,
+        source_rgba=pixels.source_rgba,
+        grayscale=pixels.grayscale,
+        composited_grayscale=pixels.composited_grayscale,
+        alpha=pixels.alpha,
+        has_usable_alpha=pixels.has_usable_alpha,
     )
 
 
@@ -1008,12 +1122,12 @@ def _display_dimensions(width: object, height: object) -> tuple[float, float]:
     return width_mm, height_mm
 
 
-def _composited_grayscale(source: RasterVectorizationSource) -> np.ndarray:
+def _composited_grayscale(source: PixelVectorizationSource) -> np.ndarray:
     return source.composited_grayscale
 
 
 def _threshold_value(
-    source: RasterVectorizationSource,
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     grayscale: np.ndarray,
 ) -> int | None:
@@ -1045,7 +1159,7 @@ def _threshold_value(
 
 
 def _mask_at_resolution(
-    source: RasterVectorizationSource,
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     grayscale: np.ndarray,
     threshold_used: int | None,
@@ -1110,7 +1224,7 @@ def _clean_components(
 
 
 def _oversampled_mask(
-    source: RasterVectorizationSource,
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     grayscale: np.ndarray,
     threshold_used: int | None,
@@ -1991,7 +2105,7 @@ def _source_edge_profiles(
     points: np.ndarray,
     normals: np.ndarray,
     normal_pitch_mm: np.ndarray,
-    source: RasterVectorizationSource,
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     threshold_used: int | None,
     width_mm: float,
@@ -2051,7 +2165,7 @@ def _source_edge_profiles(
 @_timed_stage("source_edge_refinement")
 def _refine_contour_source_edges(
     points: np.ndarray,
-    source: RasterVectorizationSource,
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     threshold_used: int | None,
     width_mm: float,
@@ -4810,7 +4924,7 @@ def _validate_rasterized_topology(
 
 @_timed_stage("mask_generation")
 def _prepare_vectorization_masks(
-    source: RasterVectorizationSource,
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     width_mm: float,
     height_mm: float,
@@ -4884,7 +4998,7 @@ def _quick_preview_prepared_raster(
         cv2.CHAIN_APPROX_NONE,
     )
     prepared_trace = _RasterTracePreparation(
-        source_identity=source.identity,
+        source_key=source.source_key,
         options=options,
         width_mm=width_mm,
         height_mm=height_mm,
@@ -5027,7 +5141,7 @@ def quick_preview_prepared_raster(
 
 
 def _reusable_prepared_trace(
-    source: RasterVectorizationSource,
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     width_mm: float,
     height_mm: float,
@@ -5037,7 +5151,7 @@ def _reusable_prepared_trace(
         return None
     trace = prepared_preview._prepared_trace
     if (
-        trace.source_identity != source.identity
+        trace.source_key != source.source_key
         or trace.options != options
         or trace.width_mm != width_mm
         or trace.height_mm != height_mm
@@ -5047,18 +5161,18 @@ def _reusable_prepared_trace(
 
 
 @_timed_stage("verified_vectorization_total")
-def _vectorize_prepared_raster(
-    source: RasterVectorizationSource,
+def _vectorize_pixel_source(
+    source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     *,
     displayed_width_mm: float,
     displayed_height_mm: float,
     prepared_preview: RasterVectorizationQuickPreview | None = None,
-) -> RasterVectorizationResult:
-    """Vectorize one verified decoded source without reopening its asset."""
+) -> PixelVectorizationResult:
+    """Vectorize one immutable decoded pixel source without asset assumptions."""
 
-    if not isinstance(source, RasterVectorizationSource):
-        raise TypeError("source must be a RasterVectorizationSource")
+    if not isinstance(source, PixelVectorizationSource):
+        raise TypeError("source must be a PixelVectorizationSource")
     options = (
         options
         if isinstance(options, RasterVectorizationOptions)
@@ -5207,6 +5321,10 @@ def _vectorize_prepared_raster(
             (float(point[0] / width_mm), float(point[1] / height_mm))
             for point in final_physical
         )
+        threshold_normalized = tuple(
+            (float(point[0] / width_mm), float(point[1] / height_mm))
+            for point in threshold_physical
+        )
         results.append(
             RasterVectorizedContour(
                 native_subpath=native_subpath,
@@ -5229,6 +5347,7 @@ def _vectorize_prepared_raster(
                 longest_smooth_span_segment_count=(
                     fitted.longest_smooth_span_segment_count
                 ),
+                threshold_points=threshold_normalized,
             )
         )
     if not results:
@@ -5247,9 +5366,8 @@ def _vectorize_prepared_raster(
     maximum_deviation = max(
         contour.max_estimated_deviation_mm for contour in result_contours
     )
-    return RasterVectorizationResult(
-        source_identity=source.identity,
-        source_sha256=source.identity.sha256,
+    return PixelVectorizationResult(
+        source_key=source.source_key,
         source_rgba=source.source_rgba,
         foreground_mask=_readonly(mask_preview),
         overlay_rgba=_readonly(overlay),
@@ -5264,6 +5382,29 @@ def _vectorize_prepared_raster(
     )
 
 
+def vectorize_pixel_source(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    displayed_width_mm: float,
+    displayed_height_mm: float,
+    timing: RasterVectorizationTiming | None = None,
+) -> PixelVectorizationResult:
+    """Vectorize source-neutral pixels through the authoritative raster path."""
+
+    token = _TIMING_STAGE.set(timing)
+    try:
+        return _vectorize_pixel_source(
+            source,
+            options,
+            displayed_width_mm=displayed_width_mm,
+            displayed_height_mm=displayed_height_mm,
+            prepared_preview=None,
+        )
+    finally:
+        _TIMING_STAGE.reset(token)
+
+
 def vectorize_prepared_raster(
     source: RasterVectorizationSource,
     options: RasterVectorizationOptions,
@@ -5273,11 +5414,18 @@ def vectorize_prepared_raster(
     prepared_preview: RasterVectorizationQuickPreview | None = None,
     timing: RasterVectorizationTiming | None = None,
 ) -> RasterVectorizationResult:
-    """Vectorize one verified source with optional non-persistent timing."""
+    """Vectorize verified imported pixels while retaining asset provenance."""
 
+    if not isinstance(source, RasterVectorizationSource):
+        raise TypeError("source must be a RasterVectorizationSource")
+    if (
+        prepared_preview is not None
+        and prepared_preview.source_identity != source.identity
+    ):
+        prepared_preview = None
     token = _TIMING_STAGE.set(timing)
     try:
-        return _vectorize_prepared_raster(
+        pixel_result = _vectorize_pixel_source(
             source,
             options,
             displayed_width_mm=displayed_width_mm,
@@ -5286,6 +5434,22 @@ def vectorize_prepared_raster(
         )
     finally:
         _TIMING_STAGE.reset(token)
+    return RasterVectorizationResult(
+        source_key=pixel_result.source_key,
+        source_rgba=pixel_result.source_rgba,
+        foreground_mask=pixel_result.foreground_mask,
+        overlay_rgba=pixel_result.overlay_rgba,
+        contours=pixel_result.contours,
+        threshold_used=pixel_result.threshold_used,
+        has_usable_alpha=pixel_result.has_usable_alpha,
+        connected_component_count=pixel_result.connected_component_count,
+        raw_contour_point_count=pixel_result.raw_contour_point_count,
+        fitted_segment_count=pixel_result.fitted_segment_count,
+        preview_flattened_point_count=pixel_result.preview_flattened_point_count,
+        max_estimated_deviation_mm=pixel_result.max_estimated_deviation_mm,
+        source_identity=source.identity,
+        source_sha256=source.identity.sha256,
+    )
 
 
 def vectorize_raster_payload(
@@ -5315,6 +5479,8 @@ __all__ = [
     "MAX_RASTER_VECTORIZATION_OVERSAMPLED_PIXELS",
     "MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION",
     "MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION",
+    "PixelVectorizationResult",
+    "PixelVectorizationSource",
     "PhysicalContourFitContour",
     "PhysicalContourFitResult",
     "RASTER_VECTORIZATION_OVERSAMPLE_FACTOR",
@@ -5330,9 +5496,11 @@ __all__ = [
     "RasterVectorizationTiming",
     "RasterVectorizedContour",
     "fit_physical_contours_to_native_path",
+    "prepare_pixel_vectorization_source",
     "prepare_raster_vectorization_source",
     "quick_preview_prepared_raster",
     "raster_payload_has_usable_alpha",
     "vectorize_prepared_raster",
+    "vectorize_pixel_source",
     "vectorize_raster_payload",
 ]

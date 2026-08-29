@@ -727,6 +727,55 @@ def test_trace_modes_share_filters_and_native_output_creation_controls(
     qt_application.processEvents()
 
 
+def test_trace_contrast_controls_match_raster_and_grid_paths(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    panel.set_calibration_ready(True)
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("contrast"))
+    panel.regular_grid.setChecked(False)
+    qt_application.processEvents()
+
+    assert not panel.target_hue.isEnabled()
+    assert not panel.hue_tolerance.isEnabled()
+    assert not panel.min_saturation.isEnabled()
+    assert not panel.pick_color_button.isEnabled()
+    assert panel.contrast_threshold_mode.isEnabled()
+    assert not panel.contrast_threshold.isEnabled()
+    assert panel.contrast_invert.isEnabled()
+    assert panel.output_mode.currentData() == "native"
+    assert not panel.output_mode.isEnabled()
+    panel.contrast_threshold_mode.setCurrentIndex(
+        panel.contrast_threshold_mode.findData("manual")
+    )
+    panel.contrast_threshold.setValue(137)
+    panel.contrast_invert.setChecked(True)
+    qt_application.processEvents()
+    assert panel.contrast_threshold.isEnabled()
+    assert panel.options()["contrast_threshold_mode"] == "manual"
+    assert panel.options()["contrast_threshold"] == 137
+    assert panel.options()["contrast_invert"] is True
+
+    panel.regular_grid.setChecked(True)
+    qt_application.processEvents()
+    assert not panel.contrast_threshold_mode.isEnabled()
+    assert not panel.contrast_threshold.isEnabled()
+    assert not panel.contrast_invert.isEnabled()
+    assert panel.output_mode.isEnabled()
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("color"))
+    qt_application.processEvents()
+    assert panel.target_hue.isEnabled()
+    assert panel.hue_tolerance.isEnabled()
+    assert panel.min_saturation.isEnabled()
+    assert panel.pick_color_button.isEnabled()
+    assert not panel.contrast_threshold_mode.isEnabled()
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
 def test_trace_preferences_migrate_removed_cutout_mode_to_contrast(
     qt_application: QtWidgets.QApplication,
 ) -> None:

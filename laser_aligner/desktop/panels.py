@@ -1265,6 +1265,19 @@ class TracePanel(QtWidgets.QWidget):
         self.min_saturation = QtWidgets.QSpinBox()
         self.min_saturation.setRange(0, 255)
         self.min_saturation.setValue(45)
+        self.contrast_threshold_mode = QtWidgets.QComboBox()
+        self.contrast_threshold_mode.addItem("Auto (Otsu)", "auto")
+        self.contrast_threshold_mode.addItem("Manual", "manual")
+        self.contrast_threshold = QtWidgets.QSpinBox()
+        self.contrast_threshold.setRange(0, 255)
+        self.contrast_threshold.setValue(128)
+        self.contrast_threshold.setToolTip(
+            "Manual 8-bit threshold used by non-grid By contrast tracing."
+        )
+        self.contrast_invert = QtWidgets.QCheckBox("Trace light pixels")
+        self.contrast_invert.setToolTip(
+            "Invert raster foreground polarity for light geometry on a dark surface."
+        )
         sample_row = QtWidgets.QWidget()
         sample_layout = QtWidgets.QHBoxLayout(sample_row)
         sample_layout.setContentsMargins(0, 0, 0, 0)
@@ -1284,6 +1297,13 @@ class TracePanel(QtWidgets.QWidget):
         _form_row(source_form, "Hue tolerance", self.hue_tolerance)
         _form_row(source_form, "Minimum saturation", self.min_saturation)
         _form_row(source_form, "Sample", sample_row)
+        _form_row(
+            source_form,
+            "Contrast threshold",
+            self.contrast_threshold_mode,
+        )
+        _form_row(source_form, "Manual threshold", self.contrast_threshold)
+        source_form.addRow(self.contrast_invert)
         layout.addWidget(source_group)
 
         filter_group = QtWidgets.QGroupBox("Object filters")
@@ -1467,8 +1487,9 @@ class TracePanel(QtWidgets.QWidget):
         self.native_fitting_tolerance.setValue(0.10)
         self.native_fitting_tolerance.setSuffix(" mm")
         self.native_fitting_tolerance.setToolTip(
-            "Requested maximum native line/Bezier fitting tolerance. Camera "
-            "traces automatically use at least the corrected camera-pixel pitch."
+            "Requested maximum native line/Bezier fitting tolerance. Non-grid "
+            "contrast tracing uses the same tolerance semantics as raster "
+            "vectorization; corrected pixel pitch remains separate source evidence."
         )
         self.native_fitting_tolerance_label = QtWidgets.QLabel("Native fit tolerance")
         self.native_fitting_tolerance_label.setToolTip(
@@ -1625,6 +1646,9 @@ class TracePanel(QtWidgets.QWidget):
         )
         self.trace_purpose.currentIndexChanged.connect(self._sync_output_controls)
         self.mode_combo.currentIndexChanged.connect(self._trace_mode_changed)
+        self.contrast_threshold_mode.currentIndexChanged.connect(
+            self._sync_output_controls
+        )
         self.output_mode.currentIndexChanged.connect(self._sync_output_controls)
         self.border_offset_mode.currentIndexChanged.connect(
             self._sync_output_controls
@@ -1638,6 +1662,9 @@ class TracePanel(QtWidgets.QWidget):
             self.target_hue,
             self.hue_tolerance,
             self.min_saturation,
+            self.contrast_threshold_mode,
+            self.contrast_threshold,
+            self.contrast_invert,
             self.min_area,
             self.max_area,
             self.min_width,
@@ -1704,6 +1731,32 @@ class TracePanel(QtWidgets.QWidget):
             )
             self.min_saturation.setValue(
                 int(float(settings.value("min_saturation", self.min_saturation.value())))
+            )
+            self._set_combo_data(
+                self.contrast_threshold_mode,
+                settings.value(
+                    "contrast_threshold_mode",
+                    self.contrast_threshold_mode.currentData(),
+                ),
+            )
+            self.contrast_threshold.setValue(
+                int(
+                    float(
+                        settings.value(
+                            "contrast_threshold",
+                            self.contrast_threshold.value(),
+                        )
+                    )
+                )
+            )
+            self.contrast_invert.setChecked(
+                self._settings_bool(
+                    settings.value(
+                        "contrast_invert",
+                        self.contrast_invert.isChecked(),
+                    ),
+                    self.contrast_invert.isChecked(),
+                )
             )
             self.min_area.setValue(
                 float(settings.value("min_area_mm2", self.min_area.value()))
@@ -1791,6 +1844,15 @@ class TracePanel(QtWidgets.QWidget):
             settings.setValue("target_hue", self.target_hue.value())
             settings.setValue("hue_tolerance", self.hue_tolerance.value())
             settings.setValue("min_saturation", self.min_saturation.value())
+            settings.setValue(
+                "contrast_threshold_mode",
+                self.contrast_threshold_mode.currentData(),
+            )
+            settings.setValue(
+                "contrast_threshold",
+                self.contrast_threshold.value(),
+            )
+            settings.setValue("contrast_invert", self.contrast_invert.isChecked())
             settings.setValue("min_area_mm2", self.min_area.value())
             settings.setValue("max_area_mm2", self.max_area.value())
             settings.setValue("min_width_mm", self.min_width.value())
@@ -1844,6 +1906,11 @@ class TracePanel(QtWidgets.QWidget):
             ),
             "hue_tolerance": self.hue_tolerance.value(),
             "min_saturation": self.min_saturation.value(),
+            "contrast_threshold_mode": str(
+                self.contrast_threshold_mode.currentData()
+            ),
+            "contrast_threshold": self.contrast_threshold.value(),
+            "contrast_invert": self.contrast_invert.isChecked(),
             "min_area_mm2": self.min_area.value(),
             "max_area_mm2": self.max_area.value(),
             "min_width_mm": self.min_width.value(),
@@ -2215,6 +2282,13 @@ class TracePanel(QtWidgets.QWidget):
     def _sync_output_controls(self, *args: Any) -> None:
         del args
         stock_mode = self.trace_purpose.currentData() == "stock"
+        contrast_mode = self.mode_combo.currentData() == "contrast"
+        grid_enabled = self.regular_grid.isChecked()
+        raster_contrast = contrast_mode and not grid_enabled
+        if raster_contrast and self.output_mode.currentData() != "native":
+            self.output_mode.setCurrentIndex(self.output_mode.findData("native"))
+        if raster_contrast and abs(float(self.border_offset.value())) > 1e-12:
+            self.border_offset.setValue(0.0)
         native_output = self.output_mode.currentData() == "native"
         self.detect_button.setText("Detect objects")
         for widget in (
@@ -2224,7 +2298,14 @@ class TracePanel(QtWidgets.QWidget):
             self.pick_color_button,
             self.color_swatch,
         ):
-            widget.setEnabled(self._calibration_ready)
+            widget.setEnabled(self._calibration_ready and not contrast_mode)
+        self.contrast_threshold_mode.setEnabled(raster_contrast)
+        self.contrast_threshold.setEnabled(
+            raster_contrast
+            and self.contrast_threshold_mode.currentData() == "manual"
+        )
+        self.contrast_invert.setEnabled(raster_contrast)
+        self.output_mode.setEnabled(not raster_contrast)
         self.native_fitting_tolerance_label.setEnabled(native_output)
         self.native_fitting_tolerance.setEnabled(native_output)
         self.replace_previous.setText(
@@ -2250,15 +2331,15 @@ class TracePanel(QtWidgets.QWidget):
             rounded_output
             and self.border_offset_mode.currentData() == "custom"
         )
-        self.border_offset_mode.setEnabled(rounded_output)
+        self.border_offset_mode.setEnabled(rounded_output and not raster_contrast)
         self.border_offset_label.setVisible(not custom_offset)
         self.border_offset.setVisible(not custom_offset)
+        self.border_offset.setEnabled(not raster_contrast)
         self.edge_offsets_label.setVisible(custom_offset)
         self.edge_offsets.setVisible(custom_offset)
         smoothing_enabled = self.output_mode.currentData() == "smoothed"
         self.smoothing_label.setEnabled(smoothing_enabled)
         self.smoothing.setEnabled(smoothing_enabled)
-        grid_enabled = self.regular_grid.isChecked()
         self.infer_missing.setEnabled(grid_enabled)
         self.repair_grid_edges.setEnabled(
             grid_enabled and self.output_mode.currentData() == "rounded"
