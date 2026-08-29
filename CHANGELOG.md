@@ -6,6 +6,53 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Corrected the camera-photo-to-raster boundary for non-grid Camera Trace. The
+  earlier shared-raster reuse converged one stage too early and treated a
+  rectified photograph as finished artwork, allowing global Otsu to promote
+  broad illumination, shadows, vignetting, or a dark machine edge. The new
+  Qt-free camera normalization adapter estimates one symmetric low-frequency
+  background on a model bounded to about 1 pixel/mm and 512 pixels on its long
+  axis. It takes the `float32` midpoint of grayscale opening and closing by a
+  35 mm elliptical rank envelope, then applies 4 mm Gaussian smoothing. Those
+  rank operations affect only the background estimate, never the normalized
+  raster or production mask. A conservative flat-field guard instead uses one
+  robust constant border background only when eight four-level histogram bins
+  cover 99.5%, a 2 mm border is 99.5% coherent, that border tone covers at least
+  half the bounded model, and far tones satisfy an 80% separation test; this
+  retains low-noise 40 x 40 mm clean interiors while rejecting realistic and
+  quantized shadows plus a machine-colored border. `float32` signed residuals,
+  a three-level noise floor, and one nearest-rank 99.5th-percentile response
+  scale clamped to 32–64 levels feed the monotonic reciprocal transfer
+  `round(255R / (R + X))`, producing symmetric dark/light uint8 rasters without
+  clipped-black endpoint loss or geometry repair. Automatic Otsu advances its
+  lowest equally optimal plateau member by at most two unused levels only when
+  the low class lacks interpolation headroom; normal and inverted polarity use
+  the foreground span and background endpoint respectively. Source-mask
+  classification and the established bicubic 4× path remain unchanged.
+  Manual non-grid Contrast now applies Otsu or its 0–255 threshold to the
+  selected normalized polarity; Auto captures, rectifies, estimates the
+  background, and normalizes once, then reuses the result for both raster
+  attempts. Explicit Color, Auto's conditional Color strategy, and the
+  specialized grid detector are unchanged. Deterministic gradient/shadow,
+  edge-background, noise, 21.5 mm dense-label, 40 mm clean-solid, two-tone Otsu
+  endpoint, gap, hole, clean-raster parity, immutability, and dark/light tests
+  cover the adapter, but the physical Coleman scene has not yet been rerun and
+  remains unvalidated.
+
+- Added an exact **Camera / Normalized / Mask** diagnostic selector for the
+  frozen Trace request. The exact 4× production contour mask is published from
+  the worker immediately after mask preparation and before contour extraction
+  or native fitting, while queued delivery, request IDs, and review signatures
+  prevent stale GUI updates; starting a new Detect also clears prior temporary
+  candidates. Capture/rectification, grayscale preparation, background
+  estimation, normalization, mask/component/4× preparation, contour extraction,
+  root review, native fitting, topology validation, detection, and request-total
+  timing remain non-persistent diagnostics. Manual Contrast now uses the same
+  root-isolated forest behavior as Auto, and complete roots already outside the
+  selected maximum-area or minimum-dimension review limits are rejected before
+  expensive fitting without changing masks, splitting hole/island trees, or
+  weakening the native fitter and its validators.
+
 - Reworked non-grid Camera Trace **Auto detect** from a separate legacy mask
   detector into a deterministic orchestrator over production tracing paths. One
   immutable corrected frame now feeds shared-raster Otsu dark and light

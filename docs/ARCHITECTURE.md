@@ -65,7 +65,8 @@ safety policy. See [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 | `storage.py` | Atomic JSON persistence used by calibration |
 | `camera/` | OpenCV/V4L2 and remote camera capture plus camera controls |
 | `calibration/` | Lens model, checkerboard solving, bed homography, rectification, targets, bounded fine registration, holdout accuracy scoring, and Qt-free read-only coordinate auditing |
-| `vision/` | Workpiece, fiducial, crosshair-grid, and camera-object detection |
+| `vision/` | Workpiece, fiducial, crosshair-grid, camera-object detection, and camera-photo normalization |
+| `vision/camera_raster_normalization.py` | Qt-free, authority-free low-frequency illumination modeling and symmetric dark/light raster adaptation for non-grid Camera Trace |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
@@ -247,19 +248,22 @@ should own a physical camera at a time.
   placement hints when a current support frame drives the desktop canvas.
 - ArUco, keyed unseeded cross-grid, and rough-map-seeded crosshair detection
   support bed mapping.
-- Non-grid Camera Trace **By contrast** treats the corrected frame as a physical
-  raster source and uses the complete source-neutral imported-raster
-  vectorization pipeline. It does not ask the object detector to choose among
-  object hypotheses. Each root `RETR_TREE` contour plus all descendants is one
-  temporary review candidate.
+- Non-grid Camera Trace **By contrast** first converts the corrected photograph
+  into a local-contrast raster with the camera-specific illumination model, then
+  uses the complete source-neutral imported-raster vectorization pipeline. Auto
+  Otsu or the operator's manual threshold applies to that normalized raster, not
+  to absolute camera brightness. Each root `RETR_TREE` contour plus all
+  descendants is one indivisible temporary review candidate; unrelated failing
+  roots do not discard verified peers.
 - Non-grid Camera Trace **Auto detect** is orchestration, not a fourth detector.
-  One corrected capture becomes one immutable `PixelVectorizationSource`; Auto
-  evaluates shared-raster Otsu with dark foreground, the same Otsu result with
-  light foreground, and a production Color attempt only when weighted HSV/Lab
-  evidence identifies a coherent hue that is neither negligible nor background-
-  or border-dominated. Every successful attempt returns authoritative native
-  candidates through its ordinary production path, and deterministic quality
-  scoring chooses one prepared result for review.
+  One corrected capture becomes one immutable camera-normalization result. Auto
+  estimates the background once and derives both the dark and light
+  `PixelVectorizationSource` values from it, then evaluates ordinary shared-
+  raster Otsu for each polarity. It also runs a production Color attempt only
+  when weighted HSV/Lab evidence identifies a coherent hue that is neither
+  negligible nor background- or border-dominated. Every successful attempt
+  returns authoritative native candidates through its ordinary production path,
+  and deterministic quality scoring chooses one prepared result for review.
 - The Trace panel treats those non-grid Auto choices as strategy-owned: hue,
   sample, threshold, and polarity controls are inactive, output is native
   lines/Béziers, and border offset is zero. Explicit Color owns hue/sample;
@@ -284,8 +288,18 @@ should own a physical camera at a time.
   inspector checkboxes; project objects are non-selectable and non-movable until
   review ends. The temporary layer never mutates `ProjectDocument` and has no
   planning, G-code, or execution consumer.
+- For a current non-grid request, the Trace **Camera display** selector can show
+  the immutable corrected **Camera** frame, the exact polarity-specific
+  **Normalized** threshold input (or grayscale context for Color), or the exact
+  4× production contour **Mask** used by `RETR_TREE`. Raster mask preparation
+  publishes those pixels before
+  contour extraction and native fitting; request identity and calibration
+  signatures reject late or stale previews. These arrays are diagnostic-only
+  and cannot create or authorize geometry.
 - Corrected camera pixels have the rectifier's explicit constant pixels/mm even
   though the upstream raw-camera homography has a spatially varying Jacobian.
+  Camera normalization uses that physical pitch to choose its low-pass scale;
+  it never changes image dimensions or the pitch presented to the vectorizer.
   Non-grid contrast uses the raster vectorizer's pixel-center mapping and exact
   requested fit-tolerance semantics before one final local-to-machine affine.
   Auto's raster attempts use that same path. Auto Color, explicit By color, and
@@ -317,6 +331,129 @@ should own a physical camera at a time.
   normalized template features, ranks rigid rotation/translation candidates,
   and reports coverage, residual, ambiguity, and scale diagnostics.
 - Scale diagnostics are warnings only. The matcher never scales cut geometry.
+
+### Camera-photo raster-normalization contract
+
+The earlier camera/raster convergence treated a rectified photograph as if it
+were already artwork. A single full-frame brightness threshold could therefore
+promote a broad sheet shadow, vignetting, or a dark machine edge even when the
+local sheet was visibly blank. The non-grid raster route now converges one stage
+later:
+
+```text
+corrected uint8 BGR photograph at a constant pixels/mm
+  -> camera-specific low-frequency background normalization
+  -> polarity-specific uint8 grayscale raster
+  -> PixelVectorizationSource
+  -> unchanged shared threshold, cleanup, 4× hierarchy, and native fitter
+```
+
+For an image of `W x H` pixels at `p` pixels/mm, the background-model scale is
+`s = min(1, 1/p, 512/max(W,H))`. The model dimensions are
+`max(1, round(Ws)) x max(1, round(Hs))`, so the expensive low-pass model is at
+most approximately 1 pixel/mm and 512 pixels on its longest axis. Grayscale is
+converted deliberately to `float32` and reduced with `INTER_AREA`.
+
+One deterministic flat-field guard prevents that finite physical envelope from
+turning a large, already-clean solid into a ring. It is deliberately narrower
+than general segmentation. The eight most populated four-level-wide bins of the
+full-resolution uint8 histogram must cover at least 99.5% of the frame. In the bounded model, a
+2 mm outer band has robust median `b`; at least 99.5% of that band must lie within
+three grayscale levels of `b`, and that same band around `b` must cover at least
+50% of the full model so a machine-colored border cannot impersonate the sheet.
+Finally, for `d = abs(I_model - b)`, let
+`intermediate` count `3 < d < 32` and `far` count `d >= 32`. The guard requires
+`far / (far + intermediate) >= 0.80`, with the ratio defined as one when both
+counts are zero. This rejects gradual low-frequency variation even when it has
+been quantized into a small palette. When all three tests pass, `B` is the
+constant `float32` border level `b`; an interior clean solid can then be larger
+than the local envelope without being absorbed. This branch remains one
+polarity-neutral background estimate and does not inspect or repair geometry.
+The bounded gates accept low-noise flat fields but deliberately fall back for
+ordinary photographic entropy or gradual tone ramps. Image-only processing
+cannot distinguish every deliberately posterized shadow from flat artwork; a
+frame that does not meet every gate uses the rank envelope rather than guessing.
+
+All other frames use the physical rank-envelope model. At each model-axis
+pitch, a nominal 35 mm physical diameter becomes the next odd elliptical-kernel
+extent, bounded to 35 model pixels. Let `O` and `C` be `BORDER_REFLECT_101`
+grayscale opening and closing by that kernel. Their symmetric midpoint is
+`E = (O + C) / 2`. The model background is a Gaussian smoothing of `E` at 4 mm
+sigma on each physical axis, also bounded to 4 model pixels, and is returned to
+full resolution with `INTER_LINEAR`. At the normal 4 pixels/mm corrected pitch,
+a 760 x 480 frame therefore uses a 190 x 120, 1-pixel/mm model, a 35 x 35
+centered ellipse, and a 4-pixel (4 mm) finishing sigma.
+
+Let `I` be the full-resolution `float32` grayscale image and `B` the upsampled
+background. The signed residual is `S = I - B`; uint8 subtraction is never used.
+With a three-level sensor-noise floor, the shared magnitude is
+`M = max(abs(S) - 3, 0)`. Its nearest-rank 99.5th percentile `q` defines the one
+shared response scale `R = clamp(q, 32, 64)`, preventing a few extremes from
+setting gain while also bounding noise amplification. The two responses are
+`D = max(-S - 3, 0)` and `L = max(S - 3, 0)`. The normalizer exposes each as an
+artwork-style raster
+`A(X) = uint8(rint(255R / (R + X)))`: blank and opposite-polarity pixels are
+white, `X = R` maps to 128, and stronger selected responses approach black
+monotonically without the old clipped-black endpoint. Thus the normalized
+manual threshold 128 has the concrete meaning "at least the robust response
+scale," and level differences supplied by photographic or antialiased input
+remain available to 4× reconstruction. A truly two-tone source necessarily
+remains two-tone under any pointwise transfer; the unchanged vectorizer still
+owns its interpolation and topology behavior. The light adapter inverts `A(L)`
+and uses the shared vectorizer's established `invert=True` contract, so its
+threshold and polarity behavior remains algebraically identical to ordinary
+light artwork.
+
+Automatic raster thresholding retains OpenCV Otsu but accounts for its choice of
+the lowest member of an equally optimal plateau. Only when the chosen threshold
+has fewer than two levels of low-class interpolation headroom, and unused
+grayscale levels exist before the nearest high-class value, does it advance by
+at most two levels within that empty gap. Normal polarity measures headroom from
+the selected foreground minimum; inverted polarity measures it from the low
+background maximum. Source-resolution foreground classification is therefore
+identical; ordinary multi-level Otsu, manual thresholds, polarity semantics, and
+bicubic 4× reconstruction are unchanged. This bounded plateau nudge prevents a
+two-tone endpoint from turning bicubic rounding into false pinholes or islands.
+
+Opening and closing operate only on the bounded temporary background model;
+neither is applied to the normalized raster or the production mask. The 35 mm
+nominal diameter is larger than the expected 3–10 mm stencil strokes and the
+dense 21.5 mm label thickness, while the flat-field guard removes a finite-size
+cutoff for qualifying clean interiors. A dark feature is suppressed by the
+closing envelope, a light feature by the opening envelope, and their midpoint
+retains a symmetric signed response for either polarity; the 4 mm final blur
+makes the estimate smooth while following broad illumination. The adapter itself still performs
+no threshold, output-mask closing, output-mask opening, gap repair, stroke
+growth, hole filling, classification, or geometry inference. Deterministic
+clean-raster coverage verifies exact Otsu geometry for qualifying clean inputs,
+including dark and light 40 x 40 mm interiors.
+
+`CameraRasterNormalizationResult` owns defensive, immutable-byte-backed,
+C-contiguous read-only arrays for corrected BGR (`uint8`), grayscale (`uint8`),
+background and signed residual (`float32`), and both normalized rasters
+(`uint8`). Its frozen diagnostics record the versioned content key,
+physical/image/model dimensions, effective model pitch, envelope diameter and
+odd kernel dimensions, smoothing sigma, noise floor, percentile, observed
+robust level, reciprocal scale, selected background-model kind, and flat-field
+palette/border/separation coverage. It is temporary analysis data with no project,
+planning, G-code, or laser authority and never fabricates
+`RasterAssetIdentity`.
+
+Opt-in non-persistent timing keeps capture and rectification at the desktop
+boundary, records `grayscale_preparation`, `background_estimation`,
+`normalization`, and `camera_normalization_total` in the camera adapter, and
+retains the shared vectorizer's mask, component-cleanup, 4× preparation,
+contour-extraction, native-fitting, and validation stages. Auto records each
+raster attempt separately plus one normalization key and a background-estimate
+count of one. Timing is diagnostic only; it neither chooses an algorithm nor
+relaxes any validator.
+
+This boundary applies only to non-grid Contrast and Auto's dark/light raster
+attempts. Explicit **By color**, Auto's conditional Color strategy, and all
+**Use grid** production masks retain their chromatic or specialized repeated-
+object implementations. Deterministic synthetic gradient/shadow, polarity,
+gap/hole, clean-raster parity, immutability, and timing coverage exists; the
+physical Coleman stencil scene has not yet been rerun and remains pending.
 
 All vision accuracy depends on current lens calibration, bed mapping, camera
 pose, material height, focus, lighting, and resolution.
@@ -593,16 +730,20 @@ selected IMAGE + workspace payload identity
 provenance. It owns RGBA, grayscale, white-composited grayscale, alpha, and a
 content-derived pixel key. `RasterVectorizationSource` wraps those same pixels
 with a legitimate `RasterAssetIdentity`; only that wrapper performs exact
-encoded-byte, path, format, size, and SHA-256 verification. Corrected camera
-frames enter through the source-neutral contract and never synthesize an asset
-identity. `PixelVectorizationResult` likewise owns shared mask, contour, native
-path, hierarchy, error, and preview data, while `RasterVectorizationResult` adds
+encoded-byte, path, format, size, and SHA-256 verification. Camera Trace's
+normalized dark/light rasters enter through the source-neutral contract; the
+corrected photograph and its background model remain in the separate temporary
+camera-normalization result, and neither layer synthesizes an asset identity.
+`PixelVectorizationResult` likewise owns shared mask, contour, native path,
+hierarchy, error, and preview data, while `RasterVectorizationResult` adds
 imported-asset provenance and preserves existing project metadata.
 
 `RasterVectorizationOptions` is a frozen validated value. Automatic detection
 uses Otsu thresholding over the white-composited image and applies alpha as an
 independent mask gate; manual mode uses the selected 0–255 threshold; alpha mode
 is available only when decoded opacity contains spatially useful variation.
+For camera Contrast, that image is the selected normalized response, so Otsu or
+the manual value measures local contrast rather than absolute exposure.
 Inversion changes foreground polarity, and
 the connected-component cleanup interprets minimum feature area in square
 millimetres from the selected image's displayed size, removing both small
@@ -649,8 +790,9 @@ camera pixels because both now enter the complete pixel pipeline.
 `project.native_contour_fit` remains the source-neutral adapter for specialized
 Color and grid detector masks that already exist as ordered physical contour
 trees; Auto's conditional Color attempt uses that adapter, while Auto's raster
-attempts use `PixelVectorizationSource` directly. The adapter does not
-reconstruct non-grid raster geometry.
+attempts use two `PixelVectorizationSource` values derived from one immutable
+camera-normalization result. The adapter does not reconstruct non-grid raster
+geometry.
 
 Auto strategy failure and candidate failure are separate. A failed attempt is a
 bounded diagnostic and does not stop later strategies. Raster Auto asks the
@@ -709,8 +851,9 @@ chunked to 8,192 contour points. Flat, noisy, multiple-crossing, out-of-frame,
 and otherwise unsupported profiles stay at their threshold position. Contours
 that participate in nesting are not refined. For imported assets those pixels
 come from the verified bounded payload; for non-grid Camera Trace they are the
-corrected frame pixels. Threshold, mask, hierarchy, source-edge evidence, and
-native fitting are otherwise the same computation.
+exact normalized-polarity pixels already used for thresholding, not a second
+sample of the raw photograph. Threshold, mask, hierarchy, source-edge evidence,
+and native fitting are otherwise the same computation.
 
 Hard corners and their adjacent support samples, along with every persistent or
 hard-anchor-promoted straight run, remain fixed. Corner and straight-run

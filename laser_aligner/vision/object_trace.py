@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import math
+import time
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
@@ -26,16 +27,24 @@ from ..project.path_geometry import (
     transform_native_path,
 )
 from ..project.raster_vectorize import (
+    RASTER_VECTORIZATION_OVERSAMPLE_FACTOR,
     PixelVectorizationForestResult,
+    PixelVectorizationMaskPreview,
     PixelVectorizationResult,
+    PixelVectorizationRootReviewFilter,
     PixelVectorizationSource,
     RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationError,
     RasterVectorizationOptions,
+    RasterVectorizationTiming,
     prepare_pixel_vectorization_source,
-    vectorize_pixel_source,
     vectorize_pixel_source_forest,
+)
+from .camera_raster_normalization import (
+    CameraRasterNormalizationResult,
+    CameraRasterNormalizationTiming,
+    normalize_camera_trace_frame,
 )
 
 TRACE_MODES = {"auto", "color", "contrast"}
@@ -299,6 +308,96 @@ class TraceResult:
             "output_work_area": self.output_work_area,
             "diagnostics": self.diagnostics,
         }
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class CameraTraceRasterPreview:
+    """Authority-free pixels from the exact non-grid Trace raster preparation.
+
+    ``foreground_mask`` is the source-resolution result representation;
+    ``contour_mask`` is the exact production workspace passed to RETR_TREE.
+    """
+
+    strategy: str
+    polarity: str
+    camera_bgr: np.ndarray
+    normalized_grayscale: np.ndarray
+    foreground_mask: np.ndarray
+    contour_mask: np.ndarray
+    threshold_used: int | None
+    connected_component_count: int
+    selected_strategy: bool = False
+
+    def __post_init__(self) -> None:
+        strategy = str(self.strategy).strip()
+        if not strategy:
+            raise ValueError("A Camera Trace raster preview requires a strategy")
+        polarity = str(self.polarity).strip().lower()
+        if polarity not in {"dark", "light", "color"}:
+            raise ValueError("Unknown Camera Trace preview polarity")
+        arrays = (
+            (self.camera_bgr, "camera_bgr", 3),
+            (self.normalized_grayscale, "normalized_grayscale", 2),
+            (self.foreground_mask, "foreground_mask", 2),
+        )
+        for values, label, dimensions in arrays:
+            if not isinstance(values, np.ndarray):
+                raise TypeError(f"{label} must be a numpy array")
+            if values.dtype != np.uint8 or values.ndim != dimensions:
+                raise ValueError(f"{label} must be a {dimensions}D uint8 array")
+            if values.flags.writeable:
+                raise ValueError(f"{label} must be read-only")
+            if not values.flags.c_contiguous:
+                raise ValueError(f"{label} must be C-contiguous")
+        if self.camera_bgr.shape[2] != 3:
+            raise ValueError("camera_bgr must contain three BGR channels")
+        shape = self.camera_bgr.shape[:2]
+        if self.normalized_grayscale.shape != shape or self.foreground_mask.shape != shape:
+            raise ValueError("Camera Trace preview arrays must have one image shape")
+        if not isinstance(self.contour_mask, np.ndarray):
+            raise TypeError("contour_mask must be a numpy array")
+        if self.contour_mask.dtype != np.uint8 or self.contour_mask.ndim != 2:
+            raise ValueError("contour_mask must be a 2D uint8 array")
+        if self.contour_mask.flags.writeable:
+            raise ValueError("contour_mask must be read-only")
+        if not self.contour_mask.flags.c_contiguous:
+            raise ValueError("contour_mask must be C-contiguous")
+        expected_contour_shape = (
+            shape
+            if polarity == "color"
+            else (
+                shape[0] * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR,
+                shape[1] * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR,
+            )
+        )
+        if self.contour_mask.shape != expected_contour_shape:
+            raise ValueError(
+                "contour_mask must be the exact production contour workspace"
+            )
+        if self.threshold_used is not None:
+            threshold = int(self.threshold_used)
+            if threshold != self.threshold_used or not 0 <= threshold <= 255:
+                raise ValueError("threshold_used must be a byte or None")
+        if (
+            type(self.connected_component_count) is not int
+            or self.connected_component_count < 0
+        ):
+            raise ValueError("connected_component_count must be non-negative")
+        if type(self.selected_strategy) is not bool:
+            raise ValueError("selected_strategy must be a boolean")
+        object.__setattr__(self, "strategy", strategy)
+        object.__setattr__(self, "polarity", polarity)
+
+
+CameraTraceRasterPreviewCallback = Callable[[CameraTraceRasterPreview], None]
+
+
+def _immutable_trace_preview_array(values: np.ndarray) -> np.ndarray:
+    contiguous = np.ascontiguousarray(values)
+    return np.frombuffer(
+        contiguous.tobytes(order="C"),
+        dtype=contiguous.dtype,
+    ).reshape(contiguous.shape)
 
 
 def _new_id() -> str:
@@ -3190,6 +3289,38 @@ def _normalized_camera_candidate_geometry(
     return normalized, center_mm, width_mm, height_mm
 
 
+def _camera_raster_vector_source(
+    normalization: CameraRasterNormalizationResult,
+    polarity: str,
+) -> PixelVectorizationSource:
+    """Adapt one normalized polarity to the shared artwork-raster contract."""
+
+    artwork_raster = normalization.raster_for(polarity)
+    # The shared vectorizer's invert flag retains its established meaning. The
+    # light response is therefore represented as light artwork on a dark field,
+    # while the dark response remains dark artwork on a light field.
+    vector_grayscale = (
+        artwork_raster
+        if polarity == "dark"
+        else cv2.bitwise_not(artwork_raster)
+    )
+    rgba = cv2.cvtColor(vector_grayscale, cv2.COLOR_GRAY2RGBA)
+    return prepare_pixel_vectorization_source(rgba)
+
+
+def _camera_raster_diagnostics(
+    normalization: CameraRasterNormalizationResult,
+    *,
+    polarity: str,
+    normalization_reused: bool,
+) -> dict[str, Any]:
+    return {
+        **asdict(normalization.diagnostics),
+        "polarity": polarity,
+        "normalization_reused": normalization_reused,
+    }
+
+
 def _detect_non_grid_contrast_raster(
     image: np.ndarray,
     options: TraceOptions,
@@ -3197,15 +3328,27 @@ def _detect_non_grid_contrast_raster(
     output_work_area: WorkArea,
     pixels_per_mm: float,
     *,
-    prepared_source: PixelVectorizationSource | None = None,
-    isolate_candidates: bool = False,
+    prepared_normalization: CameraRasterNormalizationResult | None = None,
+    normalization_timing: CameraRasterNormalizationTiming | None = None,
+    vectorization_timing: RasterVectorizationTiming | None = None,
+    raster_preview_callback: CameraTraceRasterPreviewCallback | None = None,
+    preview_strategy: str | None = None,
 ) -> TraceResult:
-    """Trace corrected camera pixels through the imported-raster vector path."""
+    """Normalize corrected camera pixels, then use the shared raster vector path."""
 
-    source = prepared_source
-    if source is None:
-        rgba = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
-        source = prepare_pixel_vectorization_source(rgba)
+    trace_started = time.perf_counter()
+    normalization_reused = prepared_normalization is not None
+    if normalization_timing is None:
+        normalization_timing = CameraRasterNormalizationTiming()
+    normalization = prepared_normalization
+    if normalization is None:
+        normalization = normalize_camera_trace_frame(
+            image,
+            pixels_per_mm,
+            timing=normalization_timing,
+        )
+    polarity = "light" if options.contrast_invert else "dark"
+    source = _camera_raster_vector_source(normalization, polarity)
     raster_width_mm = source.width_px / pixels_per_mm
     raster_height_mm = source.height_px / pixels_per_mm
     camera_center_mm = (
@@ -3226,65 +3369,103 @@ def _detect_non_grid_contrast_raster(
         simplification_tolerance_mm=effective_tolerance,
         contour_output=RasterContourOutput.ALL_CONTOURS,
     )
-    forest_result: PixelVectorizationForestResult | None = None
-    try:
-        if isolate_candidates:
-            forest_result = vectorize_pixel_source_forest(
-                source,
-                raster_options,
-                displayed_width_mm=raster_width_mm,
-                displayed_height_mm=raster_height_mm,
+    if vectorization_timing is None:
+        vectorization_timing = RasterVectorizationTiming()
+    strategy_name = preview_strategy or f"raster_{polarity}"
+
+    def trace_metadata() -> dict[str, Any]:
+        return {
+            "camera_raster": _camera_raster_diagnostics(
+                normalization,
+                polarity=polarity,
+                normalization_reused=normalization_reused,
+            ),
+            "timing": {
+                "camera_normalization": normalization_timing.snapshot(),
+                "raster_vectorization": vectorization_timing.snapshot(),
+                "trace_detection_total_seconds": time.perf_counter() - trace_started,
+            },
+        }
+
+    def mask_ready(mask_preview: PixelVectorizationMaskPreview) -> None:
+        if raster_preview_callback is None:
+            return
+        raster_preview_callback(
+            CameraTraceRasterPreview(
+                strategy=strategy_name,
+                polarity=polarity,
+                camera_bgr=normalization.corrected_bgr,
+                normalized_grayscale=source.composited_grayscale,
+                foreground_mask=mask_preview.foreground_mask,
+                contour_mask=mask_preview.contour_mask,
+                threshold_used=mask_preview.threshold_used,
+                connected_component_count=mask_preview.connected_component_count,
+                selected_strategy=preview_strategy is None,
             )
-            result = forest_result.result
-            if result is None:
-                reasons = [failure.reason for failure in forest_result.failures]
-                message = reasons[0] if reasons else "No root contour tree produced verified geometry"
-                return TraceResult(
-                    detected=False,
-                    detections=[],
-                    mode_used="contrast",
-                    target_hue=options.target_hue,
-                    image_width=image.shape[1],
-                    image_height=image.shape[0],
-                    direct_count=0,
-                    inferred_count=0,
-                    grid=None,
-                    message=message,
-                    options=options,
-                    camera_work_area={
-                        "x_min": float(work_area.x_min),
-                        "x_max": float(work_area.x_max),
-                        "y_min": float(work_area.y_min),
-                        "y_max": float(work_area.y_max),
+        )
+
+    forest_result: PixelVectorizationForestResult
+    try:
+        forest_result = vectorize_pixel_source_forest(
+            source,
+            raster_options,
+            displayed_width_mm=raster_width_mm,
+            displayed_height_mm=raster_height_mm,
+            timing=vectorization_timing,
+            mask_ready=mask_ready,
+            root_review_filter=PixelVectorizationRootReviewFilter(
+                maximum_area_mm2=options.max_area_mm2,
+                minimum_width_mm=options.min_width_mm,
+                minimum_height_mm=options.min_height_mm,
+            ),
+        )
+        result = forest_result.result
+        if result is None:
+            reasons = [failure.reason for failure in forest_result.failures]
+            message = (
+                reasons[0]
+                if reasons
+                else "No root contour tree produced verified geometry"
+            )
+            return TraceResult(
+                detected=False,
+                detections=[],
+                mode_used="contrast",
+                target_hue=options.target_hue,
+                image_width=image.shape[1],
+                image_height=image.shape[0],
+                direct_count=0,
+                inferred_count=0,
+                grid=None,
+                message=message,
+                options=options,
+                camera_work_area={
+                    "x_min": float(work_area.x_min),
+                    "x_max": float(work_area.x_max),
+                    "y_min": float(work_area.y_min),
+                    "y_max": float(work_area.y_max),
+                },
+                output_work_area={
+                    "x_min": float(output_work_area.x_min),
+                    "x_max": float(output_work_area.x_max),
+                    "y_min": float(output_work_area.y_min),
+                    "y_max": float(output_work_area.y_max),
+                },
+                diagnostics={
+                    "candidate_failures": [
+                        failure.to_dict() for failure in forest_result.failures[:64]
+                    ],
+                    "candidate_failure_count": len(forest_result.failures),
+                    "strategy_metrics": {
+                        "valid_candidate_count": 0,
+                        "verified_candidate_count": 0,
+                        "invalid_candidate_count": len(forest_result.failures),
+                        "root_tree_count": forest_result.root_tree_count,
+                        "minimum_area_mm2": options.min_area_mm2,
+                        "frame_area_mm2": raster_width_mm * raster_height_mm,
                     },
-                    output_work_area={
-                        "x_min": float(output_work_area.x_min),
-                        "x_max": float(output_work_area.x_max),
-                        "y_min": float(output_work_area.y_min),
-                        "y_max": float(output_work_area.y_max),
-                    },
-                    diagnostics={
-                        "candidate_failures": [
-                            failure.to_dict()
-                            for failure in forest_result.failures[:64]
-                        ],
-                        "candidate_failure_count": len(forest_result.failures),
-                        "strategy_metrics": {
-                            "valid_candidate_count": 0,
-                            "verified_candidate_count": 0,
-                            "invalid_candidate_count": len(forest_result.failures),
-                            "root_tree_count": forest_result.root_tree_count,
-                            "minimum_area_mm2": options.min_area_mm2,
-                            "frame_area_mm2": raster_width_mm * raster_height_mm,
-                        },
-                    },
-                )
-        else:
-            result = vectorize_pixel_source(
-                source,
-                raster_options,
-                displayed_width_mm=raster_width_mm,
-                displayed_height_mm=raster_height_mm,
+                    **trace_metadata(),
+                },
             )
     except RasterVectorizationError as exc:
         message = str(exc)
@@ -3316,6 +3497,19 @@ def _detect_non_grid_contrast_raster(
                 "x_max": float(output_work_area.x_max),
                 "y_min": float(output_work_area.y_min),
                 "y_max": float(output_work_area.y_max),
+            },
+            diagnostics={
+                "candidate_failures": [],
+                "candidate_failure_count": 0,
+                "strategy_metrics": {
+                    "valid_candidate_count": 0,
+                    "verified_candidate_count": 0,
+                    "invalid_candidate_count": 0,
+                    "root_tree_count": 0,
+                    "minimum_area_mm2": options.min_area_mm2,
+                    "frame_area_mm2": raster_width_mm * raster_height_mm,
+                },
+                **trace_metadata(),
             },
         )
     assert result is not None
@@ -3432,6 +3626,9 @@ def _detect_non_grid_contrast_raster(
                         np.count_nonzero(result.foreground_mask)
                     ),
                     "pixel_source_key": result.source_key,
+                    "camera_normalization_key": (
+                        normalization.diagnostics.normalization_key
+                    ),
                     "threshold_used": result.threshold_used,
                     "threshold_mode": options.contrast_threshold_mode,
                     "invert": options.contrast_invert,
@@ -3555,15 +3752,15 @@ def _detect_non_grid_contrast_raster(
     foreground_fraction, border_foreground_fraction = _mask_occupancy(
         result.foreground_mask
     )
-    failures = () if forest_result is None else forest_result.failures
-    root_tree_count = (
-        len(root_groups)
-        if forest_result is None
-        else forest_result.root_tree_count
+    failures = forest_result.failures
+    root_tree_count = forest_result.root_tree_count
+    prefit_review_failure_count = sum(
+        failure.stage == "review_filter" for failure in failures
     )
+    fitted_failure_count = len(failures) - prefit_review_failure_count
     review_filtered_candidate_count = max(
-        0,
-        root_tree_count - len(failures) - len(detections),
+        prefit_review_failure_count,
+        root_tree_count - fitted_failure_count - len(detections),
     )
     unavailable_candidate_count = max(0, root_tree_count - len(detections))
     strategy_metrics = {
@@ -3574,6 +3771,7 @@ def _detect_non_grid_contrast_raster(
         "verified_candidate_count": sum(item.native_verified for item in detections),
         "invalid_candidate_count": unavailable_candidate_count,
         "review_filtered_candidate_count": review_filtered_candidate_count,
+        "prefit_review_filtered_candidate_count": prefit_review_failure_count,
         "valid_area_mm2": sum(item.area_mm2 for item in detections),
         "microscopic_candidate_count": sum(
             item.area_mm2 < 4.0 * options.min_area_mm2 for item in detections
@@ -3631,6 +3829,7 @@ def _detect_non_grid_contrast_raster(
             "candidate_failures": [failure.to_dict() for failure in failures[:64]],
             "candidate_failure_count": len(failures),
             "strategy_metrics": strategy_metrics,
+            **trace_metadata(),
         },
     )
 
@@ -3702,20 +3901,28 @@ def _detect_non_grid_auto(
     work_area: WorkArea,
     output_work_area: WorkArea,
     pixels_per_mm: float,
+    *,
+    raster_preview_callback: CameraTraceRasterPreviewCallback | None = None,
 ) -> TraceResult:
-    """Choose among production non-grid tracing strategies on one pixel source."""
+    """Choose among production non-grid strategies after one normalization."""
 
-    rgba = cv2.cvtColor(image, cv2.COLOR_BGR2RGBA)
-    source = prepare_pixel_vectorization_source(rgba)
-    auto_otsu_value, _auto_otsu_mask = cv2.threshold(
-        source.composited_grayscale,
-        0,
-        255,
-        cv2.THRESH_BINARY | cv2.THRESH_OTSU,
+    auto_started = time.perf_counter()
+    normalization_timing = CameraRasterNormalizationTiming()
+    normalization = normalize_camera_trace_frame(
+        image,
+        pixels_per_mm,
+        timing=normalization_timing,
     )
-    auto_otsu_threshold = int(round(float(auto_otsu_value)))
     attempts: list[dict[str, Any]] = []
     successful: list[tuple[float, int, str, TraceResult]] = []
+    attempt_previews: dict[str, CameraTraceRasterPreview] = {}
+    attempt_vector_timings: dict[str, RasterVectorizationTiming] = {}
+
+    def auto_preview(preview: CameraTraceRasterPreview) -> None:
+        provisional = replace(preview, selected_strategy=False)
+        attempt_previews[provisional.strategy] = provisional
+        if raster_preview_callback is not None:
+            raster_preview_callback(provisional)
 
     for order, (name, polarity, invert) in enumerate(
         (
@@ -3738,6 +3945,8 @@ def _detect_non_grid_auto(
             border_offset_bottom_mm=0.0,
             border_offset_left_mm=0.0,
         )
+        vectorization_timing = RasterVectorizationTiming()
+        attempt_vector_timings[name] = vectorization_timing
         try:
             result = _detect_non_grid_contrast_raster(
                 image,
@@ -3745,23 +3954,29 @@ def _detect_non_grid_auto(
                 work_area,
                 output_work_area,
                 pixels_per_mm,
-                prepared_source=source,
-                isolate_candidates=True,
+                prepared_normalization=normalization,
+                normalization_timing=normalization_timing,
+                vectorization_timing=vectorization_timing,
+                raster_preview_callback=auto_preview,
+                preview_strategy=name,
             )
         except (RasterVectorizationError, ValueError) as exc:
-            attempts.append(
-                _auto_attempt_diagnostics(
+            preview = attempt_previews.get(name)
+            attempt = _auto_attempt_diagnostics(
                     name=name,
                     label=label,
                     status="failed",
                     reason=_concise_auto_reason(exc),
-                    threshold=auto_otsu_threshold,
+                    threshold=(
+                        None if preview is None else preview.threshold_used
+                    ),
                     polarity=polarity,
                 )
-            )
+            attempt["timing"] = vectorization_timing.snapshot()
+            attempts.append(attempt)
             continue
         metrics = dict(result.diagnostics.get("strategy_metrics", {}))
-        threshold = metrics.get("threshold", auto_otsu_threshold)
+        threshold = metrics.get("threshold")
         score, terms, rejection = _auto_strategy_quality(metrics)
         if not result.detected or score is None:
             reason = (
@@ -3769,8 +3984,7 @@ def _detect_non_grid_auto(
                 if not result.detected
                 else rejection or result.message
             )
-            attempts.append(
-                _auto_attempt_diagnostics(
+            attempt = _auto_attempt_diagnostics(
                     name=name,
                     label=label,
                     status="rejected",
@@ -3780,10 +3994,10 @@ def _detect_non_grid_auto(
                     threshold=None if threshold is None else int(threshold),
                     polarity=polarity,
                 )
-            )
+            attempt["timing"] = vectorization_timing.snapshot()
+            attempts.append(attempt)
             continue
-        attempts.append(
-            _auto_attempt_diagnostics(
+        attempt = _auto_attempt_diagnostics(
                 name=name,
                 label=label,
                 status="success",
@@ -3794,7 +4008,8 @@ def _detect_non_grid_auto(
                 threshold=None if threshold is None else int(threshold),
                 polarity=polarity,
             )
-        )
+        attempt["timing"] = vectorization_timing.snapshot()
+        attempts.append(attempt)
         successful.append((score, -order, name, result))
 
     color_evidence = _analyze_auto_color_suitability(image, options, pixels_per_mm)
@@ -3838,7 +4053,9 @@ def _detect_non_grid_auto(
                 work_area,
                 pixels_per_mm,
                 output_work_area=output_work_area,
+                raster_preview_callback=auto_preview,
                 _isolate_native_candidates=True,
+                _camera_normalization=normalization,
             )
         except (RasterVectorizationError, ValueError) as exc:
             attempts.append(
@@ -3928,11 +4145,21 @@ def _detect_non_grid_auto(
     selected.options = effective_options
     selected.diagnostics = {
         **selected.diagnostics,
+        "timing": {
+            **dict(selected.diagnostics.get("timing", {})),
+            "camera_normalization": normalization_timing.snapshot(),
+            "auto_raster_attempts": {
+                name: timing.snapshot()
+                for name, timing in attempt_vector_timings.items()
+            },
+            "trace_detection_total_seconds": time.perf_counter() - auto_started,
+        },
         "auto": {
             "selected_strategy": selected_name,
             "selected_score": selected_score,
             "attempts": attempts,
-            "source_key": source.source_key,
+            "normalization_key": normalization.diagnostics.normalization_key,
+            "background_estimate_count": 1,
             "requested_options": options.to_dict(),
             "effective_options": effective_options.to_dict(),
         },
@@ -3940,6 +4167,9 @@ def _detect_non_grid_auto(
     for detection in selected.detections:
         detection.diagnostics["auto_selected_strategy"] = selected_name
         detection.diagnostics["auto_selected_score"] = selected_score
+    selected_preview = attempt_previews.get(selected_name)
+    if selected_preview is not None and raster_preview_callback is not None:
+        raster_preview_callback(replace(selected_preview, selected_strategy=True))
     if selected_name.startswith("raster_"):
         polarity = str(selected_attempt["polarity"])
         threshold = int(selected_attempt["threshold"])
@@ -3974,7 +4204,9 @@ def detect_objects(
     output_work_area: WorkArea | None = None,
     background_image: np.ndarray | None = None,
     mask_override: np.ndarray | None = None,
+    raster_preview_callback: CameraTraceRasterPreviewCallback | None = None,
     _isolate_native_candidates: bool = False,
+    _camera_normalization: CameraRasterNormalizationResult | None = None,
 ) -> TraceResult:
     options = (
         options
@@ -3984,6 +4216,15 @@ def detect_objects(
     if not isinstance(image, np.ndarray) or image.size == 0:
         raise ValueError("No rectified camera image is available")
     _require_bgr_image(image, "Rectified camera image")
+    if raster_preview_callback is not None and not callable(
+        raster_preview_callback
+    ):
+        raise TypeError("raster_preview_callback must be callable or None")
+    if _camera_normalization is not None and not isinstance(
+        _camera_normalization,
+        CameraRasterNormalizationResult,
+    ):
+        raise TypeError("_camera_normalization must be a normalization result or None")
     pixels_per_mm = _finite_option(pixels_per_mm, "pixels_per_mm")
     if pixels_per_mm <= 0:
         raise ValueError("pixels_per_mm must be positive and finite")
@@ -4038,6 +4279,7 @@ def detect_objects(
             work_area,
             output_work_area,
             pixels_per_mm,
+            raster_preview_callback=raster_preview_callback,
         )
     if (
         options.detection_mode == "contrast"
@@ -4050,6 +4292,8 @@ def detect_objects(
             work_area,
             output_work_area,
             pixels_per_mm,
+            prepared_normalization=_camera_normalization,
+            raster_preview_callback=raster_preview_callback,
         )
     target_hue = options.target_hue
     masks: list[tuple[str, str, np.ndarray, float | None]] = []
@@ -4227,6 +4471,34 @@ def detect_objects(
     _, mode_used, chosen_hue, candidates, inferred, grid, chosen_mask = best
     if chosen_hue is not None:
         target_hue = chosen_hue
+    if (
+        raster_preview_callback is not None
+        and not options.regular_grid
+        and options.detection_mode == "color"
+    ):
+        if _camera_normalization is None:
+            preview_camera = _immutable_trace_preview_array(image)
+            preview_grayscale = _immutable_trace_preview_array(
+                cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            )
+        else:
+            preview_camera = _camera_normalization.corrected_bgr
+            preview_grayscale = _camera_normalization.dark_raster
+        preview_mask = _immutable_trace_preview_array(chosen_mask)
+        component_count, _labels = cv2.connectedComponents(preview_mask)
+        raster_preview_callback(
+            CameraTraceRasterPreview(
+                strategy="color",
+                polarity="color",
+                camera_bgr=preview_camera,
+                normalized_grayscale=preview_grayscale,
+                foreground_mask=preview_mask,
+                contour_mask=preview_mask,
+                threshold_used=None,
+                connected_component_count=max(0, component_count - 1),
+                selected_strategy=True,
+            )
+        )
     _grid_cell_review_evidence(
         image,
         candidates,

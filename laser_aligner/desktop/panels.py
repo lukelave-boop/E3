@@ -1216,6 +1216,7 @@ class TracePanel(QtWidgets.QWidget):
     createRequested = QtCore.Signal(dict)
     generateRequested = QtCore.Signal()
     selectionChanged = QtCore.Signal(list)
+    rasterPreviewModeChanged = QtCore.Signal(str)
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1269,15 +1270,22 @@ class TracePanel(QtWidgets.QWidget):
         self.contrast_threshold_mode = QtWidgets.QComboBox()
         self.contrast_threshold_mode.addItem("Auto (Otsu)", "auto")
         self.contrast_threshold_mode.addItem("Manual", "manual")
+        self.contrast_threshold_mode.setToolTip(
+            "Auto finds foreground after correcting broad lighting variation; "
+            "Manual applies the selected value to that same normalized local-contrast "
+            "raster."
+        )
         self.contrast_threshold = QtWidgets.QSpinBox()
         self.contrast_threshold.setRange(0, 255)
         self.contrast_threshold.setValue(128)
         self.contrast_threshold.setToolTip(
-            "Manual 8-bit threshold used by non-grid By contrast tracing."
+            "Manual 8-bit threshold applied to the illumination-normalized "
+            "local-contrast raster for non-grid By contrast tracing."
         )
         self.contrast_invert = QtWidgets.QCheckBox("Trace light pixels")
         self.contrast_invert.setToolTip(
-            "Invert raster foreground polarity for light geometry on a dark surface."
+            "Use the symmetric normalized light-feature response instead of the "
+            "dark-feature response; this does not threshold raw camera brightness."
         )
         sample_row = QtWidgets.QWidget()
         sample_layout = QtWidgets.QHBoxLayout(sample_row)
@@ -1525,6 +1533,27 @@ class TracePanel(QtWidgets.QWidget):
         layout.addWidget(self.detect_button)
         layout.addWidget(self.clear_button)
 
+        raster_preview_row = QtWidgets.QWidget()
+        raster_preview_layout = QtWidgets.QHBoxLayout(raster_preview_row)
+        raster_preview_layout.setContentsMargins(0, 0, 0, 0)
+        raster_preview_label = QtWidgets.QLabel("Camera display")
+        self.raster_preview_combo = QtWidgets.QComboBox()
+        self.raster_preview_combo.setObjectName("traceRasterPreviewSelector")
+        self.raster_preview_combo.addItem("Camera", "camera")
+        self.raster_preview_combo.addItem("Normalized", "normalized")
+        self.raster_preview_combo.addItem("Mask", "mask")
+        self.raster_preview_combo.setEnabled(False)
+        raster_preview_tip = (
+            "Inspect the corrected camera image, normalized grayscale, or exact "
+            "production foreground mask used by this Trace request. These views "
+            "are diagnostic only and do not change vector geometry."
+        )
+        raster_preview_label.setToolTip(raster_preview_tip)
+        self.raster_preview_combo.setToolTip(raster_preview_tip)
+        raster_preview_layout.addWidget(raster_preview_label)
+        raster_preview_layout.addWidget(self.raster_preview_combo, 1)
+        layout.addWidget(raster_preview_row)
+
         self.status_label = QtWidgets.QLabel(
             "Capture a clear corrected bed image, then detect objects."
         )
@@ -1626,6 +1655,11 @@ class TracePanel(QtWidgets.QWidget):
             lambda: self.detectRequested.emit(self.options())
         )
         self.clear_button.clicked.connect(self._clear_clicked)
+        self.raster_preview_combo.currentIndexChanged.connect(
+            lambda _index: self.rasterPreviewModeChanged.emit(
+                self.raster_preview_mode()
+            )
+        )
         self.create_button.clicked.connect(lambda: self._create_clicked(False))
         self.create_combined_button.clicked.connect(
             lambda: self._create_clicked(True)
@@ -2218,6 +2252,69 @@ class TracePanel(QtWidgets.QWidget):
                 "Bed mapping is required before camera objects can be traced."
             )
 
+    def raster_preview_mode(self) -> str:
+        value = self.raster_preview_combo.currentData()
+        return str(value) if value in {"camera", "normalized", "mask"} else "camera"
+
+    def begin_detection(self) -> None:
+        self.clear_result()
+        self.status_label.setText(
+            "Capturing and preparing the corrected camera raster…"
+        )
+
+    def set_raster_preview_available(self, strategy: str = "") -> None:
+        was_enabled = self.raster_preview_combo.isEnabled()
+        self.raster_preview_combo.setEnabled(True)
+        if not was_enabled:
+            index = self.raster_preview_combo.findData("mask")
+            previous = self.raster_preview_combo.blockSignals(True)
+            try:
+                if index >= 0:
+                    self.raster_preview_combo.setCurrentIndex(index)
+            finally:
+                self.raster_preview_combo.blockSignals(previous)
+        if not self._result_is_current:
+            strategy_text = str(strategy).strip().replace("_", " ")
+            suffix = f" ({strategy_text})" if strategy_text else ""
+            self.status_label.setText(
+                "Production mask ready"
+                f"{suffix}; verified native fitting is still running."
+            )
+
+    def clear_raster_preview(self) -> None:
+        previous = self.raster_preview_combo.blockSignals(True)
+        try:
+            index = self.raster_preview_combo.findData("camera")
+            if index >= 0:
+                self.raster_preview_combo.setCurrentIndex(index)
+            self.raster_preview_combo.setEnabled(False)
+        finally:
+            self.raster_preview_combo.blockSignals(previous)
+
+    def set_detection_failed(
+        self,
+        message: str,
+        *,
+        retain_preview: bool,
+    ) -> None:
+        self._detections = []
+        self._result_is_current = False
+        self.result_tree.clear()
+        self.select_grid_button.setText("Select complete grid")
+        self.select_grid_button.setEnabled(False)
+        self._sync_select_all_checkbox()
+        self.create_button.setEnabled(False)
+        self.create_combined_button.setEnabled(False)
+        if retain_preview:
+            self.status_label.setText(
+                "Trace fitting failed after the production mask was prepared: "
+                f"{message} The diagnostic views are retained; clear the preview "
+                "or run Detect objects again."
+            )
+        else:
+            self.clear_raster_preview()
+            self.status_label.setText(f"Trace detection failed: {message}")
+
     def detections(self) -> list[dict[str, Any]]:
         return list(self._detections)
 
@@ -2254,6 +2351,7 @@ class TracePanel(QtWidgets.QWidget):
     def clear_result(self) -> None:
         self._detections = []
         self._result_is_current = False
+        self.clear_raster_preview()
         self.result_tree.clear()
         self.select_grid_button.setText("Select complete grid")
         self.select_grid_button.setEnabled(False)

@@ -6,6 +6,7 @@ import cv2
 import numpy as np
 import pytest
 
+import laser_aligner.project.raster_vectorize as raster_vectorize_module
 import laser_aligner.vision.object_trace as object_trace_module
 from laser_aligner.config import WorkArea
 from laser_aligner.project import (
@@ -386,11 +387,13 @@ def test_non_grid_auto_selects_the_correct_otsu_polarity(
     expected_strategy: str,
     expected_polarity: str,
 ) -> None:
+    previews = []
     result = detect_objects(
         _auto_raster_scene(light_foreground=light_foreground),
         _non_grid_auto_options(),
         WorkArea(0.0, 60.0, 0.0, 40.0),
         4.0,
+        raster_preview_callback=previews.append,
     )
 
     auto = result.diagnostics["auto"]
@@ -410,6 +413,30 @@ def test_non_grid_auto_selects_the_correct_otsu_polarity(
         attempt for attempt in auto["attempts"] if attempt["name"] == "color"
     )
     assert color["status"] == "skipped"
+    assert auto["background_estimate_count"] == 1
+    assert auto["normalization_key"] == result.diagnostics["camera_raster"][
+        "normalization_key"
+    ]
+    normalization_timing = result.diagnostics["timing"]["camera_normalization"]
+    assert normalization_timing["background_estimation"]["calls"] == 1
+    assert normalization_timing["normalization"]["calls"] == 1
+    assert [preview.strategy for preview in previews[:2]] == [
+        "raster_dark",
+        "raster_light",
+    ]
+    assert previews[-1].strategy == expected_strategy
+    assert previews[-1].selected_strategy is True
+    assert all(not preview.selected_strategy for preview in previews[:-1])
+    assert all(not preview.foreground_mask.flags.writeable for preview in previews)
+    attempt_timing = selected["timing"]
+    for stage in (
+        "mask_preparation_total",
+        "component_cleanup",
+        "raster_4x_preparation",
+        "contour_extraction",
+        "native_fitting",
+    ):
+        assert attempt_timing[stage]["calls"] >= 1
 
 
 def test_non_grid_auto_reports_effective_winner_options_not_ignored_inputs() -> None:
@@ -480,7 +507,8 @@ def test_raster_auto_counts_review_filtered_roots_as_unavailable() -> None:
         if attempt["name"] == "raster_dark"
     )
     assert result.direct_count == 1
-    assert result.diagnostics["candidate_failure_count"] == 0
+    assert result.diagnostics["candidate_failure_count"] == 1
+    assert result.diagnostics["candidate_failures"][0]["stage"] == "review_filter"
     assert selected["root_tree_count"] == 2
     assert selected["candidate_count"] == 2
     assert selected["valid_candidate_count"] == 1
@@ -691,7 +719,9 @@ def test_non_grid_auto_all_pruned_summary_preserves_root_failure_reason(
     assert "no authoritative verified native candidates" not in message
 
 
-def test_non_grid_auto_omits_one_invalid_compound_tree_and_keeps_independent_root() -> None:
+def test_non_grid_auto_omits_one_invalid_compound_tree_and_keeps_independent_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     image = np.full((96, 160, 3), 255, dtype=np.uint8)
     cv2.rectangle(image, (10, 10), (82, 84), (0, 0, 0), -1)
     cv2.rectangle(image, (25, 25), (67, 69), (255, 255, 255), -1)
@@ -706,16 +736,34 @@ def test_non_grid_auto_omits_one_invalid_compound_tree_and_keeps_independent_roo
         "confidence_threshold": 0.0,
         "native_fitting_tolerance_mm": 0.10,
     }
-    with pytest.raises(
-        RasterVectorizationError,
-        match="Authoritative native-path topology remains ambiguous",
-    ):
-        detect_objects(
-            image,
-            TraceOptions(detection_mode="contrast", **common),
-            WorkArea(0.0, 80.0, 0.0, 48.0),
-            2.0,
-        )
+    authoritative_validator = (
+        raster_vectorize_module._validate_authoritative_native_topology
+    )
+
+    def reject_compound_tree(contours, width_mm, height_mm):
+        authoritative_validator(contours, width_mm, height_mm)
+        if any(contour.depth >= 2 for contour in contours):
+            raise RasterVectorizationError(
+                "Injected compound tree topology failure"
+            )
+
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_validate_authoritative_native_topology",
+        reject_compound_tree,
+    )
+    manual = detect_objects(
+        image,
+        TraceOptions(detection_mode="contrast", **common),
+        WorkArea(0.0, 80.0, 0.0, 48.0),
+        2.0,
+    )
+    assert manual.direct_count == 1
+    assert manual.diagnostics["candidate_failure_count"] == 1
+    assert manual.diagnostics["candidate_failures"][0]["stage"] == "native_topology"
+    assert "Injected compound tree topology failure" in (
+        manual.diagnostics["candidate_failures"][0]["reason"]
+    )
     result = detect_objects(
         image,
         TraceOptions(detection_mode="auto", **common),
@@ -738,7 +786,7 @@ def test_non_grid_auto_omits_one_invalid_compound_tree_and_keeps_independent_roo
     failure = result.diagnostics["candidate_failures"][0]
     assert failure["contour_count"] >= 3
     assert failure["stage"] == "native_topology"
-    assert "Authoritative native-path topology remains ambiguous" in failure["reason"]
+    assert "Injected compound tree topology failure" in failure["reason"]
     assert failure["bounds_px"] is not None
     assert "1 invalid or filtered independent candidate was omitted" in result.message
 

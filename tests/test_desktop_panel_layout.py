@@ -214,6 +214,73 @@ def test_trace_result_exposes_fitted_corner_radius(
     qt_application.processEvents()
 
 
+def test_trace_raster_selector_is_diagnostic_and_does_not_stale_result(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    emitted: list[str] = []
+    panel.rasterPreviewModeChanged.connect(emitted.append)
+
+    assert panel.raster_preview_mode() == "camera"
+    assert not panel.raster_preview_combo.isEnabled()
+    panel.begin_detection()
+    assert "preparing" in panel.status_label.text().lower()
+
+    panel.set_raster_preview_available("raster_dark")
+    assert panel.raster_preview_combo.isEnabled()
+    assert panel.raster_preview_mode() == "mask"
+    assert "native fitting is still running" in panel.status_label.text()
+
+    panel.set_result(
+        {
+            "message": "One fitted object",
+            "detections": [
+                {
+                    "id": "trace-preview",
+                    "index": 1,
+                    "source": "direct",
+                    "confidence": 0.95,
+                    "selected_default": True,
+                    "shape": "rounded_rectangle",
+                    "width_mm": 20.0,
+                    "height_mm": 10.0,
+                    "corner_radius_mm": 1.0,
+                    "rotation_deg": 0.0,
+                }
+            ],
+        }
+    )
+    assert panel.create_button.isEnabled()
+
+    panel.raster_preview_combo.setCurrentIndex(
+        panel.raster_preview_combo.findData("normalized")
+    )
+    qt_application.processEvents()
+    assert emitted == ["normalized"]
+    assert panel.create_button.isEnabled()
+    assert panel.status_label.text() == "One fitted object"
+
+    panel.set_detection_failed("native fit did not converge", retain_preview=True)
+    assert not panel.create_button.isEnabled()
+    assert not panel.create_combined_button.isEnabled()
+    assert panel.raster_preview_combo.isEnabled()
+    assert panel.raster_preview_mode() == "normalized"
+    assert "fitting failed" in panel.status_label.text().lower()
+    assert "diagnostic views are retained" in panel.status_label.text()
+
+    panel.clear_result()
+    assert panel.raster_preview_mode() == "camera"
+    assert not panel.raster_preview_combo.isEnabled()
+
+    panel.begin_detection()
+    panel.set_detection_failed("normalization failed", retain_preview=False)
+    assert not panel.raster_preview_combo.isEnabled()
+    assert panel.status_label.text() == "Trace detection failed: normalization failed"
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
 def test_trace_result_identifies_washer_dimensions(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -733,6 +800,14 @@ def test_trace_mode_controls_match_auto_raster_color_and_grid_paths(
 ) -> None:
     panel = TracePanel()
     panel.set_calibration_ready(True)
+
+    assert "correcting broad lighting variation" in (
+        panel.contrast_threshold_mode.toolTip()
+    )
+    assert "illumination-normalized" in panel.contrast_threshold.toolTip()
+    assert "does not threshold raw camera brightness" in (
+        panel.contrast_invert.toolTip()
+    )
 
     panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("color"))
     panel.output_mode.setCurrentIndex(panel.output_mode.findData("rounded"))

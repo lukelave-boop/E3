@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Mapping, Sequence
+import math
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +22,9 @@ from laser_aligner.project import (
     read_raster_asset_payload,
     transform_native_path,
     vectorize_raster_payload,
+)
+from laser_aligner.vision.camera_raster_normalization import (
+    normalize_camera_trace_frame,
 )
 from laser_aligner.vision.object_trace import (
     TraceOptions,
@@ -92,36 +96,6 @@ def _root_groups(contours: Sequence[Any]) -> tuple[tuple[int, ...], ...]:
                 descendants.append(index)
         groups.append(tuple(descendants))
     return tuple(groups)
-
-
-def _numeric_path_values(value: object) -> list[float | str | bool]:
-    if isinstance(value, Mapping):
-        output: list[float | str | bool] = []
-        for key in sorted(value):
-            output.append(str(key))
-            output.extend(_numeric_path_values(value[key]))
-        return output
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        output = []
-        for item in value:
-            output.extend(_numeric_path_values(item))
-        return output
-    if isinstance(value, bool):
-        return [value]
-    if isinstance(value, (int, float)):
-        return [float(value)]
-    return [str(value)]
-
-
-def _assert_paths_close(first: NativePathGeometry, second: NativePathGeometry) -> None:
-    first_values = _numeric_path_values(first.to_dict())
-    second_values = _numeric_path_values(second.to_dict())
-    assert len(first_values) == len(second_values)
-    for left, right in zip(first_values, second_values, strict=True):
-        if isinstance(left, float) and isinstance(right, float):
-            assert left == pytest.approx(right, abs=1e-9)
-        else:
-            assert left == right
 
 
 def test_non_grid_contrast_preserves_literal_components_holes_and_lines() -> None:
@@ -222,7 +196,14 @@ def test_imported_and_camera_pixels_produce_equivalent_native_geometry(
         displayed_height_mm=height_mm,
     )
     work_area = WorkArea(10.0, 165.0, 20.0, 95.0)
-    camera = detect_objects(pixels, _trace_options(), work_area, 4.0)
+    previews = []
+    camera = detect_objects(
+        pixels,
+        _trace_options(),
+        work_area,
+        4.0,
+        raster_preview_callback=previews.append,
+    )
     camera_center = (
         work_area.x_min + width_mm / 2.0,
         work_area.y_max - height_mm / 2.0,
@@ -261,27 +242,54 @@ def test_imported_and_camera_pixels_produce_equivalent_native_geometry(
     imported_paths = [imported_paths[index] for index in imported_order]
     imported_hierarchies = [imported_hierarchies[index] for index in imported_order]
 
-    assert {item.diagnostics["pixel_source_key"] for item in camera.detections} == {
-        imported.source_key
+    camera_source_keys = {
+        item.diagnostics["pixel_source_key"] for item in camera.detections
     }
+    assert len(camera_source_keys) == 1
+    assert camera_source_keys != {imported.source_key}
+    normalization_key = camera.diagnostics["camera_raster"]["normalization_key"]
+    assert {
+        item.diagnostics["camera_normalization_key"]
+        for item in camera.detections
+    } == {normalization_key}
+    assert len(previews) == 1
+    camera_mask = previews[0].foreground_mask > 0
+    imported_mask = imported.foreground_mask > 0
+    assert previews[0].contour_mask.shape == (
+        pixels.shape[0] * 4,
+        pixels.shape[1] * 4,
+    )
+    assert not previews[0].contour_mask.flags.writeable
+    with pytest.raises(ValueError):
+        previews[0].contour_mask.setflags(write=True)
+    intersection = np.count_nonzero(camera_mask & imported_mask)
+    union = np.count_nonzero(camera_mask | imported_mask)
+    assert intersection / union > 0.98
     expected_mask_digest = hashlib.sha256(
-        imported.foreground_mask.tobytes(order="C")
+        previews[0].foreground_mask.tobytes(order="C")
     ).hexdigest()
     assert {
         item.diagnostics["foreground_mask_sha256"] for item in camera.detections
     } == {expected_mask_digest}
     assert {
         item.diagnostics["foreground_pixel_count"] for item in camera.detections
-    } == {int(np.count_nonzero(imported.foreground_mask))}
+    } == {int(np.count_nonzero(previews[0].foreground_mask))}
     assert imported.connected_component_count == camera.direct_count == 5
     assert len(imported_groups) == camera.direct_count
     assert len(imported.contours) == camera.detections[0].diagnostics["raw_contour_count"]
-    for imported_path, imported_parents, detection in zip(
-        imported_paths,
-        imported_hierarchies,
-        camera.detections,
-        strict=True,
+    timing = camera.diagnostics["timing"]
+    assert timing["camera_normalization"]["background_estimation"]["calls"] == 1
+    for stage in (
+        "mask_preparation_total",
+        "component_cleanup",
+        "raster_4x_preparation",
+        "contour_extraction",
+        "native_fitting",
     ):
+        assert timing["raster_vectorization"][stage]["calls"] >= 1
+    assert timing["trace_detection_total_seconds"] > 0.0
+    camera_candidates = []
+    for detection in camera.detections:
         camera_path = transform_native_path(
             NativePathGeometry.from_dict(detection.native_path or {}),
             PathAffineTransform.from_components(
@@ -298,18 +306,38 @@ def test_imported_and_camera_pixels_produce_equivalent_native_geometry(
                 translate_y=-camera_center[1],
             ),
         )
-        _assert_paths_close(imported_path, camera_local)
+        camera_candidates.append((camera_local, detection))
+
+    for imported_path, imported_parents in zip(
+        imported_paths,
+        imported_hierarchies,
+        strict=True,
+    ):
+        imported_bounds = native_path_bounds(imported_path)
+        imported_center = (
+            (imported_bounds[0] + imported_bounds[2]) / 2.0,
+            (imported_bounds[1] + imported_bounds[3]) / 2.0,
+        )
+        match_index = min(
+            range(len(camera_candidates)),
+            key=lambda index: math.dist(
+                imported_center,
+                (
+                    sum(native_path_bounds(camera_candidates[index][0])[0::2]) / 2.0,
+                    sum(native_path_bounds(camera_candidates[index][0])[1::2]) / 2.0,
+                ),
+            ),
+        )
+        camera_local, detection = camera_candidates.pop(match_index)
+        assert native_path_bounds(camera_local) == pytest.approx(
+            imported_bounds,
+            abs=0.25,
+        )
         assert imported_parents == detection.diagnostics["contour_parents"]
-        assert [
-            "".join(
-                "L" if segment.__class__.__name__ == "PathLineSegment" else "C"
-                for segment in subpath.segments
-            )
-            for subpath in imported_path.subpaths
-        ] == detection.diagnostics["native_sequences"]
+    assert not camera_candidates
 
 
-def test_imported_and_camera_pixels_share_degenerate_4x_pruning(
+def test_imported_and_normalized_camera_pixels_share_degenerate_4x_pruning(
     tmp_path: Path,
 ) -> None:
     grayscale = np.full((16, 16), 220, dtype=np.uint8)
@@ -319,12 +347,17 @@ def test_imported_and_camera_pixels_share_degenerate_4x_pruning(
         dtype=np.uint8,
     )
     pixels = cv2.cvtColor(grayscale, cv2.COLOR_GRAY2BGR)
+    normalization = normalize_camera_trace_frame(pixels, 4.0)
+    normalized_pixels = cv2.cvtColor(
+        normalization.dark_raster,
+        cv2.COLOR_GRAY2BGR,
+    )
     source_path = tmp_path / "camera-degenerate-equivalence.png"
-    assert cv2.imwrite(str(source_path), pixels)
+    assert cv2.imwrite(str(source_path), normalized_pixels)
     payload = read_raster_asset_payload(source_path)
     raster_options = RasterVectorizationOptions(
         detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
-        threshold=128,
+        threshold=225,
         invert=False,
         minimum_feature_area_mm2=0.05,
         smoothing_mm=0.0,
@@ -337,12 +370,13 @@ def test_imported_and_camera_pixels_share_degenerate_4x_pruning(
         displayed_width_mm=4.0,
         displayed_height_mm=4.0,
     )
+    previews = []
     camera = detect_objects(
         pixels,
         TraceOptions(
             detection_mode="contrast",
             contrast_threshold_mode="manual",
-            contrast_threshold=128,
+            contrast_threshold=225,
             regular_grid=False,
             output_mode="native",
             min_area_mm2=0.05,
@@ -354,6 +388,7 @@ def test_imported_and_camera_pixels_share_degenerate_4x_pruning(
         ),
         WorkArea(0.0, 4.0, 0.0, 4.0),
         4.0,
+        raster_preview_callback=previews.append,
     )
 
     assert imported.pruned_contour_count == 1
@@ -361,14 +396,24 @@ def test_imported_and_camera_pixels_share_degenerate_4x_pruning(
     assert imported.rejected_contour_tree_count == 0
     assert imported.connected_component_count == camera.direct_count == 2
     assert len(imported.contours) == 2
-    assert {item.diagnostics["pixel_source_key"] for item in camera.detections} == {
-        imported.source_key
+    camera_source_keys = {
+        item.diagnostics["pixel_source_key"] for item in camera.detections
     }
+    assert camera_source_keys == {imported.source_key}
+    normalization_key = camera.diagnostics["camera_raster"]["normalization_key"]
+    assert normalization_key == normalization.diagnostics.normalization_key
     assert {
-        item.diagnostics["foreground_mask_sha256"] for item in camera.detections
-    } == {
-        hashlib.sha256(imported.foreground_mask.tobytes(order="C")).hexdigest()
-    }
+        item.diagnostics["camera_normalization_key"]
+        for item in camera.detections
+    } == {normalization_key}
+    assert len(previews) == 1
+    assert np.array_equal(previews[0].foreground_mask, imported.foreground_mask)
+    assert len(
+        {
+            item.diagnostics["foreground_mask_sha256"]
+            for item in camera.detections
+        }
+    ) == 1
     assert {
         item.diagnostics["pruned_contour_count"] for item in camera.detections
     } == {1}
@@ -407,6 +452,50 @@ def test_non_grid_contrast_supports_otsu_and_light_foreground() -> None:
     assert result.detections[0].diagnostics["invert"] is True
 
 
+def test_light_two_level_camera_adapter_keeps_exact_hole_tree() -> None:
+    image = np.full((400, 600, 3), 35, dtype=np.uint8)
+    cv2.rectangle(image, (60, 70), (190, 180), (215, 215, 215), thickness=-1)
+    cv2.circle(image, (360, 125), 60, (215, 215, 215), thickness=-1)
+    cv2.circle(image, (360, 125), 25, (35, 35, 35), thickness=-1)
+    previews = []
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="contrast",
+            contrast_threshold_mode="auto",
+            contrast_invert=True,
+            regular_grid=False,
+            output_mode="native",
+            min_area_mm2=50.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.25,
+        ),
+        WorkArea(0.0, 150.0, 0.0, 100.0),
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    assert result.direct_count == 2
+    assert len(previews) == 1
+    preview = previews[0]
+    assert preview.polarity == "light"
+    assert preview.threshold_used == 2
+    assert preview.connected_component_count == 2
+    contours, hierarchy = cv2.findContours(
+        preview.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    assert len(contours) == 3
+    assert hierarchy is not None
+    parents = hierarchy[0, :, 3].tolist()
+    assert parents.count(-1) == 2
+    assert sum(parent >= 0 for parent in parents) == 1
+
+
 def test_max_area_is_a_post_vector_candidate_filter() -> None:
     image = np.full((220, 320, 3), 225, dtype=np.uint8)
     cv2.rectangle(image, (25, 25), (145, 145), (25, 25, 25), -1)
@@ -442,7 +531,7 @@ def test_grid_contrast_does_not_enter_raster_pixel_vectorizer(
         raise AssertionError("grid contrast must retain specialized object detection")
 
     monkeypatch.setattr(
-        "laser_aligner.vision.object_trace.vectorize_pixel_source",
+        "laser_aligner.vision.object_trace.vectorize_pixel_source_forest",
         fail,
     )
     image = np.full((360, 480, 3), 225, dtype=np.uint8)
