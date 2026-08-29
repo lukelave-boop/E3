@@ -1,0 +1,177 @@
+[
+  {
+    "image_x": 1412.0,
+    "image_y": 996.0,
+    "label": "Automatic base mark 1",
+    "machine_x": 40.0,
+    "machine_y": 40.0
+  },
+  {
+    "image_x": 1415.0,
+    "image_y": 807.0,
+    "label": "Automatic base mark 2",
+    "machine_x": 75.0,
+    "machine_y": 40.0
+  },
+  {
+    "image_x": 1418.0,
+    "image_y": 620.0,
+    "label": "Automatic base mark 3",
+    "machine_x": 110.0,
+    "machine_y": 40.0
+  },
+  {
+    "image_x": 1422.0,
+    "image_y": 430.0,
+    "label": "Automatic base mark 4",
+    "machine_x": 145.0,
+    "machine_y": 40.0
+  },
+  {
+    "image_x": 1427.0,
+    "image_y": 240.0,
+    "label": "Automatic base mark 5",
+    "machine_x": 180.0,
+    "machine_y": 40.0
+  },
+  {
+    "image_x": 1224.0,
+    "image_y": 994.0,
+    "label": "Automatic base mark 6",
+    "machine_x": 40.0,
+    "machine_y": 75.0
+  },
+  {
+    "image_x": 1226.0,
+    "image_y": 805.0,
+    "label": "Automatic base mark 7",
+    "machine_x": 75.0,
+    "machine_y": 75.0
+  },
+  {
+    "image_x": 1229.0,
+    "image_y": 617.0,
+    "label": "Automatic base mark 8",
+    "machine_x": 110.0,
+    "machine_y": 75.0
+  },
+  {
+    "image_x": 1231.0,
+    "image_y": 428.0,
+    "label": "Automatic base mark 9",
+    "machine_x": 145.0,
+    "machine_y": 75.0
+  },
+  {
+    "image_x": 1236.0,
+    "image_y": 238.0,
+    "label": "Automatic base mark 10",
+    "machine_x": 180.0,
+    "machine_y": 75.0
+  },
+  {
+    "image_x": 1036.0,
+    "image_y": 991.0,
+    "label": "Automatic base mark 11",
+    "machine_x": 40.0,
+    "machine_y": 110.0
+  },
+  {
+    "image_x": 1037.0,
+    "image_y": 804.0,
+    "label": "Automatic base mark 12",
+    "machine_x": 75.0,
+    "machine_y": 110.0
+  },
+  {
+    "image_x": 1040.0,
+    "image_y": 616.0,
+    "label": "Automatic base mark 13",
+    "machine_x": 110.0,
+    "machine_y": 110.0
+  },
+  {
+    "image_x": 1042.0,
+    "image_y": 425.0,
+    "label": "Automatic base mark 14",
+    "machine_x": 145.0,
+    "machine_y": 110.0
+  },
+  {
+    "image_x": 1046.0,
+    "image_y": 235.0,
+    "label": "Automatic base mark 15",
+    "machine_x": 180.0,
+    "machine_y": 110.0
+  },
+  {
+    "image_x": 847.0,
+    "image_y": 989.0,
+    "label": "Automatic base mark 16",
+    "machine_x": 40.0,
+    "machine_y": 145.0
+  },
+  {
+    "image_x": 849.0,
+    "image_y": 801.0,
+    "label": "Automatic base mark 17",
+    "machine_x": 75.0,
+    "machine_y": 145.0
+  },
+  {
+    "image_x": 852.0,
+    "image_y": 613.0,
+    "label": "Automatic base mark 18",
+    "machine_x": 110.0,
+    "machine_y": 145.0
+  },
+  {
+    "image_x": 853.0,
+    "image_y": 423.0,
+    "label": "Automatic base mark 19",
+    "machine_x": 145.0,
+    "machine_y": 145.0
+  },
+  {
+    "image_x": 856.0,
+    "image_y": 232.0,
+    "label": "Automatic base mark 20",
+    "machine_x": 180.0,
+    "machine_y": 145.0
+  },
+  {
+    "image_x": 658.0,
+    "image_y": 988.0,
+    "label": "Automatic base mark 21",
+    "machine_x": 40.0,
+    "machine_y": 180.0
+  },
+  {
+    "image_x": 659.0,
+    "image_y": 799.0,
+    "label": "Automatic base mark 22",
+    "machine_x": 75.0,
+    "machine_y": 180.0
+  },
+  {
+    "image_x": 662.0,
+    "image_y": 610.0,
+    "label": "Automatic base mark 23",
+    "machine_x": 110.0,
+    "machine_y": 180.0
+  },
+  {
+    "image_x": 663.0,
+    "image_y": 420.0,
+    "label": "Automatic base mark 24",
+    "machine_x": 145.0,
+    "machine_y": 180.0
+  },
+  {
+    "image_x": 666.0,
+    "image_y": 229.0,
+    "label": "Automatic base mark 25",
+    "machine_x": 180.0,
+    "machine_y": 180.0
+  }
+]

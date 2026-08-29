@@ -403,11 +403,20 @@ not a second image-processing path:
 
 The workspace uses each image's actual pixels/mm: the exact 4× Mask therefore
 occupies the same machine area as Camera, Eligible, and Normalized without a
-display copy or mutation. The mask callback runs synchronously in the worker as soon as exact mask
+display copy or mutation. Because corrected source dimensions are rounded once,
+the desktop validates the Mask as exactly four times that already-rounded source
+raster rather than independently rounding the physical area again at 4×. This
+preserves a possible fractional final pixel strip and never resizes the production
+mask. The application log temporarily records each stored slot's dimensions,
+format, byte count, and pixel SHA-256 for physical display verification. The mask
+callback runs synchronously in the worker as soon as exact mask
 preparation finishes and before contour extraction or native fitting. The
 desktop publishes the read-only arrays to the GUI through a queued signal,
 checks both request ID and review signature, creates display images only on the
 GUI thread, and defaults the selector to **Mask** on the first current preview.
+If an unexpected display-size or pixmap conversion failure occurs, the workspace
+hides the preceding image instead of leaving Camera pixels under another selected
+label.
 Auto may publish provisional dark/light masks with explicit evaluation-running
 wording while it evaluates them, then
 publishes the winning strategy again; the final selector state therefore

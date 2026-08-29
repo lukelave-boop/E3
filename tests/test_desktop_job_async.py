@@ -41,6 +41,7 @@ from laser_aligner.project.job_preflight import JobPreflightReport
 from laser_aligner.project.job_preflight import (
     build_job_preflight_report as _real_build_job_preflight_report,
 )
+from laser_aligner.vision.object_trace import CameraTraceRasterPreview
 
 
 @pytest.fixture
@@ -834,7 +835,7 @@ def test_new_trace_request_retires_candidates_before_detect_and_keeps_project() 
 def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    displayed: list[tuple[QtGui.QImage, object, float | None]] = []
+    displayed: list[tuple[QtGui.QImage, object, float | None, int | None]] = []
     strategies: list[tuple[str, bool, bool]] = []
     failures: list[tuple[str, bool]] = []
     candidate_clears: list[bool] = []
@@ -876,7 +877,12 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
         _trace_raster_preview_value=E3MainWindow._trace_raster_preview_value,
         _camera_image_area=E3MainWindow._camera_image_area,
         _camera_image_ready=lambda image, **kwargs: displayed.append(
-            (image, kwargs.get("image_area"), kwargs.get("pixels_per_mm"))
+            (
+                image,
+                kwargs.get("image_area"),
+                kwargs.get("pixels_per_mm"),
+                kwargs.get("source_resolution_multiplier"),
+            )
         ),
     )
     fake._trace_raster_preview_mode_changed = lambda mode: (
@@ -929,6 +935,7 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     assert displayed[-1][0].pixelColor(7, 3).red() == 255
     assert displayed[-1][1] == main_window_module.Bounds(0.0, 0.0, 2.0, 1.0)
     assert displayed[-1][2] == 4.0
+    assert displayed[-1][3] == 4
 
     before = dict(fake._trace_raster_preview_images)
     E3MainWindow._trace_detection_failed(
@@ -961,32 +968,106 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    window, _errors, _notices = _window(tmp_path, monkeypatch)
+    window, _errors, notices = _window(tmp_path, monkeypatch)
     try:
+        caplog.set_level("INFO", logger=main_window_module.__name__)
         window._active_trace_request_id = 41
         monkeypatch.setattr(
             window.controller,
             "review_signature_is_current",
             lambda _signature: True,
         )
-        camera = np.full((480, 640, 3), (12, 34, 56), dtype=np.uint8)
-        eligible = np.zeros((480, 640), dtype=np.uint8)
-        eligible[80:400, 120:520] = 255
-        normalized = np.full((480, 640), 173, dtype=np.uint8)
-        production_mask = np.zeros((1920, 2560), dtype=np.uint8)
-        production_mask[640:1280, 960:1600] = 255
-        production_mask.setflags(write=False)
+
+        def immutable(values: np.ndarray) -> np.ndarray:
+            result = np.ascontiguousarray(values).copy()
+            result.setflags(write=False)
+            return result
+
+        def qimage_rgba(image: QtGui.QImage) -> np.ndarray:
+            converted = image.convertToFormat(
+                QtGui.QImage.Format.Format_RGBA8888
+            )
+            rows = np.frombuffer(
+                converted.constBits(),
+                dtype=np.uint8,
+                count=converted.sizeInBytes(),
+            ).reshape(converted.height(), converted.bytesPerLine())
+            return rows[:, : converted.width() * 4].reshape(
+                converted.height(), converted.width(), 4
+            ).copy()
+
+        camera_values = np.empty((6, 8, 3), dtype=np.uint8)
+        camera_values[:3, :4] = (5, 25, 245)
+        camera_values[:3, 4:] = (15, 235, 45)
+        camera_values[3:, :4] = (225, 35, 65)
+        camera_values[3:, 4:] = (105, 75, 155)
+        camera = immutable(camera_values)
+        eligible_values = np.zeros((6, 8), dtype=np.uint8)
+        eligible_values[1:5, 2:4] = 255
+        eligible_values[4:, 5:8] = 255
+        eligible = immutable(eligible_values)
+        normalized = immutable(
+            (np.arange(48, dtype=np.uint16).reshape(6, 8) * 5 + 7).astype(
+                np.uint8
+            )
+        )
+        foreground = immutable(np.zeros((6, 8), dtype=np.uint8))
+        production_mask_values = np.zeros((24, 32), dtype=np.uint8)
+        production_mask_values[2:9, 3:14] = 255
+        production_mask_values[14:22, 21:30] = 255
+        production_mask_values[18:23, 6:9] = 255
+        production_mask = immutable(production_mask_values)
         original_mask = production_mask.tobytes(order="C")
-        preview = SimpleNamespace(
+        preview = CameraTraceRasterPreview(
+            strategy="raster_dark",
+            polarity="dark",
             camera_bgr=camera,
             eligible_mask=eligible,
             normalized_grayscale=normalized,
-            foreground_mask=np.zeros((480, 640), dtype=np.uint8),
+            foreground_mask=foreground,
             contour_mask=production_mask,
-            strategy="raster_dark",
+            threshold_used=127,
+            connected_component_count=3,
             selected_strategy=True,
         )
+        expected_pixels = {
+            "camera": np.concatenate(
+                (
+                    camera[..., ::-1],
+                    np.full((*camera.shape[:2], 1), 255, dtype=np.uint8),
+                ),
+                axis=2,
+            ),
+            "eligible": np.concatenate(
+                (
+                    np.repeat(eligible[..., None], 3, axis=2),
+                    np.full((*eligible.shape, 1), 255, dtype=np.uint8),
+                ),
+                axis=2,
+            ),
+            "normalized": np.concatenate(
+                (
+                    np.repeat(normalized[..., None], 3, axis=2),
+                    np.full((*normalized.shape, 1), 255, dtype=np.uint8),
+                ),
+                axis=2,
+            ),
+            "mask": np.concatenate(
+                (
+                    np.repeat(production_mask[..., None], 3, axis=2),
+                    np.full((*production_mask.shape, 1), 255, dtype=np.uint8),
+                ),
+                axis=2,
+            ),
+        }
+        base_ppm = float(window.runtime.settings.calibration.bed.pixels_per_mm)
+        # The source raster rounds 7.6 x 5.6 pixels to 8 x 6. Its exact 4x mask
+        # is 32 x 24, while the old independent high-resolution rounding asked
+        # the workspace for 30 x 22 and left the prior Camera pixmap visible.
+        camera_area_width = (camera.shape[1] - 0.4) / base_ppm
+        camera_area_height = (camera.shape[0] - 0.4) / base_ppm
         E3MainWindow._trace_raster_preview_ready(
             window,
             41,
@@ -995,26 +1076,61 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
                 "review_signature": ("current",),
                 "camera_image_area": {
                     "x_min": 0.0,
-                    "x_max": 160.0,
+                    "x_max": camera_area_width,
                     "y_min": 0.0,
-                    "y_max": 120.0,
+                    "y_max": camera_area_height,
                 },
             },
         )
 
+        assert window.trace_panel.raster_preview_mode() == "mask"
+        assert window.workspace._camera_item.pixmap().size() == QtCore.QSize(32, 24)
+        assert np.array_equal(
+            qimage_rgba(window.workspace._camera_item.pixmap().toImage()),
+            expected_pixels["mask"],
+        )
+
         expected_sizes = {
-            "camera": QtCore.QSize(640, 480),
-            "eligible": QtCore.QSize(640, 480),
-            "normalized": QtCore.QSize(640, 480),
-            "mask": QtCore.QSize(2560, 1920),
+            "camera": QtCore.QSize(8, 6),
+            "eligible": QtCore.QSize(8, 6),
+            "normalized": QtCore.QSize(8, 6),
+            "mask": QtCore.QSize(32, 24),
         }
-        expected_rect = QtCore.QRectF(0.0, -120.0, 160.0, 120.0)
+        slot_messages = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == main_window_module.__name__
+            and record.getMessage().startswith("Camera Trace preview slot ")
+        ]
+        assert len(slot_messages) == 4
         for mode, expected_size in expected_sizes.items():
+            assert any(
+                f"slot {mode}: {expected_size.width()} x "
+                f"{expected_size.height()}," in message
+                for message in slot_messages
+            )
+        slot_hashes = {
+            message.split("slot ", 1)[1].split(":", 1)[0]: message.rsplit(
+                "pixel_sha256=", 1
+            )[1]
+            for message in slot_messages
+        }
+        assert len(set(slot_hashes.values())) == 4
+        assert slot_hashes["mask"] != slot_hashes["camera"]
+        displayed_pixels: dict[str, bytes] = {}
+        for mode, expected_size in expected_sizes.items():
+            assert np.array_equal(
+                qimage_rgba(window._trace_raster_preview_images[mode]),
+                expected_pixels[mode],
+            )
             index = window.trace_panel.raster_preview_combo.findData(mode)
             window.trace_panel.raster_preview_combo.setCurrentIndex(index)
             qt_application.processEvents()
             item = window.workspace._camera_item
             assert item.pixmap().size() == expected_size
+            workspace_pixels = qimage_rgba(item.pixmap().toImage())
+            assert np.array_equal(workspace_pixels, expected_pixels[mode])
+            displayed_pixels[mode] = workspace_pixels.tobytes(order="C")
             mapped_pixels = item.sceneTransform().mapRect(
                 QtCore.QRectF(
                     0.0,
@@ -1023,9 +1139,22 @@ def test_trace_raster_preview_switches_real_workspace_at_each_physical_scale(
                     float(expected_size.height()),
                 )
             )
-            assert mapped_pixels == expected_rect
+            assert mapped_pixels.width() == pytest.approx(camera.shape[1] / base_ppm)
+            assert mapped_pixels.height() == pytest.approx(camera.shape[0] / base_ppm)
+        assert len(set(displayed_pixels.values())) == 4
+        assert displayed_pixels["mask"] != displayed_pixels["camera"]
         assert production_mask.tobytes(order="C") == original_mask
         assert not production_mask.flags.writeable
+
+        window._trace_raster_preview_area = main_window_module.Bounds(
+            0.0, 0.0, 1.0, 1.0
+        )
+        E3MainWindow._trace_raster_preview_mode_changed(window, "mask")
+        assert not window.workspace._camera_item.isVisible()
+        assert notices[-1].startswith(
+            "Could not display Camera Trace Mask preview: Corrected camera raster "
+            "dimensions do not match"
+        )
     finally:
         _dispose(qt_application, window)
 

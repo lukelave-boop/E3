@@ -1728,6 +1728,7 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         *,
         pixels_per_mm: float | None = None,
         image_area: Bounds | None = None,
+        source_resolution_multiplier: int = 1,
     ) -> None:
         if image is None or image.isNull():
             self._camera_item.setVisible(False)
@@ -1735,28 +1736,51 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._camera_image_area = None
             return
         pixmap = QtGui.QPixmap.fromImage(image)
+        if pixmap.isNull():
+            raise ValueError("Camera image could not be converted to a display pixmap")
         area = self.workspace_scene.work_area if image_area is None else image_area
         if area.width <= 0.0 or area.height <= 0.0:
             raise ValueError("Camera image area must have positive dimensions")
+        if (
+            type(source_resolution_multiplier) is not int
+            or source_resolution_multiplier < 1
+        ):
+            raise ValueError(
+                "Camera source_resolution_multiplier must be a positive integer"
+            )
         transform = QtGui.QTransform()
         if pixels_per_mm is None:
+            if source_resolution_multiplier != 1:
+                raise ValueError(
+                    "A camera source resolution multiplier requires pixels_per_mm"
+                )
             scale_x = area.width / pixmap.width()
             scale_y = area.height / pixmap.height()
         else:
             pixels_per_mm = float(pixels_per_mm)
             if not math.isfinite(pixels_per_mm) or pixels_per_mm <= 0.0:
                 raise ValueError("Camera pixels_per_mm must be a positive finite value")
-            expected_width = max(1, int(round(area.width * pixels_per_mm)))
-            expected_height = max(1, int(round(area.height * pixels_per_mm)))
+            # A production Trace mask is reconstructed after the source raster
+            # has already been rounded to integer dimensions. Validate that
+            # exact integer derivative instead of re-rounding the area at 4x.
+            source_pixels_per_mm = pixels_per_mm / source_resolution_multiplier
+            expected_width = (
+                max(1, int(round(area.width * source_pixels_per_mm)))
+                * source_resolution_multiplier
+            )
+            expected_height = (
+                max(1, int(round(area.height * source_pixels_per_mm)))
+                * source_resolution_multiplier
+            )
             if (pixmap.width(), pixmap.height()) != (
                 expected_width,
                 expected_height,
             ):
                 raise ValueError(
-                    "Corrected camera raster dimensions do not match the work "
-                    f"area and pixels_per_mm: received {pixmap.width()} x "
-                    f"{pixmap.height()}, expected {expected_width} x "
-                    f"{expected_height}"
+                    "Corrected camera raster dimensions do not match the rounded "
+                    "source raster and resolution multiplier: received "
+                    f"{pixmap.width()} x {pixmap.height()}, expected "
+                    f"{expected_width} x {expected_height}"
                 )
             scale_x = scale_y = 1.0 / pixels_per_mm
         transform.scale(scale_x, scale_y)

@@ -1,0 +1,4 @@
+{
+  "exception_type": "SafetyError",
+  "message": "Path exceeds the configured guarded output polygon: placed design escapes by 30.00 mm"
+}

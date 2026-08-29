@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    10.0,
+    10.0,
+    86.0,
+    76.0
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 132.0,
+  "estimated_seconds": 8.589395218534,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 132.0,
+      "layer_id": "layer-golden-disjoint",
+      "name": "Golden Disjoint",
+      "passes": 1,
+      "path_count": 3,
+      "power": 150,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1600.0,
+      "travel_length_mm": 134.969760926713,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 3,
+  "point_count": 15,
+  "raster_assets": [],
+  "travel_length_mm": 134.969760926713
+}

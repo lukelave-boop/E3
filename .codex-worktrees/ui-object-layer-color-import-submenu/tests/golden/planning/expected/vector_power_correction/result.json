@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    25.0,
+    30.0,
+    55.0,
+    50.0
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 100.0,
+  "estimated_seconds": 5.165742688557,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 100.0,
+      "layer_id": "layer-golden-correction",
+      "name": "Golden Correction",
+      "passes": 1,
+      "path_count": 1,
+      "power": 350,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1800.0,
+      "travel_length_mm": 39.051248379533,
+      "vector_power_correction": 60.0
+    }
+  ],
+  "path_count": 1,
+  "point_count": 5,
+  "raster_assets": [],
+  "travel_length_mm": 39.051248379533
+}

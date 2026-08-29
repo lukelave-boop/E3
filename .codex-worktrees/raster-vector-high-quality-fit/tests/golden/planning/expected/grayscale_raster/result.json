@@ -1,0 +1,40 @@
+{
+  "bounds_mm": [
+    40.0,
+    42.5,
+    60.0,
+    57.5
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 40.0,
+  "estimated_seconds": 7.470595086326,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 40.0,
+      "layer_id": "layer-golden-grayscale",
+      "name": "Golden Grayscale",
+      "passes": 1,
+      "path_count": 5,
+      "power": 250,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 900.0,
+      "travel_length_mm": 113.363087649644,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 5,
+  "point_count": 10,
+  "raster_assets": [
+    {
+      "encoded_bytes": 102,
+      "format": "bmp",
+      "height": 4,
+      "sha256": "a8e49e43ef915cc0558a35d1f18d6ecef71fe68db1fc0bc0717791d7f9ca0221",
+      "width": 4
+    }
+  ],
+  "travel_length_mm": 113.363087649644
+}

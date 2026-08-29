@@ -6,6 +6,21 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed the desktop Camera Trace **Mask** display for corrected camera areas
+  with a fractional final pixel strip. The source frame is rounded to integer
+  dimensions before the immutable production mask is reconstructed at exactly
+  4×, so validating that mask by independently rounding `area × 4 × pixels/mm`
+  could reject its correct dimensions after the selector and status had already
+  changed, leaving the prior Camera pixmap visible. The workspace now validates
+  an explicit 4× display against four times the already-rounded source raster
+  and retains the true 4× pixels/mm transform without resizing or mutating the
+  mask. A real-workspace regression checks the complete selected pixel arrays
+  for Camera, Eligible, Normalized, and Mask, including the fractional-edge
+  case. Temporary per-slot dimensions, format, byte count, and pixel SHA-256
+  diagnostics are written to the application log for physical verification.
+  Segmentation, thresholding, contour extraction, and native fitting are
+  unchanged.
+
 - Rebuilt ordinary non-grid Camera Trace around physical material eligibility.
   The full corrected frame keeps its established pixel-to-millimetre transform,
   but a hard Trace ROI is now created from existing guarded-output geometry; a

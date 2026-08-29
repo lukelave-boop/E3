@@ -122,6 +122,30 @@ callbacks. If fitting fails after mask preparation, the camera hold and diagnost
 views remain available until Clear or the next detection; a failure before a
 deliverable preview returns to live camera state.
 
+Physical build `26c5943` confirmed that Camera, Eligible, and Normalized looked
+plausible but exposed a Mask-only presentation failure: the selector and status
+changed while the workspace retained the corrected Camera pixmap. Subsequent
+runtime tracing and the new automated pixel regression confirmed that the exact
+4× QImage was present and byte-distinct in the Mask slot. The failure occurred
+when the workspace independently re-rounded the fractional corrected-image area
+at 4× pixels/mm: `4 × round(area × base_ppm)` is not always equal to
+`round(area × 4 × base_ppm)`, so the exact production dimensions were rejected
+before `setPixmap()`. The desktop now declares the integer source-resolution
+multiplier explicitly, validates the 4× image against four times the already-
+rounded source raster, and retains the actual 4× transform. No preview image is
+resized and the immutable production mask is not copied back into or changed by
+the display path. Temporary application-log diagnostics record dimensions,
+format, byte count, and a padding-neutral pixel SHA-256 for every stored Camera,
+Eligible, Normalized, and Mask image.
+
+Focused offscreen verification passes **93 tests** across the asynchronous
+desktop camera/Trace path, real workspace rendering, and Trace panel behavior.
+Repository Ruff, `python -m compileall -q laser_aligner`, and
+`git diff --check` pass. This is automated display verification only. The fix
+has not yet been exercised in a physical build after `26c5943`; no new live
+camera, controller, motion, arming, laser-output, cutting, or physical-accuracy
+verification is claimed.
+
 Non-grid **By contrast** no longer enters the multi-hypothesis object detector.
 The corrected BGR frame is first hard-gated and reference-suppressed, then
 converted to eligibility-normalized raster artwork and sent through the same
@@ -265,7 +289,9 @@ exposure/gradient/white-balance-related drift, blur/noise/highlight, empty bed,
 blank stock, dark/light stencil artwork, holes, narrow gaps, underline, hard-ROI
 invariance, false warm Auto Color, real bounded Color, Auto fail-closed,
 four-edge coordinate mapping, and exact Camera/Eligible/Normalized/4× Mask
-switching. Existing coverage also includes the low-frequency background
+switching, including complete stored-QImage and actual workspace-pixmap pixel
+identity across a fractional-edge display case. Existing coverage also includes
+the low-frequency background
 model and its adversarial flat-field gates; dark/light reciprocal responses;
 gradient, shadow, machine-border, gap, hole, dense-label, clean-raster, noisy-
 solid, and true two-level cases; symmetric Otsu plateau stabilization; immutable

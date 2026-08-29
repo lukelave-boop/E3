@@ -1,0 +1,442 @@
+{
+  "camera_matrix": [
+    [
+      1416.7136895972149,
+      0.0,
+      920.4304780194411
+    ],
+    [
+      0.0,
+      1415.6319223286407,
+      547.9194205117512
+    ],
+    [
+      0.0,
+      0.0,
+      1.0
+    ]
+  ],
+  "created_at": 1786537652.5516288,
+  "distortion": [
+    0.080985394270391,
+    -0.395844808844696,
+    0.00011686027079951912,
+    -0.0016943851692242343,
+    0.5495843754479273
+  ],
+  "image_files": [
+    "lens-20260812-061228-011.png",
+    "lens-20260812-061237-969.png",
+    "lens-20260812-061245-685.png",
+    "lens-20260812-061258-046.png",
+    "lens-20260812-061305-887.png",
+    "lens-20260812-061353-424.png",
+    "lens-20260812-061410-838.png",
+    "lens-20260812-061422-277.png",
+    "lens-20260812-061438-519.png",
+    "lens-20260812-061452-146.png",
+    "lens-20260812-061529-788.png",
+    "lens-20260812-061619-275.png"
+  ],
+  "image_height": 1080,
+  "image_width": 1920,
+  "images_used": 12,
+  "mean_reprojection_error": 0.5717670873043208,
+  "model_id": "46cbe8b1f6def5ff9ed7bca4911dc5cfffda7d91df0347bd2141acc02a0e5146",
+  "quality": {
+    "accepted_count": 12,
+    "excluded_count": 0,
+    "gate": "warning",
+    "ignored_resolution_image_count": 0,
+    "input_count": 12,
+    "metrics": {
+      "board_scale_ratio": 1.1358050793961858,
+      "corner_hull_ratio": 0.557738736303547,
+      "edge_margins": {
+        "bottom": 0.0427667498588562,
+        "left": 0.15221086144447327,
+        "right": 0.13708990812301636,
+        "top": 0.03752054646611214
+      },
+      "maximum_view_rms_px": 0.9593082130767318,
+      "median_view_rms_px": 0.6031975887083918,
+      "opencv_reported_rms_px": 0.6848763483892407,
+      "overall_rms_px": 0.6848760119801665,
+      "pose_span_major_deg": 26.791335667531612,
+      "pose_span_minor_deg": 16.045501473211758
+    },
+    "outlier_threshold_px": 1.5079939717709796,
+    "reject_reasons": [],
+    "resolution_groups": [
+      {
+        "error_image_count": 0,
+        "full_resolution_usable_image_count": 12,
+        "height": 1080,
+        "image_count": 15,
+        "pending_image_count": 0,
+        "preview_usable_image_count": 12,
+        "usable_image_count": 12,
+        "width": 1920
+      }
+    ],
+    "retained_outlier_count": 0,
+    "selected_resolution": {
+      "height": 1080,
+      "width": 1920
+    },
+    "warning_reasons": [
+      {
+        "code": "limited_image_edge_coverage",
+        "limit": 0.15,
+        "message": "One or more image edges have limited checkerboard coverage",
+        "value": 0.15221086144447327
+      },
+      {
+        "code": "limited_board_scale_diversity",
+        "limit": 1.2,
+        "message": "Checkerboard views are all nearly the same apparent size",
+        "value": 1.1358050793961858
+      }
+    ]
+  },
+  "rms_error": 0.6848760119801665,
+  "schema_version": 2,
+  "views": [
+    {
+      "accepted": true,
+      "board_area_ratio": 0.2289306950598816,
+      "centroid_norm": [
+        0.48367626460981955,
+        0.5176679483002923
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061228-011.png",
+      "pose_normal": [
+        -0.014887710468510795,
+        -0.021207375124174685,
+        0.9996642452930625
+      ],
+      "pose_xy_deg": [
+        -0.853226396312069,
+        -1.2153189012051941
+      ],
+      "reprojection_max_px": 1.2982873916625977,
+      "reprojection_mean_px": 0.5452132645856451,
+      "reprojection_p95_px": 1.1034444153308869,
+      "reprojection_rms_px": 0.6248446699631811,
+      "tilt_azimuth_deg": -125.06909598692246,
+      "tilt_deg": 1.484775652166299,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.22997690392002323,
+      "centroid_norm": [
+        0.44419226116604277,
+        0.5007658775941826
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061237-969.png",
+      "pose_normal": [
+        -0.015704660682493453,
+        -0.022833469332490194,
+        0.9996159243985112
+      ],
+      "pose_xy_deg": [
+        -0.9000824542532009,
+        -1.3085365362227384
+      ],
+      "reprojection_max_px": 1.3428919315338135,
+      "reprojection_mean_px": 0.5019253966295056,
+      "reprojection_p95_px": 0.9102052897214883,
+      "reprojection_rms_px": 0.5742713377512144,
+      "tilt_azimuth_deg": -124.51985339854232,
+      "tilt_deg": 1.5880343458118245,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.22851967769974663,
+      "centroid_norm": [
+        0.4451619304256675,
+        0.6410257007195953
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061245-685.png",
+      "pose_normal": [
+        -0.018147732845166537,
+        -0.01731361367425867,
+        0.9996853998004167
+      ],
+      "pose_xy_deg": [
+        -1.0400014871043102,
+        -0.9922099758190308
+      ],
+      "reprojection_max_px": 1.3575830459594727,
+      "reprojection_mean_px": 0.4608739032237618,
+      "reprojection_p95_px": 0.9860253989696501,
+      "reprojection_rms_px": 0.5404505480187803,
+      "tilt_azimuth_deg": -136.3474586183035,
+      "tilt_deg": 1.437237411939182,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.23173731998436656,
+      "centroid_norm": [
+        0.4456664150143847,
+        0.3446672700560142
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061258-046.png",
+      "pose_normal": [
+        -0.016935915498075393,
+        -0.027610856350609957,
+        0.9994752700181371
+      ],
+      "pose_xy_deg": [
+        -0.9707730182534906,
+        -1.5824136256064438
+      ],
+      "reprojection_max_px": 1.3421859741210938,
+      "reprojection_mean_px": 0.5018278981248537,
+      "reprojection_p95_px": 1.035307091474533,
+      "reprojection_rms_px": 0.5762059609444022,
+      "tilt_azimuth_deg": -121.52407252377526,
+      "tilt_deg": 1.8561991199320622,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.22792725966263372,
+      "centroid_norm": [
+        0.5784044430579668,
+        0.5000157128636238
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061305-887.png",
+      "pose_normal": [
+        -0.007807484172964669,
+        -0.02015586873777186,
+        0.9997663647804494
+      ],
+      "pose_xy_deg": [
+        -0.44743133413856917,
+        -1.1549596264774793
+      ],
+      "reprojection_max_px": 1.3482102155685425,
+      "reprojection_mean_px": 0.518764049573629,
+      "reprojection_p95_px": 0.9547935843467704,
+      "reprojection_rms_px": 0.5815505074536026,
+      "tilt_azimuth_deg": -111.17414475780674,
+      "tilt_deg": 1.238554843150733,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.2940382857677201,
+      "centroid_norm": [
+        0.5645839638180202,
+        0.47482930799570594
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061353-424.png",
+      "pose_normal": [
+        0.006752725502924146,
+        -0.3784935289267559,
+        0.9255793046837495
+      ],
+      "pose_xy_deg": [
+        0.41800395195745593,
+        -22.240933742357306
+      ],
+      "reprojection_max_px": 2.551938772201538,
+      "reprojection_mean_px": 0.7694332674145699,
+      "reprojection_p95_px": 1.8641956329345692,
+      "reprojection_rms_px": 0.9287140938999484,
+      "tilt_azimuth_deg": -88.97789103646919,
+      "tilt_deg": 22.24412808392261,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.25406436613308164,
+      "centroid_norm": [
+        0.5383165683275387,
+        0.498577662390773
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061410-838.png",
+      "pose_normal": [
+        -0.00752691300886367,
+        0.08017230741336602,
+        0.9967526005506953
+      ],
+      "pose_xy_deg": [
+        -0.43265716165658336,
+        4.598600584315318
+      ],
+      "reprojection_max_px": 1.5242829322814941,
+      "reprojection_mean_px": 0.6433848246104188,
+      "reprojection_p95_px": 1.324296271800994,
+      "reprojection_rms_px": 0.7400929613602149,
+      "tilt_azimuth_deg": 95.36344709641959,
+      "tilt_deg": 4.618735410727085,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.2636536387921346,
+      "centroid_norm": [
+        0.5153277297078828,
+        0.4955515127613711
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061422-277.png",
+      "pose_normal": [
+        0.14183709801142208,
+        -0.029998598697402172,
+        0.98943535498985
+      ],
+      "pose_xy_deg": [
+        8.157861678953179,
+        -1.7366134324789295
+      ],
+      "reprojection_max_px": 2.4078972339630127,
+      "reprojection_mean_px": 0.722999139688909,
+      "reprojection_p95_px": 2.116185319423675,
+      "reprojection_rms_px": 0.9593082130767318,
+      "tilt_azimuth_deg": -11.942088163269283,
+      "tilt_deg": 8.33581705214213,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.2520552459212195,
+      "centroid_norm": [
+        0.5249607092068519,
+        0.4953738729322562
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061438-519.png",
+      "pose_normal": [
+        -0.12940142653404887,
+        -0.0200132632369875,
+        0.9913903066429288
+      ],
+      "pose_xy_deg": [
+        -7.436502265741304,
+        -1.1564767020939932
+      ],
+      "reprojection_max_px": 1.7885533571243286,
+      "reprojection_mean_px": 0.6097234448900929,
+      "reprojection_p95_px": 1.280619716644286,
+      "reprojection_rms_px": 0.6998858846483331,
+      "tilt_azimuth_deg": -171.20827482137483,
+      "tilt_deg": 7.5239094533961595,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.2625925433138081,
+      "centroid_norm": [
+        0.4096208716616218,
+        0.46577774016454876
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061452-146.png",
+      "pose_normal": [
+        -0.1381743656302145,
+        -0.03358420161119884,
+        0.9898383434100875
+      ],
+      "pose_xy_deg": [
+        -7.946730159769919,
+        -1.9432416984446228
+      ],
+      "reprojection_max_px": 1.5703001022338867,
+      "reprojection_mean_px": 0.6381250546762237,
+      "reprojection_p95_px": 1.2750778794288624,
+      "reprojection_rms_px": 0.7233836757251646,
+      "tilt_azimuth_deg": -166.33878583677853,
+      "tilt_deg": 8.175010834261151,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.22888322624705312,
+      "centroid_norm": [
+        0.48444219283115714,
+        0.5266078048936297
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061529-788.png",
+      "pose_normal": [
+        -0.0101715789747988,
+        -0.022250530853832797,
+        0.9997006816331987
+      ],
+      "pose_xy_deg": [
+        -0.5829429223430497,
+        -1.275032698353663
+      ],
+      "reprojection_max_px": 1.2375801801681519,
+      "reprojection_mean_px": 0.45093974871215997,
+      "reprojection_p95_px": 0.9490974247455595,
+      "reprojection_rms_px": 0.5409075061690803,
+      "tilt_azimuth_deg": -114.56697478689557,
+      "tilt_deg": 1.4018939030510846,
+      "width": 1920
+    },
+    {
+      "accepted": true,
+      "board_area_ratio": 0.23124966462810817,
+      "centroid_norm": [
+        0.3739792117366084,
+        0.511610774575274
+      ],
+      "corner_count": 54,
+      "exclusion_reason": null,
+      "height": 1080,
+      "name": "lens-20260812-061619-275.png",
+      "pose_normal": [
+        -0.016132443679064728,
+        -0.021615099058095038,
+        0.9996361997014966
+      ],
+      "pose_xy_deg": [
+        -0.9245770650073467,
+        -1.238711633439866
+      ],
+      "reprojection_max_px": 1.1141138076782227,
+      "reprojection_mean_px": 0.49799505552207984,
+      "reprojection_p95_px": 0.9188443630933758,
+      "reprojection_rms_px": 0.5567023101080352,
+      "tilt_azimuth_deg": -126.73584472528991,
+      "tilt_deg": 1.545547379205965,
+      "width": 1920
+    }
+  ]
+}

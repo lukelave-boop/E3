@@ -314,10 +314,13 @@ should own a physical camera at a time.
   review ends. The temporary layer never mutates `ProjectDocument` and has no
   planning, G-code, or execution consumer.
 - For a current non-grid request, the Trace **Camera display** selector can show
-  the immutable corrected **Camera** frame, the exact polarity-specific
-  **Normalized** threshold input (or grayscale context for Color), or the exact
-  4× production contour **Mask** used by `RETR_TREE`. Raster mask preparation
-  publishes those pixels before
+  the immutable corrected **Camera** frame, exact material **Eligible** mask,
+  exact polarity-specific **Normalized** threshold input (or grayscale context
+  for Color), or the exact 4× production contour **Mask** used by `RETR_TREE`.
+  The workspace validates 4× dimensions from the already-rounded source raster,
+  not by re-rounding the physical area at the higher display density, so a
+  fractional final pixel strip cannot reject the exact mask. Raster mask
+  preparation publishes those pixels before
   contour extraction and native fitting; request identity and calibration
   signatures reject late or stale previews. These arrays are diagnostic-only
   and cannot create or authorize geometry.

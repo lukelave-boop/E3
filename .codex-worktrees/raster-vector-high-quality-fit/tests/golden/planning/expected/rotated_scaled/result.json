@@ -1,0 +1,32 @@
+{
+  "bounds_mm": [
+    29.922908825369,
+    24.51428638736,
+    80.077091174631,
+    65.48571361264
+  ],
+  "coordinate_frame_signature": null,
+  "coordinate_space": "machine",
+  "cut_length_mm": 132.0,
+  "estimated_seconds": 6.875200929471,
+  "execution_signature": null,
+  "guarded_output_polygon_mm": null,
+  "layer_summaries": [
+    {
+      "cut_length_mm": 132.0,
+      "layer_id": "layer-golden-transform",
+      "name": "Golden Transform",
+      "passes": 1,
+      "path_count": 1,
+      "power": 220,
+      "raster_power_correction": 0.0,
+      "speed_mm_min": 1400.0,
+      "travel_length_mm": 46.568862667879,
+      "vector_power_correction": 0.0
+    }
+  ],
+  "path_count": 1,
+  "point_count": 5,
+  "raster_assets": [],
+  "travel_length_mm": 46.568862667879
+}
