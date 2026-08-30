@@ -5,6 +5,7 @@ import hashlib
 import logging
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -98,7 +99,10 @@ from ..templates import (
     template_from_rectangle_grid,
 )
 from ..vision.trace_orientation import (
+    MAX_TRACE_ORIENTATION_SEGMENTS,
+    MAX_TRACE_ORIENTATION_SUBPATHS,
     TraceOrientationEstimate,
+    TraceOrientationGeometry,
     estimate_trace_orientation,
     trace_rotation_transform,
 )
@@ -392,8 +396,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._close_requested = False
         self._expanding_group_selection = False
         self._trace_result: dict[str, Any] | None = None
-        self._trace_orientation_estimate: TraceOrientationEstimate | None = None
-        self._trace_straightening: TraceOrientationEstimate | None = None
         self._active_trace_request_id: int | None = None
         self._trace_raster_preview_images: dict[str, QtGui.QImage] = {}
         self._trace_raster_preview_area: Bounds | None = None
@@ -1110,6 +1112,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._rectangle_shape_edited
         )
         self.transform_panel.assignLayerRequested.connect(self._assign_layer)
+        self.transform_panel.straightenRequested.connect(
+            self._straighten_selected_trace_objects
+        )
         self.context_bar.transformEdited.connect(self._transform_edited)
         self.context_bar.rectangleShapeEdited.connect(
             self._rectangle_shape_edited
@@ -1149,18 +1154,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.generateRequested.connect(self.actions["generate"].trigger)
         self.trace_panel.selectionChanged.connect(
             self._trace_selection_changed
-        )
-        self.trace_panel.straightenRequested.connect(
-            self._straighten_trace_selection
-        )
-        self.trace_panel.straightenResetRequested.connect(
-            self._reset_trace_straightening
-        )
-        self.trace_panel.straightenContextChanged.connect(
-            self._trace_straighten_context_changed
-        )
-        self.trace_panel.reviewInvalidated.connect(
-            self._invalidate_trace_orientation_review
         )
         self.trace_panel.rasterPreviewModeChanged.connect(
             self._trace_raster_preview_mode_changed
@@ -1365,6 +1358,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             has_stock=bool(stock_boundaries(self.document)),
             selection_count=layout_selection_count,
         )
+        self._update_selected_trace_orientation(objects)
 
     def _history_changed(self, stack: CommandStack) -> None:
         if getattr(self, "_job_preparation_busy", False):
@@ -4773,8 +4767,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self._active_trace_request_id = None
         self._trace_result = None
-        self._trace_orientation_estimate = None
-        self._trace_straightening = None
         retained = bool(
             retain_preview
             and self._trace_raster_preview_images
@@ -4823,8 +4815,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     fit=True,
                 )
         self._trace_result = result
-        self._trace_orientation_estimate = None
-        self._trace_straightening = None
         self.trace_panel.set_result(result)
         self.inspector_tabs.select_panel("trace")
         preview_args = (
@@ -4846,117 +4836,158 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 *preview_args,
                 result.get("output_work_area"),
             )
-        self._update_trace_orientation(self.trace_panel.selected_ids())
         self.show_notice(str(result.get("message", "Object detection complete")))
 
     def _trace_selection_changed(self, selected_ids: list[str]) -> None:
         if self._trace_result is None:
             return
         self.workspace.set_trace_selected_ids(selected_ids)
-        self._update_trace_orientation(selected_ids)
 
     def _trace_canvas_selection_changed(self, selected_ids: list[str]) -> None:
         if self._trace_result is None:
             return
         self.trace_panel.set_selected_ids(selected_ids)
-        self._update_trace_orientation(selected_ids)
 
-    def _selected_trace_detections(
+    @staticmethod
+    def _trace_object_world_geometry(item: SceneObject) -> NativePathGeometry:
+        """Return one finished native project object in current world coordinates."""
+
+        transform = item.transform
+        affine = PathAffineTransform.from_components(
+            scale_x=transform.width_mm * (-1.0 if transform.mirror_x else 1.0),
+            scale_y=transform.height_mm * (-1.0 if transform.mirror_y else 1.0),
+            rotation_deg=transform.rotation_deg,
+            translate_x=transform.x_mm,
+            translate_y=transform.y_mm,
+        )
+        return transform_native_path(item.path_geometry(), affine)
+
+    def _selected_trace_orientation_geometry(
         self,
-        selected_ids: list[str] | tuple[str, ...],
-    ) -> list[dict[str, Any]]:
-        result = getattr(self, "_trace_result", None) or {}
-        selected = {str(value) for value in selected_ids}
-        return [
-            detection
-            for detection in result.get("detections", [])
-            if str(detection.get("id")) in selected
-        ]
+        objects: list[SceneObject],
+    ) -> tuple[TraceOrientationGeometry, ...]:
+        """Adapt an eligible normal project selection to the image-free estimator."""
 
-    def _clear_trace_straightening_preview(self) -> None:
-        workspace = getattr(self, "workspace", None)
-        setter = getattr(workspace, "set_trace_straightening", None)
-        if callable(setter):
-            setter((), None)
+        if not objects:
+            return ()
+        candidates: list[tuple[SceneObject, str]] = []
+        artwork_members: dict[str, list[tuple[int, int, str]]] = {}
+        total_subpaths = 0
+        total_segments = 0
+        for item in objects:
+            metadata = item.metadata
+            trace_source = metadata.get("trace_source")
+            artwork_id = metadata.get("trace_artwork_id")
+            member_index = metadata.get("trace_artwork_member_index")
+            member_count = metadata.get("trace_artwork_member_count")
+            if (
+                metadata.get("trace_orientation_eligible") is not True
+                or metadata.get("trace_output_mode") != "native"
+                or not isinstance(trace_source, str)
+                or not trace_source.strip()
+                or metadata.get("trace_grid_normalized") is True
+                or is_stock_boundary(item)
+                or item.kind not in {ObjectKind.PATH, ObjectKind.POLYGON}
+                or not isinstance(artwork_id, str)
+                or not artwork_id.strip()
+                or type(member_index) is not int
+                or type(member_count) is not int
+                or member_count < 1
+                or not 0 <= member_index < member_count
+                or metadata.get("trace_creation_mode") not in {"combined", "separate"}
+            ):
+                return ()
 
-    def _invalidate_trace_orientation_review(self) -> None:
-        self._clear_trace_straightening_preview()
-        self._trace_orientation_estimate = None
-        self._trace_straightening = None
-        panel = getattr(self, "trace_panel", None)
-        clearer = getattr(panel, "clear_straighten_review", None)
-        if callable(clearer):
-            clearer()
+            raw_subpaths = item.geometry.get("subpaths")
+            if not isinstance(raw_subpaths, list):
+                return ()
+            total_subpaths += len(raw_subpaths)
+            if total_subpaths > MAX_TRACE_ORIENTATION_SUBPATHS:
+                return ()
+            for raw_subpath in raw_subpaths:
+                if not isinstance(raw_subpath, dict):
+                    return ()
+                raw_segments = raw_subpath.get("segments")
+                if not isinstance(raw_segments, list):
+                    return ()
+                total_segments += len(raw_segments)
+                if total_segments > MAX_TRACE_ORIENTATION_SEGMENTS:
+                    return ()
 
-    def _update_trace_orientation(self, selected_ids: list[str]) -> None:
-        result = getattr(self, "_trace_result", None)
-        panel = getattr(self, "trace_panel", None)
-        if result is None or panel is None:
-            return
-        context_checker = getattr(panel, "straighten_context_is_current", None)
-        if callable(context_checker) and not context_checker():
-            self._clear_trace_straightening_preview()
-            self._trace_orientation_estimate = None
-            self._trace_straightening = None
-            panel.clear_straighten_review()
-            return
-
-        detections = self._selected_trace_detections(selected_ids)
-        ordered_ids = tuple(str(item.get("id")) for item in detections)
-        applied = getattr(self, "_trace_straightening", None)
-        if applied is not None:
-            if applied.selected_ids == ordered_ids:
-                panel.set_straighten_applied(applied)
-                return
-            self._clear_trace_straightening_preview()
-            self._trace_straightening = None
-
-        cached = getattr(self, "_trace_orientation_estimate", None)
-        if cached is not None and cached.selected_ids == ordered_ids:
-            if cached.offered:
-                panel.set_straighten_offer(cached)
-            else:
-                panel.clear_straighten_review()
-            return
-
-        self._trace_orientation_estimate = None
-        options = result.get("options") or {}
-        grid_result = bool(options.get("regular_grid", False) or result.get("grid"))
-        output_mode = str(options.get("output_mode", ""))
-        if (
-            result.get("detected") is not True
-            or grid_result
-            or output_mode != "native"
-            or not detections
-            or any(
-                detection.get("native_verified") is not True
-                or not detection.get("native_path")
-                for detection in detections
+            candidates.append((item, artwork_id))
+            artwork_members.setdefault(artwork_id, []).append(
+                (
+                    member_index,
+                    member_count,
+                    str(metadata["trace_creation_mode"]),
+                )
             )
-        ):
-            panel.clear_straighten_review()
-            return
+        for members in artwork_members.values():
+            member_counts = {member[1] for member in members}
+            creation_modes = {member[2] for member in members}
+            if len(member_counts) != 1 or len(creation_modes) != 1:
+                return ()
+            member_count = next(iter(member_counts))
+            creation_mode = next(iter(creation_modes))
+            if len(members) != member_count or {
+                member[0] for member in members
+            } != set(range(member_count)):
+                return ()
+            if creation_mode == "combined" and member_count != 1:
+                return ()
 
-        estimate = estimate_trace_orientation(detections)
-        self._trace_orientation_estimate = estimate
+        adapted: list[TraceOrientationGeometry] = []
+        for item, artwork_id in candidates:
+            try:
+                world_geometry = self._trace_object_world_geometry(item)
+            except (TypeError, ValueError):
+                return ()
+            adapted.append(
+                TraceOrientationGeometry(
+                    object_id=item.id,
+                    artwork_id=artwork_id,
+                    geometry=world_geometry,
+                )
+            )
+        return tuple(adapted)
+
+    def _estimate_selected_trace_orientation(
+        self,
+        objects: list[SceneObject],
+    ) -> TraceOrientationEstimate | None:
+        geometry = self._selected_trace_orientation_geometry(objects)
+        if not geometry:
+            return None
+        estimate = estimate_trace_orientation(geometry)
         LOGGER.info(
-            "Camera Trace orientation estimate: %s",
+            "Selected Camera Trace artwork orientation estimate: %s",
             estimate.to_diagnostics(),
         )
-        if estimate.offered:
-            panel.set_straighten_offer(estimate)
-        else:
-            panel.clear_straighten_review()
+        return estimate
 
-    def _straighten_trace_selection(self) -> None:
-        panel = getattr(self, "trace_panel", None)
-        if panel is None or getattr(self, "_trace_result", None) is None:
-            return
-        selected_ids = panel.selected_ids()
-        self._update_trace_orientation(selected_ids)
-        estimate = getattr(self, "_trace_orientation_estimate", None)
-        detections = self._selected_trace_detections(selected_ids)
-        ordered_ids = tuple(str(item.get("id")) for item in detections)
+    def _update_selected_trace_orientation(
+        self,
+        objects: list[SceneObject],
+    ) -> TraceOrientationEstimate | None:
+        panel = getattr(self, "transform_panel", None)
+        if panel is None:
+            return None
+        estimate = self._estimate_selected_trace_orientation(objects)
+        if estimate is None:
+            clearer = getattr(panel, "clear_straighten_review", None)
+            if callable(clearer):
+                clearer()
+            return None
+        setter = getattr(panel, "set_straighten_review", None)
+        if callable(setter):
+            setter(estimate, eligible=True)
+        return estimate
+
+    def _straighten_selected_trace_objects(self) -> None:
+        selected = set(self.workspace.selected_object_ids())
+        objects = [item for item in self.document.objects if item.id in selected]
+        estimate = self._update_selected_trace_orientation(objects)
+        ordered_ids = tuple(item.id for item in objects)
         if (
             estimate is None
             or not estimate.offered
@@ -4965,31 +4996,29 @@ class E3MainWindow(QtWidgets.QMainWindow):
             or estimate.pivot_mm is None
         ):
             return
-        transform = trace_rotation_transform(
+
+        rotation = trace_rotation_transform(
             estimate.correction_deg,
             estimate.pivot_mm,
         )
-        self.workspace.set_trace_straightening(ordered_ids, transform)
-        self._trace_straightening = estimate
-        panel.set_straighten_applied(estimate)
-
-    def _trace_straighten_context_changed(self) -> None:
-        self._invalidate_trace_orientation_review()
-        panel = getattr(self, "trace_panel", None)
-        if getattr(self, "_trace_result", None) is not None and panel is not None:
-            self._update_trace_orientation(panel.selected_ids())
-
-    def _reset_trace_straightening(self) -> None:
-        self._clear_trace_straightening_preview()
-        self._trace_straightening = None
-        estimate = getattr(self, "_trace_orientation_estimate", None)
-        panel = getattr(self, "trace_panel", None)
-        if panel is None:
-            return
-        if estimate is not None and estimate.offered:
-            panel.set_straighten_offer(estimate)
-        else:
-            panel.clear_straighten_review()
+        transforms: dict[str, Transform] = {}
+        for item in objects:
+            center_x, center_y = rotation.apply(
+                (item.transform.x_mm, item.transform.y_mm)
+            )
+            transforms[item.id] = item.transform.copy(
+                x_mm=center_x,
+                y_mm=center_y,
+                rotation_deg=item.transform.rotation_deg + estimate.correction_deg,
+            )
+        self.history.execute(
+            UpdateTransformsCommand(
+                self.document,
+                transforms,
+                description="Straighten Trace artwork",
+            )
+        )
+        self.workspace.select_objects(list(ordered_ids))
 
     def _retire_trace_preview_ui(self) -> None:
         preview_camera = getattr(self, "_trace_raster_preview_images", {}).get(
@@ -5018,8 +5047,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._trace_raster_preview_area = None
         self._trace_raster_preview_signature = None
         self._trace_result = None
-        self._trace_orientation_estimate = None
-        self._trace_straightening = None
         workspace = getattr(self, "workspace", None)
         workspace_clear = getattr(workspace, "clear_trace_preview", None)
         if callable(workspace_clear):
@@ -5230,42 +5257,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         return item
 
-    @staticmethod
-    def _apply_trace_group_rotation(
-        objects: list[SceneObject],
-        estimate: TraceOrientationEstimate | None,
-    ) -> None:
-        if (
-            estimate is None
-            or not estimate.offered
-            or estimate.correction_deg is None
-            or estimate.pivot_mm is None
-        ):
-            return
-        transform = trace_rotation_transform(
-            estimate.correction_deg,
-            estimate.pivot_mm,
-        )
-        for item in objects:
-            center_x, center_y = transform.apply(
-                (item.transform.x_mm, item.transform.y_mm)
-            )
-            item.transform = item.transform.copy(
-                x_mm=center_x,
-                y_mm=center_y,
-                rotation_deg=(
-                    item.transform.rotation_deg + estimate.correction_deg
-                ),
-            )
-            item.metadata.update(
-                {
-                    "trace_straightened": True,
-                    "trace_detected_skew_deg": estimate.detected_skew_deg,
-                    "trace_correction_deg": estimate.correction_deg,
-                    "trace_straighten_pivot_mm": list(estimate.pivot_mm),
-                }
-            )
-
     def _create_traced_objects(self, payload: dict[str, Any]) -> None:
         if self._trace_result is None:
             self.show_error("Run object detection before creating vector paths")
@@ -5294,6 +5285,30 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if purpose == "stock" and len(detections) != 1:
             self.show_notice("Select exactly one outline for the Stock boundary")
             return
+        if output_mode == "native" and any(
+            detection.get("native_verified") is not True
+            or not detection.get("native_path")
+            for detection in detections
+        ):
+            self.show_error(
+                "The selected native Trace geometry is not verified; run detection again"
+            )
+            return
+        options = self._trace_result.get("options") or {}
+        grid_result = bool(
+            options.get("regular_grid", False)
+            or self._trace_result.get("grid")
+            or any(
+                bool((detection.get("diagnostics") or {}).get("grid_normalized"))
+                for detection in detections
+            )
+        )
+        orientation_eligible = bool(
+            self._trace_result.get("detected") is True
+            and purpose == "cut"
+            and output_mode == "native"
+            and not grid_result
+        )
         replaced_count = 0
         try:
             objects = (
@@ -5304,17 +5319,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     for item in detections
                 ]
             )
-            straightening = getattr(self, "_trace_straightening", None)
-            if (
-                purpose == "cut"
-                and output_mode == "native"
-                and straightening is not None
-                and straightening.selected_ids
-                == tuple(str(item.get("id")) for item in detections)
-            ):
-                self._apply_trace_group_rotation(objects, straightening)
             if purpose == "stock":
                 objects = [mark_stock_boundary(objects[0])]
+            if orientation_eligible and all(
+                item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}
+                for item in objects
+            ):
+                artwork_id = f"trace-artwork-{uuid.uuid4().hex}"
+                creation_mode = "combined" if combine else "separate"
+                member_count = len(objects)
+                for member_index, item in enumerate(objects):
+                    item.metadata.update(
+                        {
+                            "trace_orientation_eligible": True,
+                            "trace_output_mode": "native",
+                            "trace_artwork_id": artwork_id,
+                            "trace_artwork_member_index": member_index,
+                            "trace_artwork_member_count": member_count,
+                            "trace_creation_mode": creation_mode,
+                        }
+                    )
             replace_previous = bool(payload.get("replace_previous", True))
             previous_trace_ids = [
                 item.id
@@ -5360,6 +5384,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self._clear_trace_preview()
         self.workspace.select_objects([item.id for item in objects])
+        if purpose == "cut":
+            inspector = getattr(self, "inspector_tabs", None)
+            select_panel = getattr(inspector, "select_panel", None)
+            if callable(select_panel):
+                select_panel("transform")
         if purpose == "stock":
             self.show_notice(
                 "Created a locked Stock boundary. It is visible for layout, "
@@ -5874,8 +5903,6 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._trace_raster_preview_area = None
         self._trace_raster_preview_signature = None
         self._trace_result = None
-        self._trace_orientation_estimate = None
-        self._trace_straightening = None
         self._template_match_result = None
         self.workspace.clear_trace_preview()
         self.workspace.clear_template_preview()

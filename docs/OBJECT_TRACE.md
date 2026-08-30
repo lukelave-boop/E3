@@ -102,49 +102,57 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
     Red cells are also unchecked by default. Reposition the sheet fully inside
     the work area and detect again before creating or cutting them. A Stock
     boundary requires exactly one selected outline.
-11. For a successful non-grid **Cut geometry** result using **Native lines /
-    Béziers**, E3 may show a
-    conservative **Detected skew** review with an explicit clockwise or
-    counterclockwise direction. The estimate uses only the currently selected,
-    verified native vectors. Press **Straighten** only if you want the suggested
-    correction; it is never automatic. The selected vectors rotate together in
-    the overlay while Camera, Exposed bed, Eligible, Normalized, and Mask remain
-    unchanged. **Reset** restores the exact fitted vectors.
-12. Leave **Replace earlier Trace objects** checked for the usual
+11. Leave **Replace earlier Trace objects** checked for the usual
     one-workpiece-at-a-time workflow, then press **Create separate vectors**,
     **Create one combined vector**, or **Create stock boundary**. The combined
     option creates one even-odd compound path and preserves overlaps; it is not
     a geometric union. Cut geometry replaces only earlier Trace cut
     objects. A Stock boundary replaces only the earlier Stock boundary, so it
     cannot delete imported artwork.
+12. After successful non-grid native Cut creation, E3 selects the new combined
+    object or the complete separate-object batch and opens the normal **Shape**
+    inspector. If the finished project geometry has a credible small skew, the
+    inspector shows its clockwise or counterclockwise direction and offers
+    **Straighten**. Accepting it is a normal project transform with its own Undo
+    and Redo step. No camera, Mask, threshold, or temporary candidate is changed.
 
 Changing a detection or output setting marks the result stale. Run **Detect
 objects** again before creating geometry.
 
 ### Optional Straighten review
 
-Straighten is a downstream geometry review, not another detection mode. It is
-available only for selected Cut-geometry candidates from a successful, non-grid,
-authoritative native fit. Stock boundaries retain their photographed physical
-outline and do not offer Straighten. A failed or partial native fit cannot be
-straightened: E3 does not estimate orientation from the Mask, observed contours,
-or any partially fitted path. Changing the selection computes a new estimate
-from the already fitted native geometry and does not recapture, normalize,
-threshold, or refit anything.
+Straighten is a normal selected-object transform, not another detection mode and
+not part of temporary candidate review. It is available only after successful,
+non-grid, authoritative native Cut geometry has become ordinary project objects.
+Create records a small persistent, non-authoritative eligibility and artwork
+identity in those objects' existing metadata. One combined object is one
+artwork; every member created by one **Create separate vectors** action shares
+one artwork identity. Stock boundaries, analytic/non-native Trace output,
+unrelated project objects, and failed or partial native fits do not qualify. E3
+never estimates orientation from the Mask, observed contours, or a partially
+fitted path.
+
+The adapter reads each selected object's current native path and applies its
+current width, height, mirrors, rotation, and position. The estimate therefore
+uses actual project/world geometry, including edits made after Trace creation or
+after reloading a saved project. Selection changes, project transforms, Undo,
+and Redo recompute from those paths. None of those actions recaptures,
+normalizes, thresholds, extracts contours, or refits anything.
 
 The estimator is geometric and uses no OCR, text recognition, or machine
 learning. It combines physical-length native line evidence, only those cubic
-Béziers that are demonstrably near-linear, anisotropic candidate axes, and—in a
-multi-candidate selection—candidate-center alignment. Evidence is reduced
+Béziers that are demonstrably near-linear, anisotropic disconnected-component
+axes, and alignment among meaningful component centers. Evidence is reduced
 modulo 90 degrees and combined with a bounded robust consensus. Confidence
 accounts for the inlier fraction, angular spread, physical support, independent
-features, supporting candidates, and evidence-family diversity. Candidate and
-family weights and total analysis complexity are capped so many tiny fragments
-or curve samples cannot win by vote count alone. Candidate-center alignment can
-strengthen a consensus but cannot manufacture independent candidate support. A
-reliable candidate-local angle—or a tight conflict-only mode from several strong
-candidate axes—that conflicts with another selected group is a conservative veto,
-even if one group has more total weight.
+features, supporting components, and evidence-family diversity. Family weights
+and total analysis complexity are capped so many tiny fragments or curve
+samples cannot win by vote count alone. A curved glyph, hole, island, or stencil
+bridge inside one compound or separate-vector artwork may contribute evidence,
+but it is not an independent veto boundary. A reliable orientation from another
+selected artwork remains a conservative conflict witness. Thus one label made
+from many fragments can straighten as a unit, while two separately created
+labels at materially different angles are suppressed.
 
 Positive internal skew means counterclockwise in the X-right/Y-up project frame;
 the correction has the opposite sign. The UI always spells out the direction.
@@ -153,19 +161,23 @@ stop at 10 degrees; 10–15 degrees requires exceptional agreement, and larger,
 diffuse, conflicting, circular, square-like, or otherwise ambiguous evidence is
 suppressed. No offer is safer than a confident-looking guess.
 
-When accepted, all selected candidates receive one rigid rotation around the
-combined selected native-geometry bounds center. Candidates do not rotate about
-their individual centers, so spacing, baselines, subpaths, holes, islands, fill
-rule, line segments, cubic segments, and candidate identities are preserved.
-Only the temporary vector overlay changes. **Reset** rebuilds that overlay from
-the retained original fitted geometry rather than applying an inverse transform.
+When accepted, every selected object receives one rigid rotation around the
+combined selected world-native-geometry bounds center. Objects do not rotate
+about their individual centers, so spacing and baselines remain intact. The
+edit changes only object transforms; local subpaths, holes, islands, fill rules,
+line segments, and cubic segments remain exactly the same native primitives.
+`UpdateTransformsCommand` commits the complete group as one project revision.
+Undo restores the exact pre-Straighten transforms, Redo reapplies the exact
+correction, and Create remains the separate preceding history entry. There is
+no special Reset or parallel temporary undo system.
 
-Straighten remains temporary review state with no project, planning, G-code,
-motion, arming, or laser authority. **Create separate vectors** gives every new
-object the mathematically equivalent common group transform; **Create one
-combined vector** applies the equivalent transform to the compound object. Both
-produce the same physical geometry, participate in the ordinary one-step undo
-history, and commit nothing until **Create** is pressed.
+The Shape inspector shows the detected direction and labels the button with the
+correction magnitude. When an eligible selection cannot be offered, it may show
+a muted reason such as insufficient or conflicting orientation evidence instead
+of an error dialog. Already-straight, circular, square-like, diffuse, and
+out-of-range geometry remains unoffered. Straighten has no planning, G-code,
+motion, arming, controller, or laser authority; those systems see only the
+ordinary project geometry after the edit.
 
 ### Stock-boundary layout workflow
 

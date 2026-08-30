@@ -82,7 +82,7 @@ V4L2 controls. Camera-client loss has no machine-execution meaning. See
 | `vision/` | Workpiece, fiducial, crosshair-grid, camera-object detection, and camera-photo normalization |
 | `vision/camera_raster_normalization.py` | Qt-free, authority-free low-frequency illumination modeling and symmetric dark/light raster adaptation for non-grid Camera Trace |
 | `vision/camera_trace_eligibility.py` | Qt-free hard physical Trace ROI and trusted empty-bed comparison that produces immutable material eligibility without creating foreground geometry |
-| `vision/trace_orientation.py` | Qt-free, image-free conservative skew consensus over successfully verified native Trace geometry, plus the shared-pivot rigid affine used by review and Create |
+| `vision/trace_orientation.py` | Qt-free, image-free conservative skew consensus over selected Trace-created native project geometry in world coordinates, plus the shared-pivot rigid affine used by the project transform |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
@@ -338,20 +338,25 @@ should own a physical camera at a time.
   inspector checkboxes; project objects are non-selectable and non-movable until
   review ends. The temporary layer never mutates `ProjectDocument` and has no
   planning, G-code, or execution consumer.
-- Successful non-grid native Cut-geometry Trace selections may enter an optional
-  orientation review downstream of fitting and topology validation. The Qt-free estimator
-  consumes only verified physical native paths, reduces geometric line,
-  near-linear-cubic, component-axis, and candidate-alignment evidence modulo 90
-  degrees, and fails closed on weak or conflicting consensus. `E3MainWindow`
-  keys the estimate and applied state to the current detection-ID selection;
-  selection changes recompute from the retained native paths without calling the
-  controller or vision pipeline. `WorkspaceView` rebuilds only selected vector
-  paths through one rotation about their combined bounds center. Reset rebuilds
-  originals, and Create applies the mathematically identical object-level group
-  transform before the existing one-step command. Raster preview slots and
-  project/planning/execution authority are never consumers of temporary state.
-  Stock-boundary review is excluded so its photographed physical outline cannot
-  be rotated away from the camera evidence.
+- Successful non-grid native Cut-geometry creation marks the resulting ordinary
+  `SceneObject` values as orientation-eligible Trace artwork. One combined object
+  or every member of one separate-vector Create shares a persistent,
+  non-authoritative artwork identity. The temporary Trace-candidate layer has no
+  orientation state or transform. After Create, `E3MainWindow` selects the new
+  object or complete batch and the normal Shape inspector reviews the current
+  project selection. A Qt-free adapter applies each object's signed width/height,
+  mirrors, rotation, and translation to obtain world-space native geometry.
+  The estimator reduces line, near-linear-cubic, disconnected-component-axis,
+  and component-alignment evidence modulo 90 degrees and fails closed on weak or
+  conflicting consensus. Components inside one artwork contribute evidence but
+  cannot veto one another; separately created reliable artworks can conflict.
+  Selection changes, ordinary transforms, and CommandStack Undo/Redo recompute
+  from the current project geometry without capture, normalization, thresholding,
+  contour extraction, or fitting. Accepted Straighten rotates all selected
+  object transforms about the exact combined native-geometry bounds center in
+  one `UpdateTransformsCommand`. Local native paths and primitive topology are
+  untouched. Stock boundaries, unrelated objects, raster preview slots, and
+  planning/execution authority are excluded.
 - For a current non-grid request, the Trace **Camera display** selector can show
   the immutable corrected **Camera** frame, exact production **Exposed bed**
   mask, exact material **Eligible** mask, exact polarity-specific **Normalized**

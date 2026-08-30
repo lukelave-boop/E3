@@ -1033,14 +1033,32 @@ def test_trace_panel_shows_only_current_successful_auto_threshold(
     qt_application.processEvents()
 
 
-def test_trace_straighten_review_uses_direction_words_and_clears_with_result(
+def test_trace_panel_has_no_pre_create_straighten_control(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     panel = TracePanel()
+
+    assert not hasattr(panel, "straightenRequested")
+    assert not hasattr(panel, "straightenResetRequested")
+    assert not hasattr(panel, "straightenContextChanged")
+    assert not hasattr(panel, "reviewInvalidated")
+    assert not hasattr(panel, "straighten_review")
+    assert not hasattr(panel, "set_straighten_offer")
+    assert not hasattr(panel, "set_straighten_applied")
+    assert not hasattr(panel, "clear_straighten_review")
+    assert panel.findChild(QtWidgets.QWidget, "traceStraightenReview") is None
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_transform_straighten_review_uses_direction_words_and_has_no_reset(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TransformPanel()
     straighten_events: list[bool] = []
-    reset_events: list[bool] = []
     panel.straightenRequested.connect(lambda: straighten_events.append(True))
-    panel.straightenResetRequested.connect(lambda: reset_events.append(True))
     estimate = {
         "offered": True,
         "detected_skew_deg": 1.6,
@@ -1048,23 +1066,19 @@ def test_trace_straighten_review_uses_direction_words_and_clears_with_result(
     }
 
     assert panel.straighten_review.isHidden()
-    panel.set_straighten_offer(estimate)
+    panel.set_straighten_review(estimate)
     assert not panel.straighten_review.isHidden()
     assert panel.straighten_status.text() == "Detected skew: 1.6° counterclockwise"
     assert "clockwise correction" in panel.straighten_button.toolTip()
+    assert "selected project geometry" in panel.straighten_button.toolTip()
+    assert "undoable transform" in panel.straighten_button.toolTip()
     assert not panel.straighten_button.isHidden()
-    assert panel.straighten_reset_button.isHidden()
+    assert panel.straighten_unavailable.isHidden()
+    assert not hasattr(panel, "straighten_reset_button")
     panel.straighten_button.click()
     assert straighten_events == [True]
 
-    panel.set_straighten_applied(estimate)
-    assert panel.straighten_status.text() == "Applied correction: 1.6° clockwise"
-    assert panel.straighten_button.isHidden()
-    assert not panel.straighten_reset_button.isHidden()
-    panel.straighten_reset_button.click()
-    assert reset_events == [True]
-
-    panel.set_straighten_offer(
+    panel.set_straighten_review(
         {
             "offered": True,
             "detected_skew_deg": -3.0,
@@ -1073,107 +1087,71 @@ def test_trace_straighten_review_uses_direction_words_and_clears_with_result(
     )
     assert panel.straighten_status.text() == "Detected skew: 3.0° clockwise"
     assert "counterclockwise correction" in panel.straighten_button.toolTip()
-    panel.set_detection_failed("native fitting failed", retain_preview=True)
-    assert panel.straighten_review.isHidden()
 
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()
 
 
-def test_trace_straighten_does_not_change_chosen_threshold_or_stale_lifecycle(
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        (
+            "insufficient_orientation_evidence",
+            "not enough reliable orientation evidence",
+        ),
+        ("conflicting_candidate_orientations", "conflicting orientation evidence"),
+        ("trivial_skew", "already straight"),
+        ("outside_skew_correction_range", "outside the supported correction range"),
+    ],
+)
+def test_transform_straighten_review_shows_muted_unavailable_reason(
     qt_application: QtWidgets.QApplication,
+    reason: str,
+    expected: str,
 ) -> None:
-    panel = TracePanel()
-    panel.regular_grid.setChecked(False)
-    invalidations: list[bool] = []
-    panel.reviewInvalidated.connect(lambda: invalidations.append(True))
-    panel.set_result(
-        {
-            "mode_used": "contrast",
-            "message": "Detection complete",
-            "detections": [
-                {
-                    "id": "candidate",
-                    "index": 1,
-                    "source": "direct",
-                    "confidence": 1.0,
-                    "selected_default": True,
-                    "shape": "contour",
-                    "width_mm": 20.0,
-                    "height_mm": 10.0,
-                    "rotation_deg": 0.0,
-                    "diagnostics": {"within_work_area": True},
-                }
-            ],
-            "grid": None,
-            "options": {
-                "detection_mode": "contrast",
-                "regular_grid": False,
-                "contrast_threshold_mode": "auto",
-            },
-            "diagnostics": {"strategy_metrics": {"threshold": 170}},
-        }
-    )
-    panel.set_straighten_offer(
-        {
-            "offered": True,
-            "detected_skew_deg": 2.0,
-            "correction_deg": -2.0,
-        }
-    )
-    assert panel.straighten_context_is_current()
-    assert panel.chosen_threshold_value.text() == "170"
-    panel.set_straighten_applied()
-    assert panel.chosen_threshold_value.text() == "170"
+    panel = TransformPanel()
 
-    panel.min_area.setValue(panel.min_area.value() + 1.0)
-    qt_application.processEvents()
-    assert invalidations == [True]
-    assert not panel.straighten_context_is_current()
-    assert panel.chosen_threshold_value.text() == "—"
-    assert panel.straighten_review.isHidden()
+    panel.set_straighten_review(
+        {"offered": False, "suppression_reason": reason}
+    )
+
+    assert not panel.straighten_review.isHidden()
+    assert panel.straighten_status.isHidden()
+    assert panel.straighten_button.isHidden()
+    assert not panel.straighten_unavailable.isHidden()
+    assert panel.straighten_unavailable.objectName() == "mutedLabel"
+    assert expected in panel.straighten_unavailable.text()
 
     panel.close()
     panel.deleteLater()
     qt_application.processEvents()
 
 
-def test_trace_stock_purpose_exits_straighten_context(
+def test_transform_straighten_review_hides_for_ineligible_selection(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    panel = TracePanel()
-    panel.regular_grid.setChecked(False)
-    context_changes: list[bool] = []
-    panel.straightenContextChanged.connect(lambda: context_changes.append(True))
-    panel.set_result(
-        {
-            "mode_used": "contrast",
-            "message": "Detection complete",
-            "detections": [
-                {
-                    "id": "stock-candidate",
-                    "index": 1,
-                    "source": "direct",
-                    "confidence": 1.0,
-                    "selected_default": True,
-                    "shape": "contour",
-                    "width_mm": 30.0,
-                    "height_mm": 15.0,
-                    "rotation_deg": 0.0,
-                    "diagnostics": {"within_work_area": True},
-                }
-            ],
-            "grid": None,
-        }
+    panel = TransformPanel()
+    offer = {
+        "offered": True,
+        "detected_skew_deg": 2.0,
+        "correction_deg": -2.0,
+    }
+
+    panel.set_straighten_review(offer)
+    assert not panel.straighten_review.isHidden()
+
+    panel.set_straighten_review(offer, eligible=False)
+    assert panel.straighten_review.isHidden()
+    assert panel.straighten_status.text() == ""
+    assert panel.straighten_unavailable.text() == ""
+
+    panel.set_straighten_review(
+        {"offered": False, "suppression_reason": "trivial_skew"}
     )
-    assert panel.straighten_context_is_current()
+    panel.clear_straighten_review()
+    assert panel.straighten_review.isHidden()
 
-    panel.trace_purpose.setCurrentIndex(panel.trace_purpose.findData("stock"))
-    qt_application.processEvents()
-
-    assert context_changes == [True]
-    assert not panel.straighten_context_is_current()
 
     panel.close()
     panel.deleteLater()

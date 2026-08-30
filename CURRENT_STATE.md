@@ -7,82 +7,76 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-30**
 
-## Active optional Camera Trace orientation review / Straighten
+## Active post-Create Camera Trace orientation review / Straighten
 
-Successful non-grid Camera Trace native Cut geometry now has an optional,
-selection-scoped orientation review. Stock boundaries retain their photographed
-physical outline and are excluded. `vision/trace_orientation.py` is Qt-free and
-image-free. It accepts a selection only when every candidate has
-`native_verified == True`, a parseable native path, and positive finite physical
-bounds. It reconstructs the fitted world geometry without falling back to an
-observed contour, production Mask, or partial result. Grid review remains on its
-independent path and does not invoke this estimator.
+Straighten is now a normal project edit over selected, finished Camera Trace
+artwork. Detect/review has returned to choosing which temporary outlines should
+become project objects; it has no Straighten control, Reset control, temporary
+rotation state, or rotated candidate overlay. Successful Cut creation selects the
+new combined object or the complete separate-object batch and opens the normal
+Shape inspector. The optional offer and muted no-offer diagnostic live there.
 
-Evidence comprises physical-length native line segments, only cubic segments
-whose chord/arc ratio and maximum chord deviation prove them near-linear,
-arclength-weighted anisotropic candidate axes, and one candidate-center alignment
-axis when at least three meaningful candidates support it. Evidence is reduced
-modulo 90 degrees. Per-candidate line and near-linear-cubic family weights are
-capped; total analysis is capped at 20,000 native segments and 8,192 subpaths.
-A raw-structure preflight enforces those limits before native parsing or world
-transformation. The deterministic maximum-consensus seed uses a 3-degree inlier
-window, followed by
-four bounded robust circular-mean iterations. This prevents sampled curve points,
-tiny fragments, or a single complex outline from becoming an unbounded vote.
-Reliable candidate-local line consensuses are also compared with a sorted
-modulo-90 covering-arc check. Tight modes of at least three strong candidate axes
-serve as conflict-only witnesses without adding offer authority. Disagreement
-beyond 3 degrees vetoes the offer. Candidate-center alignment never counts as
-independent candidate support, so it cannot hide a differently rotated selected
-group.
+Eligibility is persistent, non-authoritative SceneObject metadata added only to
+successful non-grid native Cut creation. `trace_orientation_eligible`,
+`trace_output_mode`, `trace_artwork_id`, member index/count, and creation mode
+extend the existing `trace_source` provenance. Stock boundaries, grid-normalized
+results, rounded/simplified/exact non-native output, failed native fits, unrelated
+project objects, and mixed eligible/ineligible selections do not enter the
+estimator. The metadata uses the existing `.e3laser` metadata map and therefore
+survives ordinary save/load without a schema change; it grants no planning,
+G-code, motion, arming, controller, or laser authority.
 
-The confidence score is 28% inlier fraction, 20% angular concentration, 18%
-physical linear support, 15% evidence-family diversity, 10% supporting-candidate
-count, and 9% independent-feature count. Hard gates still reject an inlier
-fraction below 0.68, spread above 2 degrees, fewer than two evidence families,
-insufficient independent candidate support, confidence below 0.78, or conflicting
-reliable candidate-local orientations. A strong single candidate must
-independently provide at least three linear features, 12 mm of support, and a
-compatible component axis. Skew below 0.4 degrees is treated as trivial. Offers
-normally stop at 10 degrees; 10–15 degrees additionally requires at least 0.92
-confidence, 0.90 inlier fraction, and three families, and anything larger is
-rejected. Positive detected skew is counterclockwise in the X-right/Y-up project
-frame and the correction is its negative.
+`vision/trace_orientation.py` remains Qt-free, image-free, and bounded. Its public
+adapter record is `TraceOrientationGeometry(object_id, artwork_id, geometry)`,
+where `geometry` is already in current project/world coordinates. The desktop
+adapter transforms each selected native path with its current width, height,
+mirrors, rotation, and center translation. It neither reads nor reconstructs
+pixels, masks, detection dictionaries, contours, or fitting diagnostics.
 
-The Trace panel spells out direction and never auto-applies the result. Pressing
-**Straighten** rotates the currently selected vector candidates as one rigid group
-around the center of their combined verified-native bounds. Camera, Exposed bed,
-Eligible, Normalized, and Mask pixmaps and arrays are untouched. The retained
-`_trace_result` remains the source of truth; **Reset** rebuilds the exact originals
-rather than inverse-rotating. A changed selection discards an applied preview and
-computes from the already fitted native paths without controller work, capture,
-normalization, thresholding, contour extraction, or fitting. A stale setting,
-new request, failed result, calibration-evidence invalidation, Clear, and Create
-all retire old Straighten state.
+Each disconnected native subpath is analyzed as a component. Physical-length
+lines, demonstrably near-linear cubics, anisotropic component axes, and meaningful
+component-center alignment contribute capped evidence to one robust modulo-90
+artwork consensus. All components of one combined object belong to one artwork;
+all objects from one separate Create batch share the same artwork ID. Curved and
+tiny local fragments can contribute little evidence but cannot independently veto
+their own artwork. The conservative disagreement veto instead compares reliable
+orientations from distinct selected artwork IDs, so two separately created labels
+at incompatible angles remain conflicting. Total analysis remains capped at
+20,000 native segments and 8,192 subpaths.
 
-Create applies the identical rotation mathematically at object level. Separate
-objects rotate their centers and native object transforms about the shared pivot;
-one compound object receives the equivalent transform. Local native paths remain
-unchanged, so lines stay lines, cubics stay cubics, and subpaths, holes, islands,
-fill rules, topology, relative spacing, and detection identities are preserved.
-The existing `AddObjectsCommand`/`ReplaceObjectsCommand` remains the only project
-mutation and one-step undo boundary. Temporary orientation review has no project,
-planning, G-code, motion, arming, controller, or laser authority.
+The existing confidence and angle gates remain conservative: under 0.4 degrees is
+trivial, ordinary offers stop at 10 degrees, 10–15 degrees needs exceptional
+confidence, and larger corrections are suppressed. Successful UI copy states the
+detected direction and the opposite correction direction. Eligible no-offer
+selections show a muted already-straight, insufficient-evidence,
+conflicting-evidence, or out-of-range explanation; ineligible selections show no
+Camera Trace-specific control.
 
-Focused estimator, panel, state/lifecycle, real-workspace preview, and creation
-verification passes **73 tests** in **3.24 seconds**. The Qt-free estimator subset
-passes **29 tests** in **1.93 seconds**, including ± skew sign, already-straight
-suppression, conflicting unequal/near-square/two-line/cubic-axis groups,
-circles/squares/curves/fragments, near-linear cubics, strict failed-native and
-oversized-path rejection, bounded large-candidate work, topology/primitive
-preservation, strategy metadata independence, and exceptional/large-angle gates.
-On this Windows development host, 250 warm estimates of the ordinary
-four-component synthetic +2-degree label had a **1.8137 ms median**, **1.8558 ms
-p95**, and **3.2768 ms maximum** estimator-reported time. These are software
-timings, not a real-camera performance claim. The complete Windows four-worker
-suite passes **2,903 tests** with **14 expected platform/privilege skips** in
-**163.30 seconds**. Repository Ruff, `python -m compileall -q laser_aligner`, and
-`git diff --check` pass.
+The estimator pivot is the exact center of the union of selected world-native
+bounds. Clicking **Straighten** recomputes from current geometry, rotates every
+selected object center about that one pivot, adds the same correction to every
+object rotation, and commits one standalone `UpdateTransformsCommand`. Create and
+Straighten are separate history entries. Undo restores the command's exact saved
+pre-Straighten transforms; Redo reapplies its exact saved corrected transforms.
+Local native geometry is never rewritten, so line/cubic types, subpaths, holes,
+islands, fill rule, topology, and relative spacing remain intact. Selection
+changes, ordinary transforms, and Undo/Redo recompute only from current project
+geometry, without camera, normalization, threshold, raster reconstruction, or
+native-fitting work.
+
+Focused post-Create estimator, panel, selection, creation, history, provenance,
+and persistence verification passes **87 tests** in **1.67 seconds**. Broader
+Camera Trace eligibility, raster threshold, native fitting/topology, grid,
+source-control, and template regressions pass **169 tests** in **107.17 seconds**.
+The complete Windows four-worker suite passes **2,917 tests** with **14 expected
+platform/privilege skips** in **143.46 seconds**. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass. On this
+Windows host, 200 warm end-to-end selection estimates (SceneObject adaptation
+plus estimator) measured **0.9437 ms median / 0.9603 ms p95 / 1.0538 ms max**
+for one combined four-component label, **10.9183 / 11.1325 / 12.0645 ms** for
+one combined 92-subpath stencil, and **1.0141 / 1.0314 / 1.0814 ms** for one
+four-object batch. These are synthetic software timings, not real-camera
+performance evidence.
 
 The implementation was prompted by newer operator-reported Coleman stencil
 evidence: manual threshold 128 produced a dramatically cleaner production Mask
@@ -90,9 +84,10 @@ but later failed bounded native-topology validation, manual threshold about 150
 produced usable geometry, and Auto selected 170 from the image and produced a good
 trace. Controller, firmware, machine configuration, capture identity, and measured
 placement results were not recorded in that report, so it does not satisfy the
-repository's formal physical-acceptance record. Straighten itself still requires
-a physical test of offer direction, Reset, overlay placement, separate/compound
-Create equivalence, final Preview, and guarded generated output.
+repository's formal physical-acceptance record. Post-Create Straighten still needs
+a recorded physical test of combined and separate creation selection, offer and
+correction direction, shared-pivot placement, Undo/Redo, saved/reloaded provenance,
+final Preview, and guarded generated output.
 
 ## Active Pi-owned desktop Disconnect generation correction
 
@@ -3352,11 +3347,12 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   showing the geometry that object creation will consume.
 - Border offsets.
 - Review and selective conversion to editable project objects.
-- Optional geometric Straighten review for a successful selected non-grid native
-  Cut-geometry candidate set. It rotates only temporary vectors about one shared bounds-center
-  pivot, supports exact Reset, and commits equivalent separate/compound placement
-  only through Create. Ambiguous evidence, grids, and failed native fits receive
-  no offer.
+- Optional post-Create geometric Straighten review for selected, finished,
+  non-grid native Cut artwork. The combined object or complete separate-object
+  batch is selected automatically, analyzed in current world coordinates, and
+  rotated about one shared native-bounds pivot through normal undoable project
+  history. Ambiguous evidence, grids, failed native fits, and unrelated objects
+  receive no offer; eligible suppressed selections receive a muted reason.
 - One captured corrected frame held across detection review, with monotonic
   request cancellation and stale-result rejection.
 - One-step undo for a created detection set.

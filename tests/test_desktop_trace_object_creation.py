@@ -22,7 +22,6 @@ from laser_aligner.project import (
     transform_native_path,
 )
 from laser_aligner.vision.trace_orientation import (
-    estimate_trace_orientation,
     trace_rotation_transform,
 )
 
@@ -141,6 +140,137 @@ def _world_bar(
             )
         )
     return NativePathGeometry(tuple(subpaths), fill_rule=PathFillRule.EVENODD)
+
+
+def _skewed_native_detections(angle_deg: float = 2.0) -> list[dict[str, object]]:
+    geometries = [
+        _world_bar((30.0, 35.0), with_hole_and_cubic=True),
+        _world_bar((70.0, 35.0)),
+    ]
+    bounds = [native_path_bounds(geometry) for geometry in geometries]
+    pivot = (
+        (min(item[0] for item in bounds) + max(item[2] for item in bounds)) / 2.0,
+        (min(item[1] for item in bounds) + max(item[3] for item in bounds)) / 2.0,
+    )
+    rotation = trace_rotation_transform(angle_deg, pivot)
+    return [
+        _native_detection_from_world(
+            f"candidate-{index}",
+            index,
+            transform_native_path(geometry, rotation),
+        )
+        for index, geometry in enumerate(geometries, start=1)
+    ]
+
+
+class _CreationWorkspace:
+    def __init__(self) -> None:
+        self._selected_ids: list[str] = []
+        self.selection_calls: list[list[str]] = []
+        self.clear_count = 0
+
+    def selected_object_ids(self) -> list[str]:
+        return list(self._selected_ids)
+
+    def select_objects(self, object_ids: list[str]) -> None:
+        self._selected_ids = list(object_ids)
+        self.selection_calls.append(list(object_ids))
+
+    def clear_trace_preview(self) -> None:
+        self.clear_count += 1
+
+
+class _CreationTransformPanel:
+    def __init__(self) -> None:
+        self.review = None
+        self.clear_count = 0
+
+    def set_straighten_review(self, estimate, *, eligible: bool = True) -> None:
+        assert eligible
+        self.review = estimate
+
+    def clear_straighten_review(self) -> None:
+        self.review = None
+        self.clear_count += 1
+
+
+class _CreationHarness:
+    def __init__(
+        self,
+        detections: list[dict[str, object]],
+        *,
+        detected: bool = True,
+        grid: bool = False,
+    ) -> None:
+        self.document = ProjectDocument.new()
+        self.active_layer_id = self.document.active_layer_id
+        self.history = CommandStack()
+        self._trace_result = {
+            "detected": detected,
+            "detections": detections,
+            "options": {
+                "regular_grid": grid,
+                "output_mode": "native",
+            },
+            "grid": {"rows": 1, "columns": len(detections)} if grid else None,
+        }
+        self.controller = SimpleNamespace(cancel_trace_detection=lambda: None)
+        self.workspace = _CreationWorkspace()
+        self.trace_panel = SimpleNamespace(clear_result=lambda: None)
+        self.transform_panel = _CreationTransformPanel()
+        self.selected_panels: list[str] = []
+        self.inspector_tabs = SimpleNamespace(
+            select_panel=self.selected_panels.append
+        )
+        self.notices: list[str] = []
+        self.errors: list[str] = []
+
+    def _trace_detection_world_geometry(
+        self,
+        detection: dict[str, object],
+    ) -> NativePathGeometry:
+        return E3MainWindow._trace_detection_world_geometry(detection)
+
+    def _trace_detection_to_object(
+        self,
+        detection: dict[str, object],
+        output_mode: str,
+    ) -> SceneObject:
+        return E3MainWindow._trace_detection_to_object(
+            self,
+            detection,
+            output_mode,
+        )
+
+    def _combined_trace_object(
+        self,
+        detections: list[dict[str, object]],
+    ) -> SceneObject:
+        return E3MainWindow._combined_trace_object(self, detections)
+
+    def _clear_trace_preview(self) -> None:
+        E3MainWindow._clear_trace_preview(self)
+
+    def _trace_object_world_geometry(
+        self,
+        item: SceneObject,
+    ) -> NativePathGeometry:
+        return E3MainWindow._trace_object_world_geometry(item)
+
+    def _selected_trace_orientation_geometry(self, objects: list[SceneObject]):
+        return E3MainWindow._selected_trace_orientation_geometry(self, objects)
+
+    def _estimate_selected_trace_orientation(self, objects: list[SceneObject]):
+        return E3MainWindow._estimate_selected_trace_orientation(self, objects)
+
+    def _update_selected_trace_orientation(self, objects: list[SceneObject]):
+        return E3MainWindow._update_selected_trace_orientation(self, objects)
+
+    def show_notice(self, message: str) -> None:
+        self.notices.append(message)
+
+    def show_error(self, message: str) -> None:
+        self.errors.append(message)
 
 
 @pytest.mark.parametrize(
@@ -506,178 +636,166 @@ def test_trace_creation_replaces_only_previous_trace_objects_and_is_undoable() -
     ]
 
 
-def test_straightened_separate_and_compound_creation_match_previewed_group_transform(
+@pytest.mark.parametrize("combine", [True, False])
+def test_native_cut_creation_marks_and_selects_one_reviewable_artwork_batch(
+    combine: bool,
 ) -> None:
-    base_geometries = [
-        _world_bar((30.0, 35.0), with_hole_and_cubic=True),
-        _world_bar((70.0, 35.0)),
-    ]
-    combined_bounds = [native_path_bounds(geometry) for geometry in base_geometries]
-    pivot = (
-        (
-            min(bounds[0] for bounds in combined_bounds)
-            + max(bounds[2] for bounds in combined_bounds)
-        )
-        / 2.0,
-        (
-            min(bounds[1] for bounds in combined_bounds)
-            + max(bounds[3] for bounds in combined_bounds)
-        )
-        / 2.0,
+    detections = _skewed_native_detections()
+    harness = _CreationHarness(detections)
+    detection_ids = [str(item["id"]) for item in detections]
+
+    E3MainWindow._create_traced_objects(
+        harness,
+        {
+            "selected_ids": detection_ids,
+            "output_mode": "native",
+            "purpose": "cut",
+            "replace_previous": False,
+            "combine": combine,
+        },
     )
-    detected_rotation = trace_rotation_transform(2.0, pivot)
-    detections = [
-        _native_detection_from_world(
-            f"candidate-{index}",
-            index,
-            transform_native_path(geometry, detected_rotation),
-        )
-        for index, geometry in enumerate(base_geometries, start=1)
-    ]
-    estimate = estimate_trace_orientation(detections)
+
+    objects = list(harness.document.objects)
+    expected_count = 1 if combine else len(detections)
+    assert len(objects) == expected_count
+    assert harness.history.depth == 1
+    assert harness.workspace.selection_calls == [[item.id for item in objects]]
+    assert harness.selected_panels == ["transform"]
+    assert harness.errors == []
+
+    artwork_ids = {item.metadata["trace_artwork_id"] for item in objects}
+    assert len(artwork_ids) == 1
+    assert [
+        item.metadata["trace_artwork_member_index"] for item in objects
+    ] == list(range(expected_count))
+    assert {
+        item.metadata["trace_artwork_member_count"] for item in objects
+    } == {expected_count}
+    assert {
+        item.metadata["trace_creation_mode"] for item in objects
+    } == {"combined" if combine else "separate"}
+    assert all(
+        item.metadata["trace_orientation_eligible"] is True
+        and item.metadata["trace_output_mode"] == "native"
+        and "trace_correction_deg" not in item.metadata
+        and "trace_straightened" not in item.metadata
+        for item in objects
+    )
+
+    estimate = harness._update_selected_trace_orientation(objects)
+    assert estimate is not None
     assert estimate.offered
     assert estimate.detected_skew_deg == pytest.approx(2.0, abs=0.08)
-    assert estimate.correction_deg is not None
-    assert estimate.pivot_mm is not None
-    selected_ids = [str(item["id"]) for item in detections]
 
-    class Harness:
-        def __init__(self, *, straighten: bool) -> None:
-            self.document = ProjectDocument.new()
-            self.active_layer_id = self.document.active_layer_id
-            self.history = CommandStack()
-            self._trace_result = {
-                "detections": detections,
-                "options": {"regular_grid": False, "output_mode": "native"},
-            }
-            self._trace_orientation_estimate = estimate if straighten else None
-            self._trace_straightening = estimate if straighten else None
-            self.controller = SimpleNamespace(cancel_trace_detection=lambda: None)
-            self.workspace = SimpleNamespace(
-                clear_trace_preview=lambda: None,
-                select_objects=lambda _ids: None,
-            )
-            self.trace_panel = SimpleNamespace(clear_result=lambda: None)
-
-        def _trace_detection_world_geometry(self, detection):
-            return E3MainWindow._trace_detection_world_geometry(detection)
-
-        def _trace_detection_to_object(self, detection, output_mode):
-            return E3MainWindow._trace_detection_to_object(
-                self,
-                detection,
-                output_mode,
-            )
-
-        def _combined_trace_object(self, selected):
-            return E3MainWindow._combined_trace_object(self, selected)
-
-        def _apply_trace_group_rotation(self, objects, current_estimate) -> None:
-            E3MainWindow._apply_trace_group_rotation(objects, current_estimate)
-
-        def _clear_trace_preview(self) -> None:
-            E3MainWindow._clear_trace_preview(self)
-
-        def show_notice(self, _message: str) -> None:
-            pass
-
-        def show_error(self, message: str) -> None:
-            raise AssertionError(message)
-
-    def create(*, straighten: bool, combine: bool) -> Harness:
-        harness = Harness(straighten=straighten)
-        E3MainWindow._create_traced_objects(
-            harness,
-            {
-                "selected_ids": selected_ids,
-                "output_mode": "native",
-                "purpose": "cut",
-                "replace_previous": False,
-                "combine": combine,
-            },
-        )
-        return harness
-
-    def world_paths(harness: Harness) -> list[np.ndarray]:
-        return [
-            np.asarray(polyline.points, dtype=float)
-            for item in harness.document.objects
-            for polyline in object_polylines(item)
-        ]
-
-    original = create(straighten=False, combine=False)
-    original_paths = world_paths(original)
-    assert len(original.document.objects) == 2
-    assert all(
-        "trace_straightened" not in item.metadata
-        for item in original.document.objects
-    )
-
-    separate = create(straighten=True, combine=False)
-    compound = create(straighten=True, combine=True)
-    separate_paths = world_paths(separate)
-    compound_paths = world_paths(compound)
-    correction = trace_rotation_transform(
-        estimate.correction_deg,
-        estimate.pivot_mm,
-    )
-    expected_paths = [
-        np.asarray([correction.apply(point) for point in path], dtype=float)
-        for path in original_paths
+    assert harness.history.undo()
+    assert harness.document.objects == []
+    assert harness.history.redo()
+    assert [item.id for item in harness.document.objects] == [
+        item.id for item in objects
     ]
 
-    assert len(separate_paths) == len(compound_paths) == len(expected_paths) == 3
-    for separate_path, compound_path, expected_path in zip(
-        separate_paths,
-        compound_paths,
-        expected_paths,
-        strict=True,
-    ):
-        np.testing.assert_allclose(separate_path, expected_path, atol=1e-9)
-        np.testing.assert_allclose(compound_path, expected_path, atol=1e-9)
 
-    for item, detection in zip(
-        separate.document.objects,
-        detections,
-        strict=True,
-    ):
-        assert item.path_geometry() == NativePathGeometry.from_dict(
-            detection["native_path"]
-        )
-        assert item.path_geometry().fill_rule is PathFillRule.EVENODD
-        assert item.metadata["trace_straightened"] is True
-        assert item.metadata["trace_correction_deg"] == pytest.approx(
-            estimate.correction_deg
-        )
-    assert any(
-        isinstance(segment, PathCubicSegment)
-        for segment in separate.document.objects[0].path_geometry().subpaths[0].segments
-    )
-    combined = compound.document.objects[0]
-    assert len(combined.path_geometry().subpaths) == 3
-    assert combined.path_geometry().fill_rule is PathFillRule.EVENODD
-    assert combined.metadata["trace_straightened"] is True
-
-    stock_estimate = estimate_trace_orientation([detections[0]])
-    assert stock_estimate.offered
-    stock = Harness(straighten=True)
-    stock._trace_orientation_estimate = stock_estimate
-    stock._trace_straightening = stock_estimate
+def test_straighten_and_create_are_separate_history_entries() -> None:
+    detections = _skewed_native_detections()
+    harness = _CreationHarness(detections)
     E3MainWindow._create_traced_objects(
-        stock,
+        harness,
         {
-            "selected_ids": [selected_ids[0]],
+            "selected_ids": [str(item["id"]) for item in detections],
             "output_mode": "native",
-            "purpose": "stock",
+            "purpose": "cut",
             "replace_previous": False,
             "combine": False,
         },
     )
-    assert len(stock.document.objects) == 1
-    assert "trace_straightened" not in stock.document.objects[0].metadata
-    stock_path = np.asarray(object_polylines(stock.document.objects[0])[0].points)
-    np.testing.assert_allclose(stock_path, original_paths[0], atol=1e-9)
+    objects = list(harness.document.objects)
+    before = {item.id: item.transform.to_dict() for item in objects}
+    estimate = harness._update_selected_trace_orientation(objects)
+    assert estimate is not None and estimate.offered
 
-    for harness in (original, separate, compound, stock):
-        harness.history.undo()
-        assert harness.document.objects == []
+    E3MainWindow._straighten_selected_trace_objects(harness)
+
+    after = {item.id: item.transform.to_dict() for item in objects}
+    assert harness.history.depth == 2
+    assert harness.history.undo_text == "Straighten Trace artwork"
+    assert after != before
+
+    assert harness.history.undo()
+    assert {item.id: item.transform.to_dict() for item in objects} == before
+    assert harness.history.undo_text == "Create 2 traced objects"
+
+    assert harness.history.redo()
+    assert {item.id: item.transform.to_dict() for item in objects} == after
+
+    assert harness.history.undo()
+    assert harness.history.undo()
+    assert harness.document.objects == []
+
+
+@pytest.mark.parametrize(
+    ("purpose", "output_mode", "grid", "detected"),
+    [
+        ("cut", "exact", False, True),
+        ("cut", "native", True, True),
+        ("stock", "native", False, True),
+        ("cut", "native", False, False),
+    ],
+)
+def test_noneligible_creation_never_receives_orientation_provenance(
+    purpose: str,
+    output_mode: str,
+    grid: bool,
+    detected: bool,
+) -> None:
+    detections = _skewed_native_detections()
+    if purpose == "stock":
+        detections = detections[:1]
+    harness = _CreationHarness(detections, detected=detected, grid=grid)
+
+    E3MainWindow._create_traced_objects(
+        harness,
+        {
+            "selected_ids": [str(item["id"]) for item in detections],
+            "output_mode": output_mode,
+            "purpose": purpose,
+            "replace_previous": False,
+            "combine": False,
+        },
+    )
+
+    assert harness.document.objects
+    assert all(
+        "trace_orientation_eligible" not in item.metadata
+        and "trace_output_mode" not in item.metadata
+        and "trace_artwork_id" not in item.metadata
+        and "trace_artwork_member_index" not in item.metadata
+        and "trace_artwork_member_count" not in item.metadata
+        and "trace_creation_mode" not in item.metadata
+        for item in harness.document.objects
+    )
+
+
+def test_failed_native_fit_cannot_create_or_offer_straighten() -> None:
+    detections = _skewed_native_detections()
+    detections[0] = dict(detections[0])
+    detections[0]["native_verified"] = False
+    harness = _CreationHarness(detections)
+
+    E3MainWindow._create_traced_objects(
+        harness,
+        {
+            "selected_ids": [str(item["id"]) for item in detections],
+            "output_mode": "native",
+            "purpose": "cut",
+            "replace_previous": False,
+            "combine": False,
+        },
+    )
+
+    assert harness.document.objects == []
+    assert harness.history.depth == 0
+    assert harness.workspace.selection_calls == []
+    assert harness.transform_panel.review is None
+    assert harness.errors == [
+        "The selected native Trace geometry is not verified; run detection again"
+    ]

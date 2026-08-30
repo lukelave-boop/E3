@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -21,7 +21,6 @@ from ..project import (
 )
 from ..project.path_geometry import (
     NativePathGeometry,
-    PathAffineTransform,
     PathCubicSegment,
     PathFillRule,
     PathLineSegment,
@@ -84,7 +83,6 @@ class _TraceIndexBadge(QtWidgets.QGraphicsItem):
 def _trace_candidate_path(
     scene: WorkspaceScene,
     detection: Mapping[str, Any],
-    world_transform: PathAffineTransform | None = None,
 ) -> QtGui.QPainterPath:
     path = QtGui.QPainterPath()
     native = detection.get("native_path")
@@ -105,8 +103,6 @@ def _trace_candidate_path(
                     center_x + point[0] * width,
                     center_y + point[1] * height,
                 )
-                if world_transform is not None:
-                    world_point = world_transform.apply(world_point)
                 return scene.machine_to_scene(*world_point)
 
             path.setFillRule(
@@ -143,13 +139,9 @@ def _trace_candidate_path(
         if len(points) < 2:
             continue
         first = (float(points[0][0]), float(points[0][1]))
-        if world_transform is not None:
-            first = world_transform.apply(first)
         path.moveTo(scene.machine_to_scene(*first))
         for point in points[1:]:
             world_point = (float(point[0]), float(point[1]))
-            if world_transform is not None:
-                world_point = world_transform.apply(world_point)
             path.lineTo(scene.machine_to_scene(*world_point))
         path.closeSubpath()
     return path
@@ -1631,7 +1623,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._trace_items: list[QtWidgets.QGraphicsItem] = []
         self._trace_candidates_by_id: dict[str, _TraceCandidateGraphicsItem] = {}
         self._trace_badges_by_id: dict[str, _TraceIndexBadge] = {}
-        self._trace_detections_by_id: dict[str, dict[str, Any]] = {}
         self._trace_review_active = False
         self._trace_object_flags: dict[str, QtWidgets.QGraphicsItem.GraphicsItemFlags] = {}
         self._trace_previous_object_selection: set[str] = set()
@@ -2041,6 +2032,10 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         finally:
             self._syncing_trace_selection = False
         self._clear_object_transform_overlay()
+        # Candidate review owns selection while it is active.  Announce the
+        # empty normal-project selection so object inspectors cannot retain a
+        # stale transform or post-Create Straighten review behind the Trace UI.
+        self.selectionIdsChanged.emit([])
 
     def _end_trace_review(self) -> None:
         if not self._trace_review_active:
@@ -2083,37 +2078,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self._syncing_trace_selection = False
         self._refresh_trace_candidate_styles()
 
-    def set_trace_straightening(
-        self,
-        selected_ids: Sequence[str],
-        transform: PathAffineTransform | None,
-    ) -> None:
-        """Apply one temporary rigid transform to selected Trace vectors only."""
-
-        if transform is not None and not isinstance(transform, PathAffineTransform):
-            raise TypeError("Trace straightening requires a PathAffineTransform")
-        selected = {str(detection_id) for detection_id in selected_ids}
-        for detection_id, item in self._trace_candidates_by_id.items():
-            detection = self._trace_detections_by_id.get(detection_id)
-            if detection is None:
-                continue
-            active_transform = transform if detection_id in selected else None
-            item.setPath(
-                _trace_candidate_path(
-                    self.workspace_scene,
-                    detection,
-                    active_transform,
-                )
-            )
-            badge = self._trace_badges_by_id.get(detection_id)
-            center = detection.get("center_mm")
-            if badge is not None and center and len(center) == 2:
-                badge_center = (float(center[0]), float(center[1]))
-                if active_transform is not None:
-                    badge_center = active_transform.apply(badge_center)
-                badge.setPos(self.workspace_scene.machine_to_scene(*badge_center))
-        self._refresh_trace_candidate_styles()
-
     def clear_trace_preview(self) -> None:
         self._syncing_trace_selection = True
         self._trace_pointer_select_active = False
@@ -2124,7 +2088,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
         self._trace_items.clear()
         self._trace_candidates_by_id.clear()
         self._trace_badges_by_id.clear()
-        self._trace_detections_by_id.clear()
         self._syncing_trace_selection = False
         self._overlay_entries["trace"] = []
         self._refresh_overlay_legend()
@@ -2265,7 +2228,6 @@ class WorkspaceView(QtWidgets.QGraphicsView):
             self.workspace_scene.addItem(item)
             self._trace_items.append(item)
             self._trace_candidates_by_id[item.detection_id] = item
-            self._trace_detections_by_id[item.detection_id] = dict(detection)
             item.setSelected(is_selected)
             color = item.refresh_style()
 
@@ -3044,9 +3006,18 @@ class WorkspaceView(QtWidgets.QGraphicsView):
 
     def select_objects(self, object_ids: list[str]) -> None:
         wanted = set(object_ids)
-        for object_id, item in self._items_by_id.items():
-            item.setSelected(object_id in wanted)
+        previous = set(self.selected_object_ids())
+        was_syncing = self._syncing_trace_selection
+        self._syncing_trace_selection = True
+        try:
+            for object_id, item in self._items_by_id.items():
+                item.setSelected(object_id in wanted)
+        finally:
+            self._syncing_trace_selection = was_syncing
         self._update_object_transform_overlay()
+        selected = self.selected_object_ids()
+        if not was_syncing and set(selected) != previous:
+            self.selectionIdsChanged.emit(selected)
 
     def _emit_selection(self) -> None:
         # Qt may deliver a final selectionChanged while tearing the owned

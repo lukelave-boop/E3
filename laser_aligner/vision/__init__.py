@@ -8,17 +8,22 @@ from .object_trace import (
     sample_color,
 )
 from .trace_orientation import (
+    MAX_TRACE_ORIENTATION_SEGMENTS,
+    MAX_TRACE_ORIENTATION_SUBPATHS,
     TraceOrientationEstimate,
+    TraceOrientationGeometry,
     estimate_trace_orientation,
-    trace_native_world_geometry,
     trace_rotation_transform,
 )
 from .workpiece import WorkpieceDetection, detect_workpiece
 
 __all__ = [
+    "MAX_TRACE_ORIENTATION_SEGMENTS",
+    "MAX_TRACE_ORIENTATION_SUBPATHS",
     "TraceDetection",
     "TraceOptions",
     "TraceOrientationEstimate",
+    "TraceOrientationGeometry",
     "TraceResult",
     "WorkpieceDetection",
     "auto_target_hue",
@@ -27,6 +32,5 @@ __all__ = [
     "detect_workpiece",
     "estimate_trace_orientation",
     "sample_color",
-    "trace_native_world_geometry",
     "trace_rotation_transform",
 ]

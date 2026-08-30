@@ -250,14 +250,16 @@ On hardware, Trace completes Home / park before acquiring the temporary
 capture-only stepper hold; only the short settle/discard/raw-frame burst is held.
 The Camera display selector exposes the exact **Camera**, **Exposed bed**,
 **Eligible**, **Normalized**, and production **Mask** stages without granting
-project or laser authority. A successful non-grid native **Cut geometry** result
-can now offer an optional geometric **Straighten** review for the current
-selection. Stock boundaries retain their photographed outline. Straighten uses
-native lines, demonstrably near-linear Béziers, candidate axes, and group
-alignment—never OCR or source pixels—and rotates all selected vectors around one
-shared bounds-center pivot. Ambiguous evidence and failed native fits do not
-receive an offer; Reset restores the exact original fit, and only Create commits
-the previewed transform through normal undo history. An operator-reported
+project or laser authority. After a successful non-grid native **Cut geometry**
+result is created, E3 selects the new combined object or complete separate-object
+batch and reviews that finished project geometry in the normal Shape inspector.
+Straighten uses current world-space native lines, demonstrably near-linear
+Béziers, component axes, and component alignment—never OCR or source pixels—and
+applies one rigid shared-pivot project transform. Ambiguous evidence and failed
+native fits do not receive an offer. Straighten is its own CommandStack edit, so
+Undo and Redo restore and reapply the exact placement without a parallel Reset
+state. Stock boundaries and unrelated project objects remain ineligible. An
+operator-reported
 2026-08-30 Coleman run found a much cleaner Mask at manual threshold 128 (with a
 later bounded topology failure), usable geometry near 150, and a successful
 Auto-selected threshold of 170. Those observations lack a recorded

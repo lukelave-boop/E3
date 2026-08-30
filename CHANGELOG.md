@@ -6,20 +6,25 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
-- Added an optional Camera Trace **Straighten** review for Cut geometry downstream
-  of successful non-grid native fitting. Stock boundaries retain their
-  photographed physical outline. A bounded, Qt-free geometric estimator combines
-  physical native lines, demonstrably near-linear cubic segments, anisotropic
-  candidate axes, and multi-candidate alignment modulo 90 degrees, then hides
-  the offer for trivial, diffuse, conflicting, circular, square-like, or large
-  ambiguous results. Candidate-local disagreement is an explicit conservative
-  veto and group alignment cannot manufacture candidate support. The current
-  selection rotates as one rigid group around its
-  combined native bounds center; only the temporary vector overlay moves, Reset
-  restores the exact retained fit, and separate or combined Create commits the
-  equivalent placement through ordinary undo history. Failed native fits, grid
-  results, source pixels, thresholding, normalization, topology validation,
-  planning, motion, and laser authority are unchanged.
+- Redesigned Camera Trace **Straighten** as a post-Create project edit. Temporary
+  Trace candidates now serve only outline review; they have no Straighten,
+  rotated preview, or Reset state. Successful non-grid native Cut creation
+  immediately selects the new combined object or complete separate-object batch
+  and opens the normal Shape inspector. A bounded, Qt-free adapter analyzes the
+  selected objects' current world-space native geometry, including existing
+  scale, mirrors, rotation, and placement. It combines physical lines,
+  demonstrably near-linear cubic segments, anisotropic component axes, and
+  component alignment modulo 90 degrees. Disconnected subpaths in one compound
+  object and members of one separate-vector creation batch are one artwork
+  conflict boundary; independently created, reliably disagreeing artworks still
+  suppress the offer. Clicking Straighten rotates every selected object around
+  one exact combined-native-bounds pivot through `UpdateTransformsCommand`, so
+  Create and Straighten are distinct Undo/Redo entries and local lines, cubics,
+  subpaths, holes, islands, fill rules, and spacing remain unchanged. Trace
+  eligibility and creation-batch identity persist as non-authoritative object
+  metadata. Failed native fits, Stock boundaries, unrelated project objects,
+  source pixels, thresholding, normalization, topology validation, planning,
+  motion, and laser authority are unchanged.
 
 - Replaced Camera Trace's one-shot automatic Otsu choice with a bounded,
   image-derived threshold selector over the corrected normalized raster. Otsu
