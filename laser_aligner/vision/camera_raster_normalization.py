@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
-CAMERA_RASTER_NORMALIZATION_VERSION = "e3-camera-raster-normalization-v5"
+CAMERA_RASTER_NORMALIZATION_VERSION = "e3-camera-raster-normalization-v6"
 CAMERA_BACKGROUND_MODEL_MAX_DIMENSION_PX = 512
 CAMERA_BACKGROUND_MODEL_MAX_PIXELS_PER_MM = 1.0
 CAMERA_BACKGROUND_ENVELOPE_DIAMETER_MM = 35.0
@@ -27,6 +27,7 @@ CAMERA_NORMALIZATION_NOISE_FLOOR = 3.0
 CAMERA_NORMALIZATION_ROBUST_PERCENTILE = 99.5
 CAMERA_NORMALIZATION_MIN_RESPONSE_SCALE = 32.0
 CAMERA_NORMALIZATION_MAX_RESPONSE_SCALE = 64.0
+CAMERA_NORMALIZATION_RESPONSE_MODEL = "polarity_rank_envelopes"
 CAMERA_NORMALIZATION_RESPONSE_TRANSFER = "reciprocal"
 
 
@@ -95,6 +96,7 @@ class CameraRasterNormalizationDiagnostics:
     robust_percentile: float
     robust_response_level: float
     response_scale_levels: float
+    response_model: str
     response_transfer: str
     eligibility_supplied: bool
     eligible_pixel_count: int
@@ -428,7 +430,7 @@ def normalize_camera_trace_frame(
 ) -> CameraRasterNormalizationResult:
     """Remove low-frequency photographic variation before raster vectorization.
 
-    One symmetric background model produces dark- and light-feature responses.
+    One background preparation produces dark- and light-feature responses.
     Near-discrete flat-field inputs use their robust border level so clean solid
     interiors are independent of feature size. Other inputs use the physical
     rank-envelope model. Both returned rasters use ordinary artwork semantics:
@@ -540,6 +542,8 @@ def normalize_camera_trace_frame(
                     np.float32(flat_field.border_level),
                     dtype=np.float32,
                 )
+                dark_background = background
+                light_background = background
             else:
                 background_model_kind = "rank_envelope"
                 envelope_kernel = cv2.getStructuringElement(
@@ -558,21 +562,37 @@ def normalize_camera_trace_frame(
                     envelope_kernel,
                     borderType=cv2.BORDER_REFLECT_101,
                 )
-                envelope_midpoint = (
-                    lower_envelope + upper_envelope
-                ) * np.float32(0.5)
-                model_background = cv2.GaussianBlur(
-                    envelope_midpoint,
+                model_light_background = cv2.GaussianBlur(
+                    lower_envelope,
                     (0, 0),
                     sigmaX=smoothing_sigma_model_px_x,
                     sigmaY=smoothing_sigma_model_px_y,
                     borderType=cv2.BORDER_REFLECT_101,
                 )
-                background = cv2.resize(
-                    model_background,
+                model_dark_background = cv2.GaussianBlur(
+                    upper_envelope,
+                    (0, 0),
+                    sigmaX=smoothing_sigma_model_px_x,
+                    sigmaY=smoothing_sigma_model_px_y,
+                    borderType=cv2.BORDER_REFLECT_101,
+                )
+                light_background = cv2.resize(
+                    model_light_background,
                     (width_px, height_px),
                     interpolation=cv2.INTER_LINEAR,
                 ).astype(np.float32, copy=False)
+                dark_background = cv2.resize(
+                    model_dark_background,
+                    (width_px, height_px),
+                    interpolation=cv2.INTER_LINEAR,
+                ).astype(np.float32, copy=False)
+                # Retain the symmetric midpoint as compact diagnostic context.
+                # Production polarity responses use their one-sided envelope
+                # below so the opposite envelope cannot imprint half of a
+                # foreground feature into its own background estimate.
+                background = (
+                    light_background + dark_background
+                ) * np.float32(0.5)
         finally:
             if timing is not None:
                 timing.record(
@@ -587,13 +607,30 @@ def normalize_camera_trace_frame(
                 signed_residual[eligibility == 0] = np.float32(0.0)
             noise_floor = np.float32(CAMERA_NORMALIZATION_NOISE_FLOOR)
             zero = np.float32(0.0)
-            magnitude = np.maximum(np.abs(signed_residual) - noise_floor, zero)
+            dark_distance = dark_background - intensity
+            light_distance = intensity - light_background
+            # Choose polarity from the full one-sided envelope distances, then
+            # retain that full distance as amplitude. The old midpoint used the
+            # same sign decision but also halved useful contrast and allowed a
+            # foreground blotch to cancel neighbouring pixels.
+            dark_response = np.where(
+                dark_distance > light_distance,
+                np.maximum(dark_distance - noise_floor, zero),
+                zero,
+            )
+            light_response = np.where(
+                light_distance > dark_distance,
+                np.maximum(light_distance - noise_floor, zero),
+                zero,
+            )
+            if eligibility is not None:
+                dark_response[eligibility == 0] = zero
+                light_response[eligibility == 0] = zero
+            magnitude = np.maximum(dark_response, light_response)
             robust_level, response_scale = _robust_response_scale(
                 magnitude,
                 eligibility,
             )
-            dark_response = np.maximum(-signed_residual - noise_floor, zero)
-            light_response = np.maximum(signed_residual - noise_floor, zero)
             dark_raster = _artwork_raster(dark_response, response_scale)
             light_raster = _artwork_raster(light_response, response_scale)
             if eligibility is not None:
@@ -660,6 +697,7 @@ def normalize_camera_trace_frame(
             robust_percentile=CAMERA_NORMALIZATION_ROBUST_PERCENTILE,
             robust_response_level=robust_level,
             response_scale_levels=response_scale,
+            response_model=CAMERA_NORMALIZATION_RESPONSE_MODEL,
             response_transfer=CAMERA_NORMALIZATION_RESPONSE_TRANSFER,
             eligibility_supplied=eligibility is not None,
             eligible_pixel_count=(
@@ -708,6 +746,7 @@ __all__ = [
     "CAMERA_NORMALIZATION_MAX_RESPONSE_SCALE",
     "CAMERA_NORMALIZATION_MIN_RESPONSE_SCALE",
     "CAMERA_NORMALIZATION_NOISE_FLOOR",
+    "CAMERA_NORMALIZATION_RESPONSE_MODEL",
     "CAMERA_NORMALIZATION_RESPONSE_TRANSFER",
     "CAMERA_NORMALIZATION_ROBUST_PERCENTILE",
     "CAMERA_RASTER_NORMALIZATION_VERSION",

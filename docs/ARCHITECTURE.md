@@ -425,21 +425,24 @@ frame that does not meet every gate uses the rank envelope rather than guessing.
 All other frames use the physical rank-envelope model. At each model-axis
 pitch, a nominal 35 mm physical diameter becomes the next odd elliptical-kernel
 extent, bounded to 35 model pixels. Let `O` and `C` be `BORDER_REFLECT_101`
-grayscale opening and closing by that kernel. Their symmetric midpoint is
-`E = (O + C) / 2`. The model background is a Gaussian smoothing of `E` at 4 mm
-sigma on each physical axis, also bounded to 4 model pixels, and is returned to
-full resolution with `INTER_LINEAR`. At the normal 4 pixels/mm corrected pitch,
-a 760 x 480 frame therefore uses a 190 x 120, 1-pixel/mm model, a 35 x 35
-centered ellipse, and a 4-pixel (4 mm) finishing sigma.
+grayscale opening and closing by that kernel. Each is Gaussian-smoothed at
+4 mm sigma on each physical axis, also bounded to 4 model pixels, and returned
+to full resolution with `INTER_LINEAR` as `B_L` and `B_D`. At the normal
+4 pixels/mm corrected pitch, a 760 x 480 frame therefore uses a 190 x 120,
+1-pixel/mm model, a 35 x 35 centered ellipse, and a 4-pixel (4 mm) finishing
+sigma.
 
-Let `I` be the full-resolution `float32` grayscale image and `B` the upsampled
-background. The signed residual is `S = I - B`; uint8 subtraction is never used.
-With a three-level sensor-noise floor, the shared magnitude is
-`M = max(abs(S) - 3, 0)`. Its nearest-rank 99.5th percentile `q` defines the one
-shared response scale `R = clamp(q, 32, 64)`, preventing a few extremes from
-setting gain while also bounding noise amplification. The two responses are
-`D = max(-S - 3, 0)` and `L = max(S - 3, 0)`. The normalizer exposes each as an
-artwork-style raster
+Let `I` be the full-resolution `float32` grayscale image. The one-sided
+distances are `d_D = B_D - I` for dark features and `d_L = I - B_L` for light
+features. Only the larger distance wins at each pixel; a tie produces neither
+polarity. Subtracting the common three-level noise floor after that winner gate
+produces `D` and `L`. This retains the symmetric polarity decision without
+using the old midpoint as amplitude: the midpoint could imprint half of a
+foreground feature into its own background and let darker surface variation
+erase adjacent glyph pixels. The nearest-rank 99.5th percentile of
+`max(D, L)` defines the one shared response scale `R = clamp(q, 32, 64)`,
+preventing a few extremes from setting gain while also bounding noise
+amplification. The normalizer exposes each as an artwork-style raster
 `A(X) = uint8(rint(255R / (R + X)))`: blank and opposite-polarity pixels are
 white, `X = R` maps to 128, and stronger selected responses approach black
 monotonically without the old clipped-black endpoint. Thus the normalized
@@ -459,22 +462,27 @@ grayscale levels exist before the nearest high-class value, does it advance by
 at most two levels within that empty gap. Normal polarity measures headroom from
 the selected foreground minimum; inverted polarity measures it from the low
 background maximum. Source-resolution foreground classification is therefore
-identical; ordinary multi-level Otsu, manual thresholds, polarity semantics, and
-bicubic 4× reconstruction are unchanged. This bounded plateau nudge prevents a
-two-tone endpoint from turning bicubic rounding into false pinholes or islands.
+identical; ordinary multi-level Otsu, manual thresholds, and polarity semantics
+are unchanged. The 4× stage retains bicubic edge placement only in the
+one-source-pixel transition band. A cleaned source pixel with a homogeneous 3×3
+neighborhood is nearest-neighbor locked to that foreground or background
+classification, preventing cubic overshoot from inventing positive-area
+topology away from a real source boundary. The bounded plateau nudge remains
+useful for two-tone endpoints and the transition band.
 
 Opening and closing operate only on the bounded temporary background model;
 neither is applied to the normalized raster or the production mask. The 35 mm
 nominal diameter is larger than the expected 3–10 mm stencil strokes and the
 dense 21.5 mm label thickness, while the flat-field guard removes a finite-size
-cutoff for qualifying clean interiors. A dark feature is suppressed by the
-closing envelope, a light feature by the opening envelope, and their midpoint
-retains a symmetric signed response for either polarity; the 4 mm final blur
-makes the estimate smooth while following broad illumination. The adapter itself still performs
+cutoff for qualifying clean interiors. The 4 mm final blur makes both one-sided
+estimates smooth while following broad illumination. Their midpoint and
+`I - midpoint` remain immutable diagnostic context only. The adapter itself still performs
 no threshold, output-mask closing, output-mask opening, gap repair, stroke
 growth, hole filling, classification, or geometry inference. Deterministic
 clean-raster coverage verifies exact Otsu geometry for qualifying clean inputs,
-including dark and light 40 x 40 mm interiors.
+including dark and light 40 x 40 mm interiors; a variable-tone rank-envelope
+fixture verifies four long glyphs remain solid at manual threshold 128 despite
+darker internal surface marks.
 
 `CameraRasterNormalizationResult` owns defensive, immutable-byte-backed,
 C-contiguous read-only arrays for corrected BGR (`uint8`), grayscale (`uint8`),
@@ -482,7 +490,7 @@ background and signed residual (`float32`), and both normalized rasters
 (`uint8`). Its frozen diagnostics record the versioned content key,
 physical/image/model dimensions, effective model pitch, envelope diameter and
 odd kernel dimensions, smoothing sigma, noise floor, percentile, observed
-robust level, reciprocal scale, selected background-model kind, and flat-field
+robust level, reciprocal scale, selected background/response-model kinds, and flat-field
 palette/border/separation coverage. It is temporary analysis data with no project,
 planning, G-code, or laser authority and never fabricates
 `RasterAssetIdentity`.
@@ -821,10 +829,15 @@ camera, planning, G-code, or execution paths.
 `geometry.foreground` owns source-neutral binary connected-component cleanup,
 bounded `RETR_TREE` extraction, deterministic outer-tree decomposition, and
 even-odd tree rendering. It also owns conservative post-extraction pruning of
-non-geometric contour nodes. Bicubic 4× grayscale reconstruction can overshoot
-near a retained edge inside the one-source-pixel component halo and create an
-isolated threshold pixel; OpenCV then reports a one- or two-point, zero-area
-contour even though base-resolution component cleanup already ran. Pruning
+non-geometric contour nodes. `project.raster_vectorize` locks homogeneous
+cleaned-mask 3×3 interiors to their source classification before contour
+extraction, while retaining bicubic localization in the transition band. This
+prevents a reproduced all-foreground threshold plateau from ringing into a
+positive-area child hole and applies symmetrically to homogeneous background.
+Real holes, gaps, component/hole cleanup, and source boundaries remain
+unchanged. Bicubic reconstruction can still overshoot near a retained edge and
+create an isolated threshold pixel; OpenCV then reports a one- or two-point,
+zero-area contour even though base-resolution component cleanup already ran. Pruning
 removes only contours with fewer than three distinct trace points or zero
 trace-pixel polygon area. It retains every positive-area contour, rebuilds the
 complete `next`/`previous`/`first_child`/`parent` array in original sibling order,

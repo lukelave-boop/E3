@@ -20,8 +20,10 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 > synthetic coverage. That coverage includes reflective periodic honeycomb,
 > 20/50/84% stock coverage, lighting/white-balance-related drift, blur, sensor
 > noise, a highlight, machine surround, dark/light polarity, narrow gaps, a
-> hole, an underline, warm false-Color and real bounded-Color cases, exact 4×
-> display scaling, coordinate equivalence, and imported-raster parity. The
+> hole, an underline, variable-tone long glyphs with darker surface marks,
+> homogeneous 4× foreground/background classification, warm false-Color and
+> real bounded-Color cases, exact 4× display scaling, coordinate equivalence,
+> and imported-raster parity. The
 > Coleman stencil failure
 > scene has not been rerun on the physical camera. Do not treat this
 > implementation status as a physical-camera validation.
@@ -272,24 +274,28 @@ polarity. A dark machine-colored border, gradual quantized shadow, or realistic
 noisy gradient fails the guard and cannot select this shortcut.
 
 Other frames use a 35 mm elliptical grayscale kernel to compute opening and
-closing envelopes in `float32`; their midpoint is smoothed with a 4 mm Gaussian
-and returned to full resolution. At the default 4 pixels/mm, the rank-envelope
-diameter would be 140 corrected pixels, but it is only 35 pixels in the bounded
-model. That diameter is larger than the expected 3–10 mm stencil strokes and the
-reproduced 21.5 mm label thickness. Opening suppresses light features from one
-envelope, closing suppresses dark features from the other, and their midpoint
-leaves a symmetric signed response while the smaller final blur follows broad
-illumination. Frames that do not satisfy every flat-field condition deliberately
-fall back here; image-only logic cannot disambiguate every posterized shadow from
-flat artwork.
+closing envelopes in `float32`; each envelope is smoothed with the same 4 mm
+Gaussian and returned to full resolution. At the default 4 pixels/mm, the
+rank-envelope diameter would be 140 corrected pixels, but it is only 35 pixels
+in the bounded model. That diameter is larger than the expected 3–10 mm stencil
+strokes and the reproduced 21.5 mm label thickness. The smoothed closing is the
+dark-feature background and the smoothed opening is the light-feature
+background. Their midpoint remains available only as compact signed diagnostic
+context. Production response amplitude is not measured from that midpoint:
+doing so can copy half of a glyph into its own background and let a dark surface
+mark cancel otherwise sound neighboring pixels. Frames that do not satisfy
+every flat-field condition deliberately fall back here; image-only logic cannot
+disambiguate every posterized shadow from flat artwork.
 
-The grayscale image `I` and background `B` are subtracted as `float32`, yielding
-the signed residual `S = I - B`; no uint8 subtraction can wrap. Dark and light
-responses are `max(-S - 3, 0)` and `max(S - 3, 0)`, using the same three-level
-noise floor. One nearest-rank 99.5th-percentile magnitude scale is shared by
-both polarities and clamped to 32–64 grayscale levels, so one extreme edge or
-highlight cannot set arbitrary gain and ordinary sensor noise cannot be blown
-up without bound. For response `X`, the deliberate uint8 transfer is
+For full-resolution `float32` grayscale `I`, let `C` be the smoothed closing and
+`O` the smoothed opening. The one-sided distances are `dD = C - I` and
+`dL = I - O`. Each pixel is assigned only to the larger distance (ties remain
+blank), retaining the prior exclusive dark/light decision without halving its
+contrast. The selected response then subtracts the common three-level noise
+floor. One nearest-rank 99.5th-percentile scale over the maximum selected
+response is shared by both polarities and clamped to 32–64 grayscale levels, so
+one extreme edge or highlight cannot set arbitrary gain and ordinary sensor
+noise cannot be blown up without bound. For response `X`, the deliberate uint8 transfer is
 `round(255R / (R + X))`: blank/opposite-polarity pixels are white, a response
 equal to the robust scale `R` maps to 128, and stronger responses approach black
 without a clipped-black endpoint. Manual threshold 128 therefore means at least
@@ -306,15 +312,21 @@ span; inverted light tracing measures it above the low background endpoint. The
 nudge stays inside an empty histogram gap, so source-pixel classification is
 unchanged. The eligibility mask is nearest-neighbor reconstructed to 4× and
 gates again after component-hole reconstruction, preventing interpolation from
-resurrecting machine or bed pixels. Manual thresholds, polarity semantics, and
-the existing bicubic 4× artwork reconstruction remain unchanged; the extra headroom
-prevents two-tone endpoints from producing false bicubic pinholes or islands.
+resurrecting machine or bed pixels. Manual thresholds and polarity semantics
+remain unchanged. Bicubic reconstruction continues to place the edge inside a
+one-source-pixel transition band, but every cleaned source pixel whose complete
+3×3 neighborhood has one classification is locked to that foreground or
+background classification at 4×. This range-safe interior rule prevents cubic
+ringing from inventing a positive-area pinhole or island where no
+source-resolution boundary exists. The Otsu headroom adjustment remains useful
+for the transition band and two-tone endpoints.
 
 The frozen normalization value retains immutable-byte-backed corrected BGR,
-grayscale, `float32` background and signed residual, both uint8 polarity rasters,
-a versioned content key, physical/model scale, envelope/kernel size, smoothing
-sigma, selected model kind, flat-field bin/border/background/separation coverage,
-noise-floor, percentile, reciprocal transfer, and response-scale diagnostics. It is temporary
+grayscale, the diagnostic `float32` midpoint background and signed residual,
+both uint8 polarity rasters, a versioned content key, physical/model scale,
+envelope/kernel size, smoothing sigma, selected model and polarity-response
+kind, flat-field bin/border/background/separation coverage, noise-floor,
+percentile, reciprocal transfer, and response-scale diagnostics. It is temporary
 analysis data only. Opening and closing affect only the temporary background
 estimate; they never touch the normalized raster or production mask.
 Normalization does not threshold, close output gaps, grow or erode output
@@ -485,6 +497,16 @@ at 4× can overshoot near a retained edge inside the one-source-pixel component
 halo. A nominal-background sample may cross the threshold and form an isolated
 one-pixel fragment whose OpenCV contour has one or two points and zero polygon
 area.
+
+A separate reproduced failure occurred away from a real edge: a solid
+source-resolution foreground region containing a shallow 2×2 intensity plateau
+was entirely selected at threshold 128, but cubic ringing raised reconstructed
+samples above 128 and created a positive-area child hole. Degenerate-contour
+pruning correctly could not remove that apparent topology. The homogeneous
+3×3 classification lock described above now prevents both foreground holes and
+background islands in regions where the cleaned source mask has no boundary;
+real holes, gaps, cleanup decisions, and transition-band edge localization are
+preserved.
 
 The shared pixel pipeline now prunes only contours with fewer than three
 distinct trace points or zero trace-pixel polygon area after `RETR_TREE`

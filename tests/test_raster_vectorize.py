@@ -989,6 +989,64 @@ def test_4x_interpolation_artifact_is_pruned_after_component_cleanup(
     assert result.rejected_contour_tree_count == 0
 
 
+def test_4x_interpolation_does_not_invent_a_hole_inside_solid_foreground(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((80, 80), 255, dtype=np.uint8)
+    pixels[10:70, 10:70] = 80
+    # Every source sample in the rectangle is still foreground at threshold
+    # 128. Bicubic ringing around this shallow interior plateau must not turn
+    # it into a positive-area background island in the 4x contour workspace.
+    pixels[35:37, 35:37] = 127
+    payload = _write_payload(tmp_path / "solid-with-shallow-plateau.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(
+        threshold=128,
+        minimum_feature_area_mm2=0.0,
+        simplification_tolerance_mm=0.10,
+    )
+    masks = raster_vectorize_module._prepare_vectorization_masks(
+        source,
+        options,
+        20.0,
+        20.0,
+    )
+
+    source_contours, source_hierarchy = extract_foreground_contours(
+        masks.source_mask,
+        approximation=cv2.CHAIN_APPROX_NONE,
+    )
+    cleaned_contours, cleaned_hierarchy = extract_foreground_contours(
+        masks.cleaned_mask,
+        approximation=cv2.CHAIN_APPROX_NONE,
+    )
+    working_contours, working_hierarchy = extract_foreground_contours(
+        masks.working_mask,
+        approximation=cv2.CHAIN_APPROX_NONE,
+    )
+
+    assert np.all(masks.source_mask[35:37, 35:37] == 255)
+    assert np.all(masks.cleaned_mask[35:37, 35:37] == 255)
+    assert len(source_contours) == len(cleaned_contours) == 1
+    assert source_hierarchy[0, :, 3].tolist() == [-1]
+    assert cleaned_hierarchy[0, :, 3].tolist() == [-1]
+    assert len(working_contours) == 1
+    assert working_hierarchy[0, :, 3].tolist() == [-1]
+    assert np.all(masks.working_mask[140:148, 140:148] == 255)
+
+    result = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=20.0,
+        displayed_height_mm=20.0,
+    )
+
+    assert len(result.contours) == 1
+    assert result.contours[0].parent_index is None
+    assert result.pruned_contour_count == 0
+    assert result.degenerate_contour_count == 0
+
+
 def _test_contour(*points: tuple[int, int]) -> np.ndarray:
     return np.asarray(points, dtype=np.int32).reshape(-1, 1, 2)
 

@@ -6,6 +6,23 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Fixed two independent Camera Trace defects that produced missing glyph pieces
+  and unjustified internal loops. The photographic rank-envelope path now uses
+  the full smoothed closing-minus-image response for dark features and the full
+  image-minus-opening response for light features, with an exclusive
+  larger-distance polarity gate; the opening/closing midpoint remains
+  diagnostic only and can no longer halve a glyph's useful contrast or let a
+  darker surface mark erase neighboring pixels. The shared 4× pixel pipeline
+  also locks homogeneous cleaned-mask 3×3 interiors to their source
+  classification, while retaining bicubic localization in the real boundary
+  band, so interpolation ringing cannot invent a positive-area hole or island
+  where no source boundary exists. Variable-tone glyphs, exact threshold-128
+  camera glyphs, imported/camera parity, legitimate holes and gaps, broad
+  shadows, and machine-background rejection have focused regressions. This
+  changes vision/vector preparation only; guarded output authority, project
+  creation, planning, G-code, motion, arming, and laser controls are unchanged.
+  The reported physical Coleman-camera scene still requires a fresh run.
+
 - Fixed Pi-owned desktop **Disconnect** self-cancellation. The remote facade
   still advances its STOP generation to revoke queued and in-flight pre-START
   work, but binds only its own idle `machine.disconnect` cleanup RPC to that

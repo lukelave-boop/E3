@@ -337,7 +337,7 @@ def test_imported_and_camera_pixels_produce_equivalent_native_geometry(
     assert not camera_candidates
 
 
-def test_imported_and_normalized_camera_pixels_share_degenerate_4x_pruning(
+def test_imported_and_normalized_camera_pixels_share_homogeneous_4x_guard(
     tmp_path: Path,
 ) -> None:
     grayscale = np.full((16, 16), 220, dtype=np.uint8)
@@ -391,8 +391,8 @@ def test_imported_and_normalized_camera_pixels_share_degenerate_4x_pruning(
         raster_preview_callback=previews.append,
     )
 
-    assert imported.pruned_contour_count == 1
-    assert imported.degenerate_contour_count == 1
+    assert imported.pruned_contour_count == 0
+    assert imported.degenerate_contour_count == 0
     assert imported.rejected_contour_tree_count == 0
     assert imported.connected_component_count == camera.direct_count == 2
     assert len(imported.contours) == 2
@@ -416,10 +416,10 @@ def test_imported_and_normalized_camera_pixels_share_degenerate_4x_pruning(
     ) == 1
     assert {
         item.diagnostics["pruned_contour_count"] for item in camera.detections
-    } == {1}
+    } == {0}
     assert {
         item.diagnostics["degenerate_contour_count"] for item in camera.detections
-    } == {1}
+    } == {0}
     assert [
         item.diagnostics["contour_parents"] for item in camera.detections
     ] == [[None], [None]]

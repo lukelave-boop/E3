@@ -237,7 +237,10 @@ identical row/column objects, while pixel contours remain available for
 irregular objects. Ordinary non-grid Auto and By contrast freeze one corrected
 frame, apply the guarded Trace ROI, suppress only trusted empty bed whose
 structure and compensated Lab appearance both match the reference, normalize
-eligible material, and use the shared raster Otsu/4× contour/native-fit path.
+eligible material with polarity-specific opening/closing backgrounds, and use
+the shared raster Otsu/4× contour/native-fit path. The 4× path keeps bicubic
+edge localization at real source boundaries while locking homogeneous source
+interiors so interpolation cannot invent holes or islands.
 On hardware, Trace completes Home / park before acquiring the temporary
 capture-only stepper hold; only the short settle/discard/raw-frame burst is held.
 The Camera display selector exposes the exact **Camera**, **Exposed bed**,

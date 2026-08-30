@@ -290,17 +290,23 @@ repair output geometry. It converts the corrected image to uint8 grayscale,
 fills ineligible pixels only in the temporary background-model input, derives
 its robust response scale from eligible material, forces excluded response white,
 and builds a temporary model bounded to 1 pixel/mm and 512 pixels on its long
-axis. It normally estimates broad illumination from the midpoint of a 35 mm elliptical
-opening and closing plus 4 mm Gaussian smoothing. A narrowly gated clean/flat-
+axis. It normally computes 35 mm elliptical opening and closing envelopes and
+smooths each with a 4 mm Gaussian. The closing supplies the dark-feature
+background and the opening supplies the light-feature background; their
+midpoint is retained only as signed diagnostic context. A narrowly gated clean/flat-
 field path instead uses one constant robust border level only when four-level
 histogram bins, a 2 mm border band, whole-model background dominance, and
 far-versus-intermediate separation all pass their conservative gates. Continuous,
 quantized, and machine-border shadow cases therefore fall back to the rank
 envelope.
 
-The signed float32 residual is `I - B`. After a three-level noise floor, one
-nearest-rank 99.5th-percentile magnitude clamped to 32–64 levels supplies the
-shared response scale `R`. Dark and light uint8 artwork use the reciprocal
+The one-sided float32 distances are closing-minus-image for dark features and
+image-minus-opening for light features. Only the larger distance wins at a
+pixel; ties stay blank. This retains exclusive polarity while avoiding the old
+midpoint amplitude, which could treat half of a glyph as background and let a
+darker surface mark cancel adjacent sound pixels. After a three-level noise
+floor, one nearest-rank 99.5th-percentile magnitude clamped to 32–64 levels
+supplies the shared response scale `R`. Dark and light uint8 artwork use the reciprocal
 transfer `round(255R / (R + X))`: blank/opposite-polarity is 255, response `R`
 is 128, and stronger response approaches black without hard clipping. Automatic
 Otsu alone can advance its lowest equally optimal plateau member by at most two
@@ -309,8 +315,15 @@ headroom. Normal polarity measures the selected foreground span; inverted light
 polarity measures above the low background endpoint. Camera Otsu uses only
 eligible pixels; ineligible pixels are forced background before cleanup and
 again by a nearest-neighbor gate at 4×. With no eligibility, ordinary imported-
-raster Otsu, manual thresholding, masks, hierarchy, keys, and geometry are
-unchanged.
+raster Otsu and manual-threshold semantics remain unchanged.
+
+The shared 4× mask path now constrains bicubic reconstruction to its proper
+role: localizing a boundary inside the one-source-pixel transition band. Every
+cleaned source pixel whose complete 3×3 neighborhood is foreground or
+background is nearest-neighbor locked to that same classification at 4×. This
+prevents cubic ringing from inventing a positive-area hole or island where the
+source mask contains no boundary, without filling real holes, joining gaps,
+changing component cleanup, or replacing subpixel edge localization.
 
 The physical stencil failure `A retained raster contour has fewer than three
 distinct points` was traced to the 4× reconstruction itself. Bicubic grayscale
@@ -326,6 +339,20 @@ whose subtree contains legitimate geometry causes its entire root tree to be
 rejected rather than reparenting descendants and inventing a new even-odd
 topology. Quick Preview, exact imported-raster vectorization, and camera raster
 strategies all receive the same repair and diagnostics.
+
+The normalization regression is demonstrated by four long dark glyphs on a
+continuous camera gradient with within-glyph tone variation and darker surface
+marks. The former midpoint path retained **20.6%** of the known solid cores at
+manual threshold 128 and fragmented them into **97** foreground components; the
+one-sided winner-gated responses retain **100%**, reject all tested clean
+background, and produce the expected **four** components. A separate exact-mask
+fixture starts with a solid source rectangle and a selected 2×2 intensity
+plateau at level 127 under threshold 128. Unconstrained cubic reconstruction
+reached level 145, created 24 background pixels, and produced a positive-area
+child hole; the homogeneous-interior guard retains one root and no hole. A
+camera-glyph integration fixture preserves four real roots and its one intended
+hole, and the exact 1,170 × 444 Coleman source at threshold 122 remains 50
+components, 50 roots, and zero descendants in a local read-only diagnostic.
 
 The pixel-vectorization source, exact prepared-mask value, and result are source-
 neutral and defensively immutable on bytes backing stores. Imported assets wrap
@@ -435,6 +462,13 @@ skips** in **146.84 seconds**. Repository Ruff,
 `python -m compileall -q laser_aligner`, and `git diff --check` pass. These are
 deterministic Qt-free, source-level, loopback/simulator, and offscreen-widget
 checks; no interactive GUI, live camera, or hardware validation is implied.
+
+For the rank-envelope and homogeneous-interior corrections above, a fresh
+Windows focused batch covering camera normalization and trace, eligibility,
+shared raster vectorization, object Trace, native fit acceptance and curve
+fidelity, desktop trace sources/layout/async integration, and the standalone
+camera-raster diagnostic passed **328 tests** in **304.91 seconds**. Repository
+Ruff, `python -m compileall -q laser_aligner`, and `git diff --check` also pass.
 
 On the 640 × 480 correlated-texture stencil fixture at 2 pixels/mm, ten
 post-warmup eligibility samples had median stage times of **25.081 ms** for

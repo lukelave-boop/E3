@@ -1584,6 +1584,7 @@ def _oversampled_mask(
         interpolation=cv2.INTER_NEAREST,
     )
     cv2.bitwise_and(mask, component_gate, dst=mask)
+    del component_gate
     filled_holes = cv2.bitwise_and(
         cleaned_mask,
         cv2.bitwise_not(source_mask),
@@ -1599,6 +1600,40 @@ def _oversampled_mask(
             interpolation=cv2.INTER_NEAREST,
         )
         cv2.bitwise_or(mask, fill_gate, dst=mask)
+        del fill_gate
+    # Cubic reconstruction may ring beyond the range of its source samples.
+    # Near a manual threshold, that can invent a positive-area hole inside a
+    # region whose complete source-resolution neighbourhood is foreground (or
+    # an island inside homogeneous background). Preserve cubic edge placement
+    # only in the one-source-pixel transition band and lock every homogeneous
+    # 3x3 neighbourhood to the already-cleaned source classification.
+    neighbourhood = np.ones((3, 3), dtype=np.uint8)
+    foreground_interior = cv2.erode(
+        cleaned_mask,
+        neighbourhood,
+        borderType=cv2.BORDER_REPLICATE,
+    )
+    interior_gate = cv2.resize(
+        foreground_interior,
+        (width, height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    cv2.bitwise_or(mask, interior_gate, dst=mask)
+    background_interior = cv2.bitwise_not(
+        cv2.dilate(
+            cleaned_mask,
+            neighbourhood,
+            borderType=cv2.BORDER_REPLICATE,
+        )
+    )
+    interior_gate = cv2.resize(
+        background_interior,
+        (width, height),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    cv2.bitwise_not(interior_gate, dst=interior_gate)
+    cv2.bitwise_and(mask, interior_gate, dst=mask)
+    del interior_gate
     if source.eligibility_mask is not None:
         eligibility_gate = cv2.resize(
             source.eligibility_mask,

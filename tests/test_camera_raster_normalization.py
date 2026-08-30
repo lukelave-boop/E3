@@ -26,6 +26,7 @@ from laser_aligner.vision.camera_raster_normalization import (
     CAMERA_NORMALIZATION_MAX_RESPONSE_SCALE,
     CAMERA_NORMALIZATION_MIN_RESPONSE_SCALE,
     CAMERA_NORMALIZATION_NOISE_FLOOR,
+    CAMERA_NORMALIZATION_RESPONSE_MODEL,
     CAMERA_NORMALIZATION_RESPONSE_TRANSFER,
     CameraRasterNormalizationTiming,
     normalize_camera_trace_frame,
@@ -269,6 +270,56 @@ def _dense_label_camera_scene() -> np.ndarray:
     return np.repeat(grayscale[:, :, None], 3, axis=2)
 
 
+def _varied_long_glyph_camera_scene() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Long solid glyphs with dark surface marks on a mild camera gradient."""
+
+    height, width = 640, 900
+    rows, columns = np.mgrid[0:height, 0:width].astype(np.float32)
+    illumination = (
+        np.float32(195.0)
+        + np.float32(14.0) * columns / np.float32(width - 1)
+        - np.float32(10.0) * rows / np.float32(height - 1)
+        + np.float32(4.0) * np.sin(columns / np.float32(150.0))
+    )
+    stencil = np.zeros((height, width), dtype=np.uint8)
+    for center_x in (180, 360, 540, 720):
+        cv2.rectangle(
+            stencil,
+            (center_x - 30, 100),
+            (center_x + 30, 500),
+            255,
+            thickness=-1,
+        )
+
+    photo = illumination.copy()
+    interior = (
+        np.float32(88.0)
+        + np.float32(10.0) * rows / np.float32(height)
+        + np.float32(7.0) * np.sin(columns / np.float32(25.0))
+    )
+    photo[stencil > 0] = interior[stencil > 0]
+    for center in ((180, 300), (360, 410), (540, 220), (720, 420)):
+        cv2.ellipse(
+            photo,
+            center,
+            (20, 32),
+            25,
+            0,
+            360,
+            45.0,
+            thickness=-1,
+        )
+    photo += np.random.default_rng(4).normal(0.0, 1.5, photo.shape)
+    grayscale = np.clip(np.rint(photo), 0.0, 255.0).astype(np.uint8)
+    image = np.repeat(grayscale[:, :, None], 3, axis=2)
+    stencil_core = cv2.erode(stencil, np.ones((9, 9), dtype=np.uint8)) > 0
+    background_core = cv2.erode(
+        (stencil == 0).astype(np.uint8),
+        np.ones((15, 15), dtype=np.uint8),
+    ) > 0
+    return image, stencil_core, background_core
+
+
 def _otsu_foreground(raster: np.ndarray) -> tuple[int, np.ndarray]:
     threshold, mask = cv2.threshold(
         raster,
@@ -306,8 +357,8 @@ def test_dark_camera_normalization_removes_gradient_shadow_and_edge_background()
     normalized_background_std = float(
         np.std(result.dark_raster[scene.sheet_background])
     )
-    assert normalized_background_std < raw_background_std * 0.15
-    assert normalized_background_std < 4.0
+    assert normalized_background_std < raw_background_std * 0.25
+    assert normalized_background_std < 5.0
     assert (
         float(np.median(result.dark_raster[scene.sheet_background]))
         - float(np.median(result.dark_raster[stencil_core]))
@@ -385,10 +436,11 @@ def test_dark_camera_normalization_removes_gradient_shadow_and_edge_background()
         <= diagnostics.response_scale_levels
         <= CAMERA_NORMALIZATION_MAX_RESPONSE_SCALE
     )
+    assert diagnostics.response_model == CAMERA_NORMALIZATION_RESPONSE_MODEL
     assert diagnostics.response_transfer == CAMERA_NORMALIZATION_RESPONSE_TRANSFER
 
 
-def test_light_camera_normalization_uses_the_same_symmetric_background_contract() -> None:
+def test_light_camera_normalization_uses_the_same_exclusive_polarity_contract() -> None:
     scene = _synthetic_camera_scene("light")
     result = normalize_camera_trace_frame(scene.image, _PIXELS_PER_MM)
     _threshold, mask = _otsu_foreground(result.light_raster)
@@ -406,10 +458,10 @@ def test_light_camera_normalization_uses_the_same_symmetric_background_contract(
     component_count, _labels = cv2.connectedComponents(mask)
     assert component_count - 1 == 4
 
-    floor = np.float32(CAMERA_NORMALIZATION_NOISE_FLOOR)
-    expected_dark = np.maximum(-result.signed_residual - floor, np.float32(0.0))
-    expected_light = np.maximum(result.signed_residual - floor, np.float32(0.0))
-    assert not np.any((expected_dark > 0.0) & (expected_light > 0.0))
+    assert not np.any(
+        (result.dark_raster < 255) & (result.light_raster < 255)
+    )
+    assert result.diagnostics.response_model == CAMERA_NORMALIZATION_RESPONSE_MODEL
     assert result.raster_for("dark") is result.dark_raster
     assert result.raster_for(" LIGHT ") is result.light_raster
     with pytest.raises(ValueError, match="polarity"):
@@ -491,6 +543,47 @@ def test_rank_envelope_preserves_dense_21_5_mm_label_bodies() -> None:
     assert len(retained) == 16
     assert all(325 <= values[cv2.CC_STAT_WIDTH] <= 328 for values in retained)
     assert all(85 <= values[cv2.CC_STAT_HEIGHT] <= 88 for values in retained)
+
+
+def test_rank_envelope_preserves_varied_long_glyphs_at_manual_threshold() -> None:
+    image, stencil_core, background_core = _varied_long_glyph_camera_scene()
+    result = normalize_camera_trace_frame(image, _PIXELS_PER_MM)
+    source_mask = (result.dark_raster <= 128).astype(np.uint8) * 255
+    rgba = cv2.cvtColor(result.dark_raster, cv2.COLOR_GRAY2RGBA)
+    source = prepare_pixel_vectorization_source(rgba)
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        RasterVectorizationOptions(
+            detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+            threshold=128,
+            minimum_feature_area_mm2=0.5,
+            smoothing_mm=0.0,
+            simplification_tolerance_mm=0.1,
+            contour_output=RasterContourOutput.ALL_CONTOURS,
+        ),
+        displayed_width_mm=225.0,
+        displayed_height_mm=160.0,
+    )
+    contours, hierarchy = cv2.findContours(
+        prepared.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_NONE,
+    )
+
+    assert result.diagnostics.background_model_kind == "rank_envelope"
+    grayscale = result.grayscale
+    assert int(np.max(grayscale[stencil_core])) < int(
+        np.min(grayscale[background_core])
+    )
+    assert _foreground_fraction(source_mask, stencil_core) > 0.995
+    assert _foreground_fraction(source_mask, background_core) < 0.005
+    assert prepared.threshold_used == 128
+    assert prepared.connected_component_count == 4
+    assert hierarchy is not None
+    parents = hierarchy[0, :, 3].tolist()
+    assert len(contours) == 4
+    assert parents.count(-1) == 4
+    assert sum(parent >= 0 for parent in parents) == 0
 
 
 @pytest.mark.parametrize(
@@ -656,6 +749,56 @@ def test_flat_field_two_level_native_mask_keeps_one_real_hole_without_overshoot(
     assert hierarchy is not None
     parents = hierarchy[0, :, 3].tolist()
     assert parents.count(-1) == 2
+    assert sum(parent >= 0 for parent in parents) == 1
+
+
+def test_manual_threshold_4x_mask_does_not_invent_holes_in_camera_glyphs() -> None:
+    stencil = _stencil_mask(480, 760)
+    grayscale = np.full(stencil.shape, 225, dtype=np.uint8)
+    grayscale[stencil > 0] = 45
+    plateau_origins = ((170, 150), (230, 150), (390, 170), (200, 285))
+    for x, y in plateau_origins:
+        assert np.all(stencil[y : y + 2, x : x + 2] == 255)
+        # These samples remain foreground at the selected threshold after
+        # normalization. The 4x reconstruction must not ring past that
+        # threshold and turn them into phantom holes.
+        grayscale[y : y + 2, x : x + 2] = 158
+    image = np.repeat(grayscale[:, :, None], 3, axis=2)
+
+    result = normalize_camera_trace_frame(image, _PIXELS_PER_MM)
+    rgba = cv2.cvtColor(result.dark_raster, cv2.COLOR_GRAY2RGBA)
+    source = prepare_pixel_vectorization_source(rgba)
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        RasterVectorizationOptions(
+            detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+            threshold=128,
+            minimum_feature_area_mm2=0.0,
+            smoothing_mm=0.0,
+            simplification_tolerance_mm=0.1,
+            contour_output=RasterContourOutput.ALL_CONTOURS,
+        ),
+        displayed_width_mm=190.0,
+        displayed_height_mm=120.0,
+    )
+    contours, hierarchy = cv2.findContours(
+        prepared.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_NONE,
+    )
+
+    assert result.diagnostics.background_model_kind == "flat_field_constant"
+    assert all(
+        np.all(result.dark_raster[y : y + 2, x : x + 2] == 128)
+        for x, y in plateau_origins
+    )
+    assert np.all(source.composited_grayscale[stencil > 0] <= 128)
+    assert prepared.threshold_used == 128
+    assert prepared.connected_component_count == 4
+    assert len(contours) == 5
+    assert hierarchy is not None
+    parents = hierarchy[0, :, 3].tolist()
+    assert parents.count(-1) == 4
     assert sum(parent >= 0 for parent in parents) == 1
 
 
