@@ -6,6 +6,24 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added conservative geometric primitive recovery after the shared native
+  raster contour fit. Imported rasters and Camera Trace's Contrast, Auto,
+  Color, and direct native grid adapters use the same source-neutral stage.
+  Compatible baseline spans may become robust arbitrary-angle
+  total-least-squares lines or conceptual circular arcs when source-pixel and
+  fitting-tolerance maximum, RMS, endpoint, join, frame, and topology gates all
+  pass. This is geometric model fitting, not OCR, glyph, logo, or template
+  recognition. Hard-corner partitions remain protected, and a recovered join may move
+  an observed corner only to a nearby model intersection inside both endpoint
+  allowances. Any rejected hypothesis or invalid composition falls back to the
+  original fitted line/cubic pieces. Conceptual arcs are stored as bounded
+  canonical cubic Bézier spans; no native path schema or controller-arc command
+  was added. Compact diagnostics report recovered and rejected primitive counts,
+  lengths, residuals, and endpoint adjustment; the existing bounded timing
+  snapshot reports elapsed recovery time. Raster rotation, thresholding,
+  source-edge output localization, smoothing, G-code planning, and post-Create
+  Straighten behavior are unchanged.
+
 - Redesigned Camera Trace **Straighten** as a post-Create project edit. Temporary
   Trace candidates now serve only outline review; they have no Straighten,
   rotated preview, or Reset state. Successful non-grid native Cut creation

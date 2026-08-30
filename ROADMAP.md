@@ -30,8 +30,9 @@ The following foundations are implemented and automated-test covered:
 - shared desktop pre-import review with blocking findings, bounded rendering,
   explicit approval, and exact-source binding;
 - imported-raster tracing with seam-invariant bounded fitting, persistent
-  physical corner classification, editable safe Line-layer output, and
-  high-contrast preview comparison controls;
+  physical corner classification, conservative source-neutral recovery of
+  arbitrary-angle lines and conceptual circular arcs, editable safe Line-layer
+  output, and high-contrast preview comparison controls;
 - unified Camera Trace review with physical material eligibility, bounded Auto
   threshold selection, compound native line/cubic fitting, and an optional
   post-Create geometric Straighten command over selected finished project

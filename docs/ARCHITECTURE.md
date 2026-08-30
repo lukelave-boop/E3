@@ -904,6 +904,50 @@ attempts use two `PixelVectorizationSource` values derived from one immutable
 camera-normalization result. The adapter does not reconstruct non-grid raster
 geometry.
 
+After the ordinary constrained line/cubic fit and adjacent merging, that same
+source-neutral fitter runs one conservative geometric primitive-recovery stage.
+It evaluates compatible baseline spans against the ordered source-edge evidence
+already supplied to the fitter; it does not rotate or deskew the raster and does
+not change normalization, thresholding, mask reconstruction, source-edge
+localization, smoothing, corner classification, or hierarchy. Candidate lines
+use robust total least squares at their observed angle. Candidate circular arcs
+use one conceptual center, radius, direction, and sweep, then encode the accepted
+arc as bounded canonical cubic Bézier spans. It performs no OCR, glyph, logo, or
+template recognition. Source-pixel normal pitch and the
+existing fitting tolerance jointly bound maximum and RMS residual, endpoint
+movement, and join adjustment, so a wide tolerance cannot silently promote
+resolved curvature or freeform detail.
+
+Hard-corner classifications remain immutable partition boundaries across
+recovery. The observed vertex at one of those boundaries may be replaced by a
+nearby line-line, line-circle, or circle-circle intersection only when the
+adjustment fits both endpoint allowances. Smooth joins additionally require
+tangent agreement. Each source-index-exact partition tries a line, then a
+circle, then keeps that partition's original fitted objects; one partition's
+savings cannot justify expanding another partition, and recovery never increases
+the contour's segment count. No parallel-edge, constant-width, rectangle, or
+symmetry constraint is applied. The resulting native sequence must still pass the
+existing frame, continuous error, self/adjacent-arc, compound-clearance,
+even-odd, and rasterized-hierarchy validators. A rejected hypothesis, unsafe
+join, budget exhaustion, or failed composition leaves the corresponding
+baseline fitted pieces unchanged. If authoritative compound or rasterized
+topology rejects a contour set containing accepted primitives, the complete
+source-identical fit is rerun once with recovery disabled; topology complexity
+errors remain fatal. Recovery therefore changes neither the native
+path format nor downstream consumers:
+conceptual arcs remain ordinary `PathCubicSegment` values in
+`NativePathGeometry` version 1, and preview flattening, planning, G0/G1 output,
+and post-Create Straighten continue to consume ordinary line/cubic geometry.
+
+Recovery work is deterministic and bounded by the existing one-million raw
+contour-point limit, at most 64 hard-corner partitions, at most 256 primitive
+hypotheses per contour, six robust fitting iterations, at most 4,096 nearby
+source samples in each smooth-boundary search direction, and at most 64
+canonical cubics for one conceptual arc. Exceeding a primitive-local search or
+representation bound rejects recovery; existing authoritative topology-work
+limits are not weakened. `recover_primitives=False` is a non-persistent
+development/test comparison seam, not a Trace-panel option.
+
 Auto strategy failure and candidate failure are separate. A failed attempt is a
 bounded diagnostic and does not stop later strategies. Raster Auto asks the
 shared vectorizer for root-isolated results; Color Auto isolates fitting at the
@@ -941,9 +985,9 @@ and score terms; the operator sees only the selected-strategy summary.
 never attached to project data. It accumulates inclusive elapsed time and call
 counts for image decode/preparation, threshold, mask generation, contour extraction,
 corner classification, source-edge refinement, cubic fitting, Newton
-reparameterization, continuous fit validation, adjacent merging, authoritative
-topology, preview flattening, and rasterized hierarchy validation. Timing does
-not select algorithms or relax a budget. The five-million-step
+reparameterization, continuous fit validation, adjacent merging, primitive
+recovery, authoritative topology, preview flattening, and rasterized hierarchy
+validation. Timing does not select algorithms or relax a budget. The five-million-step
 continuous-validation limit remains authoritative;
 profiling the Coleman stencil showed that proof was inexpensive compared with
 Newton refinement, so it was not weakened or bypassed.
@@ -1015,6 +1059,13 @@ corners, and adjoining transitions remain cubic segments. The
 result reports raw contour points, fitted segments, preview-flattened points,
 validated maximum/mean/RMS fit error, detected hard corners, recursive splits,
 verified merges, longest smooth-span size, and maximum estimated deviation.
+Compact primitive diagnostics additionally report baseline/final segment counts,
+recovered line and circular-arc counts and lengths, canonical arc-cubic and
+freeform-cubic counts, rejected hypotheses, maximum point residual, worst
+accepted-primitive RMS residual after final endpoint/join reconstruction (each
+reported as the worse of raw-contour and eligible source-edge evidence), maximum endpoint adjustment, and source-pixel
+scale. The separate timing snapshot records recovery time. They are bounded fit
+diagnostics, not persisted primitive semantics or physical-accuracy evidence.
 That deviation includes accepted source-edge displacement, optional smoothing,
 fitting error, and preview flattening; it is not a
 physical-accuracy certification of the source image. Highly pixel-constrained
@@ -1044,7 +1095,9 @@ coordinates, hierarchy/count consistency, and the reported maximum deviation.
 
 The created object is one schema-3 `NativePathGeometry` with `path_version: 1`,
 explicit `fill_rule: "evenodd"`, and one closed native subpath for each retained
-contour. Each subpath stores only line and cubic segments. It is normalized to
+contour. Each subpath stores only line and cubic segments; an accepted conceptual
+circular arc is represented by one or more canonical cubic segments rather than
+introducing an arc segment or changing the path version. It is normalized to
 the image-local frame and the source image `Transform` is copied, preserving
 displayed width/height, center, rotation, and horizontal/vertical mirrors.
 Parent/depth/hole provenance is retained in metadata. Outer contours and holes

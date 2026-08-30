@@ -15,6 +15,7 @@ from laser_aligner.project import (
     NativePathGeometry,
     PathAffineTransform,
     PathFillRule,
+    PathLineSegment,
     RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationOptions,
@@ -82,6 +83,55 @@ def _trace_options() -> TraceOptions:
     )
 
 
+def _camera_bar(*, angle_deg: float, light_foreground: bool) -> np.ndarray:
+    background = 32 if light_foreground else 224
+    foreground = 224 if light_foreground else 32
+    image = np.full((160, 240, 3), background, dtype=np.uint8)
+    corners = cv2.boxPoints(((120.0, 80.0), (160.0, 20.0), angle_deg))
+    cv2.fillConvexPoly(
+        image,
+        np.rint(corners).astype(np.int32),
+        (foreground, foreground, foreground),
+        lineType=cv2.LINE_8,
+    )
+    return image
+
+
+def _assert_recovered_camera_bar(result: Any) -> None:
+    assert result.grid is None
+    assert result.direct_count == 1
+    detection = result.detections[0]
+    assert detection.native_verified
+    assert detection.diagnostics["native_sequences"] == ["LLLL"]
+    recovery = detection.diagnostics["primitive_recovery"]
+    assert recovery["baseline_segment_count"] > 4
+    assert recovery["final_segment_count"] == 4
+    assert recovery["recovered_line_count"] == 4
+    assert recovery["recovered_arc_count"] == 0
+    assert recovery["freeform_cubic_count"] == 0
+
+    geometry = NativePathGeometry.from_dict(detection.native_path or {})
+    assert len(geometry.subpaths) == 1
+    subpath = geometry.subpaths[0]
+    assert subpath.closed
+    assert all(isinstance(segment, PathLineSegment) for segment in subpath.segments)
+    current = np.asarray(subpath.start, dtype=np.float64)
+    vectors: list[np.ndarray] = []
+    scale = np.asarray(
+        (detection.native_width_mm, detection.native_height_mm),
+        dtype=np.float64,
+    )
+    for segment in subpath.segments:
+        endpoint = np.asarray(segment.to, dtype=np.float64)
+        vectors.append((endpoint - current) * scale)
+        current = endpoint
+    directions = [vector / np.linalg.norm(vector) for vector in vectors]
+    assert all(
+        abs(float(np.dot(direction, directions[(index + 1) % 4]))) < 0.05
+        for index, direction in enumerate(directions)
+    )
+
+
 def _root_groups(contours: Sequence[Any]) -> tuple[tuple[int, ...], ...]:
     groups: list[tuple[int, ...]] = []
     for root_index, root in enumerate(contours):
@@ -124,6 +174,120 @@ def test_non_grid_contrast_preserves_literal_components_holes_and_lines() -> Non
     assert any("C" in sequence for sequence in sequences)
     assert {item.diagnostics["connected_component_count"] for item in result.detections} == {5}
     assert {item.diagnostics["root_tree_count"] for item in result.detections} == {5}
+
+
+@pytest.mark.parametrize("light_foreground", [False, True])
+def test_camera_contrast_shallow_bar_recovers_lines_and_preserves_hard_corners(
+    light_foreground: bool,
+) -> None:
+    result = detect_objects(
+        _camera_bar(angle_deg=1.7, light_foreground=light_foreground),
+        TraceOptions(
+            detection_mode="contrast",
+            contrast_threshold_mode="manual",
+            contrast_threshold=128,
+            contrast_invert=light_foreground,
+            regular_grid=False,
+            output_mode="native",
+            min_area_mm2=2.0,
+            max_area_mm2=2_000.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.35,
+        ),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+    )
+
+    _assert_recovered_camera_bar(result)
+    recovery = result.detections[0].diagnostics["primitive_recovery"]
+    assert recovery["baseline_segment_count"] == 48
+    assert recovery["hypothesis_count"] == 6
+
+
+@pytest.mark.parametrize("detection_mode", ["contrast", "auto"])
+@pytest.mark.parametrize(
+    ("light_foreground", "angle_deg", "selected_strategy"),
+    [
+        (False, 1.7, "raster_dark"),
+        (True, 13.0, "raster_light"),
+    ],
+)
+def test_camera_auto_threshold_routes_supported_bars_through_primitive_recovery(
+    detection_mode: str,
+    light_foreground: bool,
+    angle_deg: float,
+    selected_strategy: str,
+) -> None:
+    result = detect_objects(
+        _camera_bar(
+            angle_deg=angle_deg,
+            light_foreground=light_foreground,
+        ),
+        TraceOptions(
+            detection_mode=detection_mode,
+            contrast_threshold_mode="auto",
+            contrast_invert=light_foreground,
+            regular_grid=False,
+            output_mode="native",
+            min_area_mm2=2.0,
+            max_area_mm2=2_000.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.35,
+        ),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+    )
+
+    _assert_recovered_camera_bar(result)
+    detection = result.detections[0]
+    assert detection.diagnostics["threshold_mode"] == "auto"
+    assert detection.diagnostics["threshold_used"] is not None
+    if detection_mode == "auto":
+        assert detection.diagnostics["auto_selected_strategy"] == selected_strategy
+
+
+def test_camera_color_routes_native_fit_through_primitive_recovery_diagnostics() -> None:
+    image = np.full((160, 240, 3), 200, dtype=np.uint8)
+    corners = cv2.boxPoints(((120.0, 80.0), (160.0, 20.0), 1.7))
+    cv2.fillConvexPoly(
+        image,
+        np.rint(corners).astype(np.int32),
+        (20, 20, 220),
+        lineType=cv2.LINE_8,
+    )
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_hue=0.0,
+            hue_tolerance=10.0,
+            min_saturation=50,
+            regular_grid=False,
+            output_mode="native",
+            min_area_mm2=2.0,
+            max_area_mm2=2_000.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.35,
+        ),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+    )
+
+    assert result.grid is None
+    assert result.direct_count == 1
+    detection = result.detections[0]
+    assert detection.native_verified
+    assert detection.diagnostics["mask_source"] == "color"
+    recovery = detection.diagnostics["primitive_recovery"]
+    assert recovery["baseline_segment_count"] == recovery["final_segment_count"]
+    assert recovery["recovered_line_count"] == 0
+    assert recovery["recovered_arc_count"] == 0
 
 
 def test_raster_to_camera_affine_preserves_pixel_center_semantics() -> None:
@@ -544,6 +708,7 @@ def test_grid_contrast_does_not_enter_raster_pixel_vectorizer(
         TraceOptions(
             detection_mode="contrast",
             regular_grid=True,
+            output_mode="native",
             min_area_mm2=40.0,
             min_width_mm=10.0,
             min_height_mm=8.0,
@@ -555,6 +720,11 @@ def test_grid_contrast_does_not_enter_raster_pixel_vectorizer(
     assert result.grid is not None
     assert result.direct_count == 6
     assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)
+    assert all(item.native_verified for item in result.detections)
+    assert all(
+        item.diagnostics["primitive_recovery"]["recovered_line_count"] == 0
+        for item in result.detections
+    )
 
 
 def test_grid_auto_retains_the_specialized_detector(
@@ -577,6 +747,7 @@ def test_grid_auto_retains_the_specialized_detector(
         TraceOptions(
             detection_mode="auto",
             regular_grid=True,
+            output_mode="native",
             min_area_mm2=40.0,
             min_width_mm=10.0,
             min_height_mm=8.0,
@@ -589,3 +760,8 @@ def test_grid_auto_retains_the_specialized_detector(
     assert result.direct_count == 6
     assert result.grid["observed_cells"] == 6
     assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)
+    assert all(item.native_verified for item in result.detections)
+    assert all(
+        item.diagnostics["primitive_recovery"]["recovered_arc_count"] == 0
+        for item in result.detections
+    )

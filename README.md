@@ -106,7 +106,9 @@ Native desktop workflow:
   a bounded **Quick preview** contour overlay, then replaces that display with
   the exact **Verified** native fit in a separate worker. Quick geometry is
   display-only; **Create vectors** remains disabled until the verified fit and
-  all authoritative validation finish. High-contrast color presets and
+  all authoritative validation finish. The verified fit includes one shared,
+  conservative post-fit recovery of arbitrary-angle lines and conceptual
+  circular arcs from compatible baseline spans. High-contrast color presets and
   preview-only opacity repaint locally; the workflow supports
   automatic, manual, or usable-alpha detection; and creates one native
   multi-contour line/cubic PATH while preserving the image frame, position,
@@ -214,6 +216,22 @@ hard corners plus persistent straight runs remain locked to the extracted
 contour. The 0.10 mm displayed tolerance and existing 0.08 mm internal fit
 budget remain fixed; this source-edge step does not introduce a local span
 tolerance or give Quick Preview geometry authoring authority.
+After the baseline fit, the source-neutral primitive-recovery stage may replace
+compatible neighboring spans with arbitrary-angle total-least-squares lines or
+conceptual circular arcs. This is geometric fitting, not OCR, font, logo, or
+template recognition. Maximum, RMS, and endpoint/join gates are bounded
+jointly by source-pixel spacing and the existing fit tolerance, and hard-corner
+partitions remain protected. A recovered join may move an observed corner only
+to a nearby model intersection inside both endpoint allowances; a rejected
+hypothesis, unsafe join, or failed frame or topology check keeps the original
+fitted pieces unchanged; a rejected compound result is rerun once through the
+complete baseline fit with recovery disabled. Model selection tries a line,
+then a circle, then the unchanged freeform fallback without increasing any
+candidate partition's segment count. Circular arcs are stored as bounded canonical cubic
+Bézier spans, so the native schema, existing G0/G1
+planning, and Straighten behavior do not change. The stage does not rotate or
+deskew the raster and does not change thresholding, source-edge localization,
+or smoothing.
 Preview/topology samples are not a second authoritative geometry copy. When
 planning is requested, E3 applies the complete
 object transform and then adaptively flattens the native curve at the fixed

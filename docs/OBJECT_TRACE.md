@@ -243,7 +243,10 @@ nested contours are not forced into washers.
   authoritative physical fitter through the contour-tree adapter. Grid routes
   retain their specialized output choices. Independent candidates remain
   independent, and each candidate retains its complete outer/hole/island
-  hierarchy.
+  hierarchy. After the baseline fit, the shared source-neutral primitive stage
+  may consolidate compatible spans into arbitrary-angle lines or conceptual
+  circular arcs. Accepted arcs remain canonical cubic Bézier segments in the
+  ordinary native path.
 - **Simplified contours** follows the detected pixel boundary and removes
   points within the **Simplify tolerance**. A lower tolerance preserves more
   edge detail. This is polygon simplification; it does not turn an irregular
@@ -262,6 +265,19 @@ foreground contour plus every descendant is one candidate. The green outline is
 the exact fitted geometry that will be created: real straight runs remain lines
 and curved runs use constrained cubic Béziers. No camera-specific outline
 finder, second contour extraction, or refit occurs afterward.
+
+Primitive recovery is a conservative post-fit geometry step, not image
+preprocessing. It uses the same ordered source-edge samples, source-pixel pitch,
+and fit tolerance for imported rasters and Camera Trace adapters. It performs no
+OCR, font, glyph, logo, or template recognition. It does not
+rotate or deskew camera pixels and does not change normalization, threshold
+selection, mask reconstruction, source-edge refinement, smoothing, hard-corner
+classification, or contour hierarchy. Each exact candidate partition tries a
+line, then a circle, and otherwise retains its original fitted line/cubic pieces;
+recovery never increases that partition or the complete contour's segment count.
+It does not reconcile parallel edges or impose constant width. Unsupported line or circle hypotheses,
+excessive endpoint movement, unsafe joins, and any failed frame or topology
+composition retain the original fitted line/cubic pieces.
 
 Auto's conditional Color, explicit Color, and grid routes fit chosen detector
 masks through the physical contour-tree adapter. Analytic circle, ellipse,
@@ -587,10 +603,16 @@ persisted and does not alter scoring or validation. The request boundary records
 `normalization`, and
 `camera_normalization_total`. Shared raster timing separately records mask
 generation/preparation, threshold, component cleanup, 4× preparation, contour extraction,
-cheap root-review filtering, native fitting, and authoritative topology and
-raster-hierarchy validation. Manual Contrast retains one raster-vectorization
-snapshot; Auto retains per-dark/per-light snapshots, the common normalization
-snapshot, its normalization key, and `background_estimate_count = 1`.
+cheap root-review filtering, native fitting, primitive recovery, and authoritative
+topology and raster-hierarchy validation. Compact primitive diagnostics include
+recovered and rejected line/arc hypotheses, recovered lengths, canonical
+arc-cubic and freeform-cubic counts, maximum point and worst accepted-primitive
+RMS residuals, maximum endpoint adjustment, and source-pixel scale. The separate
+timing snapshot records recovery time. They are bounded, non-persistent
+diagnostics and do not identify a new project segment type.
+Manual Contrast retains one raster-vectorization snapshot; Auto retains
+per-dark/per-light snapshots, the common normalization snapshot, its
+normalization key, and `background_estimate_count = 1`.
 
 ### Degenerate 4× contours
 
@@ -767,6 +789,17 @@ centering shift and continuously validated native fit error. Auto raster
 strategies use the shared raster coordinate contract; Auto Color, explicit
 Color, and grid paths retain their camera-mask physical adapter and corrected-
 pixel resolution floor.
+
+Post-fit primitive promotion is subject to that same accuracy floor. Robust
+total-least-squares lines may have any angle, and conceptual circular arcs must
+pass maximum and RMS radial error plus endpoint and join limits derived from both
+source-pixel spacing and the existing fit tolerance. Hard-corner partitions
+remain protected; an observed corner may move only to a nearby model intersection
+inside both endpoint allowances. Failed hypotheses and failed native topology
+checks fall back to the already validated baseline pieces. Canonical cubic
+storage preserves the native schema, and Straighten continues to analyze the
+resulting ordinary project lines and cubics without consulting raster pixels or
+primitive-recovery provenance.
 
 The desktop registers the center of each displayed camera pixel to the same
 OpenCV/BedMapper coordinate used by the detector. At very high zoom, a smooth

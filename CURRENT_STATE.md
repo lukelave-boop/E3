@@ -7,6 +7,100 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-30**
 
+## Active raster-native geometric primitive recovery
+
+The shared source-neutral native contour fitter now runs a conservative
+primitive-recovery pass after its ordinary constrained line/cubic fit and
+adjacent merging, but before native-frame and authoritative compound-topology
+acceptance. Imported rasters, Camera Trace Contrast and Auto raster strategies,
+and the existing physical-contour adapter used by applicable Color/Grid native
+paths all enter that one stage. It does not rotate, deskew, blur, widen, or
+otherwise preprocess pixels, and it does not change camera normalization,
+eligibility, threshold selection, 4x reconstruction, smoothing, or corner
+classification.
+
+Candidate lines use deterministic robust orthogonal total least squares and keep
+the observed arbitrary angle. Candidate circles use a normalized algebraic
+initialization, bounded robust geometric refinement, and endpoint-constrained
+open-arc refinement. Acceptance checks every ordered point, maximum and
+arc-length-weighted RMS residual, signed bias, support length and sample count,
+endpoint movement, independent-half/subsample stability, monotonic order,
+angular sweep and sample gap, radius, and source-normal pixel pitch. The
+primitive maximum, RMS, endpoint, and canonical-representation budgets are the
+stricter of fixed source-pixel fractions and the existing native-fit tolerance;
+a large user tolerance therefore cannot erase resolved curvature. Strong
+grayscale/alpha threshold crossings can support primitive validation even where
+the existing source-edge output remains locked at a hard corner or persistent
+straight run.
+
+Each exact source-index partition tries a line, then a conceptual circular arc,
+then retains its original fitted line/cubic objects. A primitive may not expand
+its own partition or increase the complete contour's segment count. Hard-corner
+partitions are preserved; nearby model intersections are accepted only inside
+both endpoint allowances, nearly parallel line intersections are rejected, and
+smooth joins require at most three degrees of tangent disagreement. Ambiguous
+smooth partitions have one bounded, source-backed repartition/refit attempt.
+There is no OCR, font/glyph/logo/template inference and no parallel-edge,
+constant-width, rectangle, or symmetry regularization.
+
+Accepted conceptual arcs are encoded as mathematically derived canonical cubic
+Bézier spans of at most 90 degrees, subdivided further until exact radial-extrema
+error satisfies the representation budget, with a 64-span ceiling. Persisted
+geometry remains `NativePathGeometry` version 1 with only `PathLineSegment` and
+`PathCubicSegment`; preview, G0/G1 planning, guarded G-code, and post-Create
+Straighten require no primitive-specific path. If the complete recovered result
+fails frame, authoritative native topology, or rasterized hierarchy validation,
+the source-identical contour set is refitted once with recovery disabled.
+Complexity failures remain fatal. The non-persistent `recover_primitives=False`
+argument exists only for development comparisons and fallback; there is no new
+Trace-panel setting.
+
+Work is bounded by the existing one-million raw-point limit, 64 hard-corner
+partitions, 256 hypotheses per contour, six robust iterations, 4,096 nearby
+samples per smooth-boundary search direction, 64 canonical spans per conceptual
+arc, and the unchanged authoritative topology comparison limit. Compact result
+and Camera diagnostics report baseline/final segment counts, accepted and
+rejected primitive counts, recovered lengths, canonical/freeform cubic counts,
+worst final raw/evidence maximum and RMS residuals, endpoint movement,
+source-pixel scale, and a separate opt-in primitive-recovery timing stage; no
+point arrays or primitive
+semantics are persisted.
+
+Focused primitive, downstream, curve-fidelity, and Camera routing verification
+passes **83 tests** in **37.11 seconds**. The broader shared raster/native,
+Camera normalization/eligibility, Object Trace, and diagnostic gate passes
+**275 tests** in **154.28 seconds** with four workers. The complete Windows
+four-worker suite passes **2,980 tests** with **14 expected platform/privilege
+skips** in **253.53 seconds**. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass.
+
+One uncontended Windows benchmark used an AMD Ryzen 7 8840HS, Python 3.14.4,
+NumPy 2.5.2, and OpenCV 4.14.0. Each case prepared one immutable source and exact
+4x mask, warmed both modes, then took the median of three alternating
+recovery-disabled/enabled runs in one process. Preparation was outside the wall
+median; stage values are independently measured inclusive medians and therefore
+are not additive. Times below are milliseconds; `D/E` means disabled/enabled.
+
+| Deterministic case | Segments | Primitive D/E | Topology D/E | Native fit D/E | Wall D/E |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Small Coleman E | 72 -> 54 | 0.027 / 7.276 | 3.686 / 2.967 | 16.626 / 23.593 | 28.324 / 34.572 |
+| Coleman stencil + underline | 244 -> 164 | 0.776 / 103.996 | 33.064 / 31.242 | 1,374.106 / 1,637.644 | 1,654.530 / 1,957.330 |
+| Large annular C | 84 -> 47 | 0.088 / 500.434 | 31.004 / 24.537 | 25,794.285 / 27,384.259 | 26,087.073 / 27,658.021 |
+| 100-component label | 3,600 -> 1,200 | 3.845 / 1,331.226 | 173.132 / 55.042 | 2,225.415 / 3,671.450 | 4,213.493 / 5,640.069 |
+| Medium Camera native fit | 81 -> 49 | 0.239 / 161.652 | 14.373 / 24.346 | 1,900.397 / 2,074.705 | 2,061.962 / 2,310.248 |
+| 2x Camera native fit | 392 -> 378 | 0.357 / 206.029 | 25.739 / 51.629 | 3,155.771 / 3,301.498 | 3,410.254 / 3,625.588 |
+| Maximum-area 2,048-square import | 134 -> 134 | 0.134 / 31.674 | 44.062 / 40.731 | 31,562.450 / 32,248.796 | 32,011.144 / 32,750.669 |
+
+The representative Camera wall overhead was **12.0%** at medium resolution and
+**6.3%** at 2x. The large C and exact maximum-area case were already dominated
+by baseline fitting; recovery added **6.0%** and **2.3%** respectively. The
+100-component fixture is the largest relative recovery cost at **33.9%** while
+removing 2,400 segments; it remains deterministic at 12 hypotheses per contour.
+These are synthetic/software measurements, not real-camera or physical-geometry
+evidence. A saved physical Coleman capture still needs an operator comparison of
+recovery enabled/disabled, broad-C and underline/stem fidelity, small PATENTS
+detail, post-Create Straighten composition, final Preview, and guarded output.
+
 ## Active post-Create Camera Trace orientation review / Straighten
 
 Straighten is now a normal project edit over selected, finished Camera Trace
