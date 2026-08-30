@@ -3,9 +3,11 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from laser_aligner.air_assist import (
+    AIR_ASSIST_DIRECTIVE_PREFIX,
     AirAssistCommands,
     AirAssistMode,
     AirAssistSettings,
+    AirAssistTarget,
 )
 from laser_aligner.errors import MachineError
 from laser_aligner.machine.controller_dialects import (
@@ -168,6 +170,111 @@ def test_air_assist_mapping_resolves_exact_immutable_controller_commands() -> No
     )
     with pytest.raises(FrozenInstanceError):
         marlin.fan_index = 5  # type: ignore[misc]
+
+    assert grbl.program_lines(True) == ("M8",)
+    assert grbl.program_lines(False) == ("M9",)
+    assert grbl.kind_for_program_line(" m8 (coolant) ; enabled") == "on"
+    assert grbl.kind_for_program_line("  m9   ; disabled") == "off"
+    assert marlin.kind_for_program_line("m106   p4 s255 ; enabled") == "on"
+    assert marlin.kind_for_program_line("M107 (off) P4") == "off"
+    assert grbl.kind_for_program_line("G0 X1") is None
+
+
+def test_secondary_marlin_mapping_is_digest_bound_and_never_emits_primary_gcode(
+) -> None:
+    endpoint = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+    commands = resolve_air_assist_commands(
+        AirAssistSettings(
+            mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+            port=endpoint,
+            baudrate=115200,
+        ),
+        protocol="grbl",
+    )
+
+    assert commands == AirAssistCommands(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        protocol="marlin",
+        fan_index=None,
+        on_commands=("M106 S255",),
+        off_commands=("M106 S0",),
+        target=AirAssistTarget.PI_SECONDARY,
+        port=endpoint,
+        baudrate=115200,
+    )
+    assert commands.target is AirAssistTarget.PI_SECONDARY
+    assert len(commands.mapping_digest) == 64
+    int(commands.mapping_digest, 16)
+    expected_on = (
+        f"{AIR_ASSIST_DIRECTIVE_PREFIX} {commands.mapping_digest} ON"
+    )
+    expected_off = (
+        f"{AIR_ASSIST_DIRECTIVE_PREFIX} {commands.mapping_digest} OFF"
+    )
+    assert commands.program_lines(True) == (expected_on,)
+    assert commands.program_lines(False) == (expected_off,)
+    assert "M106" not in expected_on
+    assert "M107" not in expected_off
+    assert commands.kind_for_program_line(f"  {expected_on}  ") == "on"
+    assert commands.kind_for_program_line(expected_off) == "off"
+    assert commands.kind_for_program_line("G1 X1") is None
+
+    changed_endpoint = resolve_air_assist_commands(
+        AirAssistSettings(
+            mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+            port=f"{endpoint}-other",
+            baudrate=115200,
+        ),
+        protocol="grbl",
+    )
+    changed_baudrate = resolve_air_assist_commands(
+        AirAssistSettings(
+            mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+            port=endpoint,
+            baudrate=250000,
+        ),
+        protocol="grbl",
+    )
+    assert changed_endpoint is not None
+    assert changed_baudrate is not None
+    assert changed_endpoint.mapping_digest != commands.mapping_digest
+    assert changed_baudrate.mapping_digest != commands.mapping_digest
+
+    for malformed in (
+        f"{AIR_ASSIST_DIRECTIVE_PREFIX} {'0' * 64} ON",
+        f"{AIR_ASSIST_DIRECTIVE_PREFIX}  {commands.mapping_digest} ON",
+        f"{AIR_ASSIST_DIRECTIVE_PREFIX} {commands.mapping_digest} MAYBE",
+        f"{AIR_ASSIST_DIRECTIVE_PREFIX} {commands.mapping_digest} ON extra",
+        f"{AIR_ASSIST_DIRECTIVE_PREFIX}ED {commands.mapping_digest} ON",
+    ):
+        with pytest.raises(ValueError, match="exactly match"):
+            commands.kind_for_program_line(malformed)
+
+
+@pytest.mark.parametrize("protocol", ["grbl", "marlin"])
+def test_secondary_marlin_mapping_accepts_only_explicit_primary_protocols(
+    protocol: str,
+) -> None:
+    commands = resolve_air_assist_commands(
+        AirAssistSettings(
+            mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+            port="/dev/serial/by-id/secondary",
+        ),
+        protocol=protocol,
+    )
+
+    assert commands is not None
+    assert commands.protocol == "marlin"
+    assert commands.target is AirAssistTarget.PI_SECONDARY
+
+    with pytest.raises(ValueError, match="explicit grbl or marlin"):
+        resolve_air_assist_commands(
+            AirAssistSettings(
+                mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+                port="/dev/serial/by-id/secondary",
+            ),
+            protocol="auto",
+        )
 
 
 def test_disabled_air_assist_resolves_none_even_for_auto_protocol() -> None:

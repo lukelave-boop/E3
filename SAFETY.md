@@ -73,28 +73,35 @@ emission has stopped or that the area is safe to enter.
   rectangle can be measured. Start with a small step and conservative feed,
   keep the path clear, and use the physical emergency stop for an actual
   emergency. If an axis was moved by hand, Home / park again before jogging.
-- A successful powered serial job automatically issues `M5`, waits behind all
-  accepted toolpath motion, homes, parks at the configured camera pose, waits
-  for that move to finish, restores the normal GRBL step-idle delay if
-  necessary, and releases the motors. When the saved machine has an explicit
-  Air Assist mapping, the immutable generated program starts with laser and
-  assist off, enables full output only for powered layers that request it, and
-  issues `M5` before its final assist-off command. The controller-side service
-  additionally acknowledges its own `M5` then immutable assist-off prelude
-  before line 1 and repeats that order before completion motion. Keep the
-  complete homing and parking path clear until the job reports completion.
+- A successful powered serial job automatically issues primary-controller `M5`,
+  waits behind all accepted toolpath motion, homes, parks at the configured
+  camera pose, waits for that move to finish, restores the normal GRBL step-idle
+  delay if necessary, and releases the motors. Secondary-controller Air Assist
+  programs carry strict non-comment `E3AIRASSIST <mapping-sha256> ON|OFF`
+  instructions in the immutable program bytes. The Pi validates and intercepts
+  them before the primary GRBL stream; the primary never receives those
+  instructions or Marlin fan commands. The Pi-owned secondary connection must
+  establish acknowledged OFF before work, enable only for powered requesting
+  layers, and acknowledge OFF after primary `M5` before completion motion. Keep
+  the complete homing and parking path clear until the job reports completion.
   Stops, job failures, emergency actions, disconnects, and zero-power jobs do
   not initiate this convenience motion.
-  For a START-accepted Pi-owned job this complete stream and completion sequence
-  run on the Pi and therefore do not depend on the Windows connection. Closing
-  the monitoring client is not a job disconnect. Explicit STOP prevents normal
-  completion motion and attempts the configured controller stop plus `M5`, then
-  the configured Air Assist off command without delaying laser STOP priority.
-  Detected execution/controller failures halt further streaming and attempt a
-  best-effort `M5` followed by configured Air Assist off; sudden controller, Pi
-  process, or power failure can prevent all software cleanup. Loss of a Windows
-  monitoring client after Pi START acceptance is not a controller disconnect
-  and does not interrupt the Pi-owned program or its Air Assist state.
+  For a START-accepted Pi-owned job both execution paths run on the Pi and do not
+  depend on the Windows connection. Closing or detaching the monitoring client
+  sends no fan transition. Explicit STOP prevents normal completion motion and
+  acts on the primary controller first; bounded independent secondary-OFF
+  cleanup follows and cannot hold primary STOP behind an acknowledgement.
+  Secondary rejection or timeout fails the job and preserves the authoritative
+  primary `M5`/STOP cleanup. A Pi restart marks an active job interrupted, never
+  resumes it, and attempts acknowledged secondary OFF using the exact typed
+  binding durably accepted with that job, even if current configuration changed.
+  Failed or ambiguous recovery remains pending and blocks later START. Sudden
+  controller, Pi process, serial, or power failure can still prevent software
+  cleanup.
+  Physical bring-up has verified only exact FAN2 ON (`M106 S255`) on the
+  identified secondary Creality/Marlin controller. Intended OFF (`M106 S0`) and
+  the complete lifecycle remain pending physical confirmation; this mapping
+  never uses a `P` parameter or `M107`.
 - On GRBL, Home / park records the active `G54`-`G59` and `G92` offsets. Every
   subsequent absolute-motion job re-reads them and is blocked if they changed
   after the parked camera alignment. This detects coordinate-state drift but
@@ -251,4 +258,4 @@ The C920 is not a laser power sensor or a protective viewing system. Direct or s
 
 ## Emergency behavior
 
-In an actual emergency, use the hardware emergency stop or disconnect power. The red software stop sends controller-specific reset/stop commands and `M5`, then attempts the configured Air Assist off command, but software and serial delivery can fail. Neither control is safety-rated.
+In an actual emergency, use the hardware emergency stop or disconnect power. The red software stop sends primary-controller reset/stop commands and `M5` first, then attempts bounded independent secondary Air Assist OFF cleanup, but software, network, USB, serial, controller, and power failures can prevent delivery. Neither software control is safety-rated.

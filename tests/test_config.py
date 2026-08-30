@@ -122,6 +122,8 @@ def test_air_assist_defaults_disabled_and_direct_settings_normalize_mode(
     assert settings.public_dict()["machine"]["air_assist"] == {
         "mode": "disabled",
         "fan_index": 0,
+        "port": "",
+        "baudrate": 115200,
     }
     assert direct.mode is AirAssistMode.MARLIN_FAN
 
@@ -157,6 +159,131 @@ def test_air_assist_explicit_compatible_mapping_loads(
 
     assert settings.machine.air_assist.mode.value == mode
     assert settings.machine.air_assist.fan_index == fan_index
+
+
+@pytest.mark.parametrize("protocol", ["grbl", "marlin"])
+def test_secondary_marlin_air_assist_loads_without_changing_primary_protocol(
+    tmp_path: Path,
+    protocol: str,
+) -> None:
+    config = tmp_path / f"secondary-{protocol}.json"
+    endpoint = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+    config.write_text(
+        json.dumps(
+            {
+                "machine": {
+                    "protocol": protocol,
+                    "port": "e3bridge://192.168.5.18:8765",
+                    "air_assist": {
+                        "mode": "secondary_marlin_fan",
+                        "fan_index": 0,
+                        "port": f"  {endpoint}  ",
+                        "baudrate": 115200,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.machine.protocol == protocol
+    assert settings.machine.air_assist == AirAssistSettings(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        port=endpoint,
+        baudrate=115200,
+    )
+
+
+@pytest.mark.parametrize(
+    ("protocol", "primary_port", "air_assist", "message"),
+    [
+        (
+            "auto",
+            "e3bridge://controller:8765",
+            {
+                "mode": "secondary_marlin_fan",
+                "port": "/dev/serial/by-id/secondary",
+            },
+            "requires an explicit grbl or marlin",
+        ),
+        (
+            "grbl",
+            "e3bridge://controller:8765",
+            {"mode": "secondary_marlin_fan", "port": ""},
+            "must be a nonempty Pi-local endpoint",
+        ),
+        (
+            "grbl",
+            "e3bridge://controller:8765",
+            {
+                "mode": "secondary_marlin_fan",
+                "port": "/dev/serial/by-id/secondary",
+                "fan_index": 1,
+            },
+            "must be 0 unless",
+        ),
+        (
+            "grbl",
+            "e3bridge://controller:8765",
+            {
+                "mode": "secondary_marlin_fan",
+                "port": "/dev/serial/by-id/secondary",
+                "baudrate": True,
+            },
+            "baudrate must be a JSON integer",
+        ),
+        (
+            "grbl",
+            "e3bridge://controller:8765",
+            {
+                "mode": "secondary_marlin_fan",
+                "port": "/dev/serial/by-id/secondary",
+                "baudrate": 0,
+            },
+            "baudrate must be positive",
+        ),
+        (
+            "grbl",
+            "/dev/serial/by-id/same-controller",
+            {
+                "mode": "secondary_marlin_fan",
+                "port": "/dev/serial/by-id/same-controller",
+            },
+            "must differ from the primary",
+        ),
+        (
+            "grbl",
+            "e3bridge://controller:8765",
+            {"mode": "secondary_marlin_fan", "port": 7},
+            "port must be a JSON string",
+        ),
+    ],
+)
+def test_secondary_marlin_air_assist_rejects_ambiguous_endpoint_config(
+    tmp_path: Path,
+    protocol: str,
+    primary_port: str,
+    air_assist: dict[str, object],
+    message: str,
+) -> None:
+    config = tmp_path / "invalid-secondary-air-assist.json"
+    config.write_text(
+        json.dumps(
+            {
+                "machine": {
+                    "protocol": protocol,
+                    "port": primary_port,
+                    "air_assist": air_assist,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match=message):
+        load_settings(config)
 
 
 @pytest.mark.parametrize(

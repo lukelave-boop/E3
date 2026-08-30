@@ -522,12 +522,16 @@ def test_manager_saves_constrained_air_assist_mapping_across_reopen(
     ) == tuple(mode.value for mode in AirAssistMode)
     assert "100%" in dialog.air_assist_mode.toolTip()
     assert dialog.air_assist_fan_index.isHidden()
+    assert dialog.air_assist_port.isHidden()
+    assert dialog.air_assist_baudrate.isHidden()
 
     dialog.air_assist_mode.setCurrentIndex(
         dialog.air_assist_mode.findData(AirAssistMode.GRBL_COOLANT.value)
     )
     qt_application.processEvents()
     assert dialog.air_assist_fan_index.isHidden()
+    assert dialog.air_assist_port.isHidden()
+    assert dialog.air_assist_baudrate.isHidden()
 
     dialog.protocol.setCurrentIndex(dialog.protocol.findData("marlin"))
     dialog.air_assist_mode.setCurrentIndex(
@@ -536,6 +540,8 @@ def test_manager_saves_constrained_air_assist_mapping_across_reopen(
     dialog.air_assist_fan_index.setValue(7)
     qt_application.processEvents()
     assert not dialog.air_assist_fan_index.isHidden()
+    assert dialog.air_assist_port.isHidden()
+    assert dialog.air_assist_baudrate.isHidden()
 
     assert dialog._save_selected() is True
     dialog.close()
@@ -555,7 +561,93 @@ def test_manager_saves_constrained_air_assist_mapping_across_reopen(
     )
     assert reopened.air_assist_fan_index.value() == 7
     assert not reopened.air_assist_fan_index.isHidden()
+    assert reopened.air_assist_port.isHidden()
+    assert reopened.air_assist_baudrate.isHidden()
     reopened.close()
+
+
+def test_manager_saves_pi_secondary_marlin_fan_with_grbl_primary(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    endpoint = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+    dialog = MachineManagerDialog(runtime)
+    secondary_index = dialog.air_assist_mode.findData(
+        AirAssistMode.SECONDARY_MARLIN_FAN.value
+    )
+
+    assert dialog.air_assist_mode.itemText(secondary_index) == (
+        "Creality / Marlin auxiliary fan (Pi secondary serial)"
+    )
+    dialog.air_assist_mode.setCurrentIndex(secondary_index)
+    qt_application.processEvents()
+
+    assert dialog.protocol.currentData() == "grbl"
+    assert dialog.air_assist_fan_index.isHidden()
+    assert not dialog.air_assist_port.isHidden()
+    assert not dialog.air_assist_baudrate.isHidden()
+    assert "Windows desktop never opens" in dialog.air_assist_port.toolTip()
+
+    dialog.air_assist_port.setText(endpoint)
+    dialog.air_assist_baudrate.setValue(115200)
+
+    assert dialog._save_selected() is True
+    dialog.close()
+
+    saved_machine = runtime.machine_registry.active_machine.machine
+    assert saved_machine.protocol == "grbl"
+    assert saved_machine.port == "e3bridge://192.168.5.18:8765"
+    assert saved_machine.air_assist.mode is AirAssistMode.SECONDARY_MARLIN_FAN
+    assert saved_machine.air_assist.fan_index == 0
+    assert saved_machine.air_assist.port == endpoint
+    assert saved_machine.air_assist.baudrate == 115200
+
+    reopened = MachineManagerDialog(runtime)
+    qt_application.processEvents()
+    assert reopened.protocol.currentData() == "grbl"
+    assert (
+        reopened.air_assist_mode.currentData()
+        == AirAssistMode.SECONDARY_MARLIN_FAN.value
+    )
+    assert reopened.air_assist_port.text() == endpoint
+    assert reopened.air_assist_baudrate.value() == 115200
+    assert reopened.air_assist_fan_index.isHidden()
+    assert not reopened.air_assist_port.isHidden()
+    assert not reopened.air_assist_baudrate.isHidden()
+    reopened.close()
+
+
+@pytest.mark.parametrize("secondary_port", ["", "e3bridge://192.168.5.18:8765"])
+def test_manager_rejects_missing_or_primary_secondary_endpoint(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    secondary_port: str,
+) -> None:
+    runtime = _runtime(tmp_path)
+    before = runtime.machine_registry.active_machine.to_dict()
+    dialog = MachineManagerDialog(runtime)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda _parent, _title, text: warnings.append(str(text)),
+    )
+    dialog.air_assist_mode.setCurrentIndex(
+        dialog.air_assist_mode.findData(
+            AirAssistMode.SECONDARY_MARLIN_FAN.value
+        )
+    )
+    dialog.air_assist_port.setText(secondary_port)
+    qt_application.processEvents()
+
+    assert dialog._save_selected() is False
+    assert runtime.machine_registry.active_machine.to_dict() == before
+    assert warnings
+    expected = "nonempty Pi-local" if not secondary_port else "must differ"
+    assert expected in warnings[-1]
+    dialog.close()
 
 
 def test_manager_rejects_air_assist_mapping_for_wrong_protocol(

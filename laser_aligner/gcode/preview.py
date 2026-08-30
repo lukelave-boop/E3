@@ -5,6 +5,8 @@ import math
 import re
 from dataclasses import dataclass
 
+from ..air_assist import AIR_ASSIST_DIRECTIVE_PREFIX
+
 # G-code words may be separated by spaces ("G1 X10") or packed together
 # ("G1X10"). The parser intentionally handles both forms because many
 # controllers and CAM programs emit compact lines.
@@ -165,6 +167,8 @@ def parse_gcode_segments(text: str) -> list[GcodeSegment]:
     spot_offset_x = spot_offset_y = 0.0
     segments: list[GcodeSegment] = []
     for raw_line in text.splitlines():
+        if raw_line.strip().startswith(AIR_ASSIST_DIRECTIVE_PREFIX):
+            continue
         metadata = parse_e3_metadata_comment(raw_line)
         if metadata is not None and metadata[0] == "job" and not segments:
             try:

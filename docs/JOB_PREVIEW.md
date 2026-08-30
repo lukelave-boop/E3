@@ -17,9 +17,13 @@ and answers two separate questions:
 1. What exact motion and controller power did generation produce?
 2. In what order and at approximately what time will each move occur?
 
-Preview parses the finalized G-code text that is exported or passed to
-`MachineService`; it does not regenerate geometry independently. Generated
-controller-ignored comments retain layer, pass, and source-object context.
+Preview parses the finalized canonical program bytes that are exported or
+passed to the guarded execution path; it does not regenerate geometry
+independently. Generated controller-ignored comments retain layer, pass, and
+source-object context. Exact strict non-comment
+`E3AIRASSIST <mapping-sha256> ON|OFF` instructions retain the secondary mapping
+digest and event schedule for E3-aware interception; they are not comments and
+are never forwarded to the primary GRBL controller.
 Configured laser-spot offsets are converted back to physical spot coordinates,
 so the graphical path remains registered to the camera workspace while the
 raw program retains controller coordinates. For a honeycomb-local project, the
@@ -63,11 +67,11 @@ program, and `MachineService` remains authoritative at execution time.
 
 The report also audits the existing per-layer Air Assist request against the
 detached running-machine mapping. A visible, output-enabled layer with powered
-work and `air_assist = true` is a blocker when no supported controller output is
-configured. Output-disabled, empty, and zero-power layers do not request a
-physical output and therefore do not turn assist on. This check is fail-closed:
-Preview and START cannot silently discard requested Air Assist or guess `M8` or
-`M106`.
+work and `air_assist = true` is a blocker when no supported same-primary or
+Pi-owned secondary mapping is configured. Output-disabled, empty, and
+zero-power layers do not request a physical output and therefore do not turn
+assist on. This check is fail-closed: Preview and START cannot silently discard
+requested Air Assist, guess `M8`/`M106`, or invent an E3AIRASSIST mapping.
 
 Blocked findings are presented only after the active preparation owner has been
 released, and the modeless window cannot continue to Preview. Warning-only and
@@ -98,11 +102,13 @@ arm the laser, submit G-code, or grant execution authority.
   time and maximum planned power. With nearest-path planning they also report
   rapid-travel distance saved relative to source order.
 - Each operation row reports **Air assist: On** when requested for powered work.
-  The review inspector lists the literal configured ON/OFF commands parsed from
-  the finalized program, such as `M8` / `M9` or
-  `M106 P<n> S255` / `M107 P<n>`. A bounded sidebar keeps large reviews
-  responsive; **View all exact commands…** opens every finalized event in
-  program order. These are review data, not controls.
+  For same-primary modes, the review inspector lists exact `M8`/`M9` or indexed
+  Marlin commands. For `secondary_marlin_fan`, it lists the strict finalized
+  `E3AIRASSIST <mapping-sha256> ON|OFF` events and their resolved exact
+  `M106 S255` / `M106 S0` actions. No `P` parameter or `M107` is valid for that
+  mode. A bounded sidebar keeps large reviews responsive; **View all exact
+  commands…** opens every finalized event in program order. These are review
+  data, not controls.
 
 The global bottom progress widget deliberately keeps prepared and executing
 state separate. Its compact visible label reports execution percentage or the
@@ -164,9 +170,12 @@ available.
 
 A Start Here replacement retains the configured fail-off prologue, reconstructs
 the Air Assist state required at the selected move boundary, preserves later
-layer transitions, and finishes laser-off before the configured assist-off
-command. It cannot create an assist mapping that was absent from the reviewed
-program.
+layer transitions, and finishes primary laser-off before configured assist-off.
+For secondary mode it retains and revalidates the immutable E3AIRASSIST mapping
+digest on every scheduled instruction; any mapping or schedule change changes
+the canonical program digest. It cannot create an assist mapping that was absent
+from the reviewed program. Secondary-assist programs are E3-specific and must
+not be submitted outside an E3-aware executor.
 
 Preview includes an operation table with independent display visibility and
 generated speed shown in mm/s plus percentage of the configured work-feed

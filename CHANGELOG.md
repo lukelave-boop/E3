@@ -6,21 +6,28 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
-- Added real binary Air Assist execution using the existing per-layer
-  `OperationLayer.air_assist` field. Cuts / Layers now exposes the persisted,
-  undoable setting; Machine Manager supplies a constrained disabled, GRBL
-  coolant (`M8`/`M9`), or indexed Marlin fan (`M106 P<n> S255`/`M107 P<n>`)
-  mapping with no arbitrary command or percentage input. Structured preflight
-  fails closed for an unmapped powered request; exact planning keeps assist active
-  across paths/passes and suppresses transition chatter, and Preview exposes
-  every literal finalized command, including through a full view for large
-  transition sets. Program and service-owned fail-off preludes, program
-  epilogue, Start Here, digest/Pi ownership, normal completion, STOP, failure,
-  disarm, and disconnect cleanup preserve laser-off priority and attempt the
-  immutable configured assist-off; failed cleanup retains that exact mapping
-  for later retries until disconnect. LightBurn
-  imports remain output-disabled while visibly retaining their Air Assist bit;
-  existing material recipes already copy that controlled operation field.
+- Added Pi-owned secondary-controller Air Assist execution using the existing
+  persisted and undoable `OperationLayer.air_assist` field. The typed machine
+  mapping now includes `secondary_marlin_fan` alongside disabled and the existing
+  same-primary GRBL coolant and indexed Marlin modes. Its configuration carries
+  `mode`, fixed `fan_index = 0`, Pi-local `port`, and `baudrate`; the identified
+  Creality/Marlin endpoint is
+  `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` at 115200 baud. Its only
+  commands are `M106 S255` and `M106 S0`, never a `P` parameter or `M107`.
+  Generated jobs preserve strict non-comment
+  `E3AIRASSIST <mapping-sha256> ON|OFF` instructions in immutable program bytes,
+  so any mapping or schedule change changes the program digest. The Pi validates
+  and intercepts those instructions before streaming the separate primary GRBL
+  program, owns execution after
+  START, checks secondary acknowledgements/timeouts, and fails the job closed on
+  secondary failure. Windows detach causes no fan transition; restart marks an
+  active job interrupted without resume and recovers the exact typed secondary
+  binding accepted with that job before serving new work, retaining and blocking
+  START on an unacknowledged cleanup. STOP acts
+  on primary GRBL first, then performs bounded independent secondary cleanup.
+  One persistent `CrealityControllerOwner` is reserved for later sharing with
+  the separate S1 Z-homing/CR Touch work. Built-in mappings remain disabled, and
+  LightBurn imports remain output-disabled while retaining their Air Assist bit.
 
 - Redesigned Camera Trace **Straighten** as a post-Create project edit. Temporary
   Trace candidates now serve only outline review; they have no Straighten,

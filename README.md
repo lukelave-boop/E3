@@ -159,11 +159,13 @@ Native desktop workflow:
   hot-swapping the immutable running identity or contacting hardware; new
   projects resolve curated operation defaults from that running identity and
   fall back to a visible 0%-power, output-disabled layer when unmatched
-- Binary per-layer Air Assist using the existing project setting, with a typed
-  saved-machine mapping for disabled, GRBL coolant, or an indexed Marlin fan.
-  Powered requests without a mapping block preflight; exact fail-off,
-  transition, STOP/failure cleanup, Preview, and Pi-owned program behavior use
-  the same finalized commands
+- Binary per-layer Air Assist using the existing project setting, with typed
+  mappings for disabled output, same-primary GRBL coolant or indexed Marlin fan,
+  and a Pi-owned `secondary_marlin_fan`. Secondary jobs carry strict non-comment
+  `E3AIRASSIST <mapping-sha256> ON|OFF` instructions in their immutable program
+  bytes; the Pi validates and intercepts them before the separate primary GRBL
+  stream. Powered requests without a usable mapping fail closed, and STOP keeps
+  primary `M5`/STOP authority ahead of bounded secondary cleanup
 - A sixth read-only Coordinate Audit tab with running-machine/calibration
   binding checks, immutable capture-time GRBL pose evidence, machine/support
   overlays, and clicked-point tracing across camera, beam, honeycomb, and
@@ -544,11 +546,15 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   features differ only in rounded-corner radius; use manual selection and
   inspect the overlay for those templates.
 - No safety-rated enclosure, interlock, flame detector, or hardware E-stop can be implemented in this software.
-- The exact Creality controller protocol and `S` power range for this particular conversion kit remain unverified.
-- The repurposed Ender-3 toolhead fan's actual firmware channel and command are
-  not yet physically verified. Keep Air Assist disabled until the saved machine
-  has an explicit matching protocol and either the verified Marlin fan index or
-  a physically verified GRBL coolant mapping.
+- The primary laser/motion controller remains separate GRBL hardware. Its exact
+  Pi-local persistent serial path has not yet been confirmed; do not substitute
+  the secondary controller path for it.
+- FAN2 ON is physically verified on the Creality/Marlin secondary controller at
+  `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, 115200 baud, using exactly
+  `M106 S255`. Intended OFF is exactly `M106 S0` and still needs physical
+  confirmation. This mapping never uses `P` or `M107`; keep it disabled for
+  production until OFF and the complete startup/completion/STOP/restart/failure
+  lifecycle are physically recorded.
 - Software stop is not a substitute for immediately removing power with a hardware emergency stop.
 
 ## References used for the initial design

@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 import pytest
 
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.app import AppContext
 from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.service import FrameBurst
@@ -24,6 +25,7 @@ from laser_aligner.config import (
     WorkArea,
 )
 from laser_aligner.errors import MachineError
+from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
@@ -38,6 +40,7 @@ from laser_aligner.machine.pi_job_protocol import (
 )
 from laser_aligner.machine.pi_job_service import (
     PiJobService,
+    PiJobServiceError,
     canonical_program_bytes,
     execution_policy_digest,
 )
@@ -978,6 +981,53 @@ def test_pi_restart_marks_persisted_running_job_interrupted_without_resume(
     finally:
         first.shutdown(stop_machine=False)
         restarted.shutdown(stop_machine=False)
+
+
+def test_start_is_blocked_while_prior_secondary_recovery_is_unresolved(
+    tmp_path: Path,
+) -> None:
+    machine = _machine(SimulatedTransport())
+    store = PiJobStore(tmp_path / "pending-secondary")
+    service = PiJobService(machine, store)
+    binding = resolve_air_assist_commands(
+        AirAssistSettings(
+            mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+            port="/dev/serial/by-id/unresolved-fan",
+            baudrate=115200,
+        ),
+        protocol="grbl",
+    )
+    assert binding is not None
+
+    def prepare(job_id: str) -> ValidatedProgram:
+        program = machine.preflight_program(_POWERED_PROGRAM)
+        payload = canonical_program_bytes(program)
+        service.begin_upload(job_id, "pending.gcode", len(payload), program.digest)
+        service.append_upload_chunk(job_id, 0, payload)
+        service.finalize_upload(job_id, **_service_binding(program))
+        return program
+
+    pending_id = str(uuid.uuid4())
+    prepare(pending_id)
+    store.begin_execution(
+        pending_id,
+        secondary_recovery_binding=binding,
+    )
+    store.update_state(pending_id, "failed", error="restart OFF unavailable")
+    next_id = str(uuid.uuid4())
+    next_program = prepare(next_id)
+
+    try:
+        with pytest.raises(PiJobServiceError, match="unresolved secondary"):
+            service.start(
+                next_id,
+                authorization_phrase=MachineService.ARM_PHRASE,
+                **_service_binding(next_program),
+            )
+        assert machine.status()["connected"] is False
+        assert store.get(next_id)["state"] == "prepared"
+    finally:
+        service.shutdown(stop_machine=False)
 
 
 @pytest.mark.parametrize(

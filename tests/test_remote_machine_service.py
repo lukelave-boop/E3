@@ -11,6 +11,7 @@ from typing import Any
 
 import pytest
 
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.app import AppContext
 from laser_aligner.config import LaserSettings, MachineSettings, load_settings
 from laser_aligner.core.runtime import CoreRuntime
@@ -26,6 +27,7 @@ from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_OWNED_JOBS,
+    CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     PROTOCOL_VERSION,
     PiJobProtocolError,
 )
@@ -40,6 +42,7 @@ from laser_aligner.machine.pi_machine_server import (
     ACTION_MACHINE_STATUS,
     ACTION_SERVICE_CAPABILITIES,
     SERVER_ACTION_SCHEMAS,
+    SERVER_CAPABILITIES,
 )
 from laser_aligner.machine.remote_service import RemoteMachineService
 from laser_aligner.machine.service import MachineService
@@ -108,6 +111,7 @@ class FakePi:
         self.connected = True
         self.before_request: Any = None
         self.raise_for_action: dict[str, Exception] = {}
+        self.capabilities = [CAPABILITY_PI_OWNED_JOBS]
 
     def _response(self, request: dict[str, Any], **body: Any) -> dict[str, Any]:
         return {"ok": True, "request_id": request["request_id"], **body}
@@ -165,7 +169,7 @@ class FakePi:
             return self._response(
                 request,
                 protocol_version=PROTOCOL_VERSION,
-                capabilities=[CAPABILITY_PI_OWNED_JOBS],
+                capabilities=list(self.capabilities),
                 actions=copy.deepcopy(SERVER_ACTION_SCHEMAS),
             )
         if action == ACTION_MACHINE_STATUS:
@@ -936,6 +940,70 @@ def test_legacy_raw_bridge_is_incompatible_and_never_falls_back(
         service.connect()
 
     assert calls == [ACTION_SERVICE_CAPABILITIES]
+    assert not hasattr(service, "_transport")
+
+
+def test_secondary_marlin_mode_requires_pi_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _machine_settings()
+    settings.air_assist = AirAssistSettings(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        port="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
+        baudrate=115200,
+    )
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = RemoteMachineService(
+        settings,
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    with pytest.raises(PiJobProtocolError, match="secondary Marlin fan capability"):
+        service.connect()
+
+    assert [request["action"] for request in fake.requests] == [
+        ACTION_SERVICE_CAPABILITIES
+    ]
+
+
+def test_combined_pi_server_advertises_secondary_marlin_fan_capability() -> None:
+    assert CAPABILITY_PI_SECONDARY_MARLIN_FAN in SERVER_CAPABILITIES
+
+
+def test_secondary_remote_client_uses_capability_without_opening_local_serial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _machine_settings()
+    settings.air_assist = AirAssistSettings(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        port="/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
+        baudrate=115200,
+    )
+    fake = FakePi()
+    fake.capabilities.append(CAPABILITY_PI_SECONDARY_MARLIN_FAN)
+    _install_fake(monkeypatch, fake)
+
+    def unexpected_local_serial(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("Windows remote client opened Pi-local serial")
+
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        unexpected_local_serial,
+    )
+    service = RemoteMachineService(
+        settings,
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+
+    service.connect()
+
+    assert [request["action"] for request in fake.requests] == [
+        ACTION_SERVICE_CAPABILITIES,
+        ACTION_MACHINE_CONNECT,
+    ]
     assert not hasattr(service, "_transport")
 
 

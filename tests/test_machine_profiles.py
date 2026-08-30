@@ -348,6 +348,46 @@ def test_saved_machine_air_assist_mapping_round_trips_and_is_detached(
     assert reloaded.to_dict()["machine"]["air_assist"] == {
         "mode": "marlin_fan",
         "fan_index": 3,
+        "port": "",
+        "baudrate": 115200,
+    }
+
+
+def test_saved_secondary_marlin_mapping_round_trips_with_grbl_primary(
+    tmp_path: Path,
+) -> None:
+    registry = MachineRegistry.load_or_migrate(_settings(tmp_path))
+    created = registry.create_machine(
+        "GRBL with Pi auxiliary fan",
+        "generic-grbl",
+        "custom-laser-head",
+    )
+    endpoint = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
+    created.machine.protocol = "grbl"
+    created.machine.port = "e3bridge://192.168.5.18:8765"
+    created.machine.air_assist = AirAssistSettings(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        port=endpoint,
+        baudrate=115200,
+    )
+
+    saved = registry.update_machine(created)
+    reloaded = MachineRegistry.load_or_migrate(_settings(tmp_path)).get_machine(
+        saved.id
+    )
+
+    assert reloaded.machine.protocol == "grbl"
+    assert reloaded.machine.port == "e3bridge://192.168.5.18:8765"
+    assert reloaded.machine.air_assist == AirAssistSettings(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        port=endpoint,
+        baudrate=115200,
+    )
+    assert reloaded.to_dict()["machine"]["air_assist"] == {
+        "mode": "secondary_marlin_fan",
+        "fan_index": 0,
+        "port": endpoint,
+        "baudrate": 115200,
     }
 
 

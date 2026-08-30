@@ -580,13 +580,14 @@ native shapes / imported SVG / traced outlines / native cubic paths
   -> project.job_preflight.build_job_preflight_report()
   -> immutable structured findings (blockers stop before exact generation)
   -> project.toolpath.generate_project_gcode()
-  -> finalized multi-layer G-code + typed machine Air Assist transitions
-     + controller-ignored E3 metadata
+  -> immutable canonical program bytes: primary G-code + controller-ignored
+     E3 metadata + strict non-comment E3AIRASSIST mapping/schedule instructions
   -> gcode.job_plan.build_job_plan()
   -> immutable JobPlan used by the dedicated desktop Preview
   -> window-modal exact review and distinct START JOB signal
   -> unchanged guarded main-window run path
-  -> the same finalized G-code text is submitted to MachineService
+  -> the same finalized bytes are submitted to the guarded execution path;
+     E3AIRASSIST instructions are validated/intercepted before primary streaming
 ```
 
 #### Desktop presentation topology (`v7`)
@@ -1281,10 +1282,11 @@ execution authority:
 | Boundary | Responsibility | Explicitly not responsible for |
 |---|---|---|
 | `MachineTransport` | Open/close, raw/line writes, line reads, and drain mechanics | Controller command meaning, identity decisions, safety gates, retries, or execution authorization |
-| immutable `ControllerDialect` | Pure GRBL or Marlin identity, response classification, command-policy, typed Air Assist capability, and parsing semantics | Opening or writing transports, locking, mutable service state, authorization, or starting work |
-| local `MachineService` | Safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data or delegating authority to a transport or dialect |
+| immutable `ControllerDialect` | Pure GRBL or Marlin primary-controller identity, response classification, same-controller command policy/capabilities, and parsing semantics | Opening or writing transports, locking, secondary-controller ownership, mutable service state, authorization, or starting work |
+| local `MachineService` | Primary-controller safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data, opening a configured Pi-only secondary endpoint on Windows, or delegating authority to a transport or dialect |
 | Windows `RemoteMachineService` | Exact local preflight, upload/START client, acceptance recovery, cached monitoring, reconnect identity, and priority STOP RPC | Owning Pi serial, streaming an accepted program, or falling back to raw bridge execution |
-| Pi `PiJobStore` / `PiJobService` | Atomic verified program/state persistence, repeat local preflight, one local `MachineService`, durable ownership, progress/result retention | Trusting client paths/metadata or resuming interrupted execution |
+| Pi `PiJobStore` / `PiJobService` | Atomic verified program/state persistence, repeat local preflight, immutable auxiliary-schedule validation/interception, one local primary `MachineService`, durable ownership, progress/result retention | Trusting client paths/metadata, forwarding E3-only instructions to primary GRBL, or resuming interrupted execution |
+| Pi `CrealityControllerOwner` | One persistent, serialized Creality/Marlin secondary connection; exact command/ACK/timeout exchange; startup/restart OFF; bounded cleanup | Primary laser/motion streaming, deciding job authority, or allowing a second concurrent owner; the same owner must later be shared with S1 Z-homing/CR Touch work |
 
 `create_machine_transport(backend, port, baudrate)` is the single explicit,
 construction-only factory for direct and explicitly legacy raw serial carriers.
@@ -1306,13 +1308,38 @@ exchange. No additional probe or controller command was introduced.
 Remote profiles reject `auto` before controller/network operations and require
 the same explicit GRBL or Marlin policy on both hosts.
 
-`MachineSettings.air_assist` selects only `disabled`, `grbl_coolant`, or
-`marlin_fan` plus a bounded fan index. The resolved dialect exposes immutable
-literal ON/OFF commands: `M8`/`M9` for explicit GRBL coolant, or
-`M106 P<n> S255`/`M107 P<n>` for explicit Marlin fan. Enabled mappings reject
-`auto` and mismatched protocols. The streamed-command validator accepts only
-those exact configured literals and never broadens the manual-command surface
-or permits arbitrary auxiliary G-code.
+`MachineSettings.air_assist` is the constrained object
+`{mode, fan_index, port, baudrate}`. Existing `grbl_coolant` and `marlin_fan`
+modes retain their same-primary-controller literal pairs (`M8`/`M9` and
+`M106 P<n> S255`/`M107 P<n>`) and explicit matching dialect requirements.
+`secondary_marlin_fan` instead requires an explicit primary protocol and fixed
+`fan_index = 0`; it keeps a separate Pi-local Creality/Marlin serial endpoint.
+The current E3 deployment retains its separate explicit GRBL primary:
+
+```json
+{
+  "mode": "secondary_marlin_fan",
+  "fan_index": 0,
+  "port": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
+  "baudrate": 115200
+}
+```
+
+That secondary mapping has exactly `M106 S255` ON and `M106 S0` OFF. It never
+uses a `P` parameter or `M107`. Windows may persist the endpoint as opaque
+Pi-local configuration but never opens it. The primary laser/motion controller
+remains a separate GRBL device; its exact Pi-local serial path is not yet
+confirmed and must not be inferred from the secondary endpoint.
+
+Generated secondary-assist jobs use the exact strict non-comment grammar
+`E3AIRASSIST <mapping-sha256> ON|OFF` in the immutable canonical program bytes.
+The SHA-256 binds the exact mapping; any mapping or schedule change changes the
+program digest. The Pi validates and intercepts these instructions before the
+primary stream; they are never primary-controller G-code. Invalid, forged,
+mismatched, or unsupported instructions fail closed in E3. The E3-specific
+program is not portable controller G-code and must not be submitted outside an
+E3-aware executor. No mode broadens the manual-command surface or permits
+arbitrary auxiliary G-code.
 
 A saved machine profile supplies reusable physical motion-platform defaults,
 including backend, protocol, connection, envelope, homing, and feed settings. A
@@ -1382,9 +1409,10 @@ controller support is claimed.
   connection's absolute coordinate reference;
 - limits diagnostics to read-only queries and `M5`;
 - requires temporary arming for positive-power jobs;
-- restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset
-  plus only the exact typed Air Assist command pair configured for the explicit
-  controller dialect;
+- restricts primary-controller jobs to a conservative absolute-millimetre
+  G0/G1/M3/M4/M5 subset plus the exact same-controller auxiliary pair where
+  configured; strict E3AIRASSIST instructions form a separate E3 program grammar
+  and are validated/intercepted before any primary write;
 - validates every destination against the guarded machine rectangle, or the
   exact configured convex polygon carried by a support-bound preflight;
 - exposes incremental desktop jogging only as absolute, feed-controlled `G1`
@@ -1401,28 +1429,40 @@ controller support is claimed.
 - permits the Coordinate Audit GRBL `?` sampler only under ordinary command
   ownership and rejects it before transmission while a streamed job is running;
 - revokes authorization on stop or disarm;
-- attempts `M5` on stop, disarm, disconnect, job failure, and scoped motor-
-  release cleanup, even when mutable configuration or controller state is
-  already untrusted, then attempts configured Air Assist off without putting it
-  ahead of emergency STOP/laser-off authority.
+- attempts primary `M5` on stop, disarm, disconnect, job failure, and scoped
+  motor-release cleanup even when mutable configuration or controller state is
+  already untrusted; secondary-controller OFF is bounded independent cleanup and
+  never moves ahead of or delays primary STOP/laser-off authority.
 
 Generated powered-job programs establish `G21`, `G90`, laser off, and configured
-Air Assist off before work. The layer planner emits ON only immediately before
-the first powered Line, Fill, or Raster output that requests it, holds it across
-paths, rapid travels, passes, and adjacent requesting layers, and emits OFF
-before later powered non-requesting work. Output-disabled, empty, and zero-power
-layers never enable it. Normal termination is `M5`, configured assist off, then
-a standalone `M5`, preserving the program-end invariant. The same bytes feed
-`JobPlan`, Preview, digest/finalization, direct execution, and Pi-owned execution;
-Start Here reconstruction retains these state transitions.
+Air Assist off before work. For `secondary_marlin_fan`, fail-off and transitions
+are immutable E3AIRASSIST instructions rather than Marlin commands in the GRBL
+stream. The layer planner emits ON only immediately before the first powered
+Line, Fill, or Raster output that requests it, holds it across paths, rapid
+travels, passes, and adjacent requesting layers, and emits OFF before later
+powered non-requesting work. Output-disabled, empty, and zero-power layers never
+enable it. Normal termination retains a standalone final `M5`; the Pi
+acknowledges primary laser-off before secondary OFF and before completion motion.
+The same canonical bytes feed `JobPlan`, Preview, finalization/digest, and
+Pi-owned execution, and Start Here reconstruction preserves both mapping digest
+and schedule.
 
-Independently of program literals, `MachineService` sends and acknowledges its
-own `M5` followed by the immutable validated Air Assist OFF command before line
-1, then repeats that laser-first pair after the program and before completion
-motion. This covers configured powered setup/calibration programs that do not
-carry layer transitions. Failed-job cleanup retains the exact active OFF mapping
-for later STOP/disarm/disconnect retries even if mutable machine settings change;
-it is discarded only after an acknowledged normal postlude or transport close.
+After durable START acceptance, the Pi owns execution even when the Windows
+monitor detaches; detachment sends no secondary transition. Its single
+persistent `CrealityControllerOwner` serializes secondary commands and validates
+every ACK/timeout. A secondary failure fails the job while primary `M5`/STOP
+remains authoritative. STOP performs the primary action first and then bounded,
+independent secondary-OFF cleanup. Pi service restart changes a persisted active
+job to interrupted, never resumes it, and attempts acknowledged secondary OFF.
+At the prepared-to-start boundary, the store atomically retains a private typed
+recovery binding for the accepted secondary endpoint. Startup reconstructs only
+the mode's hard-coded OFF command, reconciles and acknowledges that exact binding
+before opening either primary execution or network service, and clears it with a
+compare-and-swap only after success. Pending recovery survives failed restarts,
+configuration changes, and terminal-job retention; it blocks later START rather
+than redirecting cleanup through mutable configuration. Future S1 Z/CR Touch work
+must share this one controller owner rather than open another Creality serial
+connection.
 
 The common guarded job-start seam performs `M5 → home → park → idle wait → arm
 → run`. Direct serial executes that seam in the desktop process. Remote serial

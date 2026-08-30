@@ -11,6 +11,7 @@ import pytest
 
 from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
+from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_BEGIN,
     ACTION_JOB_CHUNK,
@@ -22,9 +23,16 @@ from laser_aligner.machine.pi_job_service import (
     canonical_program_bytes,
     execution_policy_digest,
 )
-from laser_aligner.machine.pi_job_store import PiJobStore
+from laser_aligner.machine.pi_job_store import (
+    SECONDARY_RECOVERY_BINDING_FIELD,
+    PiJobStore,
+)
 from laser_aligner.machine.pi_machine_server import PiMachineServer
 from laser_aligner.machine.remote_service import RemoteMachineService
+from laser_aligner.machine.secondary_controller import (
+    CrealityControllerOwner,
+    SecondaryMarlinFanController,
+)
 from laser_aligner.machine.service import MachineService
 from tests.fakes.simulator_transport import SimulatedTransport
 
@@ -47,6 +55,7 @@ _POWERED_PROGRAM = "\n".join(
     )
 )
 _OUTPUT_POLYGON = ((0.0, 0.0), (40.0, 0.0), (40.0, 40.0), (0.0, 40.0))
+_SECONDARY_PORT = "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0"
 
 
 class GatedRecordingTransport(SimulatedTransport):
@@ -105,6 +114,31 @@ class ObservingPiMachineServer(PiMachineServer):
             elif action == ACTION_JOB_START:
                 self.start_response = copy.deepcopy(response)
         return response
+
+
+class RecordingSecondarySerial:
+    """Persistent acknowledged secondary peer for Pi-ownership E2E coverage."""
+
+    def __init__(self) -> None:
+        self.open_calls = 0
+        self.close_calls = 0
+        self.writes: list[str] = []
+
+    def open(self) -> None:
+        self.open_calls += 1
+
+    def close(self) -> None:
+        self.close_calls += 1
+
+    def drain(self) -> list[str]:
+        return []
+
+    def write_line(self, line: str) -> None:
+        self.writes.append(line)
+
+    def read_line(self, timeout: float = 1.0) -> str:
+        assert timeout > 0.0
+        return "ok"
 
 
 def _machine_settings(port: str) -> MachineSettings:
@@ -302,4 +336,144 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
         server.stop()
         transport.release(execute=False)
         job_service.shutdown(stop_machine=True)
+        server_thread.join(timeout=2.0)
+
+
+def test_windows_detach_does_not_change_pi_owned_secondary_fan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = GatedRecordingTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda *_args, **_kwargs: primary,
+    )
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", _TOKEN)
+
+    air_settings = AirAssistSettings(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        port=_SECONDARY_PORT,
+        baudrate=115200,
+    )
+    binding = resolve_air_assist_commands(air_settings, protocol="grbl")
+    assert binding is not None
+    secondary_serial = RecordingSecondarySerial()
+    owner = CrealityControllerOwner(
+        _SECONDARY_PORT,
+        115200,
+        serial_factory=lambda _port, _baudrate: secondary_serial,
+        sleep=lambda _delay: None,
+        startup_delay_seconds=0.0,
+        read_timeout_seconds=0.1,
+    )
+    fan = SecondaryMarlinFanController(owner, binding)
+    secondary_program = "\n".join(
+        (
+            "G21",
+            "G90",
+            "M5",
+            *binding.program_lines(False),
+            "G0 X10 Y10 F1000",
+            *binding.program_lines(True),
+            "M4 S10",
+            _GATED_COMMAND,
+            "G1 X30 Y30 F500",
+            "M5",
+            *binding.program_lines(False),
+            "M5",
+        )
+    )
+    laser_settings = LaserSettings(
+        arm_timeout_seconds=60,
+        guarded_output_polygon_mm=_OUTPUT_POLYGON,
+    )
+    local_settings = _machine_settings("test-controller")
+    local_settings.air_assist = air_settings
+    local_machine = MachineService(
+        local_settings,
+        laser_settings,
+        hardware_enabled=True,
+        laser_lockout=False,
+        secondary_air_assist=fan,
+    )
+    job_service = PiJobService(
+        local_machine,
+        PiJobStore(tmp_path / "pi-secondary-jobs"),
+        watch_interval_seconds=0.01,
+    )
+    server = PiMachineServer(
+        job_service,
+        host="127.0.0.1",
+        port=0,
+        token=_TOKEN,
+    )
+    server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    server_thread.start()
+    _wait_until(lambda: server._bound_port is not None)
+
+    remote_settings = _machine_settings(
+        f"e3bridge://127.0.0.1:{server.bound_port}"
+    )
+    remote_settings.air_assist = AirAssistSettings(
+        mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+        port=_SECONDARY_PORT,
+        baudrate=115200,
+    )
+    remote = RemoteMachineService(
+        remote_settings,
+        laser_settings,
+        hardware_enabled=True,
+        laser_lockout=False,
+        monitor_interval_seconds=0.01,
+    )
+    try:
+        remote.connect()
+        program = remote.preflight_program(
+            secondary_program,
+            guarded_output_polygon_mm=_OUTPUT_POLYGON,
+        )
+        started = remote.start_preflighted_program(
+            program,
+            "e2e-secondary-air.gcode",
+            authorization_phrase=remote.ARM_PHRASE,
+        )
+        job_id = started["job_id"]
+        assert started["accepted"] is True
+        assert SECONDARY_RECOVERY_BINDING_FIELD not in started
+        assert primary.gated.wait(timeout=2.0)
+        assert (
+            job_service.store.get(job_id)[SECONDARY_RECOVERY_BINDING_FIELD]
+            is not None
+        )
+        assert secondary_serial.writes == ["M106 S0", "M106 S255"]
+        assert all(not line.startswith("E3AIRASSIST") for line in primary.commands)
+        assert all("M106" not in line and "M107" not in line for line in primary.commands)
+
+        primary_before_detach = list(primary.commands)
+        secondary_before_detach = list(secondary_serial.writes)
+        remote.detach()
+        time.sleep(0.05)
+        assert primary.commands == primary_before_detach
+        assert secondary_serial.writes == secondary_before_detach
+        assert b"!\x18" not in getattr(primary, "raw_writes", [])
+
+        primary.release()
+        _wait_until(lambda: job_service.store.get(job_id)["state"] == "complete")
+        _wait_until(
+            lambda: job_service.store.get(job_id)[
+                SECONDARY_RECOVERY_BINDING_FIELD
+            ]
+            is None
+        )
+        assert secondary_serial.writes == [
+            "M106 S0",
+            "M106 S255",
+            "M106 S0",
+        ]
+    finally:
+        remote.detach()
+        server.stop()
+        primary.release(execute=False)
+        job_service.shutdown(stop_machine=True)
+        fan.close()
         server_thread.join(timeout=2.0)

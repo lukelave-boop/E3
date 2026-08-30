@@ -62,14 +62,20 @@ based on the same profile to retain different ports, work areas, speeds,
 offsets, physical honeycomb spans, and calibration/camera bindings.
 
 `MachineSettings.air_assist` is the machine-owned translation from the existing
-binary `OperationLayer.air_assist` project setting to a trusted controller
-output. Its constrained modes are `disabled`, GRBL coolant (`M8` / `M9`), and
-Marlin fan (`M106 P<n> S255` / `M107 P<n>`). Marlin stores a validated fan
-index; there is no percentage because an enabled operation always requests the
-configured output at 100%. An enabled mapping requires an explicit matching
-`grbl` or `marlin` protocol. E3 rejects `auto`, a mismatched protocol, an
-unknown mode, or an out-of-range channel instead of guessing hardware or
-accepting arbitrary G-code strings.
+binary `OperationLayer.air_assist` project setting to a trusted output. Its
+constrained object contains `mode`, `fan_index`, `port`, and `baudrate`. Modes
+are `disabled`; same-primary-controller GRBL coolant (`M8` / `M9`); same-primary
+Marlin fan (`M106 P<n> S255` / `M107 P<n>`); and
+`secondary_marlin_fan`. The secondary mode requires an explicit primary
+protocol and gives the Pi one persistent Creality/Marlin serial owner; the
+current E3 deployment keeps its separate primary explicitly GRBL. It uses fixed
+`fan_index = 0` and only `M106 S255` / `M106 S0`: never a `P` parameter and
+never `M107`. Its identified endpoint is
+`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` at 115200 baud. Windows stores
+that Pi-local path as opaque configuration and never opens it. There is no
+percentage or arbitrary G-code field. E3 rejects `auto`, a mismatched or missing
+mapping, an unknown mode, an invalid channel, or an invalid endpoint/baudrate
+instead of guessing hardware.
 
 `MachineSettings.honeycomb_span_mm` is optional machine-specific physical setup
 data. `null` means not configured; a configured value must be a finite positive
@@ -173,10 +179,12 @@ startup, but this preserves existing behavior rather than granting new
 authority: the normal hardware, motion, coordinate, preflight, arming, and
 program gates still apply.
 
-Configurations and saved-machine records created before Air Assist support
-load with the deterministic `disabled` mapping and fan index 0. Existing
-projects retain their serialized per-layer Boolean; no project-schema migration
-or second Air Assist field is introduced.
+Configurations and saved-machine records created before Air Assist support load
+with the deterministic `disabled` mapping, fan index 0, and no active secondary
+endpoint. The complete persisted mapping is the typed
+`{mode, fan_index, port, baudrate}` object. Existing projects retain their
+serialized per-layer Boolean; no project-schema migration or second Air Assist
+field is introduced. Every built-in starting profile remains disabled.
 
 ## Built-in starting profiles
 
@@ -200,22 +208,31 @@ laser arming before output.
 
 ## Safety boundary
 
-This increment does not add another controller path. `MachineService` remains
-the only normal controller route, and all existing STOP, disconnect, coordinate
-trust, bounds, preflight, motion, and arming behavior remains in place.
+`MachineService` remains the only normal path to the primary laser/motion
+controller. `secondary_marlin_fan` adds only a Pi-local auxiliary path owned by
+one persistent `CrealityControllerOwner`; Windows never opens it and it never
+becomes a motion/laser path. That same owner must later be shared with the
+separate S1 Z-homing/CR Touch work. All existing primary STOP, coordinate trust,
+bounds, preflight, motion, and arming behavior remains in place.
 
 When a powered output layer requests Air Assist, exact generation requires a
 usable mapping. Structured preflight blocks a missing mapping whenever it can
 prove powered serialized motion; ambiguous curved or bounded-work cases defer
 to the same fail-closed exact generator. Preview and START cannot silently omit
-the requested output or substitute a controller command. Exact ON/OFF commands
-are part of the finalized program and therefore
-its digest and Pi-owned execution. Configured generated jobs begin fail-off,
-keep assist active across paths and passes that need it, and turn the laser off
-before assist shutdown. STOP, failure, normal completion, and controller
-disconnect attempt the configured OFF command after retaining laser-off/STOP
-priority. These software actions are not safety-rated and cannot guarantee
-delivery after controller, process, network-node, or power failure.
+the request or guess a command. Secondary jobs store exact strict non-comment
+`E3AIRASSIST <mapping-sha256> ON|OFF` instructions in the canonical immutable
+program bytes. A mapping or schedule change changes the finalized program
+digest. The Pi validates and intercepts those instructions before the primary
+stream; they never reach the primary controller. The resulting program is not
+portable controller G-code and must not be submitted outside E3-aware execution.
+
+The Pi owns execution after START. It checks every secondary ACK/timeout;
+secondary failure fails the job, while primary `M5`/STOP remains authoritative.
+Windows detach causes no fan transition. STOP acts on primary first and then
+attempts bounded independent secondary OFF. Pi restart marks a running job
+interrupted, never resumes it, and attempts acknowledged OFF. These actions are
+not safety-rated and cannot guarantee delivery after controller, process,
+network-node, serial, or power failure.
 
 Creating or selecting a saved machine performs no hardware action. New
 profile-derived instances begin without motion permission or positive laser
@@ -268,9 +285,12 @@ inferred physical measurement. The operator can still clear it explicitly and
 save the machine.
 
 Under the controller connection settings, **Air assist output** selects
-**Disabled**, **GRBL coolant (M8/M9)**, or **Marlin fan**. Marlin mode exposes a
-fan/channel index. Machine Manager persists this for the next launch; it does
-not hot-swap the immutable current runtime or contact the controller. The
+**Disabled**, **GRBL coolant (M8/M9)**, **Marlin fan**, or the Pi-owned
+**Creality / Marlin auxiliary fan**. Same-primary Marlin mode exposes a bounded
+fan/channel index. The auxiliary choice fixes index 0 and exposes its Pi-local
+endpoint and baudrate; those values are persisted on Windows but are not opened
+there. Machine Manager applies the selection on a later launch and does not
+hot-swap the immutable current runtime or contact either controller. The
 ordinary Cuts / Layers editor remains machine-neutral and shows only the
 per-operation **Air assist** checkbox.
 

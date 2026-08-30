@@ -7,7 +7,8 @@ storage and normal controller execution onto a Raspberry Pi beside the machine.
 ```text
 Windows or Linux E3 desktop
   |-- e3bridge://...  authenticated E3MACHINE/2 job client
-  |       -> Pi job store/runner -> one local MachineService -> controller
+  |       -> Pi job store/runner -> one local MachineService -> primary GRBL
+  |                              `-> CrealityControllerOwner -> secondary fan
   |
   `-- e3camera://...  authenticated camera RPC
           -> Raspberry Pi -> CameraService -> V4L2/OpenCV camera
@@ -30,11 +31,11 @@ A partial upload, a prepared job with no START, and START rejection before local
 execution begins are inert. After Windows sends START, a lost or failed response
 is ownership-uncertain and must be resolved by querying that exact UUID. After
 durable acceptance, closing Windows, losing Wi-Fi/TCP, sleeping the laptop, or
-disconnecting a monitor does not stop a healthy job. Network presence is not a
-run-enable heartbeat. Explicit STOP attempts the configured controller stop plus
-`M5`, then the configured Air Assist off command. A detected local
-execution/controller failure halts further Pi streaming and attempts the same
-best-effort laser-off then assist-off cleanup; sudden Pi process or power
+disconnecting a monitor does not stop a healthy job or transition the fan.
+Network presence is not a run-enable heartbeat. Explicit STOP acts on primary
+GRBL first, including its existing stop/reset and `M5` policy, then runs bounded
+independent secondary-OFF cleanup. A secondary ACK timeout or rejection fails
+the job while preserving primary `M5`/STOP authority. Sudden Pi process or power
 failure can prevent cleanup and result persistence. No interrupted job
 auto-resumes.
 
@@ -83,11 +84,13 @@ ordinary operation/store serialization and invokes the same immediate local
 call.
 
 The Windows and Pi saved configurations must both specify the same explicit
-`grbl` or `marlin` dialect and the same work area, guarded output authority,
-motion/feed limits, laser power/mode/offset, Home/park behavior, and other safety
-profile values, including the exact Air Assist mode and Marlin fan index when
-configured. `protocol = auto` remains available for direct local serial only
-when Air Assist is disabled, but
+primary `grbl` or `marlin` dialect and the same work area, guarded output
+authority, motion/feed limits, laser power/mode/offset, Home/park behavior, and
+other safety profile values. They must also bind the same exact Air Assist
+`{mode, fan_index, port, baudrate}` mapping. For `secondary_marlin_fan`, primary
+protocol remains `grbl`; Windows retains the Pi-local secondary endpoint as
+opaque policy data and never opens it. `protocol = auto` remains available for
+direct local serial only when Air Assist is disabled, but
 remote controller/upload/monitor operations reject it before network access
 because it cannot bind one unambiguous Pi execution policy. No saved profile,
 dialect, transport, or authenticated session grants execution authority by
@@ -109,9 +112,11 @@ Choosing another saved machine affects the next launch only. The current
 `CoreRuntime`, transport, recipe compatibility, work area, and execution gates
 remain bound to the machine resolved when the process started.
 
-This change adds no controller or machine compatibility. The Pi-owned path has
-automated Windows loopback/simulator verification only and has not been
-physically re-verified on GRBL, Marlin, Raspberry Pi serial hardware, or a laser.
+This change adds no primary controller or machine compatibility. Physical
+bring-up identified the separate Creality/Marlin secondary endpoint and verified
+exact FAN2 ON with `M106 S255`; intended OFF with `M106 S0` and the complete
+Pi-owned lifecycle remain pending physical confirmation. The secondary mode
+never uses a `P` parameter or `M107`.
 
 ## Safety boundary
 
@@ -120,32 +125,54 @@ emergency stop, enclosure/interlock, extraction, fire precautions, and operator
 presence remain mandatory. An authenticated monitoring-client disconnect has no
 machine action after START acceptance: it sends no feed hold, reset, `M5`, or
 Air Assist command, and the Pi runner continues the immutable finalized program
-and completes its local cleanup. This is intentional network independence, not
+and completes its local cleanup. Secondary-assist programs carry exact strict
+non-comment `E3AIRASSIST <mapping-sha256> ON|OFF` instructions. The Pi validates
+and intercepts them before primary GRBL streaming; the primary never sees them.
+This is intentional network independence, not
 permission for unattended operation.
 
 A connected red STOP remains effective through `job.stop`. For GRBL an emergency
 STOP retains realtime feed-hold/reset policy followed by `M5`; the ordinary stop
-path latches cancellation and attempts `M5`. Marlin uses its configured dialect
-policy. A configured Air Assist off command follows `M5` without moving STOP
-behind a command ACK or ordinary store operation, but
-network, Pi, USB, serial, controller, or power failure can still prevent delivery.
+path latches cancellation and attempts `M5`. Marlin uses its configured primary
+dialect policy. Primary STOP runs first. A bounded independent secondary
+`M106 S0` attempt follows without moving STOP behind a secondary ACK, timeout,
+or ordinary store operation, but network, Pi, USB, serial, controller, or power
+failure can still prevent delivery.
 Use the physical emergency stop in an actual emergency.
 
 Controller rejection/alarm, serial write/read failure, acknowledgement timeout,
 corrupt committed bytes, local runner exception, and required completion-cleanup
-failure stop further streaming, attempt a best-effort `M5` followed by configured
-Air Assist off, record failure while the service remains alive, and invalidate
-controller trust as applicable. No job resumes
+failure stop further streaming, attempt authoritative primary `M5`/STOP followed
+by bounded independent secondary OFF, record failure while the service remains
+alive, and invalidate controller trust as applicable. A secondary rejection or
+timeout is itself a job failure. The sole Pi-side secondary reader also latches
+USB hangup/read failure without consuming command replies; the running job checks
+that latch between primary program lines and fails before sending further work.
+No job resumes
 automatically after controller loss. Reconnect and Home/park are required before
 later motion or arming.
 
 On Pi service startup, persisted `starting`, `running`, or `stopping` metadata is
 atomically changed to `interrupted`; execution authorization is not restored and
-the program is never automatically resumed. Startup deliberately does not infer
-controller position or silently reopen and move the machine. A process crash or
-power failure can prevent software cleanup while buffered controller work still
-exists, so the operator must use the physical stop/interlock, inspect the
-controller, reconnect explicitly, and Home/park before any new run.
+the program is never automatically resumed. Startup does not infer primary
+controller position or move the machine. Before any primary controller or network
+service is opened, the Pi recovers each unresolved, typed secondary binding that
+was durably accepted with a job and sends an acknowledged `M106 S0` to that exact
+endpoint. Recovery is therefore not redirected if the current saved mapping was
+disabled or changed while the node was down. The private record contains only the
+bounded mode, target, protocol, port, baudrate, and mapping digest; commands are
+reconstructed from the fixed mode and no remotely supplied command text is
+deserialized. Bindings are deduplicated, retained across failed restarts and job
+retention, and cleared only after matching acknowledged OFF. A malformed binding,
+unavailable endpoint, missing acknowledgement, bridge URI, or endpoint that
+resolves to the primary leaves recovery pending and blocks later START requests.
+After unresolved accepted bindings are reconciled, the current explicitly enabled
+secondary mapping independently establishes acknowledged startup OFF. Active
+configuration is never rewritten automatically. A process crash or power failure
+can prevent software
+cleanup while buffered controller work still exists, so the operator must use
+the physical stop/interlock, inspect both controllers, reconnect explicitly, and
+Home/park before any new run.
 
 After a STOP/reset, a GRBL-derived controller can remain alarm-locked while the
 bridge and settings queries are healthy. During connection normalization only,
@@ -249,8 +276,29 @@ the Windows process environment. Do not commit it.
 ## Pi configuration
 
 Use the machine's existing verified/local E3 hardware configuration on the Pi.
-Its controller and camera devices must remain Pi-local persistent device paths,
-preferably `/dev/serial/by-id/...` and `/dev/v4l/by-id/...`.
+Its primary controller, secondary controller, and camera devices must remain
+Pi-local persistent device paths, preferably `/dev/serial/by-id/...` and
+`/dev/v4l/by-id/...`. The exact Pi-local primary GRBL serial path is not yet
+confirmed. Do not copy the secondary Creality path into `machine.port`.
+
+A partial Pi override has this shape; the primary placeholder must be replaced
+with the already identified GRBL controller rather than guessed:
+
+```json
+{
+  "machine": {
+    "backend": "serial",
+    "protocol": "grbl",
+    "port": "/dev/serial/by-id/REPLACE_WITH_CONFIRMED_PRIMARY_GRBL",
+    "air_assist": {
+      "mode": "secondary_marlin_fan",
+      "fan_index": 0,
+      "port": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
+      "baudrate": 115200
+    }
+  }
+}
+```
 
 The combined node requires a real serial machine backend and an explicit
 hardware gate:
@@ -291,7 +339,13 @@ On the Windows copy, change only the hardware endpoints:
   "machine": {
     "backend": "serial",
     "protocol": "grbl",
-    "port": "e3bridge://e3-laser.local:8765"
+    "port": "e3bridge://e3-laser.local:8765",
+    "air_assist": {
+      "mode": "secondary_marlin_fan",
+      "fan_index": 0,
+      "port": "/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0",
+      "baudrate": 115200
+    }
   }
 }
 ```
@@ -302,13 +356,21 @@ Use `marlin` only when both sides are the matching verified Marlin profile.
 value must match the current Pi machine profile; changing only the endpoint is
 the normal deployment pattern.
 
-For a physically verified indexed Marlin toolhead fan, both complete
-configurations must retain, for example,
-`"air_assist": {"mode": "marlin_fan", "fan_index": n}` together with
-`"protocol": "marlin"`. This produces `M106 Pn S255` and `M107 Pn`. A GRBL
-machine may instead use `"mode": "grbl_coolant"` with explicit `grbl`, producing
-`M8` and `M9`, only when that physical mapping has been verified. The repository
-example stays disabled because it cannot identify the attached firmware output.
+For this E3 rig, both complete configurations retain primary
+`"protocol": "grbl"` and the exact secondary object above. Generated programs
+contain strict non-comment `E3AIRASSIST <mapping-sha256> ON|OFF` instructions;
+changing the endpoint, baudrate, command mapping, or event schedule changes the
+canonical bytes and program digest. The Pi validates and intercepts each
+instruction, then its single persistent `CrealityControllerOwner` sends exact
+secondary commands and checks ACK/timeouts. Such programs are E3-specific and
+are not portable controller G-code; do not submit them outside E3.
+
+The same-primary `marlin_fan` and `grbl_coolant` modes remain available for
+other explicitly matched and physically verified machines. Every repository
+built-in remains disabled. Do not configure `marlin_fan` or change the primary
+protocol to Marlin merely because this rig's separate fan controller is Marlin.
+The one Creality serial owner must later be shared with the separate S1
+Z-homing/CR Touch implementation, not duplicated.
 
 In PowerShell, set the secret for the E3 process and start the one normal,
 hardware-capable desktop. Startup does not connect automatically; keep motion
@@ -385,38 +447,51 @@ control values, and precision-capture settings; only `camera.device` differs.
 1. Keep laser output physically disabled when practical and launch the normal
    Windows desktop. If using the legacy browser instead, also pass its retained
    `--laser-lockout` safety override.
-2. Verify the Pi sees persistent controller and camera device paths.
-3. Confirm both profiles use the same explicit dialect/safety values, connect E3,
-   and verify controller identity/settings queries only.
+2. Verify the Pi sees distinct persistent primary GRBL, secondary
+   Creality/Marlin, and camera device paths. Record the still-unconfirmed primary
+   GRBL path separately; do not substitute the known FAN2 path.
+3. Confirm both profiles use the same explicit primary dialect/safety values and
+   exact secondary mapping. Connect E3 and verify primary identity/settings
+   queries only; Windows must not open the Pi-local secondary path.
 4. Disconnect during a partial upload and again after READY but before START;
    verify neither job starts and no output/motion command appears.
 5. Home / park with laser output disabled and verify X/Y direction and the
    configured camera pose.
-6. START a small laser-off job, wait for durable Pi acceptance, remove the
-   Windows network entirely, and verify all remaining commands and the normal
-   completion sequence execute once with no disconnect-induced reset or `M5`.
+6. START a small laser-off, assist-off job, wait for durable Pi acceptance,
+   remove the Windows network entirely, and verify all remaining primary commands
+   and the normal completion sequence execute once with no disconnect-induced
+   reset, `M5`, or fan transition.
 7. Reconnect a new desktop client during a longer laser-off job and verify the
    same UUID/digest/progress without serial interruption or restart; also verify
    a completed-offline terminal result is discoverable.
-8. Exercise software STOP during an ACK wait, including after reconnect, while
-   keeping the physical
-   emergency stop immediately available.
+8. Exercise software STOP during a primary ACK wait, including after reconnect,
+   while keeping the physical emergency stop immediately available.
 9. With output physically disabled, interrupt/restart the Pi service during a
    job and verify the durable state becomes `interrupted`, the restarted service
-   sends no new program commands, and explicit reconnect plus Home/park is
-   required. Separately observe whether an independently powered controller
+   sends no new primary program or motion commands, attempts only acknowledged
+   secondary OFF when that mapping was bound, and requires explicit reconnect
+   plus Home/park. Separately observe whether an independently powered controller
    continues commands already buffered before the process died; service restart
    cannot recall them.
-10. Verify remote camera resolution, FPS, manual focus/exposure/white-balance
+10. With laser output physically disabled and before enabling the saved mapping,
+    verify exact `M106 S0` physically stops FAN2 and record the acknowledgement.
+    Exact `M106 S255` ON is already physically observed; OFF remains pending.
+11. After OFF is verified, exercise an E3-generated secondary schedule and prove
+    that primary GRBL receives no E3AIRASSIST or Marlin line. Check startup OFF,
+    requesting/non-requesting layer transitions, normal completion, secondary
+    rejection/timeout failure, primary-first STOP with bounded cleanup, Windows
+    detach with no fan transition, and Pi restart with no resume.
+12. Verify remote camera resolution, FPS, manual focus/exposure/white-balance
    readback, fresh snapshots, and live overlay.
-11. Run repeated remote precision bursts and compare jitter/sharpness against a
+13. Run repeated remote precision bursts and compare jitter/sharpness against a
    direct-Pi/local-camera baseline.
-12. Re-run or re-validate lens/bed/support calibration through the remote path.
-13. Only after the above succeeds should a small supervised powered sacrificial
+14. Re-run or re-validate lens/bed/support calibration through the remote path.
+15. Only after the above succeeds should a small supervised powered sacrificial
     test be considered.
 
 Record the controller identity, firmware, configuration, camera mode, network
 path, exact profile digests, and result in `CURRENT_STATE.md`; passing software
 tests alone is not physical verification. The Pi-owned execution architecture
-has not completed this sequence; older raw-bridge results do not verify the new
-ownership boundary.
+has not completed this sequence. Its only new physical evidence is exact FAN2
+ON with `M106 S255`; OFF and the full ownership lifecycle above remain pending,
+and older raw-bridge results do not verify the new ownership boundary.

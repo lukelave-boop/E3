@@ -32,6 +32,26 @@ Determine whether the controller is GRBL-like or Marlin-like and whether the exp
 
 Keep `laser.default_power` and `laser.frame_power` at zero during this phase.
 
+### Identified secondary FAN2 controller
+
+The Air Assist fan is not on the primary laser/motion controller. The primary
+remains a separate GRBL device, and its exact Pi-local persistent serial path is
+still unconfirmed. Never use the secondary path as `machine.port`.
+
+Physical bring-up identified a Creality/Marlin secondary controller at
+`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, 115200 baud. Sending exactly
+`M106 S255` physically started FAN2. The intended OFF command is exactly
+`M106 S0`, but its physical result is still pending confirmation. This mapping
+uses no `P` parameter and never uses `M107`. Do not generalize this evidence to a
+different controller, endpoint, fan output, firmware, or baudrate.
+
+Keep the saved mapping and production output disabled until `M106 S0` is
+physically shown to stop FAN2 and the startup-known-OFF, layer transitions,
+normal completion, primary-first STOP, secondary failure, and Pi-restart
+cleanup paths are recorded. The Pi must be the one persistent owner of this
+secondary connection. Windows stores the endpoint only as opaque configuration
+and never opens it.
+
 ## Phase 3: verify axes with laser disabled
 
 Before enabling `machine.allow_motion`:
@@ -102,12 +122,14 @@ With `machine.home_and_release_after_powered_job` enabled, a successfully
 completed powered job also performs `M5`, waits for all accepted toolpath
 motion to finish, homes, returns to the configured camera pose, waits for the
 park move to finish, restores the configured normal GRBL idle delay if
-necessary, and releases the motors. A configured Air Assist program issues
-laser off, assist off, then a final standalone laser-off command before that
-completion motion. Keep the complete homing and parking path clear until the job
-reports completion. The desktop reports the finishing phase explicitly and
-raises an error if a completion command fails. This post-job motion is not
-attempted after a stop, failure, emergency action, disconnect, or zero-power job.
+necessary, and releases the motors. A secondary Air Assist program keeps strict
+non-comment `E3AIRASSIST <mapping-sha256> ON|OFF` instructions in its immutable
+program bytes. The Pi intercepts them before the primary GRBL stream and
+acknowledges primary `M5` before secondary `M106 S0` and completion motion. Keep
+the complete homing and parking path clear until the job reports completion.
+The desktop reports the finishing phase explicitly and raises an error if a
+completion command fails. This post-job motion is not attempted after a stop,
+failure, emergency action, disconnect, or zero-power job.
 
 `machine.grbl_step_idle_delay_ms` is the normal non-camera value and defaults
 to 250 ms for this profile. The application temporarily uses `$1=255` only
@@ -115,9 +137,13 @@ during parked camera capture. Because `$1` persists in controller storage, a
 crash can leave that hold active across power cycles; the next serial connection
 detects exactly `255`, restores the configured normal value, and explicitly
 releases the motors. Connection always requests an explicit motor release even
-when `$1` already reports its expected finite value. When Air Assist is
-configured, connection cleanup also establishes its trusted OFF command after
-laser off; it never enables the output.
+when `$1` already reports its expected finite value. A same-primary Air Assist
+mapping establishes its trusted OFF command after laser off. Separately, the
+Pi's `CrealityControllerOwner` establishes and acknowledges secondary
+`M106 S0`; Windows connection or detach causes no fan transition. STOP keeps
+primary reset/`M5` authoritative and performs only bounded independent secondary
+cleanup. Pi restart marks active work interrupted, never resumes it, and
+attempts acknowledged OFF.
 
 For GRBL controllers, this preflight also reads `$G` and `$#` after parking and
 records the active `G54`-`G59` workspace, its XYZ offset, and `G92`. Immediately
@@ -154,9 +180,10 @@ After the scale is known, record it in a versioned machine profile and keep the 
 
 ## Information to capture for the repository
 
-- controller startup banner
-- protocol and firmware version
-- serial baud rate and stable by-id path
+- primary and secondary controller startup banners
+- primary and secondary protocol and firmware versions
+- separate serial baud rates and stable by-id paths; never substitute the
+  secondary FAN2 identity for the unconfirmed primary GRBL path
 - power maximum and laser mode
 - homing command and coordinate origin
 - verified X/Y laser-spot limits
@@ -164,6 +191,10 @@ After the scale is known, record it in a versioned machine profile and keep the 
 - measured camera-to-bed height
 - laser-head/nozzle offset if relevant
 - zero-power motion and marking-test results
+- dated secondary FAN2 ON and OFF commands, acknowledgements, and observed
+  physical results; ON `M106 S255` is recorded, while OFF `M106 S0` is pending
+- startup-known-OFF, layer transition, normal completion, primary-first STOP,
+  secondary timeout/failure, and Pi-restart/no-resume cleanup results
 - twenty remove/reseat cycles against the physical locating stops, automatically
   re-detecting the honeycomb each time; record four-corner displacement and
   require every corner to remain within the chosen repeatability limit before

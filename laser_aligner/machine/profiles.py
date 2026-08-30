@@ -193,6 +193,8 @@ def _validated_pair(
             air_assist=AirAssistSettings(
                 mode=AirAssistMode(air_assist["mode"]),
                 fan_index=int(air_assist["fan_index"]),
+                port=air_assist["port"],
+                baudrate=int(air_assist["baudrate"]),
             ),
         )
         laser_raw = raw["laser"]

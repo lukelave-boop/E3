@@ -14,6 +14,11 @@ from pathlib import Path
 from threading import RLock
 from typing import Any
 
+from ..air_assist import (
+    AirAssistCommands,
+    secondary_recovery_binding_from_payload,
+    secondary_recovery_binding_payload,
+)
 from ..errors import MachineError
 from ..geometry.polygon import ConvexPolygon
 from ..storage import atomic_write_json, strict_json_loads
@@ -50,6 +55,7 @@ TERMINAL_JOB_STATES = frozenset(
 MAX_METADATA_RECORDS = 8
 MAX_TERMINAL_PROGRAMS = 2
 DEFAULT_STALE_PART_SECONDS = 24 * 60 * 60
+SECONDARY_RECOVERY_BINDING_FIELD = "secondary_air_assist_recovery_binding"
 
 _PROTECTED_UPDATE_FIELDS = frozenset(
     {
@@ -69,6 +75,7 @@ _PROTECTED_UPDATE_FIELDS = frozenset(
         "requires_motion",
         "execution_policy_digest",
         "program_retained",
+        SECONDARY_RECOVERY_BINDING_FIELD,
     }
 )
 _STATE_TRANSITIONS: dict[str, frozenset[str]] = {
@@ -125,6 +132,14 @@ class JobValidation:
 class FinalizeResult:
     record: dict[str, Any]
     validation: JobValidation
+
+
+@dataclass(frozen=True, slots=True)
+class PendingSecondaryRecovery:
+    """One exact private Pi-owned binding that still requires acknowledged OFF."""
+
+    job_id: str
+    binding: AirAssistCommands
 
 
 JobValidator = Callable[[str, ConvexPolygon | None], JobValidation]
@@ -207,6 +222,9 @@ class PiJobStore:
         if not isinstance(raw, dict):
             raise PiJobStoreError(f"Pi job record {expected_id} must be a JSON object")
         record = dict(raw)
+        # Schema-1 records written before secondary restart recovery remain
+        # readable. Any later state write normalizes the additive private field.
+        record.setdefault(SECONDARY_RECOVERY_BINDING_FIELD, None)
         required = {
             "schema",
             "job_id",
@@ -267,6 +285,20 @@ class PiJobStore:
             raise PiJobStoreError(
                 f"Pi job record {expected_id} has invalid retention metadata"
             )
+        try:
+            recovery_binding = secondary_recovery_binding_from_payload(
+                record[SECONDARY_RECOVERY_BINDING_FIELD]
+            )
+        except ValueError as exc:
+            raise PiJobStoreError(
+                f"Pi job record {expected_id} has invalid secondary recovery metadata: {exc}"
+            ) from exc
+        if recovery_binding is not None and state not in (
+            ACTIVE_JOB_STATES | TERMINAL_JOB_STATES
+        ):
+            raise PiJobStoreError(
+                f"Pi job record {expected_id} carries recovery authority before execution"
+            )
         authority_values = (
             record["program_digest"],
             record["requires_laser_authorization"],
@@ -324,6 +356,9 @@ class PiJobStore:
         record["expected_size"] = expected_size
         record["expected_sha256"] = expected_sha256
         record["guarded_output_polygon_mm"] = self._polygon_json(polygon)
+        record[SECONDARY_RECOVERY_BINDING_FIELD] = (
+            secondary_recovery_binding_payload(recovery_binding)
+        )
         return record
 
     def _read_record_path(self, path: Path) -> dict[str, Any]:
@@ -412,13 +447,19 @@ class PiJobStore:
         if len(records) <= MAX_METADATA_RECORDS:
             return
         removable = sorted(
-            (record for record in records if record["state"] in TERMINAL_JOB_STATES),
+            (
+                record
+                for record in records
+                if record["state"] in TERMINAL_JOB_STATES
+                and record[SECONDARY_RECOVERY_BINDING_FIELD] is None
+            ),
             key=self._record_sort_key,
         )
         excess = len(records) - MAX_METADATA_RECORDS
         if len(removable) < excess:
             raise PiJobStoreError(
-                "Pi job metadata capacity is exhausted by non-terminal jobs"
+                "Pi job metadata capacity is exhausted by non-terminal or "
+                "pending-recovery jobs"
             )
         for record in removable[:excess]:
             self._delete_artifacts(record["job_id"], metadata=True)
@@ -477,13 +518,15 @@ class PiJobStore:
                         record
                         for record in records
                         if record["state"] in TERMINAL_JOB_STATES
+                        and record[SECONDARY_RECOVERY_BINDING_FIELD] is None
                     ),
                     key=self._record_sort_key,
                 )
                 needed = len(records) - MAX_METADATA_RECORDS + 1
                 if len(removable) < needed:
                     raise PiJobStoreError(
-                        "Pi job metadata capacity is full; delete a non-active job first"
+                        "Pi job metadata capacity is full; resolve pending recovery or "
+                        "delete a non-active job first"
                     )
                 for old_record in removable[:needed]:
                     self._delete_artifacts(old_record["job_id"], metadata=True)
@@ -520,6 +563,7 @@ class PiJobStore:
                 "powered": None,
                 "execution_policy_digest": None,
                 "program_retained": False,
+                SECONDARY_RECOVERY_BINDING_FIELD: None,
             }
             try:
                 written = self._write_record(record)
@@ -795,6 +839,97 @@ class PiJobStore:
             raise PiJobStoreError("Pi job state update exceeds the bounded metadata limit")
         return copy.deepcopy(dict(fields))
 
+    @staticmethod
+    def _recovery_payload(
+        binding: AirAssistCommands | None,
+    ) -> dict[str, object] | None:
+        if binding is not None and type(binding) is not AirAssistCommands:
+            raise PiJobStoreError(
+                "Secondary recovery authority must be exact AirAssistCommands or None"
+            )
+        try:
+            return secondary_recovery_binding_payload(binding)
+        except ValueError as exc:
+            raise PiJobStoreError(str(exc)) from exc
+
+    def begin_execution(
+        self,
+        job_id: str,
+        *,
+        secondary_recovery_binding: AirAssistCommands | None,
+        **fields: Any,
+    ) -> dict[str, Any]:
+        """Atomically persist restart recovery before a prepared job may emit."""
+
+        payload = self._recovery_payload(secondary_recovery_binding)
+        checked_fields = self._validate_update_fields(fields)
+        with self._lock:
+            record = self._load_record(job_id)
+            if record["state"] != "prepared":
+                raise PiJobStoreError("Only a prepared Pi job can begin execution")
+            active = self.active()
+            if active is not None and active["job_id"] != record["job_id"]:
+                raise PiJobStoreError("Another Pi job already owns execution")
+            if record[SECONDARY_RECOVERY_BINDING_FIELD] is not None:
+                raise PiJobStoreError(
+                    "Prepared Pi job already contains secondary recovery authority"
+                )
+            record.update(checked_fields)
+            record[SECONDARY_RECOVERY_BINDING_FIELD] = payload
+            record["state"] = "starting"
+            record["revision"] += 1
+            record["updated_at"] = self._now()
+            return self._public(self._write_record(record))
+
+    def pending_secondary_recoveries(self) -> tuple[PendingSecondaryRecovery, ...]:
+        """Return every strict unresolved binding, including prior failed boots."""
+
+        with self._lock:
+            pending: list[PendingSecondaryRecovery] = []
+            for record in self._all_records():
+                payload = record[SECONDARY_RECOVERY_BINDING_FIELD]
+                if payload is None:
+                    continue
+                try:
+                    binding = secondary_recovery_binding_from_payload(payload)
+                except ValueError as exc:  # pragma: no cover - record validation owns this
+                    raise PiJobStoreError(str(exc)) from exc
+                assert binding is not None
+                pending.append(
+                    PendingSecondaryRecovery(
+                        job_id=record["job_id"],
+                        binding=binding,
+                    )
+                )
+            return tuple(pending)
+
+    def clear_secondary_recovery(
+        self,
+        job_id: str,
+        *,
+        acknowledged_binding: AirAssistCommands,
+    ) -> dict[str, Any]:
+        """Compare-and-clear one binding only after its exact OFF was acknowledged."""
+
+        expected = self._recovery_payload(acknowledged_binding)
+        assert expected is not None
+        with self._lock:
+            record = self._load_record(job_id)
+            stored = record[SECONDARY_RECOVERY_BINDING_FIELD]
+            if stored is None:
+                return self._public(record)
+            if stored != expected:
+                raise PiJobStoreError(
+                    "Acknowledged secondary binding does not match pending recovery"
+                )
+            record[SECONDARY_RECOVERY_BINDING_FIELD] = None
+            record["revision"] += 1
+            record["updated_at"] = self._now()
+            written = self._write_record(record)
+            if record["state"] in TERMINAL_JOB_STATES:
+                self._apply_retention()
+            return self._public(written)
+
     def update_state(
         self,
         job_id: str,
@@ -854,6 +989,10 @@ class PiJobStore:
             record = self._load_record(job_id)
             if record["state"] in ACTIVE_JOB_STATES:
                 raise PiJobStoreError("An active Pi job cannot be deleted")
+            if record[SECONDARY_RECOVERY_BINDING_FIELD] is not None:
+                raise PiJobStoreError(
+                    "A Pi job with pending secondary recovery cannot be deleted"
+                )
             self._delete_artifacts(record["job_id"], metadata=True)
             _fsync_parent_directory(self.records_dir)
             _fsync_parent_directory(self.programs_dir)
@@ -1052,7 +1191,9 @@ __all__ = [
     "JobValidation",
     "MAX_METADATA_RECORDS",
     "MAX_TERMINAL_PROGRAMS",
+    "PendingSecondaryRecovery",
     "PiJobStore",
     "PiJobStoreError",
+    "SECONDARY_RECOVERY_BINDING_FIELD",
     "TERMINAL_JOB_STATES",
 ]

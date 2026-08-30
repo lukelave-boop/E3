@@ -36,12 +36,17 @@ Generic Marlin, Ender-3 S1 Pro, and Custom Machine, with Generic 10 W Diode and
 Custom Laser Head tool profiles. This UI
 does not claim compatibility with an untested printer or controller.
 
-Machine Manager also owns the saved **Air assist output** mapping. The only
-choices are Disabled, GRBL coolant (`M8`/`M9`), and Marlin fan with a bounded
-channel index (`M106 P<n> S255`/`M107 P<n>`); there is no percentage or arbitrary
-G-code field. An enabled mapping requires the matching explicit protocol and
-takes effect only after the saved machine is selected on a later launch. The
-Cuts / Layers checkbox stores only portable per-operation intent.
+Machine Manager also owns the saved **Air assist output** mapping. Choices are
+Disabled, same-primary GRBL coolant (`M8`/`M9`), same-primary Marlin fan with a
+bounded channel index (`M106 P<n> S255`/`M107 P<n>`), and the Pi-owned
+**Creality / Marlin auxiliary fan**. The auxiliary mode requires an explicit
+primary protocol, fixes `fan_index = 0`, and stores a Pi-local `port` and
+`baudrate`; the current E3 rig keeps its separate primary GRBL. Windows treats
+the secondary endpoint as opaque and never opens it. Its exact commands are
+`M106 S255` / `M106 S0`, never `P` or `M107`. There is no percentage or arbitrary
+G-code field. The saved `{mode, fan_index, port, baudrate}` mapping takes effect
+only after the machine is selected on a later launch. The Cuts / Layers checkbox
+stores only portable per-operation intent.
 
 New profile-created machines start with motion permission off, default and frame
 power at zero, low-power framing off, and no inherited camera, calibration, or
@@ -636,5 +641,8 @@ restores `machine.grbl_step_idle_delay_ms`, which defaults to 250 ms. This
 recovery then explicitly releases the motors. Connection requests motor release
 even when `$1` was already finite, because driver state at process startup is
 not trusted. The `$1` recovery itself changes no fan setting and sends no laser-
-enable command. Separately, a configured connection establishes Air Assist OFF
-after laser off.
+enable command. A same-primary Air Assist mapping establishes its OFF command
+after laser off. For `secondary_marlin_fan`, the Pi's persistent
+`CrealityControllerOwner` separately opens the configured Creality/Marlin
+endpoint and requires acknowledged `M106 S0`; Windows connection and detach do
+not open that endpoint or create a fan transition.

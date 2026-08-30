@@ -78,6 +78,50 @@ def test_posix_serial_reopen_discards_prior_replies_and_partial_bytes() -> None:
         os.close(slave_fd)
 
 
+def test_posix_serial_latches_hangup_without_consuming_and_reopen_clears_it() -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    master_fd, slave_fd = pty.openpty()
+    serial = PosixSerial(os.ttyname(slave_fd), 115200)
+    second_master_fd: int | None = None
+    second_slave_fd: int | None = None
+    try:
+        serial.open()
+        os.close(master_fd)
+        master_fd = -1
+        deadline = time.monotonic() + 1.0
+        while serial.fault is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        assert serial.fault is not None
+        with pytest.raises(MachineError, match="Serial (?:connection closed|read failed)"):
+            serial.raise_if_faulted()
+        # The passive health snapshot must not consume the sole reader's error.
+        with pytest.raises(MachineError, match="Serial (?:connection closed|read failed)"):
+            serial.read_line(timeout=0.1)
+
+        serial.close()
+        os.close(slave_fd)
+        slave_fd = -1
+        second_master_fd, second_slave_fd = pty.openpty()
+        serial.path = os.ttyname(second_slave_fd)
+        serial.open()
+
+        assert serial.fault is None
+        serial.raise_if_faulted()
+        serial.write_line("M106 S0")
+        assert read_master(second_master_fd) == b"M106 S0\n"
+        serial.close()
+        assert serial.fault is None
+    finally:
+        serial.close()
+        for fd in (master_fd, slave_fd, second_master_fd, second_slave_fd):
+            if fd is not None and fd >= 0:
+                os.close(fd)
+
+
 def test_posix_serial_rejects_an_unbounded_controller_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

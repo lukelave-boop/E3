@@ -12,7 +12,13 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
-from ..air_assist import AirAssistCommands, AirAssistSettings
+from ..air_assist import (
+    AIR_ASSIST_DIRECTIVE_PREFIX,
+    AirAssistCommands,
+    AirAssistSettings,
+    AirAssistTarget,
+    validate_air_assist_settings,
+)
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError, TransientConnectionError
 from ..gcode.preview import contains_motion, parse_words, strip_comment
@@ -35,6 +41,7 @@ from .controller_dialects import (
     parse_grbl_step_idle_delay,
     resolve_air_assist_commands,
 )
+from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
 from .transport import MachineTransport
 from .transport_factory import create_machine_transport
@@ -70,6 +77,12 @@ def _add_exception_note(error: BaseException, note: str) -> None:
     notes = list(getattr(error, "__notes__", ()))
     notes.append(note)
     error.__notes__ = notes
+
+
+def _program_line_contains_motion(line: str) -> bool:
+    """Exclude strict E3-owned auxiliary instructions from G-code parsing."""
+
+    return not line.startswith(AIR_ASSIST_DIRECTIVE_PREFIX) and contains_motion(line)
 
 
 class _ControllerCommandRejected(MachineError):
@@ -149,34 +162,53 @@ class MachineService:
         if type(settings) is not AirAssistSettings:
             raise SafetyError("machine.air_assist must be typed AirAssistSettings")
         try:
+            validate_air_assist_settings(
+                settings,
+                protocol=self.settings.protocol,
+                primary_port=self.settings.port,
+            )
             commands = resolve_air_assist_commands(
                 settings,
                 protocol=self.settings.protocol,
             )
         except (TypeError, ValueError) as exc:
             raise SafetyError(str(exc)) from exc
-        if commands is not None:
+        if commands is not None and commands.target is AirAssistTarget.PRIMARY:
             self._air_assist_off_commands = commands.off_commands
+        else:
+            self._air_assist_off_commands = ()
         return commands
 
     def _require_air_assist_dialect_compatibility(self) -> None:
         commands = self._resolved_air_assist_commands()
         dialect = self._require_resolved_dialect()
-        if commands is not None and commands.protocol != dialect.id:
+        if (
+            commands is not None
+            and commands.target is AirAssistTarget.PRIMARY
+            and commands.protocol != dialect.id
+        ):
             raise SafetyError(
                 "Configured air-assist output does not match the connected controller dialect"
             )
 
-    def _air_assist_command_kind(self, line: str) -> str | None:
-        commands = self._resolved_air_assist_commands()
+    def _air_assist_command_kind(
+        self,
+        line: str,
+        *,
+        commands: AirAssistCommands | None = None,
+    ) -> str | None:
         if commands is None:
+            commands = self._resolved_air_assist_commands()
+        if commands is None:
+            if line.strip().startswith(AIR_ASSIST_DIRECTIVE_PREFIX):
+                raise SafetyError(
+                    "E3 air-assist instruction has no resolved machine mapping"
+                )
             return None
-        normalized = " ".join(strip_comment(line).upper().split())
-        if normalized in commands.on_commands:
-            return "on"
-        if normalized in commands.off_commands:
-            return "off"
-        return None
+        try:
+            return commands.kind_for_program_line(line)
+        except ValueError as exc:
+            raise SafetyError(str(exc)) from exc
 
     def _best_effort_fail_off(
         self,
@@ -205,6 +237,135 @@ class MachineService:
                         f"{context} command {command!r} failed: {exc}",
                     )
 
+    def _secondary_controller_for(
+        self,
+        commands: AirAssistCommands | None,
+    ) -> SecondaryMarlinFanController | None:
+        if commands is None or commands.target is not AirAssistTarget.PI_SECONDARY:
+            return None
+        controller = self._secondary_air_assist
+        if controller is None:
+            raise SafetyError(
+                "The Pi-owned secondary Marlin Air Assist controller is unavailable"
+            )
+        if controller.binding != commands:
+            raise SafetyError(
+                "The Pi-owned secondary Air Assist controller does not match the "
+                "immutable job mapping"
+            )
+        return controller
+
+    def _prepare_secondary_air_assist_for_start(
+        self,
+        program: ValidatedProgram,
+    ) -> None:
+        controller = self._secondary_controller_for(program.air_assist_commands)
+        if controller is None:
+            return
+        try:
+            controller.ensure_off()
+        except Exception as exc:
+            raise SafetyError(
+                "Pi-owned secondary Air Assist could not establish acknowledged OFF"
+            ) from exc
+        self._append_log("AUX", "M106 S0 (acknowledged pre-start OFF)")
+
+    @contextmanager
+    def _secondary_job_write_guard(self):
+        """Linearize only an auxiliary write, never its acknowledgement wait."""
+
+        with self._secondary_write_gate:
+            if self._job_stop.is_set():
+                raise MachineError("Job stopped")
+            yield
+
+    def _raise_if_secondary_faulted(self) -> None:
+        commands = self._active_job_air_assist_commands
+        controller = self._secondary_controller_for(commands)
+        if controller is None:
+            return
+        controller.raise_if_faulted()
+
+    def _execute_secondary_air_assist_instruction(self, line: str) -> bool:
+        commands = self._active_job_air_assist_commands
+        if commands is None or commands.target is not AirAssistTarget.PI_SECONDARY:
+            return False
+        kind = self._air_assist_command_kind(line, commands=commands)
+        if kind is None:
+            return False
+        controller = self._secondary_controller_for(commands)
+        assert controller is not None
+        self._check_line_safety(line, job_execution=True)
+        enabled = kind == "on"
+        controller.set_enabled(
+            enabled,
+            mapping_digest=commands.mapping_digest,
+            write_guard=self._secondary_job_write_guard,
+        )
+        physical = commands.on_commands if enabled else commands.off_commands
+        self._append_log("AUX", f"{' / '.join(physical)} (acknowledged)")
+        return True
+
+    def _best_effort_secondary_off(self, *, context: str) -> None:
+        commands = self._active_job_air_assist_commands
+        if commands is None:
+            try:
+                commands = self._resolved_air_assist_commands()
+            except Exception:
+                commands = None
+        try:
+            controller = self._secondary_controller_for(commands)
+        except Exception as exc:
+            self._append_log(
+                "ERROR",
+                f"{context} secondary Air Assist OFF unavailable: {exc}",
+            )
+            return
+        if controller is None:
+            return
+        try:
+            if controller.best_effort_off():
+                self._append_log("AUX", f"M106 S0 ({context})")
+            else:
+                self._append_log(
+                    "ERROR",
+                    f"{context} secondary command 'M106 S0' was not acknowledged",
+                )
+        except Exception as exc:
+            self._append_log(
+                "ERROR",
+                f"{context} secondary command 'M106 S0' failed: {exc}",
+            )
+
+    def _queue_secondary_off(self, *, context: str) -> None:
+        commands = self._active_job_air_assist_commands
+        if commands is None or commands.target is not AirAssistTarget.PI_SECONDARY:
+            return
+
+        def cleanup() -> None:
+            try:
+                self._best_effort_secondary_off(context=context)
+            finally:
+                with self._secondary_cleanup_lock:
+                    if self._secondary_cleanup_thread is threading.current_thread():
+                        self._secondary_cleanup_thread = None
+
+        with self._secondary_cleanup_lock:
+            current = self._secondary_cleanup_thread
+            if current is not None and current.is_alive():
+                return
+            thread = threading.Thread(
+                target=cleanup,
+                name="secondary-air-assist-off",
+                daemon=True,
+            )
+            self._secondary_cleanup_thread = thread
+            try:
+                thread.start()
+            except Exception:
+                self._secondary_cleanup_thread = None
+                raise
+
     def _uses_grbl_coordinate_state(self) -> bool:
         dialect = self._dialect
         return bool(
@@ -219,6 +380,8 @@ class MachineService:
         laser_settings: LaserSettings,
         hardware_enabled: bool = False,
         laser_lockout: bool = False,
+        *,
+        secondary_air_assist: SecondaryMarlinFanController | None = None,
     ):
         if type(laser_lockout) is not bool:
             raise TypeError("laser_lockout must be an exact boolean")
@@ -226,11 +389,23 @@ class MachineService:
         self.laser_settings = laser_settings
         self.hardware_enabled = hardware_enabled
         self.laser_lockout = laser_lockout
+        if (
+            secondary_air_assist is not None
+            and not isinstance(
+                secondary_air_assist,
+                SecondaryMarlinFanController,
+            )
+        ):
+            raise TypeError(
+                "secondary_air_assist must be SecondaryMarlinFanController or None"
+            )
+        self._secondary_air_assist = secondary_air_assist
         self._transport: MachineTransport | None = None
         # Keep the last known valid OFF mapping available even if mutable
         # settings later become invalid during an emergency cleanup path.
         self._air_assist_off_commands: tuple[str, ...] = ()
         self._active_job_air_assist_off_commands: tuple[str, ...] = ()
+        self._active_job_air_assist_commands: AirAssistCommands | None = None
         self._protocol = settings.protocol
         self._active_port = settings.port
         self._active_baudrate = settings.baudrate
@@ -255,6 +430,12 @@ class MachineService:
         # This tiny gate orders software STOP after any in-flight job write.
         # It is never held while waiting for a controller acknowledgement.
         self._transport_write_lock = threading.RLock()
+        # STOP never waits for a secondary acknowledgement.  This gate spans
+        # only the actual auxiliary serial write so STOP can order an already
+        # authorized ON before its independently queued OFF cleanup.
+        self._secondary_write_gate = threading.Lock()
+        self._secondary_cleanup_lock = threading.Lock()
+        self._secondary_cleanup_thread: threading.Thread | None = None
         self._job = JobStatus()
         self._job_thread: threading.Thread | None = None
         self._job_stop = threading.Event()
@@ -272,7 +453,10 @@ class MachineService:
             )
         except (AttributeError, TypeError, ValueError):
             configured_air = None
-        if configured_air is not None:
+        if (
+            configured_air is not None
+            and configured_air.target is AirAssistTarget.PRIMARY
+        ):
             self._air_assist_off_commands = configured_air.off_commands
 
     @property
@@ -424,7 +608,10 @@ class MachineService:
                         _expected_stop_epoch=connect_stop_epoch,
                     )
                 air_assist = self._resolved_air_assist_commands()
-                if air_assist is not None:
+                if (
+                    air_assist is not None
+                    and air_assist.target is AirAssistTarget.PRIMARY
+                ):
                     for command in air_assist.off_commands:
                         self._send_command_locked(
                             command,
@@ -455,6 +642,7 @@ class MachineService:
                     )
                     transport.close()
                     self._active_job_air_assist_off_commands = ()
+                self._best_effort_secondary_off(context="connection cleanup")
                 self._transport = None
                 self._connected = False
                 self._controller_reconnect_required = False
@@ -538,10 +726,12 @@ class MachineService:
                     context="disconnect cleanup",
                 )
                 self._transport.close()
+            self._best_effort_secondary_off(context="disconnect cleanup")
             # Once the transport is closed there is no same-session controller
             # path left on which retaining a failed job's immutable OFF mapping
             # could provide another retry.
             self._active_job_air_assist_off_commands = ()
+            self._active_job_air_assist_commands = None
             self._transport = None
             self._connected = False
             self._connecting = False
@@ -705,6 +895,7 @@ class MachineService:
             self.stop_job(emergency=False)
             return
         if self._transport is None:
+            self._best_effort_secondary_off(context="disarm without primary connection")
             return
         # No powered job is active, so wait for command ownership. A trusted
         # stream consumes the M5 acknowledgement; an already-untrusted stream
@@ -720,6 +911,9 @@ class MachineService:
                 self._best_effort_fail_off(
                     transport,
                     context="disarm on untrusted connection",
+                )
+                self._best_effort_secondary_off(
+                    context="disarm on untrusted connection"
                 )
                 return
             fail_off_error: Exception | None = None
@@ -746,6 +940,7 @@ class MachineService:
                     self._coordinate_reference_ready = False
                     self._coordinate_state_reference = None
                     self._jog_position_mm = None
+            self._best_effort_secondary_off(context="disarm cleanup")
 
     def _require_connection(self) -> MachineTransport:
         if not self._connected or self._transport is None:
@@ -776,13 +971,52 @@ class MachineService:
         job_execution: bool = False,
         preflight: bool = False,
     ) -> None:
+        line_commands = (
+            self._active_job_air_assist_commands
+            if (
+                job_execution
+                and not preflight
+                and self._active_job_air_assist_commands is not None
+            )
+            else self._resolved_air_assist_commands()
+        )
+        air_assist_kind = self._air_assist_command_kind(
+            line,
+            commands=line_commands,
+        )
+        if (
+            air_assist_kind is not None
+            and line_commands is not None
+            and line_commands.target is AirAssistTarget.PI_SECONDARY
+        ):
+            self._require_safety_configuration()
+            laser_authorized = preflight or self.armed or (
+                job_execution and self._job_laser_authorized
+            )
+            if air_assist_kind == "on" and not laser_authorized:
+                raise SafetyError(
+                    "Air-assist enable is allowed only inside an authorized powered job"
+                )
+            if not (preflight or job_execution):
+                raise SafetyError(
+                    "Air-assist commands are allowed only in streamed jobs"
+                )
+            if (
+                self.settings.backend == "serial"
+                and self.hardware_enabled is not True
+            ):
+                raise SafetyError("Hardware control is not enabled for this process")
+            return
         cleaned = strip_comment(line)
         if not cleaned:
             return
         words = parse_words(cleaned)
         m_codes = self._codes(words, "M")
         g_codes = self._codes(words, "G")
-        air_assist_kind = self._air_assist_command_kind(cleaned)
+        air_assist_kind = self._air_assist_command_kind(
+            cleaned,
+            commands=line_commands,
+        )
         powers = (
             []
             if air_assist_kind is not None
@@ -1886,13 +2120,20 @@ class MachineService:
     def _validate_stream_line(self, line: str) -> tuple[list[Any], set[int], set[int]]:
         if len(line) > 256:
             raise SafetyError("Single streamed G-code line exceeds 256 characters")
+        commands = self._resolved_air_assist_commands()
+        air_assist_kind = self._air_assist_command_kind(line, commands=commands)
+        if (
+            air_assist_kind is not None
+            and commands is not None
+            and commands.target is AirAssistTarget.PI_SECONDARY
+        ):
+            return [], set(), set()
         try:
             words = parse_words(line, require_full_match=True)
         except ValueError as exc:
             raise SafetyError(str(exc)) from exc
         if not words:
             raise SafetyError("Executable G-code line contains no supported words")
-        air_assist_kind = self._air_assist_command_kind(line)
         g_codes = self._codes(words, "G")
         m_codes = self._codes(words, "M")
         auxiliary_m_codes = m_codes.intersection({8, 9, 106, 107})
@@ -2013,8 +2254,29 @@ class MachineService:
         guarded_polygon = self._resolve_guarded_output_polygon(
             guarded_output_polygon_mm
         )
-        lines = [strip_comment(line) for line in text.splitlines()]
-        lines = [line for line in lines if line]
+        air_assist_commands = self._resolved_air_assist_commands()
+        lines: list[str] = []
+        for raw_line_number, raw_line in enumerate(text.splitlines(), start=1):
+            instruction = raw_line.strip()
+            try:
+                air_assist_kind = self._air_assist_command_kind(
+                    instruction,
+                    commands=air_assist_commands,
+                )
+            except SafetyError as exc:
+                raise SafetyError(
+                    f"Line {raw_line_number}: invalid E3 air-assist instruction: {exc}"
+                ) from exc
+            if (
+                air_assist_kind is not None
+                and air_assist_commands is not None
+                and air_assist_commands.target is AirAssistTarget.PI_SECONDARY
+            ):
+                lines.append(instruction)
+                continue
+            cleaned = strip_comment(raw_line)
+            if cleaned:
+                lines.append(cleaned)
         if not lines:
             raise SafetyError("G-code program is empty")
         if len(lines) > 250_000:
@@ -2039,7 +2301,10 @@ class MachineService:
             words, g_codes, m_codes = self._validate_stream_line(line)
             last_line_is_m5 = m_codes == {5}
             values = {word.letter: word.value for word in words}
-            air_assist_kind = self._air_assist_command_kind(line)
+            air_assist_kind = self._air_assist_command_kind(
+                line,
+                commands=air_assist_commands,
+            )
             try:
                 self._check_line_safety(
                     line,
@@ -2308,10 +2573,14 @@ class MachineService:
             if air_assist is None
             else (
                 air_assist.mode.value,
+                air_assist.target.value,
                 air_assist.protocol,
                 air_assist.fan_index,
+                air_assist.port,
+                air_assist.baudrate,
                 air_assist.on_commands,
                 air_assist.off_commands,
+                air_assist.mapping_digest,
             )
         )
         return (
@@ -2365,7 +2634,7 @@ class MachineService:
             lines=tuple(lines),
             digest=hashlib.sha256(canonical).hexdigest(),
             requires_laser_authorization=requires_laser_authorization,
-            requires_motion=any(contains_motion(line) for line in lines),
+            requires_motion=any(_program_line_contains_motion(line) for line in lines),
             safety_profile=self._program_safety_profile(guarded_polygon),
             air_assist_commands=air_assist_commands,
             guarded_output_polygon_mm=guarded_polygon,
@@ -2404,7 +2673,7 @@ class MachineService:
         )
         canonical_lines = tuple(lines)
         canonical_digest = hashlib.sha256("\n".join(lines).encode("utf-8")).hexdigest()
-        requires_motion = any(contains_motion(line) for line in lines)
+        requires_motion = any(_program_line_contains_motion(line) for line in lines)
         current_profile = self._program_safety_profile(
             program.guarded_output_polygon_mm
         )
@@ -2521,6 +2790,9 @@ class MachineService:
                         )
             if self._job.running:
                 raise MachineError("A controller job is already running")
+            # The Pi-side secondary owner must prove an acknowledged OFF state
+            # before this exact immutable program can become active.
+            self._prepare_secondary_air_assist_for_start(program)
             self._require_connection()
             lines = list(program.lines)
             if (
@@ -2567,9 +2839,13 @@ class MachineService:
                 # that check, but they must never redirect cleanup away from the
                 # output named in the already-validated program.
                 active_air_assist = program.air_assist_commands
+                self._active_job_air_assist_commands = active_air_assist
                 self._active_job_air_assist_off_commands = (
                     ()
-                    if active_air_assist is None
+                    if (
+                        active_air_assist is None
+                        or active_air_assist.target is AirAssistTarget.PI_SECONDARY
+                    )
                     else active_air_assist.off_commands
                 )
                 # Every start consumes any temporary grant. A powered job keeps
@@ -2633,6 +2909,9 @@ class MachineService:
                             transport,
                             context="job-start failure cleanup",
                         )
+                    self._best_effort_secondary_off(
+                        context="job-start failure cleanup"
+                    )
                     raise
             return self._job.to_dict()
 
@@ -2644,14 +2923,23 @@ class MachineService:
     ) -> list[str]:
         """Execute an internal completion command while the job owns the transport."""
 
-        self._write_running_job_line(command)
+        if not self._write_running_job_line(command):
+            raise MachineError(
+                "Internal primary-controller completion command was routed as auxiliary"
+            )
         try:
             return self._wait_for_ack(timeout or self.settings.read_timeout)
         except MachineError as exc:
             raise MachineError(f"Command {command!r} failed: {exc}") from exc
 
-    def _write_running_job_line(self, command: str) -> None:
-        """Check and transmit one job line atomically against software STOP."""
+    def _write_running_job_line(self, command: str) -> bool:
+        """Execute one job line; return whether the primary controller was written."""
+
+        if self._job_stop.is_set():
+            raise MachineError("Job stopped")
+        if self._execute_secondary_air_assist_instruction(command):
+            return False
+        self._raise_if_secondary_faulted()
 
         with self._transport_write_lock:
             if self._job_stop.is_set():
@@ -2665,6 +2953,7 @@ class MachineService:
                 raise
             transport.write_line(command)
             self._append_log("TX", command)
+        return True
 
     def _finish_powered_job_home_park_and_release(self) -> None:
         """Home, park, and release a serial machine after a successful laser job."""
@@ -2801,7 +3090,9 @@ class MachineService:
         program_digest: str,
     ) -> None:
         error: str | None = None
-        air_assist_off_acknowledged = not self._active_job_air_assist_off_commands
+        air_assist_off_acknowledged = (
+            self._active_job_air_assist_commands is None
+        )
         try:
             job_ack_timeout = max(
                 _JOB_COMMAND_ACK_TIMEOUT_SECONDS,
@@ -2816,12 +3107,13 @@ class MachineService:
                 self._write_running_job_line(command)
                 self._wait_for_ack(job_ack_timeout)
             for index, line in enumerate(lines, start=1):
-                self._write_running_job_line(line)
+                primary_written = self._write_running_job_line(line)
                 # GRBL may delay an acknowledgement while its planner is full or
                 # while a standalone laser-state command synchronizes queued
                 # motion. A short interactive-command timeout can therefore turn
                 # a healthy finishing move into a false job failure.
-                self._wait_for_ack(job_ack_timeout)
+                if primary_written:
+                    self._wait_for_ack(job_ack_timeout)
                 with self._lock:
                     self._job.completed_lines = index
             run_completion = (
@@ -2841,6 +3133,14 @@ class MachineService:
             for command in self._active_job_air_assist_off_commands:
                 self._write_running_job_line(command)
                 self._wait_for_ack(job_ack_timeout)
+            active_air_assist = self._active_job_air_assist_commands
+            secondary = self._secondary_controller_for(active_air_assist)
+            if secondary is not None:
+                secondary.set_enabled(
+                    False,
+                    mapping_digest=active_air_assist.mapping_digest,
+                    write_guard=self._secondary_job_write_guard,
+                )
             air_assist_off_acknowledged = True
             if run_completion:
                 self._finish_powered_job_home_park_and_release()
@@ -2874,6 +3174,7 @@ class MachineService:
                     transport,
                     context="job cleanup",
                 )
+            self._best_effort_secondary_off(context="job cleanup")
         finally:
             with self._lock:
                 # Commit the terminal state atomically against STOP. If STOP
@@ -2906,6 +3207,7 @@ class MachineService:
                     self._job_laser_authorized = False
                     if air_assist_off_acknowledged:
                         self._active_job_air_assist_off_commands = ()
+                        self._active_job_air_assist_commands = None
 
     def request_stop(self, emergency: bool = False) -> None:
         """Latch a stop and issue controller laser-off without waiting for workers."""
@@ -2985,6 +3287,16 @@ class MachineService:
                 transport,
                 context="software STOP",
             )
+        # The primary path above is authoritative and complete before this
+        # independent bounded cleanup is even dispatched.  Never wait here for
+        # the secondary exchange lock or its acknowledgement.
+        try:
+            self._queue_secondary_off(context="software STOP")
+        except Exception as exc:
+            self._append_log(
+                "ERROR",
+                f"software STOP secondary OFF cleanup could not start: {exc}",
+            )
 
     def stop_job(self, emergency: bool = False) -> None:
         self.request_stop(emergency=emergency)
@@ -3022,6 +3334,17 @@ class MachineService:
             return dict(receipt)
 
     def status(self) -> dict[str, Any]:
+        secondary_status = None
+        if self._secondary_air_assist is not None:
+            snapshot = self._secondary_air_assist.status
+            secondary_status = {
+                "ready": snapshot.ready,
+                "enabled": snapshot.enabled,
+                "fault": snapshot.fault,
+                "port": snapshot.port,
+                "baudrate": snapshot.baudrate,
+                "mapping_digest": snapshot.mapping_digest,
+            }
         return {
             "connected": self.connected,
             "connecting": self._connecting,
@@ -3052,6 +3375,7 @@ class MachineService:
             "armed": self.armed,
             "armed_until": self._armed_until if self.armed else None,
             "arm_phrase": self.ARM_PHRASE,
+            "secondary_air_assist": secondary_status,
             "job": self._job.to_dict(),
             "last_successful_job": (
                 None

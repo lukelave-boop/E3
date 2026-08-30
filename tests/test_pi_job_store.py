@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.machine import pi_job_store as store_module
+from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
     MAX_JOB_BYTES,
     MAX_UPLOAD_CHUNK_BYTES,
@@ -16,6 +18,7 @@ from laser_aligner.machine.pi_job_protocol import (
 from laser_aligner.machine.pi_job_store import (
     MAX_METADATA_RECORDS,
     MAX_TERMINAL_PROGRAMS,
+    SECONDARY_RECOVERY_BINDING_FIELD,
     JobValidation,
     PiJobStore,
     PiJobStoreError,
@@ -28,6 +31,19 @@ def _job_id(number: int) -> str:
 
 def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
+
+
+def _secondary_binding(port: str = "/dev/serial/by-id/accepted-secondary"):
+    binding = resolve_air_assist_commands(
+        AirAssistSettings(
+            mode=AirAssistMode.SECONDARY_MARLIN_FAN,
+            port=port,
+            baudrate=115200,
+        ),
+        protocol="grbl",
+    )
+    assert binding is not None
+    return binding
 
 
 def _validator(text: str, polygon: object) -> JobValidation:
@@ -299,6 +315,134 @@ def test_boot_reconciliation_marks_execution_interrupted_without_resume(
     assert "not resumed" in record["error"]
     assert restarted.active() is None
     assert restarted.read_program_bytes(job_id) == payload
+
+
+def test_secondary_recovery_is_persisted_at_start_and_cleared_by_exact_ack(
+    tmp_path: Path,
+) -> None:
+    store = PiJobStore(tmp_path / "jobs")
+    job_id = _job_id(700)
+    _upload(store, job_id, b"G21\nG90\nM5\n")
+    binding = _secondary_binding()
+
+    started = store.begin_execution(
+        job_id,
+        secondary_recovery_binding=binding,
+        phase="starting",
+    )
+    payload = started[SECONDARY_RECOVERY_BINDING_FIELD]
+    assert payload == {
+        "schema": 1,
+        "mode": "secondary_marlin_fan",
+        "target": "pi_secondary",
+        "protocol": "marlin",
+        "port": binding.port,
+        "baudrate": 115200,
+        "mapping_digest": binding.mapping_digest,
+    }
+    assert "on_commands" not in payload
+    assert "off_commands" not in payload
+    assert store.pending_secondary_recoveries()[0].binding == binding
+
+    wrong = _secondary_binding("/dev/serial/by-id/different-secondary")
+    with pytest.raises(PiJobStoreError, match="does not match"):
+        store.clear_secondary_recovery(job_id, acknowledged_binding=wrong)
+    assert store.pending_secondary_recoveries()[0].binding == binding
+
+    cleared = store.clear_secondary_recovery(
+        job_id,
+        acknowledged_binding=binding,
+    )
+    assert cleared[SECONDARY_RECOVERY_BINDING_FIELD] is None
+    assert store.pending_secondary_recoveries() == ()
+
+
+def test_pending_secondary_recovery_survives_restarts_retention_and_delete(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "jobs"
+    store = PiJobStore(root)
+    pending_id = _job_id(701)
+    _upload(store, pending_id, b"G21\nG90\nM5\n")
+    binding = _secondary_binding()
+    store.begin_execution(
+        pending_id,
+        secondary_recovery_binding=binding,
+    )
+    store.update_state(pending_id, "running")
+
+    first_restart = PiJobStore(root)
+    assert first_restart.get(pending_id)["state"] == "interrupted"
+    assert first_restart.pending_secondary_recoveries()[0].binding == binding
+    second_restart = PiJobStore(root)
+    assert second_restart.pending_secondary_recoveries()[0].binding == binding
+    with pytest.raises(PiJobStoreError, match="pending secondary recovery"):
+        second_restart.delete(pending_id)
+
+    for number in range(710, 710 + MAX_METADATA_RECORDS + 2):
+        job_id = _job_id(number)
+        _upload(second_restart, job_id, f"M5\n; {number}".encode())
+        second_restart.update_state(job_id, "failed")
+    assert second_restart.get(pending_id)[SECONDARY_RECOVERY_BINDING_FIELD] is not None
+    assert len(second_restart.list_records()) == MAX_METADATA_RECORDS
+
+    second_restart.clear_secondary_recovery(
+        pending_id,
+        acknowledged_binding=binding,
+    )
+    assert second_restart.pending_secondary_recoveries() == ()
+
+
+def test_legacy_schema_one_record_without_recovery_field_remains_readable(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "jobs"
+    store = PiJobStore(root)
+    job_id = _job_id(702)
+    _upload(store, job_id, b"M5\n")
+    record_path = store.records_dir / f"{job_id}.json"
+    payload = json.loads(record_path.read_text(encoding="utf-8"))
+    del payload[SECONDARY_RECOVERY_BINDING_FIELD]
+    record_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reopened = PiJobStore(root)
+    assert reopened.get(job_id)[SECONDARY_RECOVERY_BINDING_FIELD] is None
+
+
+@pytest.mark.parametrize(
+    ("mutation", "match"),
+    [
+        (lambda payload: payload.update({"schema": True}), "invalid schema"),
+        (lambda payload: payload.update({"mode": "disabled"}), "exact FAN2"),
+        (lambda payload: payload.update({"target": "primary"}), "exact FAN2"),
+        (lambda payload: payload.update({"protocol": "grbl"}), "exact FAN2"),
+        (lambda payload: payload.update({"port": " /dev/ttyUSB1"}), "typed values"),
+        (lambda payload: payload.update({"port": "x" * 4097}), "typed values"),
+        (lambda payload: payload.update({"baudrate": True}), "typed values"),
+        (lambda payload: payload.update({"mapping_digest": "0" * 64}), "digest"),
+        (lambda payload: payload.update({"command": "M106 S1"}), "invalid schema"),
+    ],
+)
+def test_malformed_persisted_secondary_recovery_is_rejected_before_use(
+    tmp_path: Path,
+    mutation,
+    match: str,
+) -> None:
+    root = tmp_path / str(uuid.uuid4())
+    store = PiJobStore(root)
+    job_id = _job_id(703)
+    _upload(store, job_id, b"M5\n")
+    store.begin_execution(
+        job_id,
+        secondary_recovery_binding=_secondary_binding(),
+    )
+    record_path = store.records_dir / f"{job_id}.json"
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    mutation(record[SECONDARY_RECOVERY_BINDING_FIELD])
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+    with pytest.raises(PiJobStoreError, match=match):
+        PiJobStore(root)
 
 
 def test_partial_upload_resumes_after_restart_and_stale_partial_is_discarded(

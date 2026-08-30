@@ -52,6 +52,8 @@ class PosixSerial:
         )
         self._buffer = bytearray()
         self._stop = threading.Event()
+        self._fault_lock = threading.Lock()
+        self._fault_message: str | None = None
         self._reader: threading.Thread | None = None
         self._write_lock = threading.Lock()
 
@@ -95,13 +97,16 @@ class PosixSerial:
         # and must never acknowledge commands in the new serial session.
         self._queue = queue.Queue(maxsize=_MAX_QUEUED_SERIAL_LINES)
         self._buffer.clear()
+        with self._fault_lock:
+            self._fault_message = None
+            self._stop.clear()
         self._fd = fd
-        self._stop.clear()
         self._reader = threading.Thread(target=self._reader_loop, name="serial-reader", daemon=True)
         self._reader.start()
 
     def close(self) -> None:
-        self._stop.set()
+        with self._fault_lock:
+            self._stop.set()
         if self._reader and self._reader.is_alive():
             self._reader.join(timeout=1)
         if self._fd is not None:
@@ -119,7 +124,9 @@ class PosixSerial:
                     continue
                 chunk = os.read(self._fd, 4096)
                 if not chunk:
-                    continue
+                    if not self._stop.is_set():
+                        self._fail_reader("Serial connection closed unexpectedly")
+                    return
                 self._buffer.extend(chunk)
                 while b"\n" in self._buffer or b"\r" in self._buffer:
                     newline_positions = [position for position in (self._buffer.find(b"\n"), self._buffer.find(b"\r")) if position >= 0]
@@ -157,7 +164,11 @@ class PosixSerial:
             return False
 
     def _fail_reader(self, message: str) -> None:
-        self._stop.set()
+        with self._fault_lock:
+            if self._stop.is_set():
+                return
+            self._fault_message = message
+            self._stop.set()
         self._buffer.clear()
         while True:
             try:
@@ -165,6 +176,20 @@ class PosixSerial:
             except queue.Empty:
                 break
         self._queue.put_nowait(MachineError(message))
+
+    @property
+    def fault(self) -> str | None:
+        """Return the latched reader failure without consuming response data."""
+
+        with self._fault_lock:
+            return self._fault_message
+
+    def raise_if_faulted(self) -> None:
+        """Raise a fresh error when the sole reader has latched a failure."""
+
+        message = self.fault
+        if message is not None:
+            raise MachineError(message)
 
     def write_raw(self, data: bytes) -> None:
         if self._fd is None:

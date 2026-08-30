@@ -12,6 +12,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from typing import Any
 
+from ..air_assist import AirAssistCommands, AirAssistTarget
 from ..errors import MachineError, SafetyError
 from .pi_job_protocol import validate_guarded_output_polygon
 from .pi_job_store import JobValidation, PiJobStore
@@ -482,6 +483,7 @@ class PiJobService:
                 }
             )
         record = self.store.update_state(job_id, state, **fields)
+        record = self._clear_recovery_if_acknowledged(record)
         log = LOGGER.info if state == "complete" else LOGGER.warning
         log("Pi job %s reached terminal state %s", job_id[:8], state)
         with self._state_lock:
@@ -492,6 +494,62 @@ class PiJobService:
             if self._stop_requested_for == job_id:
                 self._stop_requested_for = None
         return record
+
+    def _clear_recovery_if_acknowledged(
+        self,
+        record: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """Clear durable recovery only when the exact typed owner reports OFF ACK."""
+
+        pending = next(
+            (
+                recovery
+                for recovery in self.store.pending_secondary_recoveries()
+                if recovery.job_id == record.get("job_id")
+            ),
+            None,
+        )
+        if pending is None:
+            return dict(record)
+        try:
+            status = self.machine.status().get("secondary_air_assist")
+        except Exception:
+            return dict(record)
+        binding = pending.binding
+        if (
+            not isinstance(status, dict)
+            or status.get("ready") is not True
+            or status.get("enabled") is not False
+            or status.get("mapping_digest") != binding.mapping_digest
+            or status.get("port") != binding.port
+            or status.get("baudrate") != binding.baudrate
+        ):
+            return dict(record)
+        try:
+            return self.store.clear_secondary_recovery(
+                pending.job_id,
+                acknowledged_binding=binding,
+            )
+        except Exception:
+            LOGGER.exception(
+                "Could not clear acknowledged secondary recovery for Pi job %s",
+                pending.job_id[:8],
+            )
+            return dict(record)
+
+    @staticmethod
+    def _secondary_recovery_binding(
+        program: ValidatedProgram,
+    ) -> AirAssistCommands | None:
+        binding = program.air_assist_commands
+        if binding is None or binding.target is AirAssistTarget.PRIMARY:
+            return None
+        if (
+            type(binding) is not AirAssistCommands
+            or binding.target is not AirAssistTarget.PI_SECONDARY
+        ):
+            raise SafetyError("Program contains unsupported secondary recovery authority")
+        return binding
 
     def _start_watcher(self, job_id: str, program_digest: str) -> None:
         watcher = threading.Thread(
@@ -618,6 +676,12 @@ class PiJobService:
                 }
             if state != "prepared":
                 raise PiJobServiceError("Only a fully prepared job can be started")
+            pending_recovery = self.store.pending_secondary_recoveries()
+            if pending_recovery:
+                raise PiJobServiceError(
+                    "A previous Pi job still has unresolved secondary Air Assist "
+                    "OFF recovery; restore that controller and restart the Pi node"
+                )
             active = self._current_active_record()
             if active is not None and active.get("job_id") != job_id:
                 raise PiJobServiceError(
@@ -640,9 +704,9 @@ class PiJobService:
                     error=_bounded_error(exc),
                 )
                 raise
-            record = self.store.update_state(
+            record = self.store.begin_execution(
                 job_id,
-                "starting",
+                secondary_recovery_binding=self._secondary_recovery_binding(program),
                 phase="starting",
                 error=None,
             )

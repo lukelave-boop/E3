@@ -30,6 +30,7 @@ from ..storage import strict_json_loads
 PROTOCOL_VERSION = "E3MACHINE/2"
 LEGACY_PROTOCOL_VERSION = "E3BRIDGE/1"
 CAPABILITY_PI_OWNED_JOBS = "pi-owned-jobs-v1"
+CAPABILITY_PI_SECONDARY_MARLIN_FAN = "pi-secondary-marlin-fan-v1"
 
 ACTION_JOB_BEGIN = "job.begin"
 ACTION_JOB_CHUNK = "job.chunk"
@@ -513,6 +514,7 @@ __all__ = [
     "ACTION_JOB_STOP",
     "AuthenticatedChannel",
     "CAPABILITY_PI_OWNED_JOBS",
+    "CAPABILITY_PI_SECONDARY_MARLIN_FAN",
     "JOB_ACTIONS",
     "LEGACY_PROTOCOL_VERSION",
     "MAX_FRAME_PAYLOAD_BYTES",

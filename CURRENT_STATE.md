@@ -7,73 +7,77 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-30**
 
-## Active typed per-layer Air Assist execution
+## Active Pi-owned secondary-controller Air Assist correction
 
-E3 now executes the existing `OperationLayer.air_assist` Boolean; no duplicate
-project field or schema change was introduced. Cuts / Layers exposes the value
-as an ordinary selected-layer checkbox with the existing command-history path,
-so project save/load, layer switching, Undo/Redo, LightBurn import, and complete
-Material Recipe application retain one authority. Imported LightBurn operations
-still begin output-disabled. The default project value and every built-in
-machine mapping remain OFF/disabled.
+Work on `feature/air-assist-output` retains the existing binary
+`OperationLayer.air_assist` project setting, Cuts / Layers checkbox, persistence,
+Undo/Redo, and Material Recipe authority. Imported LightBurn operations still
+begin output-disabled. The project schema is unchanged, and all built-in machine
+profiles remain Air Assist-disabled.
 
-`MachineSettings.air_assist` is a typed saved-machine capability with only
-`disabled`, `grbl_coolant`, and `marlin_fan` modes plus a bounded fan index. The
-exact mappings are GRBL `M8`/`M9` and Marlin `M106 P<n> S255`/`M107 P<n>`.
-Enabled modes require the matching explicit protocol, reject `auto`, and expose
-no arbitrary command or percentage field. Machine Manager persists the mapping
-for the next launch; the ordinary layer editor remains machine-neutral.
+`MachineSettings.air_assist` is a constrained saved-machine mapping with
+`mode`, `fan_index`, `port`, and `baudrate` fields. In addition to the existing
+`disabled`, same-primary-controller `grbl_coolant`, and `marlin_fan` modes, this
+branch adds `secondary_marlin_fan`. That E3 mapping keeps the primary laser and
+motion controller explicitly GRBL while the Pi owns a separate persistent
+Creality/Marlin serial connection. Its verified endpoint is
+`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0` at 115200 baud, with
+`fan_index = 0`. Windows stores that Pi-local endpoint as opaque configuration
+and never opens it. The currently persisted Windows primary endpoint remains
+the GRBL `e3bridge://192.168.5.18:8765` endpoint at 115200 baud; the exact
+Pi-local primary-controller serial path has not been confirmed and must not be
+inferred from the secondary path.
 
-Structured preflight blocks a visible, output-enabled layer with provable
-powered serialized motion that requests assist when the running machine has no
-resolved mapping; ambiguous curved or bounded-work cases defer to exact
-generation, which remains fail-closed. The project
-planner establishes fail-off after its initial `M5`, emits ON after laser-off
-positioning and immediately before the first powered Line, Fill, or Raster work,
-holds it across paths, travel, passes, and adjacent requesting layers, and emits
-OFF before later non-requesting powered work. Output-disabled, empty, and
-zero-power layers never enable it. Configured programs finish with `M5`, exact
-assist OFF, then a standalone `M5`. The exact commands, events, and per-layer
-state are parsed into `JobPlan`, visible in Preview, retained by Start Here, and
-included in the finalized program digest.
+The secondary mapping is deliberately exact: ON is `M106 S255` and intended OFF
+is `M106 S0`. It never adds a `P` parameter and never uses `M107`. Physical
+bring-up has verified that exact ON command starts FAN2 on the identified
+Creality/Marlin controller. Physical confirmation that `M106 S0` stops FAN2 is
+still pending, as are full startup, transition, completion, STOP, restart, and
+failure lifecycle checks. These software controls are not safety-rated.
 
-`MachineService` accepts only the exact resolved auxiliary literals without
-broadening the manual or streamed G-code surfaces; Marlin's fan `S255` is not
-treated as laser power. The selected mapping participates in the execution
-policy snapshot used by local and Pi preflight. Every job with a configured
-mapping also receives an acknowledged service-owned `M5` then immutable assist-
-OFF prelude before line 1, including powered setup programs with no layer
-literals. Normal completion acknowledges laser OFF before assist OFF. STOP
-retains its existing realtime/reset and `M5` priority, then attempts cached
-assist OFF; disarm, connection failure, disconnect, job-start failure, and
-interrupted/error cleanup use the same laser-first order. A running job binds
-its original OFF command so mutable configuration cannot redirect cleanup away
-from an already-enabled fan; a failed immutable OFF remains available for later
-STOP/disarm/disconnect retries until the transport closes.
-Air commands live in the immutable Pi-owned program: losing Windows or a monitor
-after durable START acceptance has no controller effect, while Pi-local normal
-completion turns the output off.
+Generated secondary-assist jobs encode the strict non-comment line
+`E3AIRASSIST <mapping-sha256> ON|OFF` for each transition in the immutable
+canonical program bytes. The SHA-256 binds the exact secondary mapping; changing
+either that mapping or the schedule changes the finalized program digest. The Pi
+validates those instructions and intercepts them before the primary stream, so
+the GRBL controller never receives `E3AIRASSIST` or Marlin fan commands.
+Malformed, forged, mismatched, or unsupported instructions fail closed. These
+programs are E3-specific, are not portable controller G-code, and must not be
+submitted through a non-E3 executor.
 
-Automated verification covers the constrained config/registry/dialect model,
-LayerPanel and Machine Manager UI, old-project and old-registry defaults,
-LightBurn safety behavior, preflight and stale-context rejection, Line/Fill/
-Raster planning and all state transitions, exact Preview/Start Here behavior,
-stream allowlisting, normal/STOP/failure/disconnect cleanup, program-policy
-binding, and Pi-owned disconnect/completion. On Windows with Python 3.14, the
-focused Air Assist matrix passed 806 tests in 99.50 seconds. The final complete
-repository run passed 3,046 tests with 14 expected platform skips in 175.81
-seconds. Repository Ruff, `compileall -q laser_aligner`, and `git diff --check`
-all passed; the diff check reported only Git's existing LF-to-CRLF notices.
+The layer planner enables assist immediately before the first powered Line,
+Fill, or Raster output that requests it, holds it across paths, rapid travels,
+passes, and adjacent requesting layers, and disables it before later powered
+non-requesting work. Output-disabled, empty, and zero-power layers never enable
+it. Preview and Start Here consume the same immutable instructions and preserve
+the mapping digest and schedule.
 
-No physical Air Assist command is verified by these tests. For the repurposed
-Ender-3 toolhead fan, physical bring-up must identify the controller firmware
-and actual fan channel. If it is Marlin fan `n`, both Windows and Pi saved
-machines need explicit `protocol = marlin`, `mode = marlin_fan`, and that exact
-`fan_index = n`; if the hardware is instead proven to use GRBL coolant, both
-need explicit `protocol = grbl` and `mode = grbl_coolant`. Keep the mapping
-disabled until idle OFF, full-output start, path/pass continuity, layer
-transition OFF, normal completion, software STOP, and unchanged laser behavior
-are recorded on the physical rig. These software controls are not safety-rated.
+After START ownership is accepted, the Pi owns both execution paths. One
+persistent `CrealityControllerOwner` serializes secondary commands and validates
+their acknowledgements and timeouts. The Pi-local reader latches passive USB
+hangup/read failure, and execution checks that latch between primary program
+lines so a lost secondary session fails before further work is streamed.
+Secondary command failure fails the job;
+the primary GRBL `M5`/STOP path remains authoritative. STOP acts on the primary
+first, then runs bounded independent secondary-OFF cleanup so a secondary ACK or
+timeout cannot delay primary STOP. Detaching the Windows client causes no fan
+transition. Pi restart marks an in-progress job interrupted, never resumes it,
+and attempts an acknowledged secondary OFF. This owner must later be shared with
+the S1 Z-homing/CR Touch work rather than creating a second concurrent owner;
+that separate branch is not merged or modified by this work.
+
+Deterministic Air Assist/Pi/Windows focused verification passed **351 tests with
+7 expected Windows POSIX skips**; an additional targeted run for serial-open
+START rejection, changed/disabled-config restart recovery, and unresolved-
+recovery START blocking passed **3 tests**. The complete Windows repository run
+passed **3,118 tests with 15 expected platform skips** in **233.86 seconds**.
+Repository Ruff passed with `--no-cache` after the ordinary cached invocation
+encountered the worktree's known cache-directory ACL restriction. `compileall -q
+laser_aligner` passed with `PYTHONPYCACHEPREFIX` directed to a temporary cache,
+and `git diff --check` passed with only Git's existing LF-to-CRLF notices. These
+are automated/simulated checks only. The only new physical evidence is the exact
+FAN2 ON result above; intended OFF and end-to-end lifecycle behavior remain
+pending physical verification.
 
 ## Active post-Create Camera Trace orientation review / Straighten
 

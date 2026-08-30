@@ -11,6 +11,7 @@ from ..air_assist import (
     AirAssistCommands,
     AirAssistMode,
     AirAssistSettings,
+    AirAssistTarget,
     coerce_air_assist_mode,
     validate_air_assist_settings,
 )
@@ -299,8 +300,20 @@ def resolve_air_assist_commands(
     """Resolve a validated machine mapping into immutable controller commands."""
 
     validate_air_assist_settings(settings, protocol=protocol)
-    if coerce_air_assist_mode(settings.mode) is AirAssistMode.DISABLED:
+    mode = coerce_air_assist_mode(settings.mode)
+    if mode is AirAssistMode.DISABLED:
         return None
+    if mode is AirAssistMode.SECONDARY_MARLIN_FAN:
+        return AirAssistCommands(
+            mode=mode,
+            protocol="marlin",
+            fan_index=None,
+            on_commands=("M106 S255",),
+            off_commands=("M106 S0",),
+            target=AirAssistTarget.PI_SECONDARY,
+            port=settings.port,
+            baudrate=settings.baudrate,
+        )
     try:
         dialect = CONTROLLER_DIALECT_REGISTRY.get(protocol)
     except KeyError as exc:

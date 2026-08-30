@@ -465,8 +465,12 @@ class MachineManagerDialog(QtWidgets.QDialog):
             AirAssistMode.GRBL_COOLANT.value,
         )
         self.air_assist_mode.addItem(
-            "Marlin fan (M106/M107)",
+            "Primary-controller Marlin fan (M106/M107)",
             AirAssistMode.MARLIN_FAN.value,
+        )
+        self.air_assist_mode.addItem(
+            "Creality / Marlin auxiliary fan (Pi secondary serial)",
+            AirAssistMode.SECONDARY_MARLIN_FAN.value,
         )
         self.air_assist_mode.setToolTip(
             "Map operation Air Assist requests to one trusted controller output. "
@@ -479,8 +483,26 @@ class MachineManagerDialog(QtWidgets.QDialog):
             "Marlin fan index used by M106 Pn S255 and M107 Pn."
         )
         self.air_assist_fan_label = QtWidgets.QLabel("Marlin fan index")
+        self.air_assist_port = QtWidgets.QLineEdit()
+        self.air_assist_port.setPlaceholderText(
+            "/dev/serial/by-id/REPLACE_WITH_AUXILIARY_CONTROLLER"
+        )
+        self.air_assist_port.setToolTip(
+            "Pi-local serial endpoint owned by E3. The Windows desktop never "
+            "opens this secondary device directly."
+        )
+        self.air_assist_port_label = QtWidgets.QLabel("Pi serial endpoint")
+        self.air_assist_baudrate = QtWidgets.QSpinBox()
+        self.air_assist_baudrate.setRange(1, 4_000_000)
+        self.air_assist_baudrate.setKeyboardTracking(False)
+        self.air_assist_baudrate.setToolTip(
+            "Baud rate for the Pi-owned secondary Marlin controller."
+        )
+        self.air_assist_baudrate_label = QtWidgets.QLabel("Pi serial baud rate")
         form.addRow("Mapping", self.air_assist_mode)
         form.addRow(self.air_assist_fan_label, self.air_assist_fan_index)
+        form.addRow(self.air_assist_port_label, self.air_assist_port)
+        form.addRow(self.air_assist_baudrate_label, self.air_assist_baudrate)
         self.air_assist_mode.currentIndexChanged.connect(
             self._refresh_air_assist_conditionals
         )
@@ -495,6 +517,15 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.air_assist_form.setRowVisible(
             self.air_assist_fan_index,
             marlin_fan,
+        )
+        pi_secondary = (
+            self.air_assist_mode.currentData()
+            == AirAssistMode.SECONDARY_MARLIN_FAN.value
+        )
+        self.air_assist_form.setRowVisible(self.air_assist_port, pi_secondary)
+        self.air_assist_form.setRowVisible(
+            self.air_assist_baudrate,
+            pi_secondary,
         )
 
     def _build_geometry_group(self) -> None:
@@ -733,6 +764,10 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self.air_assist_fan_index.setValue(
                 machine.machine.air_assist.fan_index
             )
+            self.air_assist_port.setText(machine.machine.air_assist.port)
+            self.air_assist_baudrate.setValue(
+                machine.machine.air_assist.baudrate
+            )
             self._refresh_air_assist_conditionals()
             area = machine.machine.work_area
             self.x_min.setValue(area.x_min)
@@ -854,6 +889,8 @@ class MachineManagerDialog(QtWidgets.QDialog):
             defaults.air_assist.mode.value,
         )
         self.air_assist_fan_index.setValue(defaults.air_assist.fan_index)
+        self.air_assist_port.setText(defaults.air_assist.port)
+        self.air_assist_baudrate.setValue(defaults.air_assist.baudrate)
         self._refresh_air_assist_conditionals()
         area = defaults.work_area
         self.x_min.setValue(area.x_min)
@@ -951,6 +988,8 @@ class MachineManagerDialog(QtWidgets.QDialog):
                 if air_assist_mode is AirAssistMode.MARLIN_FAN
                 else 0
             ),
+            port=self.air_assist_port.text().strip(),
+            baudrate=self.air_assist_baudrate.value(),
         )
         candidate.machine.work_area = WorkArea(
             self.x_min.value(),

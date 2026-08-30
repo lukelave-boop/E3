@@ -372,6 +372,8 @@ class Settings:
                         self.machine.air_assist.mode
                     ).value,
                     "fan_index": self.machine.air_assist.fan_index,
+                    "port": self.machine.air_assist.port,
+                    "baudrate": self.machine.air_assist.baudrate,
                 },
             },
             "calibration": {
@@ -470,6 +472,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "air_assist": {
             "mode": "disabled",
             "fan_index": 0,
+            "port": "",
+            "baudrate": 115200,
         },
     },
     "calibration": {
@@ -537,6 +541,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
         ("camera.precision_capture.consensus_frames", precision["consensus_frames"]),
         ("machine.baudrate", raw["machine"]["baudrate"]),
         ("machine.air_assist.fan_index", air_assist["fan_index"]),
+        ("machine.air_assist.baudrate", air_assist["baudrate"]),
         (
             "machine.grbl_step_idle_delay_ms",
             raw["machine"]["grbl_step_idle_delay_ms"],
@@ -722,8 +727,11 @@ def _validate(raw: Mapping[str, Any]) -> None:
             AirAssistSettings(
                 mode=coerce_air_assist_mode(air_assist["mode"]),
                 fan_index=air_assist["fan_index"],
+                port=air_assist["port"],
+                baudrate=air_assist["baudrate"],
             ),
             protocol=str(raw["machine"]["protocol"]),
+            primary_port=str(raw["machine"]["port"]),
         )
     except ValueError as exc:
         raise ConfigError(str(exc)) from exc
@@ -930,6 +938,8 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             air_assist=AirAssistSettings(
                 mode=AirAssistMode(raw["machine"]["air_assist"]["mode"]),
                 fan_index=int(raw["machine"]["air_assist"]["fan_index"]),
+                port=raw["machine"]["air_assist"]["port"],
+                baudrate=int(raw["machine"]["air_assist"]["baudrate"]),
             ),
         ),
         calibration=CalibrationSettings(

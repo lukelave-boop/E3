@@ -25,6 +25,7 @@ from .pi_job_protocol import (
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_OWNED_JOBS,
+    CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     PROTOCOL_VERSION,
     AuthenticatedChannel,
     PiJobProtocolError,
@@ -71,7 +72,11 @@ MACHINE_ACTIONS = frozenset(
     }
 )
 
-SERVER_CAPABILITIES = (CAPABILITY_PI_OWNED_JOBS, "same-channel-stepper-hold-v1")
+SERVER_CAPABILITIES = (
+    CAPABILITY_PI_OWNED_JOBS,
+    CAPABILITY_PI_SECONDARY_MARLIN_FAN,
+    "same-channel-stepper-hold-v1",
+)
 
 # This mapping is the discoverable server contract used by the desktop client.
 # `action` and canonical UUID `request_id` are required on every request in

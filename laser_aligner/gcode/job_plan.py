@@ -6,7 +6,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from ..air_assist import AirAssistCommands
+from ..air_assist import (
+    AIR_ASSIST_DIRECTIVE_PREFIX,
+    AirAssistCommands,
+    AirAssistTarget,
+)
 from ..errors import SafetyError
 from .preview import parse_spot_offset_comment, scan_word_state, strip_comment
 
@@ -102,12 +106,6 @@ def _metadata(raw_line: str) -> tuple[str, dict[str, Any]] | None:
     return prefix[4:].lower(), parsed
 
 
-def _normalized_air_assist_command(line: str) -> str:
-    """Match the controller service's exact-command normalization."""
-
-    return " ".join(strip_comment(line).upper().split())
-
-
 def build_job_plan(
     text: str,
     *,
@@ -141,21 +139,6 @@ def build_job_plan(
     moves: list[PlannedMove] = []
     air_assist_events: list[PlannedAirAssistEvent] = []
     warnings: list[str] = []
-    air_command_state = (
-        {
-            **{
-                _normalized_air_assist_command(command): True
-                for command in air_assist_commands.on_commands
-            },
-            **{
-                _normalized_air_assist_command(command): False
-                for command in air_assist_commands.off_commands
-            },
-        }
-        if air_assist_commands is not None
-        else {}
-    )
-
     for line_number, raw_line in enumerate(text.splitlines(), 1):
         metadata = _metadata(raw_line)
         if metadata is not None:
@@ -184,25 +167,53 @@ def build_job_plan(
             elif kind == "path":
                 source = payload
             continue
+        raw_instruction = raw_line.strip()
+        try:
+            air_assist_kind = (
+                None
+                if air_assist_commands is None
+                else air_assist_commands.kind_for_program_line(raw_instruction)
+            )
+        except ValueError as exc:
+            raise SafetyError(
+                f"Line {line_number}: invalid E3 air-assist instruction: {exc}"
+            ) from exc
+        if (
+            air_assist_commands is None
+            and raw_instruction.startswith(AIR_ASSIST_DIRECTIVE_PREFIX)
+        ):
+            raise SafetyError(
+                f"Line {line_number}: E3 air-assist instruction has no resolved mapping"
+            )
+        if air_assist_kind is not None:
+            enabled = air_assist_kind == "on"
+            physical_commands = (
+                air_assist_commands.on_commands
+                if enabled
+                else air_assist_commands.off_commands
+            )
+            displayed_command = (
+                strip_comment(raw_line)
+                if air_assist_commands.target is AirAssistTarget.PRIMARY
+                else "; ".join(physical_commands)
+            )
+            air_assist_events.append(
+                PlannedAirAssistEvent(
+                    line_number=line_number,
+                    move_index=len(moves),
+                    command=displayed_command,
+                    enabled=enabled,
+                    layer_id=str(layer.get("id", "")),
+                    layer_name=str(layer.get("name", "")),
+                )
+            )
+            continue
         spot_offset = parse_spot_offset_comment(raw_line)
         if spot_offset is not None:
             spot_offset_x, spot_offset_y = spot_offset
             continue
         line = strip_comment(raw_line)
         if not line:
-            continue
-        normalized_air_command = _normalized_air_assist_command(line)
-        if normalized_air_command in air_command_state:
-            air_assist_events.append(
-                PlannedAirAssistEvent(
-                    line_number=line_number,
-                    move_index=len(moves),
-                    command=line,
-                    enabled=air_command_state[normalized_air_command],
-                    layer_id=str(layer.get("id", "")),
-                    layer_name=str(layer.get("name", "")),
-                )
-            )
             continue
         g_codes, m_codes, values = scan_word_state(
             line,
@@ -379,7 +390,7 @@ def restart_program_from_move(
         "M5 ; laser off before positioning",
     ]
     if air_commands is not None:
-        lines.extend(air_commands.off_commands)
+        lines.extend(air_commands.program_lines(False))
     if abs(plan.spot_offset_x) >= 1e-12 or abs(plan.spot_offset_y) >= 1e-12:
         lines.append(
             "; Laser spot offset (spot = controller + offset): "
@@ -402,7 +413,7 @@ def restart_program_from_move(
             ):
                 assert air_commands is not None
                 lines.append("M5")
-                lines.extend(air_commands.off_commands)
+                lines.extend(air_commands.program_lines(False))
                 air_active = False
                 active_power = 0.0
             active_layer = layer_key
@@ -439,7 +450,7 @@ def restart_program_from_move(
                     lines.append("M5")
                     active_power = 0.0
                 assert air_commands is not None
-                lines.extend(air_commands.on_commands)
+                lines.extend(air_commands.program_lines(True))
                 air_active = True
             if active_power != move.power:
                 lines.append(f"{power_mode.upper()} S{move.power:g}")
@@ -455,7 +466,7 @@ def restart_program_from_move(
         )
     lines.append("M5")
     if air_commands is not None:
-        lines.extend(air_commands.off_commands)
+        lines.extend(air_commands.program_lines(False))
         lines.append("M5")
     lines.extend(["; End of reviewed Start Here job", ""])
     text = "\n".join(lines)

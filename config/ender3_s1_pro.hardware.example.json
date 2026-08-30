@@ -64,7 +64,9 @@
     "max_work_feed_mm_min": 3000.0,
     "air_assist": {
       "mode": "disabled",
-      "fan_index": 0
+      "fan_index": 0,
+      "port": "",
+      "baudrate": 115200
     }
   },
   "laser": {

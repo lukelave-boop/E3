@@ -20,6 +20,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from typing import Any
 
+from ..air_assist import AirAssistMode, coerce_air_assist_mode
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError
 from .network_transport import bridge_token_from_environment, parse_bridge_uri
@@ -33,6 +34,7 @@ from .pi_job_protocol import (
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
     CAPABILITY_PI_OWNED_JOBS,
+    CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     MAX_JOB_BYTES,
     MAX_UPLOAD_CHUNK_BYTES,
     PROTOCOL_VERSION,
@@ -364,6 +366,17 @@ class RemoteMachineService:
                 raise PiJobProtocolError(
                     "The remote node does not advertise the required Pi-owned job "
                     "capability; update/start the combined Pi node"
+                )
+            air_assist_mode = coerce_air_assist_mode(
+                self.settings.air_assist.mode
+            )
+            if (
+                air_assist_mode is AirAssistMode.SECONDARY_MARLIN_FAN
+                and CAPABILITY_PI_SECONDARY_MARLIN_FAN not in capabilities
+            ):
+                raise PiJobProtocolError(
+                    "The remote node does not advertise the required Pi-owned "
+                    "secondary Marlin fan capability; update/start the combined Pi node"
                 )
             with self._state_lock:
                 self._capabilities_verified = True

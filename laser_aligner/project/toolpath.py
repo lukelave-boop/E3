@@ -2349,7 +2349,7 @@ class _AirAssistEmitter:
 
     def establish_off(self, lines: list[str]) -> None:
         if self.commands is not None:
-            lines.extend(self.commands.off_commands)
+            lines.extend(self.commands.program_lines(False))
         self.active = False
 
     def turn_on(self, lines: list[str]) -> None:
@@ -2360,7 +2360,7 @@ class _AirAssistEmitter:
                 "A powered layer requests air assist, but the machine has no "
                 "resolved air-assist command mapping"
             )
-        lines.extend(self.commands.on_commands)
+        lines.extend(self.commands.program_lines(True))
         self.active = True
 
     def turn_off_before_layer(self, lines: list[str]) -> None:
@@ -2369,7 +2369,7 @@ class _AirAssistEmitter:
         if self.commands is None:  # pragma: no cover - guarded by turn_on
             raise SafetyError("Active air assist has no resolved command mapping")
         lines.append("M5")
-        lines.extend(self.commands.off_commands)
+        lines.extend(self.commands.program_lines(False))
         self.active = False
 
 
