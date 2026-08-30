@@ -320,6 +320,58 @@ def _varied_long_glyph_camera_scene() -> tuple[np.ndarray, np.ndarray, np.ndarra
     return image, stencil_core, background_core
 
 
+def _varied_long_light_glyph_camera_scene() -> (
+    tuple[np.ndarray, np.ndarray, np.ndarray]
+):
+    """Long light glyphs with lighter surface marks on a mild camera gradient."""
+
+    height, width = 640, 900
+    rows, columns = np.mgrid[0:height, 0:width].astype(np.float32)
+    illumination = (
+        np.float32(58.0)
+        + np.float32(10.0) * columns / np.float32(width - 1)
+        - np.float32(8.0) * rows / np.float32(height - 1)
+        + np.float32(3.0) * np.sin(columns / np.float32(150.0))
+    )
+    stencil = np.zeros((height, width), dtype=np.uint8)
+    for center_x in (180, 360, 540, 720):
+        cv2.rectangle(
+            stencil,
+            (center_x - 30, 100),
+            (center_x + 30, 500),
+            255,
+            thickness=-1,
+        )
+
+    photo = illumination.copy()
+    interior = (
+        np.float32(174.0)
+        + np.float32(8.0) * rows / np.float32(height)
+        + np.float32(6.0) * np.sin(columns / np.float32(25.0))
+    )
+    photo[stencil > 0] = interior[stencil > 0]
+    for center in ((180, 300), (360, 410), (540, 220), (720, 420)):
+        cv2.ellipse(
+            photo,
+            center,
+            (20, 32),
+            25,
+            0,
+            360,
+            225.0,
+            thickness=-1,
+        )
+    photo += np.random.default_rng(7).normal(0.0, 1.5, photo.shape)
+    grayscale = np.clip(np.rint(photo), 0.0, 255.0).astype(np.uint8)
+    image = np.repeat(grayscale[:, :, None], 3, axis=2)
+    stencil_core = cv2.erode(stencil, np.ones((9, 9), dtype=np.uint8)) > 0
+    background_core = cv2.erode(
+        (stencil == 0).astype(np.uint8),
+        np.ones((15, 15), dtype=np.uint8),
+    ) > 0
+    return image, stencil_core, background_core
+
+
 def _otsu_foreground(raster: np.ndarray) -> tuple[int, np.ndarray]:
     threshold, mask = cv2.threshold(
         raster,
@@ -575,6 +627,45 @@ def test_rank_envelope_preserves_varied_long_glyphs_at_manual_threshold() -> Non
     assert int(np.max(grayscale[stencil_core])) < int(
         np.min(grayscale[background_core])
     )
+    assert _foreground_fraction(source_mask, stencil_core) > 0.995
+    assert _foreground_fraction(source_mask, background_core) < 0.005
+    assert prepared.threshold_used == 128
+    assert prepared.connected_component_count == 4
+    assert hierarchy is not None
+    parents = hierarchy[0, :, 3].tolist()
+    assert len(contours) == 4
+    assert parents.count(-1) == 4
+    assert sum(parent >= 0 for parent in parents) == 0
+
+
+def test_light_rank_envelope_preserves_glyphs_beside_lighter_surface_marks() -> None:
+    image, stencil_core, background_core = _varied_long_light_glyph_camera_scene()
+    result = normalize_camera_trace_frame(image, _PIXELS_PER_MM)
+    vector_grayscale = cv2.bitwise_not(result.light_raster)
+    source_mask = vector_grayscale > 128
+    rgba = cv2.cvtColor(vector_grayscale, cv2.COLOR_GRAY2RGBA)
+    source = prepare_pixel_vectorization_source(rgba)
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        RasterVectorizationOptions(
+            detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+            threshold=128,
+            invert=True,
+            minimum_feature_area_mm2=0.5,
+            smoothing_mm=0.0,
+            simplification_tolerance_mm=0.1,
+            contour_output=RasterContourOutput.ALL_CONTOURS,
+        ),
+        displayed_width_mm=225.0,
+        displayed_height_mm=160.0,
+    )
+    contours, hierarchy = cv2.findContours(
+        prepared.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_NONE,
+    )
+
+    assert result.diagnostics.background_model_kind == "rank_envelope"
     assert _foreground_fraction(source_mask, stencil_core) > 0.995
     assert _foreground_fraction(source_mask, background_core) < 0.005
     assert prepared.threshold_used == 128

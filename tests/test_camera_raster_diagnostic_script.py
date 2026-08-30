@@ -58,3 +58,42 @@ def test_camera_raster_diagnostic_script_writes_exact_stage_artifacts(
     assert saved["contour_mask_shape_px"] == [640, 400]
     assert saved["normalization_timing"]["background_estimation"]["calls"] == 1
     assert saved["mask_timing"]["mask_preparation_total"]["calls"] == 1
+
+
+def test_camera_raster_diagnostic_auto_reports_exact_bounded_selection(
+    tmp_path: Path,
+) -> None:
+    image = np.full((100, 160, 3), 225, dtype=np.uint8)
+    cv2.rectangle(image, (45, 22), (112, 78), (35, 35, 35), -1)
+    frame = tmp_path / "auto-frame.png"
+    output_dir = tmp_path / "auto-diagnostics"
+    assert cv2.imwrite(str(frame), image)
+
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/diagnose_camera_trace_raster.py",
+            str(frame),
+            "--pixels-per-mm",
+            "4",
+            "--threshold",
+            "auto",
+            "--minimum-area-mm2",
+            "0.5",
+            "--output-dir",
+            str(output_dir),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    selection = payload["auto_threshold_selection"]
+    assert selection["threshold"] == payload["threshold_used"]
+    assert 1 <= selection["candidate_count"] <= 12
+    assert any(
+        "otsu" in candidate["origins"]
+        for candidate in selection["candidates"]
+    )
+    assert payload["mask_timing"]["automatic_threshold_selection"]["calls"] == 1

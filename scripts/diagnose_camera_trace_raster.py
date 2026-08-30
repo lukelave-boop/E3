@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 
 import cv2
@@ -20,6 +20,7 @@ from laser_aligner.project.raster_vectorize import (  # noqa: E402
     RasterVectorizationTiming,
     prepare_pixel_vectorization_mask,
     prepare_pixel_vectorization_source,
+    select_pixel_vectorization_auto_threshold,
 )
 from laser_aligner.vision.camera_raster_normalization import (  # noqa: E402
     CameraRasterNormalizationTiming,
@@ -55,7 +56,7 @@ def _parser() -> argparse.ArgumentParser:
         "--threshold",
         choices=("auto", "manual"),
         default="auto",
-        help="Shared raster threshold mode (default: auto/Otsu)",
+        help="Shared raster threshold mode (default: bounded Auto selection)",
     )
     parser.add_argument(
         "--threshold-value",
@@ -116,6 +117,18 @@ def main() -> int:
         contour_output=RasterContourOutput.ALL_CONTOURS,
     )
     raster_timing = RasterVectorizationTiming()
+    auto_threshold_selection = None
+    if args.threshold == "auto":
+        auto_threshold_selection = select_pixel_vectorization_auto_threshold(
+            source,
+            options,
+            timing=raster_timing,
+        )
+        options = replace(
+            options,
+            detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+            threshold=auto_threshold_selection.threshold,
+        )
     prepared = prepare_pixel_vectorization_mask(
         source,
         options,
@@ -142,6 +155,11 @@ def main() -> int:
         "polarity": args.polarity,
         "threshold_mode": args.threshold,
         "threshold_used": prepared.threshold_used,
+        "auto_threshold_selection": (
+            None
+            if auto_threshold_selection is None
+            else auto_threshold_selection.to_dict()
+        ),
         "connected_component_count": prepared.connected_component_count,
         "normalized_shape_px": [source.width_px, source.height_px],
         "contour_mask_shape_px": [

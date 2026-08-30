@@ -44,6 +44,7 @@ from ..project.raster_vectorize import (
     RasterVectorizationOptions,
     RasterVectorizationTiming,
     prepare_pixel_vectorization_source,
+    select_pixel_vectorization_auto_threshold,
     vectorize_pixel_source_forest,
 )
 from .camera_raster_normalization import (
@@ -3535,6 +3536,18 @@ def _detect_non_grid_contrast_raster(
     )
     if vectorization_timing is None:
         vectorization_timing = RasterVectorizationTiming()
+    auto_threshold_selection = None
+    if options.contrast_threshold_mode == "auto":
+        auto_threshold_selection = select_pixel_vectorization_auto_threshold(
+            source,
+            raster_options,
+            timing=vectorization_timing,
+        )
+        raster_options = replace(
+            raster_options,
+            detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+            threshold=auto_threshold_selection.threshold,
+        )
     strategy_name = preview_strategy or f"raster_{polarity}"
 
     def trace_metadata() -> dict[str, Any]:
@@ -3544,6 +3557,11 @@ def _detect_non_grid_contrast_raster(
                 eligibility,
                 polarity=polarity,
                 normalization_reused=normalization_reused,
+            ),
+            "auto_threshold_selection": (
+                None
+                if auto_threshold_selection is None
+                else auto_threshold_selection.to_dict()
             ),
             "timing": {
                 "trace_eligibility": (
@@ -4438,9 +4456,7 @@ def _detect_non_grid_auto(
     if selected_name.startswith("raster_"):
         polarity = str(selected_attempt["polarity"])
         threshold = int(selected_attempt["threshold"])
-        strategy_summary = (
-            f"Raster · {polarity} foreground · Otsu {threshold}"
-        )
+        strategy_summary = f"Raster · {polarity} foreground · Auto {threshold}"
     else:
         strategy_summary = (
             f"Color · hue {float(selected_attempt['target_hue']):.0f} · "

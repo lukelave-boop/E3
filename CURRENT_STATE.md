@@ -206,7 +206,8 @@ Auto is now an orchestrator over production tracing paths rather than another
 independent detector: it prepares the corrected frame once, estimates one
   material eligibility, estimates one camera-raster background, derives
   symmetric dark- and light-feature rasters,
-tries shared-raster Otsu against both immutable results, conditionally tries
+selects one bounded source-resolution Auto threshold for each immutable result,
+conditionally tries
   Color only when eligible material contains bounded non-background chroma, and
   chooses a credible verified result or fails closed. With **Use grid** on, Auto
   deliberately retains the specialized
@@ -308,14 +309,23 @@ darker surface mark cancel adjacent sound pixels. After a three-level noise
 floor, one nearest-rank 99.5th-percentile magnitude clamped to 32–64 levels
 supplies the shared response scale `R`. Dark and light uint8 artwork use the reciprocal
 transfer `round(255R / (R + X))`: blank/opposite-polarity is 255, response `R`
-is 128, and stronger response approaches black without hard clipping. Automatic
-Otsu alone can advance its lowest equally optimal plateau member by at most two
-unused levels inside an empty histogram gap when the low class lacks interpolation
-headroom. Normal polarity measures the selected foreground span; inverted light
-polarity measures above the low background endpoint. Camera Otsu uses only
-eligible pixels; ineligible pixels are forced background before cleanup and
-again by a nearest-neighbor gate at 4×. With no eligibility, ordinary imported-
-raster Otsu and manual-threshold semantics remain unchanged.
+is 128, and stronger response approaches black without hard clipping. Camera
+Auto now generates at most 12 thresholds from that exact normalized raster:
+stabilized Otsu, Triangle, Otsu-to-class-median interpolation, and 1/3/8/16/30%
+foreground-occupancy quantiles. It scores source-resolution coherence, nearby
+mask/component/hole stability, specks, occupancy, eligibility-border dominance,
+retained coherent area, and narrow retained foreground before any 4× work or
+native fitting. A credible non-Otsu winner must clear a baseline departure margin
+that grows when it adds more than two components or worsens border occupancy.
+No captured or physically successful threshold byte is a candidate constant.
+
+The Otsu baseline can advance its lowest equally optimal plateau member by at
+most two unused levels inside an empty histogram gap when the low class lacks
+interpolation headroom. Normal polarity measures the selected foreground span;
+inverted light polarity measures above the low background endpoint. Camera Auto
+uses only eligible pixels; ineligible pixels are forced background before cleanup
+and again by a nearest-neighbor gate at 4×. With no eligibility, ordinary
+imported-raster Otsu and manual-threshold semantics remain unchanged.
 
 The shared 4× mask path now constrains bicubic reconstruction to its proper
 role: localizing a boundary inside the one-source-pixel transition band. Every
@@ -359,7 +369,7 @@ neutral and defensively immutable on bytes backing stores. Imported assets wrap
 that contract with their real `RasterAssetIdentity` and exact encoded-byte
 verification; live normalized camera pixels use a versioned content-derived key
 and do not invent file metadata, paths, or SHA provenance. Non-grid contrast
-exposes Otsu/manual threshold and local light/dark response controls, visibly
+exposes bounded-Auto/manual threshold and local light/dark response controls, visibly
 disables the hue controls, and uses the native raster-vector output without a
 border offset. With
 **Use grid** enabled, By contrast deliberately retains the specialized
@@ -369,7 +379,7 @@ multi-mask object/grid detector, classification, normalization, and gap
 
 For non-grid Auto, both raster polarities reuse one immutable normalization and
 background estimate while each owns its exact immutable
-`PixelVectorizationSource`, prepared mask, automatic Otsu threshold, physical
+`PixelVectorizationSource`, bounded Auto threshold selection, prepared mask, physical
 minimum-feature cleanup, 4× reconstruction, hierarchy, source-edge refinement,
   and native validator. Color is attempted only when eligibility-scoped weighted
   HSV/Lab evidence covers enough material, at least 60% of the chroma weight lies
@@ -393,10 +403,10 @@ least 95% foreground plus at least 75% border occupancy is rejected as
 background-dominated. Only post-ROI, post-reference, within-output, verified
 candidates contribute positive evidence. Stable
 ties prefer dark raster, then light raster, then Color. The result message names
-the selected strategy, Otsu threshold or hue/tolerance, valid count, and omitted
+the selected strategy, exact Auto threshold or hue/tolerance, valid count, and omitted
 invalid/filtered count; bounded per-attempt metrics and failure reasons remain
 internal. Serialized Auto results retain `detection_mode=auto` while reporting
-the effective selected native/Otsu-or-Color options; the original request and
+the effective selected native/Auto-or-Color options; the original request and
 effective options are both preserved in diagnostics. Review-filtered roots count
 as unavailable even when they did not reach topology fitting, and an all-pruned
 raster attempt retains exact root count, bounds, stage, and failure reason.
@@ -415,7 +425,7 @@ validators run again. If all roots pass alone but fail together, the survivor
 forest still fails, and every complexity-limit failure remains fatal to the
 strategy.
 
-In the Trace panel, non-grid Auto owns polarity, Otsu threshold, and optional
+In the Trace panel, non-grid Auto owns polarity, bounded threshold selection, and optional
 color selection. Hue/sample and threshold/polarity controls are therefore
 inactive, output is fixed to authoritative **Native lines / Béziers**, and border
 offset is fixed at zero. Explicit **By color** alone enables hue/sample controls;
@@ -423,6 +433,12 @@ explicit non-grid **By contrast** alone enables manual threshold and polarity.
 Auto with grid enabled preserves the specialized grid output and normalization
 controls. Minimum feature area, review filters, native fit tolerance, output/work
 authority, grid toggle, and selection controls remain available where applicable.
+The read-only **Chosen threshold** value is `—` before detection, displays the
+exact production byte after a successful non-grid Auto raster result, displays
+`N/A` when Auto selects Color, updates on a new result, and returns to `—` on
+Clear, failure, or settings staleness. Manual mode retains its editable byte and
+does not receive the Auto value. The minimum area, width, and height defaults
+remain 30 mm², 4 mm, and 3 mm.
 
 Cut geometry offers two explicit commits. **Create separate vectors** creates
 one editable object per selected candidate. **Create one combined vector**
@@ -469,6 +485,17 @@ shared raster vectorization, object Trace, native fit acceptance and curve
 fidelity, desktop trace sources/layout/async integration, and the standalone
 camera-raster diagnostic passed **328 tests** in **304.91 seconds**. Repository
 Ruff, `python -m compileall -q laser_aligner`, and `git diff --check` also pass.
+
+For the bounded Camera Auto threshold selection and exact chosen-threshold UI,
+the final focused Windows four-worker batch passed **313 tests** in **235.31
+seconds** across shared raster vectorization, camera normalization and Trace,
+eligibility, Auto orchestration, Trace panel state, async desktop integration,
+preview sources, and the standalone diagnostic. The complete Windows four-worker
+suite passed **2,862 tests** with **14 expected platform/privilege skips** in
+**238.22 seconds**. Repository Ruff, `python -m compileall -q laser_aligner`,
+and `git diff --check` pass. This is deterministic Qt-free and offscreen-widget
+verification only; no interactive GUI, live camera, controller, motion, arming,
+laser-output, cutting, or physical-accuracy verification is claimed.
 
 On the 640 × 480 correlated-texture stencil fixture at 2 pixels/mm, ten
 post-warmup eligibility samples had median stage times of **25.081 ms** for

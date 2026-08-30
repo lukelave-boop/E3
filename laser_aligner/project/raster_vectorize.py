@@ -49,6 +49,10 @@ MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION = 1_000_000
 MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS = 100_000
 MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION = 250_000
 MAX_RASTER_VECTORIZATION_FIT_VALIDATION_STEPS = 5_000_000
+MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES = 12
+_AUTO_THRESHOLD_BASELINE_DEPARTURE_MARGIN = 2.0
+_AUTO_THRESHOLD_COMPONENT_GROWTH_MARGIN = 1.25
+_AUTO_THRESHOLD_BORDER_GROWTH_MARGIN = 200.0
 
 _CORNER_MINIMUM_TURN_DEGREES = 35.0
 _CORNER_INNER_MINIMUM_TURN_DEGREES = 22.5
@@ -373,6 +377,65 @@ class PixelVectorizationSource:
     @property
     def height_px(self) -> int:
         return int(self.source_rgba.shape[0])
+
+
+@dataclass(frozen=True, slots=True)
+class PixelAutoThresholdCandidate:
+    """Cheap source-resolution evidence for one automatic threshold candidate."""
+
+    threshold: int
+    origins: tuple[str, ...]
+    foreground_fraction: float
+    border_foreground_fraction: float
+    coherent_foreground_fraction: float
+    retained_foreground_fraction: float
+    narrow_feature_retention: float
+    stability: float
+    noise_quality: float
+    significant_component_count: int
+    speck_component_count: int
+    hole_count: int
+    credible: bool
+    score: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "threshold": self.threshold,
+            "origins": list(self.origins),
+            "foreground_fraction": self.foreground_fraction,
+            "border_foreground_fraction": self.border_foreground_fraction,
+            "coherent_foreground_fraction": self.coherent_foreground_fraction,
+            "retained_foreground_fraction": self.retained_foreground_fraction,
+            "narrow_feature_retention": self.narrow_feature_retention,
+            "stability": self.stability,
+            "noise_quality": self.noise_quality,
+            "significant_component_count": self.significant_component_count,
+            "speck_component_count": self.speck_component_count,
+            "hole_count": self.hole_count,
+            "credible": self.credible,
+            "score": self.score,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class PixelAutoThresholdSelection:
+    """One bounded automatic threshold decision made before native fitting."""
+
+    threshold: int
+    otsu_threshold: int
+    neighbor_radius: int
+    otsu_departure_margin: float
+    candidates: tuple[PixelAutoThresholdCandidate, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "threshold": self.threshold,
+            "otsu_threshold": self.otsu_threshold,
+            "neighbor_radius": self.neighbor_radius,
+            "otsu_departure_margin": self.otsu_departure_margin,
+            "candidate_count": len(self.candidates),
+            "candidates": [candidate.to_dict() for candidate in self.candidates],
+        }
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -1406,21 +1469,11 @@ def _composited_grayscale(source: PixelVectorizationSource) -> np.ndarray:
     return source.composited_grayscale
 
 
-@_timed_stage("threshold")
-def _threshold_value(
+def _otsu_threshold_value(
     source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
     grayscale: np.ndarray,
-) -> int | None:
-    if options.detection_mode is RasterDetectionMode.ALPHA:
-        if not source.has_usable_alpha:
-            raise RasterVectorizationError(
-                "Transparency / alpha tracing is unavailable because the source has "
-                "no spatially useful alpha data"
-            )
-        return None
-    if options.detection_mode is RasterDetectionMode.MANUAL_THRESHOLD:
-        return options.threshold
+) -> int:
     # Otsu must see the white-composited transparent background as well as the
     # opaque artwork.  Sampling only alpha-eligible pixels makes a common
     # transparent silhouette appear single-valued, which yields threshold zero
@@ -1471,6 +1524,24 @@ def _threshold_value(
     return threshold + min(needed_headroom, available_gap)
 
 
+@_timed_stage("threshold")
+def _threshold_value(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    grayscale: np.ndarray,
+) -> int | None:
+    if options.detection_mode is RasterDetectionMode.ALPHA:
+        if not source.has_usable_alpha:
+            raise RasterVectorizationError(
+                "Transparency / alpha tracing is unavailable because the source has "
+                "no spatially useful alpha data"
+            )
+        return None
+    if options.detection_mode is RasterDetectionMode.MANUAL_THRESHOLD:
+        return options.threshold
+    return _otsu_threshold_value(source, options, grayscale)
+
+
 def _mask_at_resolution(
     source: PixelVectorizationSource,
     options: RasterVectorizationOptions,
@@ -1518,6 +1589,474 @@ def _mask_at_resolution(
     if eligibility is not None:
         foreground &= eligibility > 0
     return foreground.astype(np.uint8) * 255
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _AutoThresholdMaskEvidence:
+    foreground_count: int
+    coherent_foreground_count: int
+    narrow_foreground_count: int
+    foreground_fraction: float
+    border_foreground_fraction: float
+    coherent_foreground_fraction: float
+    noise_quality: float
+    significant_component_count: int
+    speck_component_count: int
+    hole_count: int
+    coherent_mask: np.ndarray = field(repr=False, compare=False)
+
+
+def _auto_threshold_candidate_values(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    grayscale: np.ndarray,
+    otsu_threshold: int,
+) -> tuple[dict[int, tuple[str, ...]], np.ndarray]:
+    eligibility = (
+        np.ones(grayscale.shape, dtype=bool)
+        if source.eligibility_mask is None
+        else source.eligibility_mask > 0
+    )
+    eligible = eligibility & (source.alpha >= options.alpha_cutoff)
+    values = grayscale[eligible]
+    if not values.size:
+        raise RasterVectorizationError(
+            "The alpha cutoff and eligibility mask exclude every source pixel"
+        )
+
+    origins: dict[int, set[str]] = {}
+
+    def add(value: float | int, origin: str) -> None:
+        threshold = int(np.clip(np.rint(float(value)), 0, 255))
+        origins.setdefault(threshold, set()).add(origin)
+
+    add(otsu_threshold, "otsu")
+    if np.unique(values).size >= 2:
+        try:
+            triangle, _mask = cv2.threshold(
+                values,
+                0,
+                255,
+                cv2.THRESH_BINARY | cv2.THRESH_TRIANGLE,
+            )
+        except cv2.error:
+            triangle = None
+        if triangle is not None:
+            add(triangle, "triangle")
+
+    baseline_mask = _mask_at_resolution(
+        source,
+        options,
+        grayscale,
+        otsu_threshold,
+    ) > 0
+    foreground_values = grayscale[eligible & baseline_mask]
+    background_values = grayscale[eligible & ~baseline_mask]
+    if foreground_values.size and background_values.size:
+        foreground_center = float(np.median(foreground_values))
+        background_center = float(np.median(background_values))
+        for fraction in (0.25, 0.50, 0.75):
+            add(
+                otsu_threshold
+                + fraction * (background_center - otsu_threshold),
+                f"toward_background_{fraction:.2f}",
+            )
+        for fraction in (0.33, 0.67):
+            add(
+                otsu_threshold
+                + fraction * (foreground_center - otsu_threshold),
+                f"toward_foreground_{fraction:.2f}",
+            )
+
+    for fraction in (0.01, 0.03, 0.08, 0.16, 0.30):
+        quantile = 1.0 - fraction if options.invert else fraction
+        add(
+            float(np.quantile(values, quantile)),
+            f"foreground_quantile_{fraction:.2f}",
+        )
+
+    if len(origins) > MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES:
+        mandatory = {
+            threshold
+            for threshold, names in origins.items()
+            if "otsu" in names or "triangle" in names
+        }
+        remaining = sorted(
+            (threshold for threshold in origins if threshold not in mandatory),
+            key=lambda threshold: (abs(threshold - otsu_threshold), threshold),
+        )
+        keep = set(mandatory)
+        keep.update(
+            remaining[: MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES - len(keep)]
+        )
+        origins = {
+            threshold: names for threshold, names in origins.items() if threshold in keep
+        }
+    return (
+        {
+            threshold: tuple(sorted(names))
+            for threshold, names in sorted(origins.items())
+        },
+        eligible,
+    )
+
+
+def _auto_threshold_mask_evidence(
+    mask: np.ndarray,
+    eligible: np.ndarray,
+) -> _AutoThresholdMaskEvidence:
+    eligible_count = int(np.count_nonzero(eligible))
+    foreground = (mask > 0) & eligible
+    foreground_count = int(np.count_nonzero(foreground))
+    foreground_fraction = foreground_count / max(1, eligible_count)
+
+    eligibility_bytes = eligible.astype(np.uint8) * 255
+    eligibility_interior = cv2.erode(
+        eligibility_bytes,
+        np.ones((3, 3), dtype=np.uint8),
+        borderType=cv2.BORDER_CONSTANT,
+        borderValue=0,
+    )
+    eligibility_boundary = eligible & (eligibility_interior == 0)
+    boundary_count = int(np.count_nonzero(eligibility_boundary))
+    border_foreground_fraction = (
+        int(np.count_nonzero(foreground & eligibility_boundary))
+        / max(1, boundary_count)
+    )
+
+    component_count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
+        foreground.astype(np.uint8),
+        connectivity=8,
+    )
+    areas = stats[1:, cv2.CC_STAT_AREA].astype(np.int64, copy=False)
+    speck_area_limit = max(
+        3,
+        min(64, int(round(math.sqrt(max(1, eligible_count)) / 48.0))),
+    )
+    significant = areas >= speck_area_limit
+    significant_component_count = int(np.count_nonzero(significant))
+    speck_component_count = int(max(0, component_count - 1)) - (
+        significant_component_count
+    )
+    keep_label = np.zeros(component_count, dtype=bool)
+    if significant_component_count:
+        keep_label[1:] = significant
+    coherent = keep_label[labels]
+    coherent_count = int(np.count_nonzero(coherent))
+    coherent_fraction = coherent_count / max(1, foreground_count)
+    speck_area_fraction = max(0, foreground_count - coherent_count) / max(
+        1,
+        foreground_count,
+    )
+    speck_explosion = speck_component_count / max(
+        16,
+        4 * max(1, significant_component_count),
+    )
+    noise_quality = max(
+        0.0,
+        1.0 - min(1.0, 2.5 * speck_area_fraction + speck_explosion),
+    )
+
+    coherent_bytes = coherent.astype(np.uint8) * 255
+    opened = cv2.morphologyEx(
+        coherent_bytes,
+        cv2.MORPH_OPEN,
+        np.ones((3, 3), dtype=np.uint8),
+    )
+    narrow_count = int(np.count_nonzero(coherent & (opened == 0)))
+    contours, hierarchy = cv2.findContours(
+        coherent_bytes,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    hole_count = (
+        0
+        if hierarchy is None or not contours
+        else int(np.count_nonzero(hierarchy[0, :, 3] >= 0))
+    )
+    return _AutoThresholdMaskEvidence(
+        foreground_count=foreground_count,
+        coherent_foreground_count=coherent_count,
+        narrow_foreground_count=narrow_count,
+        foreground_fraction=foreground_fraction,
+        border_foreground_fraction=border_foreground_fraction,
+        coherent_foreground_fraction=coherent_fraction,
+        noise_quality=noise_quality,
+        significant_component_count=significant_component_count,
+        speck_component_count=speck_component_count,
+        hole_count=hole_count,
+        coherent_mask=coherent,
+    )
+
+
+def _auto_threshold_stability(
+    current: _AutoThresholdMaskEvidence,
+    neighbors: tuple[_AutoThresholdMaskEvidence, ...],
+) -> float:
+    comparisons: list[float] = []
+    for neighbor in neighbors:
+        union = int(np.count_nonzero(current.coherent_mask | neighbor.coherent_mask))
+        intersection = int(
+            np.count_nonzero(current.coherent_mask & neighbor.coherent_mask)
+        )
+        mask_agreement = 1.0 if union == 0 else intersection / union
+        component_agreement = 1.0 - (
+            abs(
+                current.significant_component_count
+                - neighbor.significant_component_count
+            )
+            / max(
+                1,
+                current.significant_component_count,
+                neighbor.significant_component_count,
+            )
+        )
+        hole_agreement = 1.0 - (
+            abs(current.hole_count - neighbor.hole_count)
+            / max(1, current.hole_count, neighbor.hole_count)
+        )
+        comparisons.append(
+            0.65 * mask_agreement
+            + 0.25 * component_agreement
+            + 0.10 * hole_agreement
+        )
+    return sum(comparisons) / len(comparisons) if comparisons else 1.0
+
+
+def _auto_threshold_occupancy_quality(foreground_fraction: float) -> float:
+    if foreground_fraction <= 0.0:
+        return 0.0
+    if foreground_fraction < 0.002:
+        return foreground_fraction / 0.002
+    if foreground_fraction <= 0.35:
+        return 1.0
+    if foreground_fraction <= 0.65:
+        return 1.0 - 0.5 * (foreground_fraction - 0.35) / 0.30
+    if foreground_fraction < 0.90:
+        return 0.5 * (0.90 - foreground_fraction) / 0.25
+    return 0.0
+
+
+def select_pixel_vectorization_auto_threshold(
+    source: PixelVectorizationSource,
+    options: RasterVectorizationOptions,
+    *,
+    timing: RasterVectorizationTiming | None = None,
+) -> PixelAutoThresholdSelection:
+    """Select one credible source-resolution threshold before native fitting.
+
+    The family is bounded and image-derived: stabilized Otsu, Triangle, class-
+    interpolation, and foreground-occupancy quantiles. Candidate masks are
+    assessed only with cheap raster evidence; the selected byte is then used by
+    the ordinary production cleanup, 4x reconstruction, and native fitter.
+    """
+
+    if not isinstance(source, PixelVectorizationSource):
+        raise TypeError("Automatic threshold selection requires a pixel source")
+    if not isinstance(options, RasterVectorizationOptions):
+        raise TypeError("Automatic threshold selection requires raster options")
+    if options.detection_mode is not RasterDetectionMode.AUTO_THRESHOLD:
+        raise ValueError("Automatic threshold selection requires automatic mode")
+
+    started = time.perf_counter()
+    try:
+        grayscale = _composited_grayscale(source)
+        otsu_threshold = _otsu_threshold_value(source, options, grayscale)
+        origins, eligible = _auto_threshold_candidate_values(
+            source,
+            options,
+            grayscale,
+            otsu_threshold,
+        )
+        values = grayscale[eligible]
+        robust_span = float(np.percentile(values, 95.0)) - float(
+            np.percentile(values, 5.0)
+        )
+        neighbor_radius = max(2, min(8, int(round(robust_span / 32.0))))
+        evidence_cache: dict[int, _AutoThresholdMaskEvidence] = {}
+
+        def evidence(threshold: int) -> _AutoThresholdMaskEvidence:
+            threshold = max(0, min(255, int(threshold)))
+            cached = evidence_cache.get(threshold)
+            if cached is not None:
+                return cached
+            mask = _mask_at_resolution(
+                source,
+                options,
+                grayscale,
+                threshold,
+            )
+            cached = _auto_threshold_mask_evidence(mask, eligible)
+            evidence_cache[threshold] = cached
+            return cached
+
+        candidate_evidence = {
+            threshold: evidence(threshold) for threshold in origins
+        }
+        reference_pool = [
+            item
+            for item in candidate_evidence.values()
+            if item.significant_component_count
+            and item.foreground_fraction <= 0.75
+            and item.border_foreground_fraction <= 0.50
+            and item.noise_quality >= 0.25
+        ]
+        if not reference_pool:
+            reference_pool = [candidate_evidence[otsu_threshold]]
+        coherent_reference = max(
+            item.coherent_foreground_count for item in reference_pool
+        )
+        narrow_reference = max(item.narrow_foreground_count for item in reference_pool)
+
+        candidates: list[PixelAutoThresholdCandidate] = []
+        for threshold, candidate_origins in origins.items():
+            item = candidate_evidence[threshold]
+            neighbor_thresholds = tuple(
+                value
+                for value in (
+                    threshold - neighbor_radius,
+                    threshold + neighbor_radius,
+                )
+                if 0 <= value <= 255
+            )
+            stability = _auto_threshold_stability(
+                item,
+                tuple(evidence(value) for value in neighbor_thresholds),
+            )
+            retained_fraction = min(
+                1.0,
+                item.coherent_foreground_count
+                / max(1.0, 0.92 * coherent_reference),
+            )
+            narrow_retention = (
+                1.0
+                if narrow_reference == 0
+                else min(
+                    1.0,
+                    item.narrow_foreground_count
+                    / max(1.0, 0.90 * narrow_reference),
+                )
+            )
+            occupancy_quality = _auto_threshold_occupancy_quality(
+                item.foreground_fraction
+            )
+            border_quality = max(
+                0.0,
+                1.0 - min(1.0, item.border_foreground_fraction / 0.60),
+            )
+            dominance_penalty = 0.0
+            if (
+                item.foreground_fraction >= 0.75
+                and item.border_foreground_fraction >= 0.75
+            ):
+                dominance_penalty = 35.0
+            elif item.border_foreground_fraction > 0.50:
+                dominance_penalty = (
+                    20.0 * (item.border_foreground_fraction - 0.50) / 0.25
+                )
+            credible = bool(
+                item.significant_component_count
+                and item.foreground_fraction < 0.90
+                and item.border_foreground_fraction < 0.80
+                and item.coherent_foreground_fraction >= 0.50
+            )
+            score = (
+                22.0 * stability
+                + 18.0 * item.coherent_foreground_fraction
+                + 14.0 * item.noise_quality
+                + 14.0 * occupancy_quality
+                + 14.0 * border_quality
+                + 12.0 * retained_fraction
+                + 6.0 * narrow_retention
+                - dominance_penalty
+            )
+            candidates.append(
+                PixelAutoThresholdCandidate(
+                    threshold=threshold,
+                    origins=candidate_origins,
+                    foreground_fraction=item.foreground_fraction,
+                    border_foreground_fraction=item.border_foreground_fraction,
+                    coherent_foreground_fraction=(
+                        item.coherent_foreground_fraction
+                    ),
+                    retained_foreground_fraction=retained_fraction,
+                    narrow_feature_retention=narrow_retention,
+                    stability=stability,
+                    noise_quality=item.noise_quality,
+                    significant_component_count=(
+                        item.significant_component_count
+                    ),
+                    speck_component_count=item.speck_component_count,
+                    hole_count=item.hole_count,
+                    credible=credible,
+                    score=score,
+                )
+            )
+
+        credible_candidates = [candidate for candidate in candidates if candidate.credible]
+        selection_pool = credible_candidates or [
+            candidate
+            for candidate in candidates
+            if candidate.threshold == otsu_threshold
+        ]
+        selected = max(
+            selection_pool,
+            key=lambda candidate: (
+                round(candidate.score, 9),
+                "otsu" in candidate.origins,
+                round(candidate.stability, 9),
+                -abs(candidate.threshold - otsu_threshold),
+                -candidate.threshold,
+            ),
+        )
+        otsu_candidate = next(
+            candidate
+            for candidate in candidates
+            if candidate.threshold == otsu_threshold
+        )
+        otsu_departure_margin = 0.0
+        if (
+            otsu_candidate.credible
+            and selected.threshold != otsu_threshold
+        ):
+            excess_component_growth = max(
+                0,
+                selected.significant_component_count
+                - otsu_candidate.significant_component_count
+                - 2,
+            )
+            border_growth = max(
+                0.0,
+                selected.border_foreground_fraction
+                - otsu_candidate.border_foreground_fraction,
+            )
+            otsu_departure_margin = (
+                _AUTO_THRESHOLD_BASELINE_DEPARTURE_MARGIN
+                + min(
+                    8.0,
+                    _AUTO_THRESHOLD_COMPONENT_GROWTH_MARGIN
+                    * excess_component_growth,
+                )
+                + min(
+                    4.0,
+                    _AUTO_THRESHOLD_BORDER_GROWTH_MARGIN * border_growth,
+                )
+            )
+            if selected.score < otsu_candidate.score + otsu_departure_margin:
+                selected = otsu_candidate
+        return PixelAutoThresholdSelection(
+            threshold=selected.threshold,
+            otsu_threshold=otsu_threshold,
+            neighbor_radius=neighbor_radius,
+            otsu_departure_margin=otsu_departure_margin,
+            candidates=tuple(candidates),
+        )
+    finally:
+        if timing is not None:
+            timing.record(
+                "automatic_threshold_selection",
+                time.perf_counter() - started,
+            )
 
 
 @_timed_stage("component_cleanup")
@@ -6691,12 +7230,15 @@ __all__ = [
     "MAX_RASTER_VECTORIZATION_OVERSAMPLED_PIXELS",
     "MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION",
     "MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION",
+    "MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES",
     "PixelVectorizationForestResult",
     "PixelVectorizationMaskPreview",
     "PixelVectorizationResult",
     "PixelVectorizationRootFailure",
     "PixelVectorizationRootReviewFilter",
     "PixelVectorizationSource",
+    "PixelAutoThresholdCandidate",
+    "PixelAutoThresholdSelection",
     "PhysicalContourFitContour",
     "PhysicalContourFitResult",
     "RASTER_VECTORIZATION_OVERSAMPLE_FACTOR",
@@ -6717,6 +7259,7 @@ __all__ = [
     "prepare_raster_vectorization_source",
     "quick_preview_prepared_raster",
     "raster_payload_has_usable_alpha",
+    "select_pixel_vectorization_auto_threshold",
     "vectorize_prepared_raster",
     "vectorize_pixel_source",
     "vectorize_pixel_source_forest",

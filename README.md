@@ -238,9 +238,14 @@ irregular objects. Ordinary non-grid Auto and By contrast freeze one corrected
 frame, apply the guarded Trace ROI, suppress only trusted empty bed whose
 structure and compensated Lab appearance both match the reference, normalize
 eligible material with polarity-specific opening/closing backgrounds, and use
-the shared raster Otsu/4× contour/native-fit path. The 4× path keeps bicubic
-edge localization at real source boundaries while locking homogeneous source
-interiors so interpolation cannot invent holes or islands.
+bounded image-derived Auto threshold selection before the shared raster
+4× contour/native-fit path. Otsu remains the baseline; cheap source-resolution
+stability, coherent/thin-stroke retention, speck, occupancy, and border evidence
+choose the exact production threshold before native fitting. The Trace inspector
+shows that byte for a successful Auto raster result, `N/A` for an Auto Color
+winner, and no stale value after Clear, failure, or settings changes. The 4× path
+keeps bicubic edge localization at real source boundaries while locking
+homogeneous source interiors so interpolation cannot invent holes or islands.
 On hardware, Trace completes Home / park before acquiring the temporary
 capture-only stepper hold; only the short settle/discard/raw-frame burst is held.
 The Camera display selector exposes the exact **Camera**, **Exposed bed**,

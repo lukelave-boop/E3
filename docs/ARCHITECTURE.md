@@ -290,8 +290,9 @@ should own a physical camera at a time.
 - Non-grid Camera Trace **By contrast** fills ineligible pixels only in the
   temporary low-frequency background model, derives scale from eligible
   material, forces excluded response white, then uses the complete source-neutral
-  imported-raster vectorization pipeline. Auto Otsu or the operator's manual
-  threshold applies to that normalized raster, not absolute camera brightness.
+  imported-raster vectorization pipeline. Camera Auto first chooses one bounded,
+  image-derived threshold or the operator supplies a manual threshold; either
+  byte applies to that normalized raster, not absolute camera brightness.
   Each root `RETR_TREE` contour plus all descendants is one indivisible temporary
   review candidate; unrelated failing roots do not discard verified peers.
 - Non-grid Camera Trace **Auto detect** is orchestration, not a fourth detector.
@@ -299,7 +300,8 @@ should own a physical camera at a time.
   normalization result. Auto
   estimates the background once and derives both the dark and light
   `PixelVectorizationSource` values from it, then evaluates ordinary shared-
-  raster Otsu for each polarity. It also runs a production Color attempt only
+  raster production geometry at one bounded Auto-selected threshold for each
+  polarity. It also runs a production Color attempt only
   when eligibility-scoped HSV/Lab evidence identifies a coherent hue that is
   neither negligible nor material-background- or boundary-dominated. A Color
   mask above 35% of eligible material or 25% of its boundary is rejected, and
@@ -312,7 +314,10 @@ should own a physical camera at a time.
   sample, threshold, and polarity controls are inactive, output is native
   lines/Béziers, and border offset is zero. Explicit Color owns hue/sample;
   explicit non-grid Contrast owns manual threshold/polarity. Grid Auto preserves
-  the specialized output and normalization controls.
+  the specialized output and normalization controls. One read-only value shows
+  the exact winning production byte for successful Auto raster output, `N/A` for
+  an Auto Color winner, and `—` before detection or after Clear, failure, or
+  staleness; it never overwrites the editable manual threshold.
 - Camera Trace **By contrast** with grid enabled retains the specialized
   global/illumination-corrected/adaptive and signed-local multi-mask detector. It
   ranks repeated-grid hypotheses by coherent filled-region support, can classify
@@ -455,15 +460,27 @@ and uses the shared vectorizer's established `invert=True` contract, so its
 threshold and polarity behavior remains algebraically identical to ordinary
 light artwork.
 
-Automatic raster thresholding retains OpenCV Otsu but accounts for its choice of
-the lowest member of an equally optimal plateau. Only when the chosen threshold
-has fewer than two levels of low-class interpolation headroom, and unused
-grayscale levels exist before the nearest high-class value, does it advance by
-at most two levels within that empty gap. Normal polarity measures headroom from
-the selected foreground minimum; inverted polarity measures it from the low
-background maximum. Source-resolution foreground classification is therefore
-identical; ordinary multi-level Otsu, manual thresholds, and polarity semantics
-are unchanged. The 4× stage retains bicubic edge placement only in the
+The source-neutral imported-raster automatic mode retains OpenCV Otsu. Camera
+Auto uses that stabilized value as its baseline but evaluates a maximum of 12
+source-resolution values before native fitting: Otsu, Triangle, interpolation
+toward the Otsu foreground/background class medians, and image-derived thresholds
+for 1%, 3%, 8%, 16%, and 30% foreground occupancy. Each mask receives the cheap
+`22T + 18C + 14N + 14F + 14B + 12R + 6W - D` score documented in
+`OBJECT_TRACE.md`. Credibility bounds foreground, border occupancy, coherent area,
+and significant components. A non-Otsu result must clear a two-point departure
+margin that increases for more than two added components and worsened border
+occupancy. The selected byte alone is passed into the existing production mask
+and native fitter; candidate scoring never performs native fitting. No physical
+capture threshold is stored in code or configuration.
+
+The Otsu baseline accounts for OpenCV choosing the lowest member of an equally
+optimal plateau. Only when the chosen threshold has fewer than two levels of
+low-class interpolation headroom, and unused grayscale levels exist before the
+nearest high-class value, does it advance by at most two levels within that empty
+gap. Normal polarity measures headroom from the selected foreground minimum;
+inverted polarity measures it from the low background maximum. Source-resolution
+foreground classification is therefore identical; ordinary imported multi-level
+Otsu, manual thresholds, and polarity semantics are unchanged. The 4× stage retains bicubic edge placement only in the
 one-source-pixel transition band. A cleaned source pixel with a homogeneous 3×3
 neighborhood is nearest-neighbor locked to that foreground or background
 classification, preventing cubic overshoot from inventing positive-area
@@ -481,8 +498,8 @@ no threshold, output-mask closing, output-mask opening, gap repair, stroke
 growth, hole filling, classification, or geometry inference. Deterministic
 clean-raster coverage verifies exact Otsu geometry for qualifying clean inputs,
 including dark and light 40 x 40 mm interiors; a variable-tone rank-envelope
-fixture verifies four long glyphs remain solid at manual threshold 128 despite
-darker internal surface marks.
+fixture verifies dark and light long glyphs remain solid at manual threshold 128
+despite polarity-specific darker/lighter internal surface marks.
 
 `CameraRasterNormalizationResult` owns defensive, immutable-byte-backed,
 C-contiguous read-only arrays for corrected BGR (`uint8`), grayscale (`uint8`),
@@ -804,8 +821,11 @@ independent mask gate; manual mode uses the selected 0–255 threshold; alpha mo
 is available only when decoded opacity contains spatially useful variation.
 When eligibility is absent—as it is for ordinary imported rasters—the histogram,
 source key, mask, hierarchy, and geometry retain their prior behavior exactly.
-For camera Contrast, that image is the selected normalized response, so Otsu or
-the manual value measures local contrast rather than absolute exposure.
+For camera Contrast, that image is the selected normalized response. Manual uses
+the operator's byte. Camera Auto uses the bounded selector above and then passes
+its exact winning byte through the same manual-threshold mask semantics, so the
+production mask measures local contrast rather than absolute exposure while
+ordinary imported Auto remains Otsu-compatible.
 Inversion changes foreground polarity, and
 the connected-component cleanup interprets minimum feature area in square
 millimetres from the selected image's displayed size, removing both small

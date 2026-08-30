@@ -382,7 +382,7 @@ def _non_grid_auto_options() -> TraceOptions:
         (True, "raster_light", "light"),
     ),
 )
-def test_non_grid_auto_selects_the_correct_otsu_polarity(
+def test_non_grid_auto_selects_the_correct_bounded_threshold_polarity(
     light_foreground: bool,
     expected_strategy: str,
     expected_polarity: str,
@@ -406,6 +406,16 @@ def test_non_grid_auto_selects_the_correct_otsu_polarity(
     assert selected["status"] == "success"
     assert selected["polarity"] == expected_polarity
     assert isinstance(selected["threshold"], int)
+    threshold_selection = result.diagnostics["auto_threshold_selection"]
+    assert threshold_selection["threshold"] == selected["threshold"]
+    assert (
+        threshold_selection["candidate_count"]
+        <= raster_vectorize_module.MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES
+    )
+    assert any(
+        "otsu" in candidate["origins"]
+        for candidate in threshold_selection["candidates"]
+    )
     assert result.direct_count == 2
     assert all(item.native_verified for item in result.detections)
     assert f"{expected_polarity} foreground" in result.message
@@ -426,6 +436,7 @@ def test_non_grid_auto_selects_the_correct_otsu_polarity(
     ]
     assert previews[-1].strategy == expected_strategy
     assert previews[-1].selected_strategy is True
+    assert previews[-1].threshold_used == selected["threshold"]
     assert all(not preview.selected_strategy for preview in previews[:-1])
     assert all(not preview.foreground_mask.flags.writeable for preview in previews)
     attempt_timing = selected["timing"]
@@ -437,6 +448,7 @@ def test_non_grid_auto_selects_the_correct_otsu_polarity(
         "native_fitting",
     ):
         assert attempt_timing[stage]["calls"] >= 1
+    assert attempt_timing["automatic_threshold_selection"]["calls"] == 1
 
 
 def test_non_grid_auto_reports_effective_winner_options_not_ignored_inputs() -> None:

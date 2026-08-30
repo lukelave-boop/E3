@@ -15,6 +15,7 @@ from laser_aligner.geometry.foreground import (
     prune_degenerate_foreground_contours,
 )
 from laser_aligner.project import (
+    MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES,
     NativePathGeometry,
     PathAffineTransform,
     PathCubicSegment,
@@ -37,6 +38,7 @@ from laser_aligner.project import (
     quick_preview_prepared_raster,
     raster_payload_has_usable_alpha,
     read_raster_asset_payload,
+    select_pixel_vectorization_auto_threshold,
     vectorize_pixel_source,
     vectorize_pixel_source_forest,
     vectorize_prepared_raster,
@@ -447,6 +449,105 @@ def test_inverted_otsu_endpoint_plateau_nudge_preserves_mask_and_hole_tree() -> 
     parents = hierarchy[0, :, 3].tolist()
     assert parents.count(-1) == 2
     assert sum(parent >= 0 for parent in parents) == 1
+
+
+@pytest.mark.parametrize("invert", [False, True])
+def test_bounded_auto_threshold_keeps_coherent_weak_narrow_stroke(
+    invert: bool,
+) -> None:
+    grayscale = np.full((240, 320), 245, dtype=np.uint8)
+    cv2.rectangle(grayscale, (70, 55), (205, 175), 50, thickness=-1)
+    cv2.rectangle(grayscale, (207, 110), (310, 130), 190, thickness=-1)
+    noise_points = ((12, 18), (32, 202), (245, 37), (300, 215), (264, 190))
+    for x, y in noise_points:
+        grayscale[y, x] = 220
+    vector_grayscale = cv2.bitwise_not(grayscale) if invert else grayscale
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(vector_grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = RasterVectorizationOptions(
+        detection_mode=RasterDetectionMode.AUTO_THRESHOLD,
+        invert=invert,
+        minimum_feature_area_mm2=0.0,
+        smoothing_mm=0.0,
+        simplification_tolerance_mm=0.1,
+        contour_output=RasterContourOutput.ALL_CONTOURS,
+    )
+
+    selection = select_pixel_vectorization_auto_threshold(source, options)
+    selected_options = dataclasses.replace(
+        options,
+        detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+        threshold=selection.threshold,
+    )
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        selected_options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=60.0,
+    )
+
+    assert len(selection.candidates) <= MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES
+    baseline = next(
+        candidate
+        for candidate in selection.candidates
+        if "otsu" in candidate.origins
+    )
+    selected = next(
+        candidate
+        for candidate in selection.candidates
+        if candidate.threshold == selection.threshold
+    )
+    assert selected.credible
+    assert selection.threshold != selection.otsu_threshold
+    assert selected.score >= baseline.score + selection.otsu_departure_margin
+    assert selected.retained_foreground_fraction > baseline.retained_foreground_fraction
+    assert selected.narrow_feature_retention >= baseline.narrow_feature_retention
+    assert np.all(prepared.foreground_mask[111:130, 208:310] == 255)
+    assert all(prepared.foreground_mask[y, x] == 0 for x, y in noise_points)
+
+
+def test_auto_threshold_diagnostics_are_bounded_image_derived_and_stable() -> None:
+    grayscale = np.full((180, 260), 238, dtype=np.uint8)
+    cv2.putText(
+        grayscale,
+        "E3",
+        (35, 125),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        3.0,
+        72,
+        8,
+        cv2.LINE_AA,
+    )
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = RasterVectorizationOptions(
+        detection_mode=RasterDetectionMode.AUTO_THRESHOLD,
+        minimum_feature_area_mm2=0.0,
+        smoothing_mm=0.0,
+        simplification_tolerance_mm=0.1,
+        contour_output=RasterContourOutput.ALL_CONTOURS,
+    )
+
+    first = select_pixel_vectorization_auto_threshold(source, options)
+    second = select_pixel_vectorization_auto_threshold(source, options)
+    payload = first.to_dict()
+
+    assert first == second
+    assert first.threshold in {candidate.threshold for candidate in first.candidates}
+    assert first.otsu_threshold in {
+        candidate.threshold
+        for candidate in first.candidates
+        if "otsu" in candidate.origins
+    }
+    assert 1 < len(first.candidates) <= MAX_PIXEL_AUTO_THRESHOLD_CANDIDATES
+    assert payload["candidate_count"] == len(first.candidates)
+    assert all(0.0 <= candidate.stability <= 1.0 for candidate in first.candidates)
+    assert all(0.0 <= candidate.noise_quality <= 1.0 for candidate in first.candidates)
+    assert all(
+        candidate.origins != ("fixed",) for candidate in first.candidates
+    )
 
 
 def _normalized_bounds(contour) -> tuple[float, float, float, float]:
@@ -1045,6 +1146,96 @@ def test_4x_interpolation_does_not_invent_a_hole_inside_solid_foreground(
     assert result.contours[0].parent_index is None
     assert result.pruned_contour_count == 0
     assert result.degenerate_contour_count == 0
+
+
+def test_4x_homogeneous_lock_preserves_interiors_but_not_real_edge_interpolation(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((64, 72), 220, dtype=np.uint8)
+    pixels[12:52, 14:58] = 80
+    payload = _write_payload(tmp_path / "subpixel-edge.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(threshold=128)
+
+    masks = raster_vectorize_module._prepare_vectorization_masks(
+        source,
+        options,
+        18.0,
+        16.0,
+    )
+    nearest = cv2.resize(
+        masks.cleaned_mask,
+        (
+            masks.working_mask.shape[1],
+            masks.working_mask.shape[0],
+        ),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    foreground_interior = cv2.resize(
+        cv2.erode(
+            masks.cleaned_mask,
+            np.ones((3, 3), dtype=np.uint8),
+            borderType=cv2.BORDER_REPLICATE,
+        ),
+        (masks.working_mask.shape[1], masks.working_mask.shape[0]),
+        interpolation=cv2.INTER_NEAREST,
+    )
+    background_interior = cv2.resize(
+        cv2.bitwise_not(
+            cv2.dilate(
+                masks.cleaned_mask,
+                np.ones((3, 3), dtype=np.uint8),
+                borderType=cv2.BORDER_REPLICATE,
+            )
+        ),
+        (masks.working_mask.shape[1], masks.working_mask.shape[0]),
+        interpolation=cv2.INTER_NEAREST,
+    )
+
+    assert np.all(masks.working_mask[foreground_interior > 0] == 255)
+    assert np.all(masks.working_mask[background_interior > 0] == 0)
+    assert np.any(masks.working_mask != nearest)
+    assert not np.any(
+        (masks.working_mask != nearest)
+        & ((foreground_interior > 0) | (background_interior > 0))
+    )
+
+
+def test_imported_raster_keeps_real_hole_while_guarding_solid_interior(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((100, 140), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (18, 15), (120, 84), 80, thickness=-1)
+    cv2.circle(pixels, (48, 50), 14, 255, thickness=-1)
+    pixels[48:50, 88:90] = 127
+    payload = _write_payload(tmp_path / "imported-real-hole.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(threshold=128)
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=35.0,
+        displayed_height_mm=25.0,
+    )
+    contours, hierarchy = cv2.findContours(
+        prepared.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_NONE,
+    )
+    result = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=35.0,
+        displayed_height_mm=25.0,
+    )
+
+    assert hierarchy is not None
+    assert len(contours) == 2
+    assert hierarchy[0, :, 3].tolist().count(-1) == 1
+    assert sum(parent >= 0 for parent in hierarchy[0, :, 3]) == 1
+    assert np.all(prepared.contour_mask[192:200, 352:360] == 255)
+    assert len(result.contours) == 2
+    assert [contour.parent_index for contour in result.contours] == [None, 0]
 
 
 def _test_contour(*points: tuple[int, int]) -> np.ndarray:

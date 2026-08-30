@@ -818,6 +818,9 @@ def test_trace_mode_controls_match_auto_raster_color_and_grid_paths(
     panel = TracePanel()
     panel.set_calibration_ready(True)
 
+    assert panel.min_area.value() == pytest.approx(30.0)
+    assert panel.min_width.value() == pytest.approx(4.0)
+    assert panel.min_height.value() == pytest.approx(3.0)
     assert "correcting broad lighting variation" in (
         panel.contrast_threshold_mode.toolTip()
     )
@@ -916,6 +919,114 @@ def test_trace_mode_controls_match_auto_raster_color_and_grid_paths(
     panel.set_color_pick_active(False)
     qt_application.processEvents()
     assert not panel.pick_color_button.isEnabled()
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_panel_shows_only_current_successful_auto_threshold(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    panel.set_calibration_ready(True)
+    detection = {
+        "id": "threshold-candidate",
+        "index": 1,
+        "source": "direct",
+        "confidence": 1.0,
+        "selected_default": True,
+        "shape": "contour",
+        "width_mm": 20.0,
+        "height_mm": 10.0,
+        "rotation_deg": 0.0,
+        "native_verified": True,
+        "diagnostics": {
+            "within_work_area": True,
+            "native_fit_status": "verified",
+            "native_sequences": ["LLLL"],
+        },
+    }
+
+    def auto_result(strategy: str, threshold: int | None) -> dict[str, object]:
+        attempt: dict[str, object] = {
+            "name": strategy,
+            "status": "success",
+        }
+        if threshold is not None:
+            attempt["threshold"] = threshold
+        return {
+            "mode_used": "contrast" if strategy.startswith("raster_") else "color",
+            "message": "Detection complete",
+            "detections": [detection],
+            "grid": None,
+            "options": {
+                "detection_mode": "auto",
+                "regular_grid": False,
+                "contrast_threshold_mode": "auto",
+            },
+            "diagnostics": {
+                "auto": {
+                    "selected_strategy": strategy,
+                    "attempts": [attempt],
+                }
+            },
+        }
+
+    assert panel.chosen_threshold_value.text() == "—"
+    panel.set_result(auto_result("raster_dark", 158))
+    assert panel.chosen_threshold_value.text() == "158"
+    panel.set_result(auto_result("raster_light", 171))
+    assert panel.chosen_threshold_value.text() == "171"
+
+    panel.begin_detection()
+    assert panel.chosen_threshold_value.text() == "—"
+    panel.set_result(auto_result("raster_dark", 149))
+    panel.set_detection_failed("native fitting failed", retain_preview=True)
+    assert panel.chosen_threshold_value.text() == "—"
+
+    panel.set_result(auto_result("color", None))
+    assert panel.chosen_threshold_value.text() == "N/A"
+    panel.clear_result()
+    assert panel.chosen_threshold_value.text() == "—"
+
+    contrast_result = {
+        "mode_used": "contrast",
+        "message": "Detected contrast candidate",
+        "detections": [detection],
+        "grid": None,
+        "options": {
+            "detection_mode": "contrast",
+            "regular_grid": False,
+            "contrast_threshold_mode": "auto",
+        },
+        "diagnostics": {"strategy_metrics": {"threshold": 146}},
+    }
+    panel.set_result(contrast_result)
+    assert panel.chosen_threshold_value.text() == "146"
+    panel.min_area.setValue(panel.min_area.value() + 1.0)
+    qt_application.processEvents()
+    assert panel.chosen_threshold_value.text() == "—"
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("contrast"))
+    panel.regular_grid.setChecked(False)
+    panel.contrast_threshold_mode.setCurrentIndex(
+        panel.contrast_threshold_mode.findData("manual")
+    )
+    panel.contrast_threshold.setValue(133)
+    qt_application.processEvents()
+    manual_result = {
+        **contrast_result,
+        "options": {
+            "detection_mode": "contrast",
+            "regular_grid": False,
+            "contrast_threshold_mode": "manual",
+        },
+    }
+    panel.set_result(manual_result)
+    assert panel.chosen_threshold_value.text() == "—"
+    assert panel.contrast_threshold.isEnabled()
+    assert panel.contrast_threshold.value() == 133
 
     panel.close()
     panel.deleteLater()

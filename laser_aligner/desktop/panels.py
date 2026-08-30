@@ -1268,10 +1268,11 @@ class TracePanel(QtWidgets.QWidget):
         self.min_saturation.setRange(0, 255)
         self.min_saturation.setValue(45)
         self.contrast_threshold_mode = QtWidgets.QComboBox()
-        self.contrast_threshold_mode.addItem("Auto (Otsu)", "auto")
+        self.contrast_threshold_mode.addItem("Auto", "auto")
         self.contrast_threshold_mode.addItem("Manual", "manual")
         self.contrast_threshold_mode.setToolTip(
-            "Auto finds foreground after correcting broad lighting variation; "
+            "Auto evaluates a bounded family of credible thresholds after correcting "
+            "broad lighting variation; "
             "Manual applies the selected value to that same normalized local-contrast "
             "raster."
         )
@@ -1281,6 +1282,12 @@ class TracePanel(QtWidgets.QWidget):
         self.contrast_threshold.setToolTip(
             "Manual 8-bit threshold applied to the illumination-normalized "
             "local-contrast raster for non-grid By contrast tracing."
+        )
+        self.chosen_threshold_value = QtWidgets.QLabel("—")
+        self.chosen_threshold_value.setObjectName("traceChosenThreshold")
+        self.chosen_threshold_value.setToolTip(
+            "Exact production threshold selected by the current successful Auto "
+            "raster strategy. Color and non-raster Auto results show N/A."
         )
         self.contrast_invert = QtWidgets.QCheckBox("Trace light pixels")
         self.contrast_invert.setToolTip(
@@ -1312,6 +1319,7 @@ class TracePanel(QtWidgets.QWidget):
             self.contrast_threshold_mode,
         )
         _form_row(source_form, "Manual threshold", self.contrast_threshold)
+        _form_row(source_form, "Chosen threshold", self.chosen_threshold_value)
         source_form.addRow(self.contrast_invert)
         layout.addWidget(source_group)
 
@@ -2032,6 +2040,9 @@ class TracePanel(QtWidgets.QWidget):
         boundary_name = (
             "guarded output area" if guarded_output_area else "configured work area"
         )
+        self.chosen_threshold_value.setText(
+            self._chosen_auto_threshold_text(result)
+        )
         self._result_is_current = True
         self._updating = True
         try:
@@ -2324,6 +2335,7 @@ class TracePanel(QtWidgets.QWidget):
     ) -> None:
         self._detections = []
         self._result_is_current = False
+        self.chosen_threshold_value.setText("—")
         self.result_tree.clear()
         self.select_grid_button.setText("Select complete grid")
         self.select_grid_button.setEnabled(False)
@@ -2376,6 +2388,7 @@ class TracePanel(QtWidgets.QWidget):
     def clear_result(self) -> None:
         self._detections = []
         self._result_is_current = False
+        self.chosen_threshold_value.setText("—")
         self.clear_raster_preview()
         self.result_tree.clear()
         self.select_grid_button.setText("Select complete grid")
@@ -2394,11 +2407,50 @@ class TracePanel(QtWidgets.QWidget):
         if self._updating or not self._detections:
             return
         self._result_is_current = False
+        self.chosen_threshold_value.setText("—")
         self.create_button.setEnabled(False)
         self.create_combined_button.setEnabled(False)
         self.status_label.setText(
             "Trace settings changed. Run Detect objects again before creating paths."
         )
+
+    @staticmethod
+    def _chosen_auto_threshold_text(result: dict[str, Any]) -> str:
+        options = result.get("options") or {}
+        diagnostics = result.get("diagnostics") or {}
+        detection_mode = str(options.get("detection_mode", ""))
+        regular_grid = bool(options.get("regular_grid", False))
+        if detection_mode == "auto":
+            auto = diagnostics.get("auto") or {}
+            selected_strategy = str(auto.get("selected_strategy", ""))
+            if selected_strategy == "color" or not selected_strategy.startswith(
+                "raster_"
+            ):
+                return "N/A"
+            for attempt in auto.get("attempts", []):
+                if str(attempt.get("name", "")) != selected_strategy:
+                    continue
+                threshold = attempt.get("threshold")
+                if type(threshold) is int and 0 <= threshold <= 255:
+                    return str(threshold)
+            return "—"
+        if (
+            detection_mode == "contrast"
+            and not regular_grid
+            and str(options.get("contrast_threshold_mode", "")) == "auto"
+        ):
+            metrics = diagnostics.get("strategy_metrics") or {}
+            threshold = metrics.get("threshold")
+            if type(threshold) is int and 0 <= threshold <= 255:
+                return str(threshold)
+            detections = result.get("detections") or []
+            for detection in detections:
+                threshold = (detection.get("diagnostics") or {}).get(
+                    "threshold_used"
+                )
+                if type(threshold) is int and 0 <= threshold <= 255:
+                    return str(threshold)
+        return "—"
 
     def _sync_output_controls(self, *args: Any) -> None:
         del args

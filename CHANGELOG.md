@@ -6,6 +6,19 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Replaced Camera Trace's one-shot automatic Otsu choice with a bounded,
+  image-derived threshold selector over the corrected normalized raster. Otsu
+  remains the baseline alongside Triangle, class-interpolation, and foreground-
+  occupancy candidates. Cheap source-resolution scoring favors stable coherent
+  and narrow strokes while penalizing speck growth, unreasonable occupancy, and
+  border/background dominance before the winning byte enters the unchanged 4×
+  reconstruction and native fitter. Dark and light polarity share the same
+  evidence contract; no physical threshold byte is embedded. The Trace panel
+  now shows the exact production byte for a successful Auto raster result,
+  `N/A` for an Auto Color winner, and clears the value on a new request, Clear,
+  failure, or staleness. Manual threshold editing and the 30 mm² / 4 mm / 3 mm
+  minimum filter defaults are unchanged.
+
 - Fixed two independent Camera Trace defects that produced missing glyph pieces
   and unjustified internal loops. The photographic rank-envelope path now uses
   the full smoothed closing-minus-image response for dark features and the full

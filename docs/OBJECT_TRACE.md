@@ -42,11 +42,11 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    off, E3 first restricts all strategies to trusted physical Trace geometry,
    suppresses only confidently matched empty-bed structure, and keeps changed
    or uncertain material eligible. Auto corrects broad lighting variation once,
-   then tries authoritative raster Otsu against both dark- and light-feature
-   responses. It conditionally tries Color only for bounded eligible chroma;
+   then runs bounded automatic threshold selection against both dark- and light-
+   feature responses. It conditionally tries Color only for bounded eligible chroma;
    the result message says which credible strategy won. Auto's hue, threshold,
    and polarity controls are inactive because Auto owns those choices. With
-   **By contrast** and **Use grid** off, choose automatic Otsu or a manual 0–255
+   **By contrast** and **Use grid** off, choose bounded Auto or a manual 0–255
    threshold and whether dark or light local contrast is foreground. The
    threshold applies after lighting normalization, not to raw camera brightness;
    hue controls are inactive. To sample for
@@ -186,7 +186,7 @@ nested contours are not forced into washers.
 For non-grid Contrast, E3 first applies the hard physical ROI, suppresses
 confidently matched exposed bed, and removes low-frequency photographic
 background variation from eligible material. It then sends that normalized raster through the imported-raster pixel
-pipeline itself: Otsu or manual threshold and polarity, physical component and
+pipeline itself: bounded Auto or manual threshold and polarity, physical component and
 pinhole cleanup, 4× mask reconstruction, `RETR_TREE`, physical mapping,
 source-edge refinement, native fitting, and topology validation. Each root
 foreground contour plus every descendant is one candidate. The green outline is
@@ -303,23 +303,46 @@ the robust response scale. **Trace light pixels** selects the symmetric light
 response through the established raster inversion contract; it does not switch
 back to raw brightness.
 
-For automatic thresholding, only eligible pixels enter Otsu's histogram;
-excluded pixels are forced background in the source mask. OpenCV's lowest
-equally optimal Otsu plateau member
-is advanced by at most two unused levels when its low class lacks interpolation
-headroom. Normal polarity measures that headroom across the selected foreground
-span; inverted light tracing measures it above the low background endpoint. The
-nudge stays inside an empty histogram gap, so source-pixel classification is
-unchanged. The eligibility mask is nearest-neighbor reconstructed to 4× and
-gates again after component-hole reconstruction, preventing interpolation from
-resurrecting machine or bed pixels. Manual thresholds and polarity semantics
-remain unchanged. Bicubic reconstruction continues to place the edge inside a
-one-source-pixel transition band, but every cleaned source pixel whose complete
-3×3 neighborhood has one classification is locked to that foreground or
-background classification at 4×. This range-safe interior rule prevents cubic
-ringing from inventing a positive-area pinhole or island where no
-source-resolution boundary exists. The Otsu headroom adjustment remains useful
-for the transition band and two-tone endpoints.
+For automatic thresholding, only eligible pixels enter the histogram; excluded
+pixels are forced background in every candidate source mask. Candidate generation
+is capped at 12 values and is derived from the current normalized raster: the
+stabilized Otsu baseline, Triangle, interpolation from Otsu toward the foreground
+and background class medians, and thresholds for 1%, 3%, 8%, 16%, and 30%
+foreground occupancy. There is no saved physical byte or fixed successful-camera
+threshold in this family.
+
+Each candidate is assessed at source resolution before component cleanup, 4×
+reconstruction, contour extraction, or native fitting. The cheap score is
+`22T + 18C + 14N + 14F + 14B + 12R + 6W - D`: `T` combines coherent-mask IoU
+(65%), significant-component agreement (25%), and hole-count agreement (10%) at
+nearby thresholds; `C` is coherent foreground; `N` penalizes speck area and count;
+`F` rewards reasonable occupancy; `B` rewards a clean eligibility/image border;
+`R` rewards retaining coherent stroke area; `W` rewards narrow foreground retained
+inside significant components; and `D` penalizes foreground/background dominance.
+The nearby radius is image-derived from the 5th–95th percentile span and bounded
+to 2–8 byte levels. A credible candidate must retain a significant component,
+keep foreground below 90% and border foreground below 80%, and keep at least half
+of its foreground in coherent components. A non-Otsu winner must also clear a
+two-point baseline departure margin; that margin rises by 1.25 points for each
+significant component beyond two new components (capped at eight points) and by
+200 times worsened border occupancy (capped at four points). This permits stable
+legitimate strokes to move the result while resisting a component or border
+explosion. Only the winning byte enters the unchanged production raster path.
+
+OpenCV's lowest equally optimal Otsu plateau member is still advanced by at most
+two unused levels when its low class lacks interpolation headroom. Normal polarity
+measures that headroom across the selected foreground span; inverted light tracing
+measures it above the low background endpoint. The nudge stays inside an empty
+histogram gap, so source-pixel classification is unchanged. The eligibility mask
+is nearest-neighbor reconstructed to 4× and gates again after component-hole
+reconstruction, preventing interpolation from resurrecting machine or bed pixels.
+Manual thresholds and polarity semantics remain unchanged. Bicubic reconstruction
+continues to place the edge inside a one-source-pixel transition band, but every
+cleaned source pixel whose complete 3×3 neighborhood has one classification is
+locked to that foreground or background classification at 4×. This range-safe
+interior rule prevents cubic ringing from inventing a positive-area pinhole or
+island where no source-resolution boundary exists. The Otsu headroom adjustment
+remains useful for the transition band and two-tone endpoints.
 
 The frozen normalization value retains immutable-byte-backed corrected BGR,
 grayscale, the diagnostic `float32` midpoint background and signed residual,
@@ -346,7 +369,8 @@ inference behavior.
   tracing tools. It captures and rectifies once, estimates one low-frequency
   material eligibility and background, derives immutable dark and light rasters
   from that same result,
-  and runs shared-raster Otsu on each. It runs Color only when weighted HSV/Lab
+  and runs bounded source-resolution Auto threshold selection on each. It runs
+  Color only when weighted HSV/Lab
   evidence finds a coherent target within eligible material. The Color gate requires at
   least `0.005 × pixel count` total normalized chroma weight, at least 60% of
   that weight in one ±14-hue window, at least 1.5× separation from the strongest
@@ -364,8 +388,9 @@ inference behavior.
   low-saturation objects to be separated from a warmer or cooler backing
   surface while tolerating moderate lighting variation.
 - **By contrast**, with **Use grid** off, is normalized-raster vectorization.
-  Automatic mode uses Otsu on the selected local-contrast raster; manual mode
-  applies the selected 0–255 value to that same raster. Polarity chooses the
+  Automatic mode selects from the bounded, image-derived family on the selected
+  local-contrast raster; manual mode applies the selected 0–255 value to that
+  same raster. Polarity chooses the
   symmetric dark or light response. Minimum area controls physical raster
   cleanup, including tiny islands and pinholes. Complete independent root trees
   that already violate maximum area or minimum dimensions are rejected before
@@ -400,7 +425,7 @@ score floor of 70 is rejected. Hard-ROI-clipped, confidently suppressed,
 outside-output, review-filtered, and invalid-native candidates contribute no
 positive score. Stable equal-score ties prefer dark
 raster, then light raster, then Color. Status reports the selected polarity and
-Otsu threshold or the selected hue/tolerance. Internal diagnostics retain each
+exact Auto threshold or the selected hue/tolerance. Internal diagnostics retain each
 attempt's success, rejection, or skip reason plus occupancy, root counts, valid
 and invalid counts, and score terms; the inspector does not display a debug dump.
 
@@ -416,6 +441,14 @@ The complete survivor forest is rebased and globally revalidated. If every root
 passes alone but the roots fail together, or a complexity limit fails, the
 strategy remains rejected. If all meaningful strategies fail, the operator
 receives one bounded summary instead of a modal for each attempt.
+
+The read-only **Chosen threshold** row starts at `—`. A successful non-grid
+Contrast Auto result or Auto raster winner shows the exact byte used by its
+production mask. A new detection replaces it, changing settings makes it stale,
+and Clear or any failed detection restores `—` even when diagnostic images are
+retained. If non-grid Auto selects Color, the row shows `N/A`. Manual threshold
+mode keeps the existing editable 0–255 control and never substitutes the Auto
+result into that field.
 
 ### Diagnostic preview and timing
 
@@ -469,7 +502,8 @@ writes `corrected.png`, `background.png`, `normalized.png`, the exact 4×
 production `mask.png`, and `diagnostics.json` under the gitignored
 `data/trace_diagnostics/` directory. The JSON records both normalized and mask
 dimensions, the chosen model kind and scale diagnostics, the actual threshold,
-component count, and normalization/mask timings.
+the bounded Auto candidates and scores when applicable, component count, and
+normalization/mask timings.
 
 Trace timing is opt-in diagnostic metadata under `diagnostics.timing`; it is not
 persisted and does not alter scoring or validation. The request boundary records
