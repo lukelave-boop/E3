@@ -10,13 +10,20 @@ from laser_aligner.project import (
     CommandStack,
     NativePathGeometry,
     ObjectKind,
+    PathAffineTransform,
     PathCubicSegment,
     PathFillRule,
     PathLineSegment,
     PathSubpath,
     ProjectDocument,
     SceneObject,
+    native_path_bounds,
     object_polylines,
+    transform_native_path,
+)
+from laser_aligner.vision.trace_orientation import (
+    estimate_trace_orientation,
+    trace_rotation_transform,
 )
 
 
@@ -53,6 +60,87 @@ def _create_trace_object(
         detection,
         output_mode,
     )
+
+
+def _native_detection_from_world(
+    detection_id: str,
+    index: int,
+    geometry: NativePathGeometry,
+) -> dict[str, object]:
+    x_min, y_min, x_max, y_max = native_path_bounds(geometry)
+    width = x_max - x_min
+    height = y_max - y_min
+    center = ((x_min + x_max) / 2.0, (y_min + y_max) / 2.0)
+    normalized = transform_native_path(
+        geometry,
+        PathAffineTransform.from_components(
+            scale_x=1.0 / width,
+            scale_y=1.0 / height,
+            translate_x=-center[0] / width,
+            translate_y=-center[1] / height,
+        ),
+    )
+    return {
+        "id": detection_id,
+        "index": index,
+        "source": "direct",
+        "confidence": 0.98,
+        "selected_default": True,
+        "shape": "contour",
+        "center_mm": list(center),
+        "width_mm": width,
+        "height_mm": height,
+        "native_verified": True,
+        "native_path": normalized.to_dict(),
+        "native_center_mm": list(center),
+        "native_width_mm": width,
+        "native_height_mm": height,
+        "diagnostics": {
+            "within_work_area": True,
+            "native_fit_status": "verified",
+        },
+    }
+
+
+def _world_bar(
+    center: tuple[float, float],
+    *,
+    with_hole_and_cubic: bool = False,
+) -> NativePathGeometry:
+    cx, cy = center
+    outer_segments = (
+        PathLineSegment((cx + 12.0, cy - 2.0)),
+        PathCubicSegment(
+            (cx + 12.1, cy - 0.7),
+            (cx + 11.9, cy + 0.7),
+            (cx + 12.0, cy + 2.0),
+        )
+        if with_hole_and_cubic
+        else PathLineSegment((cx + 12.0, cy + 2.0)),
+        PathLineSegment((cx - 12.0, cy + 2.0)),
+        PathLineSegment((cx - 12.0, cy - 2.0)),
+    )
+    subpaths = [
+        PathSubpath(
+            (cx - 12.0, cy - 2.0),
+            outer_segments,
+            closed=True,
+        )
+    ]
+    if with_hole_and_cubic:
+        subpaths.append(
+            PathSubpath(
+                (cx - 2.0, cy - 0.8),
+                (
+                    PathLineSegment((cx - 2.0, cy + 0.8)),
+                    PathLineSegment((cx + 2.0, cy + 0.8)),
+                    PathLineSegment((cx + 2.0, cy - 0.8)),
+                    PathLineSegment((cx - 2.0, cy - 0.8)),
+                ),
+                closed=True,
+            )
+        )
+    return NativePathGeometry(tuple(subpaths), fill_rule=PathFillRule.EVENODD)
 
 
 @pytest.mark.parametrize(
@@ -416,3 +504,180 @@ def test_trace_creation_replaces_only_previous_trace_objects_and_is_undoable() -
         old_trace.id,
         manual_object.id,
     ]
+
+
+def test_straightened_separate_and_compound_creation_match_previewed_group_transform(
+) -> None:
+    base_geometries = [
+        _world_bar((30.0, 35.0), with_hole_and_cubic=True),
+        _world_bar((70.0, 35.0)),
+    ]
+    combined_bounds = [native_path_bounds(geometry) for geometry in base_geometries]
+    pivot = (
+        (
+            min(bounds[0] for bounds in combined_bounds)
+            + max(bounds[2] for bounds in combined_bounds)
+        )
+        / 2.0,
+        (
+            min(bounds[1] for bounds in combined_bounds)
+            + max(bounds[3] for bounds in combined_bounds)
+        )
+        / 2.0,
+    )
+    detected_rotation = trace_rotation_transform(2.0, pivot)
+    detections = [
+        _native_detection_from_world(
+            f"candidate-{index}",
+            index,
+            transform_native_path(geometry, detected_rotation),
+        )
+        for index, geometry in enumerate(base_geometries, start=1)
+    ]
+    estimate = estimate_trace_orientation(detections)
+    assert estimate.offered
+    assert estimate.detected_skew_deg == pytest.approx(2.0, abs=0.08)
+    assert estimate.correction_deg is not None
+    assert estimate.pivot_mm is not None
+    selected_ids = [str(item["id"]) for item in detections]
+
+    class Harness:
+        def __init__(self, *, straighten: bool) -> None:
+            self.document = ProjectDocument.new()
+            self.active_layer_id = self.document.active_layer_id
+            self.history = CommandStack()
+            self._trace_result = {
+                "detections": detections,
+                "options": {"regular_grid": False, "output_mode": "native"},
+            }
+            self._trace_orientation_estimate = estimate if straighten else None
+            self._trace_straightening = estimate if straighten else None
+            self.controller = SimpleNamespace(cancel_trace_detection=lambda: None)
+            self.workspace = SimpleNamespace(
+                clear_trace_preview=lambda: None,
+                select_objects=lambda _ids: None,
+            )
+            self.trace_panel = SimpleNamespace(clear_result=lambda: None)
+
+        def _trace_detection_world_geometry(self, detection):
+            return E3MainWindow._trace_detection_world_geometry(detection)
+
+        def _trace_detection_to_object(self, detection, output_mode):
+            return E3MainWindow._trace_detection_to_object(
+                self,
+                detection,
+                output_mode,
+            )
+
+        def _combined_trace_object(self, selected):
+            return E3MainWindow._combined_trace_object(self, selected)
+
+        def _apply_trace_group_rotation(self, objects, current_estimate) -> None:
+            E3MainWindow._apply_trace_group_rotation(objects, current_estimate)
+
+        def _clear_trace_preview(self) -> None:
+            E3MainWindow._clear_trace_preview(self)
+
+        def show_notice(self, _message: str) -> None:
+            pass
+
+        def show_error(self, message: str) -> None:
+            raise AssertionError(message)
+
+    def create(*, straighten: bool, combine: bool) -> Harness:
+        harness = Harness(straighten=straighten)
+        E3MainWindow._create_traced_objects(
+            harness,
+            {
+                "selected_ids": selected_ids,
+                "output_mode": "native",
+                "purpose": "cut",
+                "replace_previous": False,
+                "combine": combine,
+            },
+        )
+        return harness
+
+    def world_paths(harness: Harness) -> list[np.ndarray]:
+        return [
+            np.asarray(polyline.points, dtype=float)
+            for item in harness.document.objects
+            for polyline in object_polylines(item)
+        ]
+
+    original = create(straighten=False, combine=False)
+    original_paths = world_paths(original)
+    assert len(original.document.objects) == 2
+    assert all(
+        "trace_straightened" not in item.metadata
+        for item in original.document.objects
+    )
+
+    separate = create(straighten=True, combine=False)
+    compound = create(straighten=True, combine=True)
+    separate_paths = world_paths(separate)
+    compound_paths = world_paths(compound)
+    correction = trace_rotation_transform(
+        estimate.correction_deg,
+        estimate.pivot_mm,
+    )
+    expected_paths = [
+        np.asarray([correction.apply(point) for point in path], dtype=float)
+        for path in original_paths
+    ]
+
+    assert len(separate_paths) == len(compound_paths) == len(expected_paths) == 3
+    for separate_path, compound_path, expected_path in zip(
+        separate_paths,
+        compound_paths,
+        expected_paths,
+        strict=True,
+    ):
+        np.testing.assert_allclose(separate_path, expected_path, atol=1e-9)
+        np.testing.assert_allclose(compound_path, expected_path, atol=1e-9)
+
+    for item, detection in zip(
+        separate.document.objects,
+        detections,
+        strict=True,
+    ):
+        assert item.path_geometry() == NativePathGeometry.from_dict(
+            detection["native_path"]
+        )
+        assert item.path_geometry().fill_rule is PathFillRule.EVENODD
+        assert item.metadata["trace_straightened"] is True
+        assert item.metadata["trace_correction_deg"] == pytest.approx(
+            estimate.correction_deg
+        )
+    assert any(
+        isinstance(segment, PathCubicSegment)
+        for segment in separate.document.objects[0].path_geometry().subpaths[0].segments
+    )
+    combined = compound.document.objects[0]
+    assert len(combined.path_geometry().subpaths) == 3
+    assert combined.path_geometry().fill_rule is PathFillRule.EVENODD
+    assert combined.metadata["trace_straightened"] is True
+
+    stock_estimate = estimate_trace_orientation([detections[0]])
+    assert stock_estimate.offered
+    stock = Harness(straighten=True)
+    stock._trace_orientation_estimate = stock_estimate
+    stock._trace_straightening = stock_estimate
+    E3MainWindow._create_traced_objects(
+        stock,
+        {
+            "selected_ids": [selected_ids[0]],
+            "output_mode": "native",
+            "purpose": "stock",
+            "replace_previous": False,
+            "combine": False,
+        },
+    )
+    assert len(stock.document.objects) == 1
+    assert "trace_straightened" not in stock.document.objects[0].metadata
+    stock_path = np.asarray(object_polylines(stock.document.objects[0])[0].points)
+    np.testing.assert_allclose(stock_path, original_paths[0], atol=1e-9)
+
+    for harness in (original, separate, compound, stock):
+        harness.history.undo()
+        assert harness.document.objects == []

@@ -97,6 +97,11 @@ from ..templates import (
     template_from_project,
     template_from_rectangle_grid,
 )
+from ..vision.trace_orientation import (
+    TraceOrientationEstimate,
+    estimate_trace_orientation,
+    trace_rotation_transform,
+)
 from .context_bar import ContextPropertyBar
 from .controller import DesktopController, image_to_qimage
 from .controls import InspectorTabs, WheelGuard
@@ -387,6 +392,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._close_requested = False
         self._expanding_group_selection = False
         self._trace_result: dict[str, Any] | None = None
+        self._trace_orientation_estimate: TraceOrientationEstimate | None = None
+        self._trace_straightening: TraceOrientationEstimate | None = None
         self._active_trace_request_id: int | None = None
         self._trace_raster_preview_images: dict[str, QtGui.QImage] = {}
         self._trace_raster_preview_area: Bounds | None = None
@@ -1142,6 +1149,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.trace_panel.generateRequested.connect(self.actions["generate"].trigger)
         self.trace_panel.selectionChanged.connect(
             self._trace_selection_changed
+        )
+        self.trace_panel.straightenRequested.connect(
+            self._straighten_trace_selection
+        )
+        self.trace_panel.straightenResetRequested.connect(
+            self._reset_trace_straightening
+        )
+        self.trace_panel.straightenContextChanged.connect(
+            self._trace_straighten_context_changed
+        )
+        self.trace_panel.reviewInvalidated.connect(
+            self._invalidate_trace_orientation_review
         )
         self.trace_panel.rasterPreviewModeChanged.connect(
             self._trace_raster_preview_mode_changed
@@ -4754,6 +4773,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         self._active_trace_request_id = None
         self._trace_result = None
+        self._trace_orientation_estimate = None
+        self._trace_straightening = None
         retained = bool(
             retain_preview
             and self._trace_raster_preview_images
@@ -4802,6 +4823,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     fit=True,
                 )
         self._trace_result = result
+        self._trace_orientation_estimate = None
+        self._trace_straightening = None
         self.trace_panel.set_result(result)
         self.inspector_tabs.select_panel("trace")
         preview_args = (
@@ -4823,17 +4846,150 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 *preview_args,
                 result.get("output_work_area"),
             )
+        self._update_trace_orientation(self.trace_panel.selected_ids())
         self.show_notice(str(result.get("message", "Object detection complete")))
 
     def _trace_selection_changed(self, selected_ids: list[str]) -> None:
         if self._trace_result is None:
             return
         self.workspace.set_trace_selected_ids(selected_ids)
+        self._update_trace_orientation(selected_ids)
 
     def _trace_canvas_selection_changed(self, selected_ids: list[str]) -> None:
         if self._trace_result is None:
             return
         self.trace_panel.set_selected_ids(selected_ids)
+        self._update_trace_orientation(selected_ids)
+
+    def _selected_trace_detections(
+        self,
+        selected_ids: list[str] | tuple[str, ...],
+    ) -> list[dict[str, Any]]:
+        result = getattr(self, "_trace_result", None) or {}
+        selected = {str(value) for value in selected_ids}
+        return [
+            detection
+            for detection in result.get("detections", [])
+            if str(detection.get("id")) in selected
+        ]
+
+    def _clear_trace_straightening_preview(self) -> None:
+        workspace = getattr(self, "workspace", None)
+        setter = getattr(workspace, "set_trace_straightening", None)
+        if callable(setter):
+            setter((), None)
+
+    def _invalidate_trace_orientation_review(self) -> None:
+        self._clear_trace_straightening_preview()
+        self._trace_orientation_estimate = None
+        self._trace_straightening = None
+        panel = getattr(self, "trace_panel", None)
+        clearer = getattr(panel, "clear_straighten_review", None)
+        if callable(clearer):
+            clearer()
+
+    def _update_trace_orientation(self, selected_ids: list[str]) -> None:
+        result = getattr(self, "_trace_result", None)
+        panel = getattr(self, "trace_panel", None)
+        if result is None or panel is None:
+            return
+        context_checker = getattr(panel, "straighten_context_is_current", None)
+        if callable(context_checker) and not context_checker():
+            self._clear_trace_straightening_preview()
+            self._trace_orientation_estimate = None
+            self._trace_straightening = None
+            panel.clear_straighten_review()
+            return
+
+        detections = self._selected_trace_detections(selected_ids)
+        ordered_ids = tuple(str(item.get("id")) for item in detections)
+        applied = getattr(self, "_trace_straightening", None)
+        if applied is not None:
+            if applied.selected_ids == ordered_ids:
+                panel.set_straighten_applied(applied)
+                return
+            self._clear_trace_straightening_preview()
+            self._trace_straightening = None
+
+        cached = getattr(self, "_trace_orientation_estimate", None)
+        if cached is not None and cached.selected_ids == ordered_ids:
+            if cached.offered:
+                panel.set_straighten_offer(cached)
+            else:
+                panel.clear_straighten_review()
+            return
+
+        self._trace_orientation_estimate = None
+        options = result.get("options") or {}
+        grid_result = bool(options.get("regular_grid", False) or result.get("grid"))
+        output_mode = str(options.get("output_mode", ""))
+        if (
+            result.get("detected") is not True
+            or grid_result
+            or output_mode != "native"
+            or not detections
+            or any(
+                detection.get("native_verified") is not True
+                or not detection.get("native_path")
+                for detection in detections
+            )
+        ):
+            panel.clear_straighten_review()
+            return
+
+        estimate = estimate_trace_orientation(detections)
+        self._trace_orientation_estimate = estimate
+        LOGGER.info(
+            "Camera Trace orientation estimate: %s",
+            estimate.to_diagnostics(),
+        )
+        if estimate.offered:
+            panel.set_straighten_offer(estimate)
+        else:
+            panel.clear_straighten_review()
+
+    def _straighten_trace_selection(self) -> None:
+        panel = getattr(self, "trace_panel", None)
+        if panel is None or getattr(self, "_trace_result", None) is None:
+            return
+        selected_ids = panel.selected_ids()
+        self._update_trace_orientation(selected_ids)
+        estimate = getattr(self, "_trace_orientation_estimate", None)
+        detections = self._selected_trace_detections(selected_ids)
+        ordered_ids = tuple(str(item.get("id")) for item in detections)
+        if (
+            estimate is None
+            or not estimate.offered
+            or estimate.selected_ids != ordered_ids
+            or estimate.correction_deg is None
+            or estimate.pivot_mm is None
+        ):
+            return
+        transform = trace_rotation_transform(
+            estimate.correction_deg,
+            estimate.pivot_mm,
+        )
+        self.workspace.set_trace_straightening(ordered_ids, transform)
+        self._trace_straightening = estimate
+        panel.set_straighten_applied(estimate)
+
+    def _trace_straighten_context_changed(self) -> None:
+        self._invalidate_trace_orientation_review()
+        panel = getattr(self, "trace_panel", None)
+        if getattr(self, "_trace_result", None) is not None and panel is not None:
+            self._update_trace_orientation(panel.selected_ids())
+
+    def _reset_trace_straightening(self) -> None:
+        self._clear_trace_straightening_preview()
+        self._trace_straightening = None
+        estimate = getattr(self, "_trace_orientation_estimate", None)
+        panel = getattr(self, "trace_panel", None)
+        if panel is None:
+            return
+        if estimate is not None and estimate.offered:
+            panel.set_straighten_offer(estimate)
+        else:
+            panel.clear_straighten_review()
 
     def _retire_trace_preview_ui(self) -> None:
         preview_camera = getattr(self, "_trace_raster_preview_images", {}).get(
@@ -4862,6 +5018,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._trace_raster_preview_area = None
         self._trace_raster_preview_signature = None
         self._trace_result = None
+        self._trace_orientation_estimate = None
+        self._trace_straightening = None
         workspace = getattr(self, "workspace", None)
         workspace_clear = getattr(workspace, "clear_trace_preview", None)
         if callable(workspace_clear):
@@ -5072,6 +5230,42 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         return item
 
+    @staticmethod
+    def _apply_trace_group_rotation(
+        objects: list[SceneObject],
+        estimate: TraceOrientationEstimate | None,
+    ) -> None:
+        if (
+            estimate is None
+            or not estimate.offered
+            or estimate.correction_deg is None
+            or estimate.pivot_mm is None
+        ):
+            return
+        transform = trace_rotation_transform(
+            estimate.correction_deg,
+            estimate.pivot_mm,
+        )
+        for item in objects:
+            center_x, center_y = transform.apply(
+                (item.transform.x_mm, item.transform.y_mm)
+            )
+            item.transform = item.transform.copy(
+                x_mm=center_x,
+                y_mm=center_y,
+                rotation_deg=(
+                    item.transform.rotation_deg + estimate.correction_deg
+                ),
+            )
+            item.metadata.update(
+                {
+                    "trace_straightened": True,
+                    "trace_detected_skew_deg": estimate.detected_skew_deg,
+                    "trace_correction_deg": estimate.correction_deg,
+                    "trace_straighten_pivot_mm": list(estimate.pivot_mm),
+                }
+            )
+
     def _create_traced_objects(self, payload: dict[str, Any]) -> None:
         if self._trace_result is None:
             self.show_error("Run object detection before creating vector paths")
@@ -5110,6 +5304,15 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     for item in detections
                 ]
             )
+            straightening = getattr(self, "_trace_straightening", None)
+            if (
+                purpose == "cut"
+                and output_mode == "native"
+                and straightening is not None
+                and straightening.selected_ids
+                == tuple(str(item.get("id")) for item in detections)
+            ):
+                self._apply_trace_group_rotation(objects, straightening)
             if purpose == "stock":
                 objects = [mark_stock_boundary(objects[0])]
             replace_previous = bool(payload.get("replace_previous", True))
@@ -5671,6 +5874,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._trace_raster_preview_area = None
         self._trace_raster_preview_signature = None
         self._trace_result = None
+        self._trace_orientation_estimate = None
+        self._trace_straightening = None
         self._template_match_result = None
         self.workspace.clear_trace_preview()
         self.workspace.clear_template_preview()

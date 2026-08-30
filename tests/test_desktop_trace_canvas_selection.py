@@ -8,17 +8,23 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
-from PySide6 import QtCore, QtTest, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.config import LaserSettings
 from laser_aligner.desktop.panels import TracePanel
 from laser_aligner.desktop.workspace import WorkspaceView
 from laser_aligner.project import (
     Bounds,
+    NativePathGeometry,
+    PathCubicSegment,
+    PathFillRule,
+    PathLineSegment,
+    PathSubpath,
     ProjectDocument,
     SceneObject,
     generate_project_gcode,
 )
+from laser_aligner.vision.trace_orientation import trace_rotation_transform
 
 
 @pytest.fixture(scope="module")
@@ -57,6 +63,53 @@ def _candidate(
         ],
         "diagnostics": {"within_work_area": True},
     }
+
+
+def _native_candidate(
+    detection_id: str,
+    index: int,
+    center: tuple[float, float],
+) -> dict[str, object]:
+    geometry = NativePathGeometry(
+        (
+            PathSubpath(
+                (-0.5, -0.5),
+                (
+                    PathLineSegment((0.5, -0.5)),
+                    PathCubicSegment((0.55, -0.1), (0.45, 0.5), (0.0, 0.5)),
+                    PathLineSegment((-0.5, 0.5)),
+                    PathLineSegment((-0.5, -0.5)),
+                ),
+                closed=True,
+            ),
+        ),
+        fill_rule=PathFillRule.EVENODD,
+    )
+    return {
+        "id": detection_id,
+        "index": index,
+        "source": "direct",
+        "confidence": 0.98,
+        "selected_default": True,
+        "shape": "contour",
+        "center_mm": list(center),
+        "width_mm": 24.0,
+        "height_mm": 12.0,
+        "area_mm2": 250.0,
+        "native_verified": True,
+        "native_path": geometry.to_dict(),
+        "native_center_mm": list(center),
+        "native_width_mm": 24.0,
+        "native_height_mm": 12.0,
+        "diagnostics": {"within_work_area": True},
+    }
+
+
+def _path_snapshot(path: QtGui.QPainterPath) -> list[tuple[object, float, float]]:
+    return [
+        (path.elementAt(index).type, path.elementAt(index).x, path.elementAt(index).y)
+        for index in range(path.elementCount())
+    ]
 
 
 def _show(view: WorkspaceView, application: QtWidgets.QApplication) -> None:
@@ -250,6 +303,62 @@ def test_overlap_zoom_redetect_clear_and_project_selection_restoration(
         & QtWidgets.QGraphicsItem.GraphicsItemFlag.ItemIsSelectable
     )
     assert document.objects == [project_object]
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
+def test_straightening_moves_only_selected_vectors_and_reset_is_exact(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 120.0))
+    selected = _native_candidate("selected", 1, (55.0, 50.0))
+    unselected = _native_candidate("unselected", 2, (125.0, 50.0))
+    camera = QtGui.QImage(16, 12, QtGui.QImage.Format.Format_RGB32)
+    camera.fill(QtGui.QColor("#7A5134"))
+    view.set_camera_image(camera, image_area=Bounds(0.0, 0.0, 220.0, 120.0))
+    view.set_trace_preview([selected, unselected], {"selected"})
+    original_selected = _path_snapshot(
+        view._trace_candidates_by_id["selected"].path()
+    )
+    original_unselected = _path_snapshot(
+        view._trace_candidates_by_id["unselected"].path()
+    )
+    original_types = [element[0] for element in original_selected]
+    original_camera_key = view._camera_item.pixmap().cacheKey()
+    original_camera_area = view._camera_image_area
+
+    view.set_trace_straightening(
+        ["selected"],
+        trace_rotation_transform(-2.0, (90.0, 50.0)),
+    )
+
+    transformed_selected = _path_snapshot(
+        view._trace_candidates_by_id["selected"].path()
+    )
+    assert transformed_selected != original_selected
+    assert [element[0] for element in transformed_selected] == original_types
+    assert (
+        _path_snapshot(view._trace_candidates_by_id["unselected"].path())
+        == original_unselected
+    )
+    assert view.selected_trace_ids() == ["selected"]
+    assert view._camera_item.pixmap().cacheKey() == original_camera_key
+    assert view._camera_image_area == original_camera_area
+
+    view.set_trace_straightening((), None)
+
+    assert (
+        _path_snapshot(view._trace_candidates_by_id["selected"].path())
+        == original_selected
+    )
+    assert (
+        _path_snapshot(view._trace_candidates_by_id["unselected"].path())
+        == original_unselected
+    )
+    assert view._camera_item.pixmap().cacheKey() == original_camera_key
+    assert view._camera_image_area == original_camera_area
 
     view.close()
     view.deleteLater()

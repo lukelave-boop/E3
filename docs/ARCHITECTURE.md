@@ -82,6 +82,7 @@ V4L2 controls. Camera-client loss has no machine-execution meaning. See
 | `vision/` | Workpiece, fiducial, crosshair-grid, camera-object detection, and camera-photo normalization |
 | `vision/camera_raster_normalization.py` | Qt-free, authority-free low-frequency illumination modeling and symmetric dark/light raster adaptation for non-grid Camera Trace |
 | `vision/camera_trace_eligibility.py` | Qt-free hard physical Trace ROI and trusted empty-bed comparison that produces immutable material eligibility without creating foreground geometry |
+| `vision/trace_orientation.py` | Qt-free, image-free conservative skew consensus over successfully verified native Trace geometry, plus the shared-pivot rigid affine used by review and Create |
 | `geometry/` | SVG parsing, curve flattening, transforms, and physical units |
 | `gcode/` | Legacy single-SVG generation and G-code parsing/preview utilities |
 | `project/` | Desktop project schema, undoable object/shape commands, save/recovery, alignment, and multi-layer toolpaths |
@@ -337,6 +338,20 @@ should own a physical camera at a time.
   inspector checkboxes; project objects are non-selectable and non-movable until
   review ends. The temporary layer never mutates `ProjectDocument` and has no
   planning, G-code, or execution consumer.
+- Successful non-grid native Cut-geometry Trace selections may enter an optional
+  orientation review downstream of fitting and topology validation. The Qt-free estimator
+  consumes only verified physical native paths, reduces geometric line,
+  near-linear-cubic, component-axis, and candidate-alignment evidence modulo 90
+  degrees, and fails closed on weak or conflicting consensus. `E3MainWindow`
+  keys the estimate and applied state to the current detection-ID selection;
+  selection changes recompute from the retained native paths without calling the
+  controller or vision pipeline. `WorkspaceView` rebuilds only selected vector
+  paths through one rotation about their combined bounds center. Reset rebuilds
+  originals, and Create applies the mathematically identical object-level group
+  transform before the existing one-step command. Raster preview slots and
+  project/planning/execution authority are never consumers of temporary state.
+  Stock-boundary review is excluded so its photographed physical outline cannot
+  be rotated away from the camera evidence.
 - For a current non-grid request, the Trace **Camera display** selector can show
   the immutable corrected **Camera** frame, exact production **Exposed bed**
   mask, exact material **Eligible** mask, exact polarity-specific **Normalized**
@@ -525,8 +540,11 @@ This boundary applies only to non-grid Contrast and Auto's dark/light raster
 attempts. Explicit **By color**, Auto's conditional Color strategy, and all
 **Use grid** production masks retain their chromatic or specialized repeated-
 object implementations. Deterministic synthetic gradient/shadow, polarity,
-gap/hole, clean-raster parity, immutability, and timing coverage exists; the
-physical Coleman stencil scene has not yet been rerun and remains pending.
+gap/hole, clean-raster parity, immutability, and timing coverage exists. A
+2026-08-30 operator-reported Coleman run produced successful manual and Auto
+native geometry, but did not record the controller, firmware, configuration, or
+measured placement needed for formal physical acceptance; Straighten itself
+remains physically untested.
 
 All vision accuracy depends on current lens calibration, bed mapping, camera
 pose, material height, focus, lighting, and resolution.

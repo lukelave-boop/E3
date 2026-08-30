@@ -6,6 +6,21 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added an optional Camera Trace **Straighten** review for Cut geometry downstream
+  of successful non-grid native fitting. Stock boundaries retain their
+  photographed physical outline. A bounded, Qt-free geometric estimator combines
+  physical native lines, demonstrably near-linear cubic segments, anisotropic
+  candidate axes, and multi-candidate alignment modulo 90 degrees, then hides
+  the offer for trivial, diffuse, conflicting, circular, square-like, or large
+  ambiguous results. Candidate-local disagreement is an explicit conservative
+  veto and group alignment cannot manufacture candidate support. The current
+  selection rotates as one rigid group around its
+  combined native bounds center; only the temporary vector overlay moves, Reset
+  restores the exact retained fit, and separate or combined Create commits the
+  equivalent placement through ordinary undo history. Failed native fits, grid
+  results, source pixels, thresholding, normalization, topology validation,
+  planning, motion, and laser authority are unchanged.
+
 - Replaced Camera Trace's one-shot automatic Otsu choice with a bounded,
   image-derived threshold selector over the corrected normalized raster. Otsu
   remains the baseline alongside Triangle, class-interpolation, and foreground-

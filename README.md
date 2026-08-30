@@ -250,8 +250,19 @@ On hardware, Trace completes Home / park before acquiring the temporary
 capture-only stepper hold; only the short settle/discard/raw-frame burst is held.
 The Camera display selector exposes the exact **Camera**, **Exposed bed**,
 **Eligible**, **Normalized**, and production **Mask** stages without granting
-project or laser authority. The physical Coleman scene still requires a new
-camera validation. See
+project or laser authority. A successful non-grid native **Cut geometry** result
+can now offer an optional geometric **Straighten** review for the current
+selection. Stock boundaries retain their photographed outline. Straighten uses
+native lines, demonstrably near-linear Béziers, candidate axes, and group
+alignment—never OCR or source pixels—and rotates all selected vectors around one
+shared bounds-center pivot. Ambiguous evidence and failed native fits do not
+receive an offer; Reset restores the exact original fit, and only Create commits
+the previewed transform through normal undo history. An operator-reported
+2026-08-30 Coleman run found a much cleaner Mask at manual threshold 128 (with a
+later bounded topology failure), usable geometry near 150, and a successful
+Auto-selected threshold of 170. Those observations lack a recorded
+controller/firmware/configuration acceptance record, and Straighten itself still
+needs physical validation. See
 [docs/OBJECT_TRACE.md](docs/OBJECT_TRACE.md).
 
 Reusable label-sheet cutting templates can be created from visible project

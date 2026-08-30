@@ -23,10 +23,13 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 > hole, an underline, variable-tone long glyphs with darker surface marks,
 > homogeneous 4× foreground/background classification, warm false-Color and
 > real bounded-Color cases, exact 4× display scaling, coordinate equivalence,
-> and imported-raster parity. The
-> Coleman stencil failure
-> scene has not been rerun on the physical camera. Do not treat this
-> implementation status as a physical-camera validation.
+> and imported-raster parity. In a 2026-08-30 operator-reported Coleman stencil
+> run, manual threshold 128 produced a much cleaner Mask but still failed the
+> bounded native-topology proof, manual threshold about 150 produced usable
+> geometry, and Auto selected 170 and produced a good trace. Controller,
+> firmware, configuration, and measured placement details were not recorded here,
+> so this is scene evidence rather than formal physical acceptance. Straighten
+> itself has not yet been physically exercised.
 
 ## Recommended Trace workflow
 
@@ -99,7 +102,15 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
     Red cells are also unchecked by default. Reposition the sheet fully inside
     the work area and detect again before creating or cutting them. A Stock
     boundary requires exactly one selected outline.
-11. Leave **Replace earlier Trace objects** checked for the usual
+11. For a successful non-grid **Cut geometry** result using **Native lines /
+    Béziers**, E3 may show a
+    conservative **Detected skew** review with an explicit clockwise or
+    counterclockwise direction. The estimate uses only the currently selected,
+    verified native vectors. Press **Straighten** only if you want the suggested
+    correction; it is never automatic. The selected vectors rotate together in
+    the overlay while Camera, Exposed bed, Eligible, Normalized, and Mask remain
+    unchanged. **Reset** restores the exact fitted vectors.
+12. Leave **Replace earlier Trace objects** checked for the usual
     one-workpiece-at-a-time workflow, then press **Create separate vectors**,
     **Create one combined vector**, or **Create stock boundary**. The combined
     option creates one even-odd compound path and preserves overlaps; it is not
@@ -109,6 +120,52 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 
 Changing a detection or output setting marks the result stale. Run **Detect
 objects** again before creating geometry.
+
+### Optional Straighten review
+
+Straighten is a downstream geometry review, not another detection mode. It is
+available only for selected Cut-geometry candidates from a successful, non-grid,
+authoritative native fit. Stock boundaries retain their photographed physical
+outline and do not offer Straighten. A failed or partial native fit cannot be
+straightened: E3 does not estimate orientation from the Mask, observed contours,
+or any partially fitted path. Changing the selection computes a new estimate
+from the already fitted native geometry and does not recapture, normalize,
+threshold, or refit anything.
+
+The estimator is geometric and uses no OCR, text recognition, or machine
+learning. It combines physical-length native line evidence, only those cubic
+Béziers that are demonstrably near-linear, anisotropic candidate axes, and—in a
+multi-candidate selection—candidate-center alignment. Evidence is reduced
+modulo 90 degrees and combined with a bounded robust consensus. Confidence
+accounts for the inlier fraction, angular spread, physical support, independent
+features, supporting candidates, and evidence-family diversity. Candidate and
+family weights and total analysis complexity are capped so many tiny fragments
+or curve samples cannot win by vote count alone. Candidate-center alignment can
+strengthen a consensus but cannot manufacture independent candidate support. A
+reliable candidate-local angle—or a tight conflict-only mode from several strong
+candidate axes—that conflicts with another selected group is a conservative veto,
+even if one group has more total weight.
+
+Positive internal skew means counterclockwise in the X-right/Y-up project frame;
+the correction has the opposite sign. The UI always spells out the direction.
+Skew below about 0.4 degrees is treated as already straight. Offers normally
+stop at 10 degrees; 10–15 degrees requires exceptional agreement, and larger,
+diffuse, conflicting, circular, square-like, or otherwise ambiguous evidence is
+suppressed. No offer is safer than a confident-looking guess.
+
+When accepted, all selected candidates receive one rigid rotation around the
+combined selected native-geometry bounds center. Candidates do not rotate about
+their individual centers, so spacing, baselines, subpaths, holes, islands, fill
+rule, line segments, cubic segments, and candidate identities are preserved.
+Only the temporary vector overlay changes. **Reset** rebuilds that overlay from
+the retained original fitted geometry rather than applying an inverse transform.
+
+Straighten remains temporary review state with no project, planning, G-code,
+motion, arming, or laser authority. **Create separate vectors** gives every new
+object the mathematically equivalent common group transform; **Create one
+combined vector** applies the equivalent transform to the compound object. Both
+produce the same physical geometry, participate in the ordinary one-step undo
+history, and commit nothing until **Create** is pressed.
 
 ### Stock-boundary layout workflow
 
@@ -714,6 +771,8 @@ pose, material height, focus, lighting, and resolution. A trace can be
 geometrically neat but globally offset when the mapping is stale. Use a saved
 cutting template when the intended cut geometry is already known; use Trace for
 geometry that must be recovered from the image, and always review before
-generating or running a job. The normalization regressions are synthetic; the
-next physical Coleman capture remains required to validate real shadow, glare,
-focus, material-height, and exposure behavior.
+generating or running a job. The deterministic normalization regressions remain
+synthetic. The 2026-08-30 operator-reported Coleman run is useful scene evidence,
+but a recorded controller/firmware/configuration run with measured placement,
+shadow, glare, focus, material height, and exposure results is still required for
+formal physical acceptance. Straighten requires its own physical review.

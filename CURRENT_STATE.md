@@ -5,7 +5,94 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-29**
+Snapshot: **2026-08-30**
+
+## Active optional Camera Trace orientation review / Straighten
+
+Successful non-grid Camera Trace native Cut geometry now has an optional,
+selection-scoped orientation review. Stock boundaries retain their photographed
+physical outline and are excluded. `vision/trace_orientation.py` is Qt-free and
+image-free. It accepts a selection only when every candidate has
+`native_verified == True`, a parseable native path, and positive finite physical
+bounds. It reconstructs the fitted world geometry without falling back to an
+observed contour, production Mask, or partial result. Grid review remains on its
+independent path and does not invoke this estimator.
+
+Evidence comprises physical-length native line segments, only cubic segments
+whose chord/arc ratio and maximum chord deviation prove them near-linear,
+arclength-weighted anisotropic candidate axes, and one candidate-center alignment
+axis when at least three meaningful candidates support it. Evidence is reduced
+modulo 90 degrees. Per-candidate line and near-linear-cubic family weights are
+capped; total analysis is capped at 20,000 native segments and 8,192 subpaths.
+A raw-structure preflight enforces those limits before native parsing or world
+transformation. The deterministic maximum-consensus seed uses a 3-degree inlier
+window, followed by
+four bounded robust circular-mean iterations. This prevents sampled curve points,
+tiny fragments, or a single complex outline from becoming an unbounded vote.
+Reliable candidate-local line consensuses are also compared with a sorted
+modulo-90 covering-arc check. Tight modes of at least three strong candidate axes
+serve as conflict-only witnesses without adding offer authority. Disagreement
+beyond 3 degrees vetoes the offer. Candidate-center alignment never counts as
+independent candidate support, so it cannot hide a differently rotated selected
+group.
+
+The confidence score is 28% inlier fraction, 20% angular concentration, 18%
+physical linear support, 15% evidence-family diversity, 10% supporting-candidate
+count, and 9% independent-feature count. Hard gates still reject an inlier
+fraction below 0.68, spread above 2 degrees, fewer than two evidence families,
+insufficient independent candidate support, confidence below 0.78, or conflicting
+reliable candidate-local orientations. A strong single candidate must
+independently provide at least three linear features, 12 mm of support, and a
+compatible component axis. Skew below 0.4 degrees is treated as trivial. Offers
+normally stop at 10 degrees; 10–15 degrees additionally requires at least 0.92
+confidence, 0.90 inlier fraction, and three families, and anything larger is
+rejected. Positive detected skew is counterclockwise in the X-right/Y-up project
+frame and the correction is its negative.
+
+The Trace panel spells out direction and never auto-applies the result. Pressing
+**Straighten** rotates the currently selected vector candidates as one rigid group
+around the center of their combined verified-native bounds. Camera, Exposed bed,
+Eligible, Normalized, and Mask pixmaps and arrays are untouched. The retained
+`_trace_result` remains the source of truth; **Reset** rebuilds the exact originals
+rather than inverse-rotating. A changed selection discards an applied preview and
+computes from the already fitted native paths without controller work, capture,
+normalization, thresholding, contour extraction, or fitting. A stale setting,
+new request, failed result, calibration-evidence invalidation, Clear, and Create
+all retire old Straighten state.
+
+Create applies the identical rotation mathematically at object level. Separate
+objects rotate their centers and native object transforms about the shared pivot;
+one compound object receives the equivalent transform. Local native paths remain
+unchanged, so lines stay lines, cubics stay cubics, and subpaths, holes, islands,
+fill rules, topology, relative spacing, and detection identities are preserved.
+The existing `AddObjectsCommand`/`ReplaceObjectsCommand` remains the only project
+mutation and one-step undo boundary. Temporary orientation review has no project,
+planning, G-code, motion, arming, controller, or laser authority.
+
+Focused estimator, panel, state/lifecycle, real-workspace preview, and creation
+verification passes **73 tests** in **3.24 seconds**. The Qt-free estimator subset
+passes **29 tests** in **1.93 seconds**, including ± skew sign, already-straight
+suppression, conflicting unequal/near-square/two-line/cubic-axis groups,
+circles/squares/curves/fragments, near-linear cubics, strict failed-native and
+oversized-path rejection, bounded large-candidate work, topology/primitive
+preservation, strategy metadata independence, and exceptional/large-angle gates.
+On this Windows development host, 250 warm estimates of the ordinary
+four-component synthetic +2-degree label had a **1.8137 ms median**, **1.8558 ms
+p95**, and **3.2768 ms maximum** estimator-reported time. These are software
+timings, not a real-camera performance claim. The complete Windows four-worker
+suite passes **2,903 tests** with **14 expected platform/privilege skips** in
+**163.30 seconds**. Repository Ruff, `python -m compileall -q laser_aligner`, and
+`git diff --check` pass.
+
+The implementation was prompted by newer operator-reported Coleman stencil
+evidence: manual threshold 128 produced a dramatically cleaner production Mask
+but later failed bounded native-topology validation, manual threshold about 150
+produced usable geometry, and Auto selected 170 from the image and produced a good
+trace. Controller, firmware, machine configuration, capture identity, and measured
+placement results were not recorded in that report, so it does not satisfy the
+repository's formal physical-acceptance record. Straighten itself still requires
+a physical test of offer direction, Reset, overlay placement, separate/compound
+Create equivalence, final Preview, and guarded generated output.
 
 ## Active Pi-owned desktop Disconnect generation correction
 
@@ -507,10 +594,12 @@ and at most 50,000 deterministic photometric-fit samples. These timings are
 development-machine samples, not performance guarantees or physical-camera
 measurements.
 
-This is implementation and automated-test status only. The reported Coleman
-stencil scene has not been recaptured or replayed through a physical camera for
-this correction. No real camera, controller, motion, arming, laser-output,
-cutting, or physical-accuracy test was performed or is claimed.
+At the time this correction was recorded, the reported Coleman stencil scene had
+not been recaptured or replayed through a physical camera. The later 2026-08-30
+operator report is recorded in the Straighten section above but lacks the details
+required for formal physical acceptance. No controller, motion, arming,
+laser-output, cutting, or physical-accuracy test is retroactively claimed for
+this earlier correction.
 
 ## Active development-release trigger filtering
 
@@ -3263,6 +3352,11 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   showing the geometry that object creation will consume.
 - Border offsets.
 - Review and selective conversion to editable project objects.
+- Optional geometric Straighten review for a successful selected non-grid native
+  Cut-geometry candidate set. It rotates only temporary vectors about one shared bounds-center
+  pivot, supports exact Reset, and commits equivalent separate/compound placement
+  only through Create. Ambiguous evidence, grids, and failed native fits receive
+  no offer.
 - One captured corrected frame held across detection review, with monotonic
   request cancellation and stale-result rejection.
 - One-step undo for a created detection set.
@@ -3275,8 +3369,10 @@ consolidated desktop/object-trace branch passes unchanged on Linux.
   selection; the original stock outline remains authoritative for fit checks.
 
 The trace algorithms and native review lifecycle pass synthetic and offscreen
-behavioral tests. The workflow has not been exercised end to end with the real
-camera and calibration.
+behavioral tests. Operator-reported Coleman runs now cover successful manual and
+Auto native Trace generation, but the controller/firmware/configuration and
+measured result were not recorded as formal physical acceptance. Straighten has
+not been exercised end to end with the real camera and calibration.
 
 ### Reusable cutting templates
 

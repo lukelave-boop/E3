@@ -1217,6 +1217,10 @@ class TracePanel(QtWidgets.QWidget):
     generateRequested = QtCore.Signal()
     selectionChanged = QtCore.Signal(list)
     rasterPreviewModeChanged = QtCore.Signal(str)
+    straightenRequested = QtCore.Signal()
+    straightenResetRequested = QtCore.Signal()
+    straightenContextChanged = QtCore.Signal()
+    reviewInvalidated = QtCore.Signal()
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
@@ -1229,6 +1233,8 @@ class TracePanel(QtWidgets.QWidget):
         self._color_pick_sampling = False
         self._calibration_ready = False
         self._generate_enabled = True
+        self._straighten_estimate: Any | None = None
+        self._straighten_applied = False
         self._trace_settings = QtCore.QSettings("E3", "PositioningSystem")
         layout = _panel_layout(self)
 
@@ -1628,6 +1634,28 @@ class TracePanel(QtWidgets.QWidget):
         select_row.addWidget(self.select_all_button)
         select_row.addWidget(self.select_none_button)
         result_layout.addLayout(select_row)
+        self.straighten_review = QtWidgets.QWidget()
+        self.straighten_review.setObjectName("traceStraightenReview")
+        straighten_layout = QtWidgets.QVBoxLayout(self.straighten_review)
+        straighten_layout.setContentsMargins(0, 4, 0, 4)
+        straighten_layout.setSpacing(5)
+        self.straighten_status = QtWidgets.QLabel()
+        self.straighten_status.setObjectName("traceStraightenStatus")
+        self.straighten_status.setWordWrap(True)
+        straighten_layout.addWidget(self.straighten_status)
+        self.straighten_button = QtWidgets.QPushButton("Straighten")
+        self.straighten_button.setToolTip(
+            "Apply the reviewed correction to the selected temporary vectors. "
+            "Source camera pixels are not changed."
+        )
+        self.straighten_reset_button = QtWidgets.QPushButton("Reset")
+        self.straighten_reset_button.setToolTip(
+            "Restore the exact original successful Trace candidate geometry."
+        )
+        straighten_layout.addWidget(self.straighten_button)
+        straighten_layout.addWidget(self.straighten_reset_button)
+        self.straighten_review.setVisible(False)
+        result_layout.addWidget(self.straighten_review)
         self.create_button = QtWidgets.QPushButton("Create separate vectors")
         self.create_button.setToolTip(
             "Create vector objects from the selected detected outlines."
@@ -1675,6 +1703,8 @@ class TracePanel(QtWidgets.QWidget):
         self.create_combined_button.clicked.connect(
             lambda: self._create_clicked(True)
         )
+        self.straighten_button.clicked.connect(self.straightenRequested)
+        self.straighten_reset_button.clicked.connect(self.straightenResetRequested)
         self.generate_button.clicked.connect(self.generateRequested)
         self.result_tree.itemChanged.connect(self._result_changed)
         self.select_all_checkbox.stateChanged.connect(
@@ -1691,6 +1721,9 @@ class TracePanel(QtWidgets.QWidget):
             lambda: self._set_all_checked(False, include_inferred=True)
         )
         self.trace_purpose.currentIndexChanged.connect(self._sync_output_controls)
+        self.trace_purpose.currentIndexChanged.connect(
+            lambda _index: self.straightenContextChanged.emit()
+        )
         self.mode_combo.currentIndexChanged.connect(self._trace_mode_changed)
         self.contrast_threshold_mode.currentIndexChanged.connect(
             self._sync_output_controls
@@ -2020,6 +2053,7 @@ class TracePanel(QtWidgets.QWidget):
         self.status_label.setText(f"Color sampling failed: {message}")
 
     def set_result(self, result: dict[str, Any]) -> None:
+        self.clear_straighten_review()
         previous_ids = {str(item.get("id")) for item in self._detections}
         previous_selected = set(self.selected_ids())
         self._detections = list(result.get("detections", []))
@@ -2335,6 +2369,7 @@ class TracePanel(QtWidgets.QWidget):
     ) -> None:
         self._detections = []
         self._result_is_current = False
+        self.clear_straighten_review()
         self.chosen_threshold_value.setText("—")
         self.result_tree.clear()
         self.select_grid_button.setText("Select complete grid")
@@ -2388,6 +2423,7 @@ class TracePanel(QtWidgets.QWidget):
     def clear_result(self) -> None:
         self._detections = []
         self._result_is_current = False
+        self.clear_straighten_review()
         self.chosen_threshold_value.setText("—")
         self.clear_raster_preview()
         self.result_tree.clear()
@@ -2407,11 +2443,87 @@ class TracePanel(QtWidgets.QWidget):
         if self._updating or not self._detections:
             return
         self._result_is_current = False
+        self.clear_straighten_review()
+        self.reviewInvalidated.emit()
         self.chosen_threshold_value.setText("—")
         self.create_button.setEnabled(False)
         self.create_combined_button.setEnabled(False)
         self.status_label.setText(
             "Trace settings changed. Run Detect objects again before creating paths."
+        )
+
+    @staticmethod
+    def _straighten_direction(angle_deg: float) -> str:
+        return "counterclockwise" if angle_deg > 0.0 else "clockwise"
+
+    @staticmethod
+    def _straighten_value(estimate: Any, name: str) -> Any:
+        if isinstance(estimate, dict):
+            return estimate.get(name)
+        return getattr(estimate, name, None)
+
+    def set_straighten_offer(self, estimate: Any) -> None:
+        detected = self._straighten_value(estimate, "detected_skew_deg")
+        correction = self._straighten_value(estimate, "correction_deg")
+        offered = self._straighten_value(estimate, "offered") is True
+        if not offered or detected is None or correction is None:
+            self.clear_straighten_review()
+            return
+        detected = float(detected)
+        correction = float(correction)
+        if not math.isfinite(detected) or not math.isfinite(correction):
+            self.clear_straighten_review()
+            return
+        self._straighten_estimate = estimate
+        self._straighten_applied = False
+        magnitude = abs(detected)
+        self.straighten_status.setText(
+            f"Detected skew: {magnitude:.1f}° "
+            f"{self._straighten_direction(detected)}"
+        )
+        self.straighten_button.setText(f"Straighten {magnitude:.1f}°")
+        self.straighten_button.setToolTip(
+            f"Apply a {abs(correction):.1f}° "
+            f"{self._straighten_direction(correction)} correction to the selected "
+            "temporary vectors. Source camera pixels are not changed."
+        )
+        self.straighten_button.setVisible(True)
+        self.straighten_reset_button.setVisible(False)
+        self.straighten_review.setVisible(True)
+
+    def set_straighten_applied(self, estimate: Any | None = None) -> None:
+        current = self._straighten_estimate if estimate is None else estimate
+        correction = self._straighten_value(current, "correction_deg")
+        if current is None or correction is None:
+            self.clear_straighten_review()
+            return
+        correction = float(correction)
+        if not math.isfinite(correction):
+            self.clear_straighten_review()
+            return
+        self._straighten_estimate = current
+        self._straighten_applied = True
+        self.straighten_status.setText(
+            f"Applied correction: {abs(correction):.1f}° "
+            f"{self._straighten_direction(correction)}"
+        )
+        self.straighten_button.setVisible(False)
+        self.straighten_reset_button.setVisible(True)
+        self.straighten_review.setVisible(True)
+
+    def clear_straighten_review(self) -> None:
+        self._straighten_estimate = None
+        self._straighten_applied = False
+        self.straighten_status.clear()
+        self.straighten_button.setVisible(False)
+        self.straighten_reset_button.setVisible(False)
+        self.straighten_review.setVisible(False)
+
+    def straighten_context_is_current(self) -> bool:
+        return bool(
+            self._result_is_current
+            and self.trace_purpose.currentData() == "cut"
+            and self.output_mode.currentData() == "native"
         )
 
     @staticmethod
