@@ -213,6 +213,13 @@ class LayerPanel(QtWidgets.QWidget):
         settings_grid.setColumnStretch(2, 2)
         editor_layout.addLayout(settings_grid)
 
+        self.air_assist_check = QtWidgets.QCheckBox("Air assist")
+        self.air_assist_check.setToolTip(
+            "Run configured air assist at 100% while this operation is "
+            "cutting/engraving."
+        )
+        editor_layout.addWidget(self.air_assist_check)
+
         self.scan_row = QtWidgets.QWidget()
         scan_layout = QtWidgets.QGridLayout(self.scan_row)
         scan_layout.setContentsMargins(0, 0, 0, 0)
@@ -327,6 +334,7 @@ class LayerPanel(QtWidgets.QWidget):
         self.overscan_spin.editingFinished.connect(self._emit_edit)
         self.vector_correction_spin.editingFinished.connect(self._emit_edit)
         self.raster_correction_spin.editingFinished.connect(self._emit_edit)
+        self.air_assist_check.toggled.connect(self._emit_air_assist_edit)
         self.output_check.toggled.connect(self._emit_edit)
         self.visible_check.toggled.connect(self._emit_edit)
 
@@ -457,6 +465,7 @@ class LayerPanel(QtWidgets.QWidget):
             self.overscan_spin.setValue(layer.overscan_percent)
             self.vector_correction_spin.setValue(layer.vector_power_correction)
             self.raster_correction_spin.setValue(layer.raster_power_correction)
+            self.air_assist_check.setChecked(layer.air_assist)
             self.output_check.setChecked(layer.output_enabled)
             self.visible_check.setChecked(layer.visible)
             self.output_check.setToolTip("Include this operation when generating a job.")
@@ -506,10 +515,21 @@ class LayerPanel(QtWidgets.QWidget):
                 "overscan_percent": self.overscan_spin.value(),
                 "vector_power_correction": self.vector_correction_spin.value(),
                 "raster_power_correction": self.raster_correction_spin.value(),
+                "air_assist": self.air_assist_check.isChecked(),
                 "output_enabled": self.output_check.isChecked(),
                 "visible": self.visible_check.isChecked(),
             },
         )
+
+    def _emit_air_assist_edit(self, checked: bool) -> None:
+        """Edit the binary output without reserializing rounded numeric widgets."""
+
+        if self._updating:
+            return
+        layer_id = self.current_layer_id()
+        if layer_id is None:
+            return
+        self.layerEdited.emit(layer_id, {"air_assist": bool(checked)})
 
     def _sync_scan_controls(self, *args: Any) -> None:
         del args

@@ -9,6 +9,7 @@ from typing import Literal
 
 import pytest
 
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.errors import MachineError, TransientConnectionError
 from laser_aligner.machine import service as service_module
@@ -174,6 +175,10 @@ def disconnect_steps() -> list[ExpectedWrite]:
     # disconnect() first requests a normal STOP, then performs its own close-time
     # laser-off write. Neither best-effort cleanup consumes an acknowledgement.
     return [line("M5"), line("M5")]
+
+
+def air_disconnect_steps(off_command: str) -> list[ExpectedWrite]:
+    return [line("M5"), line(off_command), line("M5"), line(off_command)]
 
 
 def machine_settings(
@@ -715,6 +720,85 @@ def test_powered_grbl_stream_has_complete_home_park_release_transcript(
     assert status["armed"] is False
     assert status["coordinate_reference_ready"] is False
     assert status["jog_ready"] is False
+
+    machine.disconnect()
+    transport.assert_complete()
+
+
+def test_powered_grbl_air_assist_is_off_before_home_park_transcript(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    program_lines = [
+        "G21",
+        "G90",
+        "M5",
+        "M9",
+        "G0 X10 Y10 F1000",
+        "M8",
+        "M4 S5",
+        "G1 X20 Y20 F500",
+        "M5",
+        "M9",
+        "M5",
+    ]
+    job_start_steps = [
+        line("M5", "ok"),
+        line("$H", "ok"),
+        *coordinate_query_steps(),
+        line("G21", "ok"),
+        line("G90", "ok"),
+    ]
+    start_verification = coordinate_query_steps()
+    stream_steps = [
+        line("M5", "ok"),
+        # Service-level fail-off covers powered setup/calibration programs that
+        # intentionally contain no layer Air Assist literals.
+        line("M9", "ok"),
+        *(line(command, "ok") for command in program_lines),
+        # MachineService owns a second acknowledged fail-off immediately
+        # before any completion motion, even though the immutable program has
+        # already ended in its standalone M5.
+        line("M5", "ok"),
+        line("M9", "ok"),
+        line("G4 P0.01", "ok"),
+        line("$H", "ok"),
+        line("G21", "ok"),
+        line("G90", "ok"),
+        line("G0 X15.000 Y195.000 F3000.000", "ok"),
+        line("G4 P0.01", "ok"),
+        line("$$", *GRBL_SETTINGS),
+        line("M5", "ok"),
+        line("$MD", "ok"),
+    ]
+    transport = ScriptedTransport(
+        [
+            *grbl_connect_steps(),
+            line("M9", "ok"),
+            *job_start_steps,
+            *start_verification,
+            *stream_steps,
+            *air_disconnect_steps("M9"),
+        ]
+    )
+    install_transports(monkeypatch, transport)
+    settings = machine_settings("grbl", complete_powered_job=True)
+    settings.air_assist = AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT)
+    machine = MachineService(settings, LaserSettings(), hardware_enabled=True)
+    machine.connect()
+    machine.prepare_job_start()
+    before_start = len(transport.writes)
+    program = machine.preflight_program("\n".join(program_lines) + "\n")
+    machine.arm_program(machine.ARM_PHRASE, program)
+
+    machine.start_validated_program(program, "powered-grbl-air.gcode")
+    status = wait_for_job(machine)
+
+    assert transport.writes[before_start:] == [
+        *[(step.channel, step.payload) for step in start_verification],
+        *[(step.channel, step.payload) for step in stream_steps],
+    ]
+    assert status["job"]["phase"] == "complete"  # type: ignore[index]
+    assert status["job"]["error"] is None  # type: ignore[index]
 
     machine.disconnect()
     transport.assert_complete()

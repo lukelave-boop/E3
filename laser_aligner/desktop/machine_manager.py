@@ -3,6 +3,12 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from ..air_assist import (
+    MAX_FAN_INDEX,
+    MIN_FAN_INDEX,
+    AirAssistMode,
+    AirAssistSettings,
+)
 from ..config import WorkArea
 from ..errors import MachineError
 from ..machine.controller_dialects import CONTROLLER_DIALECT_REGISTRY
@@ -289,6 +295,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
 
         self._build_identity_group()
         self._build_connection_group()
+        self._build_air_assist_group()
         self._build_geometry_group()
         self._build_laser_group()
         self._build_camera_group()
@@ -352,9 +359,9 @@ class MachineManagerDialog(QtWidgets.QDialog):
             "Apply this machine profile's defaults…"
         )
         self.apply_machine_defaults_button.setToolTip(
-            "Explicitly replace the editable controller, work-area, homing, and "
-            "motion defaults with values from the selected profile. Nothing is "
-            "saved until Save changes is clicked."
+            "Explicitly replace the editable controller, work-area, homing, "
+            "motion, and Air Assist output defaults with values from the selected "
+            "profile. Nothing is saved until Save changes is clicked."
         )
         layout.addWidget(self.apply_machine_defaults_button)
 
@@ -445,6 +452,49 @@ class MachineManagerDialog(QtWidgets.QDialog):
             "GRBL step-idle delay (if detected)"
             if protocol == "auto"
             else "GRBL step-idle delay"
+        )
+
+    def _build_air_assist_group(self) -> None:
+        group = QtWidgets.QGroupBox("Air Assist output")
+        form = QtWidgets.QFormLayout(group)
+        self.air_assist_form = form
+        self.air_assist_mode = QtWidgets.QComboBox()
+        self.air_assist_mode.addItem("Disabled", AirAssistMode.DISABLED.value)
+        self.air_assist_mode.addItem(
+            "GRBL coolant (M8/M9)",
+            AirAssistMode.GRBL_COOLANT.value,
+        )
+        self.air_assist_mode.addItem(
+            "Marlin fan (M106/M107)",
+            AirAssistMode.MARLIN_FAN.value,
+        )
+        self.air_assist_mode.setToolTip(
+            "Map operation Air Assist requests to one trusted controller output. "
+            "The configured output always runs at 100%; recipes cannot select a "
+            "percentage. Saved changes apply on the next E3 launch."
+        )
+        self.air_assist_fan_index = QtWidgets.QSpinBox()
+        self.air_assist_fan_index.setRange(MIN_FAN_INDEX, MAX_FAN_INDEX)
+        self.air_assist_fan_index.setToolTip(
+            "Marlin fan index used by M106 Pn S255 and M107 Pn."
+        )
+        self.air_assist_fan_label = QtWidgets.QLabel("Marlin fan index")
+        form.addRow("Mapping", self.air_assist_mode)
+        form.addRow(self.air_assist_fan_label, self.air_assist_fan_index)
+        self.air_assist_mode.currentIndexChanged.connect(
+            self._refresh_air_assist_conditionals
+        )
+        self._refresh_air_assist_conditionals()
+        self.editor_layout.addWidget(group)
+
+    def _refresh_air_assist_conditionals(self) -> None:
+        marlin_fan = (
+            self.air_assist_mode.currentData()
+            == AirAssistMode.MARLIN_FAN.value
+        )
+        self.air_assist_form.setRowVisible(
+            self.air_assist_fan_index,
+            marlin_fan,
         )
 
     def _build_geometry_group(self) -> None:
@@ -676,6 +726,14 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self.read_timeout.setValue(machine.machine.read_timeout)
             self.startup_delay.setValue(machine.machine.controller_startup_delay)
             self.grbl_idle_delay.setValue(machine.machine.grbl_step_idle_delay_ms)
+            self._set_combo_data(
+                self.air_assist_mode,
+                machine.machine.air_assist.mode.value,
+            )
+            self.air_assist_fan_index.setValue(
+                machine.machine.air_assist.fan_index
+            )
+            self._refresh_air_assist_conditionals()
             area = machine.machine.work_area
             self.x_min.setValue(area.x_min)
             self.x_max.setValue(area.x_max)
@@ -768,7 +826,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
             self,
             "Apply machine profile defaults",
             "Replace the editable controller, work-area, photo-position, homing, "
-            "and motion settings with the defaults from "
+            "motion, and Air Assist output settings with the defaults from "
             f"'{profile.name}'?\n\n"
             "This is explicit and reversible until you click Save changes. "
             "Camera/calibration and laser settings are not changed.",
@@ -791,6 +849,12 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.read_timeout.setValue(defaults.read_timeout)
         self.startup_delay.setValue(defaults.controller_startup_delay)
         self.grbl_idle_delay.setValue(defaults.grbl_step_idle_delay_ms)
+        self._set_combo_data(
+            self.air_assist_mode,
+            defaults.air_assist.mode.value,
+        )
+        self.air_assist_fan_index.setValue(defaults.air_assist.fan_index)
+        self._refresh_air_assist_conditionals()
         area = defaults.work_area
         self.x_min.setValue(area.x_min)
         self.x_max.setValue(area.x_max)
@@ -879,6 +943,15 @@ class MachineManagerDialog(QtWidgets.QDialog):
         candidate.machine.read_timeout = self.read_timeout.value()
         candidate.machine.controller_startup_delay = self.startup_delay.value()
         candidate.machine.grbl_step_idle_delay_ms = self.grbl_idle_delay.value()
+        air_assist_mode = AirAssistMode(str(self.air_assist_mode.currentData()))
+        candidate.machine.air_assist = AirAssistSettings(
+            mode=air_assist_mode,
+            fan_index=(
+                self.air_assist_fan_index.value()
+                if air_assist_mode is AirAssistMode.MARLIN_FAN
+                else 0
+            ),
+        )
         candidate.machine.work_area = WorkArea(
             self.x_min.value(),
             self.x_max.value(),

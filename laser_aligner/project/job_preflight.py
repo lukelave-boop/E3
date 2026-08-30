@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from types import MappingProxyType
 from typing import TYPE_CHECKING
 
+from ..air_assist import AirAssistCommands
 from ..config import WorkArea
 from .model import (
     OBJECT_ROLE_KEY,
@@ -29,6 +30,7 @@ from .model import (
     ProjectDocument,
     SceneObject,
 )
+from .path_geometry import PathCubicSegment, PathFillRule, PathLineSegment
 from .planner_limits import (
     MAX_RASTER_ROWS,
     MAX_RASTER_SAMPLES,
@@ -47,6 +49,8 @@ if TYPE_CHECKING:
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _BOUNDS_TOLERANCE_MM = 1e-6
+_NONZERO_OUTPUT_TOLERANCE_MM = 1e-9
+_STRUCTURED_SCAN_EDGE_TEST_LIMIT = 50_000
 
 
 class PreflightSeverity(str, Enum):
@@ -174,6 +178,9 @@ class JobPreflightContext:
     machine_max_work_feed_mm_min: float | None = None
     machine_max_travel_feed_mm_min: float | None = None
     planned_travel_feed_mm_min: float | None = None
+    spot_offset_x_mm: float = 0.0
+    spot_offset_y_mm: float = 0.0
+    air_assist_commands: AirAssistCommands | None = None
     coordinate_frame: HoneycombCoordinateFrame | None = None
     honeycomb_execution_signature: tuple[str, int, str, str] | None = None
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None
@@ -205,6 +212,21 @@ class JobPreflightContext:
 
         if type(self.execution_ready) is not bool:
             raise TypeError("execution_ready must be an exact boolean")
+        for name in ("spot_offset_x_mm", "spot_offset_y_mm"):
+            value = getattr(self, name)
+            if type(value) is bool or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a finite number")
+            value = float(value)
+            if not math.isfinite(value):
+                raise ValueError(f"{name} must be finite")
+            object.__setattr__(self, name, value)
+        if (
+            self.air_assist_commands is not None
+            and not isinstance(self.air_assist_commands, AirAssistCommands)
+        ):
+            raise TypeError(
+                "air_assist_commands must be AirAssistCommands or None"
+            )
 
         object.__setattr__(self, "machine_work_area", area)
         object.__setattr__(self, "honeycomb_execution_signature", signature)
@@ -276,6 +298,13 @@ def _finite_number(value: object) -> float | None:
     return number if math.isfinite(number) else None
 
 
+def _serialized_coordinate_mm(value: float) -> float:
+    """Quantize a coordinate exactly as project G-code serialization does."""
+    if abs(value) < 0.0005:
+        value = 0.0
+    return float(f"{value:.3f}")
+
+
 def _transform_point(item: SceneObject, x: float, y: float) -> tuple[float, float]:
     transform = item.transform
     local_x = x * transform.width_mm * (-1.0 if transform.mirror_x else 1.0)
@@ -294,6 +323,168 @@ def _rectangle_corners(item: SceneObject) -> tuple[tuple[float, float], ...]:
         _transform_point(item, x, y)
         for x, y in ((-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5))
     )
+
+
+def _primitive_local_outline(
+    item: SceneObject,
+) -> tuple[tuple[float, float], ...] | None:
+    """Return the exact bounded primitive samples used by project planning."""
+    if item.kind is ObjectKind.RECTANGLE:
+        radius_mm = _finite_number(item.geometry.get("corner_radius_mm", 0.0))
+        if radius_mm is None or radius_mm < 0.0:
+            return None
+        radius_x = max(0.0, min(0.5, radius_mm / item.transform.width_mm))
+        radius_y = max(0.0, min(0.5, radius_mm / item.transform.height_mm))
+        if radius_x <= 1e-9 or radius_y <= 1e-9:
+            return (
+                (-0.5, -0.5),
+                (0.5, -0.5),
+                (0.5, 0.5),
+                (-0.5, 0.5),
+                (-0.5, -0.5),
+            )
+        points: list[tuple[float, float]] = []
+        centers = (
+            (0.5 - radius_x, -0.5 + radius_y, -90.0, 0.0),
+            (0.5 - radius_x, 0.5 - radius_y, 0.0, 90.0),
+            (-0.5 + radius_x, 0.5 - radius_y, 90.0, 180.0),
+            (-0.5 + radius_x, -0.5 + radius_y, 180.0, 270.0),
+        )
+        for center_x, center_y, start, end in centers:
+            for index in range(9):
+                angle = math.radians(start + (end - start) * index / 8)
+                points.append(
+                    (
+                        center_x + radius_x * math.cos(angle),
+                        center_y + radius_y * math.sin(angle),
+                    )
+                )
+        points.append(points[0])
+        return tuple(points)
+    if item.kind is ObjectKind.ELLIPSE:
+        return tuple(
+            (
+                0.5 * math.cos(2.0 * math.pi * index / 72),
+                0.5 * math.sin(2.0 * math.pi * index / 72),
+            )
+            for index in range(73)
+        )
+    return None
+
+
+def _scanline_x_intervals(
+    polygons: tuple[tuple[tuple[float, float], ...], ...],
+    y: float,
+    fill_rule: PathFillRule,
+) -> tuple[tuple[float, float], ...]:
+    """Mirror exact planner intersections for bounded, already-linear geometry."""
+    intersections: list[float] = []
+    winding_events: list[tuple[float, int]] = []
+    for polygon in polygons:
+        for start, end in zip(polygon[:-1], polygon[1:], strict=False):
+            start_y = start[1]
+            end_y = end[1]
+            low_y = min(start_y, end_y)
+            high_y = max(start_y, end_y)
+            if high_y - low_y <= 1e-12 or not (low_y <= y < high_y):
+                continue
+            ratio = (y - start_y) / (end_y - start_y)
+            x = start[0] + ratio * (end[0] - start[0])
+            if fill_rule is PathFillRule.EVENODD:
+                intersections.append(x)
+            else:
+                winding_events.append((x, 1 if end_y > start_y else -1))
+
+    if fill_rule is PathFillRule.EVENODD:
+        intersections.sort()
+        return tuple(
+            (intersections[index], intersections[index + 1])
+            for index in range(0, len(intersections) - 1, 2)
+            if intersections[index + 1] - intersections[index] > 1e-9
+        )
+
+    winding_events.sort(key=lambda event: event[0])
+    grouped: list[tuple[float, int]] = []
+    for x, delta in winding_events:
+        if grouped and abs(x - grouped[-1][0]) <= 1e-12:
+            grouped[-1] = (grouped[-1][0], grouped[-1][1] + delta)
+        else:
+            grouped.append((x, delta))
+    intervals: list[tuple[float, float]] = []
+    winding = 0
+    for index, (x, delta) in enumerate(grouped[:-1]):
+        winding += delta
+        next_x = grouped[index + 1][0]
+        if winding != 0 and next_x - x > 1e-9:
+            if intervals and x - intervals[-1][1] <= 1e-9:
+                intervals[-1] = (intervals[-1][0], next_x)
+            else:
+                intervals.append((x, next_x))
+    return tuple(intervals)
+
+
+def _bounded_scan_has_serialized_motion(
+    polygons: tuple[tuple[tuple[float, float], ...], ...],
+    layer: OperationLayer,
+    serialized_design_point: Callable[
+        [tuple[float, float]], tuple[float, float] | None
+    ],
+    *,
+    fill_rule: PathFillRule,
+) -> bool | None:
+    """Classify exact linear scan spans, or defer when bounded work is exceeded."""
+    interval = _finite_number(layer.line_interval_mm)
+    angle_degrees = _finite_number(layer.scan_angle_deg)
+    if interval is None or interval <= 0.0 or angle_degrees is None:
+        return None
+    angle = math.radians(angle_degrees)
+    cosine = math.cos(angle)
+    sine = math.sin(angle)
+    scan_polygons = tuple(
+        tuple(
+            (
+                point[0] * cosine + point[1] * sine,
+                -point[0] * sine + point[1] * cosine,
+            )
+            for point in polygon
+        )
+        for polygon in polygons
+    )
+    if not scan_polygons or any(len(polygon) < 2 for polygon in scan_polygons):
+        return False
+    scan_points = tuple(point for polygon in scan_polygons for point in polygon)
+    y_min = min(point[1] for point in scan_points)
+    y_max = max(point[1] for point in scan_points)
+    scaled_first_y = (y_min - 1e-9) / interval
+    if not math.isfinite(scaled_first_y):
+        return None
+    first_y = math.ceil(scaled_first_y) * interval
+    if first_y > y_max + 1e-9:
+        return False
+    scaled_row_count = (y_max + 1e-9 - first_y) / interval
+    if not math.isfinite(scaled_row_count):
+        return None
+    row_count = int(math.floor(scaled_row_count)) + 1
+    edge_count = sum(max(0, len(polygon) - 1) for polygon in scan_polygons)
+    if row_count * edge_count > _STRUCTURED_SCAN_EDGE_TEST_LIMIT:
+        return None
+
+    for row in range(row_count):
+        y = first_y + row * interval
+        for start_x, end_x in _scanline_x_intervals(
+            scan_polygons,
+            y,
+            fill_rule,
+        ):
+            start = (start_x * cosine - y * sine, start_x * sine + y * cosine)
+            end = (end_x * cosine - y * sine, end_x * sine + y * cosine)
+            serialized_start = serialized_design_point(start)
+            serialized_end = serialized_design_point(end)
+            if serialized_start is None or serialized_end is None:
+                return None
+            if serialized_start != serialized_end:
+                return True
+    return False
 
 
 def _bounds_from_points(points: tuple[tuple[float, float], ...]) -> Bounds:
@@ -326,6 +517,189 @@ def _simple_object_bounds(item: SceneObject) -> Bounds | None:
             return None
         return _bounds_from_points(transformed)
     return None
+
+
+def _object_has_potential_nonzero_output(
+    item: SceneObject,
+    layer: OperationLayer,
+    document: ProjectDocument,
+    context: JobPreflightContext,
+) -> bool | None:
+    """Prove serialized motion, prove none, or defer to exact generation."""
+    if not _valid_transform(item)[0]:
+        # Invalid transforms are reported separately and must not suppress a
+        # layer-level configuration finding.
+        return True
+
+    def controller_design(
+        design_point: tuple[float, float],
+    ) -> tuple[float, float] | None:
+        design_x, design_y = design_point
+        if document.coordinate_space is CoordinateSpace.MACHINE:
+            machine_x, machine_y = design_x, design_y
+        elif document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL:
+            frame = context.coordinate_frame
+            if frame is None:
+                return None
+            try:
+                machine_x, machine_y = frame.local_to_machine(design_x, design_y)
+            except (AttributeError, TypeError, ValueError):
+                return None
+        else:
+            return None
+        controller_point = (
+            machine_x - context.spot_offset_x_mm,
+            machine_y - context.spot_offset_y_mm,
+        )
+        if not all(math.isfinite(value) for value in controller_point):
+            return None
+        return controller_point
+
+    def controller(point: tuple[float, float]) -> tuple[float, float] | None:
+        return controller_design(_transform_point(item, *point))
+
+    def serialized_design(
+        design_point: tuple[float, float],
+    ) -> tuple[float, float] | None:
+        result = controller_design(design_point)
+        if result is None:
+            return None
+        return (
+            _serialized_coordinate_mm(result[0]),
+            _serialized_coordinate_mm(result[1]),
+        )
+
+    def serialized(point: tuple[float, float]) -> tuple[float, float] | None:
+        return serialized_design(_transform_point(item, *point))
+
+    if item.kind in {ObjectKind.RECTANGLE, ObjectKind.ELLIPSE}:
+        local_outline = _primitive_local_outline(item)
+        if local_outline is None:
+            # Malformed geometry is reported elsewhere; remain conservative.
+            return True
+        outline = tuple(serialized(point) for point in local_outline)
+        if any(point is None for point in outline):
+            return True
+        serialized_outline = tuple(point for point in outline if point is not None)
+        if layer.mode is LayerMode.LINE:
+            return any(
+                first != second
+                for first, second in zip(
+                    serialized_outline[:-1],
+                    serialized_outline[1:],
+                    strict=True,
+                )
+            )
+        if layer.mode in {LayerMode.FILL, LayerMode.RASTER}:
+            design_outline = tuple(
+                _transform_point(item, *point) for point in local_outline
+            )
+            return _bounded_scan_has_serialized_motion(
+                (design_outline,),
+                layer,
+                serialized_design,
+                fill_rule=PathFillRule.EVENODD,
+            )
+        return True
+
+    if item.kind is ObjectKind.LINE:
+        points = item.geometry.get("points")
+        if not isinstance(points, list) or len(points) != 2:
+            return True
+        try:
+            endpoints = tuple(
+                serialized((float(point[0]), float(point[1]))) for point in points
+            )
+        except (TypeError, ValueError, IndexError):
+            return True
+        return None in endpoints or endpoints[0] != endpoints[1]
+
+    if item.kind is ObjectKind.IMAGE:
+        # Structured preflight intentionally does not decode raster pixels, so
+        # it cannot distinguish a powered image from an all-white asset. Exact
+        # generation remains authoritative after bounded asset checks.
+        return None
+
+    if item.kind not in {ObjectKind.PATH, ObjectKind.POLYGON}:
+        return True
+
+    try:
+        geometry = item.path_geometry()
+    except (TypeError, ValueError):
+        # Preserve the independent malformed-geometry blocker and remain
+        # conservative about the affected layer.
+        return True
+
+    def differs(first: tuple[float, float], second: tuple[float, float]) -> bool:
+        first_point = serialized(first)
+        second_point = serialized(second)
+        if first_point is None or second_point is None:
+            return True
+        first_x, first_y = first_point
+        second_x, second_y = second_point
+        return (
+            math.hypot(second_x - first_x, second_y - first_y)
+            > _NONZERO_OUTPUT_TOLERANCE_MM
+        )
+
+    if layer.mode in {LayerMode.FILL, LayerMode.RASTER}:
+        if any(
+            isinstance(segment, PathCubicSegment)
+            for subpath in geometry.subpaths
+            for segment in subpath.segments
+        ):
+            # Curves require the exact bounded flattener. Defer their mapping
+            # decision instead of treating un-emitted controls as output.
+            return None
+        polygons: list[tuple[tuple[float, float], ...]] = []
+        for subpath in geometry.subpaths:
+            if not subpath.closed:
+                continue
+            points = [_transform_point(item, *subpath.start)]
+            for segment in subpath.segments:
+                if not isinstance(segment, PathLineSegment):  # pragma: no cover
+                    return None
+                points.append(_transform_point(item, *segment.to))
+            if points[-1] != points[0]:
+                points.append(points[0])
+            polygons.append(tuple(points))
+        return _bounded_scan_has_serialized_motion(
+            tuple(polygons),
+            layer,
+            serialized_design,
+            fill_rule=geometry.fill_rule,
+        )
+
+    if layer.mode is not LayerMode.LINE:
+        # Invalid/unknown modes are reported independently; keep their output
+        # configuration diagnosis conservative.
+        return True
+
+    deferred = False
+    for subpath in geometry.subpaths:
+        current = subpath.start
+        for segment in subpath.segments:
+            if isinstance(segment, PathLineSegment):
+                if differs(current, segment.to):
+                    return True
+            elif isinstance(segment, PathCubicSegment):
+                if differs(current, segment.to):
+                    return True
+                if not (
+                    segment.control_1 == current
+                    and segment.control_2 == current
+                    and segment.to == current
+                ):
+                    # Control-only excursions may disappear at the exact
+                    # flattening tolerance or may produce intermediate points.
+                    # Only exact generation can distinguish those cases.
+                    deferred = True
+            else:  # pragma: no cover - validated native geometry is exhaustive
+                return True
+            current = segment.to
+        if subpath.closed and differs(current, subpath.start):
+            return True
+    return None if deferred else False
 
 
 def _image_scan_counts(item: SceneObject, layer: OperationLayer) -> tuple[int, int]:
@@ -845,6 +1219,46 @@ def build_job_preflight_report(
             PreflightSeverity.BLOCKER,
             "No enabled output geometry",
             "The project contains no visible output object on an enabled visible layer.",
+        )
+
+    enabled_geometry_layer_ids = {
+        layer.id
+        for item, layer in enabled_pairs
+        if _object_has_potential_nonzero_output(item, layer, document, context) is True
+    }
+    powered_air_assist_layers: list[OperationLayer] = []
+    if power_max_valid:
+        for layer in layers:
+            power_percent = _finite_number(layer.power_percent)
+            if (
+                layer.id in enabled_geometry_layer_ids
+                and layer.air_assist is True
+                and power_percent is not None
+                and 0.0 <= power_percent <= 100.0
+                and int(
+                    round(
+                        context.controller_power_max
+                        * power_percent
+                        / 100.0
+                    )
+                )
+                > 0
+            ):
+                powered_air_assist_layers.append(layer)
+    if powered_air_assist_layers and context.air_assist_commands is None:
+        add(
+            "air_assist.output_unconfigured",
+            PreflightSeverity.BLOCKER,
+            "Air Assist output not configured",
+            "Powered operations request Air Assist, but this machine has no "
+            "configured Air Assist output. Configure it in Machine Manager "
+            "before generating the job.",
+            finding_context={
+                "layer_ids": tuple(layer.id for layer in powered_air_assist_layers),
+                "layer_names": tuple(
+                    layer.name for layer in powered_air_assist_layers
+                ),
+            },
         )
 
     work_feed_limit = _finite_number(context.machine_max_work_feed_mm_min)

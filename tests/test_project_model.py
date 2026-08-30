@@ -270,6 +270,29 @@ def test_layer_power_correction_defaults_and_round_trip() -> None:
     assert OperationLayer.from_dict(layer.to_dict()).to_dict() == layer.to_dict()
 
 
+@pytest.mark.parametrize("air_assist", [False, True])
+def test_layer_air_assist_round_trips_without_a_second_project_field(
+    air_assist: bool,
+) -> None:
+    layer = OperationLayer(air_assist=air_assist)
+
+    payload = layer.to_dict()
+    restored = OperationLayer.from_dict(payload)
+
+    assert payload["air_assist"] is air_assist
+    assert restored.air_assist is air_assist
+    assert restored.to_dict() == payload
+
+
+def test_legacy_layer_without_air_assist_defaults_off() -> None:
+    legacy = OperationLayer(air_assist=True).to_dict()
+    legacy.pop("air_assist")
+
+    restored = OperationLayer.from_dict(legacy)
+
+    assert restored.air_assist is False
+
+
 @pytest.mark.parametrize(
     ("field", "value"),
     [

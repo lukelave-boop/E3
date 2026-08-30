@@ -76,17 +76,25 @@ emission has stopped or that the area is safe to enter.
 - A successful powered serial job automatically issues `M5`, waits behind all
   accepted toolpath motion, homes, parks at the configured camera pose, waits
   for that move to finish, restores the normal GRBL step-idle delay if
-  necessary, and releases the motors. It does not change
-  fan or coolant state. Keep the complete homing and parking path clear until
-  the job reports completion. Stops, job failures, emergency actions,
-  disconnects, and zero-power jobs do not initiate this convenience motion.
+  necessary, and releases the motors. When the saved machine has an explicit
+  Air Assist mapping, the immutable generated program starts with laser and
+  assist off, enables full output only for powered layers that request it, and
+  issues `M5` before its final assist-off command. The controller-side service
+  additionally acknowledges its own `M5` then immutable assist-off prelude
+  before line 1 and repeats that order before completion motion. Keep the
+  complete homing and parking path clear until the job reports completion.
+  Stops, job failures, emergency actions, disconnects, and zero-power jobs do
+  not initiate this convenience motion.
   For a START-accepted Pi-owned job this complete stream and completion sequence
   run on the Pi and therefore do not depend on the Windows connection. Closing
   the monitoring client is not a job disconnect. Explicit STOP prevents normal
-  completion motion and attempts the configured controller stop plus `M5`.
+  completion motion and attempts the configured controller stop plus `M5`, then
+  the configured Air Assist off command without delaying laser STOP priority.
   Detected execution/controller failures halt further streaming and attempt a
-  best-effort `M5`; sudden Pi process or power failure can prevent all software
-  cleanup.
+  best-effort `M5` followed by configured Air Assist off; sudden controller, Pi
+  process, or power failure can prevent all software cleanup. Loss of a Windows
+  monitoring client after Pi START acceptance is not a controller disconnect
+  and does not interrupt the Pi-owned program or its Air Assist state.
 - On GRBL, Home / park records the active `G54`-`G59` and `G92` offsets. Every
   subsequent absolute-motion job re-reads them and is blocked if they changed
   after the parked camera alignment. This detects coordinate-state drift but
@@ -243,4 +251,4 @@ The C920 is not a laser power sensor or a protective viewing system. Direct or s
 
 ## Emergency behavior
 
-In an actual emergency, use the hardware emergency stop or disconnect power. The red software stop sends controller-specific reset/stop commands and `M5`, but software and serial delivery can fail.
+In an actual emergency, use the hardware emergency stop or disconnect power. The red software stop sends controller-specific reset/stop commands and `M5`, then attempts the configured Air Assist off command, but software and serial delivery can fail. Neither control is safety-rated.

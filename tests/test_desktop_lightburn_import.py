@@ -14,9 +14,17 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop widget te
 
 from PySide6 import QtWidgets
 
+from laser_aligner.air_assist import AirAssistCommands, AirAssistMode
+from laser_aligner.config import LaserSettings
 from laser_aligner.desktop import main_window as main_window_module
 from laser_aligner.desktop.main_window import E3MainWindow
-from laser_aligner.project import CommandStack, ProjectDocument, SceneObject
+from laser_aligner.desktop.panels import LayerPanel
+from laser_aligner.project import (
+    CommandStack,
+    ProjectDocument,
+    SceneObject,
+    generate_project_gcode,
+)
 
 
 @pytest.fixture(scope="module")
@@ -94,7 +102,7 @@ def test_desktop_import_adds_one_undoable_output_disabled_project(
     filename.write_text(
         """
         <LightBurnProject AppVersion="1.7.08">
-          <CutSetting type="Cut"><index Value="0"/><speed Value="10"/><maxPower Value="80"/></CutSetting>
+          <CutSetting type="Cut"><index Value="0"/><speed Value="10"/><maxPower Value="80"/><airAssist Value="1"/></CutSetting>
           <Shape Type="Rect" CutIndex="0" W="20" H="10"><XForm>1 0 0 1 40 30</XForm></Shape>
         </LightBurnProject>
         """,
@@ -155,6 +163,7 @@ def test_desktop_import_adds_one_undoable_output_disabled_project(
     imported_layers = [layer for layer in harness.document.layers if layer.id not in initial_layer_ids]
     assert len(imported_layers) == 1
     assert imported_layers[0].output_enabled is False
+    assert imported_layers[0].air_assist is True
     assert harness.document.objects[0].layer_id == imported_layers[0].id
     assert harness.history.can_undo
     assert harness.history.depth == 1
@@ -164,6 +173,35 @@ def test_desktop_import_adds_one_undoable_output_disabled_project(
     assert harness.selection_tool_activations == [False]
     imported_active_layer_id = imported_layers[0].id
     assert harness.active_layer_id == imported_active_layer_id
+    panel = LayerPanel()
+    panel.set_document(harness.document, imported_active_layer_id)
+    assert panel.air_assist_check.isChecked()
+    assert not panel.output_check.isChecked()
+    panel.close()
+    panel.deleteLater()
+
+    reviewed_document = harness.document.clone()
+    reviewed_layer = reviewed_document.get_layer(imported_active_layer_id)
+    reviewed_layer.output_enabled = True
+    commands = AirAssistCommands(
+        mode=AirAssistMode.GRBL_COOLANT,
+        protocol="grbl",
+        fan_index=None,
+        on_commands=("M8",),
+        off_commands=("M9",),
+    )
+    job = generate_project_gcode(
+        reviewed_document,
+        LaserSettings(),
+        air_assist_commands=commands,
+    )
+    lines = job.text.splitlines()
+    assert "M8" in lines
+    assert lines.count("M9") >= 2
+    assert lines.index("M9") < lines.index("M8") < len(lines) - 1
+    assert max(index for index, line in enumerate(lines) if line == "M9") > lines.index(
+        "M8"
+    )
 
     harness.history.undo()
     assert harness.document.objects == []

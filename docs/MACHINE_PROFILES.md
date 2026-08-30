@@ -61,6 +61,16 @@ of its concrete `MachineSettings` and `LaserSettings`. This allows two machines
 based on the same profile to retain different ports, work areas, speeds,
 offsets, physical honeycomb spans, and calibration/camera bindings.
 
+`MachineSettings.air_assist` is the machine-owned translation from the existing
+binary `OperationLayer.air_assist` project setting to a trusted controller
+output. Its constrained modes are `disabled`, GRBL coolant (`M8` / `M9`), and
+Marlin fan (`M106 P<n> S255` / `M107 P<n>`). Marlin stores a validated fan
+index; there is no percentage because an enabled operation always requests the
+configured output at 100%. An enabled mapping requires an explicit matching
+`grbl` or `marlin` protocol. E3 rejects `auto`, a mismatched protocol, an
+unknown mode, or an out-of-range channel instead of guessing hardware or
+accepting arbitrary G-code strings.
+
 `MachineSettings.honeycomb_span_mm` is optional machine-specific physical setup
 data. `null` means not configured; a configured value must be a finite positive
 number. Built-in profiles, including Creality Ender-3 S1 Pro, leave it `null`.
@@ -163,6 +173,11 @@ startup, but this preserves existing behavior rather than granting new
 authority: the normal hardware, motion, coordinate, preflight, arming, and
 program gates still apply.
 
+Configurations and saved-machine records created before Air Assist support
+load with the deterministic `disabled` mapping and fan index 0. Existing
+projects retain their serialized per-layer Boolean; no project-schema migration
+or second Air Assist field is introduced.
+
 ## Built-in starting profiles
 
 Machine profiles:
@@ -188,6 +203,19 @@ laser arming before output.
 This increment does not add another controller path. `MachineService` remains
 the only normal controller route, and all existing STOP, disconnect, coordinate
 trust, bounds, preflight, motion, and arming behavior remains in place.
+
+When a powered output layer requests Air Assist, exact generation requires a
+usable mapping. Structured preflight blocks a missing mapping whenever it can
+prove powered serialized motion; ambiguous curved or bounded-work cases defer
+to the same fail-closed exact generator. Preview and START cannot silently omit
+the requested output or substitute a controller command. Exact ON/OFF commands
+are part of the finalized program and therefore
+its digest and Pi-owned execution. Configured generated jobs begin fail-off,
+keep assist active across paths and passes that need it, and turn the laser off
+before assist shutdown. STOP, failure, normal completion, and controller
+disconnect attempt the configured OFF command after retaining laser-off/STOP
+priority. These software actions are not safety-rated and cannot guarantee
+delivery after controller, process, network-node, or power failure.
 
 Creating or selecting a saved machine performs no hardware action. New
 profile-derived instances begin without motion permission or positive laser
@@ -238,6 +266,13 @@ identity changes and applying built-in machine profile defaults leave an
 existing measured value untouched; no profile supplies 191 mm or any other
 inferred physical measurement. The operator can still clear it explicitly and
 save the machine.
+
+Under the controller connection settings, **Air assist output** selects
+**Disabled**, **GRBL coolant (M8/M9)**, or **Marlin fan**. Marlin mode exposes a
+fan/channel index. Machine Manager persists this for the next launch; it does
+not hot-swap the immutable current runtime or contact the controller. The
+ordinary Cuts / Layers editor remains machine-neutral and shows only the
+per-operation **Air assist** checkbox.
 
 `BUILD_E3_HOME_INSTALLER.bat` builds a private preconfigured installer from the
 current Windows E3 user-state directory. The private installer seeds:

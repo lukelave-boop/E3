@@ -32,9 +32,11 @@ is ownership-uncertain and must be resolved by querying that exact UUID. After
 durable acceptance, closing Windows, losing Wi-Fi/TCP, sleeping the laptop, or
 disconnecting a monitor does not stop a healthy job. Network presence is not a
 run-enable heartbeat. Explicit STOP attempts the configured controller stop plus
-`M5`. A detected local execution/controller failure halts further Pi streaming
-and attempts a best-effort `M5`; sudden Pi process or power failure can prevent
-cleanup and result persistence. No interrupted job auto-resumes.
+`M5`, then the configured Air Assist off command. A detected local
+execution/controller failure halts further Pi streaming and attempts the same
+best-effort laser-off then assist-off cleanup; sudden Pi process or power
+failure can prevent cleanup and result persistence. No interrupted job
+auto-resumes.
 
 Before START, an explicit desktop **Disconnect** advances the Windows facade's
 operation generation so queued or in-flight preparation cannot later reach
@@ -83,7 +85,9 @@ call.
 The Windows and Pi saved configurations must both specify the same explicit
 `grbl` or `marlin` dialect and the same work area, guarded output authority,
 motion/feed limits, laser power/mode/offset, Home/park behavior, and other safety
-profile values. `protocol = auto` remains available for direct local serial, but
+profile values, including the exact Air Assist mode and Marlin fan index when
+configured. `protocol = auto` remains available for direct local serial only
+when Air Assist is disabled, but
 remote controller/upload/monitor operations reject it before network access
 because it cannot bind one unambiguous Pi execution policy. No saved profile,
 dialect, transport, or authenticated session grants execution authority by
@@ -114,23 +118,26 @@ physically re-verified on GRBL, Marlin, Raspberry Pi serial hardware, or a laser
 The node is experimental software, not a safety-rated control. The physical
 emergency stop, enclosure/interlock, extraction, fire precautions, and operator
 presence remain mandatory. An authenticated monitoring-client disconnect has no
-machine action after START acceptance: it sends no feed hold, reset, or `M5`, and
-the Pi runner completes locally. This is intentional network independence, not
+machine action after START acceptance: it sends no feed hold, reset, `M5`, or
+Air Assist command, and the Pi runner continues the immutable finalized program
+and completes its local cleanup. This is intentional network independence, not
 permission for unattended operation.
 
 A connected red STOP remains effective through `job.stop`. For GRBL an emergency
 STOP retains realtime feed-hold/reset policy followed by `M5`; the ordinary stop
 path latches cancellation and attempts `M5`. Marlin uses its configured dialect
-policy. STOP does not wait behind a command ACK or ordinary store operation, but
+policy. A configured Air Assist off command follows `M5` without moving STOP
+behind a command ACK or ordinary store operation, but
 network, Pi, USB, serial, controller, or power failure can still prevent delivery.
 Use the physical emergency stop in an actual emergency.
 
 Controller rejection/alarm, serial write/read failure, acknowledgement timeout,
 corrupt committed bytes, local runner exception, and required completion-cleanup
-failure stop further streaming, attempt a best-effort `M5`, record failure while
-the service remains alive, and invalidate controller trust as applicable. No job
-resumes automatically after controller loss. Reconnect and Home/park are required
-before later motion or arming.
+failure stop further streaming, attempt a best-effort `M5` followed by configured
+Air Assist off, record failure while the service remains alive, and invalidate
+controller trust as applicable. No job resumes
+automatically after controller loss. Reconnect and Home/park are required before
+later motion or arming.
 
 On Pi service startup, persisted `starting`, `running`, or `stopping` metadata is
 atomically changed to `interrupted`; execution authorization is not restored and
@@ -271,8 +278,8 @@ an intentional opt-in and should be used only on the trusted machine network.
 
 Start from the same current hardware profile that contains the machine's real
 work area, guarded output polygon, photo pose, feed ceilings, laser spot offset,
-camera resolution, controls, and precision-capture values. Do **not** replace
-those values with generic examples.
+camera resolution, controls, precision-capture values, and Air Assist mapping.
+Do **not** replace those values with generic examples.
 
 On the Windows copy, change only the hardware endpoints:
 
@@ -294,6 +301,14 @@ Use `marlin` only when both sides are the matching verified Marlin profile.
 `auto` is rejected for the remote job path. Every remaining safety-relevant
 value must match the current Pi machine profile; changing only the endpoint is
 the normal deployment pattern.
+
+For a physically verified indexed Marlin toolhead fan, both complete
+configurations must retain, for example,
+`"air_assist": {"mode": "marlin_fan", "fan_index": n}` together with
+`"protocol": "marlin"`. This produces `M106 Pn S255` and `M107 Pn`. A GRBL
+machine may instead use `"mode": "grbl_coolant"` with explicit `grbl`, producing
+`M8` and `M9`, only when that physical mapping has been verified. The repository
+example stays disabled because it cannot identify the attached firmware output.
 
 In PowerShell, set the secret for the E3 process and start the one normal,
 hardware-capable desktop. Startup does not connect automatically; keep motion

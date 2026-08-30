@@ -1,5 +1,7 @@
 {
   "acceleration_mm_s2": 500.0,
+  "air_assist_commands": null,
+  "air_assist_events": [],
   "bounds_mm": [
     2.0,
     -3.0,
@@ -12,6 +14,7 @@
   "maximum_power": 300.0,
   "moves": [
     {
+      "air_assist": false,
       "distance_mm": 50.276564580329,
       "duration_seconds": 1.105531291607,
       "end_seconds": 1.105531291607,
@@ -37,6 +40,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 30.000463063093,
       "duration_seconds": 1.540023153155,
       "end_seconds": 2.645554444761,

@@ -3,10 +3,14 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 
+import cv2
+import numpy as np
 import pytest
 
+from laser_aligner.air_assist import AirAssistCommands, AirAssistMode
 from laser_aligner.calibration.support import HoneycombCoordinateFrame
-from laser_aligner.config import LaserSettings, WorkArea
+from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
+from laser_aligner.errors import SafetyError
 from laser_aligner.machine.service import MachineService
 from laser_aligner.project import job_preflight as preflight_module
 from laser_aligner.project import raster_asset as raster_asset_module
@@ -28,6 +32,7 @@ from laser_aligner.project.model import (
 from laser_aligner.project.path_geometry import (
     NativePathGeometry,
     PathCubicSegment,
+    PathLineSegment,
     PathSubpath,
 )
 from laser_aligner.project.planner_limits import MAX_RASTER_SAMPLES
@@ -108,6 +113,698 @@ def test_zero_power_and_known_execution_unready_are_warning_only() -> None:
         finding.severity is not PreflightSeverity.BLOCKER
         for finding in report.findings
     )
+
+
+def test_powered_air_assist_request_requires_configured_machine_output() -> None:
+    document = _rectangle_document()
+    layer = document.layers[0]
+    layer.air_assist = True
+
+    report = build_job_preflight_report(document, _context())
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "air_assist.output_unconfigured"
+    )
+    assert finding.severity is PreflightSeverity.BLOCKER
+    assert finding.title == "Air Assist output not configured"
+    assert finding.context["layer_ids"] == (layer.id,)
+    assert finding.context["layer_names"] == (layer.name,)
+
+
+def test_configured_air_assist_output_satisfies_powered_request() -> None:
+    document = _rectangle_document()
+    document.layers[0].air_assist = True
+    commands = AirAssistCommands(
+        mode=AirAssistMode.GRBL_COOLANT,
+        protocol="grbl",
+        fan_index=None,
+        on_commands=("M8",),
+        off_commands=("M9",),
+    )
+
+    report = build_job_preflight_report(
+        document,
+        _context(air_assist_commands=commands),
+    )
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    assert report.ready
+
+
+@pytest.mark.parametrize(
+    ("power_percent", "layer_output", "layer_visible", "object_visible"),
+    (
+        (0.0, True, True, True),
+        (20.0, False, True, True),
+        (20.0, True, False, True),
+        (20.0, True, True, False),
+    ),
+)
+def test_air_assist_mapping_is_not_required_without_powered_visible_output(
+    power_percent: float,
+    layer_output: bool,
+    layer_visible: bool,
+    object_visible: bool,
+) -> None:
+    document = _rectangle_document(power_percent=power_percent)
+    layer = document.layers[0]
+    layer.air_assist = True
+    layer.output_enabled = layer_output
+    layer.visible = layer_visible
+    document.objects[0].visible = object_visible
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+
+
+def test_coincident_line_does_not_require_air_assist_mapping() -> None:
+    document = ProjectDocument.new("Coincident line", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    line = SceneObject.line(layer.id, center=_DEFAULT_AREA.center)
+    line.geometry["points"] = [[0.0, 0.0], [0.0, 0.0]]
+    document.objects.append(line)
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+
+
+def test_coincident_imported_path_does_not_require_air_assist_mapping() -> None:
+    document = ProjectDocument.new("Coincident path", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.path(
+            layer.id,
+            ({"points": [[10.0, 10.0], [10.0, 10.0]], "closed": False},),
+            center=_DEFAULT_AREA.center,
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+
+
+@pytest.mark.parametrize("kind", [ObjectKind.LINE, ObjectKind.PATH])
+def test_sub_micron_serialized_vector_does_not_require_air_mapping(
+    kind: ObjectKind,
+) -> None:
+    document = ProjectDocument.new("Serialized coincident", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    transform = Transform(50.0, 50.0, 10.0, 1.0)
+    if kind is ObjectKind.LINE:
+        item = SceneObject(
+            name="Tiny line",
+            kind=kind,
+            layer_id=layer.id,
+            transform=transform,
+            geometry={"points": [[0.0, 0.0], [0.00001, 0.0]]},
+        )
+    else:
+        item = SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (PathLineSegment((0.00001, 0.0)),),
+                    ),
+                )
+            ),
+            transform=transform,
+        )
+    document.objects.append(item)
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+
+
+@pytest.mark.parametrize("kind", [ObjectKind.LINE, ObjectKind.PATH])
+def test_one_micron_serialized_vector_still_requires_air_mapping(
+    kind: ObjectKind,
+) -> None:
+    document = ProjectDocument.new("Serialized motion", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    transform = Transform(50.0, 50.0, 10.0, 1.0)
+    if kind is ObjectKind.LINE:
+        item = SceneObject(
+            name="One micron line",
+            kind=kind,
+            layer_id=layer.id,
+            transform=transform,
+            geometry={"points": [[0.0, 0.0], [0.0001, 0.0]]},
+        )
+    else:
+        item = SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (PathLineSegment((0.0001, 0.0)),),
+                    ),
+                )
+            ),
+            transform=transform,
+        )
+    document.objects.append(item)
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" in _codes(report)
+
+
+@pytest.mark.parametrize("kind", [ObjectKind.RECTANGLE, ObjectKind.ELLIPSE])
+@pytest.mark.parametrize("mode", [LayerMode.LINE, LayerMode.FILL, LayerMode.RASTER])
+def test_sub_micron_primitive_has_no_serialized_powered_output(
+    kind: ObjectKind,
+    mode: LayerMode,
+) -> None:
+    document = ProjectDocument.new("Tiny primitive", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = mode
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    constructor = (
+        SceneObject.rectangle if kind is ObjectKind.RECTANGLE else SceneObject.ellipse
+    )
+    document.objects.append(
+        constructor(
+            layer.id,
+            center=_DEFAULT_AREA.center,
+            width_mm=0.0001,
+            height_mm=0.0001,
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+    job = toolpath_module.generate_project_gcode(document, LaserSettings())
+    validated = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            work_area=_DEFAULT_AREA,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    ).preflight_program(job.text)
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    assert "\nM8\n" not in job.text
+    assert not any(
+        line.partition(";")[0].strip().startswith(("M3", "M4"))
+        for line in job.text.splitlines()
+    )
+    assert job.plan is not None and not job.plan.powered
+    assert not validated.requires_laser_authorization
+
+
+@pytest.mark.parametrize("kind", [ObjectKind.RECTANGLE, ObjectKind.ELLIPSE])
+@pytest.mark.parametrize("mode", [LayerMode.FILL, LayerMode.RASTER])
+def test_sub_scanline_primitive_defers_no_rows_without_air_mapping(
+    kind: ObjectKind,
+    mode: LayerMode,
+) -> None:
+    document = ProjectDocument.new("Sub-scanline primitive", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = mode
+    layer.line_interval_mm = 0.2
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    constructor = (
+        SceneObject.rectangle if kind is ObjectKind.RECTANGLE else SceneObject.ellipse
+    )
+    document.objects.append(
+        constructor(
+            layer.id,
+            center=(50.0, 50.0002),
+            width_mm=10.0,
+            height_mm=0.0001,
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    with pytest.raises(ValueError, match=rf"{mode.value.title()} produced no scanlines"):
+        toolpath_module.generate_project_gcode(document, LaserSettings())
+
+
+@pytest.mark.parametrize("kind", [ObjectKind.RECTANGLE, ObjectKind.ELLIPSE])
+@pytest.mark.parametrize("mode", [LayerMode.FILL, LayerMode.RASTER])
+def test_aligned_thin_primitive_proves_serialized_scan_span(
+    kind: ObjectKind,
+    mode: LayerMode,
+) -> None:
+    document = ProjectDocument.new("Aligned thin primitive", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = mode
+    layer.line_interval_mm = 0.2
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    constructor = (
+        SceneObject.rectangle if kind is ObjectKind.RECTANGLE else SceneObject.ellipse
+    )
+    document.objects.append(
+        constructor(
+            layer.id,
+            center=(50.0, 50.0),
+            width_mm=10.0,
+            height_mm=0.0001,
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" in _codes(report)
+    with pytest.raises(SafetyError, match="no resolved air-assist command mapping"):
+        toolpath_module.generate_project_gcode(document, LaserSettings())
+
+
+@pytest.mark.parametrize("mode", [LayerMode.FILL, LayerMode.RASTER])
+def test_sub_scanline_linear_native_path_has_no_air_mapping_blocker(
+    mode: LayerMode,
+) -> None:
+    document = ProjectDocument.new("Sub-scanline native path", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = mode
+    layer.line_interval_mm = 0.2
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (-0.5, -0.5),
+                        (
+                            PathLineSegment((0.5, -0.5)),
+                            PathLineSegment((0.5, 0.5)),
+                            PathLineSegment((-0.5, 0.5)),
+                        ),
+                        closed=True,
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0002, 10.0, 0.0001),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    with pytest.raises(ValueError, match=rf"{mode.value.title()} produced no scanlines"):
+        toolpath_module.generate_project_gcode(document, LaserSettings())
+
+
+@pytest.mark.parametrize(
+    ("center_x", "spot_offset_x", "baseline_requires_mapping", "requires_mapping"),
+    [
+        pytest.param(50.0004, 0.0004, True, False, id="offset-collapses-step"),
+        pytest.param(50.0, -0.0004, False, True, id="offset-creates-step"),
+    ],
+)
+def test_spot_offset_controls_serialized_motion_classification(
+    center_x: float,
+    spot_offset_x: float,
+    baseline_requires_mapping: bool,
+    requires_mapping: bool,
+) -> None:
+    document = ProjectDocument.new("Offset threshold", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject(
+            name="Threshold line",
+            kind=ObjectKind.LINE,
+            layer_id=layer.id,
+            transform=Transform(center_x, 50.0, 10.0, 1.0),
+            geometry={"points": [[0.0, 0.0], [0.00004, 0.0]]},
+        )
+    )
+
+    baseline = build_job_preflight_report(document, _context())
+    report = build_job_preflight_report(
+        document,
+        _context(spot_offset_x_mm=spot_offset_x),
+    )
+
+    assert (
+        "air_assist.output_unconfigured" in _codes(baseline)
+    ) is baseline_requires_mapping
+    assert (
+        "air_assist.output_unconfigured" in _codes(report)
+    ) is requires_mapping
+    laser = LaserSettings(spot_offset_x_mm=spot_offset_x)
+    if requires_mapping:
+        with pytest.raises(SafetyError, match="no resolved air-assist command mapping"):
+            toolpath_module.generate_project_gcode(document, laser)
+    else:
+        job = toolpath_module.generate_project_gcode(document, laser)
+        assert "\nM8\n" not in job.text
+        assert job.plan is not None and not job.plan.powered
+
+
+@pytest.mark.parametrize(
+    ("center_x", "frame_origin_y", "requires_mapping"),
+    [
+        pytest.param(50.0004, -0.0004, False, id="frame-collapses-step"),
+        pytest.param(50.0, 0.0004, True, id="frame-creates-step"),
+    ],
+)
+def test_honeycomb_controller_transform_controls_serialized_motion(
+    center_x: float,
+    frame_origin_y: float,
+    requires_mapping: bool,
+) -> None:
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(100.0, frame_origin_y),
+        x_axis_machine=(0.0, 1.0),
+        y_axis_machine=(-1.0, 0.0),
+        width_mm=100.0,
+        height_mm=100.0,
+        provenance_digest="ab" * 32,
+    )
+    document = ProjectDocument.new(
+        "Honeycomb threshold",
+        work_area=_DEFAULT_AREA,
+        coordinate_space=CoordinateSpace.HONEYCOMB_LOCAL,
+    )
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject(
+            name="Threshold line",
+            kind=ObjectKind.LINE,
+            layer_id=layer.id,
+            transform=Transform(center_x, 50.0, 10.0, 1.0),
+            geometry={"points": [[0.0, 0.0], [0.00004, 0.0]]},
+        )
+    )
+    machine_area = Bounds(-1.0, -1.0, 101.0, 101.0)
+    context = _context(
+        machine_area,
+        coordinate_frame=frame,
+        honeycomb_execution_signature=(*frame.provenance_signature, "cd" * 32),
+        expected_calibration_profile_id="camera-a",
+        active_calibration_profile_id="camera-a",
+        bed_calibration_state="VALID",
+        honeycomb_support_state="CURRENT",
+    )
+
+    report = build_job_preflight_report(document, context)
+
+    assert (
+        "air_assist.output_unconfigured" in _codes(report)
+    ) is requires_mapping
+    if requires_mapping:
+        with pytest.raises(SafetyError, match="no resolved air-assist command mapping"):
+            toolpath_module.generate_project_gcode(
+                document,
+                LaserSettings(),
+                coordinate_frame=frame,
+                machine_work_area=machine_area,
+            )
+    else:
+        job = toolpath_module.generate_project_gcode(
+            document,
+            LaserSettings(),
+            coordinate_frame=frame,
+            machine_work_area=machine_area,
+        )
+        assert "\nM8\n" not in job.text
+        assert job.plan is not None and not job.plan.powered
+
+
+def test_coincident_closed_polygon_does_not_require_air_assist_mapping() -> None:
+    document = ProjectDocument.new("Coincident polygon", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = LayerMode.FILL
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    geometry = NativePathGeometry(
+        (
+            PathSubpath(
+                (0.0, 0.0),
+                (PathLineSegment((0.0, 0.0)),),
+                closed=True,
+            ),
+        )
+    )
+    document.objects.append(
+        SceneObject(
+            name="Coincident polygon",
+            kind=ObjectKind.POLYGON,
+            layer_id=layer.id,
+            transform=Transform(50.0, 50.0, 20.0, 20.0),
+            geometry=geometry.to_dict(),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    assert "object.geometry_invalid" not in _codes(report)
+    assert "object.closed_geometry_required" not in _codes(report)
+
+
+def test_closed_out_and_back_fill_does_not_require_air_assist_mapping() -> None:
+    document = ProjectDocument.new("Out and back fill", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = LayerMode.FILL
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (
+                            PathLineSegment((1.0, 0.0)),
+                            PathLineSegment((0.0, 0.0)),
+                        ),
+                        closed=True,
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 20.0, 20.0),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    with pytest.raises(ValueError, match="Fill produced no scanlines"):
+        toolpath_module.generate_project_gcode(document, LaserSettings())
+
+
+def test_closed_out_and_back_line_still_requires_air_assist_mapping() -> None:
+    document = ProjectDocument.new("Out and back line", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = LayerMode.LINE
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (
+                            PathLineSegment((1.0, 0.0)),
+                            PathLineSegment((0.0, 0.0)),
+                        ),
+                        closed=True,
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 20.0, 20.0),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" in _codes(report)
+
+
+def test_noncollinear_closed_fill_still_requires_air_assist_mapping() -> None:
+    document = ProjectDocument.new("Triangle fill", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = LayerMode.FILL
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (
+                            PathLineSegment((1.0, 0.0)),
+                            PathLineSegment((0.5, 1.0)),
+                            PathLineSegment((0.0, 0.0)),
+                        ),
+                        closed=True,
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 20.0, 20.0),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" in _codes(report)
+
+
+def test_constant_native_cubic_does_not_require_air_assist_mapping() -> None:
+    document = ProjectDocument.new("Constant cubic", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (
+                            PathCubicSegment(
+                                (0.0, 0.0),
+                                (0.0, 0.0),
+                                (0.0, 0.0),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 20.0, 20.0),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+
+
+def test_equal_endpoint_cubic_defers_mapping_to_exact_generation() -> None:
+    document = ProjectDocument.new("Cubic loop", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (
+                            PathCubicSegment(
+                                (0.0, 0.5),
+                                (1.0, 0.5),
+                                (0.0, 0.0),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            transform=Transform(50.0, 50.0, 20.0, 20.0),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    with pytest.raises(SafetyError, match="no resolved air-assist command mapping"):
+        toolpath_module.generate_project_gcode(document, LaserSettings())
+
+
+def test_control_only_cubic_rounding_emits_no_power_or_air_mapping_blocker() -> None:
+    document = ProjectDocument.new("Rounded control-only cubic", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    document.objects.append(
+        SceneObject.native_path(
+            layer.id,
+            NativePathGeometry(
+                (
+                    PathSubpath(
+                        (0.0, 0.0),
+                        (
+                            PathCubicSegment(
+                                (0.00002, 0.0),
+                                (0.0, 0.0),
+                                (0.0, 0.0),
+                            ),
+                        ),
+                    ),
+                )
+            ),
+            transform=Transform(50.00049, 50.0, 1.0, 1.0),
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+    job = toolpath_module.generate_project_gcode(document, LaserSettings())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    assert "\nM8\n" not in job.text
+    assert not any(
+        line.partition(";")[0].strip().startswith(("M3", "M4"))
+        for line in job.text.splitlines()
+    )
+    assert job.plan is not None and not job.plan.powered
+
+
+def test_malformed_native_geometry_keeps_geometry_and_mapping_blockers() -> None:
+    document = ProjectDocument.new("Malformed path", work_area=_DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = LayerMode.FILL
+    layer.power_percent = 20.0
+    layer.air_assist = True
+    item = SceneObject.native_path(
+        layer.id,
+        NativePathGeometry(
+            (
+                PathSubpath(
+                    (0.0, 0.0),
+                    (PathLineSegment((1.0, 0.0)), PathLineSegment((0.0, 0.0))),
+                    closed=True,
+                ),
+            )
+        ),
+        transform=Transform(50.0, 50.0, 20.0, 20.0),
+    )
+    item.geometry = {"path_version": 1}
+    document.objects.append(item)
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "object.geometry_invalid" in _codes(report)
+    assert "air_assist.output_unconfigured" in _codes(report)
 
 
 def test_machine_work_area_mismatch_is_a_blocker() -> None:
@@ -238,6 +935,47 @@ def test_missing_raster_source_is_blocked_without_decode(tmp_path: Path) -> None
 
     assert report.has_blockers
     assert "raster.source_unavailable" in _codes(report)
+
+
+@pytest.mark.parametrize(
+    ("pixel", "error_type", "message"),
+    (
+        (255, ValueError, "no engravable pixels after dithering"),
+        (0, SafetyError, "no resolved air-assist command mapping"),
+    ),
+)
+def test_image_air_assist_mapping_defers_to_exact_pixel_generation(
+    tmp_path: Path,
+    pixel: int,
+    error_type: type[Exception],
+    message: str,
+) -> None:
+    image_path = tmp_path / f"raster-{pixel}.png"
+    assert cv2.imwrite(
+        str(image_path),
+        np.full((2, 2), pixel, dtype=np.uint8),
+    )
+    document = ProjectDocument.new("Raster assist", _DEFAULT_AREA)
+    layer = document.layers[0]
+    layer.mode = LayerMode.RASTER
+    layer.air_assist = True
+    layer.power_percent = 20.0
+    layer.line_interval_mm = 1.0
+    document.objects.append(
+        SceneObject(
+            name="Raster pixels",
+            kind=ObjectKind.IMAGE,
+            layer_id=layer.id,
+            transform=Transform(50.0, 50.0, 2.0, 2.0),
+            geometry={"asset": str(image_path)},
+        )
+    )
+
+    report = build_job_preflight_report(document, _context())
+
+    assert "air_assist.output_unconfigured" not in _codes(report)
+    with pytest.raises(error_type, match=message):
+        toolpath_module.generate_project_gcode(document, LaserSettings())
 
 
 def test_project_with_no_enabled_output_is_blocked() -> None:

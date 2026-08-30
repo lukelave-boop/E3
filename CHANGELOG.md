@@ -6,6 +6,22 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added real binary Air Assist execution using the existing per-layer
+  `OperationLayer.air_assist` field. Cuts / Layers now exposes the persisted,
+  undoable setting; Machine Manager supplies a constrained disabled, GRBL
+  coolant (`M8`/`M9`), or indexed Marlin fan (`M106 P<n> S255`/`M107 P<n>`)
+  mapping with no arbitrary command or percentage input. Structured preflight
+  fails closed for an unmapped powered request; exact planning keeps assist active
+  across paths/passes and suppresses transition chatter, and Preview exposes
+  every literal finalized command, including through a full view for large
+  transition sets. Program and service-owned fail-off preludes, program
+  epilogue, Start Here, digest/Pi ownership, normal completion, STOP, failure,
+  disarm, and disconnect cleanup preserve laser-off priority and attempt the
+  immutable configured assist-off; failed cleanup retains that exact mapping
+  for later retries until disconnect. LightBurn
+  imports remain output-disabled while visibly retaining their Air Assist bit;
+  existing material recipes already copy that controlled operation field.
+
 - Redesigned Camera Trace **Straighten** as a post-Create project edit. Temporary
   Trace candidates now serve only outline review; they have no Straighten,
   rotated preview, or Reset state. Successful non-grid native Cut creation

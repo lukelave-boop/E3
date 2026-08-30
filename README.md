@@ -159,6 +159,11 @@ Native desktop workflow:
   hot-swapping the immutable running identity or contacting hardware; new
   projects resolve curated operation defaults from that running identity and
   fall back to a visible 0%-power, output-disabled layer when unmatched
+- Binary per-layer Air Assist using the existing project setting, with a typed
+  saved-machine mapping for disabled, GRBL coolant, or an indexed Marlin fan.
+  Powered requests without a mapping block preflight; exact fail-off,
+  transition, STOP/failure cleanup, Preview, and Pi-owned program behavior use
+  the same finalized commands
 - A sixth read-only Coordinate Audit tab with running-machine/calibration
   binding checks, immutable capture-time GRBL pose evidence, machine/support
   overlays, and clicked-point tracing across camera, beam, honeycomb, and
@@ -540,6 +545,10 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
   inspect the overlay for those templates.
 - No safety-rated enclosure, interlock, flame detector, or hardware E-stop can be implemented in this software.
 - The exact Creality controller protocol and `S` power range for this particular conversion kit remain unverified.
+- The repurposed Ender-3 toolhead fan's actual firmware channel and command are
+  not yet physically verified. Keep Air Assist disabled until the saved machine
+  has an explicit matching protocol and either the verified Marlin fan index or
+  a physically verified GRBL coolant mapping.
 - Software stop is not a substitute for immediately removing power with a hardware emergency stop.
 
 ## References used for the initial design

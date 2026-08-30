@@ -7,6 +7,74 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-30**
 
+## Active typed per-layer Air Assist execution
+
+E3 now executes the existing `OperationLayer.air_assist` Boolean; no duplicate
+project field or schema change was introduced. Cuts / Layers exposes the value
+as an ordinary selected-layer checkbox with the existing command-history path,
+so project save/load, layer switching, Undo/Redo, LightBurn import, and complete
+Material Recipe application retain one authority. Imported LightBurn operations
+still begin output-disabled. The default project value and every built-in
+machine mapping remain OFF/disabled.
+
+`MachineSettings.air_assist` is a typed saved-machine capability with only
+`disabled`, `grbl_coolant`, and `marlin_fan` modes plus a bounded fan index. The
+exact mappings are GRBL `M8`/`M9` and Marlin `M106 P<n> S255`/`M107 P<n>`.
+Enabled modes require the matching explicit protocol, reject `auto`, and expose
+no arbitrary command or percentage field. Machine Manager persists the mapping
+for the next launch; the ordinary layer editor remains machine-neutral.
+
+Structured preflight blocks a visible, output-enabled layer with provable
+powered serialized motion that requests assist when the running machine has no
+resolved mapping; ambiguous curved or bounded-work cases defer to exact
+generation, which remains fail-closed. The project
+planner establishes fail-off after its initial `M5`, emits ON after laser-off
+positioning and immediately before the first powered Line, Fill, or Raster work,
+holds it across paths, travel, passes, and adjacent requesting layers, and emits
+OFF before later non-requesting powered work. Output-disabled, empty, and
+zero-power layers never enable it. Configured programs finish with `M5`, exact
+assist OFF, then a standalone `M5`. The exact commands, events, and per-layer
+state are parsed into `JobPlan`, visible in Preview, retained by Start Here, and
+included in the finalized program digest.
+
+`MachineService` accepts only the exact resolved auxiliary literals without
+broadening the manual or streamed G-code surfaces; Marlin's fan `S255` is not
+treated as laser power. The selected mapping participates in the execution
+policy snapshot used by local and Pi preflight. Every job with a configured
+mapping also receives an acknowledged service-owned `M5` then immutable assist-
+OFF prelude before line 1, including powered setup programs with no layer
+literals. Normal completion acknowledges laser OFF before assist OFF. STOP
+retains its existing realtime/reset and `M5` priority, then attempts cached
+assist OFF; disarm, connection failure, disconnect, job-start failure, and
+interrupted/error cleanup use the same laser-first order. A running job binds
+its original OFF command so mutable configuration cannot redirect cleanup away
+from an already-enabled fan; a failed immutable OFF remains available for later
+STOP/disarm/disconnect retries until the transport closes.
+Air commands live in the immutable Pi-owned program: losing Windows or a monitor
+after durable START acceptance has no controller effect, while Pi-local normal
+completion turns the output off.
+
+Automated verification covers the constrained config/registry/dialect model,
+LayerPanel and Machine Manager UI, old-project and old-registry defaults,
+LightBurn safety behavior, preflight and stale-context rejection, Line/Fill/
+Raster planning and all state transitions, exact Preview/Start Here behavior,
+stream allowlisting, normal/STOP/failure/disconnect cleanup, program-policy
+binding, and Pi-owned disconnect/completion. On Windows with Python 3.14, the
+focused Air Assist matrix passed 806 tests in 99.50 seconds. The final complete
+repository run passed 3,046 tests with 14 expected platform skips in 175.81
+seconds. Repository Ruff, `compileall -q laser_aligner`, and `git diff --check`
+all passed; the diff check reported only Git's existing LF-to-CRLF notices.
+
+No physical Air Assist command is verified by these tests. For the repurposed
+Ender-3 toolhead fan, physical bring-up must identify the controller firmware
+and actual fan channel. If it is Marlin fan `n`, both Windows and Pi saved
+machines need explicit `protocol = marlin`, `mode = marlin_fan`, and that exact
+`fan_index = n`; if the hardware is instead proven to use GRBL coolant, both
+need explicit `protocol = grbl` and `mode = grbl_coolant`. Keep the mapping
+disabled until idle OFF, full-output start, path/pass continuity, layer
+transition OFF, normal completion, software STOP, and unchanged laser behavior
+are recorded on the physical rig. These software controls are not safety-rated.
+
 ## Active post-Create Camera Trace orientation review / Straighten
 
 Straighten is now a normal project edit over selected, finished Camera Trace
@@ -2560,8 +2628,11 @@ Successful powered serial jobs now remain active through cancellation-aware
 extended command acknowledgements, a final `M5`, a pre-home planner-completion
 barrier, automatic homing, a bounded absolute move to the configured
 photography pose, a second motion-completion barrier, normal-idle restoration,
-and explicit motor release. They do not change fan/coolant state. Zero-power
-jobs and every stop, failure, emergency, and disconnect path skip the additional homing
+and explicit motor release. At that historical verification snapshot the
+default-disabled system did not change fan/coolant state; the active typed Air
+Assist implementation recorded above now adds only its explicitly configured
+OFF/ON/OFF program behavior and laser-first cleanup. Zero-power jobs and every
+stop, failure, emergency, and disconnect path skip the additional homing
 and parking motion. The Laser panel distinguishes drain, home, park, and release
 phases after stream progress reaches 100%; a terminal background-job error now
 raises one desktop alert and is also copied into the in-app machine log.
@@ -2571,7 +2642,8 @@ cleanup repair a persisted camera-only `$1=255` to configured
 hold from becoming normal power-on behavior. Tests cover delayed final `M5`
 acknowledgement, planner-busy homing rejection until the new barrier, successful
 parking, home and park failures, failed powered streams, FluidNC `$MD`, and the
-`$SLP`/reset fallback without issuing fan/coolant commands. On 2026-08-08 the
+`$SLP`/reset fallback without issuing fan/coolant commands when Air Assist is
+disabled. On 2026-08-08 the
 operator twice observed the head remain at the last powered point without
 homing or parking. Process start time, source timestamps, the loaded profile,
 and the generated `M4 S100` job rule out the previously suspected stale process

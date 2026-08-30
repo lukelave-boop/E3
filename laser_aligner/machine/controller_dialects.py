@@ -7,6 +7,13 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from ..air_assist import (
+    AirAssistCommands,
+    AirAssistMode,
+    AirAssistSettings,
+    coerce_air_assist_mode,
+    validate_air_assist_settings,
+)
 from ..errors import MachineError
 
 _GRBL_WORK_COORDINATE_CODES = frozenset(f"G{number}" for number in range(54, 60))
@@ -103,6 +110,7 @@ class ControllerDialect:
     coordinate_state_query_commands: tuple[str, ...] = ()
     realtime_status_query: bytes | None = None
     grbl_session: GrblSessionPolicy | None = None
+    air_assist_mode: AirAssistMode | None = None
 
     def recognizes_startup(self, responses: Sequence[str]) -> bool:
         joined = "\n".join(responses).lower()
@@ -143,6 +151,39 @@ class ControllerDialect:
             if state == "idle":
                 return HomingResponseKind.IDLE
         return HomingResponseKind.CONTINUE
+
+    def resolve_air_assist_commands(
+        self,
+        settings: AirAssistSettings,
+    ) -> AirAssistCommands | None:
+        """Resolve only the fixed auxiliary-output mapping owned by this dialect."""
+
+        validate_air_assist_settings(settings, protocol=self.id)
+        mode = coerce_air_assist_mode(settings.mode)
+        if mode is AirAssistMode.DISABLED:
+            return None
+        if mode is not self.air_assist_mode:
+            raise ValueError(
+                f"Air-assist mode {mode.value} is not supported by {self.display_name}"
+            )
+        if mode is AirAssistMode.GRBL_COOLANT:
+            return AirAssistCommands(
+                mode=mode,
+                protocol=self.id,
+                fan_index=None,
+                on_commands=("M8",),
+                off_commands=("M9",),
+            )
+        if mode is AirAssistMode.MARLIN_FAN:
+            fan_index = settings.fan_index
+            return AirAssistCommands(
+                mode=mode,
+                protocol=self.id,
+                fan_index=fan_index,
+                on_commands=(f"M106 P{fan_index} S255",),
+                off_commands=(f"M107 P{fan_index}",),
+            )
+        raise ValueError(f"Unsupported air-assist mode: {mode.value}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -211,6 +252,7 @@ GRBL_DIALECT = ControllerDialect(
     coordinate_state_query_commands=("$G", "$#"),
     realtime_status_query=b"?",
     grbl_session=GrblSessionPolicy(),
+    air_assist_mode=AirAssistMode.GRBL_COOLANT,
 )
 
 MARLIN_DIALECT = ControllerDialect(
@@ -235,6 +277,7 @@ MARLIN_DIALECT = ControllerDialect(
         success_log="M112",
         failure_label="Marlin emergency stop",
     ),
+    air_assist_mode=AirAssistMode.MARLIN_FAN,
 )
 
 CONTROLLER_DIALECT_REGISTRY = ControllerDialectRegistry(
@@ -246,6 +289,25 @@ CONTROLLER_DIALECT_REGISTRY = ControllerDialectRegistry(
 )
 
 MANUAL_QUERY_COMMANDS = CONTROLLER_DIALECT_REGISTRY.manual_query_commands
+
+
+def resolve_air_assist_commands(
+    settings: AirAssistSettings,
+    *,
+    protocol: str,
+) -> AirAssistCommands | None:
+    """Resolve a validated machine mapping into immutable controller commands."""
+
+    validate_air_assist_settings(settings, protocol=protocol)
+    if coerce_air_assist_mode(settings.mode) is AirAssistMode.DISABLED:
+        return None
+    try:
+        dialect = CONTROLLER_DIALECT_REGISTRY.get(protocol)
+    except KeyError as exc:
+        raise ValueError(
+            "Enabled air assist requires an explicit grbl or marlin protocol"
+        ) from exc
+    return dialect.resolve_air_assist_commands(settings)
 
 
 def parse_grbl_step_idle_delay(responses: Sequence[str]) -> int | None:

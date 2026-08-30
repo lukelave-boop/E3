@@ -1,5 +1,7 @@
 {
   "acceleration_mm_s2": 500.0,
+  "air_assist_commands": null,
+  "air_assist_events": [],
   "bounds_mm": [
     0.0,
     0.0,
@@ -12,6 +14,7 @@
   "maximum_power": 300.0,
   "moves": [
     {
+      "air_assist": false,
       "distance_mm": 53.740115370178,
       "duration_seconds": 1.174802307404,
       "end_seconds": 1.174802307404,
@@ -37,6 +40,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 24.0,
       "duration_seconds": 1.473333333333,
       "end_seconds": 2.648135640737,
@@ -62,6 +66,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 24.0,
       "duration_seconds": 1.473333333333,
       "end_seconds": 4.12146897407,
@@ -87,6 +92,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 24.0,
       "duration_seconds": 1.473333333333,
       "end_seconds": 5.594802307404,
@@ -112,6 +118,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 24.0,
       "duration_seconds": 1.473333333333,
       "end_seconds": 7.068135640737,
@@ -137,6 +144,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 25.455844122716,
       "duration_seconds": 0.609116882454,
       "end_seconds": 7.677252523191,
@@ -162,6 +170,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 60.0,
       "duration_seconds": 3.633333333333,
       "end_seconds": 11.310585856525,
@@ -187,6 +196,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 60.0,
       "duration_seconds": 3.633333333333,
       "end_seconds": 14.943919189858,
@@ -212,6 +222,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 60.0,
       "duration_seconds": 3.633333333333,
       "end_seconds": 18.577252523191,
@@ -237,6 +248,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 60.0,
       "duration_seconds": 3.633333333333,
       "end_seconds": 22.210585856525,

@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 
+from ..air_assist import AirAssistCommands, AirAssistSettings
 from ..config import LaserSettings, MachineSettings
 from ..errors import MachineError, SafetyError, TransientConnectionError
 from ..gcode.preview import contains_motion, parse_words, strip_comment
@@ -32,6 +33,7 @@ from .controller_dialects import (
     parse_grbl_coordinate_state,
     parse_grbl_realtime_status,
     parse_grbl_step_idle_delay,
+    resolve_air_assist_commands,
 )
 from .serial_backend import list_serial_ports as list_serial_ports
 from .transport import MachineTransport
@@ -52,6 +54,7 @@ _GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS = float(
 _GRBL_HOMING_TIMEOUT_SECONDS = GRBL_DIALECT.homing.timeout_floor_seconds
 _JOB_COMMAND_ACK_TIMEOUT_SECONDS = 120.0
 _GRBL_COORDINATE_EPSILON_MM = 0.001
+_NONZERO_OUTPUT_MOTION_EPSILON_MM = 1e-9
 _REALTIME_STOP_WRITE_DEADLINE_SECONDS = 0.35
 _MAX_ARM_TIMEOUT_SECONDS = 600
 _PROGRAM_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -114,6 +117,7 @@ class ValidatedProgram:
     requires_laser_authorization: bool
     requires_motion: bool
     safety_profile: tuple[Any, ...]
+    air_assist_commands: AirAssistCommands | None = None
     guarded_output_polygon_mm: ConvexPolygon | None = None
 
 
@@ -140,6 +144,67 @@ class MachineService:
             raise MachineError("Controller protocol has not been resolved")
         return dialect
 
+    def _resolved_air_assist_commands(self) -> AirAssistCommands | None:
+        settings = self.settings.air_assist
+        if type(settings) is not AirAssistSettings:
+            raise SafetyError("machine.air_assist must be typed AirAssistSettings")
+        try:
+            commands = resolve_air_assist_commands(
+                settings,
+                protocol=self.settings.protocol,
+            )
+        except (TypeError, ValueError) as exc:
+            raise SafetyError(str(exc)) from exc
+        if commands is not None:
+            self._air_assist_off_commands = commands.off_commands
+        return commands
+
+    def _require_air_assist_dialect_compatibility(self) -> None:
+        commands = self._resolved_air_assist_commands()
+        dialect = self._require_resolved_dialect()
+        if commands is not None and commands.protocol != dialect.id:
+            raise SafetyError(
+                "Configured air-assist output does not match the connected controller dialect"
+            )
+
+    def _air_assist_command_kind(self, line: str) -> str | None:
+        commands = self._resolved_air_assist_commands()
+        if commands is None:
+            return None
+        normalized = " ".join(strip_comment(line).upper().split())
+        if normalized in commands.on_commands:
+            return "on"
+        if normalized in commands.off_commands:
+            return "off"
+        return None
+
+    def _best_effort_fail_off(
+        self,
+        transport: MachineTransport,
+        *,
+        context: str,
+    ) -> None:
+        """Write laser-off first, then the cached configured air-off commands."""
+
+        off_commands = tuple(
+            dict.fromkeys(
+                (
+                    *self._active_job_air_assist_off_commands,
+                    *self._air_assist_off_commands,
+                )
+            )
+        )
+        with self._transport_write_lock:
+            for command in ("M5", *off_commands):
+                try:
+                    transport.write_line(command)
+                    self._append_log("TX", f"{command} ({context})")
+                except Exception as exc:
+                    self._append_log(
+                        "ERROR",
+                        f"{context} command {command!r} failed: {exc}",
+                    )
+
     def _uses_grbl_coordinate_state(self) -> bool:
         dialect = self._dialect
         return bool(
@@ -162,6 +227,10 @@ class MachineService:
         self.hardware_enabled = hardware_enabled
         self.laser_lockout = laser_lockout
         self._transport: MachineTransport | None = None
+        # Keep the last known valid OFF mapping available even if mutable
+        # settings later become invalid during an emergency cleanup path.
+        self._air_assist_off_commands: tuple[str, ...] = ()
+        self._active_job_air_assist_off_commands: tuple[str, ...] = ()
         self._protocol = settings.protocol
         self._active_port = settings.port
         self._active_baudrate = settings.baudrate
@@ -196,6 +265,15 @@ class MachineService:
         self._job_laser_authorized = False
         self._last_successful_job: dict[str, Any] | None = None
         self._log: deque[str] = deque(maxlen=200)
+        try:
+            configured_air = resolve_air_assist_commands(
+                self.settings.air_assist,
+                protocol=self.settings.protocol,
+            )
+        except (AttributeError, TypeError, ValueError):
+            configured_air = None
+        if configured_air is not None:
+            self._air_assist_off_commands = configured_air.off_commands
 
     @property
     def connected(self) -> bool:
@@ -333,6 +411,7 @@ class MachineService:
                         expected_stop_epoch=connect_stop_epoch
                     )
                     self._protocol = selected
+                self._require_air_assist_dialect_compatibility()
                 if self.settings.backend == "serial" and self._dialect is GRBL_DIALECT:
                     self._normalize_and_release_grbl_after_connect()
                 elif self.settings.backend == "serial" and self._dialect is MARLIN_DIALECT:
@@ -344,6 +423,18 @@ class MachineService:
                         ),
                         _expected_stop_epoch=connect_stop_epoch,
                     )
+                air_assist = self._resolved_air_assist_commands()
+                if air_assist is not None:
+                    for command in air_assist.off_commands:
+                        self._send_command_locked(
+                            command,
+                            timeout=max(
+                                _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS,
+                                self.settings.read_timeout,
+                            ),
+                            _internal_air_assist_off=True,
+                            _expected_stop_epoch=connect_stop_epoch,
+                        )
                 with self._stop_epoch_lock:
                     if (
                         self._stop_epoch != connect_stop_epoch
@@ -354,18 +445,16 @@ class MachineService:
                         )
                     self._trusted_controller_session_established = True
             except Exception:
-                with self._transport_write_lock:
-                    # The transport may have physically opened just as STOP
-                    # cancelled publication. It is not yet visible to
-                    # request_stop(), so this cleanup owns the best-effort M5.
-                    try:
-                        if transport is not None:
-                            transport.write_line("M5")
-                        self._append_log("TX", "M5 (connection cleanup)")
-                    except Exception:
-                        pass
-                    if transport is not None:
-                        transport.close()
+                # The transport may have physically opened just as STOP
+                # cancelled publication. It is not yet visible to
+                # request_stop(), so this cleanup owns the best-effort fail-off.
+                if transport is not None:
+                    self._best_effort_fail_off(
+                        transport,
+                        context="connection cleanup",
+                    )
+                    transport.close()
+                    self._active_job_air_assist_off_commands = ()
                 self._transport = None
                 self._connected = False
                 self._controller_reconnect_required = False
@@ -444,11 +533,15 @@ class MachineService:
         self.stop_job(emergency=False)
         with self._command_lock, self._lock:
             if self._transport is not None:
-                try:
-                    self._transport.write_line("M5")
-                except Exception:
-                    pass
+                self._best_effort_fail_off(
+                    self._transport,
+                    context="disconnect cleanup",
+                )
                 self._transport.close()
+            # Once the transport is closed there is no same-session controller
+            # path left on which retaining a failed job's immutable OFF mapping
+            # could provide another retry.
+            self._active_job_air_assist_off_commands = ()
             self._transport = None
             self._connected = False
             self._connecting = False
@@ -624,20 +717,30 @@ class MachineService:
             if transport is None:
                 return
             if self._controller_reconnect_required:
-                try:
-                    with self._transport_write_lock:
-                        transport.write_line("M5")
-                    self._append_log("TX", "M5 (disarm on untrusted connection)")
-                except Exception as exc:
-                    self._append_log("ERROR", f"Disarm laser-off request failed: {exc}")
-                return
-            try:
-                self._send_command_locked(
-                    "M5",
-                    timeout=_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS,
+                self._best_effort_fail_off(
+                    transport,
+                    context="disarm on untrusted connection",
                 )
-            except Exception as exc:
-                self._append_log("ERROR", f"Disarm laser-off request failed: {exc}")
+                return
+            fail_off_error: Exception | None = None
+            for command in ("M5", *self._air_assist_off_commands):
+                try:
+                    self._send_command_locked(
+                        command,
+                        timeout=_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS,
+                        _internal_air_assist_off=(command != "M5"),
+                    )
+                except Exception as exc:
+                    fail_off_error = fail_off_error or exc
+                    self._append_log(
+                        "ERROR",
+                        f"Disarm command {command!r} failed: {exc}",
+                    )
+            if fail_off_error is not None:
+                self._best_effort_fail_off(
+                    transport,
+                    context="disarm fallback cleanup",
+                )
                 with self._stop_epoch_lock:
                     self._controller_reconnect_required = True
                     self._coordinate_reference_ready = False
@@ -679,11 +782,17 @@ class MachineService:
         words = parse_words(cleaned)
         m_codes = self._codes(words, "M")
         g_codes = self._codes(words, "G")
-        powers = [word.value for word in words if word.letter == "S"]
+        air_assist_kind = self._air_assist_command_kind(cleaned)
+        powers = (
+            []
+            if air_assist_kind is not None
+            else [word.value for word in words if word.letter == "S"]
+        )
         requests_laser = bool(m_codes.intersection({3, 4}) or any(value > 0 for value in powers))
+        requests_air_assist = air_assist_kind is not None
         is_homing = cleaned.upper() == "$H" or 28 in g_codes
         requests_motion = contains_motion(cleaned) or is_homing
-        if requests_laser or requests_motion:
+        if requests_laser or requests_motion or requests_air_assist:
             self._require_safety_configuration()
         if g_codes in ({0}, {1}):
             feeds = [word.value for word in words if word.letter == "F"]
@@ -707,10 +816,16 @@ class MachineService:
         )
         if requests_laser and not laser_authorized:
             raise SafetyError("Laser-enable or positive-power command blocked because control is not armed")
+        if air_assist_kind == "on" and not laser_authorized:
+            raise SafetyError(
+                "Air-assist enable is allowed only inside an authorized powered job"
+            )
+        if requests_air_assist and not (preflight or job_execution):
+            raise SafetyError("Air-assist commands are allowed only in streamed jobs")
         if requests_motion and self.settings.allow_motion is not True:
             raise SafetyError("Motion commands are disabled in machine.allow_motion")
         if (
-            (requests_laser or requests_motion)
+            (requests_laser or requests_motion or requests_air_assist)
             and self.settings.backend == "serial"
             and self.hardware_enabled is not True
         ):
@@ -754,6 +869,7 @@ class MachineService:
         timeout: float | None = None,
         *,
         _internal_motion: bool = False,
+        _internal_air_assist_off: bool = False,
         _expected_stop_epoch: int | None = None,
         _terminal_error_consumed: bool = False,
     ) -> list[str]:
@@ -761,7 +877,22 @@ class MachineService:
             raise MachineError("Single controller command exceeds 256 characters")
         if self._job.running:
             raise MachineError("Manual commands are disabled while a job is running")
-        cleaned = strip_comment(line).upper() if _internal_motion else self._validate_manual_command(line)
+        if _internal_air_assist_off:
+            cleaned = " ".join(strip_comment(line).upper().split())
+            trusted_off_commands = {
+                *self._active_job_air_assist_off_commands,
+                *self._air_assist_off_commands,
+            }
+            if cleaned not in trusted_off_commands:
+                raise SafetyError(
+                    "Internal air-off command does not match a trusted configured mapping"
+                )
+        else:
+            cleaned = (
+                strip_comment(line).upper()
+                if _internal_motion
+                else self._validate_manual_command(line)
+            )
         if not cleaned:
             raise MachineError("Controller command is empty")
         with self._transport_write_lock:
@@ -769,7 +900,8 @@ class MachineService:
                 with self._stop_epoch_lock:
                     if self._stop_epoch != _expected_stop_epoch:
                         raise MachineError("Operation was cancelled by software STOP")
-            self._check_line_safety(cleaned)
+            if not _internal_air_assist_off:
+                self._check_line_safety(cleaned)
             transport = self._require_connection()
             try:
                 transport.write_line(cleaned)
@@ -1760,16 +1892,25 @@ class MachineService:
             raise SafetyError(str(exc)) from exc
         if not words:
             raise SafetyError("Executable G-code line contains no supported words")
+        air_assist_kind = self._air_assist_command_kind(line)
+        g_codes = self._codes(words, "G")
+        m_codes = self._codes(words, "M")
+        auxiliary_m_codes = m_codes.intersection({8, 9, 106, 107})
+        if auxiliary_m_codes and air_assist_kind is None:
+            raise SafetyError(
+                "Streamed air-assist command does not match the exact configured output"
+            )
         letters = {word.letter for word in words}
-        unsupported = letters - _STREAM_LETTERS
+        allowed_letters = _STREAM_LETTERS | ({"P"} if air_assist_kind is not None else set())
+        unsupported = letters - allowed_letters
         if unsupported:
             raise SafetyError(f"Unsupported G-code word(s): {', '.join(sorted(unsupported))}")
         if any(word.letter in {"G", "M"} and abs(word.value - round(word.value)) >= 1e-9 for word in words):
             raise SafetyError("G and M codes must be whole numbers")
-        g_codes = self._codes(words, "G")
-        m_codes = self._codes(words, "M")
         if len(g_codes) > 1 or len(m_codes) > 1 or (g_codes and m_codes):
             raise SafetyError("Each streamed line may contain only one G code or one M code")
+        if auxiliary_m_codes:
+            return words, g_codes, m_codes
         if not g_codes.issubset(_STREAM_G_CODES):
             raise SafetyError(f"Unsupported streamed G code: {sorted(g_codes - _STREAM_G_CODES)}")
         if not m_codes.issubset(_STREAM_M_CODES):
@@ -1883,6 +2024,10 @@ class MachineService:
         seen_absolute = False
         seen_initial_m5 = False
         laser_on = False
+        air_assist_on = False
+        seen_air_assist_command = False
+        air_interval_had_powered_motion = False
+        last_air_assist_kind: str | None = None
         requires_laser_authorization = False
         position_established = False
         x: float | None = None
@@ -1894,6 +2039,7 @@ class MachineService:
             words, g_codes, m_codes = self._validate_stream_line(line)
             last_line_is_m5 = m_codes == {5}
             values = {word.letter: word.value for word in words}
+            air_assist_kind = self._air_assist_command_kind(line)
             try:
                 self._check_line_safety(
                     line,
@@ -1925,6 +2071,12 @@ class MachineService:
                 new_x = values.get("X", x)
                 new_y = values.get("Y", y)
                 assert new_x is not None and new_y is not None
+                has_xy_displacement = (
+                    x is not None
+                    and y is not None
+                    and math.hypot(new_x - x, new_y - y)
+                    > _NONZERO_OUTPUT_MOTION_EPSILON_MM
+                )
                 controller_allowed = (
                     convex_polygon_contains_normalized(
                         (new_x, new_y), guarded_polygon
@@ -1963,6 +2115,13 @@ class MachineService:
                     raise SafetyError(f"Line {index}: rapid G0 motion is blocked while the laser is enabled")
                 x, y = new_x, new_y
                 position_established = True
+                if (
+                    g_codes == {1}
+                    and has_xy_displacement
+                    and laser_on
+                    and air_assist_on
+                ):
+                    air_interval_had_powered_motion = True
 
             if m_codes in ({3}, {4}):
                 if not seen_mm or not seen_absolute or not seen_initial_m5:
@@ -1980,12 +2139,52 @@ class MachineService:
                 seen_initial_m5 = True
                 last_m_code = 5
 
+            if air_assist_kind is not None:
+                if not seen_mm or not seen_absolute or not seen_initial_m5:
+                    raise SafetyError(
+                        f"Line {index}: G21, G90, and an initial M5 are required "
+                        "before air-assist commands"
+                    )
+                if not seen_air_assist_command and air_assist_kind != "off":
+                    raise SafetyError(
+                        f"Line {index}: the first air-assist command must establish OFF"
+                    )
+                if air_assist_kind == "on" and last_air_assist_kind == "on":
+                    raise SafetyError(
+                        f"Line {index}: duplicate air-assist {air_assist_kind.upper()} command"
+                    )
+                if air_assist_kind == "on":
+                    if laser_on:
+                        raise SafetyError(
+                            f"Line {index}: air assist must be enabled while the laser is off"
+                        )
+                    if not position_established:
+                        raise SafetyError(
+                            f"Line {index}: establish an absolute XY position before enabling air assist"
+                    )
+                    air_assist_on = True
+                    air_interval_had_powered_motion = False
+                else:
+                    if laser_on:
+                        raise SafetyError(
+                            f"Line {index}: M5 must disable the laser before air assist is disabled"
+                        )
+                    if air_assist_on and not air_interval_had_powered_motion:
+                        raise SafetyError(
+                            f"Line {index}: air-assist ON interval contained no powered work motion"
+                        )
+                    air_assist_on = False
+                seen_air_assist_command = True
+                last_air_assist_kind = air_assist_kind
+
         if not seen_mm or not seen_absolute:
             raise SafetyError("Program must explicitly set millimetres (G21) and absolute positioning (G90)")
         if not seen_initial_m5:
             raise SafetyError("Program must contain M5 before motion or laser commands")
         if laser_on or last_m_code != 5 or not last_line_is_m5:
             raise SafetyError("Program must end with a standalone M5 laser-off command")
+        if air_assist_on:
+            raise SafetyError("Program must disable air assist before its final M5")
         return lines, requires_laser_authorization
 
     def _require_safety_configuration(self) -> None:
@@ -1997,6 +2196,7 @@ class MachineService:
             "marlin",
         }:
             raise SafetyError("Machine protocol must be exactly auto, grbl, or marlin")
+        self._resolved_air_assist_commands()
 
         boolean_values = {
             "machine.allow_motion": self.settings.allow_motion,
@@ -2102,6 +2302,18 @@ class MachineService:
     ) -> tuple[Any, ...]:
         self._require_safety_configuration()
         area = self.settings.work_area
+        air_assist = self._resolved_air_assist_commands()
+        air_assist_profile = (
+            None
+            if air_assist is None
+            else (
+                air_assist.mode.value,
+                air_assist.protocol,
+                air_assist.fan_index,
+                air_assist.on_commands,
+                air_assist.off_commands,
+            )
+        )
         return (
             self.settings.backend,
             self.settings.protocol,
@@ -2127,6 +2339,7 @@ class MachineService:
             None if self.settings.photo_z is None else float(self.settings.photo_z),
             self._configured_guarded_output_polygon(),
             guarded_output_polygon_mm,
+            air_assist_profile,
         )
 
     def preflight_program(
@@ -2147,12 +2360,14 @@ class MachineService:
                 "Program contains laser-enable commands while process laser lockout is active"
             )
         canonical = "\n".join(lines).encode("utf-8")
+        air_assist_commands = self._resolved_air_assist_commands()
         return ValidatedProgram(
             lines=tuple(lines),
             digest=hashlib.sha256(canonical).hexdigest(),
             requires_laser_authorization=requires_laser_authorization,
             requires_motion=any(contains_motion(line) for line in lines),
             safety_profile=self._program_safety_profile(guarded_polygon),
+            air_assist_commands=air_assist_commands,
             guarded_output_polygon_mm=guarded_polygon,
         )
 
@@ -2173,6 +2388,10 @@ class MachineService:
             or type(program.requires_motion) is not bool
             or type(program.safety_profile) is not tuple
             or (
+                program.air_assist_commands is not None
+                and type(program.air_assist_commands) is not AirAssistCommands
+            )
+            or (
                 program.guarded_output_polygon_mm is not None
                 and type(program.guarded_output_polygon_mm) is not tuple
             )
@@ -2189,16 +2408,18 @@ class MachineService:
         current_profile = self._program_safety_profile(
             program.guarded_output_polygon_mm
         )
+        current_air_assist_commands = self._resolved_air_assist_commands()
         if (
             program.lines != canonical_lines
             or program.digest != canonical_digest
             or program.requires_laser_authorization is not requires_laser_authorization
             or program.requires_motion is not requires_motion
             or program.safety_profile != current_profile
+            or program.air_assist_commands != current_air_assist_commands
         ):
             raise SafetyError(
                 "Program lines, digest, flags, machine bounds, offsets, feed ceilings, "
-                "or hardware gates changed after program preflight; validate the exact "
+                "air-assist mapping, or hardware gates changed after program preflight; validate the exact "
                 "program again"
             )
 
@@ -2341,6 +2562,16 @@ class MachineService:
                             "starting using its exact preflight result"
                         )
                 self._job_laser_authorized = requires_laser_authorization
+                # Bind cleanup to the exact immutable mapping that passed the
+                # pre-start integrity check. Mutable settings may change after
+                # that check, but they must never redirect cleanup away from the
+                # output named in the already-validated program.
+                active_air_assist = program.air_assist_commands
+                self._active_job_air_assist_off_commands = (
+                    ()
+                    if active_air_assist is None
+                    else active_air_assist.off_commands
+                )
                 # Every start consumes any temporary grant. A powered job keeps
                 # its exact authorization only in this running-job state.
                 self._clear_arm_authorization()
@@ -2392,17 +2623,15 @@ class MachineService:
                     self._authorization_epoch += 1
                     self._clear_arm_authorization()
                     self._job_laser_authorized = False
-                    try:
-                        if transport is None:
-                            raise MachineError("Controller is not connected")
-                        with self._transport_write_lock:
-                            transport.write_line("M5")
-                        self._append_log("TX", "M5 (job-start failure cleanup)")
-                    except Exception as cleanup_error:
+                    if transport is None:
                         self._append_log(
                             "ERROR",
-                            "Job-start failure laser-off request failed: "
-                            f"{cleanup_error}",
+                            "Job-start failure cleanup could not reach the controller",
+                        )
+                    else:
+                        self._best_effort_fail_off(
+                            transport,
+                            context="job-start failure cleanup",
                         )
                     raise
             return self._job.to_dict()
@@ -2572,6 +2801,7 @@ class MachineService:
         program_digest: str,
     ) -> None:
         error: str | None = None
+        air_assist_off_acknowledged = not self._active_job_air_assist_off_commands
         try:
             job_ack_timeout = max(
                 _JOB_COMMAND_ACK_TIMEOUT_SECONDS,
@@ -2579,6 +2809,12 @@ class MachineService:
             )
             self._write_running_job_line("M5")
             self._wait_for_ack(job_ack_timeout)
+            # The service-level prelude covers powered setup/calibration jobs
+            # that intentionally contain no layer Air Assist commands. Bind it
+            # only to the immutable mapping that passed program integrity checks.
+            for command in self._active_job_air_assist_off_commands:
+                self._write_running_job_line(command)
+                self._wait_for_ack(job_ack_timeout)
             for index, line in enumerate(lines, start=1):
                 self._write_running_job_line(line)
                 # GRBL may delay an acknowledgement while its planner is full or
@@ -2602,6 +2838,10 @@ class MachineService:
                 )
             self._write_running_job_line("M5")
             self._wait_for_ack(job_ack_timeout)
+            for command in self._active_job_air_assist_off_commands:
+                self._write_running_job_line(command)
+                self._wait_for_ack(job_ack_timeout)
+            air_assist_off_acknowledged = True
             if run_completion:
                 self._finish_powered_job_home_park_and_release()
             elif self.settings.backend == "serial" and requires_motion:
@@ -2628,13 +2868,12 @@ class MachineService:
             self._mark_controller_command_state_untrusted()
             LOGGER.error("Controller job failed: %s", exc)
             self._append_log("ERROR", f"Controller job failed: {exc}")
-            try:
-                with self._transport_write_lock:
-                    if self._transport is not None:
-                        self._transport.write_line("M5")
-                        self._append_log("TX", "M5 (job cleanup)")
-            except Exception:
-                pass
+            transport = self._transport
+            if transport is not None:
+                self._best_effort_fail_off(
+                    transport,
+                    context="job cleanup",
+                )
         finally:
             with self._lock:
                 # Commit the terminal state atomically against STOP. If STOP
@@ -2665,6 +2904,8 @@ class MachineService:
                     self._job.running = False
                     self._clear_arm_authorization()
                     self._job_laser_authorized = False
+                    if air_assist_off_acknowledged:
+                        self._active_job_air_assist_off_commands = ()
 
     def request_stop(self, emergency: bool = False) -> None:
         """Latch a stop and issue controller laser-off without waiting for workers."""
@@ -2737,14 +2978,13 @@ class MachineService:
                         "ERROR",
                         f"{stop_policy.failure_label} failed: {exc}",
                     )
-            try:
-                # Place M5 after an in-flight job write. A worker reaching the
-                # same gate later sees the stop/auth latch and cannot transmit.
-                with self._transport_write_lock:
-                    transport.write_line("M5")
-                    self._append_log("TX", "M5")
-            except Exception as exc:
-                self._append_log("ERROR", f"Laser-off request failed: {exc}")
+            # Place M5 after an in-flight job write. A worker reaching the same
+            # gate later sees the stop/auth latch and cannot transmit. Air OFF
+            # follows immediately without acknowledgement or configuration work.
+            self._best_effort_fail_off(
+                transport,
+                context="software STOP",
+            )
 
     def stop_job(self, emergency: bool = False) -> None:
         self.request_stop(emergency=emergency)

@@ -102,9 +102,10 @@ With `machine.home_and_release_after_powered_job` enabled, a successfully
 completed powered job also performs `M5`, waits for all accepted toolpath
 motion to finish, homes, returns to the configured camera pose, waits for the
 park move to finish, restores the configured normal GRBL idle delay if
-necessary, and releases the motors. It does not issue
-fan/coolant commands. Keep the complete homing and parking path clear until the
-job reports completion. The desktop reports the finishing phase explicitly and
+necessary, and releases the motors. A configured Air Assist program issues
+laser off, assist off, then a final standalone laser-off command before that
+completion motion. Keep the complete homing and parking path clear until the job
+reports completion. The desktop reports the finishing phase explicitly and
 raises an error if a completion command fails. This post-job motion is not
 attempted after a stop, failure, emergency action, disconnect, or zero-power job.
 
@@ -114,8 +115,9 @@ during parked camera capture. Because `$1` persists in controller storage, a
 crash can leave that hold active across power cycles; the next serial connection
 detects exactly `255`, restores the configured normal value, and explicitly
 releases the motors. Connection always requests an explicit motor release even
-when `$1` already reports its expected finite value. It changes no fan/coolant
-setting.
+when `$1` already reports its expected finite value. When Air Assist is
+configured, connection cleanup also establishes its trusted OFF command after
+laser off; it never enables the output.
 
 For GRBL controllers, this preflight also reads `$G` and `$#` after parking and
 records the active `G54`-`G59` workspace, its XYZ offset, and `G92`. Immediately

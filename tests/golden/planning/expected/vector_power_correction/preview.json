@@ -1,5 +1,7 @@
 {
   "acceleration_mm_s2": 500.0,
+  "air_assist_commands": null,
+  "air_assist_events": [],
   "bounds_mm": [
     0.0,
     0.0,
@@ -12,6 +14,7 @@
   "maximum_power": 394.0,
   "moves": [
     {
+      "air_assist": false,
       "distance_mm": 39.051248379533,
       "duration_seconds": 0.881024967591,
       "end_seconds": 0.881024967591,
@@ -37,6 +40,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 0.915665983742,
@@ -62,6 +66,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 0.950306999893,
@@ -87,6 +92,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 0.984948016045,
@@ -112,6 +118,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 29.1,
       "duration_seconds": 1.03,
       "end_seconds": 2.014948016045,
@@ -137,6 +144,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.049589032196,
@@ -162,6 +170,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.084230048348,
@@ -187,6 +196,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.118871064499,
@@ -212,6 +222,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.15351208065,
@@ -237,6 +248,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.188153096802,
@@ -262,6 +274,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.222794112953,
@@ -287,6 +300,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 19.1,
       "duration_seconds": 0.696666666667,
       "end_seconds": 2.91946077962,
@@ -312,6 +326,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.954101795771,
@@ -337,6 +352,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 2.988742811922,
@@ -362,6 +378,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 3.023383828074,
@@ -387,6 +404,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 3.058024844225,
@@ -412,6 +430,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 3.092665860377,
@@ -437,6 +456,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 3.127306876528,
@@ -462,6 +482,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 29.1,
       "duration_seconds": 1.03,
       "end_seconds": 4.157306876528,
@@ -487,6 +508,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 4.191947892679,
@@ -512,6 +534,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 4.226588908831,
@@ -537,6 +560,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 4.261229924982,
@@ -562,6 +586,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 4.295870941134,
@@ -587,6 +612,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 4.330511957285,
@@ -612,6 +638,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 4.365152973436,
@@ -637,6 +664,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 19.1,
       "duration_seconds": 0.696666666667,
       "end_seconds": 5.061819640103,
@@ -662,6 +690,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 5.096460656254,
@@ -687,6 +716,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 5.131101672406,
@@ -712,6 +742,7 @@
       "vector_power_correction": 60.0
     },
     {
+      "air_assist": false,
       "distance_mm": 0.15,
       "duration_seconds": 0.034641016151,
       "end_seconds": 5.165742688557,

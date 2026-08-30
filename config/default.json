@@ -65,7 +65,11 @@
     "allow_motion": false,
     "controller_startup_delay": 2.0,
     "max_travel_feed_mm_min": 6000.0,
-    "max_work_feed_mm_min": 6000.0
+    "max_work_feed_mm_min": 6000.0,
+    "air_assist": {
+      "mode": "disabled",
+      "fan_index": 0
+    }
   },
   "calibration": {
     "lens": {

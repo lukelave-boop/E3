@@ -36,6 +36,13 @@ Generic Marlin, Ender-3 S1 Pro, and Custom Machine, with Generic 10 W Diode and
 Custom Laser Head tool profiles. This UI
 does not claim compatibility with an untested printer or controller.
 
+Machine Manager also owns the saved **Air assist output** mapping. The only
+choices are Disabled, GRBL coolant (`M8`/`M9`), and Marlin fan with a bounded
+channel index (`M106 P<n> S255`/`M107 P<n>`); there is no percentage or arbitrary
+G-code field. An enabled mapping requires the matching explicit protocol and
+takes effect only after the saved machine is selected on a later launch. The
+Cuts / Layers checkbox stores only portable per-operation intent.
+
 New profile-created machines start with motion permission off, default and frame
 power at zero, low-power framing off, and no inherited camera, calibration, or
 honeycomb binding. Machine Setup shows the running profile identity, active
@@ -610,9 +617,10 @@ auto-resumes it.
 After a successful powered job, `machine.home_and_release_after_powered_job`
 keeps the job in its running state while the controller acknowledges `M5`,
 drains all accepted toolpath motion, homes, returns to the configured camera
-pose, waits for the park move to finish, and releases the motors. It does not
-send fan or coolant commands. The default is enabled. The Laser panel labels
-the drain, home, park, and release phases; a completion-command failure also
+pose, waits for the park move to finish, and releases the motors. When Air
+Assist is configured, the finalized program and local cleanup establish assist
+OFF after laser off before that completion motion. The default completion
+sequence is enabled. The Laser panel labels the drain, home, park, and release phases; a completion-command failure also
  raises a one-time desktop error. The engraving may already be complete, so
  inspect the controller log and machine state before retrying. Zero-power jobs, stopped
  or failed jobs, emergency actions, and controller/serial disconnects skip the
@@ -627,5 +635,6 @@ leaves `255` persisted across a controller restart, the next serial connection
 restores `machine.grbl_step_idle_delay_ms`, which defaults to 250 ms. This
 recovery then explicitly releases the motors. Connection requests motor release
 even when `$1` was already finite, because driver state at process startup is
-not trusted. This recovery changes no fan setting and sends no laser-enable
-command.
+not trusted. The `$1` recovery itself changes no fan setting and sends no laser-
+enable command. Separately, a configured connection establishes Air Assist OFF
+after laser off.

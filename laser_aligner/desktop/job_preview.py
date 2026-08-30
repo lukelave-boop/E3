@@ -27,6 +27,7 @@ _MIN_CANVAS_WIDTH = 360
 _MIN_CANVAS_HEIGHT = 240
 _MIN_SIDEBAR_WIDTH = 300
 _DEFAULT_SIDEBAR_WIDTH = 340
+_MAX_AIR_ASSIST_EVENT_ROWS = 100
 
 RenderKey = tuple[str, str, float | None]
 
@@ -43,6 +44,7 @@ class PreviewLayerRow:
     vector_power_correction: float
     raster_power_correction: float
     power: float
+    air_assist: bool
 
 
 @dataclass(slots=True, frozen=True)
@@ -72,8 +74,10 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
                 "vector_power_correction": move.vector_power_correction,
                 "raster_power_correction": move.raster_power_correction,
                 "power": 0.0,
+                "air_assist": False,
             },
         )
+        row["air_assist"] = bool(row["air_assist"]) or move.air_assist
         if move.laser_on:
             row["distance"] = float(row["distance"]) + move.distance_mm
             row["seconds"] = float(row["seconds"]) + move.duration_seconds
@@ -95,6 +99,7 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
                 vector_power_correction=float(row["vector_power_correction"]),
                 raster_power_correction=float(row["raster_power_correction"]),
                 power=float(row["power"]),
+                air_assist=bool(row["air_assist"]),
             )
             for row in rows.values()
         ),
@@ -707,6 +712,49 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.layer_tree = self._build_layer_tree()
         side_layout.addWidget(self.layer_tree)
 
+        self.air_assist_group: QtWidgets.QGroupBox | None = None
+        self.air_assist_list: QtWidgets.QListWidget | None = None
+        self.air_assist_view_all_button: QtWidgets.QPushButton | None = None
+        self.air_assist_full_dialog: QtWidgets.QDialog | None = None
+        self.air_assist_full_text: QtWidgets.QPlainTextEdit | None = None
+        if plan.air_assist_events:
+            self.air_assist_group = QtWidgets.QGroupBox("Exact air-assist commands")
+            air_layout = QtWidgets.QVBoxLayout(self.air_assist_group)
+            air_layout.setContentsMargins(6, 8, 6, 6)
+            air_layout.setSpacing(4)
+            air_note = QtWidgets.QLabel(
+                "Finalized commands sent at these program boundaries:"
+            )
+            air_note.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+            air_note.setWordWrap(True)
+            air_layout.addWidget(air_note)
+            self.air_assist_list = QtWidgets.QListWidget()
+            self.air_assist_list.setObjectName("airAssistCommands")
+            self.air_assist_list.setAlternatingRowColors(True)
+            self.air_assist_list.setMinimumHeight(70)
+            self.air_assist_list.setMaximumHeight(150)
+            for event in plan.air_assist_events[:_MAX_AIR_ASSIST_EVENT_ROWS]:
+                state = "ON" if event.enabled else "OFF"
+                self.air_assist_list.addItem(
+                    f"Line {event.line_number} · {state} · {event.command}"
+                )
+            omitted = len(plan.air_assist_events) - _MAX_AIR_ASSIST_EVENT_ROWS
+            if omitted > 0:
+                self.air_assist_list.addItem(f"… {omitted} more exact event(s)")
+            air_layout.addWidget(self.air_assist_list)
+            if omitted > 0:
+                self.air_assist_view_all_button = QtWidgets.QPushButton(
+                    "View all exact commands…"
+                )
+                self.air_assist_view_all_button.setObjectName(
+                    "viewAllAirAssistCommands"
+                )
+                self.air_assist_view_all_button.clicked.connect(
+                    self._show_all_air_assist_commands
+                )
+                air_layout.addWidget(self.air_assist_view_all_button)
+            side_layout.addWidget(self.air_assist_group)
+
         display_group = QtWidgets.QGroupBox("Display")
         display_layout = QtWidgets.QGridLayout(display_group)
         display_layout.setContentsMargins(6, 8, 6, 6)
@@ -932,11 +980,67 @@ class JobPreviewDialog(QtWidgets.QDialog):
     def _layer_rows(self) -> tuple[PreviewLayerRow, ...]:
         return self.prepared.layer_rows
 
+    def _show_all_air_assist_commands(self) -> None:
+        existing = self.air_assist_full_dialog
+        if existing is not None:
+            existing.raise_()
+            existing.activateWindow()
+            return
+
+        dialog = QtWidgets.QDialog(self)
+        dialog.setObjectName("allAirAssistCommandsDialog")
+        dialog.setWindowTitle("All exact Air Assist commands")
+        dialog.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
+        dialog.resize(620, 420)
+        layout = QtWidgets.QVBoxLayout(dialog)
+        note = QtWidgets.QLabel(
+            "Every finalized Air Assist command, in program order:"
+        )
+        note.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+        layout.addWidget(note)
+        command_text = QtWidgets.QPlainTextEdit()
+        command_text.setObjectName("allAirAssistCommands")
+        command_text.setReadOnly(True)
+        command_text.setLineWrapMode(QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap)
+        command_text.setPlainText(
+            "\n".join(
+                f"Line {event.line_number} · "
+                f"{'ON' if event.enabled else 'OFF'} · {event.command}"
+                for event in self.plan.air_assist_events
+            )
+        )
+        layout.addWidget(command_text)
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Close
+        )
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        self.air_assist_full_dialog = dialog
+        self.air_assist_full_text = command_text
+        dialog.finished.connect(self._air_assist_full_dialog_finished)
+        dialog.open()
+
+    def _air_assist_full_dialog_finished(self, _result: int) -> None:
+        dialog = self.air_assist_full_dialog
+        self.air_assist_full_dialog = None
+        self.air_assist_full_text = None
+        if dialog is not None:
+            dialog.deleteLater()
+
     def _build_layer_tree(self) -> QtWidgets.QTreeWidget:
         tree = QtWidgets.QTreeWidget()
         tree.setObjectName("previewLayers")
         tree.setHeaderLabels(
-            ("Show", "Operation", "Cut", "Time", "Speed", "Correction", "Max power")
+            (
+                "Show",
+                "Operation",
+                "Cut",
+                "Time",
+                "Speed",
+                "Correction",
+                "Max power",
+                "Air assist",
+            )
         )
         tree.setRootIsDecorated(False)
         tree.setAlternatingRowColors(True)
@@ -968,6 +1072,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     f"R {row.raster_power_correction:+g}",
                     f"{row.power / self.plan.power_max * 100:.1f}% / "
                     f"S{row.power:g}",
+                    f"Air assist: {'On' if row.air_assist else 'Off'}",
                 ]
             )
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, row.id)
@@ -986,7 +1091,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     if column == 4
                     else item.text(column)
                 )
-                for column in range(1, 7)
+                for column in range(1, 8)
             )
             for column in range(tree.columnCount()):
                 item.setToolTip(column, html.escape(details, quote=True))
@@ -1000,7 +1105,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 column,
                 QtWidgets.QHeaderView.ResizeMode.Interactive,
             )
-        for column, width in enumerate((28, 48, 34, 30, 44, 48, 70)):
+        for column, width in enumerate((28, 42, 30, 28, 38, 42, 64, 48)):
             header.resizeSection(column, width)
         return tree
 

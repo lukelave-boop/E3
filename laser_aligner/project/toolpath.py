@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ..air_assist import AirAssistCommands
 from ..config import LaserSettings, WorkArea
 from ..errors import SafetyError
 from ..gcode.generator import (
@@ -143,6 +144,8 @@ class ProjectJob:
     point_count: int
     layer_summaries: list[dict[str, Any]] = field(default_factory=list)
     plan: JobPlan | None = None
+    spot_offset_mm: tuple[float, float] = (0.0, 0.0)
+    air_assist_commands: AirAssistCommands | None = None
     raster_assets: tuple[RasterAssetIdentity, ...] = ()
     coordinate_space: CoordinateSpace = CoordinateSpace.MACHINE
     coordinate_frame_signature: tuple[str, int, str] | None = None
@@ -2329,6 +2332,63 @@ def _points_differ(first: np.ndarray, second: np.ndarray) -> bool:
     return float(np.linalg.norm(first - second)) > 1e-9
 
 
+def _points_have_motion(points: np.ndarray) -> bool:
+    return len(points) >= 2 and any(
+        (_fmt(float(start[0])), _fmt(float(start[1])))
+        != (_fmt(float(end[0])), _fmt(float(end[1])))
+        for start, end in zip(points[:-1], points[1:], strict=True)
+    )
+
+
+@dataclass(slots=True)
+class _AirAssistEmitter:
+    """Emit a resolved binary output without duplicating state transitions."""
+
+    commands: AirAssistCommands | None
+    active: bool = False
+
+    def establish_off(self, lines: list[str]) -> None:
+        if self.commands is not None:
+            lines.extend(self.commands.off_commands)
+        self.active = False
+
+    def turn_on(self, lines: list[str]) -> None:
+        if self.active:
+            return
+        if self.commands is None:
+            raise SafetyError(
+                "A powered layer requests air assist, but the machine has no "
+                "resolved air-assist command mapping"
+            )
+        lines.extend(self.commands.on_commands)
+        self.active = True
+
+    def turn_off_before_layer(self, lines: list[str]) -> None:
+        if not self.active:
+            return
+        if self.commands is None:  # pragma: no cover - guarded by turn_on
+            raise SafetyError("Active air assist has no resolved command mapping")
+        lines.append("M5")
+        lines.extend(self.commands.off_commands)
+        self.active = False
+
+
+def _layer_has_powered_output(
+    operation: LayerOperation,
+    *,
+    power_max: int,
+) -> bool:
+    if operation.layer.controller_power(power_max) <= 0:
+        return False
+    if operation.layer.mode == LayerMode.RASTER:
+        return any(
+            _points_have_motion(span.points)
+            for row in operation.raster_rows
+            for span in row.spans
+        )
+    return any(_points_have_motion(path.points) for path in operation.paths)
+
+
 def _emit_raster_row(
     lines: list[str],
     row: RasterRow,
@@ -2337,6 +2397,7 @@ def _emit_raster_row(
     power: int,
     power_max: int,
     current: np.ndarray,
+    air_assist: _AirAssistEmitter,
 ) -> tuple[np.ndarray, float, float, int, int]:
     """Emit one scan row and return position, cut/travel, points, and paths."""
 
@@ -2377,6 +2438,8 @@ def _emit_raster_row(
         position = row_end
     else:
         for span in row.spans:
+            if not _points_have_motion(span.points):
+                continue
             span_start = span.points[0]
             span_end = span.points[-1]
             if _points_differ(position, span_start):
@@ -2386,6 +2449,8 @@ def _emit_raster_row(
                     f"G1 X{_fmt(span_start[0])} Y{_fmt(span_start[1])} "
                     f"F{_fmt(layer.speed_mm_min)}"
                 )
+            if layer.air_assist:
+                air_assist.turn_on(lines)
             lines.append(f"{laser.power_mode.upper()} S{power}")
             commanded_power = power
             motions = corrected_raster_span_motions(
@@ -2450,8 +2515,14 @@ def generate_project_gcode(
     machine_work_area: WorkArea | None = None,
     guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
     planning_cache: PlanningCache | None = None,
+    air_assist_commands: AirAssistCommands | None = None,
 ) -> ProjectJob:
     """Generate one guarded vector program containing all enabled line layers."""
+    if air_assist_commands is not None and not isinstance(
+        air_assist_commands,
+        AirAssistCommands,
+    ):
+        raise TypeError("air_assist_commands must be AirAssistCommands or None")
     document.validate()
     scene_revision = project_scene_revision(document)
     controller_power_max = int(power_max or laser.power_max)
@@ -2787,6 +2858,19 @@ def generate_project_gcode(
     if not all_paths:
         raise ValueError("The project contains no enabled output paths")
 
+    if air_assist_commands is None and any(
+        layer_plan.layer.air_assist
+        and _layer_has_powered_output(
+            layer_plan,
+            power_max=controller_power_max,
+        )
+        for layer_plan in layer_plans
+    ):
+        raise SafetyError(
+            "A powered layer requests air assist, but the machine has no resolved "
+            "air-assist command mapping"
+        )
+
     bounds = _bounds(all_paths)
     controller_bounds = _bounds(all_controller_paths)
     has_raster = any(plan.raster_rows for plan in layer_plans)
@@ -2813,6 +2897,8 @@ def generate_project_gcode(
         "G90 ; absolute positioning",
         "M5 ; laser off before any motion",
     ]
+    air_assist = _AirAssistEmitter(air_assist_commands)
+    air_assist.establish_off(lines)
     lines.insert(
         4,
         e3_metadata_line(
@@ -2844,16 +2930,27 @@ def generate_project_gcode(
         layer = layer_plan.layer
         paths = layer_plan.paths
         power = layer.controller_power(controller_power_max)
+        layer_has_powered_output = _layer_has_powered_output(
+            layer_plan,
+            power_max=controller_power_max,
+        )
+        if air_assist.active and not (
+            layer_has_powered_output and layer.air_assist
+        ):
+            air_assist.turn_off_before_layer(lines)
         layer_cut = 0.0
         layer_travel = 0.0
         layer_path_count = 0
-        lines.append(
+        layer_comment = (
             f"; Layer {layer.name.replace(';', ',')[:80]} · "
             f"{layer.speed_mm_min:g} mm/min · {layer.power_percent:g}% · "
             f"{layer.passes} pass(es) · vector correction "
             f"{layer.vector_power_correction:+g} · raster correction "
             f"{layer.raster_power_correction:+g}"
         )
+        if layer.air_assist:
+            layer_comment += " · Air assist: On"
+        lines.append(layer_comment)
         if layer_plan.dithered_image:
             lines.append("; Raster tone: deterministic 8x8 ordered grayscale dither")
         if layer.mode == LayerMode.RASTER:
@@ -2871,6 +2968,7 @@ def generate_project_gcode(
                     "vector_power_correction": layer.vector_power_correction,
                     "raster_power_correction": layer.raster_power_correction,
                     "mode": layer.mode.value,
+                    **({"air_assist": True} if layer.air_assist else {}),
                     "raster_tone": (
                         "ordered-dither-8x8"
                         if layer_plan.dithered_image
@@ -2935,6 +3033,7 @@ def generate_project_gcode(
                         power,
                         controller_power_max,
                         current,
+                        air_assist,
                     )
                     layer_cut += row_cut
                     cut_length += row_cut
@@ -2965,7 +3064,7 @@ def generate_project_gcode(
                 path_passes = range(layer.passes) if is_nested else (pass_index,)
                 for path_pass_index in path_passes:
                     points = path.points
-                    if len(points) < 2:
+                    if not _points_have_motion(points):
                         continue
                     lines.append(
                         f"; Pass {path_pass_index + 1}/{layer.passes}"
@@ -2992,6 +3091,8 @@ def generate_project_gcode(
                         f"F{_fmt(laser.travel_feed_mm_min)}"
                     )
                     if power > 0:
+                        if layer.air_assist:
+                            air_assist.turn_on(lines)
                         lines.append(f"{laser.power_mode.upper()} S{power}")
                     motions = (
                         corrected_vector_motions(
@@ -3046,6 +3147,14 @@ def generate_project_gcode(
                 "passes": layer.passes,
                 "vector_power_correction": layer.vector_power_correction,
                 "raster_power_correction": layer.raster_power_correction,
+                **(
+                    {
+                        "air_assist": True,
+                        "air_assist_label": "Air assist: On",
+                    }
+                    if layer.air_assist
+                    else {}
+                ),
             }
         )
 
@@ -3061,10 +3170,12 @@ def generate_project_gcode(
                 },
             ),
             "M5",
-            "; End of E3 project job",
-            "",
         ]
     )
+    if air_assist_commands is not None:
+        air_assist.establish_off(lines)
+        lines.append("M5")
+    lines.extend(["; End of E3 project job", ""])
     command_count = _stream_command_count(lines)
     if command_count > _MAX_STREAM_COMMANDS:
         raise ValueError(
@@ -3093,6 +3204,7 @@ def generate_project_gcode(
         start_position=(float(start[0]), float(start[1])),
         acceleration_mm_s2=laser.preview_acceleration_mm_s2,
         command_delay_ms=laser.preview_command_delay_ms,
+        air_assist_commands=air_assist_commands,
     )
     return ProjectJob(
         text=encoded.text,
@@ -3104,6 +3216,11 @@ def generate_project_gcode(
         point_count=point_count,
         layer_summaries=summaries,
         plan=plan,
+        spot_offset_mm=(
+            float(laser.spot_offset_x_mm),
+            float(laser.spot_offset_y_mm),
+        ),
+        air_assist_commands=air_assist_commands,
         raster_assets=tuple(
             identity
             for layer_plan in layer_plans
@@ -3308,6 +3425,10 @@ def generate_project_frame(
         point_count=program.point_count,
         layer_summaries=[],
         plan=plan,
+        spot_offset_mm=(
+            float(laser.spot_offset_x_mm),
+            float(laser.spot_offset_y_mm),
+        ),
         raster_assets=tuple(
             source.identity
             for source in raster_sources.values()

@@ -13,6 +13,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from PySide6 import QtWidgets
 
+from laser_aligner.air_assist import AirAssistMode
 from laser_aligner.calibration.profiles import signature_from_camera_settings
 from laser_aligner.config import load_settings
 from laser_aligner.desktop.machine_manager import (
@@ -203,14 +204,25 @@ def test_apply_machine_profile_defaults_is_explicit_and_does_not_touch_laser(
     dialog = MachineManagerDialog(runtime)
     ender_index = dialog.machine_profile.findData("ender-3-s1-pro")
     dialog.machine_profile.setCurrentIndex(ender_index)
+    dialog.air_assist_mode.setCurrentIndex(
+        dialog.air_assist_mode.findData(AirAssistMode.MARLIN_FAN.value)
+    )
+    dialog.air_assist_fan_index.setValue(7)
+    questions: list[str] = []
 
     monkeypatch.setattr(
         QtWidgets.QMessageBox,
         "question",
-        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+        lambda _parent, _title, text, *args, **kwargs: (
+            questions.append(str(text))
+            or QtWidgets.QMessageBox.StandardButton.Yes
+        ),
     )
     dialog._apply_machine_profile_defaults()
 
+    assert "Air Assist output" in dialog.apply_machine_defaults_button.toolTip()
+    assert questions and "Air Assist output settings" in questions[-1]
+    assert dialog.air_assist_mode.currentData() == AirAssistMode.DISABLED.value
     assert dialog.max_travel_feed.value() == 3000.0
     assert dialog.port.text() == "SELECT_CONTROLLER_PORT"
     assert dialog.power_max.value() == before.laser.power_max
@@ -493,6 +505,84 @@ def test_manager_saves_backend_and_explicit_motion_permission_across_reopen(
     assert not reopened.port.isHidden()
     assert reopened.grbl_idle_delay.isHidden()
     reopened.close()
+
+
+def test_manager_saves_constrained_air_assist_mapping_across_reopen(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    running_air_assist = runtime.settings.machine.air_assist
+    assert running_air_assist.mode is AirAssistMode.DISABLED
+    dialog = MachineManagerDialog(runtime)
+
+    assert tuple(
+        dialog.air_assist_mode.itemData(index)
+        for index in range(dialog.air_assist_mode.count())
+    ) == tuple(mode.value for mode in AirAssistMode)
+    assert "100%" in dialog.air_assist_mode.toolTip()
+    assert dialog.air_assist_fan_index.isHidden()
+
+    dialog.air_assist_mode.setCurrentIndex(
+        dialog.air_assist_mode.findData(AirAssistMode.GRBL_COOLANT.value)
+    )
+    qt_application.processEvents()
+    assert dialog.air_assist_fan_index.isHidden()
+
+    dialog.protocol.setCurrentIndex(dialog.protocol.findData("marlin"))
+    dialog.air_assist_mode.setCurrentIndex(
+        dialog.air_assist_mode.findData(AirAssistMode.MARLIN_FAN.value)
+    )
+    dialog.air_assist_fan_index.setValue(7)
+    qt_application.processEvents()
+    assert not dialog.air_assist_fan_index.isHidden()
+
+    assert dialog._save_selected() is True
+    dialog.close()
+
+    saved = runtime.machine_registry.active_machine.machine.air_assist
+    assert saved.mode is AirAssistMode.MARLIN_FAN
+    assert saved.fan_index == 7
+    assert runtime.settings.machine.air_assist is running_air_assist
+    assert runtime.settings.machine.air_assist.mode is AirAssistMode.DISABLED
+    assert runtime.settings.machine.air_assist.fan_index == 0
+
+    reopened = MachineManagerDialog(runtime)
+    qt_application.processEvents()
+    assert (
+        reopened.air_assist_mode.currentData()
+        == AirAssistMode.MARLIN_FAN.value
+    )
+    assert reopened.air_assist_fan_index.value() == 7
+    assert not reopened.air_assist_fan_index.isHidden()
+    reopened.close()
+
+
+def test_manager_rejects_air_assist_mapping_for_wrong_protocol(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    before = runtime.machine_registry.active_machine.to_dict()
+    dialog = MachineManagerDialog(runtime)
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda _parent, _title, text: warnings.append(str(text)),
+    )
+    dialog.protocol.setCurrentIndex(dialog.protocol.findData("marlin"))
+    dialog.air_assist_mode.setCurrentIndex(
+        dialog.air_assist_mode.findData(AirAssistMode.GRBL_COOLANT.value)
+    )
+    qt_application.processEvents()
+
+    assert dialog._save_selected() is False
+    assert runtime.machine_registry.active_machine.to_dict() == before
+    assert warnings
+    assert "requires machine.protocol grbl" in warnings[-1]
+    dialog.close()
 
 
 @pytest.mark.parametrize(

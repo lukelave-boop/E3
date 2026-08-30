@@ -5,6 +5,7 @@ from dataclasses import replace
 
 import pytest
 
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
 from laser_aligner.errors import (
     CameraError,
@@ -12,7 +13,11 @@ from laser_aligner.errors import (
     SafetyError,
     TransientConnectionError,
 )
-from laser_aligner.machine.service import MachineService, _ControllerCommandRejected
+from laser_aligner.machine.service import (
+    MachineService,
+    ValidatedProgram,
+    _ControllerCommandRejected,
+)
 from tests.fakes.simulator_transport import SimulatedTransport
 
 
@@ -480,6 +485,198 @@ def test_powered_program_preflight_is_side_effect_free() -> None:
         machine._check_line_safety("M4 S5")
 
 
+def test_grbl_air_assist_program_accepts_off_only_and_idempotent_epilogue_off() -> None:
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+    no_request = (
+        "G21\nG90\nM5\nM9\nG0 X10 Y10 F1000\nM4 S5\n"
+        "G1 X20 Y20 F500\nM5\nM9\nM5\n"
+    )
+    transitioned = (
+        "G21\nG90\nM5\nM9\nG0 X10 Y10 F1000\nM8\nM4 S5\n"
+        "G1 X20 Y20 F500\nM5\nM9\nM9\nM5\n"
+    )
+
+    assert machine.preflight_program(no_request).lines[-1] == "M5"
+    assert machine.preflight_program(transitioned).lines[-3:] == (
+        "M9",
+        "M9",
+        "M5",
+    )
+
+
+def test_configured_air_assist_is_fail_off_before_program_without_air_literals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            self.commands.append(" ".join(line.strip().upper().split()))
+            super().write_line(line)
+
+    transport = RecordingTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda *_args, **_kwargs: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            controller_startup_delay=0.0,
+            home_and_release_after_powered_job=False,
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    program = machine.preflight_program(
+        "G21\nG90\nM5\nG0 X10 Y10 F1000\nM4 S5\n"
+        "G1 X20 Y20 F500\nM5\n"
+    )
+    assert "M8" not in program.lines
+    assert "M9" not in program.lines
+    machine.connect()
+    machine._coordinate_reference_ready = True
+    transport.commands.clear()
+    try:
+        machine.arm_program(machine.ARM_PHRASE, program)
+        machine.start_validated_program(program)
+        wait_for_job(machine)
+
+        assert machine.status()["job"]["error"] is None
+        program_start = transport.commands.index("G21")
+        assert transport.commands[program_start - 2 : program_start] == ["M5", "M9"]
+        assert "M8" not in transport.commands
+    finally:
+        machine.disconnect()
+
+
+def test_marlin_air_assist_s255_is_not_laser_power_and_mapping_is_exact() -> None:
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="marlin",
+            air_assist=AirAssistSettings(
+                mode=AirAssistMode.MARLIN_FAN,
+                fan_index=2,
+            ),
+        ),
+        LaserSettings(power_max=100),
+        hardware_enabled=False,
+    )
+    valid = (
+        "G21\nG90\nM5\nM107 P2\nG0 X10 Y10 F1000\n"
+        "M106 P2 S255\nM4 S5\nG1 X20 Y20 F500\n"
+        "M5\nM107 P2\nM5\n"
+    )
+
+    assert machine.preflight_program(valid).requires_laser_authorization
+    for command in (
+        "M106 P1 S255",
+        "M106 P2 S254",
+        "M106 P2 S255 X1",
+        "M107 P1",
+        "M8",
+    ):
+        with pytest.raises(SafetyError, match="configured output|Unsupported"):
+            machine.preflight_program(
+                f"G21\nG90\nM5\nM107 P2\nG0 X10 Y10 F1000\n{command}\nM5\n"
+            )
+
+
+@pytest.mark.parametrize("command", ["M8", "M9", "M106 P0 S255", "M107 P0"])
+def test_unconfigured_air_assist_commands_remain_blocked(command: str) -> None:
+    machine = MachineService(
+        MachineSettings(backend="serial"),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+
+    with pytest.raises(SafetyError, match="Unsupported|configured output"):
+        machine.preflight_program(f"G21\nG90\nM5\n{command}\nM5\n")
+
+
+@pytest.mark.parametrize(
+    ("program", "message"),
+    [
+        (
+            "G21\nG90\nM5\nG0 X10 Y10 F1000\nM8\nM5\n",
+            "first air-assist command must establish OFF",
+        ),
+        (
+            "G21\nG90\nM5\nM9\nM8\nM5\nM9\nM5\n",
+            "establish an absolute XY position",
+        ),
+        (
+            "G21\nG90\nM5\nM9\nG0 X10 Y10 F1000\nM8\nM4 S5\nM9\nM5\n",
+            "M5 must disable the laser",
+        ),
+        (
+            "G21\nG90\nM5\nM9\nG0 X10 Y10 F1000\nM8\nM5\nM9\nM5\n",
+            "contained no powered work motion",
+        ),
+        (
+            "G21\nG90\nM5\nM9\nG0 X10 Y10 F1000\nM8\nM4 S5\n"
+            "G1 X10 Y10 F500\nM5\nM9\nM5\n",
+            "contained no powered work motion",
+        ),
+        (
+            "G21\nG90\nM5\nM9\nG0 X10 Y10 F1000\nM8\nM4 S5\n"
+            "G1 X10.0000000001 Y10 F500\nM5\nM9\nM5\n",
+            "contained no powered work motion",
+        ),
+    ],
+)
+def test_air_assist_program_lifecycle_rejects_unsafe_transitions(
+    program: str,
+    message: str,
+) -> None:
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+        LaserSettings(),
+        hardware_enabled=False,
+    )
+
+    with pytest.raises(SafetyError, match=message):
+        machine.preflight_program(program)
+
+
+def test_validated_program_rejects_air_assist_mapping_change_before_start() -> None:
+    settings = MachineSettings(
+        backend="serial",
+        protocol="marlin",
+        air_assist=AirAssistSettings(
+            mode=AirAssistMode.MARLIN_FAN,
+            fan_index=1,
+        ),
+    )
+    machine = MachineService(settings, LaserSettings(), hardware_enabled=False)
+    program = machine.preflight_program(
+        "G21\nG90\nM5\nM107 P1\nG0 X10 Y10 F1000\n"
+        "M106 P1 S255\nM4 S5\nG1 X20 Y20 F500\n"
+        "M5\nM107 P1\nM5\n"
+    )
+    settings.air_assist.fan_index = 2
+
+    with pytest.raises(SafetyError, match="configured output|air-assist mapping"):
+        machine.start_validated_program(program)
+
+
 def test_inline_g1_power_is_allowed_only_after_laser_mode_and_remains_bounded() -> None:
     machine = MachineService(
         MachineSettings(backend="serial"),
@@ -879,6 +1076,295 @@ def test_invalid_gate_mutation_cannot_suppress_disconnect_m5() -> None:
     assert transport.commands == ["M5", "M5"]
 
 
+def test_running_job_retains_original_air_off_mapping_after_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = MachineSettings(
+        backend="serial",
+        protocol="marlin",
+        controller_startup_delay=0.0,
+        home_and_release_after_powered_job=False,
+        air_assist=AirAssistSettings(
+            mode=AirAssistMode.MARLIN_FAN,
+            fan_index=1,
+        ),
+    )
+
+    class MutatingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+            self.p1_failures_remaining = 2
+            self.successful_commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            command = " ".join(line.strip().upper().split())
+            self.commands.append(command)
+            if (
+                command == "M107 P1"
+                and settings.air_assist.fan_index == 2
+                and self.p1_failures_remaining > 0
+            ):
+                self.p1_failures_remaining -= 1
+                raise OSError("injected failure after mutable mapping change")
+            super().write_line(line)
+            self.successful_commands.append(command)
+            if command.startswith("G1 X20"):
+                settings.air_assist.fan_index = 2
+
+    transport = MutatingTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda *_args, **_kwargs: transport,
+    )
+    machine = MachineService(settings, LaserSettings(), hardware_enabled=True)
+    program = machine.preflight_program(
+        "G21\nG90\nM5\nM107 P1\nG0 X10 Y10 F1000\n"
+        "M106 P1 S255\nM4 S5\nG1 X20 Y20 F500\n"
+        "M5\nM107 P1\nM5\n"
+    )
+    machine.connect()
+    machine.arm_program(machine.ARM_PHRASE, program)
+
+    machine.start_validated_program(program)
+    wait_for_job(machine)
+
+    assert settings.air_assist.fan_index == 2
+    assert "G1 X20 Y20 F500" in transport.commands
+    assert machine.status()["job"]["error"] is not None
+    assert transport.commands[-3:] == ["M5", "M107 P1", "M107 P2"]
+    assert machine._active_job_air_assist_off_commands == ("M107 P1",)
+
+    p1_successes_before_disconnect = transport.successful_commands.count("M107 P1")
+    machine.disconnect()
+
+    assert transport.successful_commands.count("M107 P1") > p1_successes_before_disconnect
+    assert machine._active_job_air_assist_off_commands == ()
+
+
+def test_validated_program_cleanup_mapping_survives_mutation_after_integrity_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = MachineSettings(
+        backend="serial",
+        protocol="marlin",
+        controller_startup_delay=0.0,
+        home_and_release_after_powered_job=False,
+        air_assist=AirAssistSettings(
+            mode=AirAssistMode.MARLIN_FAN,
+            fan_index=1,
+        ),
+    )
+
+    class RecordingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            self.commands.append(" ".join(line.strip().upper().split()))
+            super().write_line(line)
+
+    transport = RecordingTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda *_args, **_kwargs: transport,
+    )
+    machine = MachineService(settings, LaserSettings(), hardware_enabled=True)
+    program = machine.preflight_program(
+        "G21\nG90\nM5\nM107 P1\nG0 X10 Y10 F1000\n"
+        "M106 P1 S255\nM4 S5\nG1 X20 Y20 F500\n"
+        "M5\nM107 P1\nM5\n"
+    )
+    assert program.air_assist_commands is not None
+    assert program.air_assist_commands.off_commands == ("M107 P1",)
+    machine.connect()
+    try:
+        machine.arm_program(machine.ARM_PHRASE, program)
+        require_current_profile = machine._require_current_safety_profile
+
+        def validate_then_mutate(candidate: ValidatedProgram) -> None:
+            require_current_profile(candidate)
+            settings.air_assist.fan_index = 2
+            # Preserve the newly configured mapping as the current cleanup
+            # fallback while the validated program remains bound to P1.
+            machine._resolved_air_assist_commands()
+
+        monkeypatch.setattr(
+            machine,
+            "_require_current_safety_profile",
+            validate_then_mutate,
+        )
+
+        def fail_to_start(_thread: threading.Thread) -> None:
+            raise RuntimeError("thread unavailable after validation")
+
+        monkeypatch.setattr(threading.Thread, "start", fail_to_start)
+        with pytest.raises(RuntimeError, match="thread unavailable after validation"):
+            machine.start_validated_program(program, "mapping-race.gcode")
+
+        assert settings.air_assist.fan_index == 2
+        assert transport.commands[-3:] == ["M5", "M107 P1", "M107 P2"]
+        assert machine._active_job_air_assist_off_commands == ("M107 P1",)
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("protocol", "air_assist", "on_command"),
+    [
+        (
+            "grbl",
+            AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+            "M8",
+        ),
+        (
+            "marlin",
+            AirAssistSettings(mode=AirAssistMode.MARLIN_FAN, fan_index=2),
+            "M106 P2 S255",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "operation",
+    ["prepare_photo_position", "prepare_job_start", "calibration_jog"],
+)
+def test_non_job_motion_never_enables_configured_air_assist(
+    monkeypatch: pytest.MonkeyPatch,
+    protocol: str,
+    air_assist: AirAssistSettings,
+    on_command: str,
+    operation: str,
+) -> None:
+    class RecordingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            self.commands.append(" ".join(line.strip().upper().split()))
+            super().write_line(line)
+
+    transport = RecordingTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda *_args, **_kwargs: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol=protocol,
+            controller_startup_delay=0.0,
+            air_assist=air_assist,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    try:
+        if operation == "prepare_photo_position":
+            machine.prepare_photo_position()
+        elif operation == "prepare_job_start":
+            machine.prepare_job_start()
+        else:
+            machine.prepare_photo_position()
+            machine.jog(1.0, 0.0, 100.0)
+
+        assert on_command not in transport.commands
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("protocol", "air_assist", "off_command"),
+    [
+        (
+            "grbl",
+            AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+            "M9",
+        ),
+        (
+            "marlin",
+            AirAssistSettings(mode=AirAssistMode.MARLIN_FAN, fan_index=3),
+            "M107 P3",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    ("action", "repetitions"),
+    [("request_stop", 1), ("disarm", 1), ("disconnect", 2)],
+)
+def test_cleanup_paths_write_m5_before_configured_air_off(
+    protocol: str,
+    air_assist: AirAssistSettings,
+    off_command: str,
+    action: str,
+    repetitions: int,
+) -> None:
+    class RecordingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            self.commands.append(" ".join(line.strip().upper().split()))
+            super().write_line(line)
+
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol=protocol,
+            air_assist=air_assist,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    transport = RecordingTransport()
+    transport.open()
+    machine._transport = transport
+    machine._connected = True
+
+    getattr(machine, action)()
+
+    assert transport.commands == ["M5", off_command] * repetitions
+    if action != "disconnect":
+        transport.close()
+
+
+def test_disarm_attempts_air_off_even_when_laser_off_write_fails() -> None:
+    class FailingM5Transport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            self.commands.append(command)
+            if command == "M5":
+                raise OSError("laser-off write failed")
+            super().write_line(line)
+
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    transport = FailingM5Transport()
+    transport.open()
+    machine._transport = transport
+    machine._connected = True
+
+    machine.disarm()
+
+    assert transport.commands[-2:] == ["M5", "M9"]
+    assert machine._controller_reconnect_required
+    transport.close()
+
+
 @pytest.mark.parametrize(
     ("target", "value"),
     [
@@ -902,7 +1388,11 @@ def test_invalid_settings_cannot_suppress_disarm_m5(
             super().write_line(line)
 
     machine = MachineService(
-        MachineSettings(backend="serial", protocol="grbl", allow_motion=True),
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+        ),
         LaserSettings(),
         hardware_enabled=True,
     )
@@ -1116,6 +1606,62 @@ def test_stop_orders_m5_after_an_inflight_powered_job_write() -> None:
 
     assert errors == []
     assert transport.commands == ["M4 S5", "M5"]
+    assert not machine._job_laser_authorized
+
+
+def test_stop_orders_m5_then_air_off_after_inflight_powered_job_write() -> None:
+    class BlockingTransport(SimulatedTransport):
+        def __init__(self) -> None:
+            super().__init__()
+            self.powered_write_entered = threading.Event()
+            self.release_powered_write = threading.Event()
+            self.commands: list[str] = []
+
+        def write_line(self, line: str) -> None:
+            command = line.strip().upper()
+            if command == "M4 S5":
+                self.powered_write_entered.set()
+                assert self.release_powered_write.wait(timeout=2.0)
+            self.commands.append(command)
+            super().write_line(line)
+
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    transport = BlockingTransport()
+    transport.open()
+    machine._transport = transport
+    machine._connected = True
+    machine._job_laser_authorized = True
+    machine._job_stop.clear()
+    errors: list[Exception] = []
+
+    def write_powered_line() -> None:
+        try:
+            machine._write_running_job_line("M4 S5")
+        except Exception as exc:
+            errors.append(exc)
+
+    writer = threading.Thread(target=write_powered_line, daemon=True)
+    writer.start()
+    assert transport.powered_write_entered.wait(timeout=1.0)
+
+    stopper = threading.Thread(target=machine.request_stop, daemon=True)
+    stopper.start()
+    time.sleep(0.02)
+    assert stopper.is_alive()
+    transport.release_powered_write.set()
+    writer.join(timeout=1.0)
+    stopper.join(timeout=1.0)
+
+    assert errors == []
+    assert transport.commands == ["M4 S5", "M5", "M9"]
     assert not machine._job_laser_authorized
 
 
@@ -2726,7 +3272,12 @@ def test_temporary_stepper_hold_restores_grbl_idle_delay_after_capture_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
-        MachineSettings(backend="serial", protocol="grbl", allow_motion=True),
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
         LaserSettings(),
         hardware_enabled=True,
     )
@@ -2751,6 +3302,7 @@ def test_temporary_stepper_hold_restores_grbl_idle_delay_after_capture_failure(
             raise CameraError("capture failed")
 
     assert commands == ["$$", "$1=255", "capture", "M5", "$1=250", "$MD"]
+    assert "M8" not in commands
 
 
 def test_serial_connect_repairs_camera_hold_persisted_across_power_cycle(

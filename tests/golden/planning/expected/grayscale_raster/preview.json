@@ -1,5 +1,7 @@
 {
   "acceleration_mm_s2": 500.0,
+  "air_assist_commands": null,
+  "air_assist_events": [],
   "bounds_mm": [
     0.0,
     0.0,
@@ -12,6 +14,7 @@
   "maximum_power": 250.0,
   "moves": [
     {
+      "air_assist": false,
       "distance_mm": 58.363087649644,
       "duration_seconds": 1.267261752993,
       "end_seconds": 1.267261752993,
@@ -37,6 +40,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 10.0,
       "duration_seconds": 0.696666666667,
       "end_seconds": 1.96392841966,
@@ -62,6 +66,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 10.0,
       "duration_seconds": 0.696666666667,
       "end_seconds": 2.660595086326,
@@ -87,6 +92,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 5.0,
       "duration_seconds": 0.2,
       "end_seconds": 2.860595086326,
@@ -112,6 +118,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 5.0,
       "duration_seconds": 0.363333333333,
       "end_seconds": 3.22392841966,
@@ -137,6 +144,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 10.0,
       "duration_seconds": 0.696666666667,
       "end_seconds": 3.920595086326,
@@ -162,6 +170,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 5.0,
       "duration_seconds": 0.363333333333,
       "end_seconds": 4.28392841966,
@@ -187,6 +196,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 5.0,
       "duration_seconds": 0.2,
       "end_seconds": 4.48392841966,
@@ -212,6 +222,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 10.0,
       "duration_seconds": 0.696666666667,
       "end_seconds": 5.180595086326,
@@ -237,6 +248,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 10.0,
       "duration_seconds": 0.696666666667,
       "end_seconds": 5.877261752993,
@@ -262,6 +274,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 5.0,
       "duration_seconds": 0.2,
       "end_seconds": 6.077261752993,
@@ -287,6 +300,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 10.0,
       "duration_seconds": 0.696666666667,
       "end_seconds": 6.77392841966,
@@ -312,6 +326,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 10.0,
       "duration_seconds": 0.696666666667,
       "end_seconds": 7.470595086326,

@@ -13,6 +13,7 @@ from ..core import CoreRuntime
 from ..gcode.job_plan import build_job_plan, restart_program_from_move
 from ..geometry.polygon import normalize_convex_polygon
 from ..identity import application_identity, application_window_title
+from ..machine.controller_dialects import resolve_air_assist_commands
 from ..materials import (
     MaterialDatabase,
     MaterialPreset,
@@ -2593,6 +2594,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
             laser = copy.deepcopy(self.runtime.settings.laser)
             machine_work_area = machine.work_area
             work_area = self._work_area_signature(machine_work_area)
+            air_assist_commands = resolve_air_assist_commands(
+                machine.air_assist,
+                protocol=machine.protocol,
+            )
             coordinate_frame, coordinate_frame_signature = (
                 self._capture_job_coordinate_authority()
             )
@@ -2615,6 +2620,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 machine_max_work_feed_mm_min=machine.max_work_feed_mm_min,
                 machine_max_travel_feed_mm_min=machine.max_travel_feed_mm_min,
                 planned_travel_feed_mm_min=laser.travel_feed_mm_min,
+                spot_offset_x_mm=laser.spot_offset_x_mm,
+                spot_offset_y_mm=laser.spot_offset_y_mm,
+                air_assist_commands=air_assist_commands,
                 coordinate_frame=coordinate_frame,
                 honeycomb_execution_signature=coordinate_frame_signature,
                 guarded_output_polygon_mm=guarded_output_polygon_mm,
@@ -2658,6 +2666,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "coordinate_space": source_document.coordinate_space,
             "work_area": work_area,
             "machine_work_area": machine_work_area,
+            "air_assist_commands": air_assist_commands,
             "coordinate_frame": coordinate_frame,
             "coordinate_frame_signature": coordinate_frame_signature,
             "guarded_output_polygon_mm": guarded_output_polygon_mm,
@@ -2841,6 +2850,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 machine_work_area=context["machine_work_area"],
                 guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
                 planning_cache=context["planning_cache"],
+                air_assist_commands=context["air_assist_commands"],
             )
             plan = job.plan
             if plan is None:
@@ -2851,6 +2861,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     start_position=start_position,
                     acceleration_mm_s2=laser.preview_acceleration_mm_s2,
                     command_delay_ms=laser.preview_command_delay_ms,
+                    air_assist_commands=context["air_assist_commands"],
                 )
                 job.plan = plan
             if cancellation.is_set():
@@ -2910,6 +2921,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
             if request_context is not None:
                 request_context_current = self._job_request_context_is_current(
                     request_context
+                )
+            start_here_context = payload.get("start_here_request_context")
+            if start_here_context is not None:
+                request_context_current = (
+                    request_context_current
+                    and self._start_here_request_context_is_current(
+                        start_here_context
+                    )
                 )
         if (
             payload is None
@@ -3363,6 +3382,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 return False
             if bool(machine.allow_motion) != bool(context["allow_motion"]):
                 return False
+            if resolve_air_assist_commands(
+                machine.air_assist,
+                protocol=machine.protocol,
+            ) != context["air_assist_commands"]:
+                return False
             if (
                 float(machine.max_work_feed_mm_min)
                 != float(context["max_work_feed_mm_min"])
@@ -3393,6 +3417,75 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 == context["expected_calibration_profile_id"]
                 and app_context.calibration_profiles.current.key
                 == context["active_calibration_profile_id"]
+            )
+        except Exception:
+            return False
+
+    def _capture_start_here_request_context(
+        self,
+        plan: Any,
+        source_job: ProjectJob,
+    ) -> dict[str, Any]:
+        """Snapshot the machine facts used to rebuild a Start Here program."""
+
+        machine = self.runtime.settings.machine
+        air_assist_commands = resolve_air_assist_commands(
+            machine.air_assist,
+            protocol=machine.protocol,
+        )
+        if air_assist_commands != getattr(plan, "air_assist_commands", None):
+            raise ValueError(
+                "The configured Air Assist mapping changed; regenerate the job "
+                "before using Start Here"
+            )
+        laser = self.runtime.settings.laser
+        spot_offset_mm = (
+            float(laser.spot_offset_x_mm),
+            float(laser.spot_offset_y_mm),
+        )
+        prepared_spot_offset_mm = tuple(
+            float(value) for value in source_job.spot_offset_mm
+        )
+        if len(prepared_spot_offset_mm) != 2:
+            raise ValueError("The prepared job has an invalid laser spot offset")
+        if spot_offset_mm != prepared_spot_offset_mm:
+            raise ValueError(
+                "The configured laser spot offset changed; regenerate the job "
+                "before using Start Here"
+            )
+        return {
+            "air_assist_commands": air_assist_commands,
+            "power_mode": str(laser.power_mode),
+            "spot_offset_mm": spot_offset_mm,
+            "start_position": tuple(self._planned_job_start_position()),
+            "work_area": self._work_area_signature(machine.work_area),
+        }
+
+    def _start_here_request_context_is_current(
+        self,
+        context: dict[str, Any],
+    ) -> bool:
+        """Reject a completed Start Here rebuild after its machine facts change."""
+
+        try:
+            machine = self.runtime.settings.machine
+            return (
+                resolve_air_assist_commands(
+                    machine.air_assist,
+                    protocol=machine.protocol,
+                )
+                == context["air_assist_commands"]
+                and str(self.runtime.settings.laser.power_mode)
+                == str(context["power_mode"])
+                and (
+                    float(self.runtime.settings.laser.spot_offset_x_mm),
+                    float(self.runtime.settings.laser.spot_offset_y_mm),
+                )
+                == tuple(context["spot_offset_mm"])
+                and tuple(self._planned_job_start_position())
+                == tuple(context["start_position"])
+                and self._work_area_signature(machine.work_area)
+                == tuple(context["work_area"])
             )
         except Exception:
             return False
@@ -3506,6 +3599,26 @@ class E3MainWindow(QtWidgets.QMainWindow):
         job = self.last_job
         if job is None:
             return False
+        try:
+            laser = self.runtime.settings.laser
+            prepared_spot_offset_mm = tuple(
+                float(value) for value in job.spot_offset_mm
+            )
+            if len(prepared_spot_offset_mm) != 2 or prepared_spot_offset_mm != (
+                float(laser.spot_offset_x_mm),
+                float(laser.spot_offset_y_mm),
+            ):
+                return False
+            prepared_air_assist = getattr(job, "air_assist_commands", None)
+            if prepared_air_assist is not None:
+                machine = self.runtime.settings.machine
+                if resolve_air_assist_commands(
+                    machine.air_assist,
+                    protocol=machine.protocol,
+                ) != prepared_air_assist:
+                    return False
+        except (AttributeError, TypeError, ValueError):
+            return False
         coordinate_space = getattr(job, "coordinate_space", CoordinateSpace.MACHINE)
         if coordinate_space is CoordinateSpace.MACHINE:
             return (
@@ -3560,6 +3673,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
             power_max=self.runtime.settings.laser.power_max,
             default_feed_mm_min=self.runtime.settings.laser.travel_feed_mm_min,
             start_position=self._planned_job_start_position(),
+            air_assist_commands=getattr(
+                self.last_job,
+                "air_assist_commands",
+                None,
+            ),
         )
 
     def _set_prepared_job_status(self, summary: str) -> None:
@@ -3630,8 +3748,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if not self._prepared_frame_is_current():
             self._invalidate_generated_job()
             self.show_error(
-                "The honeycomb pose, camera mapping, or configured output boundary "
-                "changed; regenerate before previewing"
+                "The prepared coordinate, output-boundary, laser spot-offset, or "
+                "Air Assist authority changed; regenerate before previewing"
             )
             return
         if not self._verify_prepared_job_assets("opening Preview"):
@@ -3655,6 +3773,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         revision = self.document.revision
         text = self.last_job.text
+        air_assist_commands = getattr(
+            self.last_job,
+            "air_assist_commands",
+            None,
+        )
         laser = self.runtime.settings.laser
         start_position = self._planned_job_start_position()
         cancellation = threading.Event()
@@ -3673,6 +3796,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 start_position=start_position,
                 acceleration_mm_s2=laser.preview_acceleration_mm_s2,
                 command_delay_ms=laser.preview_command_delay_ms,
+                air_assist_commands=air_assist_commands,
             )
             prepared = prepare_job_preview(exact_plan)
             return None if cancellation.is_set() else (exact_plan, prepared)
@@ -3749,15 +3873,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _prepare_start_here(self, move_index: int) -> None:
         plan = self._current_job_plan()
-        if plan is None or self.last_job_revision != self.document.revision:
+        source_job = self.last_job
+        if (
+            plan is None
+            or source_job is None
+            or self.last_job_revision != self.document.revision
+        ):
             self._invalidate_generated_job()
             self.show_error("The project changed; regenerate before using Start Here")
             return
         if not self._prepared_frame_is_current():
             self._invalidate_generated_job()
             self.show_error(
-                "The honeycomb pose or camera-to-machine mapping changed; "
-                "regenerate before using Start Here"
+                "The prepared coordinate, laser spot-offset, or Air Assist authority "
+                "changed; regenerate before using Start Here"
             )
             return
         preview = getattr(self, "_job_preview_dialog", None)
@@ -3779,12 +3908,21 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
         if answer != QtWidgets.QMessageBox.StandardButton.Ok:
             return
+        try:
+            start_here_request_context = (
+                self._capture_start_here_request_context(plan, source_job)
+            )
+        except (TypeError, ValueError) as exc:
+            self._invalidate_generated_job()
+            self.show_error(str(exc))
+            return
         revision = self.document.revision
-        work_area = self._work_area_signature(self.runtime.settings.machine.work_area)
+        work_area = start_here_request_context["work_area"]
         coordinate_frame_signature = self.last_job_coordinate_frame
-        power_mode = self.runtime.settings.laser.power_mode
-        controller_start_position = self._planned_job_start_position()
-        source_job = self.last_job
+        power_mode = start_here_request_context["power_mode"]
+        controller_start_position = start_here_request_context[
+            "start_position"
+        ]
         source_preflight_report = getattr(
             self,
             "last_job_preflight_report",
@@ -3818,6 +3956,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 path_count=sum(1 for move in restarted.moves if move.laser_on),
                 point_count=len(restarted.moves),
                 plan=restarted,
+                spot_offset_mm=tuple(
+                    start_here_request_context["spot_offset_mm"]
+                ),
+                air_assist_commands=restarted.air_assist_commands,
                 raster_assets=source_job.raster_assets,
                 coordinate_space=getattr(
                     source_job,
@@ -3849,6 +3991,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "work_area": work_area,
                 "coordinate_frame_signature": coordinate_frame_signature,
                 "preflight_report": source_preflight_report,
+                "start_here_request_context": start_here_request_context,
                 "frame": False,
                 "summary": (
                     f"Start Here at original move {move_index + 1} · "
@@ -3908,8 +4051,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if not self._prepared_frame_is_current():
             self._invalidate_generated_job()
             self.show_error(
-                "The honeycomb pose or camera-to-machine mapping changed; "
-                "regenerate before exporting"
+                "The prepared coordinate, laser spot-offset, or Air Assist authority "
+                "changed; regenerate before exporting"
             )
             return
         machine_area = self._work_area_signature(
@@ -3952,8 +4095,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if not self._prepared_frame_is_current():
             self._invalidate_generated_job()
             self.show_error(
-                "The honeycomb pose or camera-to-machine mapping changed; "
-                "regenerate the toolpath before running"
+                "The prepared coordinate, laser spot-offset, or Air Assist authority "
+                "changed; regenerate the toolpath before running"
             )
             return
         if not self._verify_prepared_job_assets("running"):
@@ -5917,6 +6060,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
     def _load_fine_registration_job(self, registration_job: Any) -> None:
         source_job = registration_job.program
+        registration_spot_offset_mm = (
+            float(self.runtime.settings.laser.spot_offset_x_mm),
+            float(self.runtime.settings.laser.spot_offset_y_mm),
+        )
         plan = getattr(source_job, "plan", None) or build_job_plan(
             source_job.text,
             power_max=self.runtime.settings.laser.power_max,
@@ -5944,8 +6091,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 path_count=source_job.path_count,
                 point_count=source_job.point_count,
                 plan=plan,
+                spot_offset_mm=registration_spot_offset_mm,
                 coordinate_space=CoordinateSpace.MACHINE,
             )
+        job.spot_offset_mm = registration_spot_offset_mm
         exact_powered = plan.powered
         mode = (
             f"powered at {registration_job.power_percent:g}%"

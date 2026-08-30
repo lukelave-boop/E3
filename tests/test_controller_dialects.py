@@ -2,6 +2,11 @@ from dataclasses import FrozenInstanceError
 
 import pytest
 
+from laser_aligner.air_assist import (
+    AirAssistCommands,
+    AirAssistMode,
+    AirAssistSettings,
+)
 from laser_aligner.errors import MachineError
 from laser_aligner.machine.controller_dialects import (
     CONTROLLER_DIALECT_REGISTRY,
@@ -17,6 +22,7 @@ from laser_aligner.machine.controller_dialects import (
     parse_grbl_coordinate_state,
     parse_grbl_realtime_status,
     parse_grbl_step_idle_delay,
+    resolve_air_assist_commands,
 )
 
 
@@ -134,6 +140,56 @@ def test_dialects_have_no_transport_or_execution_authority() -> None:
 
     for dialect in (GRBL_DIALECT, MARLIN_DIALECT):
         assert forbidden.isdisjoint(dir(dialect))
+
+
+def test_air_assist_mapping_resolves_exact_immutable_controller_commands() -> None:
+    grbl = resolve_air_assist_commands(
+        AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        protocol="grbl",
+    )
+    marlin = resolve_air_assist_commands(
+        AirAssistSettings(mode=AirAssistMode.MARLIN_FAN, fan_index=4),
+        protocol="marlin",
+    )
+
+    assert grbl == AirAssistCommands(
+        mode=AirAssistMode.GRBL_COOLANT,
+        protocol="grbl",
+        fan_index=None,
+        on_commands=("M8",),
+        off_commands=("M9",),
+    )
+    assert marlin == AirAssistCommands(
+        mode=AirAssistMode.MARLIN_FAN,
+        protocol="marlin",
+        fan_index=4,
+        on_commands=("M106 P4 S255",),
+        off_commands=("M107 P4",),
+    )
+    with pytest.raises(FrozenInstanceError):
+        marlin.fan_index = 5  # type: ignore[misc]
+
+
+def test_disabled_air_assist_resolves_none_even_for_auto_protocol() -> None:
+    assert (
+        resolve_air_assist_commands(AirAssistSettings(), protocol="auto") is None
+    )
+
+
+def test_air_assist_mapping_rejects_ambiguous_or_forged_commands() -> None:
+    with pytest.raises(ValueError, match="requires machine.protocol grbl"):
+        resolve_air_assist_commands(
+            AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+            protocol="auto",
+        )
+    with pytest.raises(ValueError, match="exact trusted"):
+        AirAssistCommands(
+            mode=AirAssistMode.GRBL_COOLANT,
+            protocol="grbl",
+            fan_index=None,
+            on_commands=("M7",),
+            off_commands=("M9",),
+        )
 
 
 def test_emergency_stop_policy_requires_exactly_one_command_form() -> None:

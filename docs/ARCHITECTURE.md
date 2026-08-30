@@ -580,7 +580,8 @@ native shapes / imported SVG / traced outlines / native cubic paths
   -> project.job_preflight.build_job_preflight_report()
   -> immutable structured findings (blockers stop before exact generation)
   -> project.toolpath.generate_project_gcode()
-  -> finalized multi-layer vector G-code + controller-ignored E3 metadata
+  -> finalized multi-layer G-code + typed machine Air Assist transitions
+     + controller-ignored E3 metadata
   -> gcode.job_plan.build_job_plan()
   -> immutable JobPlan used by the dedicated desktop Preview
   -> window-modal exact review and distinct START JOB signal
@@ -1222,6 +1223,9 @@ preserving the layer ID, authoring name, visibility, priority, and current
 project schema. Hand-authored layers remain fully supported, and
 `JobPreflightReport`, the exact planner, `MachineService`, and the guarded start
 path continue to inspect only the resulting concrete layer/program state.
+The controlled settings already include the existing `OperationLayer.air_assist`
+Boolean, so execution support requires no recipe schema or application-path
+change.
 
 The 13 operator-supplied E3 10 W new-project operations and their matching
 machine/tool-scoped built-in recipes project from one curated value source.
@@ -1277,7 +1281,7 @@ execution authority:
 | Boundary | Responsibility | Explicitly not responsible for |
 |---|---|---|
 | `MachineTransport` | Open/close, raw/line writes, line reads, and drain mechanics | Controller command meaning, identity decisions, safety gates, retries, or execution authorization |
-| immutable `ControllerDialect` | Pure GRBL or Marlin identity, response classification, command-policy, and parsing semantics | Opening or writing transports, locking, mutable service state, authorization, or starting work |
+| immutable `ControllerDialect` | Pure GRBL or Marlin identity, response classification, command-policy, typed Air Assist capability, and parsing semantics | Opening or writing transports, locking, mutable service state, authorization, or starting work |
 | local `MachineService` | Safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data or delegating authority to a transport or dialect |
 | Windows `RemoteMachineService` | Exact local preflight, upload/START client, acceptance recovery, cached monitoring, reconnect identity, and priority STOP RPC | Owning Pi serial, streaming an accepted program, or falling back to raw bridge execution |
 | Pi `PiJobStore` / `PiJobService` | Atomic verified program/state persistence, repeat local preflight, one local `MachineService`, durable ownership, progress/result retention | Trusting client paths/metadata or resuming interrupted execution |
@@ -1301,6 +1305,14 @@ semantics; `MachineService` decides when each probe may be written and owns the
 exchange. No additional probe or controller command was introduced.
 Remote profiles reject `auto` before controller/network operations and require
 the same explicit GRBL or Marlin policy on both hosts.
+
+`MachineSettings.air_assist` selects only `disabled`, `grbl_coolant`, or
+`marlin_fan` plus a bounded fan index. The resolved dialect exposes immutable
+literal ON/OFF commands: `M8`/`M9` for explicit GRBL coolant, or
+`M106 P<n> S255`/`M107 P<n>` for explicit Marlin fan. Enabled mappings reject
+`auto` and mismatched protocols. The streamed-command validator accepts only
+those exact configured literals and never broadens the manual-command surface
+or permits arbitrary auxiliary G-code.
 
 A saved machine profile supplies reusable physical motion-platform defaults,
 including backend, protocol, connection, envelope, homing, and feed settings. A
@@ -1370,7 +1382,9 @@ controller support is claimed.
   connection's absolute coordinate reference;
 - limits diagnostics to read-only queries and `M5`;
 - requires temporary arming for positive-power jobs;
-- restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset;
+- restricts jobs to a conservative absolute-millimetre G0/G1/M3/M4/M5 subset
+  plus only the exact typed Air Assist command pair configured for the explicit
+  controller dialect;
 - validates every destination against the guarded machine rectangle, or the
   exact configured convex polygon carried by a support-bound preflight;
 - exposes incremental desktop jogging only as absolute, feed-controlled `G1`
@@ -1389,7 +1403,26 @@ controller support is claimed.
 - revokes authorization on stop or disarm;
 - attempts `M5` on stop, disarm, disconnect, job failure, and scoped motor-
   release cleanup, even when mutable configuration or controller state is
-  already untrusted.
+  already untrusted, then attempts configured Air Assist off without putting it
+  ahead of emergency STOP/laser-off authority.
+
+Generated powered-job programs establish `G21`, `G90`, laser off, and configured
+Air Assist off before work. The layer planner emits ON only immediately before
+the first powered Line, Fill, or Raster output that requests it, holds it across
+paths, rapid travels, passes, and adjacent requesting layers, and emits OFF
+before later powered non-requesting work. Output-disabled, empty, and zero-power
+layers never enable it. Normal termination is `M5`, configured assist off, then
+a standalone `M5`, preserving the program-end invariant. The same bytes feed
+`JobPlan`, Preview, digest/finalization, direct execution, and Pi-owned execution;
+Start Here reconstruction retains these state transitions.
+
+Independently of program literals, `MachineService` sends and acknowledges its
+own `M5` followed by the immutable validated Air Assist OFF command before line
+1, then repeats that laser-first pair after the program and before completion
+motion. This covers configured powered setup/calibration programs that do not
+carry layer transitions. Failed-job cleanup retains the exact active OFF mapping
+for later STOP/disarm/disconnect retries even if mutable machine settings change;
+it is discarded only after an acknowledged normal postlude or transport close.
 
 The common guarded job-start seam performs `M5 → home → park → idle wait → arm
 → run`. Direct serial executes that seam in the desktop process. Remote serial

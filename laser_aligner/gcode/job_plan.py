@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..air_assist import AirAssistCommands
+from ..errors import SafetyError
 from .preview import parse_spot_offset_comment, scan_word_state, strip_comment
 
 
@@ -34,6 +36,19 @@ class PlannedMove:
     end_seconds: float
     vector_power_correction: float = 0.0
     raster_power_correction: float = 0.0
+    air_assist: bool = False
+
+
+@dataclass(slots=True, frozen=True)
+class PlannedAirAssistEvent:
+    """One exact, controller-bound air-assist command in a finalized program."""
+
+    line_number: int
+    move_index: int
+    command: str
+    enabled: bool
+    layer_id: str = ""
+    layer_name: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -55,6 +70,8 @@ class JobPlan:
     spot_offset_y: float = 0.0
     acceleration_mm_s2: float | None = None
     command_delay_ms: float = 0.0
+    air_assist_events: tuple[PlannedAirAssistEvent, ...] = ()
+    air_assist_commands: AirAssistCommands | None = None
 
     @property
     def powered(self) -> bool:
@@ -85,6 +102,12 @@ def _metadata(raw_line: str) -> tuple[str, dict[str, Any]] | None:
     return prefix[4:].lower(), parsed
 
 
+def _normalized_air_assist_command(line: str) -> str:
+    """Match the controller service's exact-command normalization."""
+
+    return " ".join(strip_comment(line).upper().split())
+
+
 def build_job_plan(
     text: str,
     *,
@@ -93,8 +116,15 @@ def build_job_plan(
     start_position: tuple[float, float] = (0.0, 0.0),
     acceleration_mm_s2: float | None = None,
     command_delay_ms: float = 0.0,
+    air_assist_commands: AirAssistCommands | None = None,
 ) -> JobPlan:
     """Build an immutable preview model from the exact streamable program."""
+
+    if air_assist_commands is not None and not isinstance(
+        air_assist_commands,
+        AirAssistCommands,
+    ):
+        raise TypeError("air_assist_commands must be AirAssistCommands or None")
 
     x, y = (float(value) for value in start_position)
     absolute = True
@@ -109,7 +139,22 @@ def build_job_plan(
     job_metadata: dict[str, Any] = {}
     planner_metadata: dict[str, Any] = {}
     moves: list[PlannedMove] = []
+    air_assist_events: list[PlannedAirAssistEvent] = []
     warnings: list[str] = []
+    air_command_state = (
+        {
+            **{
+                _normalized_air_assist_command(command): True
+                for command in air_assist_commands.on_commands
+            },
+            **{
+                _normalized_air_assist_command(command): False
+                for command in air_assist_commands.off_commands
+            },
+        }
+        if air_assist_commands is not None
+        else {}
+    )
 
     for line_number, raw_line in enumerate(text.splitlines(), 1):
         metadata = _metadata(raw_line)
@@ -146,6 +191,19 @@ def build_job_plan(
         line = strip_comment(raw_line)
         if not line:
             continue
+        normalized_air_command = _normalized_air_assist_command(line)
+        if normalized_air_command in air_command_state:
+            air_assist_events.append(
+                PlannedAirAssistEvent(
+                    line_number=line_number,
+                    move_index=len(moves),
+                    command=line,
+                    enabled=air_command_state[normalized_air_command],
+                    layer_id=str(layer.get("id", "")),
+                    layer_name=str(layer.get("name", "")),
+                )
+            )
+            continue
         g_codes, m_codes, values = scan_word_state(
             line,
             comments_stripped=True,
@@ -157,7 +215,9 @@ def build_job_plan(
         if 5 in m_codes:
             laser_on = False
             power = 0.0
-        if "S" in values:
+        # Marlin's trusted air-assist command uses S255 as fan duty. It must
+        # never mutate the modal laser power used by preview/restart planning.
+        if "S" in values and 106 not in m_codes:
             power = float(values["S"])
         if m_codes.intersection({3, 4}):
             laser_on = power > 0
@@ -218,6 +278,7 @@ def build_job_plan(
             end_seconds=elapsed + duration,
             vector_power_correction=float(layer.get("vector_power_correction", 0.0)),
             raster_power_correction=float(layer.get("raster_power_correction", 0.0)),
+            air_assist=layer.get("air_assist") is True,
         )
         moves.append(move)
         elapsed += duration
@@ -259,6 +320,8 @@ def build_job_plan(
         spot_offset_y=spot_offset_y,
         acceleration_mm_s2=acceleration_mm_s2,
         command_delay_ms=command_delay_ms,
+        air_assist_events=tuple(air_assist_events),
+        air_assist_commands=air_assist_commands,
     )
 
 
@@ -280,6 +343,22 @@ def restart_program_from_move(
     if not 0 <= int(move_index) < len(plan.moves):
         raise ValueError("Start Here move is outside the generated job")
     selected = plan.moves[int(move_index)]
+    suffix = plan.moves[int(move_index) :]
+    requested_air = any(
+        move.laser_on and move.power > 0 and move.air_assist for move in suffix
+    )
+    air_commands = plan.air_assist_commands
+    if requested_air and air_commands is None:
+        raise SafetyError(
+            "Start Here cannot preserve requested air assist without the exact "
+            "resolved machine command mapping"
+        )
+    powered_air_by_layer: dict[tuple[str, str], bool] = {}
+    for move in suffix:
+        layer_key = (move.layer_id, move.layer_name)
+        if move.laser_on and move.power > 0:
+            if move.air_assist:
+                powered_air_by_layer[layer_key] = True
     controller_start_x = selected.start_x - plan.spot_offset_x
     controller_start_y = selected.start_y - plan.spot_offset_y
     if start_position is None:
@@ -299,6 +378,8 @@ def restart_program_from_move(
         "G90 ; absolute positioning",
         "M5 ; laser off before positioning",
     ]
+    if air_commands is not None:
+        lines.extend(air_commands.off_commands)
     if abs(plan.spot_offset_x) >= 1e-12 or abs(plan.spot_offset_y) >= 1e-12:
         lines.append(
             "; Laser spot offset (spot = controller + offset): "
@@ -309,8 +390,22 @@ def restart_program_from_move(
         f"F{selected.feed_mm_min:.3f}"
     )
     active_context: tuple[str, int, str] | None = None
+    active_layer: tuple[str, str] | None = None
     active_power = 0.0
-    for move in plan.moves[int(move_index) :]:
+    air_active = False
+    for move in suffix:
+        layer_key = (move.layer_id, move.layer_name)
+        if layer_key != active_layer:
+            if (
+                air_active
+                and not powered_air_by_layer.get(layer_key, False)
+            ):
+                assert air_commands is not None
+                lines.append("M5")
+                lines.extend(air_commands.off_commands)
+                air_active = False
+                active_power = 0.0
+            active_layer = layer_key
         context = (move.layer_id, move.pass_index, move.source_name)
         if context != active_context:
             lines.extend(
@@ -322,6 +417,7 @@ def restart_program_from_move(
                             "name": move.layer_name,
                             "color": move.layer_color,
                             "mode": move.layer_mode,
+                            "air_assist": move.air_assist,
                         },
                     ),
                     e3_metadata_line(
@@ -335,6 +431,16 @@ def restart_program_from_move(
         end_x = move.end_x - plan.spot_offset_x
         end_y = move.end_y - plan.spot_offset_y
         if move.laser_on:
+            if move.air_assist and not air_active:
+                # A coincident layer boundary can disappear from the move plan.
+                # Re-establish laser-off before enabling air, even when there was
+                # no travel move available to clear the previous modal power.
+                if active_power:
+                    lines.append("M5")
+                    active_power = 0.0
+                assert air_commands is not None
+                lines.extend(air_commands.on_commands)
+                air_active = True
             if active_power != move.power:
                 lines.append(f"{power_mode.upper()} S{move.power:g}")
                 active_power = move.power
@@ -347,7 +453,11 @@ def restart_program_from_move(
         lines.append(
             f"{code} X{end_x:.3f} Y{end_y:.3f} F{move.feed_mm_min:.3f}"
         )
-    lines.extend(["M5", "; End of reviewed Start Here job", ""])
+    lines.append("M5")
+    if air_commands is not None:
+        lines.extend(air_commands.off_commands)
+        lines.append("M5")
+    lines.extend(["; End of reviewed Start Here job", ""])
     text = "\n".join(lines)
     restarted = build_job_plan(
         text,
@@ -356,5 +466,6 @@ def restart_program_from_move(
         start_position=(actual_start_x, actual_start_y),
         acceleration_mm_s2=plan.acceleration_mm_s2,
         command_delay_ms=plan.command_delay_ms,
+        air_assist_commands=air_commands,
     )
     return text, restarted

@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
 from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_BEGIN,
@@ -34,10 +35,14 @@ _POWERED_PROGRAM = "\n".join(
         "G21",
         "G90",
         "M5",
+        "M9",
         "G0 X10 Y10 F1000",
+        "M8",
         "M4 S10",
         _GATED_COMMAND,
         "G1 X30 Y30 F500",
+        "M5",
+        "M9",
         "M5",
     )
 )
@@ -117,6 +122,7 @@ def _machine_settings(port: str) -> MachineSettings:
         controller_startup_delay=0.0,
         max_travel_feed_mm_min=6000,
         max_work_feed_mm_min=6000,
+        air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
     )
 
 
@@ -185,8 +191,6 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
         )
         canonical = canonical_program_bytes(program)
         policy_digest = execution_policy_digest(program)
-        receipt_not_before = time.time()
-
         started = remote.start_preflighted_program(
             program,
             "e2e-powered.gcode",
@@ -200,6 +204,20 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
         assert started["ownership_accepted"] is True
         assert isinstance(started["start_accepted_at"], float)
         assert transport.gated.wait(timeout=2.0)
+        assert b"M8\n" in canonical
+        assert canonical.endswith(b"M9\nM5")
+
+        # The accepted job is Pi-owned. Losing/detaching the Windows monitor
+        # after Air ON must not inject STOP or OFF into the Pi controller stream.
+        air_on_index = transport.commands.index("M8")
+        remote.detach()
+        time.sleep(0.05)
+        assert transport.commands[air_on_index:] == [
+            "M8",
+            "M4 S10",
+            _GATED_COMMAND,
+        ]
+        assert b"!\x18" not in getattr(transport, "raw_writes", [])
 
         record = store.get(job_id)
         assert store.read_program_bytes(job_id) == canonical
@@ -242,18 +260,6 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
             ACTION_JOB_START
         )
 
-        transport.release()
-        _wait_until(lambda: store.get(job_id)["state"] == "complete")
-
-        receipt = remote.successful_job_receipt(
-            program.digest,
-            not_before=receipt_not_before,
-        )
-        assert receipt is not None
-        assert receipt["job_id"] == job_id
-        assert receipt["program_digest"] == program.digest
-        assert receipt["execution_owner"] == "pi"
-
         fresh_remote = RemoteMachineService(
             remote_settings,
             laser_settings,
@@ -262,6 +268,18 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
             monitor_interval_seconds=0.01,
         )
         fresh_remote.start_monitoring()
+        _wait_until(
+            lambda: fresh_remote.status()["job"].get("job_id") == job_id
+            and fresh_remote.status()["job"]["state"] == "running"
+        )
+
+        transport.release()
+        _wait_until(lambda: store.get(job_id)["state"] == "complete")
+        assert "M9" in transport.commands[air_on_index:]
+        assert transport.commands.index("M9", air_on_index) > transport.commands.index(
+            _GATED_COMMAND,
+            air_on_index,
+        )
         _wait_until(
             lambda: fresh_remote.status()["job"].get("job_id") == job_id
             and fresh_remote.status()["job"]["state"] == "complete"

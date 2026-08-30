@@ -3,13 +3,30 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 import laser_aligner.gcode.job_plan as job_plan_module
+from laser_aligner.air_assist import AirAssistCommands, AirAssistMode, AirAssistSettings
 from laser_aligner.config import LaserSettings, MachineSettings
+from laser_aligner.errors import SafetyError
 from laser_aligner.gcode.job_plan import (
     build_job_plan,
     e3_metadata_line,
     restart_program_from_move,
 )
 from laser_aligner.machine.service import MachineService
+
+GRBL_AIR = AirAssistCommands(
+    mode=AirAssistMode.GRBL_COOLANT,
+    protocol="grbl",
+    fan_index=None,
+    on_commands=("M8",),
+    off_commands=("M9",),
+)
+MARLIN_AIR = AirAssistCommands(
+    mode=AirAssistMode.MARLIN_FAN,
+    protocol="marlin",
+    fan_index=2,
+    on_commands=("M106 P2 S255",),
+    off_commands=("M107 P2",),
+)
 
 
 def test_job_plan_preserves_exact_move_context_and_timing() -> None:
@@ -220,3 +237,292 @@ def test_build_job_plan_scans_each_executable_line_once(monkeypatch) -> None:
         ("G1X20Y0F1200", True),
         ("M5", True),
     ]
+
+
+def test_job_plan_records_exact_air_events_without_treating_fan_duty_as_laser_power() -> None:
+    text = "\n".join(
+        [
+            "G90",
+            e3_metadata_line(
+                "layer",
+                {
+                    "id": "raster-01",
+                    "name": "Raster 01",
+                    "air_assist": True,
+                },
+            ),
+            "M4 S100",
+            "G1 X10 Y0 F600",
+            "M106 P2 S255",
+            "G1 X20 Y0 F600",
+            "M5",
+            "M107 P2",
+        ]
+    )
+
+    plan = build_job_plan(
+        text,
+        power_max=1000,
+        air_assist_commands=MARLIN_AIR,
+    )
+
+    assert [move.power for move in plan.moves] == [100.0, 100.0]
+    assert all(move.air_assist for move in plan.moves)
+    assert [event.command for event in plan.air_assist_events] == [
+        "M106 P2 S255",
+        "M107 P2",
+    ]
+    assert [event.enabled for event in plan.air_assist_events] == [True, False]
+    assert plan.air_assist_commands == MARLIN_AIR
+
+
+@pytest.mark.parametrize(
+    ("protocol", "settings", "commands", "off_line", "on_line"),
+    [
+        (
+            "grbl",
+            AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+            GRBL_AIR,
+            "m9",
+            "m8",
+        ),
+        (
+            "marlin",
+            AirAssistSettings(mode=AirAssistMode.MARLIN_FAN, fan_index=2),
+            MARLIN_AIR,
+            "m107   p2",
+            "m106   p2   s255",
+        ),
+    ],
+)
+def test_job_plan_records_case_and_whitespace_equivalent_accepted_air_commands(
+    protocol: str,
+    settings: AirAssistSettings,
+    commands: AirAssistCommands,
+    off_line: str,
+    on_line: str,
+) -> None:
+    text = "\n".join(
+        [
+            "G21",
+            "G90",
+            "M5",
+            off_line,
+            "G0 X0 Y0 F600",
+            on_line,
+            "M4 S100",
+            "G1 X1 Y0 F600",
+            "M5",
+            off_line,
+            "M5",
+        ]
+    )
+
+    validated = MachineService(
+        MachineSettings(
+            protocol=protocol,
+            allow_motion=True,
+            air_assist=settings,
+        ),
+        LaserSettings(power_max=1000),
+        hardware_enabled=True,
+    ).preflight_program(text)
+    plan = build_job_plan(text, power_max=1000, air_assist_commands=commands)
+
+    assert validated.requires_laser_authorization
+    assert [event.command for event in plan.air_assist_events] == [
+        off_line,
+        on_line,
+        off_line,
+    ]
+    assert [event.enabled for event in plan.air_assist_events] == [False, True, False]
+
+
+def test_job_plan_rejects_untyped_air_command_input() -> None:
+    with pytest.raises(TypeError, match="must be AirAssistCommands or None"):
+        build_job_plan(
+            "G90\nM5\n",
+            power_max=1000,
+            air_assist_commands=("M8", "M9"),  # type: ignore[arg-type]
+        )
+
+
+def test_start_here_replays_air_after_selected_travel_and_preserves_fail_off() -> None:
+    text = "\n".join(
+        [
+            "G21",
+            "G90",
+            "M5",
+            "M9",
+            e3_metadata_line(
+                "layer",
+                {"id": "line-01", "name": "Line 01", "air_assist": True},
+            ),
+            e3_metadata_line("path", {"name": "First"}),
+            "G0 X10 Y0 F1200",
+            "M8",
+            "M4 S100",
+            "G1 X20 Y0 F600",
+            "M5",
+            e3_metadata_line("path", {"name": "Second"}),
+            "G0 X30 Y0 F1200",
+            "M4 S100",
+            "G1 X40 Y0 F600",
+            "M5",
+            "M9",
+            "M5",
+        ]
+    )
+    plan = build_job_plan(text, power_max=1000, air_assist_commands=GRBL_AIR)
+    selected_travel = next(
+        move.index
+        for move in plan.moves
+        if move.rapid and move.source_name == "Second"
+    )
+
+    restarted_text, restarted = restart_program_from_move(plan, selected_travel)
+    executable = [
+        line.partition(";")[0].strip()
+        for line in restarted_text.splitlines()
+        if line.partition(";")[0].strip()
+    ]
+
+    selected_travel_line = next(
+        index
+        for index, line in enumerate(executable)
+        if line.startswith("G0 X30.000 Y0.000")
+    )
+    assert selected_travel_line < executable.index("M8") < executable.index("M4 S100")
+    assert executable.count("M8") == 1
+    assert executable.count("M9") == 2
+    assert executable[-3:] == ["M5", "M9", "M5"]
+    assert [event.command for event in restarted.air_assist_events] == ["M9", "M8", "M9"]
+
+
+def test_start_here_turns_air_off_before_zero_power_or_non_assist_layer() -> None:
+    text = "\n".join(
+        [
+            "G90",
+            "M5",
+            "M9",
+            e3_metadata_line(
+                "layer",
+                {"id": "assist", "name": "Assist", "air_assist": True},
+            ),
+            "G0 X10 Y0",
+            "M8",
+            "M4 S100",
+            "G1 X20 Y0",
+            "M5",
+            e3_metadata_line(
+                "layer",
+                {"id": "zero", "name": "Zero", "air_assist": False},
+            ),
+            "G1 X30 Y0",
+            e3_metadata_line(
+                "layer",
+                {"id": "plain", "name": "Plain", "air_assist": False},
+            ),
+            "M4 S100",
+            "G1 X40 Y0",
+            "M5",
+            "M9",
+            "M5",
+        ]
+    )
+    plan = build_job_plan(text, power_max=1000, air_assist_commands=GRBL_AIR)
+
+    restarted_text, _restarted = restart_program_from_move(plan, 0)
+
+    assist_on = restarted_text.index("\nM8\n")
+    zero_layer = restarted_text.index('"id":"zero"')
+    transition_off = restarted_text.index("\nM9\n", assist_on)
+    assert assist_on < transition_off < zero_layer
+    assert restarted_text.count("\nM8\n") == 1
+
+
+def test_start_here_configured_without_air_request_still_starts_and_ends_off() -> None:
+    plan = build_job_plan(
+        "G90\nM5\nM9\nG0 X10 Y0\nM4 S100\nG1 X20 Y0\nM5\nM9\nM5\n",
+        power_max=1000,
+        air_assist_commands=GRBL_AIR,
+    )
+
+    text, _restarted = restart_program_from_move(plan, 0)
+    executable = [
+        line.partition(";")[0].strip()
+        for line in text.splitlines()
+        if line.partition(";")[0].strip()
+    ]
+
+    assert "M8" not in executable
+    assert executable[3] == "M9"
+    assert executable[-3:] == ["M5", "M9", "M5"]
+
+
+def test_start_here_fails_closed_when_air_metadata_has_no_resolved_mapping() -> None:
+    plan = build_job_plan(
+        e3_metadata_line(
+            "layer",
+            {"id": "assist", "name": "Assist", "air_assist": True},
+        )
+        + "\nG90\nG0 X10 Y0\nM4 S100\nG1 X20 Y0\nM5\n",
+        power_max=1000,
+    )
+
+    with pytest.raises(SafetyError, match="exact resolved machine command mapping"):
+        restart_program_from_move(plan, 0)
+
+
+def test_start_here_resets_modal_power_before_coincident_assisted_layer() -> None:
+    text = "\n".join(
+        [
+            "G21",
+            "G90",
+            "M5",
+            "M9",
+            e3_metadata_line(
+                "layer",
+                {"id": "plain", "name": "Plain", "air_assist": False},
+            ),
+            "G0 X10 Y0 F1200",
+            "M4 S100",
+            "G1 X20 Y0 F600",
+            "M5",
+            e3_metadata_line(
+                "layer",
+                {"id": "assist", "name": "Assist", "air_assist": True},
+            ),
+            # This coincident positioning command is intentionally absent from
+            # JobPlan.moves, reproducing the cross-layer modal-state boundary.
+            "G0 X20 Y0 F1200",
+            "M8",
+            "M4 S100",
+            "G1 X30 Y0 F600",
+            "M5",
+            "M9",
+            "M5",
+        ]
+    )
+    plan = build_job_plan(text, power_max=1000, air_assist_commands=GRBL_AIR)
+
+    restarted_text, restarted = restart_program_from_move(plan, 0)
+
+    first_cut = restarted_text.index("G1 X20.000 Y0.000")
+    transition_off = restarted_text.index("\nM5\n", first_cut)
+    air_on = restarted_text.index("\nM8\n", transition_off)
+    assisted_power = restarted_text.index("\nM4 S100\n", air_on)
+    assert first_cut < transition_off < air_on < assisted_power
+    assert restarted.powered
+
+    validated = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+        LaserSettings(power_max=1000),
+        hardware_enabled=True,
+    ).preflight_program(restarted_text)
+    assert validated.requires_laser_authorization

@@ -39,6 +39,13 @@ operator reviews them for the connected E3 machine and explicitly enables that
 layer. Importing a file does not arm the laser, generate G-code, move the
 machine, or start a job.
 
+An imported Air Assist value populates the ordinary Cuts / Layers **Air assist**
+checkbox while the imported layer remains output-disabled. If the operator later
+reviews and explicitly enables that layer, powered generation uses the active
+saved machine's configured output. A requested powered layer is blocked when
+that mapping is disabled or incompatible; import never chooses a controller
+command.
+
 The XML reader rejects document-type and entity declarations, malformed XML,
 unsupported roots, invalid/non-finite numbers, excessive file/XML/shape/point
 sizes, and geometry that cannot be translated without silently losing it.

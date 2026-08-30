@@ -1392,8 +1392,8 @@ def test_run_current_job_refuses_a_changed_honeycomb_frame_binding() -> None:
     assert window.machine_status_calls == 0
     assert window.run_calls == []
     assert window.errors == [
-        "The honeycomb pose or camera-to-machine mapping changed; "
-        "regenerate the toolpath before running"
+        "The prepared coordinate, laser spot-offset, or Air Assist authority "
+        "changed; regenerate the toolpath before running"
     ]
 
 

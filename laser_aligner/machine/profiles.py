@@ -10,6 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from ..air_assist import AirAssistMode, AirAssistSettings, coerce_air_assist_mode
 from ..calibration.profiles import signature_from_camera_settings
 from ..config import (
     DEFAULT_CONFIG,
@@ -109,6 +110,9 @@ def _capabilities(value: object, label: str) -> tuple[str, ...]:
 
 def _machine_dict(settings: MachineSettings) -> dict[str, Any]:
     payload = asdict(settings)
+    payload["air_assist"]["mode"] = coerce_air_assist_mode(
+        settings.air_assist.mode
+    ).value
     payload["photo_position"] = {
         "x": payload.pop("photo_x"),
         "y": payload.pop("photo_y"),
@@ -146,6 +150,7 @@ def _validated_pair(
         machine_raw = raw["machine"]
         area = machine_raw["work_area"]
         photo = machine_raw["photo_position"]
+        air_assist = machine_raw["air_assist"]
         machine = MachineSettings(
             backend=str(machine_raw["backend"]),
             protocol=str(machine_raw["protocol"]),
@@ -184,6 +189,10 @@ def _validated_pair(
             ),
             max_work_feed_mm_min=float(
                 machine_raw["max_work_feed_mm_min"]
+            ),
+            air_assist=AirAssistSettings(
+                mode=AirAssistMode(air_assist["mode"]),
+                fan_index=int(air_assist["fan_index"]),
             ),
         )
         laser_raw = raw["laser"]

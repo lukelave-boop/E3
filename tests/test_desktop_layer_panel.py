@@ -222,6 +222,95 @@ def test_layer_panel_inline_state_and_quick_editor_keep_existing_signals(
     panel.deleteLater()
 
 
+def test_layer_air_assist_edit_is_selected_layer_scoped_and_undoable(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    document = _document_with_operations()
+    first, second = document.layers
+    first.air_assist = True
+    second.air_assist = False
+    second.speed_mm_min = 1234.56
+    second.power_percent = 12.34
+    second.line_interval_mm = 0.12345
+    second.scan_angle_deg = Transform.normalized_rotation(17.89)
+    second.overscan_percent = 4.567
+    second.vector_power_correction = 0.1234
+    second.raster_power_correction = -0.2345
+    original_second = second.to_dict()
+    panel = LayerPanel()
+    history = CommandStack()
+    workspace = SimpleNamespace(selected_object_ids=lambda: [])
+
+    def refresh(_selected_ids: list[str] | None = None) -> None:
+        panel.set_document(document, second.id)
+
+    harness = SimpleNamespace(
+        document=document,
+        history=history,
+        workspace=workspace,
+        _refresh_document=refresh,
+    )
+    panel.layerEdited.connect(
+        lambda layer_id, changes: E3MainWindow._layer_edited(
+            harness, layer_id, changes
+        ),
+        QtCore.Qt.ConnectionType.QueuedConnection,
+    )
+    refresh()
+
+    assert panel.current_layer_id() == second.id
+    assert panel.air_assist_check.text() == "Air assist"
+    assert panel.air_assist_check.toolTip() == (
+        "Run configured air assist at 100% while this operation is "
+        "cutting/engraving."
+    )
+    assert not panel.air_assist_check.isChecked()
+
+    panel.layer_list.setCurrentRow(0)
+    qt_application.processEvents()
+    assert panel.current_layer_id() == first.id
+    assert panel.air_assist_check.isChecked()
+    panel.layer_list.setCurrentRow(1)
+    qt_application.processEvents()
+    assert panel.current_layer_id() == second.id
+    assert not panel.air_assist_check.isChecked()
+
+    panel.air_assist_check.click()
+    qt_application.processEvents()
+
+    assert document.get_layer(first.id).air_assist is True
+    assert document.get_layer(second.id).air_assist is True
+    edited_second = document.get_layer(second.id).to_dict()
+    assert {
+        key: value for key, value in edited_second.items() if key != "air_assist"
+    } == {
+        key: value for key, value in original_second.items() if key != "air_assist"
+    }
+    assert history.depth == 1
+    assert history.undo_text == f"Edit {second.name}"
+
+    assert history.undo()
+    refresh()
+    assert document.get_layer(first.id).air_assist is True
+    assert document.get_layer(second.id).air_assist is False
+    assert document.get_layer(second.id).to_dict() == original_second
+    assert not panel.air_assist_check.isChecked()
+
+    assert history.redo()
+    refresh()
+    assert document.get_layer(second.id).air_assist is True
+    redone_second = document.get_layer(second.id).to_dict()
+    assert {
+        key: value for key, value in redone_second.items() if key != "air_assist"
+    } == {
+        key: value for key, value in original_second.items() if key != "air_assist"
+    }
+    assert panel.air_assist_check.isChecked()
+
+    panel.close()
+    panel.deleteLater()
+
+
 def test_layer_numeric_editor_emits_once_when_the_value_is_committed(
     qt_application: QtWidgets.QApplication,
 ) -> None:

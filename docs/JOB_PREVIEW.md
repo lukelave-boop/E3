@@ -48,13 +48,26 @@ CURRENT state for local output, eligible output, operation settings, machine
 work/travel feed ceilings, and bounded raster metadata/resource budgets. Stale
 bed-calibration or support readiness is a honeycomb-local blocker. Only provably
 exact local bounds for unrounded rectangles and valid two-point lines can become
-structured bounds blockers. Rounded rectangles, ellipses, images, paths, and
-other complex geometry remain intentionally deferred. Preflight does not
-flatten those vectors, decode raster pixels, apply final placement or spot
-correction, generate commands, or run machine preflight. A ready report is
-therefore not a promise that exact generation will succeed.
+structured bounds blockers; other geometry bounds remain intentionally
+deferred. Air Assist uses a separate bounded, tri-state output classifier. It
+applies object transforms, optional honeycomb placement, laser spot correction,
+and controller-coordinate serialization to lines and rectangle/ellipse
+outlines. For Fill and Raster it can also mirror bounded scan intersections for
+those primitives and closed, line-only native paths. Curves, images, and scans
+that exceed the structured work limit defer to exact generation. Preflight does
+not flatten curved vectors, decode raster pixels, generate commands, or run
+machine preflight. A ready report is therefore not a promise that exact
+generation will succeed.
 `generate_project_gcode()` remains authoritative for geometry and the final
 program, and `MachineService` remains authoritative at execution time.
+
+The report also audits the existing per-layer Air Assist request against the
+detached running-machine mapping. A visible, output-enabled layer with powered
+work and `air_assist = true` is a blocker when no supported controller output is
+configured. Output-disabled, empty, and zero-power layers do not request a
+physical output and therefore do not turn assist on. This check is fail-closed:
+Preview and START cannot silently discard requested Air Assist or guess `M8` or
+`M106`.
 
 Blocked findings are presented only after the active preparation owner has been
 released, and the modeless window cannot continue to Preview. Warning-only and
@@ -84,6 +97,12 @@ arm the laser, submit G-code, or grant execution authority.
 - Statistics separate cut and travel distance/time and report total estimated
   time and maximum planned power. With nearest-path planning they also report
   rapid-travel distance saved relative to source order.
+- Each operation row reports **Air assist: On** when requested for powered work.
+  The review inspector lists the literal configured ON/OFF commands parsed from
+  the finalized program, such as `M8` / `M9` or
+  `M106 P<n> S255` / `M107 P<n>`. A bounded sidebar keeps large reviews
+  responsive; **View all exact commands…** opens every finalized event in
+  program order. These are review data, not controls.
 
 The global bottom progress widget deliberately keeps prepared and executing
 state separate. Its compact visible label reports execution percentage or the
@@ -142,6 +161,12 @@ zero-power frame every real job and keep the operator present.
 the modal Preview, replaces the prepared program, and requires the replacement
 to finish and be reviewed in its own exact Preview before **START JOB** is
 available.
+
+A Start Here replacement retains the configured fail-off prologue, reconstructs
+the Air Assist state required at the selected move boundary, preserves later
+layer transitions, and finishes laser-off before the configured assist-off
+command. It cannot create an assist mapping that was absent from the reviewed
+program.
 
 Preview includes an operation table with independent display visibility and
 generated speed shown in mm/s plus percentage of the configured work-feed

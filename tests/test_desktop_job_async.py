@@ -17,6 +17,11 @@ pytest.importorskip("PySide6", reason="PySide6 is required for desktop tests")
 
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
+from laser_aligner.air_assist import (
+    AirAssistCommands,
+    AirAssistMode,
+    AirAssistSettings,
+)
 from laser_aligner.calibration.support import HoneycombSupportReference
 from laser_aligner.config import WorkArea
 from laser_aligner.core import CoreRuntime
@@ -83,6 +88,50 @@ def _job(move_count: int = 2) -> ProjectJob:
         path_count=len(plan.moves),
         point_count=len(plan.moves),
         plan=plan,
+    )
+
+
+def _air_assist_job() -> ProjectJob:
+    commands = AirAssistCommands(
+        mode=AirAssistMode.GRBL_COOLANT,
+        protocol="grbl",
+        fan_index=None,
+        on_commands=("M8",),
+        off_commands=("M9",),
+    )
+    text = "\n".join(
+        (
+            "G21",
+            "G90",
+            "M5",
+            "M9",
+            '; @E3_LAYER {"id":"air","name":"Air cut","color":"#E35D6A",'
+            '"mode":"line","air_assist":true}',
+            "G0 X10 Y10 F2000",
+            "M8",
+            "M4 S100",
+            "G1 X20 Y10 F1000",
+            "M5",
+            "M9",
+            "M5",
+        )
+    )
+    plan = build_job_plan(
+        text,
+        power_max=1000,
+        start_position=(0.0, 0.0),
+        air_assist_commands=commands,
+    )
+    return ProjectJob(
+        text=text,
+        bounds_mm=plan.bounds_mm,
+        cut_length_mm=plan.cut_distance_mm,
+        travel_length_mm=plan.travel_distance_mm,
+        estimated_seconds=plan.total_seconds,
+        path_count=sum(1 for move in plan.moves if move.laser_on),
+        point_count=len(plan.moves),
+        plan=plan,
+        air_assist_commands=commands,
     )
 
 
@@ -409,6 +458,14 @@ def test_machine_frame_calibration_job_does_not_inherit_local_project_pose() -> 
     fake = SimpleNamespace(
         last_job=job,
         last_job_coordinate_frame=None,
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                laser=SimpleNamespace(
+                    spot_offset_x_mm=0.0,
+                    spot_offset_y_mm=0.0,
+                )
+            )
+        ),
         _project_execution_signature=lambda: (
             "honeycomb-coordinate-frame",
             1,
@@ -418,6 +475,57 @@ def test_machine_frame_calibration_job_does_not_inherit_local_project_pose() -> 
     )
 
     assert E3MainWindow._prepared_frame_is_current(fake)
+
+
+def test_prepared_job_uses_full_precision_spot_offset_authority() -> None:
+    job = _job()
+    job.spot_offset_mm = (0.0004, -0.0004)
+    assert job.plan is not None
+    assert (job.plan.spot_offset_x, job.plan.spot_offset_y) == (0.0, 0.0)
+    fake = SimpleNamespace(
+        last_job=job,
+        last_job_coordinate_frame=None,
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                laser=SimpleNamespace(
+                    spot_offset_x_mm=0.0004,
+                    spot_offset_y_mm=-0.0004,
+                )
+            )
+        ),
+    )
+
+    assert E3MainWindow._prepared_frame_is_current(fake)
+    fake.runtime.settings.laser.spot_offset_x_mm = 0.0005
+    assert not E3MainWindow._prepared_frame_is_current(fake)
+
+
+def test_prepared_air_assist_job_requires_exact_runtime_mapping() -> None:
+    job = _air_assist_job()
+    fake = SimpleNamespace(
+        last_job=job,
+        last_job_coordinate_frame=None,
+        runtime=SimpleNamespace(
+            settings=SimpleNamespace(
+                machine=SimpleNamespace(
+                    protocol="grbl",
+                    air_assist=AirAssistSettings(
+                        mode=AirAssistMode.GRBL_COOLANT
+                    ),
+                ),
+                laser=SimpleNamespace(
+                    spot_offset_x_mm=0.0,
+                    spot_offset_y_mm=0.0,
+                ),
+            )
+        ),
+    )
+
+    assert E3MainWindow._prepared_frame_is_current(fake)
+    fake.runtime.settings.machine.air_assist = AirAssistSettings(
+        mode=AirAssistMode.DISABLED
+    )
+    assert not E3MainWindow._prepared_frame_is_current(fake)
 
 
 def test_local_job_requires_its_exact_current_execution_signature() -> None:
@@ -444,12 +552,19 @@ def test_local_job_requires_its_exact_current_execution_signature() -> None:
         _project_execution_signature=lambda: current,
         runtime=SimpleNamespace(
             settings=SimpleNamespace(
-                laser=SimpleNamespace(guarded_output_polygon_mm=polygon)
+                laser=SimpleNamespace(
+                    guarded_output_polygon_mm=polygon,
+                    spot_offset_x_mm=0.0,
+                    spot_offset_y_mm=0.0,
+                )
             )
         ),
     )
 
     assert E3MainWindow._prepared_frame_is_current(fake)
+    fake.runtime.settings.laser.spot_offset_x_mm = 0.1
+    assert not E3MainWindow._prepared_frame_is_current(fake)
+    fake.runtime.settings.laser.spot_offset_x_mm = 0.0
     fake.runtime.settings.laser.guarded_output_polygon_mm = (
         polygon[0],
         polygon[1],
@@ -494,7 +609,7 @@ def test_local_prepared_job_rejects_missing_or_malformed_current_authority(
     assert not E3MainWindow._prepared_output_authority_is_current(fake, job)
 
 
-def test_local_start_here_preserves_prepared_output_authority(
+def test_local_start_here_preserves_prepared_output_and_air_assist_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     current = (
@@ -509,7 +624,10 @@ def test_local_start_here_preserves_prepared_output_authority(
         (228.0, 240.0),
         (18.0, 240.0),
     )
-    source = _job(8)
+    source = _air_assist_job()
+    source.spot_offset_mm = (0.0004, -0.0004)
+    commands = source.air_assist_commands
+    assert commands is not None
     source.coordinate_space = main_window_module.CoordinateSpace.HONEYCOMB_LOCAL
     source.coordinate_frame_signature = current[:3]
     source.execution_signature = current
@@ -527,6 +645,16 @@ def test_local_start_here_preserves_prepared_output_authority(
         payload = operation()
         assert isinstance(payload, dict)
         payloads.append(payload)
+
+    def capture_start_here_context(
+        plan: JobPlan,
+        source_job: ProjectJob,
+    ) -> dict[str, object]:
+        return E3MainWindow._capture_start_here_request_context(
+            harness,
+            plan,
+            source_job,
+        )
 
     harness = SimpleNamespace(
         document=SimpleNamespace(revision=7),
@@ -552,11 +680,20 @@ def test_local_start_here_preserves_prepared_output_authority(
         runtime=SimpleNamespace(
             settings=SimpleNamespace(
                 machine=SimpleNamespace(
-                    work_area=WorkArea(10.0, 210.0, 10.0, 210.0)
+                    work_area=WorkArea(10.0, 210.0, 10.0, 210.0),
+                    protocol="grbl",
+                    air_assist=AirAssistSettings(
+                        mode=AirAssistMode.GRBL_COOLANT
+                    ),
                 ),
-                laser=SimpleNamespace(power_mode="M4"),
+                laser=SimpleNamespace(
+                    power_mode="M4",
+                    spot_offset_x_mm=0.0004,
+                    spot_offset_y_mm=-0.0004,
+                ),
             )
         ),
+        _capture_start_here_request_context=capture_start_here_context,
         controller=SimpleNamespace(run_background=run_background),
     )
 
@@ -567,6 +704,24 @@ def test_local_start_here_preserves_prepared_output_authority(
     assert isinstance(restarted, ProjectJob)
     assert restarted.guarded_output_polygon_mm == polygon
     assert restarted.execution_signature == current
+    assert restarted.air_assist_commands is commands
+    assert restarted.plan is not None
+    assert restarted.plan.air_assist_commands is commands
+    assert tuple(
+        (event.command, event.enabled)
+        for event in restarted.plan.air_assist_events
+    ) == (("M9", False), ("M8", True), ("M9", False))
+    assert "\nM8\n" in restarted.text
+    assert restarted.text.count("\nM9\n") == 2
+    request_context = payloads[0]["start_here_request_context"]
+    assert isinstance(request_context, dict)
+    assert request_context["air_assist_commands"] == commands
+    assert request_context["spot_offset_mm"] == (0.0004, -0.0004)
+    harness.runtime.settings.laser.spot_offset_y_mm = 0.1
+    assert not E3MainWindow._start_here_request_context_is_current(
+        harness,
+        request_context,
+    )
 
 
 def test_local_run_passes_exact_prepared_output_authority() -> None:
@@ -2202,6 +2357,137 @@ def test_structured_preflight_runs_on_cloned_snapshot_and_reaches_exact_preview(
         _dispose(qt_application, window)
 
 
+def test_job_generation_propagates_resolved_air_assist_mapping(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    _add_line_output(window)
+    window.document.layers[0].air_assist = True
+    window.document.layers[0].power_percent = 20.0
+    machine = window.runtime.settings.machine
+    machine.protocol = "grbl"
+    machine.air_assist = AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT)
+    laser = window.runtime.settings.laser
+    laser.spot_offset_x_mm = 0.0004
+    laser.spot_offset_y_mm = -0.0004
+    preflight_mappings: list[AirAssistCommands | None] = []
+    preflight_spot_offsets: list[tuple[float, float]] = []
+    generator_mappings: list[AirAssistCommands | None] = []
+    generator_spot_offsets: list[tuple[float, float]] = []
+    job = _job()
+
+    def inspected_preflight(document, context) -> JobPreflightReport:
+        preflight_mappings.append(context.air_assist_commands)
+        preflight_spot_offsets.append(
+            (context.spot_offset_x_mm, context.spot_offset_y_mm)
+        )
+        return _real_build_job_preflight_report(document, context)
+
+    def exact_generation(*_args, **kwargs) -> ProjectJob:
+        generator_mappings.append(kwargs["air_assist_commands"])
+        generator_laser = _args[1]
+        generator_spot_offsets.append(
+            (
+                generator_laser.spot_offset_x_mm,
+                generator_laser.spot_offset_y_mm,
+            )
+        )
+        job.spot_offset_mm = generator_spot_offsets[-1]
+        return job
+
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        inspected_preflight,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preview_dialog is not None
+            and not window._job_preparation_busy,
+        )
+
+        assert len(preflight_mappings) == 1
+        commands = preflight_mappings[0]
+        assert commands is not None
+        assert commands is generator_mappings[0]
+        assert commands.on_commands == ("M8",)
+        assert commands.off_commands == ("M9",)
+        assert commands is not machine.air_assist
+        assert preflight_spot_offsets == [(0.0004, -0.0004)]
+        assert generator_spot_offsets == preflight_spot_offsets
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_air_assist_mapping_change_cancels_stale_preflight_request(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    _add_line_output(window)
+    window.document.layers[0].air_assist = True
+    machine = window.runtime.settings.machine
+    machine.protocol = "grbl"
+    machine.air_assist = AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT)
+    entered = threading.Event()
+    release = threading.Event()
+    exact_calls = 0
+
+    def blocked_preflight(document, context) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(document, context)
+        assert report.ready
+        entered.set()
+        assert release.wait(5.0)
+        return report
+
+    def exact_generation(*_args, **_kwargs) -> ProjectJob:
+        nonlocal exact_calls
+        exact_calls += 1
+        return _job()
+
+    monkeypatch.setattr(
+        main_window_module,
+        "build_job_preflight_report",
+        blocked_preflight,
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(qt_application, entered.is_set)
+        machine.air_assist = AirAssistSettings(mode=AirAssistMode.DISABLED)
+        release.set()
+        _wait_until(
+            qt_application,
+            lambda: not window._job_worker_requests
+            and window._job_preparation_owner is None,
+        )
+
+        assert exact_calls == 0
+        assert window.last_job is None
+        assert errors == []
+        assert any("Job preparation cancelled" in notice for notice in notices)
+    finally:
+        release.set()
+        _dispose(qt_application, window)
+
+
 def test_blocked_preflight_is_modeless_and_never_invokes_exact_or_machine_actions(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
@@ -2301,6 +2587,50 @@ def test_blocked_preflight_is_modeless_and_never_invokes_exact_or_machine_action
             assert errors == []
             dialog.close()
             qt_application.processEvents()
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_unconfigured_air_assist_blocks_before_exact_generation(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    _restore_real_job_preflight(monkeypatch)
+    _add_line_output(window)
+    window.document.layers[0].air_assist = True
+    window.document.layers[0].power_percent = 20.0
+    exact_calls = 0
+
+    def exact_generation(*_args, **_kwargs) -> ProjectJob:
+        nonlocal exact_calls
+        exact_calls += 1
+        return _job()
+
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        exact_generation,
+    )
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window._job_preflight_dialog is not None
+            or bool(errors)
+            or exact_calls > 0,
+        )
+
+        assert errors == []
+        assert exact_calls == 0
+        report = window.last_job_preflight_report
+        assert report is not None
+        assert "air_assist.output_unconfigured" in {
+            finding.code for finding in report.findings
+        }
+        assert window.last_job is None
+        assert window._job_preview_dialog is None
     finally:
         _dispose(qt_application, window)
 
@@ -3048,6 +3378,8 @@ def test_core_gcode_calibration_job_is_adapted_for_desktop_preview(
 
     monkeypatch.setattr(window, "_install_generated_job", capture_install)
     source = _job()
+    window.runtime.settings.laser.spot_offset_x_mm = 0.0004
+    window.runtime.settings.laser.spot_offset_y_mm = -0.0004
     try:
         window._load_fine_registration_job(_core_registration_job(source))
 
@@ -3066,6 +3398,7 @@ def test_core_gcode_calibration_job_is_adapted_for_desktop_preview(
         )
         assert adapted.plan.moves[0].start_x == 110.0
         assert adapted.plan.moves[0].start_y == 110.0
+        assert adapted.spot_offset_mm == (0.0004, -0.0004)
         assert adapted.raster_assets == ()
         assert errors == []
     finally:
@@ -3108,6 +3441,8 @@ def test_registration_render_owns_busy_state_against_late_worker(
         blocked_generation,
     )
     monkeypatch.setattr(window.workspace, "start_toolpath_preview", held_workspace)
+    window.runtime.settings.laser.spot_offset_x_mm = 0.0004
+    window.runtime.settings.laser.spot_offset_y_mm = -0.0004
     registration = _large_job(10)
     try:
         window.generate_toolpath()
@@ -3129,6 +3464,7 @@ def test_registration_render_owns_busy_state_against_late_worker(
         )
 
         assert window.last_job is registration
+        assert registration.spot_offset_mm == (0.0004, -0.0004)
         assert window._job_preparation_owner == ("render", current_request)
         assert window._job_preparation_busy
         assert not window.actions["preview_job"].isEnabled()
@@ -3365,6 +3701,72 @@ def test_start_here_preserves_exact_raster_identities(
         assert preflight.requires_motion
         assert errors == []
     finally:
+        _dispose(qt_application, window)
+
+
+def test_start_here_discards_worker_result_after_air_assist_mapping_change(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, notices = _window(tmp_path, monkeypatch)
+    machine = window.runtime.settings.machine
+    machine.protocol = "grbl"
+    machine.air_assist = AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT)
+    source = _air_assist_job()
+    entered = threading.Event()
+    release = threading.Event()
+    original_restart = main_window_module.restart_program_from_move
+    installed: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        main_window_module,
+        "generate_project_gcode",
+        lambda *args, **kwargs: source,
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.StandardButton.Ok,
+    )
+
+    def blocked_restart(*args, **kwargs):
+        entered.set()
+        assert release.wait(5.0)
+        return original_restart(*args, **kwargs)
+
+    try:
+        window.generate_toolpath()
+        _wait_until(
+            qt_application,
+            lambda: window.last_job is source
+            and not window._job_preparation_busy,
+        )
+        monkeypatch.setattr(
+            main_window_module,
+            "restart_program_from_move",
+            blocked_restart,
+        )
+        window._install_generated_job = (  # type: ignore[method-assign]
+            lambda _request_id, payload: installed.append(payload)
+        )
+
+        window._prepare_start_here(0)
+        _wait_until(qt_application, entered.is_set)
+        machine.air_assist = AirAssistSettings(mode=AirAssistMode.DISABLED)
+        release.set()
+        _wait_until(
+            qt_application,
+            lambda: not window._job_worker_requests
+            and window._job_preparation_owner is None,
+        )
+
+        assert installed == []
+        assert window.last_job is None
+        assert window._job_preview_dialog is None
+        assert errors == []
+        assert any("stale generated result" in notice for notice in notices)
+    finally:
+        release.set()
         _dispose(qt_application, window)
 
 

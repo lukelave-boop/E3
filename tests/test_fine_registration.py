@@ -548,6 +548,11 @@ def test_registration_program_has_sparse_safe_dry_and_powered_variants() -> None
         speed_mm_min=1200,
     )
     assert powered.text.count("M4 S100") == 16
+    assert not any(
+        line.strip().split(maxsplit=1)[0] in {"M8", "M9", "M106", "M107"}
+        for line in powered.text.splitlines()
+        if line.strip()
+    )
     assert powered.bounds_mm == pytest.approx((32.5, 32.5, 187.5, 187.5))
 
 

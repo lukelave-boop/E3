@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.calibration.reach import (
     FixtureReachEvidence,
     FixtureReachStore,
@@ -318,6 +319,52 @@ def test_profile_created_instances_are_detached_from_each_other_and_profiles(
     assert second.calibration_profile_id is None
 
 
+def test_saved_machine_air_assist_mapping_round_trips_and_is_detached(
+    tmp_path: Path,
+) -> None:
+    registry = MachineRegistry.load_or_migrate(_settings(tmp_path))
+    created = registry.create_machine(
+        "Marlin air machine",
+        "generic-marlin",
+        "custom-laser-head",
+    )
+    created.machine.port = "COM11"
+    created.machine.air_assist = AirAssistSettings(
+        mode=AirAssistMode.MARLIN_FAN,
+        fan_index=3,
+    )
+
+    saved = registry.update_machine(created)
+    created.machine.air_assist.fan_index = 4
+    reloaded = MachineRegistry.load_or_migrate(_settings(tmp_path)).get_machine(
+        saved.id
+    )
+
+    assert saved.machine.air_assist == AirAssistSettings(
+        mode=AirAssistMode.MARLIN_FAN,
+        fan_index=3,
+    )
+    assert reloaded.machine.air_assist == saved.machine.air_assist
+    assert reloaded.to_dict()["machine"]["air_assist"] == {
+        "mode": "marlin_fan",
+        "fan_index": 3,
+    }
+
+
+def test_schema_one_machine_without_air_assist_defaults_disabled(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path)
+    registry = MachineRegistry.load_or_migrate(settings)
+    payload = json.loads(registry.path.read_text(encoding="utf-8"))
+    payload["machines"][0]["machine"].pop("air_assist")
+    registry.path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reloaded = MachineRegistry.load_or_migrate(settings)
+
+    assert reloaded.active_machine.machine.air_assist == AirAssistSettings()
+
+
 def test_profile_objects_force_safe_setup_defaults() -> None:
     machine_profile = MachineProfile(
         id="unsafe-source",
@@ -352,6 +399,7 @@ def test_all_generic_machine_profiles_leave_honeycomb_span_unset(
 
     for profile in registry.machine_profiles():
         assert profile.machine_defaults.honeycomb_span_mm is None
+        assert profile.machine_defaults.air_assist == AirAssistSettings()
 
 
 @pytest.mark.parametrize(

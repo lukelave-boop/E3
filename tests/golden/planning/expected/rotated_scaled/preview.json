@@ -1,5 +1,7 @@
 {
   "acceleration_mm_s2": 500.0,
+  "air_assist_commands": null,
+  "air_assist_events": [],
   "bounds_mm": [
     0.0,
     0.0,
@@ -12,6 +14,7 @@
   "maximum_power": 220.0,
   "moves": [
     {
+      "air_assist": false,
       "distance_mm": 46.568455331909,
       "duration_seconds": 1.031369106638,
       "end_seconds": 1.031369106638,
@@ -37,6 +40,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 48.000510101456,
       "duration_seconds": 2.103831385301,
       "end_seconds": 3.135200491939,
@@ -62,6 +66,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 17.99975005382,
       "duration_seconds": 0.818084526116,
       "end_seconds": 3.953285018055,
@@ -87,6 +92,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 48.000510101456,
       "duration_seconds": 2.103831385301,
       "end_seconds": 6.057116403355,
@@ -112,6 +118,7 @@
       "vector_power_correction": 0.0
     },
     {
+      "air_assist": false,
       "distance_mm": 17.99975005382,
       "duration_seconds": 0.818084526116,
       "end_seconds": 6.875200929471,

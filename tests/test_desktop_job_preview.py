@@ -15,6 +15,7 @@ pytest.importorskip("PySide6", reason="PySide6 is required for preview tests")
 
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
+from laser_aligner.air_assist import AirAssistCommands, AirAssistMode
 from laser_aligner.desktop.job_preview import JobPreviewDialog
 from laser_aligner.desktop.panels import JobProgressWidget
 from laser_aligner.desktop.theme import DARK_STYLESHEET
@@ -24,6 +25,15 @@ from laser_aligner.project.job_preflight import (
     JobPreflightReport,
     PreflightFinding,
     PreflightSeverity,
+)
+
+
+GRBL_AIR = AirAssistCommands(
+    mode=AirAssistMode.GRBL_COOLANT,
+    protocol="grbl",
+    fan_index=None,
+    on_commands=("M8",),
+    off_commands=("M9",),
 )
 
 
@@ -90,6 +100,39 @@ def _variable_power_plan(
         text,
         power_max=1000,
         start_position=(0.0, 0.0),
+    )
+
+
+def _air_assist_plan():
+    text = "\n".join(
+        [
+            "G21",
+            "G90",
+            "M5",
+            "M9",
+            e3_metadata_line(
+                "layer",
+                {
+                    "id": "air-01",
+                    "name": "Air layer",
+                    "color": "#185CFF",
+                    "air_assist": True,
+                },
+            ),
+            "G0 X20 Y20 F2000",
+            "M8",
+            "M4 S200",
+            "G1 X80 Y20 F1000",
+            "M5",
+            "M9",
+            "M5",
+        ]
+    )
+    return build_job_plan(
+        text,
+        power_max=1000,
+        start_position=(10.0, 10.0),
+        air_assist_commands=GRBL_AIR,
     )
 
 
@@ -451,7 +494,6 @@ def test_preview_layer_table_controls_only_that_operation(
     )
     dialog.show()
     qt_application.processEvents()
-
     assert dialog.layer_tree.topLevelItemCount() == 1
     layer = dialog.layer_tree.topLevelItem(0)
     assert layer.text(1) == "Line 01 · Line"
@@ -470,6 +512,75 @@ def test_preview_layer_table_controls_only_that_operation(
     assert powered_items and all(not item.isVisible() for item in powered_items)
     assert "Line 01" in dialog.legend.text()
 
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_preview_shows_layer_air_status_and_exact_finalized_commands(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    dialog = JobPreviewDialog(
+        _air_assist_plan(),
+        (0.0, 100.0, 0.0, 100.0),
+        "air.gcode",
+    )
+    dialog.show()
+    qt_application.processEvents()
+
+    assert dialog.layer_tree.topLevelItem(0).text(7) == "Air assist: On"
+    assert dialog.air_assist_group is not None
+    assert dialog.air_assist_list is not None
+    command_rows = [
+        dialog.air_assist_list.item(index).text()
+        for index in range(dialog.air_assist_list.count())
+    ]
+    assert any(row.endswith("OFF · M9") for row in command_rows)
+    assert any(row.endswith("ON · M8") for row in command_rows)
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
+def test_preview_exposes_every_air_command_when_sidebar_list_is_bounded(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    plan = _air_assist_plan()
+    seed = plan.air_assist_events[0]
+    events = tuple(
+        replace(
+            seed,
+            line_number=index + 1,
+            enabled=bool(index % 2),
+            command="M8" if index % 2 else "M9",
+        )
+        for index in range(102)
+    )
+    dialog = JobPreviewDialog(
+        replace(plan, air_assist_events=events),
+        (0.0, 100.0, 0.0, 100.0),
+        "many-air-events.gcode",
+    )
+    dialog.show()
+    qt_application.processEvents()
+
+    assert dialog.air_assist_list is not None
+    assert dialog.air_assist_list.count() == 101
+    assert dialog.air_assist_list.item(100).text() == "… 2 more exact event(s)"
+    assert dialog.air_assist_view_all_button is not None
+
+    dialog.air_assist_view_all_button.click()
+    qt_application.processEvents()
+
+    assert dialog.air_assist_full_dialog is not None
+    assert dialog.air_assist_full_text is not None
+    rows = dialog.air_assist_full_text.toPlainText().splitlines()
+    assert len(rows) == 102
+    assert rows[0] == "Line 1 · OFF · M9"
+    assert rows[-1] == "Line 102 · ON · M8"
+
+    dialog.air_assist_full_dialog.close()
     dialog.close()
     dialog.deleteLater()
     qt_application.processEvents()
@@ -627,7 +738,7 @@ def test_preview_remains_useful_at_compact_geometry_with_large_text(
         assert not dialog.canvas.geometry().intersects(dialog.sidebar.geometry())
         header = dialog.layer_tree.header()
         final_column_right = (
-            header.sectionViewportPosition(6) + header.sectionSize(6)
+            header.sectionViewportPosition(7) + header.sectionSize(7)
         )
         assert final_column_right <= dialog.layer_tree.viewport().width()
         assert "…" in dialog.move_label.text()

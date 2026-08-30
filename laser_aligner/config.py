@@ -8,6 +8,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from .air_assist import (
+    AirAssistMode,
+    AirAssistSettings,
+    coerce_air_assist_mode,
+    validate_air_assist_settings,
+)
 from .errors import RealMachineSetupRequired
 from .storage import default_user_data_dir, strict_json_loads
 
@@ -240,6 +246,7 @@ class MachineSettings:
     controller_startup_delay: float = 2.0
     max_travel_feed_mm_min: float = 6000.0
     max_work_feed_mm_min: float = 6000.0
+    air_assist: AirAssistSettings = field(default_factory=AirAssistSettings)
 
 
 @dataclass(slots=True)
@@ -360,6 +367,12 @@ class Settings:
                 "grbl_step_idle_delay_ms": self.machine.grbl_step_idle_delay_ms,
                 "max_travel_feed_mm_min": self.machine.max_travel_feed_mm_min,
                 "max_work_feed_mm_min": self.machine.max_work_feed_mm_min,
+                "air_assist": {
+                    "mode": coerce_air_assist_mode(
+                        self.machine.air_assist.mode
+                    ).value,
+                    "fan_index": self.machine.air_assist.fan_index,
+                },
             },
             "calibration": {
                 "lens": {
@@ -454,6 +467,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "controller_startup_delay": 2.0,
         "max_travel_feed_mm_min": 6000.0,
         "max_work_feed_mm_min": 6000.0,
+        "air_assist": {
+            "mode": "disabled",
+            "fan_index": 0,
+        },
     },
     "calibration": {
         "lens": {
@@ -499,6 +516,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
     precision = raw["camera"]["precision_capture"]
     area = raw["machine"]["work_area"]
     photo = raw["machine"]["photo_position"]
+    air_assist = raw["machine"]["air_assist"]
     lens = raw["calibration"]["lens"]
     bed = raw["calibration"]["bed"]
     laser = raw["laser"]
@@ -518,6 +536,7 @@ def _validate(raw: Mapping[str, Any]) -> None:
         ),
         ("camera.precision_capture.consensus_frames", precision["consensus_frames"]),
         ("machine.baudrate", raw["machine"]["baudrate"]),
+        ("machine.air_assist.fan_index", air_assist["fan_index"]),
         (
             "machine.grbl_step_idle_delay_ms",
             raw["machine"]["grbl_step_idle_delay_ms"],
@@ -698,6 +717,16 @@ def _validate(raw: Mapping[str, Any]) -> None:
         raise ConfigError("machine.backend must be 'serial'")
     if str(raw["machine"]["protocol"]) not in {"auto", "grbl", "marlin"}:
         raise ConfigError("machine.protocol must be auto, grbl, or marlin")
+    try:
+        validate_air_assist_settings(
+            AirAssistSettings(
+                mode=coerce_air_assist_mode(air_assist["mode"]),
+                fan_index=air_assist["fan_index"],
+            ),
+            protocol=str(raw["machine"]["protocol"]),
+        )
+    except ValueError as exc:
+        raise ConfigError(str(exc)) from exc
     if int(raw["machine"]["baudrate"]) <= 0:
         raise ConfigError("machine.baudrate must be positive")
     if float(raw["machine"]["read_timeout"]) <= 0:
@@ -898,6 +927,10 @@ def load_settings(config_path: str | Path | None = None) -> Settings:
             controller_startup_delay=float(raw["machine"]["controller_startup_delay"]),
             max_travel_feed_mm_min=float(raw["machine"]["max_travel_feed_mm_min"]),
             max_work_feed_mm_min=float(raw["machine"]["max_work_feed_mm_min"]),
+            air_assist=AirAssistSettings(
+                mode=AirAssistMode(raw["machine"]["air_assist"]["mode"]),
+                fan_index=int(raw["machine"]["air_assist"]["fan_index"]),
+            ),
         ),
         calibration=CalibrationSettings(
             lens=LensCalibrationSettings(

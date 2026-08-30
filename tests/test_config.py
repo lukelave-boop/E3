@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from laser_aligner import config as config_module
+from laser_aligner.air_assist import AirAssistMode, AirAssistSettings
 from laser_aligner.config import (
     DEFAULT_CONFIG,
     UNCONFIGURED_CONTROLLER_PORT,
@@ -105,6 +106,93 @@ def test_all_python_and_packaged_defaults_require_controller_selection(
     assert DEFAULT_CONFIG["machine"]["port"] == UNCONFIGURED_CONTROLLER_PORT
     assert packaged["machine"]["port"] == UNCONFIGURED_CONTROLLER_PORT
     assert load_settings(sparse).machine.port == UNCONFIGURED_CONTROLLER_PORT
+
+
+def test_air_assist_defaults_disabled_and_direct_settings_normalize_mode(
+    tmp_path: Path,
+) -> None:
+    sparse = tmp_path / "sparse-air-assist.json"
+    sparse.write_text("{}", encoding="utf-8")
+
+    settings = load_settings(sparse)
+    direct = AirAssistSettings(mode="marlin_fan", fan_index=3)  # type: ignore[arg-type]
+
+    assert settings.machine.air_assist == AirAssistSettings()
+    assert settings.machine.air_assist.mode is AirAssistMode.DISABLED
+    assert settings.public_dict()["machine"]["air_assist"] == {
+        "mode": "disabled",
+        "fan_index": 0,
+    }
+    assert direct.mode is AirAssistMode.MARLIN_FAN
+
+
+@pytest.mark.parametrize(
+    ("protocol", "mode", "fan_index"),
+    [
+        ("grbl", "grbl_coolant", 0),
+        ("marlin", "marlin_fan", 0),
+        ("marlin", "marlin_fan", 7),
+    ],
+)
+def test_air_assist_explicit_compatible_mapping_loads(
+    tmp_path: Path,
+    protocol: str,
+    mode: str,
+    fan_index: int,
+) -> None:
+    config = tmp_path / f"{mode}.json"
+    config.write_text(
+        json.dumps(
+            {
+                "machine": {
+                    "protocol": protocol,
+                    "air_assist": {"mode": mode, "fan_index": fan_index},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = load_settings(config)
+
+    assert settings.machine.air_assist.mode.value == mode
+    assert settings.machine.air_assist.fan_index == fan_index
+
+
+@pytest.mark.parametrize(
+    ("protocol", "mode", "fan_index", "message"),
+    [
+        ("grbl", "unknown", 0, "mode must be"),
+        ("auto", "grbl_coolant", 0, "requires machine.protocol grbl"),
+        ("marlin", "grbl_coolant", 0, "requires machine.protocol grbl"),
+        ("grbl", "marlin_fan", 0, "requires machine.protocol marlin"),
+        ("grbl", "disabled", 1, "must be 0 unless"),
+        ("marlin", "marlin_fan", 256, "between 0 and 255"),
+        ("marlin", "marlin_fan", True, "must be a JSON integer"),
+    ],
+)
+def test_air_assist_invalid_or_ambiguous_mapping_is_rejected(
+    tmp_path: Path,
+    protocol: str,
+    mode: str,
+    fan_index: object,
+    message: str,
+) -> None:
+    config = tmp_path / "invalid-air-assist.json"
+    config.write_text(
+        json.dumps(
+            {
+                "machine": {
+                    "protocol": protocol,
+                    "air_assist": {"mode": mode, "fan_index": fan_index},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ConfigError, match=message):
+        load_settings(config)
 
 
 def test_guarded_output_polygon_loads_as_exact_four_point_authority(

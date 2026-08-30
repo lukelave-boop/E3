@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import laser_aligner.project.toolpath as toolpath_module
+from laser_aligner.air_assist import AirAssistCommands, AirAssistMode, AirAssistSettings
 from laser_aligner.calibration.support import HoneycombCoordinateFrame
 from laser_aligner.config import LaserSettings, MachineSettings, WorkArea
 from laser_aligner.errors import SafetyError
@@ -40,6 +41,21 @@ from laser_aligner.templates import (
     RectangleGridSpec,
     instantiate_template,
     template_from_rectangle_grid,
+)
+
+GRBL_AIR = AirAssistCommands(
+    mode=AirAssistMode.GRBL_COOLANT,
+    protocol="grbl",
+    fan_index=None,
+    on_commands=("M8",),
+    off_commands=("M9",),
+)
+MARLIN_AIR_P3 = AirAssistCommands(
+    mode=AirAssistMode.MARLIN_FAN,
+    protocol="marlin",
+    fan_index=3,
+    on_commands=("M106 P3 S255",),
+    off_commands=("M107 P3",),
 )
 
 
@@ -425,6 +441,24 @@ def test_project_gcode_applies_laser_spot_offset_but_keeps_design_bounds():
     assert corrected.bounds_mm == pytest.approx(baseline.bounds_mm)
     assert "spot = controller + offset): X-28 Y-8" in corrected.text
     assert "; Controller bounds: X99.9..176.1 Y92.6..143.4" in corrected.text
+
+
+def test_project_and_frame_jobs_keep_full_precision_spot_offset_authority():
+    laser = LaserSettings(
+        power_max=1000,
+        spot_offset_x_mm=0.0004,
+        spot_offset_y_mm=-0.0004,
+    )
+
+    job = generate_project_gcode(make_document(), laser)
+    frame = generate_project_frame(make_document(), laser)
+
+    assert job.spot_offset_mm == (0.0004, -0.0004)
+    assert frame.spot_offset_mm == (0.0004, -0.0004)
+    assert job.plan is not None
+    assert frame.plan is not None
+    assert (job.plan.spot_offset_x, job.plan.spot_offset_y) == (0.0, 0.0)
+    assert (frame.plan.spot_offset_x, frame.plan.spot_offset_y) == (0.0, 0.0)
 
 
 def test_project_offset_rejects_shifted_controller_bounds():
@@ -2705,3 +2739,331 @@ def test_planner_choice_is_recorded_in_exact_preview_plan() -> None:
     assert source.plan.planner_mode == "source order"
     assert optimized.plan.source_order_travel_mm is not None
     assert optimized.plan.planner_savings_mm >= 0
+
+
+@pytest.mark.parametrize("mode", [LayerMode.LINE, LayerMode.FILL, LayerMode.RASTER])
+def test_air_assist_wraps_powered_output_once_across_paths_and_passes(
+    mode: LayerMode,
+) -> None:
+    document = make_document()
+    layer = document.layers[0]
+    layer.mode = mode
+    layer.line_interval_mm = 5.0
+    layer.passes = 2
+    layer.air_assist = True
+    document.add_object(
+        SceneObject.ellipse(layer.id, center=(55, 55), width_mm=15, height_mm=15)
+    )
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        air_assist_commands=GRBL_AIR,
+    )
+    executable = [
+        line.partition(";")[0].strip()
+        for line in job.text.splitlines()
+        if line.partition(";")[0].strip()
+    ]
+
+    first_position = next(
+        index for index, line in enumerate(executable) if line.startswith("G0 ")
+    )
+    first_power = next(
+        index for index, line in enumerate(executable) if re.match(r"M[34] S", line)
+    )
+    assert executable[executable.index("M5") + 1] == "M9"
+    assert first_position < executable.index("M8") < first_power
+    first_off = executable.index("M5", first_power)
+    later_position = next(
+        index
+        for index, line in enumerate(executable[first_off + 1 :], first_off + 1)
+        if line.startswith("G0 ")
+    )
+    later_power = next(
+        index
+        for index, line in enumerate(executable[later_position + 1 :], later_position + 1)
+        if re.match(r"M[34] S", line)
+    )
+    assert "M8" not in executable[first_off + 1 : later_power]
+    assert executable.count("M8") == 1
+    assert executable.count("M9") == 2
+    assert executable[-3:] == ["M5", "M9", "M5"]
+    assert job.air_assist_commands == GRBL_AIR
+    assert job.plan is not None and job.plan.air_assist_commands == GRBL_AIR
+    assert job.layer_summaries[0]["air_assist"] is True
+    assert job.layer_summaries[0]["air_assist_label"] == "Air assist: On"
+    assert "Air assist: On" in job.text
+
+
+@pytest.mark.parametrize(
+    ("second_air", "second_power", "expected_off_count"),
+    [(True, 25.0, 2), (False, 25.0, 3), (False, 0.0, 3)],
+)
+def test_air_assist_layer_transitions_are_stable_and_fail_off(
+    second_air: bool,
+    second_power: float,
+    expected_off_count: int,
+) -> None:
+    document = make_document()
+    first = document.layers[0]
+    first.air_assist = True
+    second = document.add_layer(name="Second")
+    second.air_assist = second_air
+    second.power_percent = second_power
+    document.add_object(
+        SceneObject.ellipse(second.id, center=(80, 80), width_mm=20, height_mm=20)
+    )
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        air_assist_commands=GRBL_AIR,
+    )
+
+    assert job.text.count("\nM8\n") == 1
+    assert job.text.count("\nM9\n") == expected_off_count
+    if not (second_air and second_power > 0):
+        second_layer = job.text.index("; Layer Second")
+        transition_off = job.text.index("\nM9\n", job.text.index("\nM8\n"))
+        assert transition_off < second_layer
+
+
+def test_air_assist_off_to_on_layer_positions_before_enabling() -> None:
+    document = make_document()
+    first = document.layers[0]
+    first.air_assist = False
+    second = document.add_layer(name="Second")
+    second.air_assist = True
+    second.power_percent = 25
+    document.add_object(
+        SceneObject.ellipse(second.id, center=(80, 80), width_mm=20, height_mm=20)
+    )
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        air_assist_commands=GRBL_AIR,
+    )
+
+    second_program = job.text[job.text.index("; Layer Second") :]
+    assert job.text.index("\nM4 S100\n") < job.text.index("\nM8\n")
+    assert (
+        second_program.index("\nG0 ")
+        < second_program.index("\nM8\n")
+        < second_program.index("\nM4 S250\n")
+    )
+
+
+def test_air_assist_changes_finalized_text_and_preflight_digest() -> None:
+    document = make_document()
+    laser = LaserSettings(power_max=1000)
+    without_air = generate_project_gcode(
+        document,
+        laser,
+        air_assist_commands=GRBL_AIR,
+    )
+    document.layers[0].air_assist = True
+    with_air = generate_project_gcode(
+        document,
+        laser,
+        air_assist_commands=GRBL_AIR,
+    )
+    machine = MachineService(
+        MachineSettings(
+            protocol="grbl",
+            allow_motion=True,
+            air_assist=AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+        laser,
+        hardware_enabled=True,
+    )
+
+    without_air_program = machine.preflight_program(without_air.text)
+    with_air_program = machine.preflight_program(with_air.text)
+
+    assert "\nM8\n" not in without_air.text
+    assert "\nM8\n" in with_air.text
+    assert without_air.text != with_air.text
+    assert without_air_program.digest != with_air_program.digest
+
+
+def test_air_assist_missing_mapping_fails_only_for_usable_powered_output() -> None:
+    powered = make_document()
+    powered.layers[0].air_assist = True
+    with pytest.raises(SafetyError, match="no resolved air-assist command mapping"):
+        generate_project_gcode(powered, LaserSettings(power_max=1000))
+
+    zero_power = make_document()
+    zero_power.layers[0].air_assist = True
+    zero_power.layers[0].power_percent = 0
+    zero_job = generate_project_gcode(zero_power, LaserSettings(power_max=1000))
+    assert "M8" not in zero_job.text
+
+    with pytest.raises(TypeError, match="must be AirAssistCommands or None"):
+        generate_project_gcode(
+            zero_power,
+            LaserSettings(power_max=1000),
+            air_assist_commands=("M8", "M9"),  # type: ignore[arg-type]
+        )
+
+
+def test_coincident_vector_air_layer_has_no_on_or_mapping_requirement() -> None:
+    document = ProjectDocument.new("Coincident", Bounds(0, 0, 100, 100))
+    layer = document.layers[0]
+    layer.air_assist = True
+    layer.power_percent = 25
+    document.add_object(
+        SceneObject(
+            name="Coincident line",
+            kind=ObjectKind.LINE,
+            layer_id=layer.id,
+            geometry={"points": [[0.0, 0.0], [0.0, 0.0]]},
+            transform=Transform(50.0, 50.0, 10.0, 1.0),
+        )
+    )
+
+    job = generate_project_gcode(document, LaserSettings(power_max=1000))
+
+    assert not re.search(r"\bM[348]\b", job.text)
+    assert job.plan is not None and not job.plan.powered
+
+
+def test_serialized_coincident_tiny_air_line_is_unpowered_and_preflights() -> None:
+    document = ProjectDocument.new("Tiny line", Bounds(0, 0, 100, 100))
+    layer = document.layers[0]
+    layer.air_assist = True
+    layer.power_percent = 25
+    document.add_object(
+        SceneObject(
+            name="Sub-micron line",
+            kind=ObjectKind.LINE,
+            layer_id=layer.id,
+            geometry={"points": [[0.0, 0.0], [0.00001, 0.0]]},
+            transform=Transform(50.0, 50.0, 10.0, 1.0),
+        )
+    )
+
+    job = generate_project_gcode(document, LaserSettings(power_max=1000))
+    validated = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            work_area=Bounds(0, 0, 100, 100),
+        ),
+        LaserSettings(power_max=1000),
+        hardware_enabled=True,
+    ).preflight_program(job.text)
+
+    assert "\nM8\n" not in job.text
+    assert not re.search(r"\bM[34]\b", job.text)
+    assert job.plan is not None and not job.plan.powered
+    assert not validated.requires_laser_authorization
+
+
+def test_one_micron_serialized_air_line_remains_powered_output() -> None:
+    document = ProjectDocument.new("One micron line", Bounds(0, 0, 100, 100))
+    layer = document.layers[0]
+    layer.air_assist = True
+    layer.power_percent = 25
+    document.add_object(
+        SceneObject(
+            name="One micron line",
+            kind=ObjectKind.LINE,
+            layer_id=layer.id,
+            geometry={"points": [[0.0, 0.0], [0.0001, 0.0]]},
+            transform=Transform(50.0, 50.0, 10.0, 1.0),
+        )
+    )
+
+    with pytest.raises(SafetyError, match="no resolved air-assist command mapping"):
+        generate_project_gcode(document, LaserSettings(power_max=1000))
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        air_assist_commands=GRBL_AIR,
+    )
+
+    assert "\nM8\n" in job.text
+    assert "\nM4 S250\n" in job.text
+    assert "G1 X50.001 Y50" in job.text
+
+
+def test_serialized_coincident_raster_span_never_enables_air_or_laser() -> None:
+    layer = ProjectDocument.new("Tiny raster", Bounds(0, 0, 100, 100)).layers[0]
+    layer.mode = LayerMode.RASTER
+    layer.air_assist = True
+    points = np.asarray([[50.0, 50.0], [50.0001, 50.0]], dtype=np.float64)
+    row = toolpath_module.RasterRow(
+        points=points,
+        spans=[Polyline(points, source_tag="Sub-micron span")],
+        source_tag="Sub-micron row",
+    )
+    lines: list[str] = []
+
+    toolpath_module._emit_raster_row(
+        lines,
+        row,
+        layer,
+        LaserSettings(power_max=1000),
+        250,
+        1000,
+        points[0],
+        toolpath_module._AirAssistEmitter(GRBL_AIR),
+    )
+
+    assert "M8" not in lines
+    assert not any(line.startswith(("M3", "M4")) for line in lines)
+
+
+def test_disabled_and_empty_air_layers_never_turn_air_on() -> None:
+    document = make_document()
+    document.layers[0].air_assist = True
+    document.layers[0].output_enabled = False
+    empty = document.add_layer(name="Empty")
+    empty.air_assist = True
+    output = document.add_layer(name="Output")
+    document.add_object(
+        SceneObject.rectangle(output.id, center=(80, 80), width_mm=20, height_mm=20)
+    )
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        air_assist_commands=GRBL_AIR,
+    )
+
+    assert "\nM8\n" not in job.text
+    assert job.text.count("\nM9\n") == 2
+
+
+def test_marlin_air_assist_commands_are_exact_and_do_not_change_preview_power() -> None:
+    document = make_document()
+    document.layers[0].air_assist = True
+
+    job = generate_project_gcode(
+        document,
+        LaserSettings(power_max=1000),
+        air_assist_commands=MARLIN_AIR_P3,
+    )
+
+    assert "\nM106 P3 S255\n" in job.text
+    assert job.text.count("\nM107 P3\n") == 2
+    assert job.plan is not None
+    assert job.plan.maximum_power == pytest.approx(100.0)
+    assert {event.command for event in job.plan.air_assist_events} == {
+        "M106 P3 S255",
+        "M107 P3",
+    }
+
+
+def test_project_framing_never_uses_layer_air_assist() -> None:
+    document = make_document()
+    document.layers[0].air_assist = True
+
+    frame = generate_project_frame(document, LaserSettings())
+
+    assert "\nM8\n" not in frame.text
+    assert "\nM9\n" not in frame.text
