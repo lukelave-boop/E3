@@ -257,6 +257,16 @@ shows that byte for a successful Auto raster result, `N/A` for an Auto Color
 winner, and no stale value after Clear, failure, or settings changes. The 4× path
 keeps bicubic edge localization at real source boundaries while locking
 homogeneous source interiors so interpolation cannot invent holes or islands.
+For these non-grid raster routes, object filtering and enclosed-hole cleanup are
+independent: minimum object area first removes source-resolution connected
+foreground components, maximum object area later rejects complete vectorized
+root candidates, and minimum/maximum hole area define the inclusive range of
+legitimate holes. Holes below the hole minimum or above its optional maximum are
+filled in the exact
+production Mask before contour extraction; the external border-connected
+background is never filled, and background touching hard-ineligible pixels is
+likewise protected. Existing Trace preferences inherit the old minimum hole
+behavior once and use no maximum-hole filter until explicitly changed.
 On hardware, Trace completes Home / park before acquiring the temporary
 capture-only stepper hold; only the short settle/discard/raw-frame burst is held.
 The Camera display selector exposes the exact **Camera**, **Exposed bed**,

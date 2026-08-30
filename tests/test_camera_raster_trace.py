@@ -98,6 +98,108 @@ def _root_groups(contours: Sequence[Any]) -> tuple[tuple[int, ...], ...]:
     return tuple(groups)
 
 
+def _contour_tree_shape(mask: np.ndarray) -> tuple[list[int], list[int]]:
+    contours, hierarchy = cv2.findContours(
+        mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    assert hierarchy is not None
+    parents = hierarchy[0, :, 3].tolist()
+    depths = []
+    for index in range(len(contours)):
+        depth = 0
+        parent = parents[index]
+        while parent >= 0:
+            depth += 1
+            parent = parents[parent]
+        depths.append(depth)
+    return parents, depths
+
+
+def _wrench_hole_scene() -> np.ndarray:
+    image = np.full((320, 480, 3), 228, dtype=np.uint8)
+    dark = (28, 28, 28)
+    background = (228, 228, 228)
+
+    cv2.rectangle(image, (70, 120), (355, 200), dark, thickness=-1)
+    cv2.circle(image, (370, 160), 75, dark, thickness=-1, lineType=cv2.LINE_8)
+    cv2.fillPoly(
+        image,
+        [
+            np.asarray(
+                ((35, 105), (95, 125), (95, 195), (35, 215), (55, 175), (55, 145)),
+                dtype=np.int32,
+            )
+        ],
+        dark,
+    )
+
+    # Two sub-minimum reflection patches and one legitimate enclosed hole.
+    cv2.rectangle(image, (125, 142), (128, 145), background, thickness=-1)
+    cv2.rectangle(image, (155, 174), (159, 178), background, thickness=-1)
+    cv2.rectangle(image, (215, 135), (234, 154), background, thickness=-1)
+
+    # One over-maximum hole contains a foreground island large enough to pass
+    # the object minimum. Filling that hole intentionally absorbs the island.
+    cv2.rectangle(image, (330, 125), (410, 195), background, thickness=-1)
+    cv2.rectangle(image, (350, 145), (389, 174), dark, thickness=-1)
+
+    # This independent foreground speck is below the 50 mm2 object minimum.
+    cv2.rectangle(image, (15, 15), (30, 30), dark, thickness=-1)
+    return image
+
+
+def _wrench_hole_options(
+    *,
+    max_area_mm2: float = 8_000.0,
+    max_hole_area_mm2: float | None = 30.0,
+) -> TraceOptions:
+    return TraceOptions(
+        detection_mode="contrast",
+        contrast_threshold_mode="manual",
+        contrast_threshold=128,
+        regular_grid=False,
+        output_mode="native",
+        min_area_mm2=50.0,
+        max_area_mm2=max_area_mm2,
+        min_hole_area_mm2=2.0,
+        max_hole_area_mm2=max_hole_area_mm2,
+        min_width_mm=1.0,
+        min_height_mm=1.0,
+        confidence_threshold=0.0,
+        native_fitting_tolerance_mm=0.25,
+    )
+
+
+def _auto_hole_scene(*, light_foreground: bool) -> np.ndarray:
+    background = 28 if light_foreground else 228
+    foreground = 228 if light_foreground else 28
+    image = np.full((160, 240, 3), background, dtype=np.uint8)
+    foreground_bgr = (foreground,) * 3
+    background_bgr = (background,) * 3
+    cv2.rectangle(image, (20, 25), (105, 135), foreground_bgr, thickness=-1)
+    cv2.circle(
+        image,
+        (175, 80),
+        38,
+        foreground_bgr,
+        thickness=-1,
+        lineType=cv2.LINE_8,
+    )
+    cv2.rectangle(image, (35, 40), (38, 43), background_bgr, thickness=-1)
+    cv2.rectangle(image, (65, 60), (76, 71), background_bgr, thickness=-1)
+    cv2.circle(
+        image,
+        (175, 80),
+        16,
+        background_bgr,
+        thickness=-1,
+        lineType=cv2.LINE_8,
+    )
+    return image
+
+
 def test_non_grid_contrast_preserves_literal_components_holes_and_lines() -> None:
     result = detect_objects(
         _glyph_scene(),
@@ -124,6 +226,152 @@ def test_non_grid_contrast_preserves_literal_components_holes_and_lines() -> Non
     assert any("C" in sequence for sequence in sequences)
     assert {item.diagnostics["connected_component_count"] for item in result.detections} == {5}
     assert {item.diagnostics["root_tree_count"] for item in result.detections} == {5}
+
+
+def test_manual_contrast_wrench_uses_independent_object_and_hole_ranges() -> None:
+    image = _wrench_hole_scene()
+    previews = []
+    result = detect_objects(
+        image,
+        _wrench_hole_options(),
+        WorkArea(0.0, 120.0, 0.0, 80.0),
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    assert result.direct_count == 1
+    assert result.options.min_area_mm2 == 50.0
+    assert result.options.max_area_mm2 == 8_000.0
+    assert result.options.min_hole_area_mm2 == 2.0
+    assert result.options.max_hole_area_mm2 == 30.0
+    assert result.diagnostics["hole_cleanup"] == {
+        "raw_hole_count": 4,
+        "preserved_hole_count": 1,
+        "filled_below_min_count": 2,
+        "filled_above_max_count": 1,
+        "minimum_hole_area_mm2": 2.0,
+        "maximum_hole_area_mm2": 30.0,
+    }
+    assert len(previews) == 1
+    preview = previews[0]
+    assert preview.contour_mask.shape == (image.shape[0] * 4, image.shape[1] * 4)
+
+    def production_value(x: int, y: int) -> int:
+        return int(preview.contour_mask[y * 4 + 2, x * 4 + 2])
+
+    assert production_value(126, 143) == 255
+    assert production_value(157, 176) == 255
+    assert production_value(224, 144) == 0
+    assert production_value(340, 135) == 255
+    assert production_value(370, 160) == 255
+    assert production_value(22, 22) == 0
+
+    parents, depths = _contour_tree_shape(preview.contour_mask)
+    assert parents == [-1, 0]
+    assert depths == [0, 1]
+    detection = result.detections[0]
+    assert 50.0 < detection.area_mm2 < 8_000.0
+    assert detection.native_verified
+    assert detection.diagnostics["contour_parents"] == [None, 0]
+    assert detection.diagnostics["contour_depths"] == [0, 1]
+    native = NativePathGeometry.from_dict(detection.native_path or {})
+    assert native.fill_rule is PathFillRule.EVENODD
+    assert len(native.subpaths) == 2
+
+    unbounded = detect_objects(
+        image,
+        _wrench_hole_options(max_hole_area_mm2=None),
+        WorkArea(0.0, 120.0, 0.0, 80.0),
+        4.0,
+    )
+    assert unbounded.direct_count == 1
+    unbounded_detection = unbounded.detections[0]
+    assert unbounded.diagnostics["hole_cleanup"] == {
+        "raw_hole_count": 4,
+        "preserved_hole_count": 2,
+        "filled_below_min_count": 2,
+        "filled_above_max_count": 0,
+        "minimum_hole_area_mm2": 2.0,
+        "maximum_hole_area_mm2": None,
+    }
+    assert sorted(unbounded_detection.diagnostics["contour_depths"]) == [0, 1, 1, 2]
+    assert len(
+        NativePathGeometry.from_dict(unbounded_detection.native_path or {}).subpaths
+    ) == 4
+
+    object_maximum = detect_objects(
+        image,
+        _wrench_hole_options(max_area_mm2=1_000.0),
+        WorkArea(0.0, 120.0, 0.0, 80.0),
+        4.0,
+    )
+    assert object_maximum.direct_count == 0
+
+
+@pytest.mark.parametrize(
+    ("light_foreground", "expected_strategy", "expected_polarity"),
+    (
+        (False, "raster_dark", "dark"),
+        (True, "raster_light", "light"),
+    ),
+)
+def test_non_grid_auto_winner_applies_explicit_hole_range_to_production_native(
+    light_foreground: bool,
+    expected_strategy: str,
+    expected_polarity: str,
+) -> None:
+    previews = []
+    result = detect_objects(
+        _auto_hole_scene(light_foreground=light_foreground),
+        TraceOptions(
+            detection_mode="auto",
+            regular_grid=False,
+            min_area_mm2=2.0,
+            max_area_mm2=2_000.0,
+            min_hole_area_mm2=2.0,
+            max_hole_area_mm2=30.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.20,
+        ),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    assert result.diagnostics["auto"]["selected_strategy"] == expected_strategy
+    selected_attempt = next(
+        attempt
+        for attempt in result.diagnostics["auto"]["attempts"]
+        if attempt["name"] == expected_strategy
+    )
+    assert selected_attempt["hole_cleanup"] == {
+        "raw_hole_count": 3,
+        "preserved_hole_count": 1,
+        "filled_below_min_count": 1,
+        "filled_above_max_count": 1,
+        "minimum_hole_area_mm2": 2.0,
+        "maximum_hole_area_mm2": 30.0,
+    }
+    assert result.diagnostics["hole_cleanup"] == selected_attempt["hole_cleanup"]
+    selected_preview = previews[-1]
+    assert selected_preview.selected_strategy
+    assert selected_preview.strategy == expected_strategy
+    assert selected_preview.polarity == expected_polarity
+    assert int(selected_preview.contour_mask[41 * 4 + 2, 36 * 4 + 2]) == 255
+    assert int(selected_preview.contour_mask[65 * 4 + 2, 70 * 4 + 2]) == 0
+    assert int(selected_preview.contour_mask[80 * 4 + 2, 175 * 4 + 2]) == 255
+    parents, depths = _contour_tree_shape(selected_preview.contour_mask)
+    assert parents.count(-1) == 2
+    assert sorted(depths) == [0, 0, 1]
+    assert result.direct_count == 2
+    assert sorted(
+        len(NativePathGeometry.from_dict(item.native_path or {}).subpaths)
+        for item in result.detections
+    ) == [1, 2]
+    assert result.options.min_hole_area_mm2 == 2.0
+    assert result.options.max_hole_area_mm2 == 30.0
 
 
 def test_raster_to_camera_affine_preserves_pixel_center_semantics() -> None:
@@ -524,7 +772,65 @@ def test_max_area_is_a_post_vector_candidate_filter() -> None:
     assert result.detections[0].area_mm2 < 150.0
 
 
-def test_grid_contrast_does_not_enter_raster_pixel_vectorizer(
+def test_explicit_color_retains_specialized_holes_despite_raster_hole_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("explicit Color must not enter shared raster cleanup")
+
+    monkeypatch.setattr(
+        "laser_aligner.vision.object_trace.vectorize_pixel_source_forest",
+        fail,
+    )
+    background = (128, 128, 128)
+    target = (220, 100, 161)
+    image = np.full((180, 240, 3), background, dtype=np.uint8)
+    cv2.rectangle(image, (45, 30), (195, 150), target, thickness=-1)
+    cv2.rectangle(image, (90, 60), (150, 120), background, thickness=-1)
+    previews = []
+
+    result = detect_objects(
+        image,
+        TraceOptions(
+            detection_mode="color",
+            target_bgr=target,
+            target_hue=150.0,
+            hue_tolerance=16.0,
+            regular_grid=False,
+            output_mode="native",
+            min_area_mm2=5.0,
+            max_area_mm2=3_000.0,
+            min_hole_area_mm2=0.0,
+            max_hole_area_mm2=1.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.20,
+        ),
+        WorkArea(0.0, 60.0, 0.0, 45.0),
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    assert result.mode_used == "color"
+    assert result.direct_count == 1
+    assert len(previews) == 1
+    preview = previews[0]
+    assert preview.strategy == "color"
+    assert preview.contour_mask.shape == image.shape[:2]
+    assert int(preview.contour_mask[90, 120]) == 0
+    parents, depths = _contour_tree_shape(preview.contour_mask)
+    assert parents == [-1, 0]
+    assert depths == [0, 1]
+    detection = result.detections[0]
+    assert detection.native_verified
+    assert detection.diagnostics["contour_parents"] == [None, 0]
+    assert len(NativePathGeometry.from_dict(detection.native_path or {}).subpaths) == 2
+    assert result.options.min_hole_area_mm2 == 0.0
+    assert result.options.max_hole_area_mm2 == 1.0
+
+
+def test_grid_contrast_does_not_acquire_shared_raster_hole_filtering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fail(*_args: object, **_kwargs: object) -> object:
@@ -545,6 +851,8 @@ def test_grid_contrast_does_not_enter_raster_pixel_vectorizer(
             detection_mode="contrast",
             regular_grid=True,
             min_area_mm2=40.0,
+            min_hole_area_mm2=0.0,
+            max_hole_area_mm2=1.0,
             min_width_mm=10.0,
             min_height_mm=8.0,
         ),
@@ -554,10 +862,12 @@ def test_grid_contrast_does_not_enter_raster_pixel_vectorizer(
 
     assert result.grid is not None
     assert result.direct_count == 6
+    assert result.options.min_hole_area_mm2 == 0.0
+    assert result.options.max_hole_area_mm2 == 1.0
     assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)
 
 
-def test_grid_auto_retains_the_specialized_detector(
+def test_grid_auto_does_not_acquire_shared_raster_hole_filtering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fail(*_args: object, **_kwargs: object) -> object:
@@ -578,6 +888,8 @@ def test_grid_auto_retains_the_specialized_detector(
             detection_mode="auto",
             regular_grid=True,
             min_area_mm2=40.0,
+            min_hole_area_mm2=0.0,
+            max_hole_area_mm2=1.0,
             min_width_mm=10.0,
             min_height_mm=8.0,
         ),
@@ -588,4 +900,6 @@ def test_grid_auto_retains_the_specialized_detector(
     assert result.grid is not None
     assert result.direct_count == 6
     assert result.grid["observed_cells"] == 6
+    assert result.options.min_hole_area_mm2 == 0.0
+    assert result.options.max_hole_area_mm2 == 1.0
     assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)

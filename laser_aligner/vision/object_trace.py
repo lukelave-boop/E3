@@ -41,6 +41,7 @@ from ..project.raster_vectorize import (
     PixelVectorizationSource,
     RasterContourOutput,
     RasterDetectionMode,
+    RasterHoleCleanupDiagnostics,
     RasterVectorizationCancelledError,
     RasterVectorizationError,
     RasterVectorizationOptions,
@@ -92,6 +93,10 @@ def _trace_cancel_kwargs() -> dict[str, Callable[[], bool]]:
         if _TRACE_CANCEL_CHECK.get() is None
         else {"cancel_check": _trace_cancel_requested}
     )
+
+
+MAXIMUM_TRACE_MINIMUM_AREA_MM2 = 100_000.0
+MAXIMUM_TRACE_AREA_MM2 = 1_000_000.0
 
 
 def _finite_option(value: Any, label: str) -> float:
@@ -146,6 +151,8 @@ class TraceOptions:
     border_offset_left_mm: float = 0.0
     smoothing_mm: float = 0.25
     native_fitting_tolerance_mm: float = 0.10
+    min_hole_area_mm2: float | None = None
+    max_hole_area_mm2: float | None = None
 
     def __post_init__(self) -> None:
         self.detection_mode = str(self.detection_mode).lower()
@@ -179,14 +186,42 @@ class TraceOptions:
             raise ValueError("contrast_threshold must be an integer from 0 through 255")
         if type(self.contrast_invert) is not bool:
             raise ValueError("contrast_invert must be a JSON boolean")
-        self.min_area_mm2 = max(
-            0.01,
-            _finite_option(self.min_area_mm2, "min_area_mm2"),
+        self.min_area_mm2 = _finite_option(self.min_area_mm2, "min_area_mm2")
+        if not 0.0 < self.min_area_mm2 <= MAXIMUM_TRACE_MINIMUM_AREA_MM2:
+            raise ValueError(
+                "min_area_mm2 must be greater than zero and no greater than "
+                f"{MAXIMUM_TRACE_MINIMUM_AREA_MM2:.0f}"
+            )
+        self.max_area_mm2 = _finite_option(self.max_area_mm2, "max_area_mm2")
+        if not self.min_area_mm2 <= self.max_area_mm2 <= MAXIMUM_TRACE_AREA_MM2:
+            raise ValueError(
+                "max_area_mm2 must be at least min_area_mm2 and no greater than "
+                f"{MAXIMUM_TRACE_AREA_MM2:.0f}"
+            )
+        self.min_hole_area_mm2 = (
+            self.min_area_mm2
+            if self.min_hole_area_mm2 is None
+            else _finite_option(self.min_hole_area_mm2, "min_hole_area_mm2")
         )
-        self.max_area_mm2 = max(
-            self.min_area_mm2,
-            _finite_option(self.max_area_mm2, "max_area_mm2"),
-        )
+        if not 0.0 <= self.min_hole_area_mm2 <= MAXIMUM_TRACE_MINIMUM_AREA_MM2:
+            raise ValueError(
+                "min_hole_area_mm2 must be non-negative and no greater than "
+                f"{MAXIMUM_TRACE_MINIMUM_AREA_MM2:.0f}"
+            )
+        if self.max_hole_area_mm2 is not None:
+            self.max_hole_area_mm2 = _finite_option(
+                self.max_hole_area_mm2,
+                "max_hole_area_mm2",
+            )
+            if not (
+                self.min_hole_area_mm2
+                <= self.max_hole_area_mm2
+                <= MAXIMUM_TRACE_AREA_MM2
+            ):
+                raise ValueError(
+                    "max_hole_area_mm2 must be at least min_hole_area_mm2 and no "
+                    f"greater than {MAXIMUM_TRACE_AREA_MM2:.0f}"
+                )
         self.min_width_mm = max(
             0.1,
             _finite_option(self.min_width_mm, "min_width_mm"),
@@ -3563,6 +3598,8 @@ def _detect_non_grid_contrast_raster(
         threshold=options.contrast_threshold,
         invert=options.contrast_invert,
         minimum_feature_area_mm2=options.min_area_mm2,
+        minimum_hole_area_mm2=options.min_hole_area_mm2,
+        maximum_hole_area_mm2=options.max_hole_area_mm2,
         smoothing_mm=0.0,
         simplification_tolerance_mm=effective_tolerance,
         contour_output=RasterContourOutput.ALL_CONTOURS,
@@ -3583,6 +3620,10 @@ def _detect_non_grid_contrast_raster(
             threshold=auto_threshold_selection.threshold,
         )
     strategy_name = preview_strategy or f"raster_{polarity}"
+    hole_cleanup: RasterHoleCleanupDiagnostics | None = None
+
+    def hole_cleanup_diagnostics() -> dict[str, object] | None:
+        return None if hole_cleanup is None else hole_cleanup.to_dict()
 
     def trace_metadata() -> dict[str, Any]:
         return {
@@ -3597,6 +3638,7 @@ def _detect_non_grid_contrast_raster(
                 if auto_threshold_selection is None
                 else auto_threshold_selection.to_dict()
             ),
+            "hole_cleanup": hole_cleanup_diagnostics(),
             "timing": {
                 "trace_eligibility": (
                     {}
@@ -3610,7 +3652,9 @@ def _detect_non_grid_contrast_raster(
         }
 
     def mask_ready(mask_preview: PixelVectorizationMaskPreview) -> None:
+        nonlocal hole_cleanup
         _check_trace_cancelled()
+        hole_cleanup = mask_preview.hole_cleanup
         if raster_preview_callback is None:
             return
         raster_preview_callback(
@@ -3689,6 +3733,7 @@ def _detect_non_grid_contrast_raster(
                         "invalid_candidate_count": len(forest_result.failures),
                         "root_tree_count": forest_result.root_tree_count,
                         "minimum_area_mm2": options.min_area_mm2,
+                        "hole_cleanup": hole_cleanup_diagnostics(),
                         "frame_area_mm2": raster_width_mm * raster_height_mm,
                     },
                     **trace_metadata(),
@@ -3734,6 +3779,7 @@ def _detect_non_grid_contrast_raster(
                     "invalid_candidate_count": 0,
                     "root_tree_count": 0,
                     "minimum_area_mm2": options.min_area_mm2,
+                    "hole_cleanup": hole_cleanup_diagnostics(),
                     "frame_area_mm2": raster_width_mm * raster_height_mm,
                 },
                 **trace_metadata(),
@@ -4053,6 +4099,7 @@ def _detect_non_grid_contrast_raster(
             for item in detections
         ),
         "minimum_area_mm2": options.min_area_mm2,
+        "hole_cleanup": hole_cleanup_diagnostics(),
         "frame_area_mm2": (
             float(np.count_nonzero(eligibility.material_eligible_mask))
             / pixels_per_mm**2
@@ -4155,6 +4202,8 @@ def _auto_attempt_diagnostics(
         output["target_hue"] = float(target_hue)
     if hue_tolerance is not None:
         output["hue_tolerance"] = float(hue_tolerance)
+    if isinstance(values.get("hole_cleanup"), Mapping):
+        output["hole_cleanup"] = dict(values["hole_cleanup"])
     for key in (
         "valid_area_mm2",
         "microscopic_candidate_count",

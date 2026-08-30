@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import fields
 
 import cv2
 import numpy as np
@@ -1970,6 +1971,95 @@ def test_trace_options_require_boolean_grid_edge_repair() -> None:
         TraceOptions(repair_grid_edges="yes")
 
 
+def test_trace_options_migrate_legacy_hole_filter_once() -> None:
+    legacy = TraceOptions.from_mapping(
+        {
+            "detection_mode": "contrast",
+            "min_area_mm2": 50.0,
+            "max_area_mm2": 8_000.0,
+        }
+    )
+
+    assert legacy.min_hole_area_mm2 == pytest.approx(50.0)
+    assert legacy.max_hole_area_mm2 is None
+    saved = legacy.to_dict()
+    assert saved["min_hole_area_mm2"] == pytest.approx(50.0)
+    assert saved["max_hole_area_mm2"] is None
+
+    saved["min_area_mm2"] = 75.0
+    restored = TraceOptions.from_mapping(saved)
+    assert restored.min_area_mm2 == pytest.approx(75.0)
+    assert restored.min_hole_area_mm2 == pytest.approx(50.0)
+    assert restored.max_hole_area_mm2 is None
+
+
+def test_trace_options_round_trip_independent_hole_area_range() -> None:
+    options = TraceOptions(
+        min_area_mm2=50.0,
+        max_area_mm2=8_000.0,
+        min_hole_area_mm2=2.0,
+        max_hole_area_mm2=30.0,
+    )
+
+    assert TraceOptions.from_mapping(options.to_dict()).to_dict() == options.to_dict()
+
+
+def test_trace_hole_options_are_appended_after_legacy_positional_fields() -> None:
+    option_fields = fields(TraceOptions)
+    assert [item.name for item in option_fields[-2:]] == [
+        "min_hole_area_mm2",
+        "max_hole_area_mm2",
+    ]
+
+    legacy = TraceOptions(*(item.default for item in option_fields[:-2]))
+
+    assert legacy.min_hole_area_mm2 == pytest.approx(legacy.min_area_mm2)
+    assert legacy.max_hole_area_mm2 is None
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"min_area_mm2": 0.0}, "greater than zero"),
+        ({"min_area_mm2": 100_001.0}, "no greater than 100000"),
+        (
+            {"min_area_mm2": 10.0, "max_area_mm2": 9.0},
+            "at least min_area_mm2",
+        ),
+        ({"max_area_mm2": 1_000_001.0}, "no greater than 1000000"),
+        ({"min_hole_area_mm2": -0.01}, "non-negative"),
+        ({"min_hole_area_mm2": 100_001.0}, "no greater than 100000"),
+        (
+            {"min_hole_area_mm2": 2.0, "max_hole_area_mm2": 1.99},
+            "at least min_hole_area_mm2",
+        ),
+        ({"max_hole_area_mm2": 1_000_001.0}, "no greater than 1000000"),
+    ],
+)
+def test_trace_options_reject_invalid_area_ranges(
+    overrides: dict[str, float],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        TraceOptions(**overrides)
+
+
+def test_trace_options_accept_inclusive_area_boundaries_and_unbounded_holes() -> None:
+    bounded = TraceOptions(
+        min_area_mm2=10.0,
+        max_area_mm2=10.0,
+        min_hole_area_mm2=3.0,
+        max_hole_area_mm2=3.0,
+    )
+    unbounded = TraceOptions(min_hole_area_mm2=0.0, max_hole_area_mm2=None)
+    zero_only = TraceOptions(min_hole_area_mm2=0.0, max_hole_area_mm2=0.0)
+
+    assert bounded.max_area_mm2 == bounded.min_area_mm2
+    assert bounded.max_hole_area_mm2 == bounded.min_hole_area_mm2
+    assert unbounded.max_hole_area_mm2 is None
+    assert zero_only.max_hole_area_mm2 == pytest.approx(0.0)
+
+
 def test_border_offset_expands_fitted_output():
     image = _label_scene(obscure=False)
     base = detect_objects(
@@ -2185,6 +2275,8 @@ def test_non_grid_mode_preserves_irregular_colored_silhouette():
         {"target_hue": float("nan")},
         {"hue_tolerance": float("inf")},
         {"min_area_mm2": float("nan")},
+        {"min_hole_area_mm2": float("nan")},
+        {"max_hole_area_mm2": float("inf")},
         {"target_bgr": [0, float("nan"), 0]},
         {"border_offset_top_mm": float("nan")},
     ],

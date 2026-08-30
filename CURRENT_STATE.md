@@ -7,6 +7,68 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-08-31**
 
+## Active independent Camera Trace hole-area filters
+
+Non-grid Camera Trace Contrast and Auto's dark/light raster attempts now separate
+foreground-object review from enclosed-hole cleanup. The Trace Object filters are
+ordered **Minimum area**, **Maximum area**, **Minimum hole area**, **Maximum hole
+area**, **Minimum width**, and **Minimum height**, all area values use mm², and the
+hole tooltips describe enclosed holes rather than object size. Hole controls are
+available for non-grid Auto/Contrast and inactive for Grid and explicit Color.
+
+Minimum object area first removes source-resolution connected foreground
+components, including nested foreground islands. Maximum object area later
+rejects complete post-vector root candidates above its inclusive limit.
+Independently, enclosed background components below the minimum hole area or
+above the optional maximum hole area are filled; holes exactly on either bound
+or between them are preserved. `None` represents no maximum. The external
+border-connected background is never filled. Background connected to hard-
+ineligible pixels is equally protected and excluded from filterable-hole counts.
+Cleanup changes the exact production Mask before 4× `RETR_TREE` extraction and
+native fitting, so preserved holes retain
+normal descendants and deliberately filled holes may absorb nested foreground
+islands into the parent. Maximum hole area never acts as a root/object filter.
+
+`geometry.foreground.clean_foreground_components` remains backward compatible
+while accepting independent minimum and maximum hole areas. Its detailed companion
+returns bounded counts for raw, preserved, below-minimum-filled, and above-maximum-
+filled holes. `RasterVectorizationOptions`, mask previews, quick/exact pixel and
+asset results, metadata, Camera Trace results, and Auto raster-attempt diagnostics
+carry the effective physical range and aggregate counts without retaining a
+per-hole list. Existing source-neutral callers that omit the new limits still use
+minimum feature area as minimum hole area and no maximum, preserving imported-
+raster defaults.
+
+Legacy Trace options and QSettings with no hole fields migrate once: minimum hole
+area copies the saved minimum object area and maximum hole area becomes **No
+maximum**. Persisted values are explicit thereafter, so later object-area edits do
+not recouple them. Validation rejects non-finite, negative, inverted, or out-of-
+widget-bound ranges rather than swapping or clamping them.
+
+Windows Python 3.12.13 verification on the synchronized integration worktree
+passes **349 focused Trace tests** in **67.07 seconds** and **512 bounded-shutdown
+tests** with **2 expected Windows skips** in **51.95 seconds**. The complete
+four-worker repository suite passes **3,225 tests** with **15 expected
+platform/privilege skips** in **193.41 seconds**. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass; the diff
+check reports only Git's existing LF-to-CRLF notices. Focused regressions prove
+that cancellation during source-mask hole cleanup or later native fitting
+publishes no accepted Trace result, and that both the controller and main-window
+guards prevent a late cancelled result from publishing or creating project
+geometry. Frozen-build evidence remains pending on this integration branch. This
+is deterministic Qt-free/offscreen automated verification, not an interactive
+camera test.
+
+This feature does not change primitive recovery, Straighten, camera
+normalization, exposed-bed suppression, the Auto threshold-selection algorithm,
+Grid/Color detection, project schema, planning, motion, Air Assist, Pi execution,
+homing, arming, or laser-output authority. The synthetic mask and offscreen tests
+do not constitute physical validation; the reflective wrench still requires a
+fresh recorded camera run. The recommended first settings are **Minimum area 50
+mm²**, **Maximum area 8,000 mm²**, **Minimum hole area 500 mm²**, and **Maximum
+hole area No maximum**.
+Exercise a finite maximum-hole value once before returning it to **No maximum**.
+
 ## Active bounded desktop shutdown correction
 
 Accepted desktop Close now starts one monotonic four-second shutdown deadline.

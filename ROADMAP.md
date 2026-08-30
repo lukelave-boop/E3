@@ -33,9 +33,11 @@ The following foundations are implemented and automated-test covered:
   physical corner classification, editable safe Line-layer output, and
   high-contrast preview comparison controls;
 - unified Camera Trace review with physical material eligibility, bounded Auto
-  threshold selection, compound native line/cubic fitting, and an optional
-  post-Create geometric Straighten command over selected finished project
-  artwork, while retaining the independent repeated-object/grid workflow;
+  threshold selection, independent physical object/hole area filtering for
+  non-grid raster strategies, compound native line/cubic fitting, and an
+  optional post-Create geometric Straighten command over selected finished
+  project artwork, while retaining the independent repeated-object/grid
+  workflow;
 - SVG, raster-image, LightBurn, and foreign-G-code preflight;
 - structured job readiness preflight before authoritative exact planning;
 - machine-aware material recipes that remain authoring aids rather than
