@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -95,6 +96,69 @@ def test_invalid_icon_requests_fail_clearly(
         make_icon("new", size=4)
     with pytest.raises(KeyError, match="No icon mapping"):
         action_icon("about")
+
+
+def test_dev_test_application_icon_is_distinct_at_taskbar_sizes(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    del qt_application
+    assets = (
+        Path(__file__).resolve().parents[1]
+        / "laser_aligner"
+        / "desktop"
+        / "assets"
+    )
+    normal_path = assets / "e3-positioning-system.svg"
+    dev_path = assets / "e3-dev-test.svg"
+
+    assert normal_path.is_file()
+    assert dev_path.is_file()
+    assert normal_path.read_bytes() != dev_path.read_bytes()
+
+    for size in (16, 32):
+        normal_image = (
+            QtGui.QIcon(str(normal_path))
+            .pixmap(size, size)
+            .toImage()
+            .convertToFormat(QtGui.QImage.Format.Format_ARGB32)
+        )
+        dev_image = (
+            QtGui.QIcon(str(dev_path))
+            .pixmap(size, size)
+            .toImage()
+            .convertToFormat(QtGui.QImage.Format.Format_ARGB32)
+        )
+        assert not normal_image.isNull()
+        assert not dev_image.isNull()
+
+        normal_pixels = [
+            normal_image.pixelColor(x, y)
+            for y in range(size)
+            for x in range(size)
+        ]
+        dev_pixels = [
+            dev_image.pixelColor(x, y)
+            for y in range(size)
+            for x in range(size)
+        ]
+        differing_pixels = sum(
+            normal.rgba() != development.rgba()
+            for normal, development in zip(normal_pixels, dev_pixels, strict=True)
+        )
+        assert differing_pixels >= size * size // 4
+
+        def is_badge_orange(color: QtGui.QColor) -> bool:
+            return (
+                color.alpha() >= 192
+                and color.red() >= 210
+                and color.green() >= 90
+                and color.blue() <= 110
+            )
+
+        assert sum(map(is_badge_orange, dev_pixels)) >= size * size // 12
+        assert sum(map(is_badge_orange, dev_pixels)) > 3 * sum(
+            map(is_badge_orange, normal_pixels)
+        )
 
 
 def test_theme_keeps_compact_chrome_and_light_drafting_contract() -> None:

@@ -57,6 +57,36 @@ def test_desktop_identity_does_not_request_an_x11_title_suffix():
     assert application.version == __version__
 
 
+def test_windows_app_id_is_configured_before_qapplication_is_created():
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "laser_aligner"
+        / "desktop"
+        / "main.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    main_function = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "main"
+    )
+    calls = [node for node in ast.walk(main_function) if isinstance(node, ast.Call)]
+    app_id_call = next(
+        call
+        for call in calls
+        if isinstance(call.func, ast.Name)
+        and call.func.id == "configure_windows_app_user_model_id"
+    )
+    application_creation = next(
+        call
+        for call in calls
+        if isinstance(call.func, ast.Attribute)
+        and call.func.attr == "QApplication"
+    )
+
+    assert app_id_call.lineno < application_creation.lineno
+
+
 def test_machine_setup_registration_job_uses_the_normal_main_job_pipeline():
     source = (Path(__file__).resolve().parents[1] / "laser_aligner" / "desktop" / "main_window.py").read_text(
         encoding="utf-8"
