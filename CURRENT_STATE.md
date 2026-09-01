@@ -55,9 +55,18 @@ check reports only Git's existing LF-to-CRLF notices. Focused regressions prove
 that cancellation during source-mask hole cleanup or later native fitting
 publishes no accepted Trace result, and that both the controller and main-window
 guards prevent a late cancelled result from publishing or creating project
-geometry. Frozen-build evidence remains pending on this integration branch. This
-is deterministic Qt-free/offscreen automated verification, not an interactive
-camera test.
+geometry. This is deterministic Qt-free/offscreen automated verification, not an
+interactive camera test.
+
+Windows development packaging completed from synchronized implementation commit
+`0f237489ac73823c08cbe3c5ae92b49ed8201dc9` as version `0.6.159`. The frozen
+bundle's `build-info.json` records that exact development revision, the generated
+`E3-Trace-Hole-Area-Setup.exe` installer is 215,121,993 bytes with SHA-256
+`F7159E441CDD40E64C041604F0DCEEA7016788DA4A4CEFBBF9316B5DD2F85B2B`, and the
+bundle contains no `icu*.dll` files. A hidden launch with isolated temporary user
+state remained alive for the full 12-second smoke window without early failure.
+Hidden mode exposed no main-window handle, so the process was stopped after this
+launch-only smoke; this is not an interactive GUI or frozen Close-timing test.
 
 This feature does not change primitive recovery, Straighten, camera
 normalization, exposed-bed suppression, the Auto threshold-selection algorithm,
