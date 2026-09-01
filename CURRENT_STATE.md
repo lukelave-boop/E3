@@ -49,10 +49,37 @@ launch preceding blocked close preparation; late desktop callbacks; CPU
 cancellation; stale/late Pi monitor races; and accepted/uncertain Pi-job
 non-destructive detach. The final Windows Python suite passes **3,170 tests**
 with **15 expected platform skips** in four-worker execution; repository Ruff,
-`compileall -q laser_aligner`, and `git diff --check` pass. Windows development
-packaging and the requested physical close timings remain pending for this
-active branch. No physical controller, motion, arming, laser-output, or shutdown
-timing result is claimed yet.
+`compileall -q laser_aligner`, and `git diff --check` pass.
+
+Windows development packaging completed from shutdown implementation commit
+`96873738d6f7826b96c9d07a94f10bbf399157f0` as version `0.6.156`. The final
+windowed bundle and private machine-seeded development installer were rebuilt
+with the unrelated Codex Poppler directory removed from the build process
+`PATH`; the bundle contains no foreign `icu*.dll` files and launches
+successfully. On 2026-08-31, accepted main-window `WM_CLOSE` to actual process
+termination was measured on that frozen build with the configured hardware
+profile as follows:
+
+- ordinary disconnected state, with the camera and machine services offline:
+  **279.9 ms**;
+- 50 ms after invoking the exact **Refresh camera** control against the
+  unreachable camera: **222.0 ms**;
+- 50 ms after opening Trace and invoking its exact **Detect objects** control:
+  **230.4 ms**;
+- 50 ms after invoking **Connect machine** against the unreachable Pi service:
+  **226.5 ms**; and
+- combined camera Refresh plus unreachable-Pi Connect: **316.0 ms**.
+
+Every performed frozen-build case was below 5 seconds and below the normal
+two-second target. The Pi host answered ICMP in 7-8 ms and exposed its expected
+Raspberry Pi MAC address, but TCP ports 8765 and 8766 remained closed throughout
+the acceptance window. A live-camera-enabled close and an idle Pi-reachable
+Disconnect therefore remain physically pending. The Trace control path was
+started, but no live-image native-fit workload could be established while the
+camera service was unavailable; its CPU cancellation evidence remains
+automated. No physical controller motion, arming, laser output, accepted Pi job,
+or Air Assist action was performed, and the software shutdown controls are not
+safety-rated.
 
 ## Active Pi-owned secondary-controller Air Assist correction
 
