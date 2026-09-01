@@ -67,6 +67,22 @@ repository suite passes **3,253 tests** with **15 expected platform/privilege
 skips** in **148.36 seconds**. These are deterministic Qt-free/offscreen tests,
 not physical camera, controller, motion, or laser validation.
 
+Windows development packaging completed from verified implementation commit
+`dcef18e31ab099d6c4b402eea70b58d64b284394` as version `0.6.161` using
+Python 3.14.4, OpenCV 4.14.0, PySide6 6.11.2, PyInstaller 6.22.2, and Inno
+Setup 6.7.3. The frozen `build-info.json` records that exact revision. The
+private machine-seeded `E3-Trace-Outer-Silhouette-Setup.exe` installer is
+250,696,523 bytes with SHA-256
+`B0DE921A1E16A4EC9298BD1AD3EFD37E5DA220F7A68AC904559437DC8AAB9A50`.
+Four unrelated Codex-runtime Poppler DLLs discovered through the build host were
+identified by their recorded source paths, removed from the generated bundle,
+and excluded by recompiling the installer; the final bundle contains no
+`icu*.dll`, `libcrypto-3-x64.dll`, or `libssl-3-x64.dll`. A hidden launch with
+isolated temporary user state remained alive for the full 12-second smoke window
+without early failure, after which the test process and temporary state were
+removed. This is a frozen launch-only smoke, not an interactive GUI, physical
+camera, controller, or Close-timing test.
+
 Physical validation remains pending. The first fresh reflective-wrench A/B run
 should use **By contrast**, **Auto threshold** (the recent physical scene chose
 approximately 195), **Minimum area 50 mm²**, **Maximum area 8,000 mm²**,
