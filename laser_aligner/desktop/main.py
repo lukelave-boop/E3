@@ -8,7 +8,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from ..identity import APPLICATION_NAME, application_version
+from ..identity import (
+    APPLICATION_NAME,
+    application_version,
+    configure_windows_app_user_model_id,
+)
 from .qt import PYSIDE6_IMPORT_ERROR, require_qt
 
 
@@ -126,6 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     from .theme import apply_dark_theme
     from .update_ui import install_update_menu
 
+    configure_windows_app_user_model_id()
     application = QtWidgets.QApplication([sys.argv[0]])
     configure_application_identity(application)
     application.setOrganizationName("E3")

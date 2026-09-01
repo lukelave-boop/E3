@@ -17,7 +17,11 @@ from ..gcode.job_plan import (
     restart_program_from_move,
 )
 from ..geometry.polygon import normalize_convex_polygon
-from ..identity import application_identity, application_window_title
+from ..identity import (
+    application_icon_filename,
+    application_identity,
+    application_window_title,
+)
 from ..machine.controller_dialects import resolve_air_assist_commands
 from ..materials import (
     MaterialDatabase,
@@ -423,7 +427,11 @@ class E3MainWindow(QtWidgets.QMainWindow):
 
         self._application_identity = application_identity()
         self.setWindowTitle(self._application_identity)
-        icon_path = Path(__file__).resolve().parent / "assets" / "e3-positioning-system.svg"
+        icon_path = (
+            Path(__file__).resolve().parent
+            / "assets"
+            / application_icon_filename()
+        )
         if icon_path.exists():
             self.setWindowIcon(QtGui.QIcon(str(icon_path)))
         self.setMinimumSize(900, 600)
