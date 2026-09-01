@@ -34,6 +34,7 @@ pip-wheel-metadata/
 /trace-result.json
 config/network-local.json
 installer-dist/
+launcher-dist/
 build-info.json
 AppDir/
 E3-x86_64.AppImage

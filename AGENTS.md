@@ -110,6 +110,37 @@ Do not commit captures, calibration photographs, logs, generated G-code, trace
 previews, or local configuration unless a task explicitly makes them curated
 fixtures.
 
+## Windows feature-test handoff
+
+When a Windows feature build is ready for operator or physical testing, update
+the permanent pointer at:
+
+`C:\Users\lukel\Documents\E3 Dev Test\current-feature.json`
+
+Use `packaging/set_dev_test_feature.py` so the update is validated and atomic.
+The selected EXE must be the exact frozen build under test, and its adjacent
+`build-info.json` version and revision must match the pointer. Never copy a
+feature bundle into the permanent launcher directory and never rebuild or move
+`E3 DEV TEST.exe` merely to select another feature. Do not replace the normal E3
+launcher, icon, shortcut, AppUserModelID, or process.
+
+Final reports for Windows feature builds that require testing must begin with:
+
+```text
+TEST THIS BUILD:
+E3 DEV TEST
+
+Feature:
+Version:
+Branch:
+Revision:
+Target EXE:
+```
+
+The target may live in a worktree, but the operator must be directed to the
+permanent launcher rather than asked to browse that worktree. See
+`docs/DEV_TEST_LAUNCHER.md` for the exact build, pointer, and shortcut workflow.
+
 ## Verification commands
 
 For ordinary localized work, select the directly affected test files or test

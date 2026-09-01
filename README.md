@@ -363,6 +363,12 @@ automated-test covered. The installed frozen PyInstaller E3 to visible Inno
 Setup handoff still requires package-level verification in a disposable
 interactive Windows environment.
 
+Windows feature builds use the separate permanent **E3 DEV TEST** launcher.
+Its stable executable and Desktop shortcut remain visually and taskbar-distinct
+from production E3, while `current-feature.json` selects the exact frozen build
+without changing machine or project behavior. See
+[the feature-test launcher workflow](docs/DEV_TEST_LAUNCHER.md).
+
 GitHub Actions has two validation tiers. Pushes to `fix/**`, `feature/**`,
 `agent/**`, `cleanup/**`, and `architecture/**` run Fast Development CI on
 Windows Python 3.12: repository Ruff, desktop dependency and bytecode

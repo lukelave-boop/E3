@@ -6,6 +6,17 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added the permanent pointer-driven Windows **E3 DEV TEST** launcher workflow.
+  A separate one-file, windowed executable with an orange DEV icon validates an
+  exact bounded `current-feature.json`, matching adjacent packaged build
+  metadata, and starts only that frozen E3 EXE through a sanitized PyInstaller/
+  Win32 process boundary. Explicit environment activation gives feature builds
+  a DEV title, window icon, and `E3.DevTest` AppUserModelID while the production
+  E3 title, icon, implicit taskbar identity, settings, project data, and machine
+  behavior remain unchanged. The matching Desktop shortcut points permanently
+  to the launcher; selecting a later feature requires only an atomic pointer
+  update and never automatic taskbar pinning.
+
 - Replaced unbounded desktop Close with a single four-second monotonic shutdown
   deadline. Remote camera shutdown now makes blocked address resolution
   cancellable and tracks and closes active sockets so blocked fresh-frame,
