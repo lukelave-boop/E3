@@ -52,7 +52,7 @@ with **15 expected platform skips** in four-worker execution; repository Ruff,
 `compileall -q laser_aligner`, and `git diff --check` pass.
 
 Windows development packaging completed from shutdown implementation commit
-`96873738d6f7826b96c9d07a94f10bbf399157f0` as version `0.6.156`. The final
+`9687373aedee893c01d3cc6f9fb4efb15fa276a9` as version `0.6.156`. The final
 windowed bundle and private machine-seeded development installer were rebuilt
 with the unrelated Codex Poppler directory removed from the build process
 `PATH`; the bundle contains no foreign `icu*.dll` files and launches
