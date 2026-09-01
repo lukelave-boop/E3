@@ -103,6 +103,28 @@ def test_installer_environment_removes_only_bundle_rooted_path_entries(
     assert child_environment is not os.environ
 
 
+def test_installer_environment_strips_dev_test_identity_even_outside_bundle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(updates.sys, "_MEIPASS", raising=False)
+    monkeypatch.setenv("E3_DEV_TEST", "1")
+    monkeypatch.setenv("E3_DEV_TEST_FEATURE", "Outer silhouette")
+    monkeypatch.setenv("E3_DEV_TEST_VERSION", "0.6.161")
+    monkeypatch.setenv("E3_DEV_TEST_BRANCH", "feature/trace-outer-silhouette")
+    monkeypatch.setenv("E3_DEV_TEST_REVISION", "a" * 40)
+    monkeypatch.setenv("E3_DEV_TEST_LAUNCHER", r"C:\E3 Dev Test\E3 DEV TEST.exe")
+    monkeypatch.setenv("KEEP", "unchanged")
+
+    child_environment = updates._windows_installer_environment()
+
+    assert not any(
+        key.casefold() == "e3_dev_test"
+        or key.casefold().startswith("e3_dev_test_")
+        for key in child_environment
+    )
+    assert child_environment["KEEP"] == "unchanged"
+
+
 def test_external_windows_process_clears_dll_search_before_exact_popen(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
