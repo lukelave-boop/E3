@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101820"/>
+      <stop offset="1" stop-color="#172A33"/>
+    </linearGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE45C"/>
+      <stop offset="1" stop-color="#FF8A00"/>
+    </linearGradient>
+    <linearGradient id="badge" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#FFE45C"/>
+      <stop offset="1" stop-color="#FF8A00"/>
+    </linearGradient>
+  </defs>
+  <rect x="6" y="6" width="244" height="244" rx="44" fill="url(#bg)" stroke="#FF9D00" stroke-width="12"/>
+  <rect x="44" y="46" width="168" height="146" rx="12" fill="#0D141A" stroke="#4FC3A1" stroke-width="7"/>
+  <path d="M64 76H192M64 106H192M64 136H192M76 62V176M108 62V176M140 62V176M172 62V176"
+        stroke="#263A43" stroke-width="4"/>
+  <circle cx="128" cy="118" r="28" fill="none" stroke="#4FC3A1" stroke-width="8"/>
+  <path d="M128 78V158M88 118H168" stroke="#EAF1F5" stroke-width="7" stroke-linecap="round"/>
+  <path d="M128 18L147 57H109Z" fill="url(#beam)"/>
+  <circle cx="128" cy="118" r="7" fill="#FFE45C"/>
+  <rect x="21" y="166" width="214" height="70" rx="18" fill="url(#badge)" stroke="#FFF3B0" stroke-width="5"/>
+  <path fill="#201200" fill-rule="evenodd"
+        d="M52 180H72C89 180 100 188 100 201S89 222 72 222H52ZM65 191V211H72C81 211 87 207 87 201S81 191 72 191Z"/>
+  <path fill="#201200" d="M108 180H148V191H121V196H145V206H121V211H148V222H108Z"/>
+  <path fill="#201200" d="M154 180H168L179 208L190 180H204L186 222H172Z"/>
+</svg>
