@@ -5,7 +5,71 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-31**
+Snapshot: **2026-09-01**
+
+## Permanent Windows feature-test launcher
+
+The pointer-driven **E3 DEV TEST** launcher is implemented and installed at
+`C:\Users\lukel\Documents\E3 Dev Test\E3 DEV TEST.exe`, with its validated
+pointer beside it and a dedicated `C:\Users\lukel\Desktop\E3 DEV TEST.lnk`.
+The launcher and shortcut use the explicit `E3.DevTest` AppUserModelID and a
+separate orange DEV icon. The normal E3 executable, implicit process identity,
+icon, and Desktop shortcut remain unchanged. The normal shortcut SHA-256 stayed
+`657FC4B36FC34BF0562E793A448637BD2B37949D8187C3B473040535F325E839`
+before and after installation.
+
+The permanent launcher is a one-file Windows GUI-subsystem executable (PE
+subsystem 2), is 9,553,388 bytes, and has SHA-256
+`1828B10B2A96E9A032428E650C463D9AB9104BBF4739ED3F05BF3CAF7677232B`.
+It strictly accepts exactly the five documented pointer fields, binds version
+and revision to adjacent packaged Windows build metadata, starts only the
+selected absolute EXE through a sanitized external-process boundary, and never
+falls back to production. Pointer installation and later selection use the same
+validator and atomic writer. The Windows updater boundary strips every
+`E3_DEV_TEST*` variable so a production restart cannot inherit DEV identity.
+
+The initial selected feature is **Outer silhouette**, version `0.6.161`, branch
+`feature/trace-outer-silhouette`, exact frozen revision
+`45f428ac547f039988afbb3da2a0dd0f0e2d707a`, at
+`C:\Users\lukel\Documents\E3\.codex-worktrees\trace-outer-silhouette\dist\E3\E3.exe`.
+That EXE is 8,730,791 bytes with SHA-256
+`514B7D6A9EA03362066FAB24ABE638183790BC27DAE503142BADA5BF4C8959A5`;
+its adjacent schema-1 metadata records the same version and revision. The final
+bundle was rebuilt with the Codex Poppler directory removed inside the Python
+build process and contains zero `icu*.dll` files.
+
+Focused Windows automation passes **61 tests** across launcher validation,
+identity, desktop sources/icons, and update launching. Repository Ruff on every
+touched Python file, `compileall -q laser_aligner packaging`, and
+`git diff --check` pass. Interactive Windows process checks established all of
+the following:
+
+- the permanent launcher starts the configured frozen EXE, which remains live
+  with title `E3 DEV TEST — Outer silhouette — v0.6.161 — Untitled`;
+- a normal launch of that same bundle remains live beside it with title
+  `E3 Positioning System 0.6.161 · build 45f428ac — Untitled` and is not closed
+  or replaced;
+- neither launch creates a new `conhost.exe` process;
+- the live 32-pixel window icons differ in 980 of 1,024 pixels, with 266 orange
+  DEV pixels versus 4 in the normal icon;
+- the DEV environment reaches the pre-Qt AppUserModelID assignment and a live
+  Qt window, while the matching shortcut property is exactly `E3.DevTest`;
+- a copied launcher with no pointer shows the native
+  `E3 DEV TEST — Launch failed` dialog beginning
+  `No valid current feature build is configured` and names the missing fixed
+  pointer path; and
+- changing only a temporary `current-feature.json` selected two different
+  frozen GUI probe paths in sequence while the launcher SHA-256 remained
+  unchanged.
+
+Taskbar pinning was deliberately not automated. The permanent executable and
+matching shortcut are ready for the operator to pin, but an actual persistent
+pin/relaunch cycle remains a user action. The live smoke used an isolated local
+profile with camera autostart disabled and every saved machine's
+`allow_motion` forced false. No Pi, camera, controller, motion, arming, laser
+output, job streaming, or physical hardware behavior was exercised or verified;
+the Pi was unavailable, and no connection was attempted. These identity and
+launcher controls are not safety-rated.
 
 ## Active bounded desktop shutdown correction
 
