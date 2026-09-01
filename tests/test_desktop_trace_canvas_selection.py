@@ -109,6 +109,33 @@ def _drag_machine_rect(
     QtWidgets.QApplication.processEvents()
 
 
+def test_outer_silhouette_candidate_overlay_has_one_filled_exterior_subpath(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    view = WorkspaceView(Bounds(0.0, 0.0, 220.0, 120.0))
+    detection = _candidate("outer", 1, 90.0, size=30.0)
+    detection["vector_contours_mm"] = [detection.pop("vector_contour_mm")]
+    detection["diagnostics"] = {
+        "within_work_area": True,
+        "trace_detail": "outer_silhouette",
+        "outer_only": True,
+        # The cleaned Mask can still contain this enclosed evidence, but it is
+        # deliberately absent from vector_contours_mm.
+        "ignored_mask_hole_bounds_mm": [86.0, 46.0, 94.0, 54.0],
+    }
+
+    view.set_trace_preview([detection], {"outer"})
+
+    candidate = view._trace_candidates_by_id["outer"]
+    path = candidate.path()
+    assert len(path.toSubpathPolygons()) == 1
+    assert path.contains(view.workspace_scene.machine_to_scene(90.0, 50.0))
+
+    view.close()
+    view.deleteLater()
+    qt_application.processEvents()
+
+
 def test_click_ctrl_click_empty_click_and_rubber_band_selection(
     qt_application: QtWidgets.QApplication,
 ) -> None:

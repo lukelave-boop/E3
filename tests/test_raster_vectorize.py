@@ -821,6 +821,330 @@ def test_donut_preserves_hole_hierarchy_and_outer_only_choice(
     assert not outer_only.contours[0].is_hole
 
 
+def test_outer_only_matches_full_detail_for_a_solid_rectangle() -> None:
+    grayscale = np.full((80, 120), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (18, 14), (101, 65), 0, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    full_options = _manual_options(simplification_tolerance_mm=0.12)
+    outer_options = dataclasses.replace(
+        full_options,
+        contour_output=RasterContourOutput.OUTER_ONLY,
+    )
+
+    full = vectorize_pixel_source(
+        source,
+        full_options,
+        displayed_width_mm=60.0,
+        displayed_height_mm=40.0,
+    )
+    outer = vectorize_pixel_source(
+        source,
+        outer_options,
+        displayed_width_mm=60.0,
+        displayed_height_mm=40.0,
+    )
+
+    assert len(full.contours) == len(outer.contours) == 1
+    assert outer.project_path_geometry() == full.project_path_geometry()
+    assert outer.contours[0].threshold_points == full.contours[0].threshold_points
+    assert np.array_equal(outer.foreground_mask, full.foreground_mask)
+
+
+def test_outer_only_removes_one_legitimate_hole_from_a_rectangle() -> None:
+    grayscale = np.full((100, 140), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (12, 10), (127, 89), 0, thickness=-1)
+    cv2.rectangle(grayscale, (48, 32), (91, 67), 255, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    full_options = _manual_options(simplification_tolerance_mm=0.12)
+    outer_options = dataclasses.replace(
+        full_options,
+        contour_output=RasterContourOutput.OUTER_ONLY,
+    )
+
+    full = vectorize_pixel_source(
+        source,
+        full_options,
+        displayed_width_mm=70.0,
+        displayed_height_mm=50.0,
+    )
+    outer = vectorize_pixel_source(
+        source,
+        outer_options,
+        displayed_width_mm=70.0,
+        displayed_height_mm=50.0,
+    )
+
+    assert [contour.depth for contour in full.contours] == [0, 1]
+    assert [contour.is_hole for contour in full.contours] == [False, True]
+    assert len(full.project_path_geometry().subpaths) == 2
+    assert len(outer.contours) == 1
+    assert outer.contours[0].parent_index is None
+    assert len(outer.project_path_geometry().subpaths) == 1
+    assert np.array_equal(outer.foreground_mask, full.foreground_mask)
+
+
+def test_outer_only_ignores_every_descendant_in_a_five_level_tree() -> None:
+    grayscale = np.full((160, 160), 255, dtype=np.uint8)
+    for minimum, maximum, value in (
+        (8, 151, 0),
+        (24, 135, 255),
+        (40, 119, 0),
+        (56, 103, 255),
+        (72, 87, 0),
+    ):
+        cv2.rectangle(
+            grayscale,
+            (minimum, minimum),
+            (maximum, maximum),
+            value,
+            thickness=-1,
+        )
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    full_options = _manual_options(simplification_tolerance_mm=0.12)
+    outer_options = dataclasses.replace(
+        full_options,
+        contour_output=RasterContourOutput.OUTER_ONLY,
+    )
+
+    full = vectorize_pixel_source(
+        source,
+        full_options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=80.0,
+    )
+    outer = vectorize_pixel_source(
+        source,
+        outer_options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=80.0,
+    )
+
+    assert [contour.depth for contour in full.contours] == [0, 1, 2, 3, 4]
+    assert len(full.project_path_geometry().subpaths) == 5
+    assert len(outer.contours) == 1
+    assert outer.contours[0].parent_index is None
+    assert outer.contours[0].depth == 0
+    assert not outer.contours[0].is_hole
+    assert len(outer.project_path_geometry().subpaths) == 1
+
+
+def test_outer_only_native_geometry_is_invariant_to_interior_hole_cleanup() -> None:
+    grayscale = np.full((96, 96), 255, dtype=np.uint8)
+    cv2.circle(grayscale, (48, 48), 34, 0, thickness=-1)
+    cv2.circle(grayscale, (48, 48), 15, 255, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    preserved_options = _manual_options(
+        contour_output=RasterContourOutput.OUTER_ONLY,
+        minimum_hole_area_mm2=0.0,
+        maximum_hole_area_mm2=None,
+        simplification_tolerance_mm=0.18,
+    )
+    filled_options = dataclasses.replace(
+        preserved_options,
+        maximum_hole_area_mm2=0.0,
+    )
+
+    preserved = vectorize_pixel_source(
+        source,
+        preserved_options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=48.0,
+    )
+    filled = vectorize_pixel_source(
+        source,
+        filled_options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=48.0,
+    )
+
+    assert preserved.hole_cleanup.preserved_hole_count == 1
+    assert filled.hole_cleanup.filled_above_max_count == 1
+    assert preserved.project_path_geometry() == filled.project_path_geometry()
+    assert preserved.contours[0].threshold_points == filled.contours[0].threshold_points
+    assert (
+        preserved.contours[0].max_fitting_error_mm
+        == filled.contours[0].max_fitting_error_mm
+    )
+
+
+def test_outer_only_keeps_concave_notches_and_ignores_nested_islands(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pixels = np.full((120, 180, 3), 255, dtype=np.uint8)
+    cv2.rectangle(pixels, (8, 8), (80, 108), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (30, 8), (58, 72), (255, 255, 255), thickness=-1)
+    cv2.rectangle(pixels, (100, 12), (170, 106), (0, 0, 0), thickness=-1)
+    cv2.rectangle(pixels, (116, 28), (154, 88), (255, 255, 255), thickness=-1)
+    cv2.rectangle(pixels, (130, 44), (140, 68), (0, 0, 0), thickness=-1)
+    payload = _write_payload(tmp_path / "outer-concave-nested.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(
+        contour_output=RasterContourOutput.OUTER_ONLY,
+        simplification_tolerance_mm=0.12,
+    )
+
+    preview = quick_preview_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=90.0,
+        displayed_height_mm=60.0,
+    )
+    exact = vectorize_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=90.0,
+        displayed_height_mm=60.0,
+        prepared_preview=preview,
+    )
+    fit_calls: list[int] = []
+    original_fit = raster_vectorize_module._fit_forest_contour
+
+    def record_fit(original_index, **kwargs):
+        fit_calls.append(original_index)
+        return original_fit(original_index, **kwargs)
+
+    monkeypatch.setattr(raster_vectorize_module, "_fit_forest_contour", record_fit)
+    forest = vectorize_pixel_source_forest(
+        source,
+        options,
+        displayed_width_mm=90.0,
+        displayed_height_mm=60.0,
+    )
+
+    assert len(preview.contours) == 2
+    assert len(exact.contours) == 2
+    assert len(exact.project_path_geometry().subpaths) == 2
+    assert forest.result is not None
+    assert forest.root_tree_count == 2
+    assert forest.failures == ()
+    assert len(forest.result.contours) == 2
+    assert len(fit_calls) == 2
+    assert all(
+        contour.parent_index is None and contour.depth == 0 and not contour.is_hole
+        for contour in exact.contours
+    )
+
+    polygons = [
+        np.asarray(contour.threshold_points, dtype=np.float32).reshape(-1, 1, 2)
+        for contour in exact.contours
+    ]
+    bottom_of_u = (44.0 / 180.0 - 0.5, 0.5 - 92.0 / 120.0)
+    open_notch = (44.0 / 180.0 - 0.5, 0.5 - 30.0 / 120.0)
+    u_contour = next(
+        polygon
+        for polygon in polygons
+        if cv2.pointPolygonTest(polygon, bottom_of_u, False) > 0
+    )
+    assert cv2.isContourConvex(u_contour) is False
+    assert cv2.pointPolygonTest(u_contour, open_notch, False) < 0
+
+
+def test_outer_only_ignores_more_than_8192_tiny_internal_holes() -> None:
+    grayscale = np.full((404, 404), 255, dtype=np.uint8)
+    grayscale[2:402, 2:402] = 0
+    grayscale[4:400:4, 4:400:4] = 255
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    full_options = _manual_options(
+        minimum_hole_area_mm2=0.0,
+        simplification_tolerance_mm=0.20,
+    )
+    outer_options = dataclasses.replace(
+        full_options,
+        contour_output=RasterContourOutput.OUTER_ONLY,
+    )
+
+    with pytest.raises(RasterVectorizationComplexityError, match="contour limit"):
+        vectorize_pixel_source(
+            source,
+            full_options,
+            displayed_width_mm=40.4,
+            displayed_height_mm=40.4,
+        )
+
+    outer = vectorize_pixel_source(
+        source,
+        outer_options,
+        displayed_width_mm=40.4,
+        displayed_height_mm=40.4,
+    )
+
+    assert outer.hole_cleanup.raw_hole_count == 9_801
+    assert outer.hole_cleanup.preserved_hole_count == 9_801
+    assert len(outer.contours) == 1
+    assert outer.contours[0].parent_index is None
+    assert outer.pruned_contour_count == 0
+    assert outer.rejected_contour_tree_count == 0
+
+
+def test_outer_only_hidden_holes_do_not_consume_the_fitted_segment_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grayscale = np.full((96, 96), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (8, 8), (87, 87), 0, thickness=-1)
+    for x_min in (18, 50):
+        for y_min in (18, 50):
+            cv2.rectangle(
+                grayscale,
+                (x_min, y_min),
+                (x_min + 20, y_min + 20),
+                255,
+                thickness=-1,
+            )
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    full_options = _manual_options(simplification_tolerance_mm=0.20)
+    outer_options = dataclasses.replace(
+        full_options,
+        contour_output=RasterContourOutput.OUTER_ONLY,
+    )
+    outer_baseline = vectorize_pixel_source(
+        source,
+        outer_options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=48.0,
+    )
+    full_baseline = vectorize_pixel_source(
+        source,
+        full_options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=48.0,
+    )
+    assert full_baseline.fitted_segment_count > outer_baseline.fitted_segment_count
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS",
+        outer_baseline.fitted_segment_count,
+    )
+
+    bounded_outer = vectorize_pixel_source(
+        source,
+        outer_options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=48.0,
+    )
+
+    assert bounded_outer.project_path_geometry() == outer_baseline.project_path_geometry()
+    with pytest.raises(RasterVectorizationComplexityError, match="fitted segments"):
+        vectorize_pixel_source(
+            source,
+            full_options,
+            displayed_width_mm=48.0,
+            displayed_height_mm=48.0,
+        )
+
+
 def test_letter_like_shape_preserves_multiple_counters(tmp_path: Path) -> None:
     pixels = np.full((120, 90, 3), 255, dtype=np.uint8)
     cv2.rectangle(pixels, (15, 10), (74, 109), (0, 0, 0), thickness=-1)
@@ -1881,8 +2205,20 @@ def _inject_pruning_rejected_tree(
         *,
         approximation=cv2.CHAIN_APPROX_NONE,
         maximum_contours=None,
+        retrieval_mode=cv2.RETR_TREE,
     ):
         del approximation, maximum_contours
+        if retrieval_mode == cv2.RETR_EXTERNAL:
+            external = (contours[0], contours[3]) if include_independent_root else (contours[0],)
+            external_hierarchy = (
+                np.asarray(
+                    [[[1, -1, -1, -1], [-1, 0, -1, -1]]],
+                    dtype=np.int32,
+                )
+                if include_independent_root
+                else np.asarray([[[-1, -1, -1, -1]]], dtype=np.int32)
+            )
+            return external, external_hierarchy
         return tuple(contours), hierarchy
 
     monkeypatch.setattr(
@@ -1995,6 +2331,45 @@ def test_forest_review_filter_rejects_only_provably_oversized_complete_root(
     assert compound_area_mm2 > 950.0
 
 
+def test_forest_review_area_uses_exterior_for_outer_and_evenodd_net_for_full() -> None:
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(_compound_tree_and_independent_root_pixels(), cv2.COLOR_BGR2RGBA)
+    )
+    full_options = _manual_options(simplification_tolerance_mm=0.10)
+    outer_options = dataclasses.replace(
+        full_options,
+        contour_output=RasterContourOutput.OUTER_ONLY,
+    )
+    review_filter = PixelVectorizationRootReviewFilter(maximum_area_mm2=1_000.0)
+
+    full = vectorize_pixel_source_forest(
+        source,
+        full_options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=48.0,
+        root_review_filter=review_filter,
+    )
+    outer = vectorize_pixel_source_forest(
+        source,
+        outer_options,
+        displayed_width_mm=80.0,
+        displayed_height_mm=48.0,
+        root_review_filter=review_filter,
+    )
+
+    assert full.result is not None
+    assert full.root_tree_count == 2
+    assert full.failures == ()
+    assert len(full.result.contours) == 4
+    assert outer.result is not None
+    assert outer.root_tree_count == 2
+    assert outer.valid_root_tree_count == 1
+    assert len(outer.result.contours) == 1
+    assert outer.failures[0].stage == "review_filter"
+    assert outer.failures[0].contour_count == 1
+    assert "exterior silhouette threshold area" in outer.failures[0].reason
+
+
 def test_forest_review_filter_uses_full_margin_for_minimum_dimensions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2089,6 +2464,64 @@ def test_auto_forest_reports_exact_pruning_failure_and_keeps_valid_root(
     assert failure.stage == "contour_pruning"
     assert failure.to_dict()["bounds_px"] == [8, 8, 37, 37]
     assert "complete root tree was rejected" in failure.reason
+
+
+def test_outer_forest_never_exposes_a_malformed_descendant_to_pruning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _inject_pruning_rejected_tree(monkeypatch, include_independent_root=True)
+
+    forest = vectorize_pixel_source_forest(
+        _pruning_forest_source(tmp_path, "outer-pruning-isolation.png"),
+        _manual_options(contour_output=RasterContourOutput.OUTER_ONLY),
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+    )
+
+    assert forest.result is not None
+    assert forest.root_tree_count == 2
+    assert forest.failures == ()
+    assert len(forest.result.contours) == 2
+    assert forest.result.pruned_contour_count == 0
+    assert forest.result.rejected_contour_tree_count == 0
+    assert all(
+        contour.parent_index is None and contour.depth == 0 and not contour.is_hole
+        for contour in forest.result.contours
+    )
+
+
+def test_outer_forest_still_rejects_an_ambiguous_exterior(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grayscale = np.full((64, 64), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (8, 8), (55, 55), 0, thickness=-1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    self_crossing = _line_contour(
+        ((-0.4, -0.4), (0.4, 0.4), (-0.4, 0.4), (0.4, -0.4))
+    )
+    monkeypatch.setattr(
+        raster_vectorize_module,
+        "_fit_forest_contour",
+        lambda *_args, **_kwargs: self_crossing,
+    )
+
+    forest = vectorize_pixel_source_forest(
+        source,
+        _manual_options(contour_output=RasterContourOutput.OUTER_ONLY),
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+    )
+
+    assert forest.result is None
+    assert forest.root_tree_count == 1
+    assert forest.valid_root_tree_count == 0
+    assert forest.invalid_root_tree_count == 1
+    assert forest.failures[0].stage == "native_topology"
+    assert forest.failures[0].contour_count == 1
+    assert "ambiguous" in forest.failures[0].reason
 
 
 def test_auto_forest_returns_complete_failures_when_pruning_removes_every_root(

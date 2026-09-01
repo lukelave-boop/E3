@@ -11,10 +11,12 @@ import laser_aligner.geometry.foreground as foreground_module
 import laser_aligner.project.raster_vectorize as raster_vectorize_module
 from laser_aligner.config import WorkArea
 from laser_aligner.project import (
+    RasterContourOutput,
     RasterDetectionMode,
     RasterVectorizationCancelledError,
     RasterVectorizationOptions,
     fit_physical_contours_to_native_path,
+    prepare_pixel_vectorization_mask,
     prepare_pixel_vectorization_source,
     vectorize_pixel_source,
 )
@@ -157,6 +159,60 @@ def test_pixel_vectorizer_polls_cancel_check_inside_bounded_work() -> None:
     assert time.perf_counter() - started < 1.0
 
 
+def test_outer_vectorizer_observes_cancellation_after_external_opencv_work(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    grayscale = np.full((192, 192), 255, dtype=np.uint8)
+    cv2.rectangle(grayscale, (12, 12), (179, 179), 0, -1)
+    for y in range(30, 170, 20):
+        for x in range(30, 170, 20):
+            cv2.circle(grayscale, (x, y), 5, 255, -1)
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    options = RasterVectorizationOptions(
+        detection_mode=RasterDetectionMode.MANUAL_THRESHOLD,
+        threshold=127,
+        minimum_feature_area_mm2=0.0,
+        simplification_tolerance_mm=0.10,
+        contour_output=RasterContourOutput.OUTER_ONLY,
+    )
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=48.0,
+        displayed_height_mm=48.0,
+    )
+    original_find_contours = foreground_module.cv2.findContours
+    cancelled = False
+    retrieval_modes: list[int] = []
+
+    def cancel_after_find_contours(mask, retrieval_mode, approximation):
+        nonlocal cancelled
+        result = original_find_contours(mask, retrieval_mode, approximation)
+        retrieval_modes.append(retrieval_mode)
+        cancelled = True
+        return result
+
+    monkeypatch.setattr(
+        foreground_module.cv2,
+        "findContours",
+        cancel_after_find_contours,
+    )
+
+    with pytest.raises(RasterVectorizationCancelledError):
+        vectorize_pixel_source(
+            source,
+            options,
+            displayed_width_mm=48.0,
+            displayed_height_mm=48.0,
+            prepared_mask=prepared,
+            cancel_check=lambda: cancelled,
+        )
+
+    assert retrieval_modes == [cv2.RETR_EXTERNAL]
+
+
 def test_trace_cancellation_has_a_public_exception_and_no_preview() -> None:
     previews: list[object] = []
 
@@ -296,8 +352,10 @@ def test_hole_filtered_trace_cancels_inside_source_cleanup(
     assert previews == []
 
 
+@pytest.mark.parametrize("trace_detail", ["full", "outer_silhouette"])
 def test_hole_filtered_trace_cancels_during_subsequent_native_fitting(
     monkeypatch: pytest.MonkeyPatch,
+    trace_detail: str,
 ) -> None:
     fitting_entered = threading.Event()
     release_fitting = threading.Event()
@@ -329,6 +387,7 @@ def test_hole_filtered_trace_cancels_during_subsequent_native_fitting(
                         contrast_threshold=128,
                         regular_grid=False,
                         output_mode="native",
+                        trace_detail=trace_detail,
                         min_area_mm2=1.0,
                         max_area_mm2=100_000.0,
                         min_hole_area_mm2=5.0,
