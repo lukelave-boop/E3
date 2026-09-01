@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -214,22 +213,6 @@ def test_corrected_overlay_interval_defaults_to_two_fps_and_allows_15_fps(
         qt_application.processEvents()
 
 
-class _UnfinishedSignal:
-    def __init__(self) -> None:
-        self.callbacks: list[Callable[[], None]] = []
-
-    def connect(
-        self,
-        callback: Callable[[], None],
-        _connection: object,
-    ) -> None:
-        self.callbacks.append(callback)
-
-    def emit(self) -> None:
-        for callback in tuple(self.callbacks):
-            callback()
-
-
 def _hold_camera_refresh_tasks(
     controller: DesktopController,
     monkeypatch: pytest.MonkeyPatch,
@@ -237,22 +220,17 @@ def _hold_camera_refresh_tasks(
     launches: list[dict[str, object]] = []
 
     def fake_run(callback: object, **kwargs: object) -> object:
-        finished = _UnfinishedSignal()
-        launches.append(
-            {"callback": callback, "finished": finished, **kwargs}
-        )
-        return SimpleNamespace(
-            signals=SimpleNamespace(finished=finished)
-        )
+        launches.append({"callback": callback, **kwargs})
+        return SimpleNamespace()
 
     monkeypatch.setattr(controller, "_run", fake_run)
     return launches
 
 
 def _finish_camera_launch(launch: dict[str, object]) -> None:
-    finished = launch["finished"]
-    assert isinstance(finished, _UnfinishedSignal)
-    finished.emit()
+    finished = launch["on_finished"]
+    assert callable(finished)
+    finished()
 
 
 def test_slow_corrected_overlay_drops_periodic_ticks_without_backlog(

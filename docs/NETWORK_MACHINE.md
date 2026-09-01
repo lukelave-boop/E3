@@ -391,6 +391,22 @@ are requested remotely. Precision-capture sequence numbers, generation,
 control diagnostics, discard/settle metadata, and observed/negotiated FPS are
 returned to the desktop.
 
+Desktop shutdown does not reduce these ordinary camera-operation timeouts.
+Instead, `RemoteCameraService` resolves addresses in a daemon helper while the
+request worker polls shutdown, tracks connecting and active request sockets, and,
+only after local shutdown is latched, shuts down and closes them to wake blocked
+resolution/connect/send/receive work. Socket creation and natural-completion
+races are idempotent; no double-close error escapes.
+
+Remote machine application shutdown is likewise distinct from interactive
+Disconnect. Only freshly observed idle state permits one
+capability-plus-`machine.disconnect` attempt; stale or empty observer state
+detaches without treating the Pi as idle. Resolution, connect, authentication,
+capability negotiation, and the action share one absolute maximum 0.75-second
+shutdown allowance. Accepted and ownership-uncertain Pi jobs detach without any
+RPC or command, including STOP, `M5`, reset, hold, Air Assist OFF, or controller
+Disconnect.
+
 For status-wire compatibility only, the desktop accepts the retired
 `synthetic` field from a legacy physical Pi node when its value is the exact
 boolean `false`. It copies the returned mapping and removes that one field before

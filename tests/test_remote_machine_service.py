@@ -105,6 +105,7 @@ def _service(
 class FakePi:
     def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.timeouts: list[float] = []
         self.jobs: dict[str, dict[str, Any]] = {}
         self.uploads: dict[str, bytearray] = {}
         self.active_job_id: str | None = None
@@ -152,10 +153,14 @@ class FakePi:
         request: dict[str, Any],
         *,
         timeout: float,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         assert (host, port) == ("pi.test", 9876)
         assert token == _TOKEN
         assert timeout > 0.0
+        if deadline is not None:
+            assert time.monotonic() < deadline
+        self.timeouts.append(float(timeout))
         request = copy.deepcopy(request)
         self.requests.append(request)
         action = request["action"]
@@ -821,7 +826,276 @@ def test_idle_disconnect_may_release_the_pi_controller(
         ACTION_SERVICE_CAPABILITIES,
         ACTION_MACHINE_DISCONNECT,
     ]
+    assert fake.timeouts == [130.0, 130.0]
     assert service.connected is False
+
+
+def test_shutdown_idle_reachable_uses_short_disconnect_budget_and_detaches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    with service._state_lock:
+        service._status_cache["status_stale"] = False
+    started = time.monotonic()
+
+    service.shutdown(deadline=started + 4.0)
+
+    assert time.monotonic() - started < 1.0
+    assert [request["action"] for request in fake.requests] == [
+        ACTION_SERVICE_CAPABILITIES,
+        ACTION_MACHINE_DISCONNECT,
+    ]
+    assert len(fake.timeouts) == 2
+    assert all(0.0 < timeout <= 0.75 for timeout in fake.timeouts)
+    assert ACTION_JOB_STOP not in [request["action"] for request in fake.requests]
+    assert service.connected is False
+    assert service.status()["status_stale"] is True
+
+
+def test_shutdown_capability_and_unreachable_disconnect_share_one_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service()
+    with service._state_lock:
+        service._status_cache["status_stale"] = False
+    monkeypatch.setattr(
+        remote_service_module,
+        "_SHUTDOWN_DISCONNECT_TIMEOUT_SECONDS",
+        0.15,
+    )
+    calls: list[tuple[str, float]] = []
+
+    def block_with_supplied_timeout(
+        _host: str,
+        _port: int,
+        _token: str,
+        request: dict[str, Any],
+        *,
+        timeout: float,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        assert deadline is not None
+        assert time.monotonic() < deadline
+        action = request["action"]
+        calls.append((action, timeout))
+        if action == ACTION_SERVICE_CAPABILITIES:
+            time.sleep(timeout * 0.6)
+            return {
+                "ok": True,
+                "request_id": request["request_id"],
+                "protocol_version": PROTOCOL_VERSION,
+                "capabilities": [CAPABILITY_PI_OWNED_JOBS],
+                "actions": copy.deepcopy(SERVER_ACTION_SCHEMAS),
+            }
+        assert action == ACTION_MACHINE_DISCONNECT
+        time.sleep(timeout)
+        raise PiJobProtocolError("simulated unreachable Pi")
+
+    monkeypatch.setattr(
+        remote_service_module,
+        "request_response",
+        block_with_supplied_timeout,
+    )
+    started = time.monotonic()
+
+    service.shutdown(deadline=started + 4.0)
+
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.3
+    assert [action for action, _timeout in calls] == [
+        ACTION_SERVICE_CAPABILITIES,
+        ACTION_MACHINE_DISCONNECT,
+    ]
+    assert 0.0 < calls[1][1] < calls[0][1] * 0.5
+    assert service.status()["status_stale"] is True
+
+
+def test_shutdown_stale_cache_detaches_without_assuming_pi_is_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+
+    service.detach(
+        deadline=time.monotonic() + 0.05,
+        remember_idle_for_shutdown=True,
+    )
+    service.shutdown(deadline=time.monotonic() + 4.0)
+
+    assert fake.requests == []
+    assert fake.timeouts == []
+    assert service.status()["status_stale"] is True
+
+
+def test_late_monitor_ownership_vetoes_remembered_idle_shutdown_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    with service._state_lock:
+        service._status_cache["status_stale"] = False
+
+    service.detach(
+        deadline=time.monotonic() + 0.05,
+        remember_idle_for_shutdown=True,
+    )
+    with service._state_lock:
+        assert service._shutdown_idle_disconnect_allowed is True
+        service._start_ownership_uncertain = True
+
+    service.shutdown(deadline=time.monotonic() + 4.0)
+
+    assert fake.requests == []
+    assert fake.timeouts == []
+    assert service.pi_owned_job_active is True
+
+
+def test_unjoined_monitor_disables_remembered_idle_shutdown_disconnect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    with service._state_lock:
+        service._status_cache["status_stale"] = False
+    monitor_release = threading.Event()
+    monitor_thread = threading.Thread(
+        target=monitor_release.wait,
+        name="late-idle-monitor",
+        daemon=True,
+    )
+    service._monitor_thread = monitor_thread
+    monitor_thread.start()
+
+    try:
+        service.detach(
+            deadline=time.monotonic() + 0.01,
+            remember_idle_for_shutdown=True,
+        )
+        service.shutdown(deadline=time.monotonic() + 4.0)
+    finally:
+        monitor_release.set()
+        monitor_thread.join(timeout=1.0)
+
+    assert fake.requests == []
+    assert fake.timeouts == []
+
+
+def test_direct_shutdown_with_live_monitor_never_trusts_cached_idle(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    with service._state_lock:
+        service._status_cache["status_stale"] = False
+    monitor_release = threading.Event()
+    monitor_thread = threading.Thread(
+        target=monitor_release.wait,
+        name="direct-shutdown-monitor",
+        daemon=True,
+    )
+    service._monitor_thread = monitor_thread
+    monitor_thread.start()
+
+    try:
+        service.shutdown(deadline=time.monotonic() + 4.0)
+    finally:
+        monitor_release.set()
+        monitor_thread.join(timeout=1.0)
+
+    assert fake.requests == []
+    assert fake.timeouts == []
+    service.start_monitoring()
+    assert service._monitor_thread is None
+
+
+def test_shutdown_expired_deadline_detaches_without_network_action(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+
+    service.shutdown(deadline=time.monotonic() - 1.0)
+
+    assert fake.requests == []
+    assert service.status()["status_stale"] is True
+
+
+def test_shutdown_accepted_pi_job_is_immediate_non_destructive_detach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    program = service.preflight_program(_POWERED_GCODE)
+    service.start_preflighted_program(
+        program,
+        authorization_phrase=service.ARM_PHRASE,
+    )
+    fake.requests.clear()
+    fake.timeouts.clear()
+    monitor_release = threading.Event()
+    monitor_thread = threading.Thread(
+        target=monitor_release.wait,
+        name="blocked-test-monitor",
+        daemon=True,
+    )
+    service._monitor_thread = monitor_thread
+    monitor_thread.start()
+    started = time.monotonic()
+
+    try:
+        service.shutdown(deadline=started + 4.0)
+    finally:
+        monitor_release.set()
+        monitor_thread.join(timeout=1.0)
+
+    assert time.monotonic() - started < 0.2
+    # No RPC means no STOP, controller Disconnect/reset/M5, or Air Assist OFF.
+    assert fake.requests == []
+    assert fake.timeouts == []
+    assert service.pi_owned_job_active is True
+    assert service.status()["status_stale"] is True
+
+
+def test_shutdown_ownership_uncertain_is_immediate_non_destructive_detach(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    job_id = str(uuid.uuid4())
+    fake.jobs[job_id] = {
+        "job_id": job_id,
+        "name": "uncertain.gcode",
+        "state": "starting",
+        "phase": "starting",
+        "program_digest": "b" * 64,
+        "completed_lines": 0,
+        "total_lines": 7,
+        "powered": True,
+    }
+    fake.active_job_id = job_id
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    fake.requests.clear()
+    fake.timeouts.clear()
+    started = time.monotonic()
+
+    service.shutdown(deadline=started + 4.0)
+
+    assert time.monotonic() - started < 0.2
+    assert fake.requests == []
+    assert fake.timeouts == []
+    assert service.pi_owned_job_active is True
+    status = service.status()
+    assert status["job"]["ownership_uncertain"] is True
+    assert status["status_stale"] is True
 
 
 def test_disconnect_revocation_keeps_stale_ordinary_scopes_cancelled(

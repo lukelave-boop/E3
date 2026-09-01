@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import math
 import time
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -18,7 +19,12 @@ from ..gcode.generator import (
     generate_frame_path_gcode,
     validate_paths,
 )
-from ..gcode.job_plan import JobPlan, build_job_plan, e3_metadata_line
+from ..gcode.job_plan import (
+    JobPlan,
+    JobPlanCancelled,
+    build_job_plan,
+    e3_metadata_line,
+)
 from ..geometry.polygon import (
     convex_polygon_violation_normalized_mm,
     normalize_convex_polygon,
@@ -106,6 +112,26 @@ _NATIVE_PATH_TOPOLOGY_NUMERIC_MARGIN_RELATIVE = 1e-12
 _NORMALIZED_GEOMETRY_STAGE_VERSION = 2
 
 
+class ToolpathGenerationCancelled(RuntimeError):
+    """Cooperative cancellation of desktop background job planning."""
+
+
+_TOOLPATH_CANCEL_CHECK: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "toolpath_cancel_check",
+    default=None,
+)
+
+
+def _toolpath_cancel_requested() -> bool:
+    cancel_check = _TOOLPATH_CANCEL_CHECK.get()
+    return bool(cancel_check is not None and cancel_check())
+
+
+def _raise_if_toolpath_cancelled() -> None:
+    if _toolpath_cancel_requested():
+        raise ToolpathGenerationCancelled("Toolpath generation was cancelled")
+
+
 @dataclass(slots=True)
 class _NormalizedPointBudget:
     limit: int
@@ -121,6 +147,7 @@ class _NormalizedPointBudget:
         return self.remaining
 
     def consume(self, paths: Iterable[Polyline]) -> None:
+        _raise_if_toolpath_cancelled()
         point_count = sum(len(path.points) for path in paths)
         if point_count > self.remaining:
             raise self._exceeded()
@@ -578,14 +605,21 @@ def _object_fill_rule(item: SceneObject) -> PathFillRule:
 
 
 def _nearest_order(paths: list[Polyline], start: np.ndarray) -> list[Polyline]:
-    remaining = [Polyline(path.points.copy(), path.closed, path.source_tag) for path in paths]
+    remaining: list[Polyline] = []
+    for path in paths:
+        _raise_if_toolpath_cancelled()
+        remaining.append(
+            Polyline(path.points.copy(), path.closed, path.source_tag)
+        )
     ordered: list[Polyline] = []
     current = start.copy()
     while remaining:
+        _raise_if_toolpath_cancelled()
         best_index = 0
         best_points: np.ndarray | None = None
         best_distance = float("inf")
         for index, path in enumerate(remaining):
+            _raise_if_toolpath_cancelled()
             direct = float(np.linalg.norm(path.points[0] - current))
             reverse = float(np.linalg.norm(path.points[-1] - current))
             if reverse < direct and not path.closed:
@@ -612,6 +646,7 @@ def _point_in_closed_path(point: np.ndarray, polygon: np.ndarray) -> bool:
     inside = False
     previous = vertices[-1]
     for current in vertices:
+        _raise_if_toolpath_cancelled()
         cross = (current[1] > point[1]) != (previous[1] > point[1])
         if cross:
             x = (previous[0] - current[0]) * (point[1] - current[1]) / (previous[1] - current[1]) + current[0]
@@ -627,14 +662,17 @@ def _containment_plan(paths: list[Polyline]) -> tuple[list[int], list[bool]]:
     nested = [False] * len(paths)
     bounds = []
     for path in paths:
+        _raise_if_toolpath_cancelled()
         minimum = path.points.min(axis=0)
         maximum = path.points.max(axis=0)
         bounds.append((minimum, maximum))
     for index, inner in enumerate(paths):
+        _raise_if_toolpath_cancelled()
         if not inner.closed or len(inner.points) < 4:
             continue
         probe = inner.points[0]
         for other_index, outer in enumerate(paths):
+            _raise_if_toolpath_cancelled()
             if other_index == index or not outer.closed or len(outer.points) < 4:
                 continue
             inner_min, inner_max = bounds[index]
@@ -1294,6 +1332,7 @@ def _preflight_normalized_point_budget(
         ],
     ] = {}
     for layer in sorted(document.layers, key=lambda item: item.priority):
+        _raise_if_toolpath_cancelled()
         if not layer.visible or not layer.output_enabled:
             continue
         layer_objects = [
@@ -1649,6 +1688,7 @@ def _scanline_rows(
     rows: list[RasterRow] = []
     fill_rule = _object_fill_rule(item)
     for row in range(row_count):
+        _raise_if_toolpath_cancelled()
         y = first_y + row * interval
         scan_spans: list[np.ndarray] = []
         for start_x, end_x in _scanline_x_intervals(polygons, y, fill_rule):
@@ -2160,6 +2200,7 @@ def _image_raster_rows(
     rows: list[RasterRow] = []
     estimated_commands = 0
     for row_index, row_position in enumerate(row_positions):
+        _raise_if_toolpath_cancelled()
         row_interval = _scan_line_polygon_interval(scan_polygon, float(row_position))
         if row_interval is None:
             continue
@@ -2504,7 +2545,7 @@ def _stream_command_count(lines: Iterable[str]) -> int:
     return sum(1 for line in lines if line.partition(";")[0].strip())
 
 
-def generate_project_gcode(
+def _generate_project_gcode(
     document: ProjectDocument,
     laser: LaserSettings,
     *,
@@ -2518,6 +2559,7 @@ def generate_project_gcode(
     air_assist_commands: AirAssistCommands | None = None,
 ) -> ProjectJob:
     """Generate one guarded vector program containing all enabled line layers."""
+    _raise_if_toolpath_cancelled()
     if air_assist_commands is not None and not isinstance(
         air_assist_commands,
         AirAssistCommands,
@@ -2535,11 +2577,13 @@ def generate_project_gcode(
             prepared_object_paths=prepared_object_paths,
         )
     )
+    _raise_if_toolpath_cancelled()
     raster_sources = _preflight_raster_budget(
         document,
         controller_power_max,
         prepared_object_paths=prepared_object_paths,
     )
+    _raise_if_toolpath_cancelled()
     local_work_area, execution_work_area, coordinate_frame_signature = (
         _coordinate_context(document, coordinate_frame, machine_work_area)
     )
@@ -2581,6 +2625,7 @@ def generate_project_gcode(
     raster_command_estimate = 0
     vector_command_estimate = 0
     for layer in sorted(document.layers, key=lambda item: item.priority):
+        _raise_if_toolpath_cancelled()
         if not layer.visible or not layer.output_enabled:
             continue
         layer_objects = [
@@ -2927,6 +2972,7 @@ def generate_project_gcode(
     planned_order_travel = 0.0
 
     for layer_plan in layer_plans:
+        _raise_if_toolpath_cancelled()
         layer = layer_plan.layer
         paths = layer_plan.paths
         power = layer.controller_power(controller_power_max)
@@ -2987,6 +3033,7 @@ def generate_project_gcode(
             )
             nested_flags = _containment_plan(nested_order)[1]
         for pass_index in range(layer.passes):
+            _raise_if_toolpath_cancelled()
             if layer.mode == LayerMode.RASTER:
                 lines.append(f"; Pass {pass_index + 1}/{layer.passes}")
                 lines.append(
@@ -3003,6 +3050,7 @@ def generate_project_gcode(
                     ]
                 comparison_position = current.copy()
                 for row in rows:
+                    _raise_if_toolpath_cancelled()
                     source_motion = _raster_motion_points(
                         row.points,
                         layer.overscan_percent,
@@ -3012,6 +3060,7 @@ def generate_project_gcode(
                     )
                     comparison_position = source_motion[-1]
                 for row in rows:
+                    _raise_if_toolpath_cancelled()
                     row_motion = _raster_motion_points(
                         row.points,
                         layer.overscan_percent,
@@ -3046,6 +3095,7 @@ def generate_project_gcode(
 
             comparison_position = current.copy()
             for source_path in paths:
+                _raise_if_toolpath_cancelled()
                 source_motion = source_path.points
                 source_order_travel += float(
                     np.linalg.norm(source_motion[0] - comparison_position)
@@ -3059,10 +3109,12 @@ def generate_project_gcode(
                 ordered = _nearest_order(paths, current) if nearest_enabled else paths
                 nested = [False] * len(ordered)
             for path, is_nested in zip(ordered, nested, strict=True):
+                _raise_if_toolpath_cancelled()
                 if is_nested and pass_index > 0:
                     continue
                 path_passes = range(layer.passes) if is_nested else (pass_index,)
                 for path_pass_index in path_passes:
+                    _raise_if_toolpath_cancelled()
                     points = path.points
                     if not _points_have_motion(points):
                         continue
@@ -3106,8 +3158,10 @@ def generate_project_gcode(
                         if power > 0
                         else []
                     )
+                    _raise_if_toolpath_cancelled()
                     commanded_power = power
                     for point in points[1:]:
+                        _raise_if_toolpath_cancelled()
                         if power > 0:
                             continue
                         lines.append(
@@ -3115,6 +3169,7 @@ def generate_project_gcode(
                             f"F{_fmt(layer.speed_mm_min)}"
                         )
                     for motion in motions:
+                        _raise_if_toolpath_cancelled()
                         power_word = ""
                         if motion.power != commanded_power:
                             power_word = f" S{motion.power}"
@@ -3197,15 +3252,20 @@ def generate_project_gcode(
             1 for layer_plan in layer_plans if layer_plan.layer.mode != LayerMode.LINE
         ),
     )
-    plan = build_job_plan(
-        encoded.text,
-        power_max=controller_power_max,
-        default_feed_mm_min=laser.travel_feed_mm_min,
-        start_position=(float(start[0]), float(start[1])),
-        acceleration_mm_s2=laser.preview_acceleration_mm_s2,
-        command_delay_ms=laser.preview_command_delay_ms,
-        air_assist_commands=air_assist_commands,
-    )
+    try:
+        plan = build_job_plan(
+            encoded.text,
+            power_max=controller_power_max,
+            default_feed_mm_min=laser.travel_feed_mm_min,
+            start_position=(float(start[0]), float(start[1])),
+            acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+            command_delay_ms=laser.preview_command_delay_ms,
+            air_assist_commands=air_assist_commands,
+            cancel_check=_toolpath_cancel_requested,
+        )
+    except JobPlanCancelled as exc:
+        raise ToolpathGenerationCancelled("Toolpath generation was cancelled") from exc
+    _raise_if_toolpath_cancelled()
     return ProjectJob(
         text=encoded.text,
         bounds_mm=bounds,
@@ -3230,6 +3290,42 @@ def generate_project_gcode(
         coordinate_frame_signature=coordinate_frame_signature,
         guarded_output_polygon_mm=guarded_polygon,
     )
+
+
+def generate_project_gcode(
+    document: ProjectDocument,
+    laser: LaserSettings,
+    *,
+    power_max: int | None = None,
+    optimize_order: bool = True,
+    start_position: tuple[float, float] | None = None,
+    coordinate_frame: HoneycombCoordinateFrame | None = None,
+    machine_work_area: WorkArea | None = None,
+    guarded_output_polygon_mm: tuple[tuple[float, float], ...] | None = None,
+    planning_cache: PlanningCache | None = None,
+    air_assist_commands: AirAssistCommands | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> ProjectJob:
+    """Generate one guarded project program with optional cooperative cancellation."""
+
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable or None")
+    token = _TOOLPATH_CANCEL_CHECK.set(cancel_check)
+    try:
+        return _generate_project_gcode(
+            document,
+            laser,
+            power_max=power_max,
+            optimize_order=optimize_order,
+            start_position=start_position,
+            coordinate_frame=coordinate_frame,
+            machine_work_area=machine_work_area,
+            guarded_output_polygon_mm=guarded_output_polygon_mm,
+            planning_cache=planning_cache,
+            air_assist_commands=air_assist_commands,
+        )
+    finally:
+        _TOOLPATH_CANCEL_CHECK.reset(token)
 
 
 def generate_project_frame(

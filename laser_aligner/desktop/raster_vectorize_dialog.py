@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import threading
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -291,12 +292,14 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         self._quick_request_id: int | None = None
         self._quick_options: RasterVectorizationOptions | None = None
         self._quick_task: FunctionTask | None = None
+        self._quick_cancel_event: threading.Event | None = None
         self._pending_quick_request: (
             tuple[int, RasterVectorizationOptions] | None
         ) = None
         self._exact_request_id: int | None = None
         self._exact_options: RasterVectorizationOptions | None = None
         self._exact_task: FunctionTask | None = None
+        self._exact_cancel_event: threading.Event | None = None
         self._pending_exact_request: (
             tuple[int, RasterVectorizationOptions] | None
         ) = None
@@ -724,6 +727,10 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
             self._set_status(str(exc), "bad")
             return
         self._request_serial += 1
+        if self._quick_cancel_event is not None:
+            self._quick_cancel_event.set()
+        if self._exact_cancel_event is not None:
+            self._exact_cancel_event.set()
         request = (self._request_serial, options)
         self._latest_requested_id = self._request_serial
         self._pending_quick_request = request
@@ -762,18 +769,25 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         prepared_source = self._prepared_source
         width_mm = self.width_mm
         height_mm = self.height_mm
+        cancellation = threading.Event()
+        self._quick_cancel_event = cancellation
 
         def operation() -> _QuickPreviewOutcome:
             source = prepared_source
             try:
+                if cancellation.is_set():
+                    raise RuntimeError("Raster quick preview was cancelled")
                 if source is None:
                     source = prepare_raster_vectorization_source(payload)
+                if cancellation.is_set():
+                    raise RuntimeError("Raster quick preview was cancelled")
                 if quick_vectorizer is None:
                     preview = quick_preview_prepared_raster(
                         source,
                         options,
                         displayed_width_mm=width_mm,
                         displayed_height_mm=height_mm,
+                        cancel_check=cancellation.is_set,
                     )
                 else:
                     preview = quick_vectorizer(
@@ -793,7 +807,11 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
                 prepared_source=source,
             )
 
-        task = FunctionTask(operation)
+        task = FunctionTask(
+            operation,
+            label="Raster quick preview",
+            cancel=cancellation.set,
+        )
         self._quick_task = task
         task.signals.succeeded.connect(
             self._active_quick_succeeded,
@@ -808,7 +826,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
         _retain_preview_task(task)
-        QtCore.QThreadPool.globalInstance().start(task)
+        task.start_on(QtCore.QThreadPool.globalInstance())
 
     @QtCore.Slot(object)
     def _active_quick_succeeded(self, outcome: object) -> None:
@@ -851,6 +869,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         if task is None or request_id is None:
             return
         self._quick_task = None
+        self._quick_cancel_event = None
         self._quick_request_id = None
         self._quick_options = None
         if self._closed:
@@ -932,9 +951,13 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         payload = self.payload
         width_mm = self.width_mm
         height_mm = self.height_mm
+        cancellation = threading.Event()
+        self._exact_cancel_event = cancellation
 
         def operation() -> _ExactPreviewOutcome:
             try:
+                if cancellation.is_set():
+                    raise RuntimeError("Raster vector fitting was cancelled")
                 if vectorizer is not None:
                     result = vectorizer(
                         payload,
@@ -949,7 +972,10 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
                         displayed_width_mm=width_mm,
                         displayed_height_mm=height_mm,
                         prepared_preview=prepared_preview,
+                        cancel_check=cancellation.is_set,
                     )
+                if cancellation.is_set():
+                    raise RuntimeError("Raster vector fitting was cancelled")
             except Exception as exc:
                 return _ExactPreviewOutcome(
                     result=None,
@@ -957,7 +983,11 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
                 )
             return _ExactPreviewOutcome(result=result)
 
-        task = FunctionTask(operation)
+        task = FunctionTask(
+            operation,
+            label="Raster verified vector fit",
+            cancel=cancellation.set,
+        )
         self._exact_task = task
         task.signals.succeeded.connect(
             self._active_exact_succeeded,
@@ -972,7 +1002,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
         _retain_preview_task(task)
-        QtCore.QThreadPool.globalInstance().start(task)
+        task.start_on(QtCore.QThreadPool.globalInstance())
 
     @QtCore.Slot(object)
     def _active_exact_succeeded(self, outcome: object) -> None:
@@ -1012,6 +1042,7 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
         if task is None or request_id is None:
             return
         self._exact_task = None
+        self._exact_cancel_event = None
         self._exact_request_id = None
         self._exact_options = None
         if self._closed:
@@ -1149,6 +1180,10 @@ class RasterVectorizationDialog(QtWidgets.QDialog):
 
     def _abandon_pending_work(self) -> None:
         self._closed = True
+        if self._quick_cancel_event is not None:
+            self._quick_cancel_event.set()
+        if self._exact_cancel_event is not None:
+            self._exact_cancel_event.set()
         self._debounce_timer.stop()
         self._pending_quick_request = None
         self._pending_exact_request = None

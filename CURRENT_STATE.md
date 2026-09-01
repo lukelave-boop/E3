@@ -5,7 +5,54 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-30**
+Snapshot: **2026-08-31**
+
+## Active bounded desktop shutdown correction
+
+Accepted desktop Close now starts one monotonic four-second shutdown deadline.
+The window arms a process-exit watchdog at the moment Close is accepted, before
+state persistence or runtime teardown, so a non-cooperative Qt worker cannot keep
+the E3 process alive past the deadline. This watchdog is an exit-only fallback;
+the normal path cancels work, drains the desktop pool for at most one second,
+stops the runtime under the same absolute deadline, and exits through Qt in the
+ordinary way. `QThreadPool.waitForDone(-1)` is no longer used.
+
+`RemoteCameraService` tracks every connecting or active request socket under a
+lock. Address resolution runs through a daemon helper while the request worker
+polls the shutdown generation, so even blocked platform DNS cannot retain a Qt
+worker. Desktop shutdown latches cancellation and closes tracked sockets, waking
+blocked fresh-frame, precision-burst, control/snapshot, send, and receive work.
+The ordinary operation-grade camera timeouts are unchanged. Retained and labeled
+`FunctionTask` wrappers remain alive until their runnables return, but their
+success, failure, image, result, and busy-state publication is suppressed once
+shutdown begins. Camera Trace, native fitting, raster conversion, and toolpath
+generation receive cooperative cancellation checks through their CPU-heavy
+loops.
+
+Remote machine shutdown is separate from ordinary Disconnect. Only freshly
+observed idle state permits one best-effort `machine.disconnect` attempt; an
+empty or stale observer cache detaches without assuming the Pi is idle. Address
+resolution, connect, authentication, capability check, and RPC share a maximum
+0.75-second shutdown allowance; failure logs and detaches without retrying under
+the normal 130-second operation timeout. An accepted or
+ownership-uncertain Pi job detaches immediately and sends no RPC, STOP, `M5`,
+reset, hold, Air Assist OFF, or controller Disconnect. The recent idle
+Disconnect generation correction and all ordinary operation timeouts remain
+unchanged.
+
+Automated focused coverage reproduces blocked 36-second fresh-frame,
+precision-burst, and control/snapshot calls; blocked address resolution and
+socket creation/connect/send/receive races; an unreachable idle Pi, stale Pi
+observer state, and slow-drip machine protocol; the combined blocked-camera plus unreachable-Pi
+case under one shared deadline; stuck Qt-pool work in a subprocess; an updater
+launch preceding blocked close preparation; late desktop callbacks; CPU
+cancellation; stale/late Pi monitor races; and accepted/uncertain Pi-job
+non-destructive detach. The final Windows Python suite passes **3,170 tests**
+with **15 expected platform skips** in four-worker execution; repository Ruff,
+`compileall -q laser_aligner`, and `git diff --check` pass. Windows development
+packaging and the requested physical close timings remain pending for this
+active branch. No physical controller, motion, arming, laser-output, or shutdown
+timing result is claimed yet.
 
 ## Active Pi-owned secondary-controller Air Assist correction
 
@@ -188,7 +235,8 @@ The related lifecycle paths do not have the same inversion. Remote
 the Windows facade's generation. Direct `detach()` advances the generation but
 has no cleanup RPC to self-cancel. Desktop shutdown calls detach first to revoke
 workers; accepted/uncertain Pi execution stays detach-only, while later idle
-`AppContext.stop()` invokes Disconnect outside the stale desktop worker scope.
+`AppContext.stop()` uses the distinct short-budget remote shutdown path outside
+the stale desktop worker scope.
 
 A deterministic offscreen desktop regression exercises the exact
 `DesktopController._run() → operation_scope() →
@@ -1198,12 +1246,13 @@ arguments and installer-directory working directory, and then restores its own
 DLL search state. Successful process creation is authoritative: if restoring
 the dying parent's DLL state fails after the child exists, E3 logs that parent
 cleanup failure and completes the handoff instead of claiming the installer did
-not start. The desktop waits for controller task ownership to drain
-after the normal unsaved-project approval and existing shutdown preparation;
-periodic producers are stopped and newly observed owned work is rechecked before
-the final close. The updater's drain callback runs in the GUI-thread cleanup
-before MainWindow's queued close-after-drain timer, so that timer cannot end E3
-before launch. A process-creation failure after accepted terminal shutdown shows
+not start. After the normal unsaved-project approval, the desktop starts the
+same bounded shutdown used by an ordinary Close. Once close preparation is
+accepted, the verified installer is spawned before synchronous runtime teardown
+rather than waiting indefinitely for worker ownership to drain; late task
+publication is already suppressed and the shared four-second process deadline is
+active. A
+process-creation failure after accepted terminal shutdown shows
 a standalone error containing the verified installer path for manual launch,
 then exits rather than presenting the stopped desktop as usable.
 
@@ -2933,8 +2982,10 @@ software STOP remains available. Raw G-code, workspace paths, dedicated Preview
 paths, and large backward timeline jumps are built in bounded GUI-thread slices.
 Closing an unfinished Preview, STOP, new/open, project revision, renderer error,
 or application close cancels acceptance and cannot enable Run/export or clear a
-newer renderer's busy state. Application shutdown defers runtime teardown until
-owned workers return. Generation no longer writes an implicit G-code artifact;
+newer renderer's busy state. Application shutdown retains worker ownership and
+suppresses callbacks, but drains for at most one second before bounded runtime
+teardown under the shared four-second process deadline. Generation no longer
+writes an implicit G-code artifact;
 explicit export is the only desktop file-write path. Offscreen tests cover 1k
 and 100k early close, stale success/failure registration collisions, all three
 renderer failure sites, zero-power framing, Start Here, project replacement/shutdown,

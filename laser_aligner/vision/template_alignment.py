@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
@@ -12,6 +13,32 @@ if TYPE_CHECKING:
 
 
 _EPSILON = 1e-9
+
+
+class TemplateAlignmentCancelled(RuntimeError):
+    """Cooperative cancellation of camera-template alignment work."""
+
+
+_TEMPLATE_ALIGNMENT_CANCEL_CHECK: ContextVar[Callable[[], bool] | None] = (
+    ContextVar("template_alignment_cancel_check", default=None)
+)
+
+
+def _set_cancel_check(
+    cancel_check: Callable[[], bool] | None,
+) -> Token[Callable[[], bool] | None]:
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable or None")
+    inherited = _TEMPLATE_ALIGNMENT_CANCEL_CHECK.get()
+    return _TEMPLATE_ALIGNMENT_CANCEL_CHECK.set(
+        inherited if cancel_check is None else cancel_check
+    )
+
+
+def _raise_if_cancelled() -> None:
+    cancel_check = _TEMPLATE_ALIGNMENT_CANCEL_CHECK.get()
+    if cancel_check is not None and cancel_check():
+        raise TemplateAlignmentCancelled("Template alignment was cancelled")
 
 
 @dataclass(slots=True)
@@ -115,6 +142,7 @@ def _rotation_matrix(angle_deg: float) -> np.ndarray:
 def _as_features(items: Sequence[Any], *, detections: bool) -> list[_ObservedFeature]:
     output: list[_ObservedFeature] = []
     for item in items:
+        _raise_if_cancelled()
         raw_center = _value(item, "center_mm", None)
         if raw_center is None:
             continue
@@ -217,6 +245,7 @@ def _shape_quality(template: _ObservedFeature, detection: _ObservedFeature) -> f
 def _representative_pairs(points: np.ndarray, limit: int = 96) -> list[tuple[int, int, float, float]]:
     pairs: list[tuple[int, int, float, float]] = []
     for first in range(len(points)):
+        _raise_if_cancelled()
         for second in range(first + 1, len(points)):
             vector = points[second] - points[first]
             distance = float(np.linalg.norm(vector))
@@ -237,6 +266,7 @@ def _rotation_hypotheses(
 
     # The long-axis orientation is a strong and inexpensive hypothesis source.
     for feature in template_features[:24]:
+        _raise_if_cancelled()
         for detection in detections[:24]:
             difference = _normalise_axis_angle(detection.rotation - feature.rotation)
             quality = _dimension_quality(feature, detection)
@@ -248,6 +278,7 @@ def _rotation_hypotheses(
     template_pairs = _representative_pairs(template_points)
     detection_pairs = _representative_pairs(detection_points)
     for _, _, template_distance, template_angle in template_pairs:
+        _raise_if_cancelled()
         for _, _, detection_distance, detection_angle in detection_pairs:
             ratio = detection_distance / template_distance
             if not 0.55 <= ratio <= 1.80:
@@ -308,6 +339,7 @@ def _has_half_turn_feature_symmetry(
     half_turned = 2.0 * center - points
     candidates: list[tuple[float, int, int]] = []
     for source_index, predicted in enumerate(half_turned):
+        _raise_if_cancelled()
         source = features[source_index]
         for target_index, target in enumerate(features):
             distance = float(np.linalg.norm(predicted - target.center))
@@ -364,11 +396,13 @@ def _translation_hypotheses(
     bin_size = max(0.5, tolerance * 0.65)
     candidate_rows: list[tuple[np.ndarray, float]] = []
     for point in rotated_template:
+        _raise_if_cancelled()
         for detection in detections:
             candidate_rows.append((detection.center - point, detection.weight))
 
     outputs: list[np.ndarray] = []
     for offset_x, offset_y in ((0.0, 0.0), (0.5, 0.5), (0.5, 0.0), (0.0, 0.5)):
+        _raise_if_cancelled()
         groups: dict[tuple[int, int], list[tuple[np.ndarray, float]]] = {}
         for translation, weight in candidate_rows:
             key = (
@@ -393,6 +427,7 @@ def _assign_matches(
     detections: Sequence[_ObservedFeature],
     tolerance: float,
 ) -> tuple[list[tuple[int, int, float]], np.ndarray, np.ndarray, np.ndarray]:
+    _raise_if_cancelled()
     candidates: list[tuple[float, float, int, int, float, float]] = []
     detection_centers = np.asarray([item.center for item in detections])
     distances = np.linalg.norm(transformed[:, np.newaxis, :] - detection_centers[np.newaxis, :, :], axis=2)
@@ -414,6 +449,7 @@ def _assign_matches(
     dimension_quality: list[float] = []
     orientation_quality: list[float] = []
     for _, distance, feature_index, detection_index, dimension, orientation in sorted(candidates):
+        _raise_if_cancelled()
         if feature_index in used_features or detection_index in used_detections:
             continue
         used_features.add(feature_index)
@@ -444,6 +480,7 @@ def _refine_rigid_fit(
     template_features: Sequence[_ObservedFeature],
     detections: Sequence[_ObservedFeature],
 ) -> tuple[float, np.ndarray]:
+    _raise_if_cancelled()
     if not pairs:
         return rotation_deg, translation
     template_points = np.asarray([template_features[pair[0]].center for pair in pairs])
@@ -490,6 +527,7 @@ def _evaluate_fit(
     tolerance: float,
 ) -> _Fit:
     for _ in range(3):
+        _raise_if_cancelled()
         transformed = np.asarray([item.center for item in template_features]) @ _rotation_matrix(rotation_deg).T
         transformed += translation
         pairs, weights, dimensions, orientations = _assign_matches(
@@ -547,6 +585,7 @@ def _scale_diagnostics(
 ) -> tuple[float | None, float | None]:
     pair_ratios: list[float] = []
     for first in range(len(fit.pairs)):
+        _raise_if_cancelled()
         for second in range(first + 1, len(fit.pairs)):
             first_feature, first_detection, _ = fit.pairs[first]
             second_feature, second_detection, _ = fit.pairs[second]
@@ -596,7 +635,7 @@ def _empty_alignment(template: Any, feature_count: int, detection_count: int, wa
     )
 
 
-def align_template(
+def _align_template(
     template: CutTemplate,
     detections: Sequence[Mapping[str, Any] | Any],
 ) -> TemplateAlignment:
@@ -607,6 +646,7 @@ def align_template(
     participate at lower weight.  Any observed scale difference is reported but
     is never included in the returned transform.
     """
+    _raise_if_cancelled()
     template_features = _as_features(_feature_sequence(template), detections=False)
     observed = _as_features(detections, detections=True)
     if not template_features:
@@ -618,8 +658,10 @@ def align_template(
     best: _Fit | None = None
     template_points = np.asarray([item.center for item in template_features])
     for rotation in _rotation_hypotheses(template_features, observed):
+        _raise_if_cancelled()
         rotated = template_points @ _rotation_matrix(rotation).T
         for translation in _translation_hypotheses(rotated, observed, tolerance):
+            _raise_if_cancelled()
             fit = _evaluate_fit(rotation, translation, template_features, observed, tolerance)
             if best is None or fit.objective > best.objective:
                 best = fit
@@ -717,39 +759,72 @@ def align_template(
     )
 
 
+def align_template(
+    template: CutTemplate,
+    detections: Sequence[Mapping[str, Any] | Any],
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> TemplateAlignment:
+    """Align one template, optionally polling a cooperative cancellation hook."""
+
+    token = _set_cancel_check(cancel_check)
+    try:
+        return _align_template(template, detections)
+    finally:
+        _TEMPLATE_ALIGNMENT_CANCEL_CHECK.reset(token)
+
+
 def rank_templates(
     templates: Sequence[CutTemplate],
     detections: Sequence[Mapping[str, Any] | Any],
+    *,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[TemplateAlignment]:
     """Align and rank templates, marking candidates that are too close to call."""
-    ranked = [align_template(template, detections) for template in templates]
-    ranked.sort(
-        key=lambda item: (
-            item.score,
-            item.coverage,
-            item.direct_match_count,
-            -(item.rms_error_mm if item.rms_error_mm is not None else math.inf),
-        ),
-        reverse=True,
-    )
-    if len(ranked) < 2 or ranked[0].score < 15.0:
-        return ranked
-    threshold = max(3.0, ranked[0].score * 0.06)
-    close_count = 1
-    for candidate in ranked[1:]:
-        if ranked[0].score - candidate.score <= threshold:
-            close_count += 1
-        else:
-            break
-    if close_count > 1:
-        message = f"Template match is ambiguous: {close_count} candidates score within {threshold:.1f} points."
-        for index in range(close_count):
-            ranked[index] = replace(
-                ranked[index],
-                ambiguous=True,
-                warnings=(*ranked[index].warnings, message),
+    token = _set_cancel_check(cancel_check)
+    try:
+        ranked = []
+        for template in templates:
+            _raise_if_cancelled()
+            ranked.append(_align_template(template, detections))
+        ranked.sort(
+            key=lambda item: (
+                item.score,
+                item.coverage,
+                item.direct_match_count,
+                -(item.rms_error_mm if item.rms_error_mm is not None else math.inf),
+            ),
+            reverse=True,
+        )
+        if len(ranked) < 2 or ranked[0].score < 15.0:
+            return ranked
+        threshold = max(3.0, ranked[0].score * 0.06)
+        close_count = 1
+        for candidate in ranked[1:]:
+            _raise_if_cancelled()
+            if ranked[0].score - candidate.score <= threshold:
+                close_count += 1
+            else:
+                break
+        if close_count > 1:
+            message = (
+                f"Template match is ambiguous: {close_count} candidates score "
+                f"within {threshold:.1f} points."
             )
-    return ranked
+            for index in range(close_count):
+                ranked[index] = replace(
+                    ranked[index],
+                    ambiguous=True,
+                    warnings=(*ranked[index].warnings, message),
+                )
+        return ranked
+    finally:
+        _TEMPLATE_ALIGNMENT_CANCEL_CHECK.reset(token)
 
 
-__all__ = ["TemplateAlignment", "align_template", "rank_templates"]
+__all__ = [
+    "TemplateAlignment",
+    "TemplateAlignmentCancelled",
+    "align_template",
+    "rank_templates",
+]

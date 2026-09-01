@@ -330,8 +330,10 @@ into workers. Conflicting job actions remain unavailable until every required
 exact view finishes, while software STOP stays live. Preview is window-modal,
 and the main-window Preview action can only reopen it rather than execute
 directly. **START JOB** dismisses Preview before synchronously entering the
-existing guarded run path. Closing an unfinished Preview fails closed, and
-application close retains workers through completion before runtime teardown.
+existing guarded run path. Closing an unfinished Preview fails closed. Accepted
+application Close cancels worker authority, retains runnable ownership, and
+suppresses late callbacks; it drains the pool for at most one second before
+bounded runtime teardown under one four-second process-exit deadline.
 Generated programs remain in memory until the explicit export action writes
 one; there is no persistent raw-G-code pane.
 

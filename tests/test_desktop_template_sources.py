@@ -21,7 +21,7 @@ def test_controller_matches_templates_off_thread_and_ignores_stale_results() -> 
     assert "def _match_cut_templates_once(" in controller
     assert "refresh=True," in controller
     assert "_usable_template_detections(trace_result.detections)" in controller
-    assert "rank_templates(grouped_templates, usable_detections)" in controller
+    assert "cancel_check=cancel_check" in controller
     assert "CutTemplate.from_dict(template.to_dict())" in controller
     assert "self._run(" in controller
     assert "request_id != self._template_match_request_id" in controller

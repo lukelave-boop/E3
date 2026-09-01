@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -241,6 +242,54 @@ def test_bounded_index_rejects_same_stat_content_change_without_commit(
     assert isinstance(errors[0], CalibrationError)
     assert "changed" in str(errors[0]).lower()
     assert not calibrator.image_index_path.exists()
+
+
+def test_bounded_index_observes_cancellation_without_committing_partial_index(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calibrator = LensCalibrator(
+        tmp_path,
+        LensCalibrationSettings(columns=2, rows=2, minimum_images=1),
+    )
+    for name in ("first.png", "second.png"):
+        assert cv2.imwrite(
+            str(calibrator.image_dir / name),
+            np.zeros((120, 160, 3), dtype=np.uint8),
+        )
+    detection_entered = threading.Event()
+    release_detection = threading.Event()
+    cancellation = threading.Event()
+    errors: list[BaseException] = []
+
+    def detect(_image: np.ndarray) -> tuple[bool, None]:
+        detection_entered.set()
+        assert release_detection.wait(2.0)
+        return False, None
+
+    monkeypatch.setattr(calibrator, "detect_corners", detect)
+
+    def index() -> None:
+        try:
+            calibrator.index_pending_captures(cancel_check=cancellation.is_set)
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=index, name="test-lens-index-cancel")
+    worker.start()
+    assert detection_entered.wait(1.0)
+    cancel_started = time.monotonic()
+    cancellation.set()
+    release_detection.set()
+    worker.join(1.0)
+
+    assert not worker.is_alive()
+    assert time.monotonic() - cancel_started < 1.0
+    assert len(errors) == 1
+    assert isinstance(errors[0], CalibrationError)
+    assert "cancelled" in str(errors[0]).lower()
+    assert not calibrator.image_index_path.exists()
+    assert calibrator.status()["index"]["indexing"] is False
 
 
 @pytest.mark.skipif(

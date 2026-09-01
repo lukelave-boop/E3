@@ -864,7 +864,10 @@ def test_controller_uses_one_frozen_frame_for_all_template_option_groups(
     def fake_rank(
         templates: list[CutTemplate],
         detections: list[object],
+        *,
+        cancel_check=None,
     ) -> list[TemplateAlignment]:
+        assert cancel_check is None
         ranked_detection_ids.append(
             [str(detection.id) for detection in detections]
         )
@@ -1054,7 +1057,7 @@ def test_local_template_matching_rectifies_and_reviews_in_honeycomb_coordinates(
     monkeypatch.setattr(
         controller_module,
         "rank_templates",
-        lambda templates, _detections: [
+        lambda templates, _detections, **_kwargs: [
             _alignment(
                 template_id=templates[0].id,
                 template_name=templates[0].name,

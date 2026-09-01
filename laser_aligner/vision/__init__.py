@@ -1,6 +1,7 @@
 from .fiducials import detect_aruco_markers
 from .object_trace import (
     TraceDetection,
+    TraceDetectionCancelledError,
     TraceOptions,
     TraceResult,
     auto_target_hue,
@@ -21,6 +22,7 @@ __all__ = [
     "MAX_TRACE_ORIENTATION_SEGMENTS",
     "MAX_TRACE_ORIENTATION_SUBPATHS",
     "TraceDetection",
+    "TraceDetectionCancelledError",
     "TraceOptions",
     "TraceOrientationEstimate",
     "TraceOrientationGeometry",

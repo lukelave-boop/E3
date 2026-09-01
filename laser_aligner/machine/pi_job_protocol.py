@@ -10,15 +10,18 @@ from __future__ import annotations
 
 import base64
 import binascii
+import errno
 import hashlib
 import hmac
 import json
 import math
 import re
 import secrets
+import select
 import socket
 import struct
 import threading
+import time
 import uuid
 from collections.abc import Mapping, Sequence
 from typing import Any
@@ -75,6 +78,17 @@ _SERVER_AUTH_DOMAIN = b"E3MACHINE/2 server-auth\0"
 _SESSION_DOMAIN = b"E3MACHINE/2 session\0"
 _CLIENT_FRAME_DOMAIN = b"E3MACHINE/2 client-frame\0"
 _SERVER_FRAME_DOMAIN = b"E3MACHINE/2 server-frame\0"
+_CONNECT_IN_PROGRESS_ERRORS = frozenset(
+    {
+        errno.EINPROGRESS,
+        errno.EWOULDBLOCK,
+        errno.EALREADY,
+        errno.EINTR,
+        getattr(errno, "WSAEINPROGRESS", 10036),
+        getattr(errno, "WSAEWOULDBLOCK", 10035),
+        getattr(errno, "WSAEALREADY", 10037),
+    }
+)
 
 
 class PiJobProtocolError(MachineError):
@@ -464,6 +478,109 @@ def authenticate_server(sock: socket.socket, token: str) -> AuthenticatedChannel
     )
 
 
+def _remaining_deadline_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0.0:
+        raise PiJobProtocolError("E3 machine request deadline expired")
+    return remaining
+
+
+class _DeadlineSocket:
+    """Apply one absolute deadline before every protocol socket operation."""
+
+    def __init__(self, sock: socket.socket, deadline: float) -> None:
+        self._sock = sock
+        self._deadline = deadline
+
+    def recv(self, length: int) -> bytes:
+        self._sock.settimeout(_remaining_deadline_seconds(self._deadline))
+        return self._sock.recv(length)
+
+    def sendall(self, payload: bytes) -> None:
+        self._sock.settimeout(_remaining_deadline_seconds(self._deadline))
+        self._sock.sendall(payload)
+
+
+def _resolve_until_deadline(
+    host: str,
+    port: int,
+    deadline: float,
+) -> tuple[tuple[Any, ...], ...]:
+    """Resolve without allowing a platform DNS call to hold shutdown."""
+
+    resolved: list[tuple[Any, ...]] = []
+    failures: list[BaseException] = []
+    finished = threading.Event()
+
+    def resolve() -> None:
+        try:
+            resolved.extend(
+                socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+            )
+        except BaseException as exc:  # pragma: no cover - platform resolver failures
+            failures.append(exc)
+        finally:
+            finished.set()
+
+    thread = threading.Thread(
+        target=resolve,
+        name="e3-machine-shutdown-resolver",
+        daemon=True,
+    )
+    thread.start()
+    if not finished.wait(_remaining_deadline_seconds(deadline)):
+        raise PiJobProtocolError("E3 machine address resolution deadline expired")
+    if failures:
+        failure = failures[0]
+        raise PiJobProtocolError(
+            f"Could not resolve E3 machine at {host}:{port}: {failure}"
+        ) from failure
+    if not resolved:
+        raise PiJobProtocolError(f"Could not resolve E3 machine at {host}:{port}")
+    return tuple(resolved)
+
+
+def _connect_until_deadline(
+    addresses: Sequence[tuple[Any, ...]],
+    deadline: float,
+) -> socket.socket:
+    last_error: OSError | None = None
+    for family, sock_type, protocol, _canonical_name, address in addresses:
+        _remaining_deadline_seconds(deadline)
+        sock = socket.socket(family, sock_type, protocol)
+        try:
+            sock.setblocking(False)
+            result = sock.connect_ex(address)
+            if result not in {0, errno.EISCONN}:
+                if result not in _CONNECT_IN_PROGRESS_ERRORS:
+                    raise OSError(result, f"socket connect failed ({result})")
+                _readable, writable, exceptional = select.select(
+                    [],
+                    [sock],
+                    [sock],
+                    _remaining_deadline_seconds(deadline),
+                )
+                if not writable and not exceptional:
+                    raise TimeoutError("E3 machine connection deadline expired")
+                error_code = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if error_code:
+                    raise OSError(
+                        error_code,
+                        f"socket connect failed ({error_code})",
+                    )
+            sock.setblocking(True)
+            return sock
+        except OSError as exc:
+            last_error = exc
+            try:
+                sock.close()
+            except OSError:
+                pass
+    if last_error is not None:
+        raise last_error
+    raise OSError("Could not connect to the E3 machine")
+
+
 def request_response(
     host: str,
     port: int,
@@ -471,6 +588,7 @@ def request_response(
     request: Mapping[str, Any],
     *,
     timeout: float = 5.0,
+    deadline: float | None = None,
 ) -> dict[str, Any]:
     """Perform one authenticated request/response exchange."""
 
@@ -486,11 +604,28 @@ def request_response(
         or timeout <= 0
     ):
         raise PiJobProtocolError("E3 machine request timeout must be positive and finite")
+    if deadline is not None and (
+        isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or not math.isfinite(float(deadline))
+    ):
+        raise PiJobProtocolError("E3 machine request deadline must be finite")
     try:
-        sock = socket.create_connection((host, port), timeout=float(timeout))
+        if deadline is None:
+            sock = socket.create_connection((host, port), timeout=float(timeout))
+            bounded_sock: socket.socket | _DeadlineSocket = sock
+        else:
+            effective_deadline = min(
+                float(deadline),
+                time.monotonic() + float(timeout),
+            )
+            addresses = _resolve_until_deadline(host, port, effective_deadline)
+            sock = _connect_until_deadline(addresses, effective_deadline)
+            bounded_sock = _DeadlineSocket(sock, effective_deadline)
         with sock:
-            sock.settimeout(float(timeout))
-            channel = authenticate_client(sock, token)
+            if deadline is None:
+                sock.settimeout(float(timeout))
+            channel = authenticate_client(bounded_sock, token)  # type: ignore[arg-type]
             channel.send_json(request)
             return channel.receive_json()
     except PiJobProtocolError:

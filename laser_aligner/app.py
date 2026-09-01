@@ -767,24 +767,38 @@ class AppContext:
                 self._camera_start_error = str(exc)
                 LOGGER.error("Camera did not start: %s", exc)
 
-    def stop(self) -> None:
+    def stop(self, *, deadline: float | None = None) -> None:
+        if deadline is not None:
+            if (
+                isinstance(deadline, bool)
+                or not isinstance(deadline, (int, float))
+                or not math.isfinite(float(deadline))
+            ):
+                raise TypeError("Application shutdown deadline must be finite")
+            deadline = float(deadline)
         try:
-            # RemoteMachineService.disconnect() releases an idle Pi controller
-            # but turns into a non-destructive detach for accepted/uncertain
-            # execution. Direct local serial retains its M5/disconnect cleanup.
-            try:
-                self.machine.disconnect()
-            except MachineError as exc:
-                if getattr(self.machine, "pi_owned_execution", False) is not True:
-                    raise
-                # Shutdown remains best-effort when the saved Pi is offline or
-                # credentials are unavailable. The disconnect RPC was still
-                # attempted; detach only stops this process's observer and does
-                # not convert an unreachable idle/unknown job into a STOP.
-                LOGGER.warning("Remote machine disconnect during shutdown failed: %s", exc)
-                self.machine.detach()
+            shutdown = getattr(self.machine, "shutdown", None)
+            if deadline is not None and callable(shutdown):
+                shutdown(deadline=deadline)
+            else:
+                # Ordinary non-desktop lifecycle stops retain their existing
+                # operation-grade disconnect behavior.  The desktop supplies an
+                # absolute deadline and RemoteMachineService.shutdown() applies
+                # its much shorter, non-destructive exit policy.
+                try:
+                    self.machine.disconnect()
+                except MachineError as exc:
+                    if getattr(self.machine, "pi_owned_execution", False) is not True:
+                        raise
+                    LOGGER.warning(
+                        "Remote machine disconnect during shutdown failed: %s", exc
+                    )
+                    self.machine.detach()
         finally:
-            self.camera.stop()
+            if deadline is None:
+                self.camera.stop()
+            else:
+                self.camera.stop(deadline=deadline)
 
     def restart_camera(self) -> dict[str, Any]:
         """Release and reopen the configured camera after an explicit retry."""

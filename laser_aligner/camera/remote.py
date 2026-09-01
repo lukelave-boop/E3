@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import errno
 import math
+import select
 import socket
 import threading
 import time
@@ -37,6 +39,19 @@ _STILL_TRANSFER_QUALITY = 95
 _MONITOR_FPS = frozenset({5, 10, 15})
 _MONITOR_SIZES = frozenset({(1280, 720), (1920, 1080)})
 _MAX_MONITOR_JPEG_BYTES = 4 * 1024 * 1024
+_CONNECT_CANCEL_POLL_SECONDS = 0.05
+_NETWORK_CANCELLED_MESSAGE = "Remote camera request was cancelled during shutdown"
+_CONNECT_IN_PROGRESS_ERRORS = frozenset(
+    {
+        errno.EINPROGRESS,
+        errno.EWOULDBLOCK,
+        errno.EALREADY,
+        errno.EINTR,
+        getattr(errno, "WSAEINPROGRESS", 10036),
+        getattr(errno, "WSAEWOULDBLOCK", 10035),
+        getattr(errno, "WSAEALREADY", 10037),
+    }
+)
 
 
 def _status_probe_delay(failure_count: int) -> float:
@@ -169,6 +184,11 @@ class RemoteCameraService(CameraService):
         self._status_cache = self._offline_status()
         self._status_probe_stop = threading.Event()
         self._status_probe_thread: threading.Thread | None = None
+        self._network_lock = threading.RLock()
+        self._network_generation = 0
+        self._shutdown_event = threading.Event()
+        self._terminal_shutdown = False
+        self._active_sockets: dict[int, socket.socket] = {}
 
     def _offline_status(self, error: str | None = None) -> CameraStatus:
         return CameraStatus(
@@ -215,31 +235,40 @@ class RemoteCameraService(CameraService):
         return status
 
     def _ensure_status_probe(self) -> None:
-        with self._status_lock:
-            thread = self._status_probe_thread
-            if thread is not None and thread.is_alive():
+        with self._network_lock:
+            if self._shutdown_event.is_set():
                 return
-            self._status_probe_stop.clear()
-            thread = threading.Thread(
-                target=self._status_probe_loop,
-                name="remote-camera-status",
-                daemon=True,
-            )
-            self._status_probe_thread = thread
+            with self._status_lock:
+                thread = self._status_probe_thread
+                if thread is not None and thread.is_alive():
+                    return
+                self._status_probe_stop.clear()
+                thread = threading.Thread(
+                    target=self._status_probe_loop,
+                    name="remote-camera-status",
+                    daemon=True,
+                )
+                self._status_probe_thread = thread
         thread.start()
 
-    def _stop_status_probe(self) -> None:
+    def _stop_status_probe(self, *, deadline: float | None = None) -> None:
         self._status_probe_stop.set()
         with self._status_lock:
             thread = self._status_probe_thread
+        join_seconds = 1.0
+        if deadline is not None:
+            join_seconds = min(join_seconds, max(0.0, deadline - time.monotonic()))
         if (
             thread is not None
             and thread.is_alive()
             and thread is not threading.current_thread()
+            and join_seconds > 0
         ):
-            thread.join(timeout=1.0)
+            thread.join(timeout=join_seconds)
         with self._status_lock:
-            if self._status_probe_thread is thread:
+            if self._status_probe_thread is thread and (
+                thread is None or not thread.is_alive()
+            ):
                 self._status_probe_thread = None
 
     def _status_probe_loop(self) -> None:
@@ -261,6 +290,190 @@ class RemoteCameraService(CameraService):
                 else _STATUS_PROBE_REACHABLE_OFFLINE_DELAY_SECONDS
             )
 
+    def _rearm_network_requests(self) -> None:
+        """Begin a new local client generation after an explicit start/restart."""
+
+        with self._network_lock:
+            if self._terminal_shutdown:
+                raise CameraError(_NETWORK_CANCELLED_MESSAGE)
+            if self._shutdown_event.is_set():
+                self._network_generation += 1
+                self._shutdown_event.clear()
+
+    def _begin_network_request(self) -> int:
+        with self._network_lock:
+            if self._shutdown_event.is_set():
+                raise CameraError(_NETWORK_CANCELLED_MESSAGE)
+            return self._network_generation
+
+    def _request_was_cancelled(self, generation: int) -> bool:
+        with self._network_lock:
+            return (
+                self._shutdown_event.is_set()
+                or generation != self._network_generation
+            )
+
+    def _raise_if_request_cancelled(self, generation: int) -> None:
+        if self._request_was_cancelled(generation):
+            raise CameraError(_NETWORK_CANCELLED_MESSAGE)
+
+    def _register_socket(self, sock: socket.socket, generation: int) -> None:
+        with self._network_lock:
+            if (
+                self._shutdown_event.is_set()
+                or generation != self._network_generation
+            ):
+                self._close_socket(sock, interrupt=True)
+                raise CameraError(_NETWORK_CANCELLED_MESSAGE)
+            self._active_sockets[id(sock)] = sock
+
+    @staticmethod
+    def _close_socket(sock: socket.socket, *, interrupt: bool) -> None:
+        if interrupt:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except (OSError, ValueError):
+                pass
+        try:
+            sock.close()
+        except (OSError, ValueError):
+            pass
+
+    def _release_socket(self, sock: socket.socket) -> None:
+        with self._network_lock:
+            if self._active_sockets.get(id(sock)) is sock:
+                self._active_sockets.pop(id(sock), None)
+        self._close_socket(sock, interrupt=False)
+
+    def cancel_pending_requests(self, *, terminal: bool = False) -> None:
+        """Revoke this client generation and interrupt all active network I/O."""
+
+        self._status_probe_stop.set()
+        with self._network_lock:
+            if terminal:
+                self._terminal_shutdown = True
+            first_cancel = not self._shutdown_event.is_set()
+            self._shutdown_event.set()
+            if first_cancel:
+                self._network_generation += 1
+                self._mjpeg_generation += 1
+            sockets = tuple(self._active_sockets.values())
+            self._active_sockets.clear()
+        for sock in sockets:
+            self._close_socket(sock, interrupt=True)
+
+    def _resolve_addresses(
+        self,
+        *,
+        generation: int,
+        timeout_seconds: float,
+    ) -> tuple[tuple[Any, ...], ...]:
+        """Resolve on a daemon so shutdown can release the requesting worker."""
+
+        resolved: list[tuple[Any, ...]] = []
+        failures: list[BaseException] = []
+        finished = threading.Event()
+
+        def resolve() -> None:
+            try:
+                resolved.extend(
+                    socket.getaddrinfo(
+                        self._host,
+                        self._port,
+                        type=socket.SOCK_STREAM,
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover - platform resolver
+                failures.append(exc)
+            finally:
+                finished.set()
+
+        threading.Thread(
+            target=resolve,
+            name="remote-camera-resolver",
+            daemon=True,
+        ).start()
+        deadline = time.monotonic() + timeout_seconds
+        while not finished.is_set():
+            self._raise_if_request_cancelled(generation)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                raise TimeoutError("remote camera address resolution timed out")
+            finished.wait(min(_CONNECT_CANCEL_POLL_SECONDS, remaining))
+        self._raise_if_request_cancelled(generation)
+        if failures:
+            failure = failures[0]
+            if isinstance(failure, OSError):
+                raise failure
+            raise CameraError(
+                f"Could not resolve remote camera at {self._host}:{self._port}: "
+                f"{failure}"
+            ) from failure
+        if not resolved:
+            raise OSError("Remote camera address did not resolve")
+        return tuple(resolved)
+
+    def _connect_socket(
+        self,
+        *,
+        generation: int,
+        timeout_seconds: float,
+    ) -> socket.socket:
+        self._raise_if_request_cancelled(generation)
+        addresses = self._resolve_addresses(
+            generation=generation,
+            timeout_seconds=timeout_seconds,
+        )
+
+        last_error: OSError | None = None
+        for family, sock_type, protocol, _canonical_name, address in addresses:
+            self._raise_if_request_cancelled(generation)
+            sock = socket.socket(family, sock_type, protocol)
+            try:
+                # Registration happens before connect so shutdown can close a
+                # socket in every connect/send/receive race window.
+                self._register_socket(sock, generation)
+                sock.setblocking(False)
+                result = sock.connect_ex(address)
+                if result not in {0, errno.EISCONN}:
+                    if result not in _CONNECT_IN_PROGRESS_ERRORS:
+                        raise OSError(result, f"socket connect failed ({result})")
+                    deadline = time.monotonic() + timeout_seconds
+                    while True:
+                        self._raise_if_request_cancelled(generation)
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise TimeoutError("remote camera connect timed out")
+                        _readable, writable, exceptional = select.select(
+                            [],
+                            [sock],
+                            [sock],
+                            min(_CONNECT_CANCEL_POLL_SECONDS, remaining),
+                        )
+                        if not writable and not exceptional:
+                            continue
+                        error_code = sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                        if error_code:
+                            raise OSError(
+                                error_code,
+                                f"socket connect failed ({error_code})",
+                            )
+                        break
+                self._raise_if_request_cancelled(generation)
+                return sock
+            except CameraError:
+                self._release_socket(sock)
+                raise
+            except (OSError, ValueError) as exc:
+                self._release_socket(sock)
+                if self._request_was_cancelled(generation):
+                    raise CameraError(_NETWORK_CANCELLED_MESSAGE) from exc
+                last_error = exc if isinstance(exc, OSError) else OSError(str(exc))
+
+        if last_error is not None:
+            raise last_error
+        raise OSError("Could not create a remote camera socket")
+
     def _request(
         self,
         action: str,
@@ -269,6 +482,7 @@ class RemoteCameraService(CameraService):
         timeout: float = _CONNECT_TIMEOUT_SECONDS,
         connect_timeout: float | None = None,
     ) -> tuple[dict[str, Any], tuple[bytes, ...]]:
+        generation = self._begin_network_request()
         connect_timeout_seconds = (
             _CONNECT_TIMEOUT_SECONDS
             if connect_timeout is None
@@ -278,26 +492,40 @@ class RemoteCameraService(CameraService):
         request = {"action": action}
         if payload:
             request.update(payload)
+        sock: socket.socket | None = None
         try:
-            sock = socket.create_connection(
-                (self._host, self._port),
-                timeout=connect_timeout_seconds,
+            sock = self._connect_socket(
+                generation=generation,
+                timeout_seconds=connect_timeout_seconds,
             )
-            with sock:
-                sock.settimeout(max(connect_timeout_seconds, float(timeout)))
-                authenticate_camera_client(sock, token)
-                send_packet(sock, request)
-                header, blobs = receive_packet(sock)
+            sock.settimeout(max(connect_timeout_seconds, float(timeout)))
+            authenticate_camera_client(sock, token)
+            self._raise_if_request_cancelled(generation)
+            send_packet(sock, request)
+            self._raise_if_request_cancelled(generation)
+            header, blobs = receive_packet(sock)
+            self._raise_if_request_cancelled(generation)
         except CameraError as exc:
+            if self._request_was_cancelled(generation):
+                cancelled = CameraError(_NETWORK_CANCELLED_MESSAGE)
+                self._set_cached_status(self._offline_status(str(cancelled)))
+                raise cancelled from exc
             self._set_cached_status(self._offline_status(str(exc)))
             raise
         except (OSError, ValueError) as exc:
+            if self._request_was_cancelled(generation):
+                cancelled = CameraError(_NETWORK_CANCELLED_MESSAGE)
+                self._set_cached_status(self._offline_status(str(cancelled)))
+                raise cancelled from exc
             message = (
                 f"Could not communicate with remote camera at "
                 f"{self._host}:{self._port}: {exc}"
             )
             self._set_cached_status(self._offline_status(message))
             raise CameraError(message) from exc
+        finally:
+            if sock is not None:
+                self._release_socket(sock)
         if header.get("ok") is not True:
             error = header.get("error")
             detail = error if isinstance(error, str) and error else "remote camera request failed"
@@ -327,6 +555,7 @@ class RemoteCameraService(CameraService):
             )
 
     def start(self) -> None:
+        self._rearm_network_requests()
         try:
             self._verify_remote_profile()
             self._request("start")
@@ -337,13 +566,14 @@ class RemoteCameraService(CameraService):
             # failed probes back off rather than blocking Qt polling.
             self._ensure_status_probe()
 
-    def stop(self) -> None:
+    def stop(self, *, deadline: float | None = None) -> None:
         """Release this desktop client's camera state without stopping the Pi camera."""
-        self._stop_status_probe()
+        self.cancel_pending_requests()
+        self._stop_status_probe(deadline=deadline)
         self._set_cached_status(self._offline_status())
-        self._mjpeg_generation += 1
 
     def restart(self) -> None:
+        self._rearm_network_requests()
         try:
             self._request("restart")
             self._fetch_status(connect_timeout=1.0)
@@ -494,11 +724,15 @@ class RemoteCameraService(CameraService):
             raise CameraError("MJPEG target FPS must be a positive finite number")
         generation = self._mjpeg_generation
         delay = 1.0 / max(1.0, fps)
-        while generation == self._mjpeg_generation:
+        while (
+            generation == self._mjpeg_generation
+            and not self._shutdown_event.is_set()
+        ):
             try:
                 jpeg = self.jpeg(quality=min(self.settings.jpeg_quality, 85))
             except CameraError:
-                time.sleep(0.2)
+                if self._shutdown_event.wait(0.2):
+                    return
                 continue
             yield (
                 b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: "
@@ -507,7 +741,8 @@ class RemoteCameraService(CameraService):
                 + jpeg
                 + b"\r\n"
             )
-            time.sleep(delay)
+            if self._shutdown_event.wait(delay):
+                return
 
     def monitor_jpeg_frames(
         self,
@@ -529,44 +764,65 @@ class RemoteCameraService(CameraService):
         stopping = stop_event or threading.Event()
         token = camera_token_from_environment()
         established = False
-        while not stopping.is_set():
+        generation = self._begin_network_request()
+        while not stopping.is_set() and not self._request_was_cancelled(generation):
+            sock: socket.socket | None = None
             try:
-                sock = socket.create_connection((self._host, self._port), timeout=_CONNECT_TIMEOUT_SECONDS)
-                with sock:
-                    sock.settimeout(2.0)
-                    authenticate_camera_client(sock, token)
-                    send_packet(
-                        sock,
-                        {
-                            "action": "monitor_stream",
-                            "fps": fps,
-                            "width": width,
-                            "height": height,
-                            "quality": quality,
-                        },
-                    )
+                sock = self._connect_socket(
+                    generation=generation,
+                    timeout_seconds=_CONNECT_TIMEOUT_SECONDS,
+                )
+                sock.settimeout(2.0)
+                authenticate_camera_client(sock, token)
+                self._raise_if_request_cancelled(generation)
+                send_packet(
+                    sock,
+                    {
+                        "action": "monitor_stream",
+                        "fps": fps,
+                        "width": width,
+                        "height": height,
+                        "quality": quality,
+                    },
+                )
+                self._raise_if_request_cancelled(generation)
+                header, blobs = receive_packet(sock)
+                self._raise_if_request_cancelled(generation)
+                if header.get("ok") is not True or blobs:
+                    raise CameraError(str(header.get("error") or "Monitor start failed"))
+                established = True
+                while (
+                    not stopping.is_set()
+                    and not self._request_was_cancelled(generation)
+                ):
                     header, blobs = receive_packet(sock)
-                    if header.get("ok") is not True or blobs:
-                        raise CameraError(str(header.get("error") or "Monitor start failed"))
-                    established = True
-                    while not stopping.is_set():
-                        header, blobs = receive_packet(sock)
-                        received_monotonic = time.monotonic()
-                        if header.get("ok") is not True:
-                            raise CameraError(str(header.get("error") or "Monitor stream failed"))
-                        yield _validated_monitor_payload(
-                            header,
-                            blobs,
-                            requested_width=width,
-                            requested_height=height,
-                            requested_fps=fps,
-                            received_monotonic=received_monotonic,
-                        )
-            except CameraError:
+                    self._raise_if_request_cancelled(generation)
+                    received_monotonic = time.monotonic()
+                    if header.get("ok") is not True:
+                        raise CameraError(str(header.get("error") or "Monitor stream failed"))
+                    yield _validated_monitor_payload(
+                        header,
+                        blobs,
+                        requested_width=width,
+                        requested_height=height,
+                        requested_fps=fps,
+                        received_monotonic=received_monotonic,
+                    )
+            except (CameraError, OSError, ValueError) as exc:
+                if self._request_was_cancelled(generation):
+                    return
                 if not established:
-                    raise
+                    if isinstance(exc, CameraError):
+                        raise
+                    raise CameraError(
+                        f"Could not communicate with remote camera at "
+                        f"{self._host}:{self._port}: {exc}"
+                    ) from exc
                 if stopping.wait(0.25):
                     return
+            finally:
+                if sock is not None:
+                    self._release_socket(sock)
 
     def monitor_frames(
         self,

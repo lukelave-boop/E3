@@ -9,6 +9,7 @@ import pytest
 from laser_aligner.project import SceneObject
 from laser_aligner.templates import TemplateFeature
 from laser_aligner.vision.template_alignment import (
+    TemplateAlignmentCancelled,
     _as_features,
     _orientation_quality,
     _shape_quality,
@@ -391,3 +392,30 @@ def test_ranker_surfaces_indistinguishable_templates_as_ambiguous():
     assert ranked[0].ambiguous
     assert ranked[1].ambiguous
     assert any("ambiguous" in warning.lower() for warning in ranked[0].warnings)
+
+
+def test_template_ranking_polls_cooperative_cancellation_inside_alignment() -> None:
+    template = _Template("cancel-3x2", "Cancelable", _grid())
+    detections = _detections(
+        template.features,
+        rotation_deg=3.0,
+        translation=(18.0, 27.0),
+    )
+    checks = 0
+
+    def cancel_after_work_starts() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 8
+
+    with pytest.raises(TemplateAlignmentCancelled, match="cancelled"):
+        rank_templates(
+            [template],
+            detections,
+            cancel_check=cancel_after_work_starts,
+        )
+
+    assert checks >= 8
+    assert rank_templates([template], detections, cancel_check=lambda: False) == (
+        rank_templates([template], detections)
+    )

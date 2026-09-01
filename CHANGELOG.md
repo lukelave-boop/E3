@@ -6,6 +6,22 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Replaced unbounded desktop Close with a single four-second monotonic shutdown
+  deadline. Remote camera shutdown now makes blocked address resolution
+  cancellable and tracks and closes active sockets so blocked fresh-frame,
+  precision-burst, and control/snapshot work wakes without shortening ordinary
+  operation timeouts. Desktop tasks remain strongly owned
+  and labeled, drain for at most one second, suppress all late UI publication,
+  and cooperatively cancel Trace/native fitting, raster conversion, and toolpath
+  planning. Freshly observed idle Pi shutdown gets one best-effort
+  `machine.disconnect` attempt within a shared 0.75-second end-to-end shutdown
+  allowance, while stale/empty state detaches without an RPC; accepted or
+  ownership-uncertain Pi jobs detach immediately without STOP, `M5`, reset,
+  hold, Air Assist OFF, or controller Disconnect. A process watchdog guarantees
+  termination before the hard deadline if a non-cooperative Qt-pool worker
+  survives normal teardown. Ordinary machine/camera timeouts and the corrected
+  interactive Disconnect generation behavior are unchanged.
+
 - Added Pi-owned secondary-controller Air Assist execution using the existing
   persisted and undoable `OperationLayer.air_assist` field. The typed machine
   mapping now includes `secondary_marlin_fan` alongside disabled and the existing

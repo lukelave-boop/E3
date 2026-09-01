@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -113,6 +114,7 @@ def main(argv: list[str] | None = None) -> int:
     from ..core import CoreRuntime
     from ..deployment import read_bridge_token, resolve_launch_profile, user_config_path
     from ..first_run import inspect_simulator_recovery
+    from .controller import DESKTOP_SHUTDOWN_TIMEOUT_SECONDS
     from .dialogs import install_modal_dialog_first_paint_fix
     from .first_run import (
         install_first_run_menu,
@@ -120,6 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         run_simulator_recovery,
     )
     from .main_window import E3MainWindow
+    from .shutdown import arm_process_exit_watchdog
     from .theme import apply_dark_theme
     from .update_ui import install_update_menu
 
@@ -179,8 +182,26 @@ def main(argv: list[str] | None = None) -> int:
     runtime, open_first_run_machine_setup = prepared
 
     window = E3MainWindow(runtime)
+    watchdog_armed = False
+
+    def arm_watchdog_once(deadline: float) -> None:
+        nonlocal watchdog_armed
+        if watchdog_armed:
+            return
+        watchdog_armed = True
+        arm_process_exit_watchdog(deadline)
+
+    def prepare_direct_application_quit() -> None:
+        if watchdog_armed:
+            return
+        deadline = time.monotonic() + DESKTOP_SHUTDOWN_TIMEOUT_SECONDS
+        arm_watchdog_once(deadline)
+        window.controller.begin_shutdown(deadline)
+
+    window.shutdownStarted.connect(arm_watchdog_once)
     install_update_menu(window)
     install_first_run_menu(window)
+    application.aboutToQuit.connect(prepare_direct_application_quit)
     application.aboutToQuit.connect(window.controller.stop)
     window.show()
     if open_first_run_machine_setup:

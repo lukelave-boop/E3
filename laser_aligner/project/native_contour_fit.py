@@ -12,11 +12,13 @@ from __future__ import annotations
 from .raster_vectorize import (
     PhysicalContourFitContour,
     PhysicalContourFitResult,
+    RasterVectorizationCancelledError,
     fit_physical_contours_to_native_path,
 )
 
 __all__ = [
     "PhysicalContourFitContour",
     "PhysicalContourFitResult",
+    "RasterVectorizationCancelledError",
     "fit_physical_contours_to_native_path",
 ]

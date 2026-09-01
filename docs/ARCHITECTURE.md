@@ -71,6 +71,15 @@ the Pi retains sole ownership of the real `CameraService`, `VideoCapture`, and
 V4L2 controls. Camera-client loss has no machine-execution meaning. See
 [NETWORK_MACHINE.md](NETWORK_MACHINE.md).
 
+Accepted desktop Close establishes one absolute four-second monotonic deadline.
+The controller first revokes and cooperatively cancels worker authority, closes
+all tracked remote-camera request sockets, and performs a finite task-pool drain.
+Late runnable outcomes remain memory-safe but cannot publish into Qt. Runtime
+camera and machine cleanup receives the same deadline rather than independent
+budgets. Idle remote machine cleanup uses one short best-effort Disconnect;
+accepted or ownership-uncertain Pi jobs are local detach only. A process-exit
+watchdog is the final bound for non-cooperative native or Qt-pool work.
+
 ## Module ownership
 
 | Module | Responsibility |
@@ -686,6 +695,9 @@ GUI captures detached configuration/coordinate facts
 Project revision, STOP, replacement, application close, feed-ceiling changes,
 and coordinate/calibration/support authority changes invalidate the detached
 request under the same token and stale-result checks used by exact generation.
+CPU-heavy Trace, native fitting, raster conversion, and planning loops poll that
+cancellation authority; a result canceled before START cannot later acquire
+execution authority.
 No worker creates or mutates Qt objects. Blocking review is modeless so it does
 not hold preparation ownership or hide software STOP; the exact generated-job
 Preview remains the window-modal execution review gate.

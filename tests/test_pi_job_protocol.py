@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import socket
 import threading
+import time
 import uuid
 
 import pytest
@@ -17,6 +18,7 @@ from laser_aligner.machine.pi_job_protocol import (
     authenticate_server,
     decode_upload_chunk,
     encode_upload_chunk,
+    request_response,
     validate_guarded_output_polygon,
     validate_job_id,
     validate_job_name,
@@ -90,6 +92,78 @@ def test_mutual_authentication_and_counted_frames_round_trip() -> None:
             {"action": "job.active", "sequence": 2},
         ],
     }
+
+
+def test_request_response_absolute_deadline_bounds_slow_drip_authentication() -> None:
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+    port = int(listener.getsockname()[1])
+
+    def serve_slowly() -> None:
+        try:
+            client, _address = listener.accept()
+            with client:
+                payload = (
+                    f"{protocol_module.PROTOCOL_VERSION} CHALLENGE "
+                    + ("00" * 32)
+                    + "\n"
+                ).encode("ascii")
+                for byte in payload:
+                    try:
+                        client.sendall(bytes((byte,)))
+                    except OSError:
+                        return
+                    time.sleep(0.03)
+        finally:
+            listener.close()
+
+    worker = threading.Thread(target=serve_slowly, daemon=True)
+    worker.start()
+    started = time.monotonic()
+
+    with pytest.raises(PiJobProtocolError, match="read failed|deadline"):
+        request_response(
+            "127.0.0.1",
+            port,
+            TOKEN,
+            {"action": "machine.disconnect"},
+            timeout=1.0,
+            deadline=started + 0.15,
+        )
+
+    assert time.monotonic() - started < 0.4
+    worker.join(timeout=1.0)
+
+
+def test_request_response_absolute_deadline_bounds_address_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def blocked_resolution(*_args, **_kwargs):
+        entered.set()
+        release.wait(2.0)
+        return []
+
+    monkeypatch.setattr(protocol_module.socket, "getaddrinfo", blocked_resolution)
+    started = time.monotonic()
+    try:
+        with pytest.raises(PiJobProtocolError, match="resolution deadline"):
+            request_response(
+                "unreachable-pi.test",
+                9876,
+                TOKEN,
+                {"action": "machine.disconnect"},
+                timeout=1.0,
+                deadline=started + 0.08,
+            )
+        assert entered.is_set()
+        assert time.monotonic() - started < 0.3
+    finally:
+        release.set()
 
 
 def test_crlf_authentication_lines_do_not_prefix_the_first_frame(

@@ -182,6 +182,10 @@ Native desktop workflow:
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop; successful powered jobs drain queued motion, Home/park, and
   only then release the motors, with visible completion phases and failure alert
+- Bounded desktop shutdown with active remote-camera socket interruption, a
+  short idle-Pi Disconnect attempt, non-destructive detach for Pi-owned jobs,
+  cooperative CPU cancellation, late-callback suppression, and a hard
+  four-second process-exit deadline; ordinary operation timeouts are unchanged
 - Authenticated, versioned Pi-owned job upload/execution with atomic local job
   storage, independent Pi preflight, durable START ownership, reconnect/status/
   terminal-result discovery, priority STOP, bounded retention, and no fallback

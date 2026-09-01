@@ -6,11 +6,16 @@ import logging
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
 from ..core import CoreRuntime
-from ..gcode.job_plan import build_job_plan, restart_program_from_move
+from ..gcode.job_plan import (
+    JobPlanCancelled,
+    build_job_plan,
+    restart_program_from_move,
+)
 from ..geometry.polygon import normalize_convex_polygon
 from ..identity import application_identity, application_window_title
 from ..machine.controller_dialects import resolve_air_assist_commands
@@ -37,6 +42,7 @@ from ..project import (
     DuplicateObjectsCommand,
     FunctionalCommand,
     GroupObjectsCommand,
+    JobPreflightCancelled,
     JobPreflightContext,
     JobPreflightReport,
     LayerMode,
@@ -55,6 +61,7 @@ from ..project import (
     ReorderObjectsCommand,
     ReplaceObjectsCommand,
     SceneObject,
+    ToolpathGenerationCancelled,
     Transform,
     UngroupObjectsCommand,
     UpdateLayerCommand,
@@ -108,12 +115,21 @@ from ..vision.trace_orientation import (
     trace_rotation_transform,
 )
 from .context_bar import ContextPropertyBar
-from .controller import DesktopController, image_to_qimage
+from .controller import (
+    DESKTOP_SHUTDOWN_TIMEOUT_SECONDS,
+    DesktopController,
+    image_to_qimage,
+)
 from .controls import InspectorTabs, WheelGuard
 from .icons import action_icon, apply_action_icons
 from .import_review import review_import_manifest
 from .job_preflight import JobPreflightDialog
-from .job_preview import JobPreviewDialog, PreparedJobPreview, prepare_job_preview
+from .job_preview import (
+    JobPreviewDialog,
+    JobPreviewPreparationCancelled,
+    PreparedJobPreview,
+    prepare_job_preview,
+)
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
 from .panels import (
@@ -330,6 +346,8 @@ class LayerPaletteBar(QtWidgets.QWidget):
 
 
 class E3MainWindow(QtWidgets.QMainWindow):
+    shutdownStarted = QtCore.Signal(float)
+
     def __init__(
         self,
         runtime: CoreRuntime,
@@ -2704,6 +2722,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             on_failure=lambda message, request_id=request_id: (
                 self._job_worker_failed(request_id, "Project snapshot", message)
             ),
+            cancel=cancellation.set,
             label="Snapshot project for job generation",
         )
 
@@ -2736,10 +2755,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
         def operation() -> JobPreflightReport | None:
             if cancellation.is_set():
                 return None
-            report = build_job_preflight_report(
-                snapshot,
-                context["preflight_context"],
-            )
+            try:
+                report = build_job_preflight_report(
+                    snapshot,
+                    context["preflight_context"],
+                    cancel_check=cancellation.is_set,
+                )
+            except JobPreflightCancelled:
+                return None
             return None if cancellation.is_set() else report
 
         self.controller.run_background(
@@ -2750,6 +2773,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             on_failure=lambda message, request_id=request_id: (
                 self._job_preflight_failed(request_id, message)
             ),
+            cancel=cancellation.set,
             label=stage,
         )
 
@@ -2841,32 +2865,44 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 return None
             laser = context["laser"]
             start_position = context["start_position"]
-            job = generate_project_gcode(
-                snapshot,
-                laser,
-                optimize_order=bool(context["optimize_order"]),
-                start_position=start_position,
-                coordinate_frame=context["coordinate_frame"],
-                machine_work_area=context["machine_work_area"],
-                guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
-                planning_cache=context["planning_cache"],
-                air_assist_commands=context["air_assist_commands"],
-            )
-            plan = job.plan
-            if plan is None:
-                plan = build_job_plan(
-                    job.text,
-                    power_max=laser.power_max,
-                    default_feed_mm_min=laser.travel_feed_mm_min,
+            try:
+                job = generate_project_gcode(
+                    snapshot,
+                    laser,
+                    optimize_order=bool(context["optimize_order"]),
                     start_position=start_position,
-                    acceleration_mm_s2=laser.preview_acceleration_mm_s2,
-                    command_delay_ms=laser.preview_command_delay_ms,
+                    coordinate_frame=context["coordinate_frame"],
+                    machine_work_area=context["machine_work_area"],
+                    guarded_output_polygon_mm=context["guarded_output_polygon_mm"],
+                    planning_cache=context["planning_cache"],
                     air_assist_commands=context["air_assist_commands"],
+                    cancel_check=cancellation.is_set,
                 )
-                job.plan = plan
-            if cancellation.is_set():
+                plan = job.plan
+                if plan is None:
+                    plan = build_job_plan(
+                        job.text,
+                        power_max=laser.power_max,
+                        default_feed_mm_min=laser.travel_feed_mm_min,
+                        start_position=start_position,
+                        acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                        command_delay_ms=laser.preview_command_delay_ms,
+                        air_assist_commands=context["air_assist_commands"],
+                        cancel_check=cancellation.is_set,
+                    )
+                    job.plan = plan
+                if cancellation.is_set():
+                    return None
+                prepared = prepare_job_preview(
+                    plan,
+                    cancel_check=cancellation.is_set,
+                )
+            except (
+                JobPlanCancelled,
+                JobPreviewPreparationCancelled,
+                ToolpathGenerationCancelled,
+            ):
                 return None
-            prepared = prepare_job_preview(plan)
             powered = plan.powered
             if cancellation.is_set():
                 return None
@@ -2893,6 +2929,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             on_failure=lambda message, request_id=request_id: (
                 self._job_generation_failed(request_id, message)
             ),
+            cancel=cancellation.set,
             label=stage,
         )
 
@@ -3789,16 +3826,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
         def prepare() -> tuple[Any, PreparedJobPreview] | None:
             if cancellation.is_set():
                 return None
-            exact_plan = plan or build_job_plan(
-                text,
-                power_max=laser.power_max,
-                default_feed_mm_min=laser.travel_feed_mm_min,
-                start_position=start_position,
-                acceleration_mm_s2=laser.preview_acceleration_mm_s2,
-                command_delay_ms=laser.preview_command_delay_ms,
-                air_assist_commands=air_assist_commands,
-            )
-            prepared = prepare_job_preview(exact_plan)
+            try:
+                exact_plan = plan or build_job_plan(
+                    text,
+                    power_max=laser.power_max,
+                    default_feed_mm_min=laser.travel_feed_mm_min,
+                    start_position=start_position,
+                    acceleration_mm_s2=laser.preview_acceleration_mm_s2,
+                    command_delay_ms=laser.preview_command_delay_ms,
+                    air_assist_commands=air_assist_commands,
+                    cancel_check=cancellation.is_set,
+                )
+                prepared = prepare_job_preview(
+                    exact_plan,
+                    cancel_check=cancellation.is_set,
+                )
+            except (JobPlanCancelled, JobPreviewPreparationCancelled):
+                return None
             return None if cancellation.is_set() else (exact_plan, prepared)
 
         self.controller.run_background(
@@ -3809,6 +3853,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             on_failure=lambda message, request_id=request_id: (
                 self._preview_index_failed(request_id, message)
             ),
+            cancel=cancellation.set,
             label="Index exact job Preview",
         )
 
@@ -3941,12 +3986,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         def operation() -> dict[str, Any] | None:
             if cancellation.is_set():
                 return None
-            text, restarted = restart_program_from_move(
-                plan,
-                move_index,
-                power_mode=power_mode,
-                start_position=controller_start_position,
-            )
+            try:
+                text, restarted = restart_program_from_move(
+                    plan,
+                    move_index,
+                    power_mode=power_mode,
+                    start_position=controller_start_position,
+                    cancel_check=cancellation.is_set,
+                )
+            except JobPlanCancelled:
+                return None
             job = ProjectJob(
                 text=text,
                 bounds_mm=restarted.bounds_mm,
@@ -3978,8 +4027,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 ),
             )
             job.execution_signature = coordinate_frame_signature
+            if cancellation.is_set():
+                return None
             verify_project_job_assets(job)
-            prepared = prepare_job_preview(restarted)
+            try:
+                prepared = prepare_job_preview(
+                    restarted,
+                    cancel_check=cancellation.is_set,
+                )
+            except JobPreviewPreparationCancelled:
+                return None
             if cancellation.is_set():
                 return None
             return {
@@ -4009,6 +4066,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             on_failure=lambda message, request_id=request_id: (
                 self._start_here_failed(request_id, message)
             ),
+            cancel=cancellation.set,
             label="Prepare Start Here job",
         )
 
@@ -4756,6 +4814,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         request_id: int,
         payload: object,
     ) -> None:
+        if (
+            getattr(self, "_close_requested", False)
+            or getattr(self, "_closing", False)
+            or getattr(self.controller, "_shutdown_started", False)
+        ):
+            return
         if request_id != self._active_trace_request_id:
             return
         if not isinstance(payload, dict):
@@ -6481,17 +6545,37 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 self.inspector_tabs.currentIndex(),
             )
 
-    def _prepare_close_request(self) -> bool:
+    def _prepare_close_request(
+        self,
+        *,
+        before_shutdown_cleanup: Callable[[], None] | None = None,
+    ) -> bool:
         if self._close_requested:
             return True
         if not self._confirm_discard_changes():
             return False
         self._close_requested = True
+        shutdown_deadline = time.monotonic() + DESKTOP_SHUTDOWN_TIMEOUT_SECONDS
+        # Arm the production process boundary before any service or worker
+        # cleanup can block. Unit-created windows have no watchdog connection.
+        self.shutdownStarted.emit(shutdown_deadline)
+        # The updater uses this acceptance boundary to spawn its already-
+        # verified detached installer. It must happen before QSettings, dialogs,
+        # worker cancellation, or hardware-service teardown can consume the
+        # process deadline. Ordinary Close has no callback here.
+        if before_shutdown_cleanup is not None:
+            before_shutdown_cleanup()
         self._save_window_state()
         self._cancel_job_preparation("Application is closing")
         self._cancel_job_render()
         self._invalidate_generated_job(cancel_preparation=False)
-        self.controller.begin_shutdown()
+        machine_setup_dialog = getattr(self, "_machine_setup_dialog", None)
+        if machine_setup_dialog is not None:
+            try:
+                machine_setup_dialog.begin_shutdown()
+            except Exception:
+                LOGGER.exception("Could not cancel Machine Setup during shutdown")
+        self.controller.begin_shutdown(shutdown_deadline)
         return True
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
@@ -6501,14 +6585,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         if not self._prepare_close_request():
             event.ignore()
             return
-        if self.controller.has_active_tasks:
-            self.statusBar().showMessage(
-                "Closing after background preparation finishes…"
-            )
-            event.ignore()
-            return
         self._closing = True
-        self.controller.stop()
+        self.statusBar().showMessage("Closing E3…")
+        self.controller.stop(deadline=self.controller.begin_shutdown())
         event.accept()
 
     def _background_tasks_drained(self) -> None:

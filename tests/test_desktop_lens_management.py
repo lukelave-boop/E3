@@ -22,6 +22,7 @@ from laser_aligner.camera.service import CameraStatus
 from laser_aligner.core import CoreRuntime
 from laser_aligner.desktop.machine_setup import MachineSetupDialog
 from laser_aligner.desktop.qt import require_qt
+from laser_aligner.errors import CalibrationError
 
 QtCore, QtGui, QtWidgets = require_qt()
 
@@ -324,7 +325,7 @@ def test_ready_catalog_exposes_force_reindex_all_recovery(
     monkeypatch.setattr(
         runtime.context.lens,
         "reindex_all_captures",
-        lambda: called.set()
+        lambda *, cancel_check=None: called.set()
         or {
             "indexed_count": 3,
             "usable_count": 2,
@@ -443,10 +444,17 @@ def test_cold_lens_index_runs_offscreen_without_freezing_or_unsafe_close(
         detector_shapes.append(tuple(image.shape[:2]))
         return False, None
 
-    def blocked_index(*, retry_errors: bool = False) -> dict[str, Any]:
+    def blocked_index(
+        *,
+        retry_errors: bool = False,
+        cancel_check=None,
+    ) -> dict[str, Any]:
         worker_entered.set()
         assert release_worker.wait(3.0)
-        return original_index(retry_errors=retry_errors)
+        return original_index(
+            retry_errors=retry_errors,
+            cancel_check=cancel_check,
+        )
 
     monkeypatch.setattr(lens, "detect_corners", detect)
     monkeypatch.setattr(lens, "index_pending_captures", blocked_index)
@@ -491,6 +499,64 @@ def test_cold_lens_index_runs_offscreen_without_freezing_or_unsafe_close(
         release_worker.set()
         _wait_until(qt_application, lambda: not dialog.lens_index_busy)
         dialog.close()
+        runtime.stop()
+
+
+def test_app_shutdown_cancels_lens_index_and_suppresses_late_dialog_callbacks(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    lens = runtime.context.lens
+    assert cv2.imwrite(
+        str(lens.image_dir / "shutdown-camera-frame.jpg"),
+        np.zeros((1080, 1920, 3), dtype=np.uint8),
+    )
+    worker_entered = threading.Event()
+    cancellation_observed = threading.Event()
+
+    def blocked_index(
+        *,
+        retry_errors: bool = False,
+        cancel_check=None,
+    ) -> dict[str, Any]:
+        del retry_errors
+        worker_entered.set()
+        while cancel_check is None or not cancel_check():
+            time.sleep(0.005)
+        cancellation_observed.set()
+        raise CalibrationError("Lens evidence indexing was cancelled")
+
+    monkeypatch.setattr(lens, "index_pending_captures", blocked_index)
+    dialog = MachineSetupDialog(runtime)
+    task = None
+    try:
+        dialog.show()
+        _wait_until(qt_application, worker_entered.is_set)
+        task = dialog._lens_index_task
+        assert task is not None
+        prior_outcome = dialog._lens_index_outcome
+
+        started = time.monotonic()
+        dialog.begin_shutdown()
+        elapsed = time.monotonic() - started
+
+        assert elapsed < 0.2
+        assert not dialog.isVisible()
+        assert not dialog.lens_index_busy
+        assert not dialog._lens_index_start_timer.isActive()
+        assert not dialog._lens_index_poll_timer.isActive()
+        assert cancellation_observed.wait(1.0)
+        assert task.wait_until(time.monotonic() + 1.0)
+        qt_application.processEvents()
+        assert dialog._lens_index_outcome == prior_outcome
+        assert dialog._lens_index_error is None
+    finally:
+        if task is not None:
+            task.suppress_callbacks()
+            task.wait_until(time.monotonic() + 1.0)
+        dialog.begin_shutdown()
         runtime.stop()
 
 

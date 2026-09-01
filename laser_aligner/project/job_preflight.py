@@ -11,6 +11,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Callable, Mapping
+from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -51,6 +52,33 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _BOUNDS_TOLERANCE_MM = 1e-6
 _NONZERO_OUTPUT_TOLERANCE_MM = 1e-9
 _STRUCTURED_SCAN_EDGE_TEST_LIMIT = 50_000
+
+
+class JobPreflightCancelled(RuntimeError):
+    """Cooperative cancellation of structured job preflight work."""
+
+
+_PREFLIGHT_CANCEL_CHECK: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "job_preflight_cancel_check",
+    default=None,
+)
+
+
+def _set_cancel_check(
+    cancel_check: Callable[[], bool] | None,
+) -> Token[Callable[[], bool] | None]:
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable or None")
+    inherited = _PREFLIGHT_CANCEL_CHECK.get()
+    return _PREFLIGHT_CANCEL_CHECK.set(
+        inherited if cancel_check is None else cancel_check
+    )
+
+
+def _raise_if_cancelled() -> None:
+    cancel_check = _PREFLIGHT_CANCEL_CHECK.get()
+    if cancel_check is not None and cancel_check():
+        raise JobPreflightCancelled("Job preflight was cancelled")
 
 
 class PreflightSeverity(str, Enum):
@@ -381,6 +409,7 @@ def _scanline_x_intervals(
     intersections: list[float] = []
     winding_events: list[tuple[float, int]] = []
     for polygon in polygons:
+        _raise_if_cancelled()
         for start, end in zip(polygon[:-1], polygon[1:], strict=False):
             start_y = start[1]
             end_y = end[1]
@@ -470,6 +499,7 @@ def _bounded_scan_has_serialized_motion(
         return None
 
     for row in range(row_count):
+        _raise_if_cancelled()
         y = first_y + row * interval
         for start_x, end_x in _scanline_x_intervals(
             scan_polygons,
@@ -526,6 +556,7 @@ def _object_has_potential_nonzero_output(
     context: JobPreflightContext,
 ) -> bool | None:
     """Prove serialized motion, prove none, or defer to exact generation."""
+    _raise_if_cancelled()
     if not _valid_transform(item)[0]:
         # Invalid transforms are reported separately and must not suppress a
         # layer-level configuration finding.
@@ -653,10 +684,12 @@ def _object_has_potential_nonzero_output(
             return None
         polygons: list[tuple[tuple[float, float], ...]] = []
         for subpath in geometry.subpaths:
+            _raise_if_cancelled()
             if not subpath.closed:
                 continue
             points = [_transform_point(item, *subpath.start)]
             for segment in subpath.segments:
+                _raise_if_cancelled()
                 if not isinstance(segment, PathLineSegment):  # pragma: no cover
                     return None
                 points.append(_transform_point(item, *segment.to))
@@ -677,8 +710,10 @@ def _object_has_potential_nonzero_output(
 
     deferred = False
     for subpath in geometry.subpaths:
+        _raise_if_cancelled()
         current = subpath.start
         for segment in subpath.segments:
+            _raise_if_cancelled()
             if isinstance(segment, PathLineSegment):
                 if differs(current, segment.to):
                     return True
@@ -747,12 +782,13 @@ def _valid_transform(item: SceneObject) -> tuple[bool, str]:
     return True, ""
 
 
-def build_job_preflight_report(
+def _build_job_preflight_report(
     document: ProjectDocument,
     context: JobPreflightContext,
 ) -> JobPreflightReport:
     """Build a deterministic advisory report without invoking exact planning."""
 
+    _raise_if_cancelled()
     if not isinstance(document, ProjectDocument):
         raise TypeError("document must be a ProjectDocument")
     if not isinstance(context, JobPreflightContext):
@@ -782,6 +818,7 @@ def build_job_preflight_report(
 
     layers = [item for item in document.layers if isinstance(item, OperationLayer)]
     objects = [item for item in document.objects if isinstance(item, SceneObject)]
+    _raise_if_cancelled()
     if len(layers) != len(document.layers):
         add(
             "project.layer_invalid",
@@ -1010,6 +1047,7 @@ def build_job_preflight_report(
 
     layer_by_id: dict[str, OperationLayer] = {}
     for layer in layers:
+        _raise_if_cancelled()
         layer_by_id.setdefault(layer.id, layer)
         setting_rules = (
             ("speed_mm_min", 0.0, None, False),
@@ -1086,6 +1124,7 @@ def build_job_preflight_report(
     simple_bounds: list[tuple[SceneObject, Bounds]] = []
     deferred_bounds = 0
     for item in objects:
+        _raise_if_cancelled()
         layer = layer_by_id.get(item.layer_id)
         if layer is None:
             add(
@@ -1229,6 +1268,7 @@ def build_job_preflight_report(
     powered_air_assist_layers: list[OperationLayer] = []
     if power_max_valid:
         for layer in layers:
+            _raise_if_cancelled()
             power_percent = _finite_number(layer.power_percent)
             if (
                 layer.id in enabled_geometry_layer_ids
@@ -1274,6 +1314,7 @@ def build_job_preflight_report(
     elif work_feed_limit is not None:
         used_layer_ids: set[str] = set()
         for _item, layer in enabled_pairs:
+            _raise_if_cancelled()
             if layer.id in used_layer_ids:
                 continue
             used_layer_ids.add(layer.id)
@@ -1332,6 +1373,7 @@ def build_job_preflight_report(
     if simple_bounds:
         union = simple_bounds[0][1]
         for _item, bounds in simple_bounds[1:]:
+            _raise_if_cancelled()
             union = Bounds(
                 min(union.x_min, bounds.x_min),
                 min(union.y_min, bounds.y_min),
@@ -1367,6 +1409,7 @@ def build_job_preflight_report(
     aggregate_samples = 0
     aggregate_commands = 0
     for item, layer in raster_pairs:
+        _raise_if_cancelled()
         asset = item.geometry.get("asset")
         if not isinstance(asset, str) or not asset.strip():
             add(
@@ -1392,6 +1435,7 @@ def build_job_preflight_report(
                     )
                 else:
                     raster_metadata[metadata.path] = metadata
+                _raise_if_cancelled()
 
         if (
             _valid_transform(item)[0]
@@ -1549,10 +1593,27 @@ def build_job_preflight_report(
         "Exact planning checks remain authoritative",
         "Vector flattening, fill/raster construction, placement, correction, final bounds, and stream validation run only in the exact planner.",
     )
+    _raise_if_cancelled()
     return JobPreflightReport(tuple(findings))
 
 
+def build_job_preflight_report(
+    document: ProjectDocument,
+    context: JobPreflightContext,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> JobPreflightReport:
+    """Build the advisory report with optional cooperative cancellation."""
+
+    token = _set_cancel_check(cancel_check)
+    try:
+        return _build_job_preflight_report(document, context)
+    finally:
+        _PREFLIGHT_CANCEL_CHECK.reset(token)
+
+
 __all__ = [
+    "JobPreflightCancelled",
     "JobPreflightContext",
     "JobPreflightReport",
     "PreflightCounts",

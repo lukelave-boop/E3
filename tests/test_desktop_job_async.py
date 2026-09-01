@@ -1101,6 +1101,12 @@ def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     assert displayed[-1][3] == 4
 
     before = dict(fake._trace_raster_preview_images)
+    fake.controller._shutdown_started = True
+    E3MainWindow._trace_raster_preview_ready(fake, 8, payload)
+    assert fake._trace_raster_preview_images == before
+    assert len(displayed) == 1
+    fake.controller._shutdown_started = False
+
     E3MainWindow._trace_detection_failed(
         fake,
         8,
@@ -1695,7 +1701,7 @@ def _window(
     monkeypatch.setattr(
         main_window_module,
         "build_job_preflight_report",
-        lambda _document, _context: JobPreflightReport(),
+        lambda _document, _context, **_kwargs: JobPreflightReport(),
     )
     window = E3MainWindow(_runtime(tmp_path))
     errors: list[str] = []
@@ -2300,8 +2306,14 @@ def test_structured_preflight_runs_on_cloned_snapshot_and_reaches_exact_preview(
     exact_snapshots: list[ProjectDocument] = []
     job = _job()
 
-    def inspected_preflight(document, context) -> JobPreflightReport:
-        report = _real_build_job_preflight_report(document, context)
+    def inspected_preflight(
+        document, context, *, cancel_check=None
+    ) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(
+            document,
+            context,
+            cancel_check=cancel_check,
+        )
         preflight_calls.append((threading.get_ident(), document, report))
         return report
 
@@ -2379,12 +2391,18 @@ def test_job_generation_propagates_resolved_air_assist_mapping(
     generator_spot_offsets: list[tuple[float, float]] = []
     job = _job()
 
-    def inspected_preflight(document, context) -> JobPreflightReport:
+    def inspected_preflight(
+        document, context, *, cancel_check=None
+    ) -> JobPreflightReport:
         preflight_mappings.append(context.air_assist_commands)
         preflight_spot_offsets.append(
             (context.spot_offset_x_mm, context.spot_offset_y_mm)
         )
-        return _real_build_job_preflight_report(document, context)
+        return _real_build_job_preflight_report(
+            document,
+            context,
+            cancel_check=cancel_check,
+        )
 
     def exact_generation(*_args, **kwargs) -> ProjectJob:
         generator_mappings.append(kwargs["air_assist_commands"])
@@ -2446,8 +2464,14 @@ def test_air_assist_mapping_change_cancels_stale_preflight_request(
     release = threading.Event()
     exact_calls = 0
 
-    def blocked_preflight(document, context) -> JobPreflightReport:
-        report = _real_build_job_preflight_report(document, context)
+    def blocked_preflight(
+        document, context, *, cancel_check=None
+    ) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(
+            document,
+            context,
+            cancel_check=cancel_check,
+        )
         assert report.ready
         entered.set()
         assert release.wait(5.0)
@@ -2747,8 +2771,14 @@ def test_local_authority_change_discards_preflight_before_exact_generation(
     reports: list[JobPreflightReport] = []
     exact_calls = 0
 
-    def blocked_preflight(document, context) -> JobPreflightReport:
-        report = _real_build_job_preflight_report(document, context)
+    def blocked_preflight(
+        document, context, *, cancel_check=None
+    ) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(
+            document,
+            context,
+            cancel_check=cancel_check,
+        )
         reports.append(report)
         entered.set()
         assert release.wait(5.0)
@@ -2821,8 +2851,14 @@ def test_warning_preflight_does_not_override_authoritative_exact_failure(
     reports: list[JobPreflightReport] = []
     exact_calls = 0
 
-    def inspected_preflight(document, context) -> JobPreflightReport:
-        report = _real_build_job_preflight_report(document, context)
+    def inspected_preflight(
+        document, context, *, cancel_check=None
+    ) -> JobPreflightReport:
+        report = _real_build_job_preflight_report(
+            document,
+            context,
+            cancel_check=cancel_check,
+        )
         reports.append(report)
         return report
 
@@ -2877,10 +2913,16 @@ def test_software_stop_cancels_blocked_preflight_worker_before_exact_generation(
     release = threading.Event()
     exact_calls = 0
 
-    def blocked_preflight(document, context) -> JobPreflightReport:
+    def blocked_preflight(
+        document, context, *, cancel_check=None
+    ) -> JobPreflightReport:
         entered.set()
         assert release.wait(5.0)
-        return _real_build_job_preflight_report(document, context)
+        return _real_build_job_preflight_report(
+            document,
+            context,
+            cancel_check=cancel_check,
+        )
 
     def exact_generation(*_args, **_kwargs) -> ProjectJob:
         nonlocal exact_calls
@@ -3594,7 +3636,7 @@ def test_project_replacement_cancels_worker_without_late_install(
         _dispose(qt_application, window)
 
 
-def test_close_waits_for_cancelled_worker_ownership_to_drain(
+def test_close_is_bounded_while_cancelled_worker_remains_owned(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -3602,6 +3644,13 @@ def test_close_waits_for_cancelled_worker_ownership_to_drain(
     window, _errors, _notices = _window(tmp_path, monkeypatch)
     entered = threading.Event()
     release = threading.Event()
+    setup_shutdown: list[bool] = []
+
+    class OpenMachineSetup:
+        def begin_shutdown(self) -> None:
+            setup_shutdown.append(True)
+
+    window._machine_setup_dialog = OpenMachineSetup()  # type: ignore[assignment]
 
     def blocked_generation(*args, **kwargs) -> ProjectJob:
         del args, kwargs
@@ -3618,33 +3667,30 @@ def test_close_waits_for_cancelled_worker_ownership_to_drain(
         window.generate_toolpath()
         _wait_until(qt_application, entered.is_set)
 
+        started = time.monotonic()
         window.close()
         qt_application.processEvents()
+        elapsed = time.monotonic() - started
 
         assert window._close_requested
-        assert not window._closing
+        assert window._closing
         assert window.controller.has_active_tasks
-        assert window.isVisible()
+        assert not window.isVisible()
+        assert elapsed < 3.0
+        assert not window.runtime.running
+        assert window.last_job is None
+        assert setup_shutdown == [True]
+
         release.set()
         _wait_until(
             qt_application,
-            lambda: window._closing and not window.isVisible(),
+            lambda: not window.controller.has_active_tasks,
             timeout=10.0,
         )
         assert not window.controller.has_active_tasks
-        assert not window.runtime.running
-        assert window.last_job is None
     finally:
         release.set()
-        if not window._closing:
-            _wait_until(
-                qt_application,
-                lambda: not window.controller.has_active_tasks,
-                timeout=10.0,
-            )
-            window.controller.stop()
-            window._closing = True
-            window.close()
+        window._machine_setup_dialog = None
         window.deleteLater()
         qt_application.processEvents()
 

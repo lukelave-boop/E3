@@ -134,10 +134,11 @@ The global bottom widget shows preparation progress, while the shared action
 state blocks overlapping Generate, Frame, Preview, Start, and export commands
 until all exact views are complete. Closing an unfinished Preview, software
 STOP, project replacement, or a project revision invalidates the whole
-unfinished result. Application close requests cancellation and keeps task
-ownership until every worker has returned before stopping the runtime. Late
-success and failure callbacks cannot clear a newer job's busy state or install
-their result. Generation remains in memory and does not create a G-code artifact
+unfinished result. Application close requests cancellation, keeps each runnable
+strongly owned, and suppresses its callbacks. It waits at most one second for
+cooperative workers before bounded runtime teardown under the shared four-second
+process deadline; a late worker cannot publish, clear busy state, or authorize
+START. Generation remains in memory and does not create a G-code artifact
 automatically; only the explicit **Export G-code** command writes a file.
 
 ## Exactness and invalidation

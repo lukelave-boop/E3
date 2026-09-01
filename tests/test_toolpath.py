@@ -2,6 +2,7 @@ import math
 import re
 import struct
 import zlib
+from functools import partial
 from pathlib import Path
 
 import cv2
@@ -28,6 +29,7 @@ from laser_aligner.project import (
     ProjectDocument,
     RasterAssetMetadata,
     SceneObject,
+    ToolpathGenerationCancelled,
     Transform,
     decode_raster_grayscale,
     evaluate_cubic,
@@ -74,6 +76,77 @@ def make_document():
         )
     )
     return document
+
+
+def test_project_job_planning_observes_cooperative_cancellation() -> None:
+    checks = 0
+
+    def cancel_after_work_starts() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 4
+
+    with pytest.raises(ToolpathGenerationCancelled, match="cancelled"):
+        generate_project_gcode(
+            make_document(),
+            LaserSettings(power_max=1000),
+            cancel_check=cancel_after_work_starts,
+        )
+
+    assert checks >= 4
+    assert generate_project_gcode(make_document(), LaserSettings(power_max=1000)).text
+
+
+@pytest.mark.parametrize("optimizer", ("nearest", "containment"))
+def test_quadratic_vector_optimizers_poll_cooperative_cancellation(
+    optimizer: str,
+) -> None:
+    checks = 0
+
+    def cancel_inside_optimizer() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 64
+
+    if optimizer == "nearest":
+        paths = [
+            Polyline(
+                np.array([[float(index), 0.0], [float(index), 1.0]]),
+                closed=False,
+            )
+            for index in range(256)
+        ]
+        operation = partial(
+            toolpath_module._nearest_order,
+            paths,
+            np.array([0.0, 0.0]),
+        )
+    else:
+        paths = [
+            Polyline(
+                np.array(
+                    [
+                        [float(index), 0.0],
+                        [float(index) + 2.0, 0.0],
+                        [float(index) + 2.0, 2.0],
+                        [float(index), 2.0],
+                        [float(index), 0.0],
+                    ]
+                ),
+                closed=True,
+            )
+            for index in range(256)
+        ]
+        operation = partial(toolpath_module._containment_plan, paths)
+
+    token = toolpath_module._TOOLPATH_CANCEL_CHECK.set(cancel_inside_optimizer)
+    try:
+        with pytest.raises(ToolpathGenerationCancelled, match="cancelled"):
+            operation()
+    finally:
+        toolpath_module._TOOLPATH_CANCEL_CHECK.reset(token)
+
+    assert checks >= 64
 
 
 def make_image_document(

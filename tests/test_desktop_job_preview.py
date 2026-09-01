@@ -16,7 +16,11 @@ pytest.importorskip("PySide6", reason="PySide6 is required for preview tests")
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from laser_aligner.air_assist import AirAssistCommands, AirAssistMode
-from laser_aligner.desktop.job_preview import JobPreviewDialog
+from laser_aligner.desktop.job_preview import (
+    JobPreviewDialog,
+    JobPreviewPreparationCancelled,
+    prepare_job_preview,
+)
 from laser_aligner.desktop.panels import JobProgressWidget
 from laser_aligner.desktop.theme import DARK_STYLESHEET
 from laser_aligner.calibration.support import HoneycombCoordinateFrame
@@ -883,3 +887,24 @@ def test_preview_keyboard_timeline_navigation(
     dialog.close()
     dialog.deleteLater()
     qt_application.processEvents()
+
+
+def test_preview_index_polls_cooperative_cancellation() -> None:
+    checks = 0
+
+    def cancel_after_work_starts() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    with pytest.raises(JobPreviewPreparationCancelled, match="cancelled"):
+        prepare_job_preview(
+            _plan(),
+            cancel_check=cancel_after_work_starts,
+        )
+
+    assert checks >= 2
+    assert prepare_job_preview(
+        _plan(),
+        cancel_check=lambda: False,
+    ) == prepare_job_preview(_plan())

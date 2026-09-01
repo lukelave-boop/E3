@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import socket
 import threading
 import time
@@ -11,6 +12,7 @@ import cv2
 import numpy as np
 import pytest
 
+from laser_aligner.app import AppContext
 from laser_aligner.camera import bridge as camera_bridge
 from laser_aligner.camera import remote as camera_remote
 from laser_aligner.camera.bridge import CameraBridgeServer
@@ -18,6 +20,10 @@ from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.remote import (
     RemoteCameraService,
     _status_probe_delay,
+)
+from laser_aligner.camera.remote_protocol import (
+    authenticate_camera_server,
+    receive_packet,
 )
 from laser_aligner.camera.service import CameraStatus, CompressedCameraFrame, FrameBurst
 from laser_aligner.config import CameraSettings, PrecisionCaptureSettings
@@ -143,6 +149,603 @@ def free_port() -> int:
     return int(port)
 
 
+class BlockingCameraRequestServer:
+    """Authenticate camera requests, then intentionally never answer them."""
+
+    def __init__(self, token: str, *, expected_requests: int = 1) -> None:
+        self.token = token
+        self.expected_requests = expected_requests
+        self.requests: list[dict[str, object]] = []
+        self._lock = threading.Lock()
+        self._requests_ready = threading.Event()
+        self._clients_closed = threading.Event()
+        self._stop = threading.Event()
+        self._clients: list[socket.socket] = []
+        self._handlers: list[threading.Thread] = []
+        self._closed_clients = 0
+        self._listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self._listener.bind(("127.0.0.1", 0))
+        self.port = int(self._listener.getsockname()[1])
+        self._listener.listen()
+        self._listener.settimeout(0.05)
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self) -> None:
+        while not self._stop.is_set():
+            try:
+                client, _address = self._listener.accept()
+            except TimeoutError:
+                continue
+            except OSError:
+                return
+            with self._lock:
+                self._clients.append(client)
+            handler = threading.Thread(
+                target=self._handle_client,
+                args=(client,),
+                daemon=True,
+            )
+            self._handlers.append(handler)
+            handler.start()
+
+    def _handle_client(self, client: socket.socket) -> None:
+        client_closed = False
+        try:
+            if not authenticate_camera_server(client, self.token):
+                return
+            header, blobs = receive_packet(client)
+            assert blobs == ()
+            with self._lock:
+                self.requests.append(header)
+                if len(self.requests) >= self.expected_requests:
+                    self._requests_ready.set()
+            client.settimeout(0.05)
+            while not self._stop.is_set():
+                try:
+                    if not client.recv(1):
+                        client_closed = True
+                        return
+                except TimeoutError:
+                    continue
+        except (CameraError, OSError):
+            client_closed = not self._stop.is_set()
+        finally:
+            if client_closed:
+                with self._lock:
+                    self._closed_clients += 1
+                    if self._closed_clients >= self.expected_requests:
+                        self._clients_closed.set()
+            try:
+                client.close()
+            except OSError:
+                pass
+
+    def wait_for_requests(self, timeout: float = 1.0) -> bool:
+        return self._requests_ready.wait(timeout)
+
+    def wait_for_client_closes(self, timeout: float = 1.0) -> bool:
+        return self._clients_closed.wait(timeout)
+
+    def close(self) -> None:
+        self._stop.set()
+        try:
+            self._listener.close()
+        except OSError:
+            pass
+        with self._lock:
+            clients = tuple(self._clients)
+        for client in clients:
+            try:
+                client.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
+                client.close()
+            except OSError:
+                pass
+        self._thread.join(timeout=1.0)
+        for handler in self._handlers:
+            handler.join(timeout=1.0)
+
+
+def _run_remote_operation(remote: RemoteCameraService, operation: str) -> object:
+    if operation == "snapshot_after":
+        return remote.snapshot_after(0, timeout=36.0)
+    if operation == "capture_burst":
+        return remote.capture_burst(
+            PrecisionCaptureSettings(
+                settle_seconds=0.0,
+                discard_frames=0,
+                sample_frames=1,
+                timeout_seconds=36.0,
+                minimum_valid_frames=1,
+                consensus_frames=1,
+            )
+        )
+    if operation == "apply_controls_and_snapshot":
+        return remote.apply_controls_and_snapshot(
+            {"focus_absolute": 40},
+            settle_seconds=0.0,
+            timeout_seconds=36.0,
+        )
+    raise AssertionError(f"Unknown test operation: {operation}")
+
+
+@pytest.mark.parametrize(
+    "operation",
+    ("snapshot_after", "capture_burst", "apply_controls_and_snapshot"),
+)
+def test_remote_camera_stop_interrupts_blocked_operation(
+    monkeypatch: pytest.MonkeyPatch,
+    operation: str,
+) -> None:
+    token = "camera-cancel-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    server = BlockingCameraRequestServer(token)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{server.port}")
+    )
+    errors: list[Exception] = []
+
+    def run() -> None:
+        try:
+            _run_remote_operation(remote, operation)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    try:
+        assert server.wait_for_requests()
+        started = time.monotonic()
+        remote.stop(deadline=started + 1.0)
+        worker.join(timeout=1.0)
+        elapsed = time.monotonic() - started
+
+        assert not worker.is_alive()
+        assert elapsed < 1.0
+        assert len(errors) == 1
+        assert isinstance(errors[0], CameraError)
+        assert "cancelled during shutdown" in str(errors[0])
+        assert server.wait_for_client_closes()
+        assert server.requests[0]["action"] == operation
+        if operation == "snapshot_after":
+            assert server.requests[0]["timeout"] == 36.0
+        elif operation == "capture_burst":
+            profile = server.requests[0]["profile"]
+            assert isinstance(profile, dict)
+            assert profile["timeout_seconds"] == 36.0
+        else:
+            assert server.requests[0]["timeout"] == 36.0
+
+        # Shutdown is idempotent even after the worker owns no socket.
+        remote.stop(deadline=time.monotonic())
+    finally:
+        remote.cancel_pending_requests()
+        worker.join(timeout=1.0)
+        server.close()
+
+
+def test_combined_blocked_camera_and_unreachable_machine_share_exit_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "combined-shutdown-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    server = BlockingCameraRequestServer(token)
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{server.port}")
+    )
+    errors: list[Exception] = []
+
+    class UnreachableMachine:
+        def __init__(self) -> None:
+            self.deadlines: list[float] = []
+
+        def shutdown(self, *, deadline: float) -> None:
+            self.deadlines.append(deadline)
+            # Model the remote facade consuming its complete shutdown-only RPC
+            # allowance before giving up and detaching.
+            time.sleep(min(0.15, max(0.0, deadline - time.monotonic())))
+
+    def run_camera_request() -> None:
+        try:
+            remote.snapshot_after(0, timeout=36.0)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run_camera_request)
+    worker.start()
+    machine = UnreachableMachine()
+    context = AppContext.__new__(AppContext)
+    context.machine = machine
+    context.camera = remote
+    try:
+        assert server.wait_for_requests()
+        started = time.monotonic()
+        deadline = started + 4.0
+
+        context.stop(deadline=deadline)
+        worker.join(timeout=1.0)
+
+        assert time.monotonic() - started < 1.0
+        assert machine.deadlines == [deadline]
+        assert not worker.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], CameraError)
+        assert "cancelled during shutdown" in str(errors[0])
+        assert server.wait_for_client_closes()
+    finally:
+        remote.cancel_pending_requests()
+        worker.join(timeout=1.0)
+        server.close()
+
+
+def test_cancel_pending_requests_interrupts_all_concurrent_camera_sockets(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    token = "camera-concurrent-cancel-token-with-plenty-entropy"
+    monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
+    operations = (
+        "snapshot_after",
+        "capture_burst",
+        "apply_controls_and_snapshot",
+    )
+    server = BlockingCameraRequestServer(token, expected_requests=len(operations))
+    remote = RemoteCameraService(
+        CameraSettings(device=f"e3camera://127.0.0.1:{server.port}")
+    )
+    errors: list[Exception] = []
+
+    def run(operation: str) -> None:
+        try:
+            _run_remote_operation(remote, operation)
+        except Exception as exc:
+            errors.append(exc)
+
+    workers = [threading.Thread(target=run, args=(operation,)) for operation in operations]
+    for worker in workers:
+        worker.start()
+    try:
+        assert server.wait_for_requests()
+        started = time.monotonic()
+        remote.cancel_pending_requests()
+        for worker in workers:
+            worker.join(timeout=1.0)
+
+        assert time.monotonic() - started < 1.0
+        assert all(not worker.is_alive() for worker in workers)
+        assert len(errors) == len(operations)
+        assert all(
+            isinstance(exc, CameraError) and "cancelled during shutdown" in str(exc)
+            for exc in errors
+        )
+        assert server.wait_for_client_closes()
+        assert {request["action"] for request in server.requests} == set(operations)
+    finally:
+        remote.stop(deadline=time.monotonic() + 1.0)
+        for worker in workers:
+            worker.join(timeout=1.0)
+        server.close()
+
+
+def test_cancel_before_socket_creation_fails_without_opening_network(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "E3_BRIDGE_TOKEN",
+        "camera-preconnect-cancel-token-with-plenty-entropy",
+    )
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://127.0.0.1:65534")
+    )
+    remote.cancel_pending_requests()
+    monkeypatch.setattr(
+        camera_remote.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: pytest.fail("cancelled request resolved an address"),
+    )
+
+    with pytest.raises(CameraError, match="cancelled during shutdown"):
+        remote.snapshot_after(0, timeout=36.0)
+
+    remote.stop(deadline=time.monotonic())
+
+
+def test_cancel_during_address_resolution_releases_request_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "E3_BRIDGE_TOKEN",
+        "camera-resolution-cancel-token-with-plenty-entropy",
+    )
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://blocked-camera.test:65534")
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    errors: list[Exception] = []
+
+    def blocked_resolution(*_args, **_kwargs):
+        entered.set()
+        release.wait(2.0)
+        return []
+
+    def request() -> None:
+        try:
+            remote.snapshot_after(0, timeout=36.0)
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(camera_remote.socket, "getaddrinfo", blocked_resolution)
+    worker = threading.Thread(target=request)
+    worker.start()
+    assert entered.wait(1.0)
+    started = time.monotonic()
+    try:
+        remote.cancel_pending_requests(terminal=True)
+        worker.join(timeout=1.0)
+
+        assert time.monotonic() - started < 1.0
+        assert not worker.is_alive()
+        assert len(errors) == 1
+        assert isinstance(errors[0], CameraError)
+        assert "cancelled during shutdown" in str(errors[0])
+    finally:
+        release.set()
+
+
+def test_terminal_shutdown_cannot_be_rearmed_by_an_entered_restart_worker(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "E3_BRIDGE_TOKEN",
+        "camera-terminal-restart-token-with-plenty-entropy",
+    )
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://127.0.0.1:65534")
+    )
+    entered_rearm = threading.Event()
+    resume_rearm = threading.Event()
+    original_rearm = remote._rearm_network_requests
+    errors: list[Exception] = []
+
+    def delayed_rearm() -> None:
+        entered_rearm.set()
+        assert resume_rearm.wait(1.0)
+        original_rearm()
+
+    def restart() -> None:
+        try:
+            remote.restart()
+        except Exception as exc:
+            errors.append(exc)
+
+    monkeypatch.setattr(remote, "_rearm_network_requests", delayed_rearm)
+    monkeypatch.setattr(
+        camera_remote.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: pytest.fail(
+            "terminally cancelled restart opened a network request"
+        ),
+    )
+    worker = threading.Thread(target=restart)
+    worker.start()
+    assert entered_rearm.wait(1.0)
+
+    remote.cancel_pending_requests(terminal=True)
+    resume_rearm.set()
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], CameraError)
+    assert "cancelled during shutdown" in str(errors[0])
+    with pytest.raises(CameraError, match="cancelled during shutdown"):
+        remote.start()
+
+
+def test_cancel_immediately_after_socket_creation_closes_unregistered_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "E3_BRIDGE_TOKEN",
+        "camera-registration-race-token-with-plenty-entropy",
+    )
+    entered_registration = threading.Event()
+    finish_registration = threading.Event()
+
+    class CreatedSocket:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.closed = 0
+
+        def shutdown(self, _how: int) -> None:
+            return
+
+        def close(self) -> None:
+            self.closed += 1
+            if self.closed > 1:
+                raise OSError("socket was already closed")
+
+    created = CreatedSocket()
+    monkeypatch.setattr(
+        camera_remote.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 1))],
+    )
+    monkeypatch.setattr(camera_remote.socket, "socket", lambda *_args: created)
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://127.0.0.1:65534")
+    )
+    original_register = remote._register_socket
+
+    def register_after_cancel(sock: socket.socket, generation: int) -> None:
+        entered_registration.set()
+        assert finish_registration.wait(1.0)
+        original_register(sock, generation)
+
+    monkeypatch.setattr(remote, "_register_socket", register_after_cancel)
+    errors: list[Exception] = []
+
+    def run() -> None:
+        try:
+            remote.snapshot()
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert entered_registration.wait(1.0)
+    remote.cancel_pending_requests()
+    finish_registration.set()
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], CameraError)
+    assert "cancelled during shutdown" in str(errors[0])
+    assert created.closed >= 1
+
+
+def test_cancel_during_connect_interrupts_socket_and_hides_double_close_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "E3_BRIDGE_TOKEN",
+        "camera-connect-race-token-with-plenty-entropy",
+    )
+    connect_started = threading.Event()
+    socket_closed = threading.Event()
+
+    class ConnectingSocket:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.close_calls = 0
+
+        def setblocking(self, _enabled: bool) -> None:
+            return
+
+        def connect_ex(self, _address: object) -> int:
+            connect_started.set()
+            return errno.EWOULDBLOCK
+
+        def shutdown(self, _how: int) -> None:
+            socket_closed.set()
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls > 1:
+                raise OSError("socket was already closed")
+
+    connecting = ConnectingSocket()
+    monkeypatch.setattr(
+        camera_remote.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 1))],
+    )
+    monkeypatch.setattr(camera_remote.socket, "socket", lambda *_args: connecting)
+
+    def blocked_select(*_args, **_kwargs):
+        assert socket_closed.wait(1.0)
+        raise ValueError("closed socket")
+
+    monkeypatch.setattr(camera_remote.select, "select", blocked_select)
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://127.0.0.1:65534")
+    )
+    errors: list[Exception] = []
+
+    def run() -> None:
+        try:
+            remote.snapshot()
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert connect_started.wait(1.0)
+    remote.cancel_pending_requests()
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], CameraError)
+    assert "cancelled during shutdown" in str(errors[0])
+    assert connecting.close_calls >= 1
+
+
+def test_cancel_during_send_interrupts_socket(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "E3_BRIDGE_TOKEN",
+        "camera-send-race-token-with-plenty-entropy",
+    )
+    send_started = threading.Event()
+    socket_closed = threading.Event()
+
+    class SendingSocket:
+        def __init__(self, *_args, **_kwargs) -> None:
+            self.close_calls = 0
+
+        def setblocking(self, _enabled: bool) -> None:
+            return
+
+        def connect_ex(self, _address: object) -> int:
+            return 0
+
+        def settimeout(self, _timeout: float) -> None:
+            return
+
+        def sendall(self, _payload: bytes) -> None:
+            send_started.set()
+            assert socket_closed.wait(1.0)
+            raise OSError("socket closed during send")
+
+        def shutdown(self, _how: int) -> None:
+            socket_closed.set()
+
+        def close(self) -> None:
+            self.close_calls += 1
+            if self.close_calls > 1:
+                raise OSError("socket was already closed")
+
+    sending = SendingSocket()
+    monkeypatch.setattr(
+        camera_remote.socket,
+        "getaddrinfo",
+        lambda *_args, **_kwargs: [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 1))],
+    )
+    monkeypatch.setattr(camera_remote.socket, "socket", lambda *_args: sending)
+    monkeypatch.setattr(
+        camera_remote,
+        "authenticate_camera_client",
+        lambda *_args, **_kwargs: None,
+    )
+    remote = RemoteCameraService(
+        CameraSettings(device="e3camera://127.0.0.1:65534")
+    )
+    errors: list[Exception] = []
+
+    def run() -> None:
+        try:
+            remote.snapshot()
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=run)
+    worker.start()
+    assert send_started.wait(1.0)
+    remote.cancel_pending_requests()
+    worker.join(timeout=1.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert isinstance(errors[0], CameraError)
+    assert "cancelled during shutdown" in str(errors[0])
+    assert sending.close_calls >= 1
+
+
 def test_remote_camera_round_trip(monkeypatch) -> None:
     token = "camera-bridge-token-with-plenty-entropy"
     monkeypatch.setenv("E3_BRIDGE_TOKEN", token)
@@ -179,6 +782,12 @@ def test_remote_camera_round_trip(monkeypatch) -> None:
         remote.ensure_burst_current(burst)
         result = remote.apply_controls({"focus_absolute": 40})
         assert result.verified["focus_absolute"] == 40
+        remote.stop(deadline=time.monotonic() + 1.0)
+        with pytest.raises(CameraError, match="cancelled during shutdown"):
+            remote.snapshot()
+        assert camera.started is True
+        remote.start()
+        assert remote.snapshot().shape == (48, 64, 3)
     finally:
         remote.stop()
         # Desktop teardown releases only the client; the Pi owns the physical camera.

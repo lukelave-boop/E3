@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Any
 
@@ -13,6 +14,33 @@ from ..air_assist import (
 )
 from ..errors import SafetyError
 from .preview import parse_spot_offset_comment, scan_word_state, strip_comment
+
+
+class JobPlanCancelled(RuntimeError):
+    """Cooperative cancellation of exact G-code plan indexing."""
+
+
+_JOB_PLAN_CANCEL_CHECK: ContextVar[Callable[[], bool] | None] = ContextVar(
+    "job_plan_cancel_check",
+    default=None,
+)
+
+
+def _set_cancel_check(
+    cancel_check: Callable[[], bool] | None,
+) -> Token[Callable[[], bool] | None]:
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable or None")
+    inherited = _JOB_PLAN_CANCEL_CHECK.get()
+    return _JOB_PLAN_CANCEL_CHECK.set(
+        inherited if cancel_check is None else cancel_check
+    )
+
+
+def _raise_if_cancelled() -> None:
+    cancel_check = _JOB_PLAN_CANCEL_CHECK.get()
+    if cancel_check is not None and cancel_check():
+        raise JobPlanCancelled("Job plan indexing was cancelled")
 
 
 @dataclass(slots=True, frozen=True)
@@ -106,7 +134,7 @@ def _metadata(raw_line: str) -> tuple[str, dict[str, Any]] | None:
     return prefix[4:].lower(), parsed
 
 
-def build_job_plan(
+def _build_job_plan(
     text: str,
     *,
     power_max: int,
@@ -118,6 +146,7 @@ def build_job_plan(
 ) -> JobPlan:
     """Build an immutable preview model from the exact streamable program."""
 
+    _raise_if_cancelled()
     if air_assist_commands is not None and not isinstance(
         air_assist_commands,
         AirAssistCommands,
@@ -140,6 +169,7 @@ def build_job_plan(
     air_assist_events: list[PlannedAirAssistEvent] = []
     warnings: list[str] = []
     for line_number, raw_line in enumerate(text.splitlines(), 1):
+        _raise_if_cancelled()
         metadata = _metadata(raw_line)
         if metadata is not None:
             kind, payload = metadata
@@ -295,11 +325,10 @@ def build_job_plan(
         elapsed += duration
         x, y = new_x, new_y
 
-    points = [
-        coordinate
-        for move in moves
-        for coordinate in ((move.start_x, move.start_y), (move.end_x, move.end_y))
-    ]
+    points: list[tuple[float, float]] = []
+    for move in moves:
+        _raise_if_cancelled()
+        points.extend(((move.start_x, move.start_y), (move.end_x, move.end_y)))
     if points:
         xs = [point[0] for point in points]
         ys = [point[1] for point in points]
@@ -307,8 +336,12 @@ def build_job_plan(
     else:
         bounds = (0.0, 0.0, 0.0, 0.0)
         warnings.append("The program contains no motion")
-    cut_moves = [move for move in moves if move.laser_on]
-    travel_moves = [move for move in moves if not move.laser_on]
+    cut_moves = []
+    travel_moves = []
+    for move in moves:
+        _raise_if_cancelled()
+        (cut_moves if move.laser_on else travel_moves).append(move)
+    _raise_if_cancelled()
     return JobPlan(
         moves=tuple(moves),
         bounds_mm=bounds,
@@ -336,7 +369,35 @@ def build_job_plan(
     )
 
 
-def restart_program_from_move(
+def build_job_plan(
+    text: str,
+    *,
+    power_max: int,
+    default_feed_mm_min: float = 1000.0,
+    start_position: tuple[float, float] = (0.0, 0.0),
+    acceleration_mm_s2: float | None = None,
+    command_delay_ms: float = 0.0,
+    air_assist_commands: AirAssistCommands | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> JobPlan:
+    """Index exact G-code, optionally polling a cooperative cancellation hook."""
+
+    token = _set_cancel_check(cancel_check)
+    try:
+        return _build_job_plan(
+            text,
+            power_max=power_max,
+            default_feed_mm_min=default_feed_mm_min,
+            start_position=start_position,
+            acceleration_mm_s2=acceleration_mm_s2,
+            command_delay_ms=command_delay_ms,
+            air_assist_commands=air_assist_commands,
+        )
+    finally:
+        _JOB_PLAN_CANCEL_CHECK.reset(token)
+
+
+def _restart_program_from_move(
     plan: JobPlan,
     move_index: int,
     *,
@@ -351,13 +412,17 @@ def restart_program_from_move(
     of beginning the model at the selected boundary.
     """
 
+    _raise_if_cancelled()
     if not 0 <= int(move_index) < len(plan.moves):
         raise ValueError("Start Here move is outside the generated job")
     selected = plan.moves[int(move_index)]
     suffix = plan.moves[int(move_index) :]
-    requested_air = any(
-        move.laser_on and move.power > 0 and move.air_assist for move in suffix
-    )
+    requested_air = False
+    for move in suffix:
+        _raise_if_cancelled()
+        if move.laser_on and move.power > 0 and move.air_assist:
+            requested_air = True
+            break
     air_commands = plan.air_assist_commands
     if requested_air and air_commands is None:
         raise SafetyError(
@@ -366,6 +431,7 @@ def restart_program_from_move(
         )
     powered_air_by_layer: dict[tuple[str, str], bool] = {}
     for move in suffix:
+        _raise_if_cancelled()
         layer_key = (move.layer_id, move.layer_name)
         if move.laser_on and move.power > 0:
             if move.air_assist:
@@ -405,6 +471,7 @@ def restart_program_from_move(
     active_power = 0.0
     air_active = False
     for move in suffix:
+        _raise_if_cancelled()
         layer_key = (move.layer_id, move.layer_name)
         if layer_key != active_layer:
             if (
@@ -469,6 +536,7 @@ def restart_program_from_move(
         lines.extend(air_commands.program_lines(False))
         lines.append("M5")
     lines.extend(["; End of reviewed Start Here job", ""])
+    _raise_if_cancelled()
     text = "\n".join(lines)
     restarted = build_job_plan(
         text,
@@ -479,4 +547,27 @@ def restart_program_from_move(
         command_delay_ms=plan.command_delay_ms,
         air_assist_commands=air_commands,
     )
+    _raise_if_cancelled()
     return text, restarted
+
+
+def restart_program_from_move(
+    plan: JobPlan,
+    move_index: int,
+    *,
+    power_mode: str = "M4",
+    start_position: tuple[float, float] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[str, JobPlan]:
+    """Build a guarded Start Here program with cooperative cancellation."""
+
+    token = _set_cancel_check(cancel_check)
+    try:
+        return _restart_program_from_move(
+            plan,
+            move_index,
+            power_mode=power_mode,
+            start_position=start_position,
+        )
+    finally:
+        _JOB_PLAN_CANCEL_CHECK.reset(token)

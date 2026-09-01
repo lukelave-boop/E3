@@ -102,6 +102,10 @@ _TIMING_STAGE = ContextVar["RasterVectorizationTiming | None"](
     "raster_vectorization_timing",
     default=None,
 )
+_CANCEL_CHECK = ContextVar["Callable[[], bool] | None"](
+    "raster_vectorization_cancel_check",
+    default=None,
+)
 _TimedResult = TypeVar("_TimedResult")
 
 
@@ -142,12 +146,17 @@ def _timed_stage(
     ) -> Callable[..., _TimedResult]:
         @wraps(function)
         def measured(*args: Any, **kwargs: Any) -> _TimedResult:
+            _check_cancelled()
             timing = _TIMING_STAGE.get()
             if timing is None:
-                return function(*args, **kwargs)
+                result = function(*args, **kwargs)
+                _check_cancelled()
+                return result
             started = time.perf_counter()
             try:
-                return function(*args, **kwargs)
+                result = function(*args, **kwargs)
+                _check_cancelled()
+                return result
             finally:
                 timing.record(stage, time.perf_counter() - started)
 
@@ -162,6 +171,25 @@ class RasterVectorizationError(ValueError):
 
 class RasterVectorizationComplexityError(RasterVectorizationError):
     """Raised when raster-derived geometry exceeds a bounded workload."""
+
+
+class RasterVectorizationCancelledError(RuntimeError):
+    """Raised when a caller cancels cooperative raster/vector fitting work."""
+
+
+def _check_cancelled() -> None:
+    cancel_check = _CANCEL_CHECK.get()
+    if cancel_check is not None and cancel_check():
+        raise RasterVectorizationCancelledError("Raster vectorization was cancelled")
+
+
+def _set_cancel_check(
+    cancel_check: Callable[[], bool] | None,
+) -> object:
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable or None")
+    inherited = _CANCEL_CHECK.get()
+    return _CANCEL_CHECK.set(inherited if cancel_check is None else cancel_check)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1204,6 +1232,7 @@ class _ComplexityBudget:
     merged_segments: int = 0
 
     def add_fitted_segments(self, count: int = 1) -> None:
+        _check_cancelled()
         if self.fitted_segments + count > MAX_RASTER_VECTORIZATION_FITTED_SEGMENTS:
             _raise_complexity(
                 "Raster vectorization requires more than "
@@ -1212,6 +1241,7 @@ class _ComplexityBudget:
         self.fitted_segments += count
 
     def consume_fit_validation_step(self, count: int = 1) -> None:
+        _check_cancelled()
         if (
             self.fit_validation_steps + count
             > MAX_RASTER_VECTORIZATION_FIT_VALIDATION_STEPS
@@ -1224,6 +1254,7 @@ class _ComplexityBudget:
         self.fit_validation_steps += count
 
     def add_preview_points(self, count: int = 1) -> None:
+        _check_cancelled()
         if (
             self.preview_points + count
             > MAX_RASTER_VECTORIZATION_POINTS_AFTER_SIMPLIFICATION
@@ -1842,6 +1873,7 @@ def select_pixel_vectorization_auto_threshold(
     options: RasterVectorizationOptions,
     *,
     timing: RasterVectorizationTiming | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> PixelAutoThresholdSelection:
     """Select one credible source-resolution threshold before native fitting.
 
@@ -1858,8 +1890,10 @@ def select_pixel_vectorization_auto_threshold(
     if options.detection_mode is not RasterDetectionMode.AUTO_THRESHOLD:
         raise ValueError("Automatic threshold selection requires automatic mode")
 
+    cancel_token = _set_cancel_check(cancel_check)
     started = time.perf_counter()
     try:
+        _check_cancelled()
         grayscale = _composited_grayscale(source)
         otsu_threshold = _otsu_threshold_value(source, options, grayscale)
         origins, eligible = _auto_threshold_candidate_values(
@@ -1876,6 +1910,7 @@ def select_pixel_vectorization_auto_threshold(
         evidence_cache: dict[int, _AutoThresholdMaskEvidence] = {}
 
         def evidence(threshold: int) -> _AutoThresholdMaskEvidence:
+            _check_cancelled()
             threshold = max(0, min(255, int(threshold)))
             cached = evidence_cache.get(threshold)
             if cached is not None:
@@ -1910,6 +1945,7 @@ def select_pixel_vectorization_auto_threshold(
 
         candidates: list[PixelAutoThresholdCandidate] = []
         for threshold, candidate_origins in origins.items():
+            _check_cancelled()
             item = candidate_evidence[threshold]
             neighbor_thresholds = tuple(
                 value
@@ -2052,11 +2088,14 @@ def select_pixel_vectorization_auto_threshold(
             candidates=tuple(candidates),
         )
     finally:
-        if timing is not None:
-            timing.record(
-                "automatic_threshold_selection",
-                time.perf_counter() - started,
-            )
+        try:
+            if timing is not None:
+                timing.record(
+                    "automatic_threshold_selection",
+                    time.perf_counter() - started,
+                )
+        finally:
+            _CANCEL_CHECK.reset(cancel_token)
 
 
 @_timed_stage("component_cleanup")
@@ -2197,6 +2236,7 @@ def _boundary_transition_count(mask: np.ndarray, *, stop_after: int) -> int:
         total += int(np.count_nonzero(mask[:, -1]))
     block_rows = 256
     for start in range(0, height, block_rows):
+        _check_cancelled()
         end = min(height, start + block_rows)
         block = mask[start:end]
         if width > 1:
@@ -4093,6 +4133,7 @@ def _fit_span_pieces(
     hard_start: bool = False,
     hard_end: bool = False,
 ) -> list[_FittedPiece]:
+    _check_cancelled()
     if start_tangent is None:
         start_tangent = _endpoint_tangent(points, at_start=True)
     if end_tangent is None:
@@ -4865,6 +4906,7 @@ class _TopologyWorkBudget:
     segment_pair_checks: int = 0
 
     def consume(self, count: int = 1) -> None:
+        _check_cancelled()
         if (
             self.segment_pair_checks + count
             > _NATIVE_TOPOLOGY_MAX_SEGMENT_PAIR_CHECKS
@@ -4950,7 +4992,9 @@ def _native_self_topology_is_ambiguous(
 ) -> bool:
     for contour in contours:
         current = contour.native_subpath.start
-        for segment in contour.native_subpath.segments:
+        for index, segment in enumerate(contour.native_subpath.segments):
+            if index % 128 == 0:
+                _check_cancelled()
             if isinstance(segment, PathCubicSegment) and (
                 _cubic_self_topology_is_ambiguous(current, segment, transform)
             ):
@@ -5379,7 +5423,11 @@ def _point_inside_closed_polyline(point: np.ndarray, polygon: np.ndarray) -> boo
     """Return deterministic even/odd containment using float64 coordinates."""
 
     inside = False
-    for start, end in zip(polygon[:-1], polygon[1:], strict=True):
+    for index, (start, end) in enumerate(
+        zip(polygon[:-1], polygon[1:], strict=True)
+    ):
+        if index % 256 == 0:
+            _check_cancelled()
         if (start[1] > point[1]) == (end[1] > point[1]):
             continue
         crossing_x = start[0] + (
@@ -5530,7 +5578,7 @@ def _validate_authoritative_native_topology(
         )
 
 
-def fit_physical_contours_to_native_path(
+def _fit_physical_contours_to_native_path(
     contours_mm: tuple[np.ndarray, ...] | list[np.ndarray],
     parents: tuple[int | None, ...] | list[int | None],
     *,
@@ -5583,6 +5631,7 @@ def fit_physical_contours_to_native_path(
     for index, (raw, classification) in enumerate(
         zip(raw_contours, classification_contours, strict=True)
     ):
+        _check_cancelled()
         if raw.shape != classification.shape:
             raise ValueError(
                 f"classification contour {index} must match its fitted contour shape"
@@ -5629,6 +5678,7 @@ def fit_physical_contours_to_native_path(
     center = np.asarray(((x_min + x_max) / 2.0, (y_min + y_max) / 2.0))
     epsilon = max(_NATIVE_FRAME_EPSILON_MM, max(width_mm, height_mm) * 1e-12)
     for index, contour in enumerate(cleaned):
+        _check_cancelled()
         if (
             float(np.min(contour[:, 0])) < x_min - epsilon
             or float(np.max(contour[:, 0])) > x_max + epsilon
@@ -5650,6 +5700,7 @@ def fit_physical_contours_to_native_path(
     for index, (raw_world, classification_world) in enumerate(
         zip(cleaned, cleaned_classification, strict=True)
     ):
+        _check_cancelled()
         raw = raw_world - center
         classification = classification_world - center
         depth = depths[index]
@@ -5731,6 +5782,7 @@ def fit_physical_contours_to_native_path(
         )
 
     fitted_tuple = tuple(fitted_results)
+    _check_cancelled()
     _validate_authoritative_native_topology(fitted_tuple, width_mm, height_mm)
     geometry = NativePathGeometry(
         tuple(contour.native_subpath for contour in fitted_tuple),
@@ -5747,11 +5799,42 @@ def fit_physical_contours_to_native_path(
     )
 
 
+def fit_physical_contours_to_native_path(
+    contours_mm: tuple[np.ndarray, ...] | list[np.ndarray],
+    parents: tuple[int | None, ...] | list[int | None],
+    *,
+    source_pixel_spacing_mm: tuple[float, float],
+    fitting_tolerance_mm: float = 0.10,
+    smoothing_mm: float = 0.0,
+    classification_contours_mm: tuple[np.ndarray, ...] | list[np.ndarray] | None = None,
+    frame_bounds_mm: tuple[float, float, float, float] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+) -> PhysicalContourFitResult:
+    """Fit physical contours, optionally observing cooperative cancellation."""
+
+    cancel_token = _set_cancel_check(cancel_check)
+    try:
+        _check_cancelled()
+        return _fit_physical_contours_to_native_path(
+            contours_mm,
+            parents,
+            source_pixel_spacing_mm=source_pixel_spacing_mm,
+            fitting_tolerance_mm=fitting_tolerance_mm,
+            smoothing_mm=smoothing_mm,
+            classification_contours_mm=classification_contours_mm,
+            frame_bounds_mm=frame_bounds_mm,
+        )
+    finally:
+        _CANCEL_CHECK.reset(cancel_token)
+
+
 def _hierarchy_signature(parents: np.ndarray) -> tuple[bytes, ...]:
     count = len(parents)
     children: list[list[int]] = [[] for _index in range(count)]
     depths = [_hierarchy_depth(index, parents) for index in range(count)]
     for index, raw_parent in enumerate(parents):
+        if index % 256 == 0:
+            _check_cancelled()
         parent = int(raw_parent)
         if parent >= count:
             raise RasterVectorizationError(
@@ -5761,6 +5844,8 @@ def _hierarchy_signature(parents: np.ndarray) -> tuple[bytes, ...]:
             children[parent].append(index)
     digests = [b""] * count
     for index in sorted(range(count), key=lambda item: depths[item], reverse=True):
+        if index % 256 == 0:
+            _check_cancelled()
         digest = hashlib.sha256()
         digest.update(b"contour")
         for child_digest in sorted(digests[child] for child in children[index]):
@@ -5786,6 +5871,7 @@ def _validate_rasterized_topology(
     rendered = np.zeros((height, width), dtype=np.uint8)
     ordered = sorted(enumerate(contours), key=lambda item: (item[1].depth, item[0]))
     for _index, contour in ordered:
+        _check_cancelled()
         normalized = np.asarray(contour.preview_points, dtype=np.float64)
         pixels = np.empty_like(normalized)
         pixels[:, 0] = (normalized[:, 0] + 0.5) * width - 0.5
@@ -5927,6 +6013,7 @@ def prepare_pixel_vectorization_mask(
     displayed_width_mm: float,
     displayed_height_mm: float,
     timing: RasterVectorizationTiming | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> PixelVectorizationMaskPreview:
     """Build the exact source-neutral production mask without fitting contours."""
 
@@ -5941,7 +6028,8 @@ def prepare_pixel_vectorization_mask(
         displayed_width_mm,
         displayed_height_mm,
     )
-    token = _TIMING_STAGE.set(timing)
+    cancel_token = _set_cancel_check(cancel_check)
+    timing_token = _TIMING_STAGE.set(timing)
     try:
         return _prepare_pixel_vectorization_mask(
             source,
@@ -5950,7 +6038,8 @@ def prepare_pixel_vectorization_mask(
             height_mm,
         )
     finally:
-        _TIMING_STAGE.reset(token)
+        _TIMING_STAGE.reset(timing_token)
+        _CANCEL_CHECK.reset(cancel_token)
 
 
 def _validated_prepared_mask(
@@ -5979,7 +6068,9 @@ def _emit_mask_ready(
     preview: PixelVectorizationMaskPreview,
 ) -> None:
     if callback is not None:
+        _check_cancelled()
         callback(preview)
+        _check_cancelled()
 
 
 @_timed_stage("contour_extraction")
@@ -6068,6 +6159,7 @@ def _quick_preview_prepared_raster(
     raw_point_count = 0
     preview_point_count = 0
     for original_index in selected_indices:
+        _check_cancelled()
         raw = raw_contours[original_index]
         raw_point_count += len(raw)
         approximated = cv2.approxPolyDP(raw, approximation_px, True)
@@ -6139,6 +6231,7 @@ def quick_preview_prepared_raster(
     displayed_width_mm: float,
     displayed_height_mm: float,
     timing: RasterVectorizationTiming | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> RasterVectorizationQuickPreview:
     """Build bounded display-only mask/outline geometry without fitting."""
 
@@ -6153,7 +6246,8 @@ def quick_preview_prepared_raster(
         displayed_width_mm,
         displayed_height_mm,
     )
-    token = _TIMING_STAGE.set(timing)
+    cancel_token = _set_cancel_check(cancel_check)
+    timing_token = _TIMING_STAGE.set(timing)
     try:
         return _quick_preview_prepared_raster(
             source,
@@ -6162,7 +6256,8 @@ def quick_preview_prepared_raster(
             height_mm,
         )
     finally:
-        _TIMING_STAGE.reset(token)
+        _TIMING_STAGE.reset(timing_token)
+        _CANCEL_CHECK.reset(cancel_token)
 
 
 def _reusable_prepared_trace(
@@ -6291,6 +6386,7 @@ def _vectorize_pixel_source(
     budget = _ComplexityBudget()
     results: list[RasterVectorizedContour] = []
     for original_index in selected_indices:
+        _check_cancelled()
         depth = depths[original_index]
         is_hole = bool(depth % 2)
         physical = _physical_contour(
@@ -6451,6 +6547,7 @@ def _forest_root_selections(
         current = index
         visited = 0
         while int(parents[current]) >= 0:
+            _check_cancelled()
             current = int(parents[current])
             visited += 1
             if current < 0 or current >= len(parents) or visited > len(parents):
@@ -6546,6 +6643,7 @@ def _filter_forest_roots_before_fitting(
     failures: list[PixelVectorizationRootFailure] = []
 
     for root in roots:
+        _check_cancelled()
         physical_by_index = {
             index: _physical_contour(
                 raw_contours[index],
@@ -6827,6 +6925,7 @@ def _isolate_invalid_forest_roots(
     except RasterVectorizationError as global_failure:
         rejected: list[_RasterRootSelection] = []
         for root in roots:
+            _check_cancelled()
             try:
                 validator(assembled((root,)))
             except RasterVectorizationComplexityError:
@@ -6963,8 +7062,10 @@ def _vectorize_pixel_source_forest(
     fitted_by_original_index: dict[int, RasterVectorizedContour] = {}
     accepted_roots: list[_RasterRootSelection] = []
     for root in roots:
+        _check_cancelled()
         try:
             for original_index in root.contour_indices:
+                _check_cancelled()
                 fitted_by_original_index[original_index] = _fit_forest_contour(
                     original_index,
                     raw_contours=raw_contours,
@@ -7096,12 +7197,14 @@ def vectorize_pixel_source(
     timing: RasterVectorizationTiming | None = None,
     prepared_mask: PixelVectorizationMaskPreview | None = None,
     mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> PixelVectorizationResult:
     """Vectorize source-neutral pixels through the authoritative raster path."""
 
     if mask_ready is not None and not callable(mask_ready):
         raise TypeError("mask_ready must be callable or None")
-    token = _TIMING_STAGE.set(timing)
+    cancel_token = _set_cancel_check(cancel_check)
+    timing_token = _TIMING_STAGE.set(timing)
     try:
         return _vectorize_pixel_source(
             source,
@@ -7113,7 +7216,8 @@ def vectorize_pixel_source(
             mask_ready=mask_ready,
         )
     finally:
-        _TIMING_STAGE.reset(token)
+        _CANCEL_CHECK.reset(cancel_token)
+        _TIMING_STAGE.reset(timing_token)
 
 
 def vectorize_pixel_source_forest(
@@ -7126,6 +7230,7 @@ def vectorize_pixel_source_forest(
     prepared_mask: PixelVectorizationMaskPreview | None = None,
     mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
     root_review_filter: PixelVectorizationRootReviewFilter | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> PixelVectorizationForestResult:
     """Vectorize root-isolated candidates through the shared raster pipeline."""
 
@@ -7138,7 +7243,8 @@ def vectorize_pixel_source_forest(
         raise TypeError(
             "root_review_filter must be a PixelVectorizationRootReviewFilter or None"
         )
-    token = _TIMING_STAGE.set(timing)
+    cancel_token = _set_cancel_check(cancel_check)
+    timing_token = _TIMING_STAGE.set(timing)
     try:
         return _vectorize_pixel_source_forest(
             source,
@@ -7150,7 +7256,8 @@ def vectorize_pixel_source_forest(
             root_review_filter=root_review_filter,
         )
     finally:
-        _TIMING_STAGE.reset(token)
+        _CANCEL_CHECK.reset(cancel_token)
+        _TIMING_STAGE.reset(timing_token)
 
 
 def vectorize_prepared_raster(
@@ -7161,6 +7268,7 @@ def vectorize_prepared_raster(
     displayed_height_mm: float,
     prepared_preview: RasterVectorizationQuickPreview | None = None,
     timing: RasterVectorizationTiming | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> RasterVectorizationResult:
     """Vectorize verified imported pixels while retaining asset provenance."""
 
@@ -7171,7 +7279,8 @@ def vectorize_prepared_raster(
         and prepared_preview.source_identity != source.identity
     ):
         prepared_preview = None
-    token = _TIMING_STAGE.set(timing)
+    cancel_token = _set_cancel_check(cancel_check)
+    timing_token = _TIMING_STAGE.set(timing)
     try:
         pixel_result = _vectorize_pixel_source(
             source,
@@ -7180,8 +7289,10 @@ def vectorize_prepared_raster(
             displayed_height_mm=displayed_height_mm,
             prepared_preview=prepared_preview,
         )
+        _check_cancelled()
     finally:
-        _TIMING_STAGE.reset(token)
+        _CANCEL_CHECK.reset(cancel_token)
+        _TIMING_STAGE.reset(timing_token)
     return RasterVectorizationResult(
         source_key=pixel_result.source_key,
         source_rgba=pixel_result.source_rgba,
@@ -7210,17 +7321,25 @@ def vectorize_raster_payload(
     displayed_width_mm: float,
     displayed_height_mm: float,
     timing: RasterVectorizationTiming | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> RasterVectorizationResult:
     """Verify, decode, and vectorize an exact bounded raster payload."""
 
-    source = prepare_raster_vectorization_source(payload, timing=timing)
-    return vectorize_prepared_raster(
-        source,
-        options,
-        displayed_width_mm=displayed_width_mm,
-        displayed_height_mm=displayed_height_mm,
-        timing=timing,
-    )
+    cancel_token = _set_cancel_check(cancel_check)
+    try:
+        _check_cancelled()
+        source = prepare_raster_vectorization_source(payload, timing=timing)
+        _check_cancelled()
+        return vectorize_prepared_raster(
+            source,
+            options,
+            displayed_width_mm=displayed_width_mm,
+            displayed_height_mm=displayed_height_mm,
+            timing=timing,
+            cancel_check=cancel_check,
+        )
+    finally:
+        _CANCEL_CHECK.reset(cancel_token)
 
 
 __all__ = [
@@ -7244,6 +7363,7 @@ __all__ = [
     "RASTER_VECTORIZATION_OVERSAMPLE_FACTOR",
     "RasterContourOutput",
     "RasterDetectionMode",
+    "RasterVectorizationCancelledError",
     "RasterVectorizationComplexityError",
     "RasterVectorizationError",
     "RasterVectorizationOptions",

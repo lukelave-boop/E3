@@ -9,6 +9,7 @@ import os
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -68,6 +69,11 @@ _QUALITY_NUMERIC_FIELDS = {
     "highlight_clip_percent",
 }
 _READY_QUALITY_FIELDS = _QUALITY_NUMERIC_FIELDS | set(_QUALITY_STRING_FIELDS)
+
+
+def _check_index_cancelled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise CalibrationError("Lens evidence indexing was cancelled")
 
 
 def _canonical_model_id(
@@ -531,17 +537,21 @@ class LensCalibrator:
 
     def _load_evidence_payloads(
         self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> tuple[
         dict[str, EncodedImagePayload],
         tuple[tuple[str, int, int, int, int, int, str], ...],
     ]:
         """Read one immutable, bounded byte payload per selected evidence file."""
 
+        _check_index_cancelled(cancel_check)
         paths = self._image_paths()
         payloads: dict[str, EncodedImagePayload] = {}
         signature: list[tuple[str, int, int, int, int, int, str]] = []
         total_bytes = 0
         for path in paths:
+            _check_index_cancelled(cancel_check)
             try:
                 payload = read_encoded_image_payload(
                     path,
@@ -574,6 +584,8 @@ class LensCalibrator:
                     payload.content_sha256,
                 )
             )
+            _check_index_cancelled(cancel_check)
+        _check_index_cancelled(cancel_check)
         if [path.name for path in self._image_paths()] != list(payloads):
             raise CalibrationError(
                 "Checkerboard evidence changed while its encoded bytes were being read"
@@ -643,7 +655,13 @@ class LensCalibrator:
             raise CalibrationError(f"Lens evidence has no file identity: {payload.source}")
         return identity.size, identity.mtime_ns
 
-    def _analyze_bounded_payload(self, payload: EncodedImagePayload) -> dict[str, Any]:
+    def _analyze_bounded_payload(
+        self,
+        payload: EncodedImagePayload,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        _check_index_cancelled(cancel_check)
         try:
             decoded = decode_image_payload(
                 payload,
@@ -656,7 +674,9 @@ class LensCalibrator:
             raise CalibrationError(
                 f"Lens evidence digest changed during decode: {payload.source.name}"
             )
+        _check_index_cancelled(cancel_check)
         found, corners = self.detect_corners(decoded.image)
+        _check_index_cancelled(cancel_check)
         found = bool(
             found
             and corners is not None
@@ -664,6 +684,7 @@ class LensCalibrator:
         )
         corners = corners if found else None
         metrics = self._capture_metrics(decoded.image, corners)
+        _check_index_cancelled(cancel_check)
         try:
             assert_image_payload_current(payload)
         except ImageEvidenceChangedError as exc:
@@ -1056,7 +1077,10 @@ class LensCalibrator:
         self,
         item: dict[str, Any],
         payload: EncodedImagePayload,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
+        _check_index_cancelled(cancel_check)
         expected_signature = (int(item["size"]), int(item["mtime_ns"]))
         expected_digest = str(item["content_sha256"])
         if (
@@ -1070,7 +1094,10 @@ class LensCalibrator:
         try:
             return self._ready_index_entry(
                 payload,
-                self._analyze_bounded_payload(payload),
+                self._analyze_bounded_payload(
+                    payload,
+                    cancel_check=cancel_check,
+                ),
             )
         except CalibrationError:
             raise
@@ -1102,9 +1129,13 @@ class LensCalibrator:
         *,
         retry_errors: bool = False,
         force_all: bool = False,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         """Build the bounded evidence catalog without holding the state lock."""
 
+        if cancel_check is not None and not callable(cancel_check):
+            raise TypeError("cancel_check must be callable or None")
+        _check_index_cancelled(cancel_check)
         operation_started = False
         try:
             with self._state_lock:
@@ -1114,7 +1145,10 @@ class LensCalibrator:
                 evidence_revision = self._evidence_revision
                 evidence_signature = self._evidence_signature_locked()
 
-            payloads, content_signature = self._load_evidence_payloads()
+            _check_index_cancelled(cancel_check)
+            payloads, content_signature = self._load_evidence_payloads(
+                cancel_check=cancel_check
+            )
             if tuple(item[:3] for item in content_signature) != evidence_signature:
                 raise CalibrationError(
                     "Checkerboard evidence changed before its bounded index began; "
@@ -1122,6 +1156,7 @@ class LensCalibrator:
                 )
             content_by_name = {item[0]: item[-1] for item in content_signature}
             for item in catalog:
+                _check_index_cancelled(cancel_check)
                 current_digest = content_by_name.get(str(item["name"]))
                 if current_digest is None:
                     raise CalibrationError(
@@ -1159,25 +1194,37 @@ class LensCalibrator:
                 for item in catalog
             }
             for item in pending:
+                _check_index_cancelled(cancel_check)
                 name = str(item["name"])
                 with self._state_lock:
                     self._index_current = name
-                entry = self._bounded_index_entry(item, payloads[name])
+                entry = self._bounded_index_entry(
+                    item,
+                    payloads[name],
+                    cancel_check=cancel_check,
+                )
                 indexed[name] = entry
+                _check_index_cancelled(cancel_check)
                 with self._state_lock:
                     self._index_completed += 1
                     if entry["index_state"] == "error":
                         self._index_failed += 1
 
             for payload in payloads.values():
+                _check_index_cancelled(cancel_check)
                 try:
                     assert_image_payload_current(payload)
                 except ImageEvidenceChangedError as exc:
                     raise CalibrationError(str(exc)) from exc
             del payloads
-            _final_payloads, final_content_signature = self._load_evidence_payloads()
+            _check_index_cancelled(cancel_check)
+            _final_payloads, final_content_signature = self._load_evidence_payloads(
+                cancel_check=cancel_check
+            )
             del _final_payloads
+            _check_index_cancelled(cancel_check)
             with self._state_lock:
+                _check_index_cancelled(cancel_check)
                 if (
                     self._evidence_revision != evidence_revision
                     or final_content_signature != content_signature
@@ -1187,6 +1234,7 @@ class LensCalibrator:
                         "Checkerboard evidence changed while its bounded index was being "
                         "built; index the current capture set again"
                     )
+                _check_index_cancelled(cancel_check)
                 self._write_image_index({"images": indexed})
             return {
                 "indexed_count": len(pending),
@@ -1203,10 +1251,18 @@ class LensCalibrator:
                 with self._state_lock:
                     self._finish_operation_locked(_INDEX_OPERATION)
 
-    def reindex_all_captures(self) -> dict[str, Any]:
+    def reindex_all_captures(
+        self,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
         """Rebuild every advisory entry from the current immutable file bytes."""
 
-        return self.index_pending_captures(retry_errors=True, force_all=True)
+        return self.index_pending_captures(
+            retry_errors=True,
+            force_all=True,
+            cancel_check=cancel_check,
+        )
 
     @staticmethod
     def _capture_metrics(

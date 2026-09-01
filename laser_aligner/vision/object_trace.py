@@ -5,6 +5,7 @@ import math
 import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass, field, fields, replace
 from typing import Any
 
@@ -40,6 +41,7 @@ from ..project.raster_vectorize import (
     PixelVectorizationSource,
     RasterContourOutput,
     RasterDetectionMode,
+    RasterVectorizationCancelledError,
     RasterVectorizationError,
     RasterVectorizationOptions,
     RasterVectorizationTiming,
@@ -66,6 +68,30 @@ CONTRAST_THRESHOLD_MODES = {"auto", "manual"}
 MAX_TRACE_CONTOURS = 8_192
 AUTO_MINIMUM_CREDIBLE_SCORE = 70.0
 AUTO_COLOR_RASTER_MARGIN = 8.0
+TraceDetectionCancelledError = RasterVectorizationCancelledError
+
+_TRACE_CANCEL_CHECK = ContextVar["Callable[[], bool] | None"](
+    "trace_detection_cancel_check",
+    default=None,
+)
+
+
+def _trace_cancel_requested() -> bool:
+    cancel_check = _TRACE_CANCEL_CHECK.get()
+    return bool(cancel_check is not None and cancel_check())
+
+
+def _check_trace_cancelled() -> None:
+    if _trace_cancel_requested():
+        raise TraceDetectionCancelledError("Trace detection was cancelled")
+
+
+def _trace_cancel_kwargs() -> dict[str, Callable[[], bool]]:
+    return (
+        {}
+        if _TRACE_CANCEL_CHECK.get() is None
+        else {"cancel_check": _trace_cancel_requested}
+    )
 
 
 def _finite_option(value: Any, label: str) -> float:
@@ -3242,10 +3268,12 @@ def _fit_trace_candidate_native(
 ) -> None:
     """Fit one already-detected contour tree through the shared native fitter."""
 
+    _check_trace_cancelled()
     pitch = 1.0 / pixels_per_mm
     offset_px = options.border_offset_mm * pixels_per_mm
     source_contours_px: list[np.ndarray] = []
     for depth, contour_index in zip(tree.depths, tree.contour_indices, strict=True):
+        _check_trace_cancelled()
         points = np.asarray(contours[contour_index], dtype=np.float64).reshape(-1, 2)
         if abs(offset_px) > 1e-12:
             points = _offset_contour(
@@ -3280,9 +3308,11 @@ def _fit_trace_candidate_native(
     localized_count = 0
     localization_shift_px = 0.0
     if len(classification_px) == 1:
+        _check_trace_cancelled()
         localized_px, localization_shift_px, localized_count = (
             _localize_camera_intensity_edges(image, classification_px[0])
         )
+        _check_trace_cancelled()
         physical = (_pixel_to_machine(localized_px, work_area, pixels_per_mm),)
 
     combined = np.concatenate(physical, axis=0)
@@ -3301,6 +3331,7 @@ def _fit_trace_candidate_native(
             float(np.max(combined[:, 0]) + padding),
             float(np.max(combined[:, 1]) + padding),
         ),
+        **_trace_cancel_kwargs(),
     )
     fitted_contours = [
         [list(point) for point in contour.preview_points_mm]
@@ -3500,6 +3531,7 @@ def _detect_non_grid_contrast_raster(
 ) -> TraceResult:
     """Normalize corrected camera pixels, then use the shared raster vector path."""
 
+    _check_trace_cancelled()
     trace_started = time.perf_counter()
     normalization_reused = prepared_normalization is not None
     if normalization_timing is None:
@@ -3512,6 +3544,7 @@ def _detect_non_grid_contrast_raster(
             eligibility_mask=eligibility.material_eligible_mask,
             timing=normalization_timing,
         )
+        _check_trace_cancelled()
     polarity = "light" if options.contrast_invert else "dark"
     source = _camera_raster_vector_source(normalization, polarity, eligibility)
     raster_width_mm = source.width_px / pixels_per_mm
@@ -3542,6 +3575,7 @@ def _detect_non_grid_contrast_raster(
             source,
             raster_options,
             timing=vectorization_timing,
+            **_trace_cancel_kwargs(),
         )
         raster_options = replace(
             raster_options,
@@ -3576,6 +3610,7 @@ def _detect_non_grid_contrast_raster(
         }
 
     def mask_ready(mask_preview: PixelVectorizationMaskPreview) -> None:
+        _check_trace_cancelled()
         if raster_preview_callback is None:
             return
         raster_preview_callback(
@@ -3593,6 +3628,7 @@ def _detect_non_grid_contrast_raster(
                 selected_strategy=preview_strategy is None,
             )
         )
+        _check_trace_cancelled()
 
     forest_result: PixelVectorizationForestResult
     try:
@@ -3608,6 +3644,7 @@ def _detect_non_grid_contrast_raster(
                 minimum_width_mm=options.min_width_mm,
                 minimum_height_mm=options.min_height_mm,
             ),
+            **_trace_cancel_kwargs(),
         )
         result = forest_result.result
         if result is None:
@@ -3708,6 +3745,7 @@ def _detect_non_grid_contrast_raster(
     edge_tolerance_x = 1.0 / (source.width_px * 4.0) + 1e-12
     edge_tolerance_y = 1.0 / (source.height_px * 4.0) + 1e-12
     for contour_indices in root_groups:
+        _check_trace_cancelled()
         normalized_geometry, center_mm, width_mm, height_mm = (
             _normalized_camera_candidate_geometry(
                 result,
@@ -4147,6 +4185,7 @@ def _detect_non_grid_auto(
 ) -> TraceResult:
     """Choose among production non-grid strategies after one normalization."""
 
+    _check_trace_cancelled()
     auto_started = time.perf_counter()
     normalization_timing = CameraRasterNormalizationTiming()
     normalization = normalize_camera_trace_frame(
@@ -4155,16 +4194,19 @@ def _detect_non_grid_auto(
         eligibility_mask=eligibility.material_eligible_mask,
         timing=normalization_timing,
     )
+    _check_trace_cancelled()
     attempts: list[dict[str, Any]] = []
     successful: list[tuple[float, int, str, TraceResult]] = []
     attempt_previews: dict[str, CameraTraceRasterPreview] = {}
     attempt_vector_timings: dict[str, RasterVectorizationTiming] = {}
 
     def auto_preview(preview: CameraTraceRasterPreview) -> None:
+        _check_trace_cancelled()
         provisional = replace(preview, selected_strategy=False)
         attempt_previews[provisional.strategy] = provisional
         if raster_preview_callback is not None:
             raster_preview_callback(provisional)
+        _check_trace_cancelled()
 
     for order, (name, polarity, invert) in enumerate(
         (
@@ -4172,6 +4214,7 @@ def _detect_non_grid_auto(
             ("raster_light", "light", True),
         )
     ):
+        _check_trace_cancelled()
         label = f"Raster · {polarity} foreground"
         raster_options = replace(
             options,
@@ -4263,6 +4306,7 @@ def _detect_non_grid_auto(
         pixels_per_mm,
         eligibility.material_eligible_mask,
     )
+    _check_trace_cancelled()
     color_name = "color"
     color_label = "Color"
     color_order = 2
@@ -4446,6 +4490,7 @@ def _detect_non_grid_auto(
         detection.diagnostics["auto_selected_score"] = selected_score
     selected_preview = attempt_previews.get(selected_name)
     if selected_preview is not None and raster_preview_callback is not None:
+        _check_trace_cancelled()
         raster_preview_callback(
             replace(
                 selected_preview,
@@ -4453,6 +4498,7 @@ def _detect_non_grid_auto(
                 native_fitting_completed=True,
             )
         )
+        _check_trace_cancelled()
     if selected_name.startswith("raster_"):
         polarity = str(selected_attempt["polarity"])
         threshold = int(selected_attempt["threshold"])
@@ -4476,7 +4522,7 @@ def _detect_non_grid_auto(
     return selected
 
 
-def detect_objects(
+def _detect_objects(
     image: np.ndarray,
     options: TraceOptions | Mapping[str, Any] | None,
     work_area: WorkArea,
@@ -4496,6 +4542,7 @@ def detect_objects(
     _camera_eligibility: CameraTraceEligibilityResult | None = None,
     _camera_eligibility_timing: CameraTraceEligibilityTiming | None = None,
 ) -> TraceResult:
+    _check_trace_cancelled()
     options = (
         options
         if isinstance(options, TraceOptions)
@@ -4582,6 +4629,7 @@ def detect_objects(
                 reference_identity=reference_identity,
                 timing=eligibility_timing,
             )
+            _check_trace_cancelled()
         elif camera_eligibility.material_eligible_mask.shape != image.shape[:2]:
             raise ValueError("Prepared Camera Trace eligibility does not match the image")
         if not np.any(camera_eligibility.material_eligible_mask):
@@ -4783,18 +4831,22 @@ def detect_objects(
     }
     best = None
     for mode, mask_source, mask, hue in masks:
+        _check_trace_cancelled()
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
-        candidates = [
-            candidate for contour in contours
-            if (candidate := _candidate(
+        candidates = []
+        for contour_index, contour in enumerate(contours):
+            if contour_index % 32 == 0:
+                _check_trace_cancelled()
+            candidate = _candidate(
                 contour,
                 mask,
                 options,
                 work_area,
                 output_work_area,
                 pixels_per_mm,
-            )) is not None
-        ]
+            )
+            if candidate is not None:
+                candidates.append(candidate)
         washers = (
             _washer_candidates(
                 mask,
@@ -4914,6 +4966,7 @@ def detect_objects(
                 selected_strategy=True,
             )
         )
+        _check_trace_cancelled()
     _grid_cell_review_evidence(
         image,
         candidates,
@@ -4950,6 +5003,7 @@ def detect_objects(
             direct_detections,
             strict=True,
         ):
+            _check_trace_cancelled()
             tree: ForegroundContourTree | None = None
             try:
                 tree = _trace_candidate_tree(candidate, native_contours, native_trees)
@@ -5040,6 +5094,8 @@ def detect_objects(
         )
     )
     for index, detection in enumerate(detections, 1):
+        if index % 128 == 0:
+            _check_trace_cancelled()
         detection.index = index
 
     direct_count = sum(item.source == "direct" for item in detections)
@@ -5214,6 +5270,7 @@ def detect_objects(
             / pixels_per_mm**2
         ),
     }
+    _check_trace_cancelled()
     return TraceResult(
         bool(detections), detections, mode_used, target_hue,
         image.shape[1], image.shape[0], direct_count, inferred_count,
@@ -5236,3 +5293,56 @@ def detect_objects(
             },
         },
     )
+
+
+def detect_objects(
+    image: np.ndarray,
+    options: TraceOptions | Mapping[str, Any] | None,
+    work_area: WorkArea,
+    pixels_per_mm: float,
+    *,
+    output_work_area: WorkArea | None = None,
+    background_image: np.ndarray | None = None,
+    trace_roi_polygons_mm: Sequence[Sequence[Sequence[float]]] | None = None,
+    trace_output_polygon_mm: Sequence[Sequence[float]] | None = None,
+    trace_roi_source: str = "guarded output area",
+    reference_required: bool = False,
+    reference_identity: str | None = None,
+    mask_override: np.ndarray | None = None,
+    raster_preview_callback: CameraTraceRasterPreviewCallback | None = None,
+    cancel_check: Callable[[], bool] | None = None,
+    _isolate_native_candidates: bool = False,
+    _camera_normalization: CameraRasterNormalizationResult | None = None,
+    _camera_eligibility: CameraTraceEligibilityResult | None = None,
+    _camera_eligibility_timing: CameraTraceEligibilityTiming | None = None,
+) -> TraceResult:
+    """Detect camera objects, optionally observing cooperative cancellation."""
+
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable or None")
+    inherited = _TRACE_CANCEL_CHECK.get()
+    cancel_token = _TRACE_CANCEL_CHECK.set(
+        inherited if cancel_check is None else cancel_check
+    )
+    try:
+        return _detect_objects(
+            image,
+            options,
+            work_area,
+            pixels_per_mm,
+            output_work_area=output_work_area,
+            background_image=background_image,
+            trace_roi_polygons_mm=trace_roi_polygons_mm,
+            trace_output_polygon_mm=trace_output_polygon_mm,
+            trace_roi_source=trace_roi_source,
+            reference_required=reference_required,
+            reference_identity=reference_identity,
+            mask_override=mask_override,
+            raster_preview_callback=raster_preview_callback,
+            _isolate_native_candidates=_isolate_native_candidates,
+            _camera_normalization=_camera_normalization,
+            _camera_eligibility=_camera_eligibility,
+            _camera_eligibility_timing=_camera_eligibility_timing,
+        )
+    finally:
+        _TRACE_CANCEL_CHECK.reset(cancel_token)

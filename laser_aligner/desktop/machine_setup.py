@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import threading
 from collections.abc import Callable
 from dataclasses import asdict
 from typing import Any
@@ -587,6 +588,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._lens_index_outcome = "Checkerboard evidence catalog is ready."
         self._lens_index_error: str | None = None
         self._lens_mutation_blocked = False
+        self._lens_index_cancel_event = threading.Event()
+        self._shutdown_started = False
         self.setWindowTitle("Machine Setup")
         self.setMinimumSize(900, 680)
         self.resize(1080, 780)
@@ -727,7 +730,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         on_failure: Callable[[str], None] | None = None,
     ) -> bool:
         """Own one slow setup operation while keeping the Qt event loop responsive."""
-        if self.operation_busy:
+        if self._shutdown_started or self.operation_busy:
             return False
         machine = self.context.machine
         machine_generation = machine.operation_generation()
@@ -750,7 +753,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                     machine.ensure_connected()
                 return operation()
 
-        task = FunctionTask(scoped_operation)
+        task = FunctionTask(scoped_operation, label=f"Machine Setup: {name}")
         self._active_task = task
         task.signals.succeeded.connect(
             lambda result, generation=generation: self._operation_succeeded(
@@ -774,7 +777,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             lambda generation=generation: self._operation_finished(generation),
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
-        self._thread_pool.start(task)
+        task.start_on(self._thread_pool)
         return True
 
     def _operation_succeeded(
@@ -851,6 +854,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.operation_status.setText(f"Software STOP requested.{suffix}")
 
     def _close_blocked(self) -> bool:
+        if self._shutdown_started:
+            return False
         if self.operation_busy:
             self.operation_status.setText(
                 f"{self._active_operation_name} is still running. Use STOP / LASER OFF "
@@ -882,6 +887,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
 
     def _schedule_lens_index(self, lens: dict[str, Any]) -> None:
+        if self._shutdown_started:
+            return
         signature = self._pending_lens_index_signature(lens)
         if (
             not signature
@@ -900,20 +907,27 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._start_lens_index(retry_errors=True, force_all=True)
 
     def _start_lens_index(self, *, retry_errors: bool, force_all: bool) -> bool:
-        if self.lens_index_busy:
+        if self._shutdown_started or self.lens_index_busy:
             return False
+        self._lens_index_cancel_event.clear()
         self._lens_index_generation += 1
         generation = self._lens_index_generation
         self._lens_index_error = None
         self._lens_index_outcome = "Checkerboard evidence indexing is queued."
-        operation = (
-            self.context.lens.reindex_all_captures
-            if force_all
-            else lambda: self.context.lens.index_pending_captures(
-                retry_errors=retry_errors
+        def operation() -> Any:
+            if force_all:
+                return self.context.lens.reindex_all_captures(
+                    cancel_check=self._lens_index_cancel_event.is_set
+                )
+            return self.context.lens.index_pending_captures(
+                retry_errors=retry_errors,
+                cancel_check=self._lens_index_cancel_event.is_set,
             )
+        task = FunctionTask(
+            operation,
+            label="Machine Setup: index lens captures",
+            cancel=self._lens_index_cancel_event.set,
         )
-        task = FunctionTask(operation)
         self._lens_index_task = task
         task.signals.succeeded.connect(
             lambda result, generation=generation: self._lens_index_succeeded(
@@ -933,7 +947,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         self._lens_index_poll_timer.start()
         self.refresh_all()
-        self._thread_pool.start(task)
+        task.start_on(self._thread_pool)
         return True
 
     def _lens_index_succeeded(self, generation: int, result: Any) -> None:
@@ -964,7 +978,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.refresh_all()
 
     def _poll_lens_index_progress(self) -> None:
-        if not self.lens_index_busy:
+        if self._shutdown_started or not self.lens_index_busy:
             self._lens_index_poll_timer.stop()
             return
         try:
@@ -3260,6 +3274,30 @@ class MachineSetupDialog(QtWidgets.QDialog):
         ):
             self._settings.setValue(f"machineSetup/{key}", widget.value())
         self._settings.sync()
+
+    def begin_shutdown(self) -> None:
+        """Cancel dialog-owned work and prevent late queued UI presentation."""
+
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+        self._lens_index_start_timer.stop()
+        self._lens_index_poll_timer.stop()
+        self._lens_index_cancel_event.set()
+        self._operation_generation += 1
+        self._lens_index_generation += 1
+        active_task = self._active_task
+        lens_index_task = self._lens_index_task
+        self._active_task = None
+        self._lens_index_task = None
+        self._active_operation_name = None
+        for task in (active_task, lens_index_task):
+            if task is not None:
+                task.suppress_callbacks()
+        try:
+            self._save_preferences()
+        finally:
+            super().reject()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         if self._close_blocked():

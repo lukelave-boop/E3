@@ -149,13 +149,16 @@ class CoreRuntime:
         with self._lock:
             self._state = RuntimeState.RUNNING
 
-    def stop(self) -> None:
+    def stop(self, *, deadline: float | None = None) -> None:
         with self._lock:
             if self._state in {RuntimeState.STOPPED, RuntimeState.STOPPING}:
                 return
             self._state = RuntimeState.STOPPING
         try:
-            self.context.stop()
+            if deadline is None:
+                self.context.stop()
+            else:
+                self.context.stop(deadline=deadline)
         finally:
             with self._lock:
                 self._state = RuntimeState.STOPPED

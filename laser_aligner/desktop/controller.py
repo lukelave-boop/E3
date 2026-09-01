@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
+import math
+import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,11 @@ from .tasks import FunctionTask
 
 QtCore, QtGui, QtWidgets = require_qt()
 
+LOGGER = logging.getLogger(__name__)
+
+DESKTOP_SHUTDOWN_TIMEOUT_SECONDS = 4.0
+DESKTOP_WORKER_DRAIN_SECONDS = 1.0
+
 _MIN_TEMPLATE_MATCHES = 3
 _MIN_TEMPLATE_DIRECT_MATCHES = 2
 _MIN_TEMPLATE_COVERAGE = 0.50
@@ -38,6 +47,23 @@ _MAX_TEMPLATE_SCALE_ERROR = 0.035
 _DEFAULT_LIVE_CAMERA_INTERVAL_MS = round(1000 / 2)
 _MIN_LIVE_CAMERA_INTERVAL_MS = round(1000 / 15)
 _MAX_LIVE_CAMERA_INTERVAL_MS = 10_000
+
+
+@dataclass(slots=True)
+class _TaskCallbacks:
+    on_success: Callable[[Any], None] | None
+    on_failure: Callable[[str], None] | None
+    on_finished: Callable[[], None] | None
+    show_busy: bool
+
+
+def _validate_shutdown_deadline(deadline: object) -> float:
+    if (
+        type(deadline) not in {int, float}
+        or not math.isfinite(float(deadline))
+    ):
+        raise ValueError("Shutdown deadline must be a finite monotonic timestamp")
+    return float(deadline)
 
 
 def _guarded_output_work_area(runtime: CoreRuntime) -> WorkArea:
@@ -377,6 +403,7 @@ class DesktopController(QtCore.QObject):
         self.thread_pool = QtCore.QThreadPool.globalInstance()
         self._active_tasks = 0
         self._tasks: set[FunctionTask] = set()
+        self._task_callbacks: dict[FunctionTask, _TaskCallbacks] = {}
         self._camera_refresh_in_flight = False
         self._camera_refresh_generation: int | None = None
         self._camera_refresh_pending = False
@@ -389,11 +416,13 @@ class DesktopController(QtCore.QObject):
         self._camera_reconnect_in_flight = False
         self._camera_reconnect_generation: int | None = None
         self._trace_request_id = 0
+        self._trace_cancel_event = threading.Event()
         self._trace_review_active = False
         self._trace_sample_image: np.ndarray | None = None
         self._trace_sample_area: WorkArea | None = None
         self._trace_sample_signature: tuple[object, ...] | None = None
         self._template_match_request_id = 0
+        self._template_match_cancel_event = threading.Event()
         self._template_review_active = False
         self._template_review_signature: tuple[object, ...] | None = None
         self._live_camera_enabled = False
@@ -401,6 +430,8 @@ class DesktopController(QtCore.QObject):
         self._reported_terminal_job: tuple[object, object] | None = None
         self._workspace_coordinate_space = "machine"
         self._shutdown_started = False
+        self._shutdown_finalized = False
+        self._shutdown_deadline_monotonic: float | None = None
         self._poll_timer = QtCore.QTimer(self)
         self._poll_timer.setInterval(750)
         self._poll_timer.timeout.connect(self.poll_status)
@@ -427,11 +458,13 @@ class DesktopController(QtCore.QObject):
         self._camera_source_generation += 1
         self._invalidate_camera_image()
         self._trace_request_id += 1
+        self._trace_cancel_event.set()
         self._trace_review_active = False
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
         self._template_match_request_id += 1
+        self._template_match_cancel_event.set()
         self._template_review_active = False
         self._template_review_signature = None
         if self.runtime.running:
@@ -447,28 +480,84 @@ class DesktopController(QtCore.QObject):
             self._sync_camera_timer()
         self.notice.emit("Core services started")
 
-    def stop(self) -> None:
-        self.begin_shutdown()
-        # FunctionTask disables Qt auto-deletion, so keep every live wrapper
-        # owned until its callback has actually returned. A bounded wait followed
-        # by clearing `_tasks` can abandon a near-cap planning worker.
-        self.thread_pool.waitForDone(-1)
-        self.runtime.stop()
-
-    def begin_shutdown(self) -> None:
-        if self._shutdown_started:
+    def stop(self, deadline: float | None = None) -> None:
+        shutdown_deadline = self.begin_shutdown(deadline)
+        if self._shutdown_finalized:
             return
+        self._shutdown_finalized = True
+
+        # Use one absolute deadline throughout shutdown. Give worker callbacks a
+        # short bounded chance to return, but reserve the rest of the process
+        # budget for camera/machine/runtime cleanup. FunctionTask retains every
+        # Python wrapper independently until its run() method actually exits.
+        drain_deadline = min(
+            shutdown_deadline,
+            time.monotonic() + DESKTOP_WORKER_DRAIN_SECONDS,
+        )
+        remaining_ms = max(
+            0,
+            math.ceil((drain_deadline - time.monotonic()) * 1000.0),
+        )
+        self.thread_pool.waitForDone(remaining_ms)
+        unfinished = FunctionTask.unfinished_labels()
+        if unfinished:
+            LOGGER.warning(
+                "Desktop shutdown worker drain expired with %d task(s) still "
+                "running: %s",
+                len(unfinished),
+                ", ".join(unfinished),
+            )
+        self.runtime.stop(deadline=shutdown_deadline)
+
+    def begin_shutdown(self, deadline: float | None = None) -> float:
+        requested_deadline = (
+            time.monotonic() + DESKTOP_SHUTDOWN_TIMEOUT_SECONDS
+            if deadline is None
+            else _validate_shutdown_deadline(deadline)
+        )
+        previous_deadline = self._shutdown_deadline_monotonic
+        if previous_deadline is None:
+            self._shutdown_deadline_monotonic = requested_deadline
+        elif deadline is not None and requested_deadline < previous_deadline:
+            # A caller may tighten a shutdown budget, but no repeated signal or
+            # nested close path may silently reset/extend the original deadline.
+            self._shutdown_deadline_monotonic = requested_deadline
+
+        shutdown_deadline = self._shutdown_deadline_monotonic
+        assert shutdown_deadline is not None
+        if self._shutdown_started:
+            return shutdown_deadline
         self._shutdown_started = True
         self._poll_timer.stop()
         self._camera_live_timer.stop()
+        self._active_tasks = 0
         self._trace_request_id += 1
+        self._trace_cancel_event.set()
         self._trace_review_active = False
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
         self._template_match_request_id += 1
+        self._template_match_cancel_event.set()
         self._template_review_active = False
         self._template_review_signature = None
+        # Cut off both controller-owned and dialog-owned FunctionTask outcome
+        # signals before revoking services. Internal completion remains enabled
+        # so ownership can be released if the Qt event loop is still alive.
+        FunctionTask.suppress_all_callbacks()
+        for task in tuple(self._tasks):
+            task.suppress_callbacks()
+
+        camera = getattr(self.runtime.context, "camera", None)
+        cancel_camera_requests = getattr(camera, "cancel_pending_requests", None)
+        if callable(cancel_camera_requests):
+            try:
+                cancel_camera_requests(terminal=True)
+            except Exception:
+                LOGGER.exception(
+                    "Could not cancel pending camera requests during shutdown"
+                )
+
         machine = self.runtime.context.machine
         # Pi execution is deliberately independent of this process.  Always
         # detach a remote facade on ordinary desktop shutdown, even before its
@@ -477,11 +566,15 @@ class DesktopController(QtCore.QObject):
         # serial retains the longstanding shutdown laser-off path.
         try:
             if bool(getattr(machine, "pi_owned_execution", False)):
-                machine.detach()
+                machine.detach(
+                    deadline=min(shutdown_deadline, time.monotonic() + 0.05),
+                    remember_idle_for_shutdown=True,
+                )
             else:
                 machine.request_stop(emergency=False)
         except Exception as exc:
-            self.errorOccurred.emit(f"Shutdown machine cleanup failed: {exc}")
+            LOGGER.warning("Shutdown machine cleanup failed: %s", exc)
+        return shutdown_deadline
 
     @property
     def has_active_tasks(self) -> bool:
@@ -497,50 +590,59 @@ class DesktopController(QtCore.QObject):
         *,
         on_success: Callable[[Any], None] | None = None,
         on_failure: Callable[[str], None] | None = None,
+        on_finished: Callable[[], None] | None = None,
+        cancel: Callable[[], None] | None = None,
         label: str = "Operation",
         show_busy: bool = True,
         requires_controller: bool = False,
     ) -> FunctionTask:
-        if show_busy:
+        publish_ui = not self._shutdown_started
+        if show_busy and publish_ui:
             self._set_busy(1)
         machine = self.runtime.context.machine
         operation_generation = machine.operation_generation()
 
         def guarded_callback() -> Any:
+            if self._shutdown_started:
+                return None
             with machine.operation_scope(operation_generation):
                 if requires_controller:
                     machine.ensure_connected()
                 return callback()
 
-        task = FunctionTask(guarded_callback)
+        task = FunctionTask(guarded_callback, label=label, cancel=cancel)
+        if not publish_ui:
+            task.suppress_callbacks()
         self._tasks.add(task)
-
-        if on_success is not None:
-            task.signals.succeeded.connect(
-                on_success,
-                QtCore.Qt.ConnectionType.QueuedConnection,
-            )
-
-        if on_failure is None:
-            task.signals.failed.connect(
-                lambda message: self.errorOccurred.emit(f"{label} failed: {message}"),
-                QtCore.Qt.ConnectionType.QueuedConnection,
-            )
-        else:
-            task.signals.failed.connect(
-                on_failure,
-                QtCore.Qt.ConnectionType.QueuedConnection,
-            )
-
-        # Route cleanup through a QObject slot in the GUI thread. Do not drop
-        # the final Python reference from the worker thread.
-        task.signals.finished.connect(
-            lambda task=task, show_busy=show_busy: self._task_finished(
-                task, show_busy
-            ),
+        self._task_callbacks[task] = _TaskCallbacks(
+            on_success=on_success,
+            on_failure=on_failure,
+            on_finished=on_finished,
+            show_busy=show_busy and publish_ui,
+        )
+        # QObject-bound slots are automatically disconnected if the controller
+        # is destroyed. This avoids receiverless lambdas that could outlive the
+        # desktop while a bounded shutdown leaves a worker finishing in-place.
+        task.signals.resultReady.connect(
+            self._task_succeeded,
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
-        self.thread_pool.start(task)
+        task.signals.errorReady.connect(
+            self._task_failed,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        task.signals.completed.connect(
+            self._task_finished,
+            QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        try:
+            task.start_on(self.thread_pool)
+        except BaseException:
+            registration = self._task_callbacks.pop(task)
+            self._tasks.discard(task)
+            if registration.show_busy:
+                self._set_busy(-1)
+            raise
         return task
 
     def run_background(
@@ -549,6 +651,7 @@ class DesktopController(QtCore.QObject):
         *,
         on_success: Callable[[Any], None] | None = None,
         on_failure: Callable[[str], None] | None = None,
+        cancel: Callable[[], None] | None = None,
         label: str = "Operation",
         show_busy: bool = True,
     ) -> FunctionTask:
@@ -558,20 +661,54 @@ class DesktopController(QtCore.QObject):
             callback,
             on_success=on_success,
             on_failure=on_failure,
+            cancel=cancel,
             label=label,
             show_busy=show_busy,
         )
 
-    @QtCore.Slot(object, bool)
+    @QtCore.Slot(object, object)
+    def _task_succeeded(self, task: FunctionTask, result: Any) -> None:
+        if self._shutdown_started:
+            return
+        registration = self._task_callbacks.get(task)
+        if registration is not None and registration.on_success is not None:
+            registration.on_success(result)
+
+    @QtCore.Slot(object, str)
+    def _task_failed(self, task: FunctionTask, message: str) -> None:
+        if self._shutdown_started:
+            return
+        registration = self._task_callbacks.get(task)
+        if registration is None:
+            return
+        if registration.on_failure is None:
+            self.errorOccurred.emit(f"{task.label} failed: {message}")
+        else:
+            registration.on_failure(message)
+
+    @QtCore.Slot(object)
     def _task_finished(
         self,
         task: FunctionTask,
-        show_busy: bool = True,
     ) -> None:
-        if show_busy:
-            self._set_busy(-1)
+        registration = self._task_callbacks.pop(task, None)
+        if registration is not None and registration.show_busy:
+            if self._shutdown_started:
+                self._active_tasks = max(0, self._active_tasks - 1)
+            else:
+                self._set_busy(-1)
         self._tasks.discard(task)
-        if not self._tasks:
+        if (
+            registration is not None
+            and registration.on_finished is not None
+            and not self._shutdown_started
+        ):
+            registration.on_finished()
+        if (
+            not self._tasks
+            and not self._shutdown_started
+            and not self._shutdown_finalized
+        ):
             self.tasksDrained.emit()
 
     def poll_status(self) -> None:
@@ -681,7 +818,7 @@ class DesktopController(QtCore.QObject):
             )
             return image_to_qimage(frame)
 
-        task = self._run(
+        self._run(
             corrected_image,
             on_success=lambda image, source_generation=source_generation,
             expected_revision=expected_revision,
@@ -701,14 +838,11 @@ class DesktopController(QtCore.QObject):
                     expected_revision,
                 )
             ),
-            label="Corrected bed-image refresh",
-            show_busy=False,
-        )
-        task.signals.finished.connect(
-            lambda source_generation=source_generation: (
+            on_finished=lambda source_generation=source_generation: (
                 self._camera_refresh_finished(source_generation)
             ),
-            QtCore.Qt.ConnectionType.QueuedConnection,
+            label="Corrected bed-image refresh",
+            show_busy=False,
         )
 
     def retry_camera_image(self) -> None:
@@ -801,11 +935,13 @@ class DesktopController(QtCore.QObject):
         self._camera_overlay_error_latched = None
         self._invalidate_camera_image()
         self._trace_request_id += 1
+        self._trace_cancel_event.set()
         self._trace_review_active = False
         self._trace_sample_image = None
         self._trace_sample_area = None
         self._trace_sample_signature = None
         self._template_match_request_id += 1
+        self._template_match_cancel_event.set()
         self._template_review_active = False
         self._template_review_signature = None
         self.reviewEvidenceInvalidated.emit()
@@ -1122,6 +1258,7 @@ class DesktopController(QtCore.QObject):
         """Invalidate any in-flight match result and resume normal camera updates."""
 
         self._template_match_request_id += 1
+        self._template_match_cancel_event.set()
         self._template_review_signature = None
         self.set_template_review_active(False)
 
@@ -1129,6 +1266,7 @@ class DesktopController(QtCore.QObject):
         """Invalidate trace work and release only the trace camera hold."""
 
         self._trace_request_id += 1
+        self._trace_cancel_event.set()
         was_held = self._camera_review_active()
         self._trace_review_active = False
         self._trace_sample_image = None
@@ -1402,6 +1540,9 @@ class DesktopController(QtCore.QObject):
                 self.request_camera_refresh()
 
     def detect_trace_objects(self, raw_options: dict[str, Any]) -> int:
+        self._trace_cancel_event.set()
+        trace_cancel_event = threading.Event()
+        self._trace_cancel_event = trace_cancel_event
         self._trace_request_id += 1
         request_id = self._trace_request_id
         preview_emitted = False
@@ -1490,7 +1631,7 @@ class DesktopController(QtCore.QObject):
                 """Publish immutable production arrays without doing Qt image work."""
 
                 nonlocal preview_emitted
-                if request_id != self._trace_request_id:
+                if self._shutdown_started or request_id != self._trace_request_id:
                     return
                 preview_emitted = True
                 self.traceRasterPreviewReady.emit(
@@ -1539,6 +1680,7 @@ class DesktopController(QtCore.QObject):
                     else coordinate_frame.provenance_digest
                 ),
                 raster_preview_callback=raster_preview_ready,
+                cancel_check=trace_cancel_event.is_set,
             )
             detection_seconds = time.perf_counter() - detection_started
             output_polygon = None
@@ -1815,6 +1957,8 @@ class DesktopController(QtCore.QObject):
         request_id: int,
         templates: tuple[CutTemplate, ...],
         selected_template_id: str | None,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
         context = self.runtime.context
         calibration = context.bed.calibration
@@ -1987,6 +2131,7 @@ class DesktopController(QtCore.QObject):
                     if coordinate_frame is None
                     else coordinate_frame.provenance_digest
                 ),
+                cancel_check=cancel_check,
             )
             if coordinate_frame is not None:
                 output_polygon, _outside = _apply_local_output_review(
@@ -2002,7 +2147,11 @@ class DesktopController(QtCore.QObject):
                 traces_by_template[template.id] = trace_result
                 evidence_by_template[template.id] = evidence
             alignments.extend(
-                rank_templates(grouped_templates, usable_detections)
+                rank_templates(
+                    grouped_templates,
+                    usable_detections,
+                    cancel_check=cancel_check,
+                )
             )
 
         alignments.sort(
@@ -2138,6 +2287,9 @@ class DesktopController(QtCore.QObject):
         template_id: str | None = None,
     ) -> int:
         """Match one camera frame against all templates or one selected ID."""
+        self._template_match_cancel_event.set()
+        template_cancel_event = threading.Event()
+        self._template_match_cancel_event = template_cancel_event
         self._template_match_request_id += 1
         request_id = self._template_match_request_id
         try:
@@ -2156,6 +2308,7 @@ class DesktopController(QtCore.QObject):
                 None
                 if template_id is None
                 else str(template_id),
+                cancel_check=template_cancel_event.is_set,
             ),
             on_success=lambda payload: self._template_match_complete(
                 request_id,
@@ -2165,6 +2318,7 @@ class DesktopController(QtCore.QObject):
                 request_id,
                 message,
             ),
+            cancel=template_cancel_event.set,
             label="Match cutting templates",
         )
         return request_id

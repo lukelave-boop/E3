@@ -553,7 +553,15 @@ class CameraService:
                 self._last_error = None
                 self._frame_condition.notify_all()
 
-    def stop(self) -> None:
+    def stop(self, *, deadline: float | None = None) -> None:
+        if deadline is not None:
+            if (
+                isinstance(deadline, bool)
+                or not isinstance(deadline, (int, float))
+                or not math.isfinite(float(deadline))
+            ):
+                raise TypeError("Camera shutdown deadline must be finite")
+            deadline = float(deadline)
         with self._stop_lock:
             self._teardown_complete.clear()
             with self._frame_condition:
@@ -580,10 +588,19 @@ class CameraService:
                     except Exception:
                         LOGGER.exception("Could not release camera during shutdown")
                 if thread is not None and thread is not threading.current_thread() and thread.is_alive():
-                    thread.join(timeout=_READER_JOIN_SECONDS)
+                    join_timeout = _READER_JOIN_SECONDS
+                    if deadline is not None:
+                        join_timeout = min(
+                            join_timeout,
+                            max(0.0, deadline - time.monotonic()),
+                        )
+                    if join_timeout > 0.0:
+                        thread.join(timeout=join_timeout)
                     if thread.is_alive():
                         with self._frame_condition:
-                            self._last_error = "Camera reader did not stop within 2 seconds"
+                            self._last_error = (
+                                "Camera reader did not stop within its shutdown deadline"
+                            )
                             self._frame_condition.notify_all()
             finally:
                 self._teardown_complete.set()

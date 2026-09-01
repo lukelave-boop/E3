@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -107,10 +109,16 @@ class _PreparedWindow(_Window):
         self.accept_prepare = accept_prepare
         self.start_task_while_preparing = start_task_while_preparing
 
-    def _prepare_close_request(self) -> bool:
+    def _prepare_close_request(
+        self,
+        *,
+        before_shutdown_cleanup=None,
+    ) -> bool:
         self.events.append("prepare")
         if not self.accept_prepare:
             return False
+        if before_shutdown_cleanup is not None:
+            before_shutdown_cleanup()
         if self.start_task_while_preparing:
             self.controller.active = True
         return True
@@ -122,9 +130,15 @@ class _AutoClosePreparedWindow(_PreparedWindow):
         self._close_requested = False
         controller.tasksDrained.connect(self._background_tasks_drained)
 
-    def _prepare_close_request(self) -> bool:
+    def _prepare_close_request(
+        self,
+        *,
+        before_shutdown_cleanup=None,
+    ) -> bool:
         self.events.append("prepare")
         self._close_requested = True
+        if before_shutdown_cleanup is not None:
+            before_shutdown_cleanup()
         self.controller.active = True
         return True
 
@@ -135,6 +149,14 @@ class _AutoClosePreparedWindow(_PreparedWindow):
         if self._close_requested:
             self.events.append("auto-close-scheduled")
             QtCore.QTimer.singleShot(0, self.close)
+
+
+class _SlowClosePreparedWindow(_PreparedWindow):
+    def closeEvent(self, event) -> None:
+        self.events.append("close-start")
+        time.sleep(0.15)
+        self.events.append("close-finish")
+        event.accept()
 
 
 def test_handoff_launches_after_close_without_last_window_exit(
@@ -338,7 +360,7 @@ def test_successful_createprocess_with_restore_failure_remains_handoff_success(
     assert lifecycle == ["popen", "quit"]
 
 
-def test_requested_handoff_waits_for_controller_tasks_to_drain(
+def test_requested_handoff_uses_bounded_close_without_waiting_for_workers(
     qt_application,
     monkeypatch,
     tmp_path: Path,
@@ -354,6 +376,12 @@ def test_requested_handoff_waits_for_controller_tasks_to_drain(
     window.events.clear()
     package = tmp_path / "E3-Setup.exe"
     handoffs: list[Path] = []
+    launches: list[Path] = []
+    monkeypatch.setattr(
+        update_ui,
+        "launch_downloaded_update",
+        lambda path: launches.append(path),
+    )
     monkeypatch.setattr(
         update_ui,
         "_perform_downloaded_update_handoff",
@@ -363,7 +391,8 @@ def test_requested_handoff_waits_for_controller_tasks_to_drain(
     update_ui._request_downloaded_update_handoff(window, package)
 
     assert window.events == ["prepare"]
-    assert handoffs == []
+    assert launches == [package]
+    assert handoffs == [package]
     assert window.isVisible()
 
     controller.active = False
@@ -372,10 +401,82 @@ def test_requested_handoff_waits_for_controller_tasks_to_drain(
 
     assert handoffs == [package]
 
-    controller.tasksDrained.emit()
-    qt_application.processEvents()
 
-    assert handoffs == [package]
+def test_verified_installer_is_spawned_before_slow_bounded_teardown(
+    qt_application,
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    controller = _Controller()
+    window = _SlowClosePreparedWindow(controller)
+    window.show()
+    qt_application.processEvents()
+    window.events.clear()
+    package = tmp_path / "E3-Setup.exe"
+
+    monkeypatch.setattr(
+        update_ui,
+        "launch_downloaded_update",
+        lambda _path: window.events.append("launch"),
+    )
+    monkeypatch.setattr(qt_application, "quit", lambda: None)
+
+    update_ui._request_downloaded_update_handoff(window, package)
+
+    assert window.events == [
+        "prepare",
+        "launch",
+        "close-start",
+        "close-finish",
+    ]
+    assert not window.isVisible()
+
+
+def test_production_update_launches_before_blocked_close_preparation() -> None:
+    script = """
+import os
+import time
+from pathlib import Path
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+from PySide6 import QtWidgets
+from laser_aligner.desktop import main_window as main_window_module
+from laser_aligner.desktop import update_ui
+from laser_aligner.desktop.main_window import E3MainWindow
+from laser_aligner.desktop.shutdown import arm_process_exit_watchdog
+
+main_window_module.DESKTOP_SHUTDOWN_TIMEOUT_SECONDS = 0.4
+application = QtWidgets.QApplication([])
+window = E3MainWindow.__new__(E3MainWindow)
+QtWidgets.QMainWindow.__init__(window)
+window._close_requested = False
+window._closing = False
+window._confirm_discard_changes = lambda: True
+window._save_window_state = lambda: time.sleep(30.0)
+window.shutdownStarted.connect(arm_process_exit_watchdog)
+update_ui.launch_downloaded_update = lambda _path: print("LAUNCHED", flush=True)
+update_ui._request_downloaded_update_handoff(window, Path("verified-E3-Setup.exe"))
+"""
+    process = subprocess.Popen(
+        [sys.executable, "-c", script],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    assert process.stdout is not None
+    assert process.stdout.readline().strip() == "LAUNCHED"
+    started = time.monotonic()
+    try:
+        _stdout, stderr = process.communicate(timeout=4.0)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        stdout, stderr = process.communicate()
+        pytest.fail(
+            "updater subprocess did not honor the process deadline; "
+            f"stdout={stdout!r}, stderr={stderr!r}"
+        )
+
+    assert process.returncode == 0, stderr
+    assert 0.2 <= time.monotonic() - started < 3.0
 
 
 def test_rejected_close_preparation_never_arms_or_launches_handoff(
@@ -385,7 +486,7 @@ def test_rejected_close_preparation_never_arms_or_launches_handoff(
 ) -> None:
     controller = _Controller()
     controller.active = True
-    window = _PreparedWindow(controller)
+    window = _PreparedWindow(controller, accept_prepare=False)
     window.show()
     qt_application.processEvents()
     window.events.clear()
@@ -398,20 +499,10 @@ def test_rejected_close_preparation_never_arms_or_launches_handoff(
 
     update_ui._request_downloaded_update_handoff(
         window,
-        tmp_path / "first-E3-Setup.exe",
-    )
-    assert getattr(window, "_e3_update_idle_handoff", None) is not None
-
-    window.accept_prepare = False
-    update_ui._request_downloaded_update_handoff(
-        window,
         tmp_path / "rejected-E3-Setup.exe",
     )
-    controller.active = False
-    controller.tasksDrained.emit()
-    qt_application.processEvents()
 
-    assert window.events == ["prepare", "prepare"]
+    assert window.events == ["prepare"]
     assert handoffs == []
     assert getattr(window, "_e3_update_idle_handoff", None) is None
 
@@ -437,17 +528,12 @@ def test_updater_handoff_precedes_main_window_queued_auto_close(
     monkeypatch.setattr(update_ui, "launch_downloaded_update", launch)
 
     update_ui._request_downloaded_update_handoff(window, package)
-    assert launches == []
-
-    controller.active = False
-    controller.tasksDrained.emit()
 
     assert launches == [package]
-    assert window.events[:4] == [
+    assert window.events[:3] == [
         "prepare",
-        "auto-close-suppressed",
-        "close",
         "launch",
+        "close",
     ]
 
     qt_application.processEvents()
@@ -483,13 +569,10 @@ def test_failed_deferred_launch_is_not_closed_by_background_drain_timer(
         window,
         tmp_path / "E3-Setup.exe",
     )
-    controller.active = False
-    controller.tasksDrained.emit()
     qt_application.processEvents()
 
-    assert window.events[:3] == [
+    assert window.events[:2] == [
         "prepare",
-        "auto-close-suppressed",
         "close",
     ]
     assert not window.isVisible()

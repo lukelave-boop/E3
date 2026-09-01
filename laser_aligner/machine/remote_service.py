@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import logging
 import math
 import re
 import socket
@@ -65,6 +66,8 @@ from .service import MachineService, ValidatedProgram
 _DEFAULT_RPC_TIMEOUT_SECONDS = 130.0
 _MONITOR_RPC_TIMEOUT_SECONDS = 0.75
 _STOP_RPC_TIMEOUT_SECONDS = 1.0
+_SHUTDOWN_DISCONNECT_TIMEOUT_SECONDS = 0.75
+_SHUTDOWN_DETACH_JOIN_SECONDS = 0.05
 _HOLD_CONNECT_TIMEOUT_SECONDS = 5.0
 _HOLD_SESSION_TIMEOUT_SECONDS = 180.0
 _DEFAULT_MONITOR_INTERVAL_SECONDS = 0.75
@@ -78,6 +81,8 @@ _ACTIVE_JOB_STATES = frozenset({"starting", "running", "stopping"})
 _TERMINAL_JOB_STATES = frozenset(
     {"complete", "failed", "stopped", "interrupted", "deleted"}
 )
+
+LOGGER = logging.getLogger(__name__)
 
 
 class _RemoteRequestRejected(MachineError):
@@ -169,6 +174,8 @@ class RemoteMachineService:
         self._monitor_stop = threading.Event()
         self._monitor_thread: threading.Thread | None = None
         self._detached = False
+        self._shutdown_started = False
+        self._shutdown_idle_disconnect_allowed: bool | None = None
         self._capabilities_verified = False
 
         self._hold_lock = threading.RLock()
@@ -313,17 +320,21 @@ class RemoteMachineService:
         payload: Mapping[str, Any] | None = None,
         *,
         timeout: float = _DEFAULT_RPC_TIMEOUT_SECONDS,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         request_id = self._request_id()
         request: dict[str, Any] = {"request_id": request_id, "action": action}
         if payload:
             request.update(payload)
+        request_kwargs: dict[str, float] = {"timeout": timeout}
+        if deadline is not None:
+            request_kwargs["deadline"] = deadline
         response = request_response(
             self._target.host,
             self._target.port,
             bridge_token_from_environment(),
             request,
-            timeout=timeout,
+            **request_kwargs,
         )
         return self._validate_response(
             response,
@@ -335,6 +346,7 @@ class RemoteMachineService:
         self,
         *,
         timeout: float = _DEFAULT_RPC_TIMEOUT_SECONDS,
+        deadline: float | None = None,
     ) -> None:
         # Keep an offline legacy profile inspectable in setup/UI, but fail before
         # the first controller, upload, or monitoring RPC.  The Pi resolves one
@@ -343,11 +355,40 @@ class RemoteMachineService:
         with self._state_lock:
             if self._capabilities_verified:
                 return
-        with self._capability_lock:
+        capability_lock_acquired = False
+        if deadline is None:
+            self._capability_lock.acquire()
+            capability_lock_acquired = True
+        else:
+            remaining = min(float(timeout), deadline - time.monotonic())
+            if remaining <= 0.0:
+                raise PiJobProtocolError(
+                    "Remote machine shutdown deadline expired before capability "
+                    "verification"
+                )
+            capability_lock_acquired = self._capability_lock.acquire(timeout=remaining)
+            if not capability_lock_acquired:
+                raise PiJobProtocolError(
+                    "Remote machine shutdown deadline expired waiting for capability "
+                    "verification"
+                )
+        try:
             with self._state_lock:
                 if self._capabilities_verified:
                     return
-            response = self._rpc(ACTION_SERVICE_CAPABILITIES, timeout=timeout)
+            rpc_timeout = float(timeout)
+            if deadline is not None:
+                rpc_timeout = min(rpc_timeout, deadline - time.monotonic())
+                if rpc_timeout <= 0.0:
+                    raise PiJobProtocolError(
+                        "Remote machine shutdown deadline expired before capability "
+                        "request"
+                    )
+            response = self._rpc(
+                ACTION_SERVICE_CAPABILITIES,
+                timeout=rpc_timeout,
+                deadline=deadline,
+            )
             capabilities = response.get("capabilities")
             actions = response.get("actions")
             if response.get("protocol_version") != PROTOCOL_VERSION:
@@ -380,6 +421,9 @@ class RemoteMachineService:
                 )
             with self._state_lock:
                 self._capabilities_verified = True
+        finally:
+            if capability_lock_acquired:
+                self._capability_lock.release()
 
     @staticmethod
     def _normalize_job(raw: object) -> dict[str, Any]:
@@ -646,10 +690,13 @@ class RemoteMachineService:
 
     def start_monitoring(self) -> None:
         with self._state_lock:
+            if self._shutdown_started:
+                return
             thread = self._monitor_thread
             if thread is not None and thread.is_alive():
                 return
             self._detached = False
+            self._shutdown_idle_disconnect_allowed = None
             self._monitor_stop.clear()
             thread = threading.Thread(
                 target=self._monitor_loop,
@@ -657,12 +704,20 @@ class RemoteMachineService:
                 daemon=True,
             )
             self._monitor_thread = thread
-        thread.start()
+            # Start while holding the state lock so shutdown cannot observe a
+            # published-but-not-yet-started thread and mistake it for quiescent.
+            thread.start()
 
-    def detach(self) -> None:
+    def detach(
+        self,
+        *,
+        deadline: float | None = None,
+        remember_idle_for_shutdown: bool = False,
+    ) -> None:
         """Detach this desktop observer without issuing disconnect, M5, or STOP."""
 
         self._monitor_stop.set()
+        idle_snapshot: bool | None = None
         # The stop epoch is the local linearization boundary for uploads and
         # START dispatch.  A pre-START operation that has not yet committed
         # ownership observes the new generation and leaves the Pi job inert.
@@ -671,6 +726,21 @@ class RemoteMachineService:
         with self._stop_epoch_lock:
             self._stop_epoch += 1
             with self._state_lock:
+                if remember_idle_for_shutdown:
+                    job = self._status_cache.get("job")
+                    active = self._start_ownership_uncertain or bool(
+                        isinstance(job, Mapping)
+                        and job.get("ownership_accepted") is True
+                        and _job_state(job) in _ACTIVE_JOB_STATES
+                    )
+                    idle_snapshot = bool(
+                        self._status_cache.get("status_stale") is False
+                        and not active
+                    )
+                    # Do not expose the remembered idle decision until an
+                    # in-flight monitor has actually stopped. Its final reply
+                    # may still establish accepted or uncertain Pi ownership.
+                    self._shutdown_idle_disconnect_allowed = False
                 self._authorization_epoch += 1
                 thread = self._monitor_thread
                 self._clear_arm_locked()
@@ -681,8 +751,23 @@ class RemoteMachineService:
             and thread.is_alive()
             and thread is not threading.current_thread()
         ):
-            thread.join(timeout=1.0)
+            join_timeout = 1.0
+            if deadline is not None:
+                join_timeout = min(join_timeout, max(0.0, deadline - time.monotonic()))
+            if join_timeout > 0.0:
+                thread.join(timeout=join_timeout)
+        monitor_stopped = thread is None or not thread.is_alive()
         with self._state_lock:
+            if remember_idle_for_shutdown:
+                job = self._status_cache.get("job")
+                active = self._start_ownership_uncertain or bool(
+                    isinstance(job, Mapping)
+                    and job.get("ownership_accepted") is True
+                    and _job_state(job) in _ACTIVE_JOB_STATES
+                )
+                self._shutdown_idle_disconnect_allowed = bool(
+                    idle_snapshot and monitor_stopped and not active
+                )
             if self._monitor_thread is thread:
                 self._monitor_thread = None
         self._mark_monitor_disconnected(None)
@@ -733,11 +818,26 @@ class RemoteMachineService:
         self,
         action: str,
         payload: Mapping[str, Any] | None = None,
+        *,
+        timeout: float = _DEFAULT_RPC_TIMEOUT_SECONDS,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         generation = self._operation_stop_epoch()
         self._require_operation_current(generation)
-        self._require_capabilities()
-        response = self._rpc(action, payload)
+        self._require_capabilities(timeout=timeout, deadline=deadline)
+        rpc_timeout = float(timeout)
+        if deadline is not None:
+            rpc_timeout = min(rpc_timeout, deadline - time.monotonic())
+            if rpc_timeout <= 0.0:
+                raise PiJobProtocolError(
+                    f"Remote machine shutdown deadline expired before {action}"
+                )
+        response = self._rpc(
+            action,
+            payload,
+            timeout=rpc_timeout,
+            deadline=deadline,
+        )
         remote_status = self._response_mapping(response, "status")
         self._cache_remote_status(remote_status, job_record=None)
         self._require_operation_current(generation)
@@ -789,6 +889,93 @@ class RemoteMachineService:
                 self._clear_arm_locked()
         finally:
             self._operation_lock.release()
+
+    def shutdown(self, *, deadline: float) -> None:
+        """Bound application-exit cleanup without disturbing Pi-owned execution.
+
+        ``deadline`` is one absolute ``time.monotonic()`` deadline shared with the
+        desktop shutdown sequence.  An idle controller gets one best-effort,
+        shutdown-specific disconnect attempt.  Accepted or ownership-uncertain
+        execution remains wholly Pi-owned and is detached without any RPC.
+        """
+
+        if (
+            isinstance(deadline, bool)
+            or not isinstance(deadline, (int, float))
+            or not math.isfinite(float(deadline))
+        ):
+            raise TypeError("Remote machine shutdown deadline must be finite")
+        deadline = float(deadline)
+        with self._state_lock:
+            self._shutdown_started = True
+        self._monitor_stop.set()
+
+        acquired = self._operation_lock.acquire(blocking=False)
+        try:
+            with self._state_lock:
+                remembered_idle = self._shutdown_idle_disconnect_allowed
+                self._shutdown_idle_disconnect_allowed = None
+                monitor_thread = self._monitor_thread
+                monitor_stopped = (
+                    monitor_thread is None or not monitor_thread.is_alive()
+                )
+                job = self._status_cache.get("job")
+                active = self._start_ownership_uncertain or bool(
+                    isinstance(job, Mapping)
+                    and job.get("ownership_accepted") is True
+                    and _job_state(job) in _ACTIVE_JOB_STATES
+                )
+                known_idle = bool(
+                    not active
+                    and (
+                        remembered_idle is True
+                        or (
+                            remembered_idle is None
+                            and monitor_stopped
+                            and self._status_cache.get("status_stale") is False
+                        )
+                    )
+                )
+            if not acquired or not known_idle:
+                return
+
+            with self._stop_epoch_lock:
+                self._stop_epoch += 1
+                disconnect_generation = self._stop_epoch
+            attempt_deadline = min(
+                deadline,
+                time.monotonic() + _SHUTDOWN_DISCONNECT_TIMEOUT_SECONDS,
+            )
+            if attempt_deadline <= time.monotonic():
+                LOGGER.warning(
+                    "Remote machine shutdown deadline expired; detaching without "
+                    "controller disconnect"
+                )
+                return
+            try:
+                with self.operation_scope(disconnect_generation):
+                    self._machine_status_action(
+                        ACTION_MACHINE_DISCONNECT,
+                        timeout=_SHUTDOWN_DISCONNECT_TIMEOUT_SECONDS,
+                        deadline=attempt_deadline,
+                    )
+            except Exception as exc:
+                # Application exit is best-effort.  A failed idle Disconnect must
+                # never be retried with the ordinary operation-grade timeout and
+                # must never be converted into STOP or controller output cleanup.
+                LOGGER.warning(
+                    "Remote machine disconnect during bounded shutdown failed: %s",
+                    exc,
+                )
+        finally:
+            if acquired:
+                self._operation_lock.release()
+            self.detach(
+                deadline=min(
+                    deadline,
+                    time.monotonic() + _SHUTDOWN_DETACH_JOIN_SECONDS,
+                )
+            )
 
     def preflight_program(
         self,

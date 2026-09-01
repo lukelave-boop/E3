@@ -39,6 +39,10 @@ removed. The installer is started detached, with its parent directory as the
 working directory, before E3 exits. E3 restores its own DLL search state if
 process creation fails. Once Windows creates the installer process, that child
 is authoritative even if the exiting E3 parent cannot restore its own DLL state.
+After close approval, installer handoff uses the same bounded shutdown latch and
+does not wait indefinitely for desktop workers; their late callbacks are already
+suppressed and the verified external installer is spawned before the four-second
+process deadline can force exit.
 If process creation fails after E3's final close, a standalone error shows the
 verified installer path for manual launch and E3 exits; the stopped desktop is
 not re-shown as if it were usable. This boundary is automated-test covered; a

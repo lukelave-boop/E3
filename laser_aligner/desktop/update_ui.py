@@ -192,8 +192,38 @@ def _handoff_downloaded_update(
     previous_quit_on_last_window = application.quitOnLastWindowClosed()
     application.setQuitOnLastWindowClosed(False)
     closed = False
+    prepared_close = bool(
+        getattr(window, "_e3_update_close_prepared", False)
+    )
+    installer_launched = bool(
+        getattr(window, "_e3_update_installer_launched", False)
+    )
+    launch_error = getattr(window, "_e3_update_installer_launch_error", None)
 
     try:
+        if prepared_close:
+            # E3MainWindow has already accepted Close and armed the hard process
+            # deadline. Its pre-cleanup acceptance hook has already spawned the
+            # verified external installer, so normal close only performs the
+            # remaining bounded teardown and cannot preempt the handoff.
+            if isinstance(launch_error, Exception):
+                try:
+                    closed = bool(window.close())
+                    _show_terminal_handoff_failure(path, launch_error)
+                finally:
+                    application.quit()
+                return False
+            if not installer_launched:
+                raise RuntimeError(
+                    "Accepted E3 update close did not attempt installer launch"
+                )
+            if not window.close():
+                application.quit()
+                return False
+            closed = True
+            application.quit()
+            return True
+
         # Keep the process alive while close() performs the normal unsaved-
         # project checks. Closing the last Qt window must not terminate E3
         # before the verified installer has actually been spawned.
@@ -261,45 +291,42 @@ def _request_downloaded_update_handoff(
     window: QtWidgets.QMainWindow,
     path: Path,
 ) -> None:
-    """Wait for controller task ownership to drain before closing E3."""
+    """Enter the bounded close path, then launch the verified installer."""
 
-    controller = window.controller
     previous = getattr(window, "_e3_update_idle_handoff", None)
     if previous is not None:
         try:
-            controller.tasksDrained.disconnect(previous)
+            window.controller.tasksDrained.disconnect(previous)
         except (RuntimeError, TypeError):
             pass
         window._e3_update_idle_handoff = None  # type: ignore[attr-defined]
 
     prepare_close = getattr(window, "_prepare_close_request", None)
-    if callable(prepare_close) and not prepare_close():
-        return
+    if callable(prepare_close):
+        installer_launched = False
+        launch_error: Exception | None = None
 
-    def attempt() -> None:
-        if getattr(window, "_e3_update_idle_handoff", None) is not attempt:
+        def launch_before_shutdown_cleanup() -> None:
+            nonlocal installer_launched, launch_error
+            try:
+                launch_downloaded_update(path)
+            except Exception as exc:
+                launch_error = exc
+            else:
+                installer_launched = True
+
+        if not prepare_close(
+            before_shutdown_cleanup=launch_before_shutdown_cleanup
+        ):
             return
-        if controller.has_active_tasks:
-            return
-        try:
-            controller.tasksDrained.disconnect(attempt)
-        except (RuntimeError, TypeError):
-            pass
-        window._e3_update_idle_handoff = None  # type: ignore[attr-defined]
-        _perform_downloaded_update_handoff(window, path)
-
-    if not controller.has_active_tasks:
-        _perform_downloaded_update_handoff(window, path)
-        return
-
-    window._e3_update_idle_handoff = attempt  # type: ignore[attr-defined]
-    # DesktopController emits tasksDrained from its GUI-thread cleanup slot.
-    # MainWindow suppresses its ordinary close-after-drain timer while this
-    # handler owns the pending updater handoff.
-    controller.tasksDrained.connect(
-        attempt,
-        QtCore.Qt.ConnectionType.DirectConnection,
-    )
+        window._e3_update_close_prepared = True  # type: ignore[attr-defined]
+        window._e3_update_installer_launched = installer_launched  # type: ignore[attr-defined]
+        window._e3_update_installer_launch_error = launch_error  # type: ignore[attr-defined]
+    # CloseEvent now cancels producers, drains workers for a bounded slice, and
+    # tears down the runtime under one absolute deadline. Waiting for arbitrary
+    # workers here would bypass that contract and could let the process watchdog
+    # fire before the verified installer is spawned.
+    _perform_downloaded_update_handoff(window, path)
 
 
 def _download_complete(

@@ -7,6 +7,7 @@ from laser_aligner.air_assist import AirAssistCommands, AirAssistMode, AirAssist
 from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.errors import SafetyError
 from laser_aligner.gcode.job_plan import (
+    JobPlanCancelled,
     build_job_plan,
     e3_metadata_line,
     restart_program_from_move,
@@ -526,3 +527,43 @@ def test_start_here_resets_modal_power_before_coincident_assisted_layer() -> Non
         hardware_enabled=True,
     ).preflight_program(restarted_text)
     assert validated.requires_laser_authorization
+
+
+def test_job_plan_and_start_here_poll_cooperative_cancellation() -> None:
+    text = "\n".join(
+        ["G21", "G90", "M5"]
+        + [f"G1 X{index} Y{index % 17} F600" for index in range(1, 300)]
+        + ["M5"]
+    )
+    checks = 0
+
+    def cancel_plan() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 20
+
+    with pytest.raises(JobPlanCancelled, match="cancelled"):
+        build_job_plan(text, power_max=1000, cancel_check=cancel_plan)
+
+    plan = build_job_plan(text, power_max=1000)
+    restart_checks = 0
+
+    def cancel_restart() -> bool:
+        nonlocal restart_checks
+        restart_checks += 1
+        return restart_checks >= 20
+
+    with pytest.raises(JobPlanCancelled, match="cancelled"):
+        restart_program_from_move(
+            plan,
+            0,
+            cancel_check=cancel_restart,
+        )
+
+    assert checks >= 20
+    assert restart_checks >= 20
+    assert build_job_plan(
+        text,
+        power_max=1000,
+        cancel_check=lambda: False,
+    ) == plan

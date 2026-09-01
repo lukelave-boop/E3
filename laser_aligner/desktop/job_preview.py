@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import bisect
 import html
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -55,9 +56,30 @@ class PreparedJobPreview:
     layer_rows: tuple[PreviewLayerRow, ...]
 
 
-def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
+class JobPreviewPreparationCancelled(RuntimeError):
+    """Cooperative cancellation of exact-preview indexing."""
+
+
+def prepare_job_preview(
+    plan: JobPlan,
+    *,
+    cancel_check: Callable[[], bool] | None = None,
+) -> PreparedJobPreview:
+    if cancel_check is not None and not callable(cancel_check):
+        raise TypeError("cancel_check must be callable or None")
+
+    def check_cancelled() -> None:
+        if cancel_check is not None and cancel_check():
+            raise JobPreviewPreparationCancelled(
+                "Exact Preview preparation was cancelled"
+            )
+
+    check_cancelled()
     rows: dict[str, dict[str, object]] = {}
+    move_ends: list[float] = []
     for move in plan.moves:
+        check_cancelled()
+        move_ends.append(move.end_seconds)
         if not move.layer_id and not move.layer_name:
             continue
         key = move.layer_id or move.layer_name
@@ -85,9 +107,11 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
             assert isinstance(feeds, set)
             feeds.add(float(move.feed_mm_min))
             row["power"] = max(float(row["power"]), move.power)
-    return PreparedJobPreview(
-        move_ends=tuple(move.end_seconds for move in plan.moves),
-        layer_rows=tuple(
+    check_cancelled()
+    layer_rows: list[PreviewLayerRow] = []
+    for row in rows.values():
+        check_cancelled()
+        layer_rows.append(
             PreviewLayerRow(
                 id=str(row["id"]),
                 name=str(row["name"]),
@@ -101,8 +125,10 @@ def prepare_job_preview(plan: JobPlan) -> PreparedJobPreview:
                 power=float(row["power"]),
                 air_assist=bool(row["air_assist"]),
             )
-            for row in rows.values()
-        ),
+        )
+    return PreparedJobPreview(
+        move_ends=tuple(move_ends),
+        layer_rows=tuple(layer_rows),
     )
 
 

@@ -50,6 +50,9 @@ The following foundations are implemented and automated-test covered:
 - shared operation-color editing from Cuts/Layers and clickable Objects-row
   swatches through one undoable layer command;
 - guarded exact Preview and the existing `MachineService` execution boundary;
+- bounded desktop process shutdown with active remote-camera cancellation,
+  finite worker draining, shutdown-only idle-Pi Disconnect, and non-destructive
+  accepted-job detach;
 - Windows frozen packaging and automatic-update source boundaries, including
   the hardened external Inno process handoff.
 
@@ -88,6 +91,9 @@ configuration, environment, and result for each step:
 1. Confirm controller identity, firmware, protocol, relevant settings, and
    usable power scale.
 2. Exercise the intended direct or authenticated Pi-bridged connection.
+   Record process-exit timing while idle/live, immediately after camera refresh
+   and Trace start, with the Pi reachable and unreachable, and while ordinarily
+   disconnected; every accepted Close must terminate E3 in under five seconds.
 3. Confirm Home/reference establishment and reset/reconnect behavior.
 4. Confirm coordinate origin, X/Y directions, and active offsets.
 5. Confirm the configured photography park pose and repeatability.

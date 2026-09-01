@@ -16,6 +16,7 @@ from laser_aligner.project import job_preflight as preflight_module
 from laser_aligner.project import raster_asset as raster_asset_module
 from laser_aligner.project import toolpath as toolpath_module
 from laser_aligner.project.job_preflight import (
+    JobPreflightCancelled,
     JobPreflightContext,
     PreflightSeverity,
     build_job_preflight_report,
@@ -1197,3 +1198,27 @@ def test_image_transform_envelope_is_not_treated_as_commanded_bounds() -> None:
     assert "geometry.local_bounds_outside_work_area" not in _codes(report)
     assert "geometry.complex_bounds_deferred" in _codes(report)
     assert "raster.source_unavailable" in _codes(report)
+
+
+def test_structured_preflight_polls_cooperative_cancellation() -> None:
+    document = _rectangle_document()
+    checks = 0
+
+    def cancel_after_work_starts() -> bool:
+        nonlocal checks
+        checks += 1
+        return checks >= 4
+
+    with pytest.raises(JobPreflightCancelled, match="cancelled"):
+        build_job_preflight_report(
+            document,
+            _context(),
+            cancel_check=cancel_after_work_starts,
+        )
+
+    assert checks >= 4
+    assert build_job_preflight_report(
+        document,
+        _context(),
+        cancel_check=lambda: False,
+    ) == build_job_preflight_report(document, _context())
