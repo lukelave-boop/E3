@@ -1486,6 +1486,15 @@ the subsequent START response only reports that durable fact. After START is
 sent, a lost or failed response is ownership-uncertain, so Windows queries the
 same UUID and never retries START blindly.
 
+The execution-policy SHA-256 remains the only cross-host policy authority.
+When the node advertises the versioned diagnostic capability and Windows
+recognizes it, Windows repeats the fixed bounded policy preimage on FINALIZE and
+START. The Pi verifies that
+preimage against the supplied opaque digest before comparing it with its own
+independent profile, and logs only fixed mismatching field labels. The payload
+is omitted for older nodes; it cannot authorize execution, weaken a mismatch,
+or expose values through an unauthenticated interface.
+
 After successful powered streaming, the job remains active through
 `M5 → planner-complete barrier → home → G21/G90 → park → motion-complete
 barrier → motor release`. Stream acknowledgements use a cancellation-aware

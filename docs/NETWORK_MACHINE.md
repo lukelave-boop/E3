@@ -67,6 +67,16 @@ has bounded same-boot replay handling, repeated identical upload chunks are
 idempotent, FINALIZE revalidates an existing prepared job, and duplicate START
 returns the durable state without running it again.
 
+Nodes advertising `pi-execution-policy-diagnostics-v1` also accept a bounded
+authenticated diagnostic copy of the fixed execution-policy profile on FINALIZE
+and START. The Pi first proves that copy hashes to the existing opaque policy
+digest; it never replaces the independently computed Pi-local profile or digest
+comparison. On a mismatch the node log records only fixed field labels, never
+values, credentials, authorization phrases, arbitrary client labels, or G-code.
+The desktop omits the field for older nodes and presents a concise Machine
+Setup / Machine Manager guidance message while the same fail-closed rejection
+remains authoritative.
+
 The stepper hold is a capture-only lease. A caller must complete Home / park,
 realtime-position sampling, and every other ordinary machine operation before
 acquiring it. The Pi deliberately keeps `_ordinary_lock` for the full held

@@ -6,6 +6,16 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added capability-gated, fail-closed diagnostics for Windows/Pi execution-policy
+  mismatches. FINALIZE and START can carry a bounded authenticated copy of the
+  fixed 25-field policy profile; the Pi first proves it hashes to the existing
+  opaque policy digest, then logs only fixed differing field labels. Values,
+  credentials, arbitrary client labels, authorization phrases, and G-code are
+  never logged by this diagnostic. Older nodes receive no new field, the policy
+  digest algorithm and independent Pi preflight remain unchanged, malformed or
+  unbound diagnostics are rejected, and the desktop now directs the operator to
+  Machine Setup / Machine Manager or node diagnostics.
+
 - Added the permanent pointer-driven Windows **E3 DEV TEST** launcher workflow.
   A separate one-file, windowed executable with an orange DEV icon validates an
   exact bounded `current-feature.json`, matching adjacent packaged build

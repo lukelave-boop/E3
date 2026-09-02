@@ -188,8 +188,9 @@ Native desktop workflow:
   four-second process-exit deadline; ordinary operation timeouts are unchanged
 - Authenticated, versioned Pi-owned job upload/execution with atomic local job
   storage, independent Pi preflight, durable START ownership, reconnect/status/
-  terminal-result discovery, priority STOP, bounded retention, and no fallback
-  to the incompatible legacy raw-serial bridge
+  terminal-result discovery, priority STOP, bounded retention, capability-gated
+  safe policy-mismatch field diagnostics, and no fallback to the incompatible
+  legacy raw-serial bridge
 - Validated G-code export; no operator capability requires the browser UI
 
 Follow the [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)

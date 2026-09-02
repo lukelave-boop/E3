@@ -5,7 +5,7 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-09-01**
+Snapshot: **2026-09-02**
 
 ## Permanent Windows feature-test launcher
 
@@ -144,6 +144,72 @@ camera service was unavailable; its CPU cancellation evidence remains
 automated. No physical controller motion, arming, laser output, accepted Pi job,
 or Air Assist action was performed, and the software shutdown controls are not
 safety-rated.
+
+## Active physical Pi execution-policy mismatch correction
+
+The physical **Home and start job** failure reported on 2026-09-01 is isolated
+to execution-policy schema drift. The selected Windows feature build is
+**Guided calibration remediation**, version `0.6.162`, revision
+`097b8fdd654233e096dfe99aae3fe94105f16373`, whose base includes the current
+25-field execution profile. Its saved active machine normalizes Air Assist to a
+trailing `None`. An authenticated, controller-inert Pi-owned job probe using
+only `G21`, `G90`, and `M5` was finalized but never started: the Pi rejected the
+current 25-field digest
+`ec4dbd1d5e30068ae126ea74034b93398e58b2d64d25e7f211d92a24d14f141f`
+and accepted the corresponding legacy 24-field digest
+`91b593c46e5b09814cd168b9fb661e4769f885265237d33043959b3406846c4f`.
+Both temporary job records were deleted.
+
+Because the Pi independently re-preflights the exact uploaded bytes before
+FINALIZE, that acceptance proves all original normalized policy fields match:
+backend and protocol; process and motion gates; homing behavior; work-area
+bounds; laser margin, offsets, and power ceiling; feed ceilings; arming timeout;
+photo position; configured guarded polygon; and the probe's absent job polygon.
+The exact difference is structural: Windows has field 25
+`air_assist.mapping = None`, while the running Pi has no field 25. Authenticated
+capabilities and status independently show the pre-Air-Assist node surface. The
+failure occurs before controller connection, Home, motion, arming, laser output,
+or Air Assist output. The precise loaded Pi source revision, systemd unit,
+checkout cleanliness, and raw config remain pending authenticated shell access;
+they must not be inferred from the network protocol alone.
+
+The active Windows saved machine is also stale relative to the documented rig
+intent: it currently has Air Assist disabled, while the intended matched mapping
+is `secondary_marlin_fan` at 115200 baud on Pi-local endpoint
+`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, with the primary controller
+remaining GRBL. That configuration difference did not cause the reported
+24-versus-25-field rejection. Neither side has yet been edited; the Pi checkout
+and config must first be audited and backed up, then both saved configurations
+must be made deliberately identical before a fresh job is generated.
+
+The current correction branch adds optional authenticated diagnostics under the
+new `pi-execution-policy-diagnostics-v1` capability. A supporting client sends
+the bounded canonical diagnostic preimage only for FINALIZE and START. The Pi
+recomputes and requires its SHA-256 to equal the already-authoritative submitted
+policy digest before comparing it with its independently computed local profile.
+Mismatch logs contain only fixed server-owned field labels such as
+`machine.work_area.x_max` and `air_assist.mapping`; no field values, G-code,
+credentials, authorization phrases, endpoints, or client-provided labels are
+logged. Malformed, oversized, unbound, or drifted diagnostics fail closed before
+controller writes. Older clients remain accepted by a new node, and new clients
+omit the optional field when an older node does not advertise the capability.
+
+Focused automated verification passes **120 tests** across the remote client,
+Pi server/service, Pi-owned end-to-end execution, durable job store, and remote
+node. The complete four-worker Windows suite passes **3,217 tests with 15
+expected platform skips**. Repository Ruff passes with `--no-cache` (the normal
+cached run encountered pre-existing inaccessible worktree cache directories),
+`compileall -q laser_aligner` and `git diff --check` pass, and independent safety
+review found no fail-open path or actionable correctness issue. These are
+simulated and controller-inert checks. No physical controller connection, Home,
+motion, arming, laser output, Air Assist transition, fresh physical job, or
+post-update restart has yet been performed or claimed.
+
+The current honeycomb/calibration evidence was hashed before investigation and
+has not been edited. In particular, `bed_calibration.json`, the automatic
+four-edge-fit `honeycomb_support.json` (191 mm span), both detection images, and
+both visual-reference files retain their pre-investigation contents. Honeycomb
+state is not an execution-policy input and is not the cause of this failure.
 
 ## Active Pi-owned secondary-controller Air Assist correction
 
