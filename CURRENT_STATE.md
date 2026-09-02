@@ -169,18 +169,52 @@ The exact difference is structural: Windows has field 25
 `air_assist.mapping = None`, while the running Pi has no field 25. Authenticated
 capabilities and status independently show the pre-Air-Assist node surface. The
 failure occurs before controller connection, Home, motion, arming, laser output,
-or Air Assist output. The precise loaded Pi source revision, systemd unit,
-checkout cleanliness, and raw config remain pending authenticated shell access;
-they must not be inferred from the network protocol alone.
+or Air Assist output.
 
-The active Windows saved machine is also stale relative to the documented rig
-intent: it currently has Air Assist disabled, while the intended matched mapping
-is `secondary_marlin_fan` at 115200 baud on Pi-local endpoint
+Authenticated shell audit then verified the exact installed unit as
+`e3-hardware-node.service`, with `WorkingDirectory` and imported source under
+`/home/greenhouse-climate/Projects/laser-camera-aligner`, production Python at
+`.venv/bin/python`, and config
+`/home/greenhouse-climate/Projects/laser-camera-aligner/config/pi-hardware.json`.
+The pre-update checkout was tracked-clean `main` at
+`ac9e123b1a4038e00a1ed19a380354b5aa0aab89`; its only untracked files were that
+config and its existing `.bak`. The service process had started after that
+commit and imported directly from the same checkout. The raw and typed Pi
+configuration had no Air Assist field, and its exact 24-field runtime profile
+matched the inert probe result. The bridge credential was checked only for
+valid presence/length and was not printed.
+
+The active Windows saved machine was also stale relative to the documented rig
+intent: it had Air Assist disabled, while the intended matched mapping is
+`secondary_marlin_fan` at 115200 baud on Pi-local endpoint
 `/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, with the primary controller
 remaining GRBL. That configuration difference did not cause the reported
-24-versus-25-field rejection. Neither side has yet been edited; the Pi checkout
-and config must first be audited and backed up, then both saved configurations
-must be made deliberately identical before a fresh job is generated.
+24-versus-25-field rejection.
+
+With authenticated `job.active = null`, the Pi config was copied byte-for-byte
+to `/var/backups/e3/pi-hardware.json.20260902T021345Z`, the complete 34 MB Pi
+data directory was archived as
+`/var/backups/e3/data.20260902T021345Z.tar.gz`, and recovery branch
+`pi-preupdate-20260902T021345Z` was created. The data archive is 33 MB with
+SHA-256
+`50dac0919750fe60514b26fa84465798e64e65ee83bb09d2752aaa62086825ed`.
+The service was stopped, the clean checkout was fast-forwarded to authoritative
+`origin/main` revision `8ce92ee57454afe36dac8a27ce0485ede215eeae`, and no
+dependency manifest changed. `pip check` and `compileall -q laser_aligner`
+passed; the production venv intentionally has no pytest, so no development
+packages were installed merely to run Pi-local automation.
+
+While stopped, the Pi config received only the intended four-field Air Assist
+mapping. Both serial-by-id endpoints resolved (`ttyACM0` primary, `ttyUSB0`
+secondary). E3 DEV TEST Machine Manager then saved the identical mapping through
+the supported Windows saved-machine path, and the exact v0.6.162 build was
+relaunched after that save. Windows and Pi now independently normalize the same
+secondary profile, including `M106 S255`, `M106 S0`, and mapping digest
+`e5f4015545f71910e71441b0e702fd685bf6a6142398dc3069813ffd98a4292f`.
+Their no-job-polygon execution-policy digests both equal
+`990313a9ca97ac580a8a4f171b26c01b7685a5ea4be8a157984c9c9cd936c424`;
+with the authoritative configured polygon also used as job authority, both
+equal `743d88d293df873eb98dc281f063070baf2d6200dce56bf2903d15e821417387`.
 
 The current correction branch adds optional authenticated diagnostics under the
 new `pi-execution-policy-diagnostics-v1` capability. A supporting client sends
@@ -201,9 +235,20 @@ expected platform skips**. Repository Ruff passes with `--no-cache` (the normal
 cached run encountered pre-existing inaccessible worktree cache directories),
 `compileall -q laser_aligner` and `git diff --check` pass, and independent safety
 review found no fail-open path or actionable correctness issue. These are
-simulated and controller-inert checks. No physical controller connection, Home,
-motion, arming, laser output, Air Assist transition, fresh physical job, or
-post-update restart has yet been performed or claimed.
+simulated and controller-inert checks.
+
+The updated Pi service restarted successfully at revision `8ce92ee...` with PID
+83934 and a new boot ID; camera and authenticated machine services became
+available, no job was active, the primary controller remained disconnected, and
+the laser remained unarmed. Startup opened the configured secondary controller
+only for the required OFF initialization, but the Marlin response contained
+startup garbage prefixed to the echoed `M106 S0`, which was rejected as an
+unknown command. The node therefore logged
+`Secondary Marlin fan startup OFF was not acknowledged`, remained
+`secondary_air_assist.ready = false`, and kept Air Assist job START degraded.
+This is the next distinct fail-closed blocker. No retry, controller Connect,
+Home, motion, arming, laser output, Air Assist ON transition, job FINALIZE, or
+physical START was attempted after it appeared.
 
 The current honeycomb/calibration evidence was hashed before investigation and
 has not been edited. In particular, `bed_calibration.json`, the automatic
