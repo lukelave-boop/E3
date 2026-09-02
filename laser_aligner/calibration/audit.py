@@ -61,6 +61,7 @@ def honeycomb_support_validity(
             "reasons": [
                 "The running machine has no configured physical honeycomb ruler span"
             ],
+            "reason_codes": ["honeycomb.span_missing"],
             "expected_span_mm": None,
             "recorded_size_mm": (
                 None
@@ -79,14 +80,17 @@ def honeycomb_support_validity(
         return {
             "state": "MISSING",
             "reasons": ["No honeycomb support reference is recorded"],
+            "reason_codes": ["honeycomb.reference_missing"],
             "expected_span_mm": expected,
             "recorded_size_mm": None,
             "execution_verifiable": False,
         }
 
     reasons: list[str] = []
+    reason_codes: list[str] = []
     if bed_calibration_created_at is None:
         reasons.append("No active camera-to-machine bed map is installed")
+        reason_codes.append("honeycomb.bed_map_missing")
     elif (
         abs(float(reference.bed_calibration_created_at) - bed_calibration_created_at)
         > 1e-9
@@ -94,6 +98,7 @@ def honeycomb_support_validity(
         reasons.append(
             "The camera-to-machine bed map changed after this support was recorded"
         )
+        reason_codes.append("honeycomb.bed_map_changed")
     width = float(reference.support_width_mm)
     height = float(reference.support_height_mm)
     if (
@@ -104,9 +109,16 @@ def honeycomb_support_validity(
             f"The saved support is {width:g} x {height:g} mm, but the running "
             f"machine is configured for {expected:g} x {expected:g} mm"
         )
+        reason_codes.append("honeycomb.span_mismatch")
+    if not reference.is_execution_verifiable:
+        reasons.append(
+            "The saved support does not contain accepted automatic four-edge evidence"
+        )
+        reason_codes.append("honeycomb.evidence_not_execution_verifiable")
     return {
         "state": "CURRENT" if not reasons else "STALE",
         "reasons": reasons,
+        "reason_codes": reason_codes,
         "expected_span_mm": expected,
         "recorded_size_mm": [width, height],
         "execution_verifiable": bool(reference.is_execution_verifiable and not reasons),

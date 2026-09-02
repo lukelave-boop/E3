@@ -7,6 +7,61 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-02**
 
+## Active guided calibration and actionable preflight remediation
+
+Machine Setup now places a compact state-driven **Goal / Do this now / Done
+when** guide at the top of all six numbered tabs. Bed Mapping presents one
+unified **Honeycomb frame** workflow: **1. Home, park & capture ruler overlay**
+followed by **2. Detect & save honeycomb frame**. The ruler overlay and saved
+frame report independent MISSING/CURRENT/STALE state. The second action stays
+disabled until the active bed map owns a current ruler capture, successful
+capture visibly identifies the next action, and the full-width controls retain
+their complete text at the minimum dialog width through tested 100%, 125%,
+150%, and 200% font-scale equivalents. **Clear ruler preview** changes only the
+transient displayed capture. Explicit saved-frame removal and the
+diagnostic-only three-hint fallback live under **Advanced / troubleshooting**.
+
+Automatic four-edge review now offers **Save honeycomb frame**, **Try again**,
+and **Cancel**. Only Save calls the existing persistence path; retry and cancel
+clear the candidate without making it current. A saved automatic frame becomes
+CURRENT immediately and remains CURRENT after restart when its bed map,
+configured span, teaching-image bytes/metadata, and support-frame bindings are
+unchanged. Invalid saved-reference files and stale teaching bindings now expose
+stable reason codes and their exact technical reason without decoding image
+pixels or changing execution authority.
+
+Qt-neutral `PreflightFinding` values carry immutable ordered resolution steps
+and stable navigation target/label strings. Calibration and coordinate blockers
+select camera, lens, base-map, physical-span, saved-frame, work-area, guarded-
+polygon, or profile-binding recovery from structured reason codes rather than
+display prose. The desktop shows a numbered **How to fix** section, retains the
+technical reason, dismisses the blocked report, and maps navigation through a
+fixed allowlist to the relevant Setup tab or Machine Manager field. Navigation
+performs no Home/park, capture, motion, calibration write, arming, or laser
+action. Navigation-only Machine Setup opens also suppress automatic pending
+lens-evidence indexing until the operator explicitly chooses an evidence
+action. Saving calibration evidence invalidates stale prepared jobs and
+preflight reports through the existing `calibrationChanged` path.
+
+The guided-calibration build at revision `097b8fdd654233e096dfe99aae3fe94105f16373`
+was physically/UI validated by the operator before synchronization. The clearer
+numbered Bed Mapping flow, ruler overlay, automatic detect/save flow, explicit
+**Save honeycomb frame** dialog, immediate CURRENT state, persistence of CURRENT
+after restart, and minimum-dialog button layout were accepted. That campaign did
+not require repetition when the already validated feature was merged forward.
+
+After merging authoritative main revision
+`d409ead3938435ad380ada87a79821f1181eb3b7`, focused calibration, persistence,
+preflight, navigation, Pi-policy diagnostic, and desktop startup/shutdown
+verification passes **404 tests** in **191.07 seconds**. The complete Windows
+four-worker repository suite passes **3,270 tests** with **15 expected platform
+or privilege skips** in **241.61 seconds**. Repository Ruff,
+`compileall -q laser_aligner`, and `git diff --check` pass. The synchronization
+adds no new physical behavior claim beyond the operator evidence above and the
+separately recorded later Pi-policy physical verification. Calibration
+mathematics, acceptance thresholds, detection mathematics, guarded output
+limits, machine authority, motion behavior, STOP, shutdown, and laser/Air Assist
+authority remain unchanged; the software guidance is not safety-rated.
 ## Permanent Windows feature-test launcher
 
 The pointer-driven **E3 DEV TEST** launcher is implemented and installed at

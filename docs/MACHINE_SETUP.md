@@ -288,20 +288,23 @@ authorize this step.
    button manually only to retry.
 4. Inspect the numbered overlay. Apply only when every circle is centered on
    its mark and the reported 25-point fit passes.
-5. After applying the map, choose **Home / park, capture ruler overlay**. The
+5. After applying the map, choose **1. Home, park & capture ruler overlay**. The
    raw parked-camera view shows a 10 mm machine-coordinate grid with larger
    coordinate labels every 40 mm, the configured camera/work boundary in
    orange, and the guarded laser-output area
    after boundary margin and any configured laser-spot offset in green. Compare
    both axes to rigid honeycomb rulers.
-   This is a diagnostic for camera-to-machine origin, scale, and crop errors;
-   it never changes configuration automatically and does not prove laser reach
-   or collision clearance. If it exposes a discrepancy, stop and correct the
-   camera/machine calibration evidence before proceeding. Do not resize the
-   machine-output envelope merely to match the movable honeycomb.
+   This ruler overlay is the current image and verification evidence for the
+   next action. It does not save the honeycomb frame. It is a diagnostic for
+   camera-to-machine origin, scale, and crop errors; it never changes
+   configuration automatically and does not prove laser reach or collision
+   clearance. If it exposes a discrepancy, stop and correct the camera/machine
+   calibration evidence before proceeding. Do not resize the machine-output
+   envelope merely to match the movable honeycomb.
 6. Confirm **Configured physical ruler span** displays the measured span
-   configured for this running saved machine, then choose **Detect honeycomb
-   automatically**. If it displays **Not configured**, use Machine Manager to
+   configured for this running saved machine, then choose **2. Detect & save
+   honeycomb frame**. This second action remains disabled until the ruler
+   overlay is current. If the span displays **Not configured**, use Machine Manager to
    configure the measured physical span for the saved machine before returning
    to this workflow; do not guess it in Machine Setup. Vision segments the
    dominant rectangular honeycomb and independently fits all four
@@ -311,15 +314,19 @@ authorize this step.
    +Y. **Configured physical ruler span** defines the nominal honeycomb-local
    width and height; it does not replace the four measured corners or fabricate
    observed edge lengths. Printed tick recognition is not required.
-   Review and accept the detected outline. Acceptance stores a schema-2 support
-   plus the exact reviewed teaching image, its four image corners, and digests
-   binding the image, support frame, and complete bed map. Only this accepted
+   Review the detected magenta outline, then click **Save honeycomb frame** only
+   when all four edges follow the physical cutting surface. **Try again** and
+   **Cancel** do not save the candidate. Saving stores a schema-2 support plus
+   the exact reviewed teaching image, its four image corners, and digests
+   binding the image, support frame, and complete bed map. Only this saved
    automatic four-edge result is execution-verifiable. At Start, image
    registration uses only fresh, spatially distributed features inside the
    accepted cutting surface and projects the four taught corners as the pose
    measurement. Missing, stale, insufficiently covered, ambiguous,
    displaced, scaled, or non-square evidence fails before arming.
-7. **Fallback: detect with 3 hints** is a display/diagnostic last resort. Its
+7. **Fallback: detect with 3 hints** is under **Advanced / troubleshooting** and
+   is labeled **Diagnostic only — does not authorize powered honeycomb-local
+   jobs.** Its
    X-ruler, approximate shared-zero, and Y-ruler clicks only select search
    corridors; they are not measured corners. It can save a legacy visual
    reference, but it lacks four-corner evidence and cannot authorize a
@@ -330,12 +337,15 @@ The execution-verifiable result defines the movable honeycomb's rigid local job
 frame from X0/Y0 to the configured physical span on each axis. The live camera,
 grid, Trace, and project geometry share that frame. Green maps the separately
 configured machine-coordinate output authority into it; its local coordinates
-depend on the accepted support pose and configured span. Automatic detection
+depend on the saved support pose and configured span. Automatic detection
 never moves or expands that authority. Features outside green remain red,
 unchecked, and blocked. Ordinary machine-coordinate jobs retain their guarded
 rectangle. Preflight, arming, and execution use the same selected authority.
-The laser-burned keyed map remains the camera-to-machine calibration. Use
-**Clear visual reference** or re-detect automatically after the honeycomb moves.
+The laser-burned keyed map remains the camera-to-machine calibration. **Clear
+ruler preview** removes only the displayed ruler image. The separate **Remove
+saved honeycomb frame…** action under **Advanced / troubleshooting** retains the
+existing explicit saved-reference removal semantics. Capture a new ruler
+overlay and detect/save the frame again after the honeycomb moves.
 
 The generated pattern contains 23 regular crosses plus a larger and a medium
 interior cross. Those two keys let the detector resolve rotation and reflection
@@ -402,7 +412,7 @@ Fine registration verifies the solved bed map using eight fresh crosses placed
 between the common 5×5 grid locations. Use a clean sacrificial surface at the
 calibrated material height and rigidly restrain it to the moving bed.
 
-Powered preparation requires the current accepted automatic four-corner
+Powered preparation requires the current saved automatic four-corner
 honeycomb reference. The targets are laid out inside that cutting surface and
 the configured machine area. Generation checks every powered segment against
 the support polygon and the complete program against machine bounds. The
@@ -482,7 +492,7 @@ still refit all four current edges and pass the new map's size and closure gates
 With an explicit honeycomb-output polygon, the powered 5×5 fit uses five
 machine-axis nodes across a 180 × 180 mm center span so the residual mesh samples
 near the complete cutting-surface boundary. The 5 mm crosses must fit entirely
-inside both the accepted support and that fixed output polygon. The prepared
+inside both the saved support and that fixed output polygon. The prepared
 session binds the exact polygon through generation, Preview, and Start.
 
 If the remaining error changes by bed position after the homography and fine
@@ -491,7 +501,7 @@ exact powered 25-cross Preview, then run it on a clean, restrained sacrificial
 surface at calibration height. The reviewed mesh is a bounded
 nonlinear residual layer over the existing map and can be reset independently.
 
-Powered dense preparation requires the current accepted automatic four-corner
+Powered dense preparation requires the current saved automatic four-corner
 support. Its regular Cartesian grid remains machine-axis aligned inside a
 shrunken rectangle whose complete powered crosses fit the support and machine
 area. The session is bound and reverified at Start in the same way as fine
@@ -530,7 +540,7 @@ This is the independent holdout check for a translation or full-bed refinement.
 It uses five locations that are not among the eight fine-registration marks and
 does not fit or change calibration.
 
-Powered validation requires the current accepted automatic four-corner support.
+Powered validation requires the current saved automatic four-corner support.
 Its powered segments fit both that polygon and the configured machine area. The
 session is bound to the exact active homography, residual-mesh revision, support,
 and G-code; **START JOB** rejects a changed binding before its single laser-off Home and
@@ -571,7 +581,7 @@ profiles, compares its expected calibration binding with the actually active
 calibration profile, and reports controller protocol, Home/reference state,
 GRBL workspace/G92 state, work rectangle, photography position, guarded beam
 and carriage authority, boundary margin, laser spot offset, camera/lens/bed-map
-state, and the accepted honeycomb support. The physical support span comes only
+state, and the saved honeycomb support. The physical support span comes only
 from `machine.honeycomb_span_mm`; an unset value is explicit and blocks READY.
 No 190/191 mm value is inferred.
 
@@ -584,7 +594,7 @@ current coordinate trust, so the panel distinguishes **TRUSTED AT CAPTURE**
 from **CURRENTLY TRUSTED**.
 
 The overlay shows the configured machine boundary, guarded output authority,
-current accepted support, and positive machine/support axes. Clicking it traces
+current saved support, and positive machine/support axes. Clicking it traces
 display pixel to corrected source pixel, desired beam/machine coordinate,
 honeycomb-local coordinate when valid, and spot-corrected carriage coordinate.
 Containment results are informational and never expand motion or laser-output

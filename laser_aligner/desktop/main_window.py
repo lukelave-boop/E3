@@ -2628,6 +2628,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 self._capture_job_coordinate_authority()
             )
             coordinate_readiness = self._capture_job_coordinate_readiness()
+            calibration_guidance = self._capture_job_calibration_guidance()
             guarded_output_polygon_mm = (
                 laser.guarded_output_polygon_mm
                 if coordinate_frame_signature is not None
@@ -2660,8 +2661,27 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 active_calibration_profile_id=active_calibration_profile_id,
                 bed_calibration_state=coordinate_readiness[0],
                 bed_calibration_reasons=coordinate_readiness[1],
+                bed_calibration_reason_codes=calibration_guidance[
+                    "bed_reason_codes"
+                ],
                 honeycomb_support_state=coordinate_readiness[2],
                 honeycomb_support_reasons=coordinate_readiness[3],
+                honeycomb_support_reason_codes=calibration_guidance[
+                    "support_reason_codes"
+                ],
+                camera_readiness_state=calibration_guidance["camera_state"],
+                camera_readiness_reasons=calibration_guidance["camera_reasons"],
+                camera_readiness_reason_codes=calibration_guidance[
+                    "camera_reason_codes"
+                ],
+                lens_model_state=calibration_guidance["lens_state"],
+                lens_model_reasons=calibration_guidance["lens_reasons"],
+                lens_model_reason_codes=calibration_guidance[
+                    "lens_reason_codes"
+                ],
+                physical_honeycomb_span_configured=calibration_guidance[
+                    "physical_span_configured"
+                ],
                 execution_ready=bool(machine.allow_motion),
                 execution_unready_reason=(
                     "Motion is blocked in the running machine configuration."
@@ -2712,6 +2732,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             "max_work_feed_mm_min": float(machine.max_work_feed_mm_min),
             "max_travel_feed_mm_min": float(machine.max_travel_feed_mm_min),
             "coordinate_readiness": coordinate_readiness,
+            "calibration_guidance_signature": (
+                self._calibration_guidance_signature(calibration_guidance)
+            ),
         }
 
         def snapshot_operation() -> ProjectDocument | None:
@@ -2831,6 +2854,12 @@ class E3MainWindow(QtWidgets.QMainWindow):
         dialog.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, True)
         dialog.setWindowTitle("Job preflight blocked")
         dialog.cancel_button.setText("Close")
+        dialog.navigationRequested.connect(
+            lambda target, source=dialog: self._preflight_navigation_requested(
+                source,
+                target,
+            )
+        )
         dialog.destroyed.connect(
             lambda _object=None, target=dialog: (
                 self._preflight_dialog_destroyed(target)
@@ -2840,6 +2869,55 @@ class E3MainWindow(QtWidgets.QMainWindow):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _preflight_navigation_requested(
+        self,
+        dialog: JobPreflightDialog,
+        target: str,
+    ) -> None:
+        """Dismiss one blocked report and route an allowlisted UI-only target."""
+
+        if dialog is not self._job_preflight_dialog:
+            return
+        target_id = str(target).strip()
+        setup_tabs = {
+            "machine_setup.camera": 0,
+            "machine_setup.lens": 1,
+            "machine_setup.bed_mapping": 2,
+            "machine_setup.fine_registration": 3,
+            "machine_setup.accuracy_validation": 4,
+            "machine_setup.coordinate_audit": 5,
+        }
+        if target_id not in setup_tabs and target_id != "machine_manager":
+            return
+
+        finding = dialog.preflight_view.selected_finding()
+        dialog.close()
+        if target_id == "machine_manager":
+            finding_code = str(getattr(finding, "code", ""))
+            if finding_code == "honeycomb.output_polygon_invalid":
+                focus_target = "guarded_output_polygon"
+            elif finding_code in {
+                "work_area.machine_missing",
+                "work_area.mismatch",
+                "honeycomb.machine_work_area_missing",
+                "coordinate_space.unsupported",
+            }:
+                focus_target = "work_area"
+            else:
+                focus_target = "honeycomb_span"
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self.open_machine_manager(focus_target=focus_target),
+            )
+            return
+        QtCore.QTimer.singleShot(
+            0,
+            lambda target_id=target_id: self.open_machine_setup(
+                setup_tabs[target_id],
+                navigation_target=target_id,
+            ),
+        )
 
     def _preflight_dialog_destroyed(self, dialog: JobPreflightDialog) -> None:
         if self._job_preflight_dialog is dialog:
@@ -3405,6 +3483,84 @@ class E3MainWindow(QtWidgets.QMainWindow):
         support_state, support_reasons = status(support)
         return bed_state, bed_reasons, support_state, support_reasons
 
+    def _capture_job_calibration_guidance(self) -> dict[str, Any]:
+        """Capture detached recovery facts without changing execution authority."""
+
+        empty: dict[str, Any] = {
+            "bed_reason_codes": (),
+            "support_reason_codes": (),
+            "camera_state": None,
+            "camera_reasons": (),
+            "camera_reason_codes": (),
+            "lens_state": None,
+            "lens_reasons": (),
+            "lens_reason_codes": (),
+            "physical_span_configured": None,
+        }
+        if self.document.coordinate_space is CoordinateSpace.MACHINE:
+            return empty
+
+        app_context = self.runtime.context
+        bed = app_context.bed_calibration_validity()
+        support = app_context.honeycomb_support_status()
+        camera = app_context.camera_calibration_readiness()
+
+        def values(value: Any, key: str) -> tuple[str, ...]:
+            return tuple(
+                text
+                for item in value.get(key, ())
+                if (text := str(item).strip())
+            )
+
+        model = app_context.lens.model
+        if model is None:
+            lens_state = "MISSING"
+            lens_reasons = ("No accepted lens model is active.",)
+            lens_reason_codes = ("lens.model_missing",)
+        else:
+            gate = str(model.quality.get("gate") or "").strip().casefold()
+            if gate in {"pass", "warning"}:
+                lens_state = "QUALIFIED"
+                lens_reasons = ()
+                lens_reason_codes = ()
+            else:
+                lens_state = "UNQUALIFIED"
+                lens_reasons = (
+                    "The active lens model does not have accepted pose-diversity "
+                    "and coverage diagnostics.",
+                )
+                lens_reason_codes = ("lens.model_unqualified",)
+
+        return {
+            "bed_reason_codes": values(bed, "reason_codes"),
+            "support_reason_codes": values(support, "reason_codes"),
+            "camera_state": str(camera.get("state") or "UNKNOWN").strip().upper(),
+            "camera_reasons": values(camera, "reasons"),
+            "camera_reason_codes": values(camera, "reason_codes"),
+            "lens_state": lens_state,
+            "lens_reasons": lens_reasons,
+            "lens_reason_codes": lens_reason_codes,
+            "physical_span_configured": (
+                self.runtime.settings.machine.honeycomb_span_mm is not None
+            ),
+        }
+
+    @staticmethod
+    def _calibration_guidance_signature(
+        guidance: dict[str, Any],
+    ) -> tuple[Any, ...]:
+        """Return only stable state/code facts; diagnostic prose may contain ages."""
+
+        return (
+            guidance["bed_reason_codes"],
+            guidance["support_reason_codes"],
+            guidance["camera_state"],
+            guidance["camera_reason_codes"],
+            guidance["lens_state"],
+            guidance["lens_reason_codes"],
+            guidance["physical_span_configured"],
+        )
+
     def _job_request_context_is_current(self, context: dict[str, Any]) -> bool:
         """Reject detached preflight/planning inputs after any authority change."""
 
@@ -3439,6 +3595,10 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 != float(context["max_travel_feed_mm_min"])
                 or self._capture_job_coordinate_readiness()
                 != context["coordinate_readiness"]
+                or self._calibration_guidance_signature(
+                    self._capture_job_calibration_guidance()
+                )
+                != context["calibration_guidance_signature"]
             ):
                 return False
             if self.runtime.settings.laser != context["laser"]:
@@ -6004,11 +6164,23 @@ class E3MainWindow(QtWidgets.QMainWindow):
             8000,
         )
 
-    def open_machine_manager(self) -> None:
+    def open_machine_manager(
+        self,
+        *,
+        focus_honeycomb_span: bool = False,
+        focus_target: str | None = None,
+    ) -> None:
         dialog = MachineManagerDialog(self.runtime, self)
         self._machine_manager_dialog = dialog
         dialog.registryChanged.connect(self._refresh_machine_selector)
         try:
+            if focus_honeycomb_span:
+                focus_target = "honeycomb_span"
+            if focus_target is not None:
+                QtCore.QTimer.singleShot(
+                    0,
+                    lambda: dialog.focus_navigation_target(focus_target),
+                )
             dialog.exec()
         finally:
             self._machine_manager_dialog = None
@@ -6019,10 +6191,16 @@ class E3MainWindow(QtWidgets.QMainWindow):
         tab_index: int = 0,
         *,
         automatic_capture: str | None = None,
+        navigation_target: str | None = None,
     ) -> None:
         existing = self._machine_setup_dialog
         if existing is not None:
             existing.tabs.setCurrentIndex(int(tab_index))
+            if navigation_target is not None:
+                QtCore.QTimer.singleShot(
+                    0,
+                    lambda: existing.focus_navigation_target(navigation_target),
+                )
             if automatic_capture is not None:
                 capture = getattr(existing, automatic_capture)
                 QtCore.QTimer.singleShot(0, capture)
@@ -6032,9 +6210,18 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
         was_live = self.camera_panel.live_enabled()
         self.controller.set_live_camera(False)
-        dialog = MachineSetupDialog(self.runtime, self)
+        dialog = MachineSetupDialog(
+            self.runtime,
+            self,
+            navigation_only=navigation_target is not None,
+        )
         self._machine_setup_dialog = dialog
         dialog.tabs.setCurrentIndex(tab_index)
+        if navigation_target is not None:
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: dialog.focus_navigation_target(navigation_target),
+            )
         dialog.calibrationChanged.connect(self.controller.poll_status)
         dialog.calibrationChanged.connect(self.controller.calibration_changed)
         dialog.calibrationChanged.connect(self._calibration_project_frame_changed)

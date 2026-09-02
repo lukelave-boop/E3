@@ -42,6 +42,9 @@ def _finding(
     message: str | None = None,
     detail: str = "",
     context: dict[str, object] | None = None,
+    resolution_steps: tuple[str, ...] = (),
+    navigation_target: str | None = None,
+    navigation_label: str | None = None,
 ) -> PreflightFinding:
     return PreflightFinding(
         code=code,
@@ -50,6 +53,9 @@ def _finding(
         message=message or f"Message {code}",
         detail=detail,
         context={} if context is None else context,
+        resolution_steps=resolution_steps,
+        navigation_target=navigation_target,
+        navigation_label=navigation_label,
     )
 
 
@@ -198,6 +204,54 @@ def test_finding_detail_and_context_are_complete_and_deterministic(
     assert item is not None
     assert item.toolTip(4) == "SHA-256 will be checked again before execution."
     assert item.toolTip(5) == "Alpha=7; enabled=True; zeta=last"
+
+
+def test_actionable_finding_renders_numbered_steps_and_navigation(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    report = JobPreflightReport(
+        findings=(
+            _finding(
+                "honeycomb.support_not_current",
+                PreflightSeverity.BLOCKER,
+                title="Honeycomb frame is not current",
+                message=(
+                    "E3 does not have a current saved honeycomb frame for this "
+                    "camera-to-machine map."
+                ),
+                detail="The camera-to-machine bed map changed after this frame was saved.",
+                resolution_steps=(
+                    "Open Tools → Machine Setup.",
+                    "Select 3. Bed Mapping.",
+                    "Capture a current ruler overlay.",
+                    "Detect and save the honeycomb frame.",
+                ),
+                navigation_target="machine_setup.bed_mapping",
+                navigation_label="Open Bed Mapping",
+            ),
+        )
+    )
+    dialog = JobPreflightDialog(report)
+    requested: list[str] = []
+    dialog.navigationRequested.connect(requested.append)
+
+    assert not dialog.preflight_view.remediation_group.isHidden()
+    assert dialog.preflight_view.resolution_steps_label.text() == (
+        "1. Open Tools → Machine Setup.\n"
+        "2. Select 3. Bed Mapping.\n"
+        "3. Capture a current ruler overlay.\n"
+        "4. Detect and save the honeycomb frame."
+    )
+    assert dialog.preflight_view.technical_reason_label.text() == (
+        "Technical reason: The camera-to-machine bed map changed after this frame "
+        "was saved."
+    )
+    assert dialog.preflight_view.navigation_button.text() == "Open Bed Mapping"
+
+    dialog.preflight_view.navigation_button.click()
+    qt_application.processEvents()
+
+    assert requested == ["machine_setup.bed_mapping"]
 
 
 def test_findings_and_repeated_context_rendering_are_bounded_and_deterministic(

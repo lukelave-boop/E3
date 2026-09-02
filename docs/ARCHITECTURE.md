@@ -653,8 +653,10 @@ retaining prepared-job invalidation and undo/redo behavior.
 The structured job-preflight boundary is Qt-neutral and advisory.
 `PreflightSeverity` classifies findings as info, warning, or blocker;
 `PreflightFinding` carries a stable dotted code, title, message, optional detail,
-and immutable structured context; `JobPreflightReport` carries the ordered
-findings, severity counts, and derived `ready` / `has_blockers` state. The
+immutable structured context, immutable ordered resolution steps, and an
+optional stable navigation target/label. It never carries a Qt callback or
+arbitrary callable. `JobPreflightReport` carries the ordered findings, severity
+counts, and derived `ready` / `has_blockers` state. The
 builder receives only a detached project snapshot plus a detached
 `JobPreflightContext`. It does not construct `SceneObject` values, flatten
 geometry, decode pixels, generate G-code, call `MachineService`, or communicate
@@ -668,6 +670,8 @@ CURRENT state required for local output; layer/object/output eligibility and
 operation-setting validity; configured machine work/travel feed ceilings; and
 bounded raster headers and aggregate encoded/decoded/row/sample/command budgets.
 Stale bed-calibration or support readiness blocks honeycomb-local generation.
+Structured camera, lens, bed-map, profile-binding, physical-span, and support
+reason codes select context-specific recovery without parsing display text.
 Only provably exact local bounds for unrounded rectangles and valid two-point
 lines are eligible for structured bounds blockers. Rounded rectangles, ellipses,
 images, paths, and other complex geometry bounds remain explicitly deferred
@@ -699,8 +703,14 @@ CPU-heavy Trace, native fitting, raster conversion, and planning loops poll that
 cancellation authority; a result canceled before START cannot later acquire
 execution authority.
 No worker creates or mutates Qt objects. Blocking review is modeless so it does
-not hold preparation ownership or hide software STOP; the exact generated-job
-Preview remains the window-modal execution review gate.
+not hold preparation ownership or hide software STOP. The desktop alone maps
+stable navigation IDs
+through a fixed allowlist, dismisses the report, and opens the exact Setup tab
+or Machine Manager field. That route performs no Home/park, capture, motion,
+calibration write, arming, or laser action; navigation-only Machine Setup opens
+also suppress automatic pending lens-evidence indexing until the operator
+explicitly chooses an evidence action. Navigation is not completion.
+The exact generated-job Preview remains the window-modal execution review gate.
 
 The staged-planning contract is:
 

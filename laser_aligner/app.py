@@ -468,8 +468,16 @@ class AppContext:
         if calibration is None:
             unavailable_reason = self.bed.calibration_unavailable_reason
             if unavailable_reason is not None:
-                return {"state": "STALE", "reasons": [unavailable_reason]}
-            return {"state": "MISSING", "reasons": ["No bed map is installed"]}
+                return {
+                    "state": "STALE",
+                    "reasons": [unavailable_reason],
+                    "reason_codes": ["bed_map.unavailable"],
+                }
+            return {
+                "state": "MISSING",
+                "reasons": ["No bed map is installed"],
+                "reason_codes": ["bed_map.missing"],
+            }
         saved = calibration.provenance
         if not isinstance(saved, dict):
             return {
@@ -477,6 +485,7 @@ class AppContext:
                 "reasons": [
                     "This legacy bed map has no camera/lens provenance and must be remapped"
                 ],
+                "reason_codes": ["bed_map.legacy_provenance"],
             }
         current = self._bed_provenance(lens_model_id=lens_model_id)
         changed: list[str] = []
@@ -495,34 +504,48 @@ class AppContext:
                 "reasons": [
                     "Bed-map dependency changed: " + ", ".join(changed)
                 ],
+                "reason_codes": ["bed_map.dependency_changed"],
             }
-        return {"state": "VALID", "reasons": []}
+        return {"state": "VALID", "reasons": [], "reason_codes": []}
 
     def camera_calibration_readiness(self) -> dict[str, Any]:
         """Report whether the live camera is stable enough for calibration."""
 
         status = self.camera.status()
         reasons: list[str] = []
+        reason_codes: list[str] = []
+
+        def add_reason(code: str, message: str) -> None:
+            reasons.append(message)
+            if code not in reason_codes:
+                reason_codes.append(code)
+
         if not status.connected:
-            reasons.append("Camera is not connected")
+            add_reason("camera.not_connected", "Camera is not connected")
         expected = (int(self.settings.camera.width), int(self.settings.camera.height))
         actual = (int(status.width), int(status.height))
         if actual != expected:
-            reasons.append(
+            add_reason(
+                "camera.resolution_mismatch",
                 "Camera resolution is not the configured calibration mode: "
-                f"expected {expected[0]}x{expected[1]}, got {actual[0]}x{actual[1]}"
+                f"expected {expected[0]}x{expected[1]}, got {actual[0]}x{actual[1]}",
             )
         if status.frame_age_seconds is None:
-            reasons.append("Camera has not delivered a live frame")
+            add_reason("camera.frame_missing", "Camera has not delivered a live frame")
         elif status.frame_age_seconds > 2.0:
-            reasons.append(
-                f"Latest camera frame is stale ({status.frame_age_seconds:.2f} s old)"
+            add_reason(
+                "camera.frame_stale",
+                f"Latest camera frame is stale ({status.frame_age_seconds:.2f} s old)",
             )
         for requirement, detail in sorted(status.controls_critical_unverified.items()):
-            reasons.append(f"{requirement.replace('_', ' ')} is unverified: {detail}")
+            add_reason(
+                "camera.control_unverified",
+                f"{requirement.replace('_', ' ')} is unverified: {detail}",
+            )
         return {
             "state": "READY" if not reasons else "BLOCKED",
             "reasons": reasons,
+            "reason_codes": reason_codes,
             "expected_resolution": list(expected),
             "actual_resolution": list(actual),
             "controls_verified": dict(status.controls_verified),
@@ -1850,15 +1873,131 @@ class AppContext:
     def clear_honeycomb_support_reference(self) -> None:
         self.honeycomb_support.clear()
 
+    def _honeycomb_teaching_reference_stale_reason(
+        self,
+        reference: HoneycombSupportReference,
+    ) -> str | None:
+        """Validate persisted automatic teaching bindings without decoding pixels."""
+
+        image_path = self.honeycomb_visual_reference_path
+        metadata_path = self.honeycomb_visual_reference_metadata_path
+        if not image_path.is_file():
+            return "The saved automatic honeycomb teaching image is missing"
+        if not metadata_path.is_file():
+            return "The saved automatic honeycomb teaching metadata is missing"
+
+        metadata = read_json(metadata_path)
+        if not isinstance(metadata, dict):
+            return "The saved automatic honeycomb teaching metadata is invalid"
+        if (
+            type(metadata.get("schema_version")) is not int
+            or metadata.get("schema_version") != 2
+        ):
+            return "The saved automatic honeycomb teaching metadata schema is not 2"
+        if (
+            metadata.get("kind")
+            != "accepted-automatic-honeycomb-teaching-reference"
+        ):
+            return "The saved automatic honeycomb teaching metadata kind is invalid"
+
+        try:
+            image_payload = read_encoded_image_payload(image_path)
+        except ValueError as exc:
+            return (
+                "The saved automatic honeycomb teaching image is invalid or "
+                f"unreadable: {exc}"
+            )
+        if metadata.get("image_sha256") != image_payload.content_sha256:
+            return (
+                "The saved automatic honeycomb teaching image digest does not match its "
+                "saved metadata"
+            )
+
+        corners = metadata.get("cutting_surface_corners_px")
+        corners_valid = bool(
+            isinstance(corners, list)
+            and len(corners) == 4
+            and all(
+                isinstance(point, list)
+                and len(point) == 2
+                and all(
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and math.isfinite(float(value))
+                    for value in point
+                )
+                for point in corners
+            )
+        )
+        if not corners_valid:
+            return (
+                "The saved automatic honeycomb teaching metadata does not contain four "
+                "finite image corners"
+            )
+
+        active_bed_mapping_digest = self.bed_mapping_digest()
+        if active_bed_mapping_digest is None:
+            return (
+                "The saved automatic honeycomb teaching metadata cannot be bound because "
+                "no active camera-to-machine bed map is installed"
+            )
+        if metadata.get("bed_mapping_digest") != active_bed_mapping_digest:
+            return (
+                "The saved automatic honeycomb teaching metadata is bound to a different "
+                "camera-to-machine bed map"
+            )
+        if (
+            metadata.get("support_coordinate_frame_digest")
+            != reference.coordinate_frame_digest
+        ):
+            return (
+                "The saved automatic honeycomb teaching metadata is bound to a different "
+                "honeycomb coordinate frame"
+            )
+        return None
+
     def honeycomb_support_status(self) -> dict[str, Any]:
         calibration = self.bed.calibration
-        return honeycomb_support_validity(
+        status = honeycomb_support_validity(
             self.honeycomb_support.reference,
             bed_calibration_created_at=(
                 None if calibration is None else calibration.created_at
             ),
             expected_span_mm=self.settings.machine.honeycomb_span_mm,
         )
+        load_error = self.honeycomb_support.load_error
+        if load_error is not None:
+            reasons = list(status.get("reasons") or ())
+            reason_codes = list(status.get("reason_codes") or ())
+            if "honeycomb.reference_missing" in reason_codes:
+                missing_index = reason_codes.index("honeycomb.reference_missing")
+                reason_codes.pop(missing_index)
+                reasons.pop(missing_index)
+            reasons.append(load_error)
+            reason_codes.append("honeycomb.reference_invalid")
+            status.update(
+                state="STALE",
+                reasons=reasons,
+                reason_codes=reason_codes,
+                execution_verifiable=False,
+            )
+            return status
+
+        reference = self.honeycomb_support.reference
+        if reference is not None and reference.is_execution_verifiable:
+            stale_reason = self._honeycomb_teaching_reference_stale_reason(reference)
+            if stale_reason is not None:
+                reasons = list(status.get("reasons") or ())
+                reason_codes = list(status.get("reason_codes") or ())
+                reasons.append(stale_reason)
+                reason_codes.append("honeycomb.teaching_image_stale")
+                status.update(
+                    state="STALE",
+                    reasons=reasons,
+                    reason_codes=reason_codes,
+                    execution_verifiable=False,
+                )
+        return status
 
     def coordinate_audit_status(self) -> dict[str, Any]:
         """Report audit state without connecting to or commanding hardware."""

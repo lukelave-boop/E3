@@ -48,6 +48,7 @@ if TYPE_CHECKING:
 
 
 _CODE_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)+$")
+_NAVIGATION_TARGET_RE = re.compile(r"^[a-z][a-z0-9_]*(?:\.[a-z0-9_]+)*$")
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 _BOUNDS_TOLERANCE_MM = 1e-6
 _NONZERO_OUTPUT_TOLERANCE_MM = 1e-9
@@ -109,6 +110,9 @@ class PreflightFinding:
     message: str
     detail: str = ""
     context: Mapping[str, object] = field(default_factory=dict)
+    resolution_steps: tuple[str, ...] = ()
+    navigation_target: str | None = None
+    navigation_label: str | None = None
 
     def __post_init__(self) -> None:
         code = str(self.code).strip().casefold()
@@ -125,6 +129,39 @@ class PreflightFinding:
             raise ValueError("Preflight finding title and message must not be empty")
         if not isinstance(self.context, Mapping):
             raise TypeError("Preflight finding context must be a mapping")
+        if isinstance(self.resolution_steps, (str, bytes)):
+            raise TypeError("Preflight finding resolution steps must be a sequence")
+        try:
+            resolution_steps = tuple(
+                str(step).strip() for step in self.resolution_steps
+            )
+        except TypeError as exc:
+            raise TypeError(
+                "Preflight finding resolution steps must be a sequence"
+            ) from exc
+        if any(not step for step in resolution_steps):
+            raise ValueError("Preflight finding resolution steps must not be empty")
+
+        navigation_target = (
+            None
+            if self.navigation_target is None
+            else str(self.navigation_target).strip().casefold() or None
+        )
+        navigation_label = (
+            None
+            if self.navigation_label is None
+            else str(self.navigation_label).strip() or None
+        )
+        if navigation_target is not None and not _NAVIGATION_TARGET_RE.fullmatch(
+            navigation_target
+        ):
+            raise ValueError(
+                "Preflight finding navigation targets must be stable identifiers"
+            )
+        if (navigation_target is None) != (navigation_label is None):
+            raise ValueError(
+                "Preflight finding navigation target and label must be supplied together"
+            )
 
         object.__setattr__(self, "code", code)
         object.__setattr__(self, "severity", severity)
@@ -136,6 +173,9 @@ class PreflightFinding:
             "context",
             _freeze_context_value(dict(self.context)),
         )
+        object.__setattr__(self, "resolution_steps", resolution_steps)
+        object.__setattr__(self, "navigation_target", navigation_target)
+        object.__setattr__(self, "navigation_label", navigation_label)
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,8 +258,17 @@ class JobPreflightContext:
     active_calibration_profile_id: str | None = None
     bed_calibration_state: str | None = None
     bed_calibration_reasons: tuple[str, ...] = ()
+    bed_calibration_reason_codes: tuple[str, ...] = ()
     honeycomb_support_state: str | None = None
     honeycomb_support_reasons: tuple[str, ...] = ()
+    honeycomb_support_reason_codes: tuple[str, ...] = ()
+    camera_readiness_state: str | None = None
+    camera_readiness_reasons: tuple[str, ...] = ()
+    camera_readiness_reason_codes: tuple[str, ...] = ()
+    lens_model_state: str | None = None
+    lens_model_reasons: tuple[str, ...] = ()
+    lens_model_reason_codes: tuple[str, ...] = ()
+    physical_honeycomb_span_configured: bool | None = None
     execution_ready: bool = True
     execution_unready_reason: str = ""
 
@@ -240,6 +289,13 @@ class JobPreflightContext:
 
         if type(self.execution_ready) is not bool:
             raise TypeError("execution_ready must be an exact boolean")
+        if (
+            self.physical_honeycomb_span_configured is not None
+            and type(self.physical_honeycomb_span_configured) is not bool
+        ):
+            raise TypeError(
+                "physical_honeycomb_span_configured must be an exact boolean or None"
+            )
         for name in ("spot_offset_x_mm", "spot_offset_y_mm"):
             value = getattr(self, name)
             if type(value) is bool or not isinstance(value, (int, float)):
@@ -275,24 +331,313 @@ class JobPreflightContext:
                 name,
                 None if value is None else str(value).strip() or None,
             )
-        for name in ("bed_calibration_state", "honeycomb_support_state"):
+        for name in (
+            "bed_calibration_state",
+            "honeycomb_support_state",
+            "camera_readiness_state",
+            "lens_model_state",
+        ):
             value = getattr(self, name)
             object.__setattr__(
                 self,
                 name,
                 None if value is None else str(value).strip().upper() or None,
             )
-        for name in ("bed_calibration_reasons", "honeycomb_support_reasons"):
+        for name in (
+            "bed_calibration_reasons",
+            "honeycomb_support_reasons",
+            "camera_readiness_reasons",
+            "lens_model_reasons",
+        ):
+            values = getattr(self, name)
+            if isinstance(values, (str, bytes)):
+                raise TypeError(f"{name} must be a sequence")
             object.__setattr__(
                 self,
                 name,
-                tuple(str(value).strip() for value in getattr(self, name) if str(value).strip()),
+                tuple(
+                    str(value).strip()
+                    for value in values
+                    if str(value).strip()
+                ),
             )
+        for name in (
+            "bed_calibration_reason_codes",
+            "honeycomb_support_reason_codes",
+            "camera_readiness_reason_codes",
+            "lens_model_reason_codes",
+        ):
+            values = getattr(self, name)
+            if isinstance(values, (str, bytes)):
+                raise TypeError(f"{name} must be a sequence")
+            codes = tuple(str(value).strip().casefold() for value in values)
+            if any(not _CODE_RE.fullmatch(code) for code in codes):
+                raise ValueError(f"{name} must contain stable dotted identifiers")
+            object.__setattr__(self, name, codes)
         object.__setattr__(
             self,
             "execution_unready_reason",
             str(self.execution_unready_reason).strip(),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _Remediation:
+    steps: tuple[str, ...]
+    navigation_target: str
+    navigation_label: str
+
+
+_HONEYCOMB_FRAME_REMEDIATION = _Remediation(
+    steps=(
+        "Open Tools → Machine Setup.",
+        "Select 3. Bed Mapping.",
+        "Click “1. Home, park & capture ruler overlay.”",
+        "When the ruler image appears, click “2. Detect & save honeycomb frame.”",
+        "Confirm the magenta outline and click “Save honeycomb frame.”",
+        "Return here and generate again.",
+    ),
+    navigation_target="machine_setup.bed_mapping",
+    navigation_label="Open Bed Mapping",
+)
+
+_PHYSICAL_HONEYCOMB_SPAN_REMEDIATION = _Remediation(
+    steps=(
+        "Open Machine Manager.",
+        "Edit the running saved machine.",
+        "Enter the measured Physical honeycomb ruler span.",
+        "Save and relaunch as required by existing configuration semantics.",
+        "Return to Machine Setup → 3. Bed Mapping.",
+        "Capture the ruler overlay.",
+        "Detect and save the honeycomb frame.",
+    ),
+    navigation_target="machine_manager",
+    navigation_label="Open Machine Manager",
+)
+
+_CAMERA_READINESS_REMEDIATION = _Remediation(
+    steps=(
+        "Open Tools → Machine Setup.",
+        "Select 1. Camera.",
+        "Click “Refresh raw preview.”",
+        "Click “Apply all configured controls.”",
+        "Resolve the reported camera condition until Camera readiness is READY.",
+        "Complete the remaining Lens and Bed Mapping steps, then return here and generate again.",
+    ),
+    navigation_target="machine_setup.camera",
+    navigation_label="Open Camera Setup",
+)
+
+_LENS_MODEL_REMEDIATION = _Remediation(
+    steps=(
+        "Open Tools → Machine Setup.",
+        "Select 2. Lens.",
+        "Capture the required checkerboard views for the current camera resolution and focus.",
+        "Click “Solve current-resolution calibration.”",
+        "Continue when a qualified lens model is active.",
+        "Complete Bed Mapping and the honeycomb frame, then return here and generate again.",
+    ),
+    navigation_target="machine_setup.lens",
+    navigation_label="Open Lens Calibration",
+)
+
+_BED_MAP_REMEDIATION = _Remediation(
+    steps=(
+        "Open Tools → Machine Setup.",
+        "Select 3. Bed Mapping.",
+        "Complete the base camera-to-machine map process before attempting honeycomb detection.",
+        "Use “Prepare powered base-map job” and the existing guarded Preview workflow when a fresh base map is required.",
+        "Click “Home / park, capture and detect base grid” and review the detected base map.",
+        "Continue only when the camera-to-machine map is VALID.",
+        "Then capture the ruler overlay, detect and save the honeycomb frame, and generate again.",
+    ),
+    navigation_target="machine_setup.bed_mapping",
+    navigation_label="Open Bed Mapping",
+)
+
+_PROFILE_BINDING_REMEDIATION = _Remediation(
+    steps=(
+        "Open Tools → Machine Setup.",
+        "Select 6. Coordinate Audit.",
+        "Compare the running machine’s expected calibration profile with the active profile.",
+        "Select and relaunch the correctly bound saved machine, or deliberately use “Bind active profile for a later launch” when that is the intended binding.",
+        "Refresh the audit and continue only when the calibration-profile binding matches.",
+        "Return here and generate again.",
+    ),
+    navigation_target="machine_setup.coordinate_audit",
+    navigation_label="Open Coordinate Audit",
+)
+
+_MACHINE_WORK_AREA_REMEDIATION = _Remediation(
+    steps=(
+        "Open Machine Manager.",
+        "Edit the running saved machine.",
+        "Enter and review the measured machine work area.",
+        "Save and relaunch as required by the existing configuration semantics.",
+        "Return to the project and generate again when the running work area is current.",
+    ),
+    navigation_target="machine_manager",
+    navigation_label="Open Machine Manager",
+)
+
+_WORK_AREA_MISMATCH_REMEDIATION = _Remediation(
+    steps=(
+        "Open Machine Manager and verify the running saved machine and its measured work area.",
+        "If that saved configuration is wrong, correct it, save it, and relaunch as required.",
+        "If the running configuration is correct, open or create a project for that machine and coordinate space.",
+        "Generate again only when the project and running-machine work areas match.",
+    ),
+    navigation_target="machine_manager",
+    navigation_label="Open Machine Manager",
+)
+
+_HONEYCOMB_WORK_AREA_REMEDIATION = _Remediation(
+    steps=(
+        "Open Tools → Machine Setup.",
+        "Select 3. Bed Mapping and verify the current saved honeycomb frame.",
+        "Open or create a honeycomb-local project whose work area matches that current frame.",
+        "Generate again only when the project bounds and saved honeycomb frame agree.",
+    ),
+    navigation_target="machine_setup.bed_mapping",
+    navigation_label="Open Bed Mapping",
+)
+
+_OUTPUT_POLYGON_REMEDIATION = _Remediation(
+    steps=(
+        "Open Machine Manager.",
+        "Edit the running saved machine and review the read-only Guarded output polygon summary under Laser / tool-head settings.",
+        "This authority cannot be repaired inside the running process; close E3 and have the machine administrator correct the saved polygon from measured machine limits.",
+        "Relaunch E3 and confirm Machine Manager shows the corrected saved configuration.",
+        "Return here and generate again after the configured output authority is valid.",
+    ),
+    navigation_target="machine_manager",
+    navigation_label="Open Machine Manager",
+)
+
+_COORDINATE_SPACE_REMEDIATION = _Remediation(
+    steps=(
+        "Open Machine Manager and verify the running saved machine.",
+        "Open or create a project that explicitly uses Machine or Honeycomb coordinates for that machine.",
+        "For Honeycomb coordinates, complete Machine Setup → 3. Bed Mapping before generating.",
+        "Generate again only after the project has a supported coordinate space.",
+    ),
+    navigation_target="machine_manager",
+    navigation_label="Open Machine Manager",
+)
+
+_CAMERA_REASON_CODES = frozenset(
+    {
+        "camera.not_connected",
+        "camera.resolution_mismatch",
+        "camera.frame_missing",
+        "camera.frame_stale",
+        "camera.control_unverified",
+    }
+)
+_LENS_REASON_CODES = frozenset({"lens.model_missing", "lens.model_unqualified"})
+_BED_MAP_REASON_CODES = frozenset(
+    {
+        "bed_map.missing",
+        "bed_map.unavailable",
+        "bed_map.legacy_provenance",
+        "bed_map.dependency_changed",
+        "honeycomb.bed_map_missing",
+        "honeycomb.bed_map_changed",
+    }
+)
+_SPAN_REASON_CODES = frozenset({"honeycomb.span_missing"})
+_LENS_READY_STATES = frozenset(
+    {
+        "ACCEPTED",
+        "ACTIVE",
+        "CURRENT",
+        "PASS",
+        "QUALIFIED",
+        "READY",
+        "VALID",
+        "WARNING",
+    }
+)
+
+
+def _coordinate_remediation(
+    context: JobPreflightContext,
+    *,
+    default: _Remediation,
+) -> _Remediation:
+    """Choose recovery from detached structured facts, never display wording."""
+
+    expected_profile = context.expected_calibration_profile_id
+    active_profile = context.active_calibration_profile_id
+    if (
+        expected_profile is None
+        or active_profile is None
+        or expected_profile != active_profile
+    ):
+        return _PROFILE_BINDING_REMEDIATION
+
+    support_codes = frozenset(context.honeycomb_support_reason_codes)
+    if (
+        context.physical_honeycomb_span_configured is False
+        or bool(support_codes & _SPAN_REASON_CODES)
+    ):
+        return _PHYSICAL_HONEYCOMB_SPAN_REMEDIATION
+
+    camera_codes = frozenset(context.camera_readiness_reason_codes)
+    if (
+        context.camera_readiness_state is not None
+        and context.camera_readiness_state != "READY"
+    ) or bool(camera_codes & _CAMERA_REASON_CODES):
+        return _CAMERA_READINESS_REMEDIATION
+
+    lens_codes = frozenset(context.lens_model_reason_codes)
+    if (
+        context.lens_model_state is not None
+        and context.lens_model_state not in _LENS_READY_STATES
+    ) or bool(lens_codes & _LENS_REASON_CODES):
+        return _LENS_MODEL_REMEDIATION
+
+    bed_codes = frozenset(context.bed_calibration_reason_codes)
+    if (
+        context.bed_calibration_state is not None
+        and context.bed_calibration_state != "VALID"
+    ) or bool((bed_codes | support_codes) & _BED_MAP_REASON_CODES):
+        return _BED_MAP_REMEDIATION
+
+    return default
+
+
+def _coordinate_detail(
+    context: JobPreflightContext,
+    remediation: _Remediation,
+    primary_reasons: tuple[str, ...],
+) -> str:
+    """Retain primary technical reasons and the selected prerequisite reason."""
+
+    reasons: list[str] = []
+
+    def add(values: tuple[str, ...]) -> None:
+        for value in values:
+            if value and value not in reasons:
+                reasons.append(value)
+
+    if remediation is _PROFILE_BINDING_REMEDIATION:
+        expected = context.expected_calibration_profile_id or "not bound"
+        active = context.active_calibration_profile_id or "not active"
+        add(
+            (
+                "Calibration profile binding mismatch: running machine expects "
+                f"{expected!r}, active profile is {active!r}",
+            )
+        )
+    elif remediation is _CAMERA_READINESS_REMEDIATION:
+        add(context.camera_readiness_reasons)
+    elif remediation is _LENS_MODEL_REMEDIATION:
+        add(context.lens_model_reasons)
+    elif remediation is _BED_MAP_REMEDIATION:
+        add(context.bed_calibration_reasons)
+    add(primary_reasons)
+    return "; ".join(reasons)
 
 
 def _bounds_tuple(bounds: Bounds) -> tuple[float, float, float, float]:
@@ -804,6 +1149,7 @@ def _build_job_preflight_report(
         *,
         detail: str = "",
         finding_context: Mapping[str, object] | None = None,
+        remediation: _Remediation | None = None,
     ) -> None:
         findings.append(
             PreflightFinding(
@@ -813,6 +1159,13 @@ def _build_job_preflight_report(
                 message=message,
                 detail=detail,
                 context={} if finding_context is None else finding_context,
+                resolution_steps=() if remediation is None else remediation.steps,
+                navigation_target=(
+                    None if remediation is None else remediation.navigation_target
+                ),
+                navigation_label=(
+                    None if remediation is None else remediation.navigation_label
+                ),
             )
         )
 
@@ -886,6 +1239,7 @@ def _build_job_preflight_report(
                 PreflightSeverity.BLOCKER,
                 "Machine work area unavailable",
                 "A configured machine work area is required for project preflight.",
+                remediation=_MACHINE_WORK_AREA_REMEDIATION,
             )
         elif not _bounds_match(document.work_area, machine_area):
             add(
@@ -897,6 +1251,7 @@ def _build_job_preflight_report(
                     "project_bounds_mm": _bounds_tuple(document.work_area),
                     "machine_bounds_mm": _bounds_tuple(machine_area),
                 },
+                remediation=_WORK_AREA_MISMATCH_REMEDIATION,
             )
         if context.coordinate_frame is not None:
             add(
@@ -904,6 +1259,7 @@ def _build_job_preflight_report(
                 PreflightSeverity.BLOCKER,
                 "Unexpected honeycomb frame",
                 "A honeycomb coordinate frame cannot be applied to a machine-coordinate project.",
+                remediation=_HONEYCOMB_WORK_AREA_REMEDIATION,
             )
         if context.guarded_output_polygon_mm is not None:
             add(
@@ -911,6 +1267,7 @@ def _build_job_preflight_report(
                 PreflightSeverity.BLOCKER,
                 "Unexpected honeycomb output polygon",
                 "A guarded honeycomb output polygon requires a honeycomb-local project.",
+                remediation=_HONEYCOMB_WORK_AREA_REMEDIATION,
             )
     elif document.coordinate_space is CoordinateSpace.HONEYCOMB_LOCAL:
         frame = context.coordinate_frame
@@ -918,32 +1275,79 @@ def _build_job_preflight_report(
             context.bed_calibration_state is not None
             and context.bed_calibration_state != "VALID"
         ):
+            bed_remediation = _coordinate_remediation(
+                context,
+                default=_BED_MAP_REMEDIATION,
+            )
             add(
                 "honeycomb.bed_calibration_not_valid",
                 PreflightSeverity.BLOCKER,
                 "Camera-to-machine map is not valid",
-                "Honeycomb-local output requires a current valid camera-to-machine map.",
-                detail="; ".join(context.bed_calibration_reasons),
-                finding_context={"state": context.bed_calibration_state},
+                "E3 cannot place the honeycomb frame until the camera-to-machine map is valid.",
+                detail=_coordinate_detail(
+                    context,
+                    bed_remediation,
+                    context.bed_calibration_reasons,
+                ),
+                finding_context={
+                    "state": context.bed_calibration_state,
+                    "reason_codes": context.bed_calibration_reason_codes,
+                    "camera_readiness_state": context.camera_readiness_state,
+                    "camera_readiness_reason_codes": (
+                        context.camera_readiness_reason_codes
+                    ),
+                    "lens_model_state": context.lens_model_state,
+                    "lens_model_reason_codes": context.lens_model_reason_codes,
+                },
+                remediation=bed_remediation,
             )
         if (
             context.honeycomb_support_state is not None
             and context.honeycomb_support_state != "CURRENT"
         ):
+            support_remediation = _coordinate_remediation(
+                context,
+                default=_HONEYCOMB_FRAME_REMEDIATION,
+            )
             add(
                 "honeycomb.support_not_current",
                 PreflightSeverity.BLOCKER,
-                "Honeycomb support is not current",
-                "Honeycomb-local output requires the current configured support evidence.",
-                detail="; ".join(context.honeycomb_support_reasons),
-                finding_context={"state": context.honeycomb_support_state},
+                "Honeycomb frame is not current",
+                "E3 does not have a current saved honeycomb frame for this camera-to-machine map.",
+                detail=_coordinate_detail(
+                    context,
+                    support_remediation,
+                    context.honeycomb_support_reasons,
+                ),
+                finding_context={
+                    "state": context.honeycomb_support_state,
+                    "reason_codes": context.honeycomb_support_reason_codes,
+                    "physical_honeycomb_span_configured": (
+                        context.physical_honeycomb_span_configured
+                    ),
+                    "camera_readiness_state": context.camera_readiness_state,
+                    "camera_readiness_reason_codes": (
+                        context.camera_readiness_reason_codes
+                    ),
+                    "lens_model_state": context.lens_model_state,
+                    "lens_model_reason_codes": context.lens_model_reason_codes,
+                    "bed_calibration_state": context.bed_calibration_state,
+                    "bed_calibration_reason_codes": (
+                        context.bed_calibration_reason_codes
+                    ),
+                },
+                remediation=support_remediation,
             )
         if frame is None:
             add(
                 "honeycomb.frame_missing",
                 PreflightSeverity.BLOCKER,
-                "Honeycomb coordinate frame missing",
-                "Honeycomb-local output requires the current reviewed coordinate frame.",
+                "Honeycomb frame is missing",
+                "E3 does not have a saved four-edge coordinate frame for this honeycomb-local project.",
+                remediation=_coordinate_remediation(
+                    context,
+                    default=_HONEYCOMB_FRAME_REMEDIATION,
+                ),
             )
         if machine_area is None:
             add(
@@ -951,6 +1355,7 @@ def _build_job_preflight_report(
                 PreflightSeverity.BLOCKER,
                 "Machine work area unavailable",
                 "Honeycomb-local output requires an independent machine work area.",
+                remediation=_MACHINE_WORK_AREA_REMEDIATION,
             )
         if frame is not None:
             expected = Bounds(0.0, 0.0, frame.width_mm, frame.height_mm)
@@ -964,6 +1369,7 @@ def _build_job_preflight_report(
                         "project_bounds_mm": _bounds_tuple(document.work_area),
                         "support_bounds_mm": _bounds_tuple(expected),
                     },
+                    remediation=_HONEYCOMB_WORK_AREA_REMEDIATION,
                 )
 
         signature = context.honeycomb_execution_signature
@@ -973,6 +1379,10 @@ def _build_job_preflight_report(
                 PreflightSeverity.BLOCKER,
                 "Honeycomb support binding unavailable",
                 "Current execution-grade support and complete bed-map evidence are required.",
+                remediation=_coordinate_remediation(
+                    context,
+                    default=_HONEYCOMB_FRAME_REMEDIATION,
+                ),
             )
         elif len(signature) != 4:
             add(
@@ -980,6 +1390,10 @@ def _build_job_preflight_report(
                 PreflightSeverity.BLOCKER,
                 "Honeycomb support binding invalid",
                 "The support/bed execution signature is malformed.",
+                remediation=_coordinate_remediation(
+                    context,
+                    default=_HONEYCOMB_FRAME_REMEDIATION,
+                ),
             )
         else:
             if frame is not None and tuple(signature[:3]) != tuple(
@@ -990,6 +1404,10 @@ def _build_job_preflight_report(
                     PreflightSeverity.BLOCKER,
                     "Honeycomb frame binding changed",
                     "The reviewed support frame does not match the current execution binding.",
+                    remediation=_coordinate_remediation(
+                        context,
+                        default=_HONEYCOMB_FRAME_REMEDIATION,
+                    ),
                 )
             bed_digest = str(signature[3]).casefold()
             if not _SHA256_RE.fullmatch(bed_digest):
@@ -998,6 +1416,10 @@ def _build_job_preflight_report(
                     PreflightSeverity.BLOCKER,
                     "Bed-map binding invalid",
                     "The honeycomb execution binding lacks a valid complete bed-map digest.",
+                    remediation=_coordinate_remediation(
+                        context,
+                        default=_BED_MAP_REMEDIATION,
+                    ),
                 )
 
         expected_profile = context.expected_calibration_profile_id
@@ -1014,6 +1436,7 @@ def _build_job_preflight_report(
                     "expected_profile_id": expected_profile,
                     "active_profile_id": active_profile,
                 },
+                remediation=_PROFILE_BINDING_REMEDIATION,
             )
         elif expected_profile != active_profile:
             add(
@@ -1027,6 +1450,7 @@ def _build_job_preflight_report(
                     "expected_profile_id": expected_profile,
                     "active_profile_id": active_profile,
                 },
+                remediation=_PROFILE_BINDING_REMEDIATION,
             )
         polygon = context.guarded_output_polygon_mm
         if polygon is not None and len(polygon) < 3:
@@ -1035,6 +1459,7 @@ def _build_job_preflight_report(
                 PreflightSeverity.BLOCKER,
                 "Guarded output polygon invalid",
                 "The configured honeycomb output authority must contain at least three points.",
+                remediation=_OUTPUT_POLYGON_REMEDIATION,
             )
     else:
         add(
@@ -1043,6 +1468,7 @@ def _build_job_preflight_report(
             "Unsupported coordinate space",
             "The project coordinate space is not supported for job planning.",
             finding_context={"coordinate_space": str(document.coordinate_space)},
+            remediation=_COORDINATE_SPACE_REMEDIATION,
         )
 
     layer_by_id: dict[str, OperationLayer] = {}
