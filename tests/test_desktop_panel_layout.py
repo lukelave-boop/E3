@@ -414,6 +414,51 @@ def test_trace_preferences_persist_but_replace_previous_resets(
     qt_application.processEvents()
 
 
+def test_trace_hole_filter_preferences_migrate_and_round_trip_independently(
+    qt_application: QtWidgets.QApplication,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = QtCore.QSettings(
+        str(tmp_path / "legacy-trace-preferences.ini"),
+        QtCore.QSettings.Format.IniFormat,
+    )
+    settings.beginGroup("trace")
+    settings.setValue("min_area_mm2", 50.0)
+    settings.setValue("max_area_mm2", 8_000.0)
+    settings.endGroup()
+    settings.sync()
+    monkeypatch.setattr(QtCore, "QSettings", lambda *_args, **_kwargs: settings)
+
+    migrated = TracePanel()
+    assert migrated.min_hole_area.value() == pytest.approx(50.0)
+    assert migrated.options()["max_hole_area_mm2"] is None
+    settings.beginGroup("trace")
+    assert float(settings.value("min_hole_area_mm2")) == pytest.approx(50.0)
+    assert float(settings.value("max_hole_area_mm2")) == pytest.approx(-0.01)
+    settings.endGroup()
+
+    migrated.min_area.setValue(75.0)
+    qt_application.processEvents()
+    assert migrated.min_hole_area.value() == pytest.approx(50.0)
+    migrated.min_hole_area.setValue(2.0)
+    migrated.max_hole_area.setValue(30.0)
+    qt_application.processEvents()
+    migrated.close()
+    migrated.deleteLater()
+    qt_application.processEvents()
+
+    restored = TracePanel()
+    options = restored.options()
+    assert options["min_area_mm2"] == pytest.approx(75.0)
+    assert options["min_hole_area_mm2"] == pytest.approx(2.0)
+    assert options["max_hole_area_mm2"] == pytest.approx(30.0)
+
+    restored.close()
+    restored.deleteLater()
+    qt_application.processEvents()
+
+
 def test_trace_create_payload_can_keep_earlier_trace_batches(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -806,6 +851,65 @@ def test_trace_modes_share_filters_and_native_output_creation_controls(
     assert panel.create_button.isEnabled()
     assert panel.create_combined_button.isEnabled()
     assert "Verified native sequence" in panel.result_tree.topLevelItem(0).toolTip(4)
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_hole_filters_have_distinct_layout_copy_and_raster_applicability(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    form = panel.min_area.parentWidget().layout()
+    assert isinstance(form, QtWidgets.QFormLayout)
+    controls = (
+        panel.min_area,
+        panel.max_area,
+        panel.min_hole_area,
+        panel.max_hole_area,
+        panel.min_width,
+        panel.min_height,
+    )
+    assert [form.getWidgetPosition(control)[0] for control in controls] == list(
+        range(6)
+    )
+    assert panel.min_hole_area.suffix() == " mm²"
+    assert panel.max_hole_area.suffix() == " mm²"
+    assert panel.max_hole_area.specialValueText() == "No maximum"
+    assert panel.options()["max_hole_area_mm2"] is None
+    panel.min_hole_area.setValue(0.0)
+    panel.max_hole_area.setValue(0.0)
+    assert panel.options()["max_hole_area_mm2"] == pytest.approx(0.0)
+    assert "Fill enclosed holes smaller" in panel.min_hole_area.toolTip()
+    assert "Fill enclosed holes larger" in panel.max_hole_area.toolTip()
+    assert "selected area range are preserved" in panel.max_hole_area.toolTip()
+    assert "objects" not in panel.min_hole_area.toolTip().lower()
+    assert "objects" not in panel.max_hole_area.toolTip().lower()
+
+    assert not panel.min_hole_area.isEnabled()
+    assert not panel.max_hole_area.isEnabled()
+    panel.regular_grid.setChecked(False)
+    qt_application.processEvents()
+    assert panel.min_hole_area.isEnabled()
+    assert panel.max_hole_area.isEnabled()
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("color"))
+    qt_application.processEvents()
+    assert not panel.min_hole_area.isEnabled()
+    assert not panel.max_hole_area.isEnabled()
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("contrast"))
+    qt_application.processEvents()
+    assert panel.min_hole_area.isEnabled()
+    assert panel.max_hole_area.isEnabled()
+
+    panel.regular_grid.setChecked(True)
+    qt_application.processEvents()
+    assert not panel.min_hole_area.isEnabled()
+    assert not panel.max_hole_area.isEnabled()
+    assert panel.min_area.isEnabled()
+    assert panel.max_area.isEnabled()
 
     panel.close()
     panel.deleteLater()

@@ -993,6 +993,90 @@ def test_new_trace_request_retires_candidates_before_detect_and_keeps_project() 
     assert document.objects == [project_object]
 
 
+def test_cancelled_trace_late_result_cannot_publish_or_create_project_geometry() -> None:
+    document = ProjectDocument.new()
+    existing = SceneObject.rectangle(
+        document.active_layer_id,
+        name="Existing artwork",
+    )
+    document.add_object(existing)
+    cancellations: list[bool] = []
+    controller_publications: list[object] = []
+    panel_results: list[object] = []
+    errors: list[str] = []
+    controller = SimpleNamespace(
+        _trace_request_id=17,
+        _trace_cancel_event=threading.Event(),
+        _trace_review_active=True,
+        _trace_sample_image=np.zeros((1, 1, 3), dtype=np.uint8),
+        _trace_sample_area=WorkArea(0.0, 1.0, 0.0, 1.0),
+        _trace_sample_signature=("machine", None, "bed-map"),
+        _camera_review_active=lambda: True,
+        _resume_live_camera_after_review=lambda _was_held: None,
+        traceResultReady=SimpleNamespace(emit=controller_publications.append),
+    )
+    fake = SimpleNamespace(
+        controller=SimpleNamespace(
+            cancel_trace_detection=lambda: cancellations.append(True),
+            review_signature_is_current=lambda _signature: True,
+        ),
+        document=document,
+        _active_trace_request_id=17,
+        _trace_result={"request_id": 17, "detections": [{"id": "stale"}]},
+        _trace_raster_preview_images={},
+        _trace_raster_preview_area=None,
+        _trace_raster_preview_signature=None,
+        workspace=SimpleNamespace(clear_trace_preview=lambda: None),
+        trace_panel=SimpleNamespace(
+            clear_result=lambda: None,
+            set_result=panel_results.append,
+        ),
+        show_error=errors.append,
+    )
+
+    DesktopController.cancel_trace_detection(controller)
+    DesktopController._trace_detection_complete(
+        controller,
+        17,
+        {"request_id": 17, "detections": [{"id": "stale"}]},
+    )
+    E3MainWindow._clear_trace_preview(fake)
+    E3MainWindow._trace_result_ready(
+        fake,
+        {
+            "request_id": 17,
+            "detections": [
+                {
+                    "id": "stale",
+                    "index": 1,
+                    "center_mm": [10.0, 10.0],
+                    "width_mm": 5.0,
+                    "height_mm": 5.0,
+                    "shape": "rounded_rectangle",
+                }
+            ],
+        },
+    )
+    E3MainWindow._create_traced_objects(
+        fake,
+        {
+            "selected_ids": ["stale"],
+            "purpose": "cut",
+            "output_mode": "rounded",
+        },
+    )
+
+    assert controller._trace_request_id == 18
+    assert controller._trace_cancel_event.is_set()
+    assert controller_publications == []
+    assert cancellations == [True]
+    assert fake._active_trace_request_id is None
+    assert fake._trace_result is None
+    assert panel_results == []
+    assert document.objects == [existing]
+    assert errors == ["Run object detection before creating vector paths"]
+
+
 def test_trace_raster_preview_uses_exact_arrays_and_ignores_late_request(
     qt_application: QtWidgets.QApplication,
 ) -> None:

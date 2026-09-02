@@ -303,6 +303,17 @@ should own a physical camera at a time.
   imported-raster vectorization pipeline. Camera Auto first chooses one bounded,
   image-derived threshold or the operator supplies a manual threshold; either
   byte applies to that normalized raster, not absolute camera brightness.
+  Source-neutral cleanup then applies separate physical foreground-component and
+  enclosed-background-hole limits. The hole range is inclusive: enclosed holes
+  below its minimum or above its optional maximum are filled, while external
+  border-connected background is never a hole. A background component touching
+  hard-ineligible pixels is likewise protected and omitted from filterable-hole
+  aggregates. Cleanup precedes exact 4× Mask reconstruction, `RETR_TREE`
+  extraction, and native fitting, so any accepted native topology is validated
+  against that production Mask. A later fitting failure or cancellation publishes
+  no accepted geometry, although the already-produced Mask preview may remain
+  visible. Filling a hole may intentionally absorb nested foreground descendants;
+  preserving it retains the normal even-odd hierarchy.
   Each root `RETR_TREE` contour plus all descendants is one indivisible temporary
   review candidate; unrelated failing roots do not discard verified peers.
 - Non-grid Camera Trace **Auto detect** is orchestration, not a fourth detector.
@@ -322,9 +333,12 @@ should own a physical camera at a time.
   than choosing the least-bad strategy.
 - The Trace panel treats those non-grid Auto choices as strategy-owned: hue,
   sample, threshold, and polarity controls are inactive, output is native
-  lines/Béziers, and border offset is zero. Explicit Color owns hue/sample;
-  explicit non-grid Contrast owns manual threshold/polarity. Grid Auto preserves
-  the specialized output and normalization controls. One read-only value shows
+  lines/Béziers, and border offset is zero. Its independent hole limits remain
+  available because both raster polarities consume them. Explicit Color owns
+  hue/sample and bypasses raster hole cleanup; explicit non-grid Contrast owns
+  manual threshold/polarity and consumes the hole limits. Grid Auto preserves
+  the specialized output and normalization controls and bypasses these hole
+  limits. One read-only value shows
   the exact winning production byte for successful Auto raster output, `N/A` for
   an Auto Color winner, and `—` before detection or after Clear, failure, or
   staleness; it never overwrites the editable manual threshold.
@@ -859,8 +873,9 @@ normalized dark/light rasters enter through the source-neutral contract; the
 corrected photograph and its background model remain in the separate temporary
 camera-normalization result, and neither layer synthesizes an asset identity.
 `PixelVectorizationResult` likewise owns shared mask, contour, native path,
-hierarchy, error, and preview data, while `RasterVectorizationResult` adds
-imported-asset provenance and preserves existing project metadata.
+hierarchy, error, bounded hole-cleanup aggregates, and preview data, while
+`RasterVectorizationResult` adds imported-asset provenance and preserves
+existing project metadata.
 
 `RasterVectorizationOptions` is a frozen validated value. Automatic detection
 uses Otsu thresholding over the white-composited image and applies alpha as an
@@ -873,11 +888,16 @@ the operator's byte. Camera Auto uses the bounded selector above and then passes
 its exact winning byte through the same manual-threshold mask semantics, so the
 production mask measures local contrast rather than absolute exposure while
 ordinary imported Auto remains Otsu-compatible.
-Inversion changes foreground polarity, and
-the connected-component cleanup interprets minimum feature area in square
-millimetres from the selected image's displayed size, removing both small
-foreground islands and enclosed background pinholes while retaining larger
-holes. Preview requests use a
+Inversion changes foreground polarity. Connected-component cleanup interprets
+minimum foreground feature area and optional minimum/maximum enclosed-hole area
+in square millimetres from the selected image's displayed size. An omitted
+minimum-hole option inherits minimum feature area, and an omitted maximum is
+unbounded; therefore existing imported-raster callers preserve their former
+small-island/pinhole cleanup and do not begin filling large legitimate holes.
+Explicit callers can preserve only holes within inclusive physical bounds.
+Background connected to the image border is never filled by the maximum-hole
+rule; background connected to source-neutral ineligible pixels is equally
+protected and excluded from cleanup counts. Preview requests use a
 160 ms debounce by default. Quick and exact work each retain at most one running
 request plus the latest pending options, so slider input cannot build an
 unbounded task queue. A newer request immediately makes the prior result
@@ -901,9 +921,10 @@ cleaned-mask 3×3 interiors to their source classification before contour
 extraction, while retaining bicubic localization in the transition band. This
 prevents a reproduced all-foreground threshold plateau from ringing into a
 positive-area child hole and applies symmetrically to homogeneous background.
-Real holes, gaps, component/hole cleanup, and source boundaries remain
-unchanged. Bicubic reconstruction can still overshoot near a retained edge and
-create an isolated threshold pixel; OpenCV then reports a one- or two-point,
+Real holes, gaps, component/hole cleanup, and source boundaries retain their
+explicit cleaned classification. Bicubic reconstruction can still overshoot
+near a retained edge and create an isolated threshold pixel; OpenCV then reports
+a one- or two-point,
 zero-area contour even though base-resolution component cleanup already ran. Pruning
 removes only contours with fewer than three distinct trace points or zero
 trace-pixel polygon area. It retains every positive-area contour, rebuilds the

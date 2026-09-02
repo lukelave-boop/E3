@@ -26,6 +26,7 @@ from laser_aligner.project import (
     PixelVectorizationRootReviewFilter,
     RasterContourOutput,
     RasterDetectionMode,
+    RasterHoleCleanupDiagnostics,
     RasterVectorizationComplexityError,
     RasterVectorizationError,
     RasterVectorizationOptions,
@@ -975,6 +976,233 @@ def test_minimum_feature_area_removes_tiny_pinhole_but_keeps_larger_hole(
     assert len(unfiltered.contours) == 3
     assert len(filtered.contours) == 2
     assert [contour.is_hole for contour in filtered.contours] == [False, True]
+
+
+def test_independent_hole_range_controls_exact_mask_and_native_topology(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((40, 40), 255, dtype=np.uint8)
+    pixels[2:38, 2:38] = 0
+    pixels[5, 5] = 255
+    pixels[8:10, 6:8] = 255
+    pixels[13:15, 6:9] = 255
+    pixels[18:21, 6:9] = 255
+    pixels[24:26, 6:11] = 255
+    payload = _write_payload(tmp_path / "independent-hole-range.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    options = _manual_options(
+        minimum_feature_area_mm2=0.5,
+        minimum_hole_area_mm2=4.0,
+        maximum_hole_area_mm2=9.0,
+    )
+
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=40.0,
+        displayed_height_mm=40.0,
+    )
+    quick = quick_preview_prepared_raster(
+        source,
+        options,
+        displayed_width_mm=40.0,
+        displayed_height_mm=40.0,
+    )
+    contours, hierarchy = cv2.findContours(
+        prepared.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_NONE,
+    )
+    result = vectorize_pixel_source(
+        source,
+        options,
+        displayed_width_mm=40.0,
+        displayed_height_mm=40.0,
+        prepared_mask=prepared,
+    )
+
+    assert prepared.foreground_mask[5, 5] == 255
+    assert np.all(prepared.foreground_mask[8:10, 6:8] == 0)
+    assert np.all(prepared.foreground_mask[13:15, 6:9] == 0)
+    assert np.all(prepared.foreground_mask[18:21, 6:9] == 0)
+    assert np.all(prepared.foreground_mask[24:26, 6:11] == 255)
+    assert hierarchy is not None
+    assert len(contours) == 4
+    assert hierarchy[0, :, 3].tolist().count(-1) == 1
+    assert sum(parent >= 0 for parent in hierarchy[0, :, 3]) == 3
+    expected_cleanup = RasterHoleCleanupDiagnostics(
+        raw_hole_count=5,
+        preserved_hole_count=3,
+        filled_below_min_count=1,
+        filled_above_max_count=1,
+        minimum_hole_area_mm2=4.0,
+        maximum_hole_area_mm2=9.0,
+    )
+    assert prepared.hole_cleanup == expected_cleanup
+    assert quick.hole_cleanup == expected_cleanup
+    assert result.hole_cleanup is prepared.hole_cleanup
+    assert [contour.depth for contour in result.contours] == [0, 1, 1, 1]
+    assert [contour.parent_index for contour in result.contours] == [
+        None,
+        0,
+        0,
+        0,
+    ]
+    assert [contour.is_hole for contour in result.contours] == [
+        False,
+        True,
+        True,
+        True,
+    ]
+    assert result.metadata()["raster_vectorization_hole_cleanup"] == (
+        expected_cleanup.to_dict()
+    )
+
+
+def test_absent_raster_hole_options_preserve_legacy_imported_cleanup() -> None:
+    grayscale = np.full((20, 20), 255, dtype=np.uint8)
+    grayscale[2:18, 2:18] = 0
+    grayscale[7:9, 7:9] = 255
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA)
+    )
+    legacy_options = _manual_options(minimum_feature_area_mm2=5.0)
+    explicit_legacy_options = _manual_options(
+        minimum_feature_area_mm2=5.0,
+        minimum_hole_area_mm2=5.0,
+        maximum_hole_area_mm2=None,
+    )
+    independent_options = _manual_options(
+        minimum_feature_area_mm2=5.0,
+        minimum_hole_area_mm2=0.0,
+        maximum_hole_area_mm2=None,
+    )
+
+    legacy = prepare_pixel_vectorization_mask(
+        source,
+        legacy_options,
+        displayed_width_mm=20.0,
+        displayed_height_mm=20.0,
+    )
+    explicit_legacy = prepare_pixel_vectorization_mask(
+        source,
+        explicit_legacy_options,
+        displayed_width_mm=20.0,
+        displayed_height_mm=20.0,
+    )
+    independent = prepare_pixel_vectorization_mask(
+        source,
+        independent_options,
+        displayed_width_mm=20.0,
+        displayed_height_mm=20.0,
+    )
+
+    assert legacy_options.minimum_hole_area_mm2 is None
+    assert legacy_options.maximum_hole_area_mm2 is None
+    assert np.array_equal(legacy.foreground_mask, explicit_legacy.foreground_mask)
+    assert np.array_equal(legacy.contour_mask, explicit_legacy.contour_mask)
+    assert legacy.hole_cleanup == explicit_legacy.hole_cleanup
+    assert legacy.hole_cleanup.minimum_hole_area_mm2 == pytest.approx(5.0)
+    assert legacy.hole_cleanup.maximum_hole_area_mm2 is None
+    assert legacy.hole_cleanup.filled_below_min_count == 1
+    assert legacy.foreground_mask[7, 7] == 255
+    assert independent.foreground_mask[7, 7] == 0
+    assert independent.hole_cleanup.preserved_hole_count == 1
+
+
+def test_ineligible_background_is_not_filled_or_counted_as_a_filterable_hole() -> None:
+    grayscale = np.full((20, 20), 255, dtype=np.uint8)
+    grayscale[2:18, 2:18] = 0
+    eligibility = np.full((20, 20), 255, dtype=np.uint8)
+    eligibility[7:13, 7:13] = 0
+    source = prepare_pixel_vectorization_source(
+        cv2.cvtColor(grayscale, cv2.COLOR_GRAY2RGBA),
+        eligibility_mask=eligibility,
+    )
+    options = _manual_options(
+        threshold=128,
+        minimum_feature_area_mm2=0.0,
+        minimum_hole_area_mm2=0.0,
+        maximum_hole_area_mm2=0.0,
+    )
+
+    prepared = prepare_pixel_vectorization_mask(
+        source,
+        options,
+        displayed_width_mm=20.0,
+        displayed_height_mm=20.0,
+    )
+
+    assert prepared.hole_cleanup.raw_hole_count == 0
+    assert prepared.hole_cleanup.preserved_hole_count == 0
+    assert prepared.hole_cleanup.filled_below_min_count == 0
+    assert prepared.hole_cleanup.filled_above_max_count == 0
+    assert prepared.foreground_mask[9, 9] == 0
+    assert prepared.contour_mask[9 * 4 + 2, 9 * 4 + 2] == 0
+
+
+def test_filled_nested_hole_absorbs_island_in_production_native_topology(
+    tmp_path: Path,
+) -> None:
+    pixels = np.full((32, 32), 255, dtype=np.uint8)
+    pixels[2:30, 2:30] = 0
+    pixels[8:24, 8:24] = 255
+    pixels[12:20, 12:20] = 0
+    payload = _write_payload(tmp_path / "nested-hole-filter.png", pixels)
+    source = prepare_raster_vectorization_source(payload)
+    preserved_options = _manual_options(
+        minimum_feature_area_mm2=1.0,
+        minimum_hole_area_mm2=0.0,
+        maximum_hole_area_mm2=192.0,
+    )
+    filled_options = dataclasses.replace(
+        preserved_options,
+        maximum_hole_area_mm2=191.0,
+    )
+
+    preserved_mask = prepare_pixel_vectorization_mask(
+        source,
+        preserved_options,
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+    )
+    filled_mask = prepare_pixel_vectorization_mask(
+        source,
+        filled_options,
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+    )
+    preserved = vectorize_pixel_source(
+        source,
+        preserved_options,
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+        prepared_mask=preserved_mask,
+    )
+    filled = vectorize_pixel_source(
+        source,
+        filled_options,
+        displayed_width_mm=32.0,
+        displayed_height_mm=32.0,
+        prepared_mask=filled_mask,
+    )
+
+    assert preserved_mask.hole_cleanup.preserved_hole_count == 1
+    assert preserved_mask.hole_cleanup.filled_above_max_count == 0
+    assert [contour.depth for contour in preserved.contours] == [0, 1, 2]
+    assert [contour.parent_index for contour in preserved.contours] == [None, 0, 1]
+    assert filled_mask.hole_cleanup.preserved_hole_count == 0
+    assert filled_mask.hole_cleanup.filled_above_max_count == 1
+    assert np.all(filled_mask.foreground_mask[2:30, 2:30] == 255)
+    filled_contours, filled_hierarchy = cv2.findContours(
+        filled_mask.contour_mask,
+        cv2.RETR_TREE,
+        cv2.CHAIN_APPROX_NONE,
+    )
+    assert filled_hierarchy is not None
+    assert len(filled_contours) == 1
+    assert [contour.depth for contour in filled.contours] == [0]
+    assert [contour.parent_index for contour in filled.contours] == [None]
 
 
 def test_4x_degenerate_fragment_is_pruned_without_losing_valid_features(
@@ -2512,6 +2740,24 @@ def test_options_payload_and_result_preview_storage_are_not_mutated(
         ({"alpha_cutoff": 256}, "0 through 255"),
         ({"invert": 1}, "JSON boolean"),
         ({"minimum_feature_area_mm2": -0.1}, "cannot be negative"),
+        ({"minimum_hole_area_mm2": -0.1}, "cannot be negative"),
+        ({"minimum_hole_area_mm2": float("nan")}, "finite number"),
+        ({"maximum_hole_area_mm2": -0.1}, "cannot be negative"),
+        ({"maximum_hole_area_mm2": float("inf")}, "finite number"),
+        (
+            {
+                "minimum_feature_area_mm2": 2.0,
+                "maximum_hole_area_mm2": 1.0,
+            },
+            "effective minimum hole area",
+        ),
+        (
+            {
+                "minimum_hole_area_mm2": 2.0,
+                "maximum_hole_area_mm2": 1.0,
+            },
+            "effective minimum hole area",
+        ),
         ({"smoothing_mm": float("nan")}, "finite number"),
         ({"simplification_tolerance_mm": 0.0}, "must be positive"),
     ],
@@ -2522,6 +2768,30 @@ def test_options_reject_invalid_values(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         RasterVectorizationOptions(**changes)
+
+
+def test_hole_options_are_appended_after_legacy_positional_fields() -> None:
+    options = RasterVectorizationOptions(
+        RasterDetectionMode.MANUAL_THRESHOLD,
+        121,
+        True,
+        2,
+        0.25,
+        0.05,
+        0.15,
+        RasterContourOutput.OUTER_ONLY,
+    )
+
+    assert options.detection_mode is RasterDetectionMode.MANUAL_THRESHOLD
+    assert options.threshold == 121
+    assert options.invert is True
+    assert options.alpha_cutoff == 2
+    assert options.minimum_feature_area_mm2 == pytest.approx(0.25)
+    assert options.smoothing_mm == pytest.approx(0.05)
+    assert options.simplification_tolerance_mm == pytest.approx(0.15)
+    assert options.contour_output is RasterContourOutput.OUTER_ONLY
+    assert options.minimum_hole_area_mm2 is None
+    assert options.maximum_hole_area_mm2 is None
 
 
 def test_alpha_mode_rejects_opaque_source(tmp_path: Path) -> None:

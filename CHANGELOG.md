@@ -6,6 +6,20 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Separated Camera Trace foreground-object area review from enclosed-hole
+  cleanup for non-grid Contrast and Auto's dark/light raster strategies. The
+  Trace panel now exposes minimum/maximum object area and minimum/maximum hole
+  area in mm². Holes inside the inclusive hole range are preserved; holes below
+  its minimum or above its optional maximum are filled in the exact production
+  Mask before contour extraction and native fitting. Existing preferences
+  migrate once by inheriting their former minimum-area coupling and defaulting
+  to no maximum-hole filter. The shared source-neutral vectorizer supports the
+  same explicit limits while omitted imported-raster settings retain their old
+  minimum-pinhole and unbounded-maximum behavior. Grid and Color paths, the Auto
+  threshold-selection algorithm, normalization, exposed-bed eligibility,
+  Straighten, planning, motion, Air Assist, Pi execution, homing, and laser
+  authority are unchanged.
+
 - Reworked Machine Setup calibration guidance and recovery without changing
   calibration math or execution authority. Every numbered tab now presents a
   compact Goal / Do this now / Done when guide. Bed Mapping groups the normal
@@ -41,7 +55,6 @@ not current product capability.
   behavior remain unchanged. The matching Desktop shortcut points permanently
   to the launcher; selecting a later feature requires only an atomic pointer
   update and never automatic taskbar pinning.
-
 - Replaced unbounded desktop Close with a single four-second monotonic shutdown
   deadline. Remote camera shutdown now makes blocked address resolution
   cancellable and tracks and closes active sockets so blocked fresh-frame,

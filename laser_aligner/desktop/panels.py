@@ -1460,10 +1460,34 @@ class TracePanel(QtWidgets.QWidget):
         self.min_area.setRange(0.01, 100_000.0)
         self.min_area.setValue(30.0)
         self.min_area.setSuffix(" mm²")
+        self.min_area.setToolTip(
+            "Reject foreground objects smaller than this area."
+        )
         self.max_area = MeasurementSpinBox("area")
         self.max_area.setRange(0.1, 1_000_000.0)
         self.max_area.setValue(20_000.0)
         self.max_area.setSuffix(" mm²")
+        self.max_area.setToolTip(
+            "Reject foreground objects larger than this area."
+        )
+        self.min_hole_area = MeasurementSpinBox("area")
+        self.min_hole_area.setRange(0.0, 100_000.0)
+        self.min_hole_area.setValue(30.0)
+        self.min_hole_area.setSuffix(" mm²")
+        self.min_hole_area.setToolTip(
+            "Fill enclosed holes smaller than this area. Used by non-grid "
+            "Auto and By contrast raster tracing."
+        )
+        self.max_hole_area = MeasurementSpinBox("area")
+        self.max_hole_area.setRange(-0.01, 1_000_000.0)
+        self.max_hole_area.setSpecialValueText("No maximum")
+        self.max_hole_area.setValue(self.max_hole_area.minimum())
+        self.max_hole_area.setSuffix(" mm²")
+        self.max_hole_area.setToolTip(
+            "Fill enclosed holes larger than this area. Holes within the selected "
+            "area range are preserved. Used by non-grid Auto and By contrast "
+            "raster tracing; No maximum preserves every hole above the minimum."
+        )
         self.min_width = MeasurementSpinBox()
         self.min_width.setRange(0.1, 1000.0)
         self.min_width.setValue(4.0)
@@ -1479,6 +1503,8 @@ class TracePanel(QtWidgets.QWidget):
         for spin in (
             self.min_area,
             self.max_area,
+            self.min_hole_area,
+            self.max_hole_area,
             self.min_width,
             self.min_height,
             self.confidence,
@@ -1530,6 +1556,12 @@ class TracePanel(QtWidgets.QWidget):
         )
         _form_row(filter_form, "Minimum area", self.min_area)
         _form_row(filter_form, "Maximum area", self.max_area)
+        self.min_hole_area_label = QtWidgets.QLabel("Minimum hole area")
+        self.max_hole_area_label = QtWidgets.QLabel("Maximum hole area")
+        self.min_hole_area_label.setToolTip(self.min_hole_area.toolTip())
+        self.max_hole_area_label.setToolTip(self.max_hole_area.toolTip())
+        filter_form.addRow(self.min_hole_area_label, self.min_hole_area)
+        filter_form.addRow(self.max_hole_area_label, self.max_hole_area)
         _form_row(filter_form, "Minimum width", self.min_width)
         _form_row(filter_form, "Minimum height", self.min_height)
         confidence_label = QtWidgets.QLabel("Auto-select")
@@ -1843,6 +1875,8 @@ class TracePanel(QtWidgets.QWidget):
             self.contrast_invert,
             self.min_area,
             self.max_area,
+            self.min_hole_area,
+            self.max_hole_area,
             self.min_width,
             self.min_height,
             self.confidence,
@@ -1886,6 +1920,7 @@ class TracePanel(QtWidgets.QWidget):
 
     def _restore_preferences(self) -> None:
         settings = self._trace_settings
+        migrated_hole_filters = False
         settings.beginGroup("trace")
         try:
             saved_mode = settings.value(
@@ -1940,6 +1975,20 @@ class TracePanel(QtWidgets.QWidget):
             self.max_area.setValue(
                 float(settings.value("max_area_mm2", self.max_area.value()))
             )
+            if settings.contains("min_hole_area_mm2"):
+                minimum_hole_area = float(settings.value("min_hole_area_mm2"))
+            else:
+                minimum_hole_area = self.min_area.value()
+                settings.setValue("min_hole_area_mm2", minimum_hole_area)
+                migrated_hole_filters = True
+            self.min_hole_area.setValue(minimum_hole_area)
+            if settings.contains("max_hole_area_mm2"):
+                maximum_hole_area = float(settings.value("max_hole_area_mm2"))
+            else:
+                maximum_hole_area = self.max_hole_area.minimum()
+                settings.setValue("max_hole_area_mm2", maximum_hole_area)
+                migrated_hole_filters = True
+            self.max_hole_area.setValue(maximum_hole_area)
             self.min_width.setValue(
                 float(settings.value("min_width_mm", self.min_width.value()))
             )
@@ -2011,6 +2060,8 @@ class TracePanel(QtWidgets.QWidget):
                     self._sampled_bgr = None
         finally:
             settings.endGroup()
+        if migrated_hole_filters:
+            settings.sync()
 
     def _save_preferences(self, *_args: object) -> None:
         settings = self._trace_settings
@@ -2031,6 +2082,8 @@ class TracePanel(QtWidgets.QWidget):
             settings.setValue("contrast_invert", self.contrast_invert.isChecked())
             settings.setValue("min_area_mm2", self.min_area.value())
             settings.setValue("max_area_mm2", self.max_area.value())
+            settings.setValue("min_hole_area_mm2", self.min_hole_area.value())
+            settings.setValue("max_hole_area_mm2", self.max_hole_area.value())
             settings.setValue("min_width_mm", self.min_width.value())
             settings.setValue("min_height_mm", self.min_height.value())
             settings.setValue("confidence_percent", self.confidence.value())
@@ -2089,6 +2142,12 @@ class TracePanel(QtWidgets.QWidget):
             "contrast_invert": self.contrast_invert.isChecked(),
             "min_area_mm2": self.min_area.value(),
             "max_area_mm2": self.max_area.value(),
+            "min_hole_area_mm2": self.min_hole_area.value(),
+            "max_hole_area_mm2": (
+                None
+                if self.max_hole_area.value() <= self.max_hole_area.minimum()
+                else self.max_hole_area.value()
+            ),
             "min_width_mm": self.min_width.value(),
             "min_height_mm": self.min_height.value(),
             "confidence_threshold": self.confidence.value() / 100.0,
@@ -2617,6 +2676,13 @@ class TracePanel(QtWidgets.QWidget):
             and self.contrast_threshold_mode.currentData() == "manual"
         )
         self.contrast_invert.setEnabled(manual_raster_contrast)
+        for widget in (
+            self.min_hole_area_label,
+            self.max_hole_area_label,
+            self.min_hole_area,
+            self.max_hole_area,
+        ):
+            widget.setEnabled(raster_native)
         self.output_mode.setEnabled(not raster_native)
         self.native_fitting_tolerance_label.setEnabled(native_output)
         self.native_fitting_tolerance.setEnabled(native_output)

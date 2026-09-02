@@ -20,7 +20,7 @@ from ..geometry.foreground import (
     ForegroundComponentLimitError,
     ForegroundContourLimitError,
     ForegroundContourPruneResult,
-    clean_foreground_components,
+    clean_foreground_components_with_diagnostics,
     extract_foreground_contours,
     prune_degenerate_foreground_contours,
 )
@@ -266,6 +266,8 @@ class RasterVectorizationOptions:
     smoothing_mm: float = 0.0
     simplification_tolerance_mm: float = 0.10
     contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS
+    minimum_hole_area_mm2: float | None = None
+    maximum_hole_area_mm2: float | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -301,6 +303,30 @@ class RasterVectorizationOptions:
         )
         if minimum_area < 0.0:
             raise ValueError("minimum_feature_area_mm2 cannot be negative")
+        minimum_hole_area = self.minimum_hole_area_mm2
+        if minimum_hole_area is not None:
+            minimum_hole_area = _finite(
+                minimum_hole_area,
+                "minimum_hole_area_mm2",
+            )
+            if minimum_hole_area < 0.0:
+                raise ValueError("minimum_hole_area_mm2 cannot be negative")
+        effective_minimum_hole_area = (
+            minimum_area if minimum_hole_area is None else minimum_hole_area
+        )
+        maximum_hole_area = self.maximum_hole_area_mm2
+        if maximum_hole_area is not None:
+            maximum_hole_area = _finite(
+                maximum_hole_area,
+                "maximum_hole_area_mm2",
+            )
+            if maximum_hole_area < 0.0:
+                raise ValueError("maximum_hole_area_mm2 cannot be negative")
+            if maximum_hole_area < effective_minimum_hole_area:
+                raise ValueError(
+                    "maximum_hole_area_mm2 must be greater than or equal to the "
+                    "effective minimum hole area"
+                )
         if smoothing < 0.0:
             raise ValueError("smoothing_mm cannot be negative")
         if tolerance <= 0.0:
@@ -316,6 +342,68 @@ class RasterVectorizationOptions:
         object.__setattr__(self, "minimum_feature_area_mm2", minimum_area)
         object.__setattr__(self, "smoothing_mm", smoothing)
         object.__setattr__(self, "simplification_tolerance_mm", tolerance)
+        object.__setattr__(self, "minimum_hole_area_mm2", minimum_hole_area)
+        object.__setattr__(self, "maximum_hole_area_mm2", maximum_hole_area)
+
+
+@dataclass(frozen=True, slots=True)
+class RasterHoleCleanupDiagnostics:
+    """Bounded physical-area diagnostics for source-mask hole cleanup."""
+
+    raw_hole_count: int
+    preserved_hole_count: int
+    filled_below_min_count: int
+    filled_above_max_count: int
+    minimum_hole_area_mm2: float
+    maximum_hole_area_mm2: float | None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "raw_hole_count",
+            "preserved_hole_count",
+            "filled_below_min_count",
+            "filled_above_max_count",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.raw_hole_count != (
+            self.preserved_hole_count
+            + self.filled_below_min_count
+            + self.filled_above_max_count
+        ):
+            raise ValueError("Hole cleanup diagnostic counts are inconsistent")
+        minimum_hole_area = _finite(
+            self.minimum_hole_area_mm2,
+            "minimum_hole_area_mm2",
+        )
+        if minimum_hole_area < 0.0:
+            raise ValueError("minimum_hole_area_mm2 cannot be negative")
+        maximum_hole_area = self.maximum_hole_area_mm2
+        if maximum_hole_area is not None:
+            maximum_hole_area = _finite(
+                maximum_hole_area,
+                "maximum_hole_area_mm2",
+            )
+            if maximum_hole_area < minimum_hole_area:
+                raise ValueError(
+                    "maximum_hole_area_mm2 must be greater than or equal to "
+                    "minimum_hole_area_mm2"
+                )
+        object.__setattr__(self, "minimum_hole_area_mm2", minimum_hole_area)
+        object.__setattr__(self, "maximum_hole_area_mm2", maximum_hole_area)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return bounded JSON-ready cleanup diagnostics."""
+
+        return {
+            "raw_hole_count": self.raw_hole_count,
+            "preserved_hole_count": self.preserved_hole_count,
+            "filled_below_min_count": self.filled_below_min_count,
+            "filled_above_max_count": self.filled_above_max_count,
+            "minimum_hole_area_mm2": self.minimum_hole_area_mm2,
+            "maximum_hole_area_mm2": self.maximum_hole_area_mm2,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,6 +572,7 @@ class PixelVectorizationMaskPreview:
     connected_component_count: int
     displayed_width_mm: float
     displayed_height_mm: float
+    hole_cleanup: RasterHoleCleanupDiagnostics
     _masks: _RasterMaskPreparation = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -514,6 +603,8 @@ class PixelVectorizationMaskPreview:
             or self.connected_component_count < 0
         ):
             raise ValueError("connected_component_count must be non-negative")
+        if not isinstance(self.hole_cleanup, RasterHoleCleanupDiagnostics):
+            raise TypeError("A mask preview requires hole cleanup diagnostics")
         width_mm, height_mm = _display_dimensions(
             self.displayed_width_mm,
             self.displayed_height_mm,
@@ -525,6 +616,7 @@ class PixelVectorizationMaskPreview:
             or self._masks.working_mask is not self.contour_mask
             or self._masks.threshold_used != self.threshold_used
             or self._masks.component_count != self.connected_component_count
+            or self._masks.hole_cleanup is not self.hole_cleanup
         ):
             raise ValueError("Mask preview fields do not match its exact preparation")
         object.__setattr__(self, "displayed_width_mm", width_mm)
@@ -551,6 +643,7 @@ class _RasterMaskPreparation:
     working_mask: np.ndarray
     preview_mask: np.ndarray
     component_count: int
+    hole_cleanup: RasterHoleCleanupDiagnostics
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -614,6 +707,7 @@ class RasterVectorizationQuickPreview:
     connected_component_count: int
     raw_contour_point_count: int
     preview_point_count: int
+    hole_cleanup: RasterHoleCleanupDiagnostics
     _prepared_trace: _RasterTracePreparation = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -634,8 +728,14 @@ class RasterVectorizationQuickPreview:
                 raise ValueError(f"quick preview {name} must be non-negative")
         if self.preview_point_count != sum(len(contour.points) for contour in contours):
             raise ValueError("quick preview point count does not match its contours")
+        if not isinstance(self.hole_cleanup, RasterHoleCleanupDiagnostics):
+            raise TypeError("quick preview requires hole cleanup diagnostics")
         if not isinstance(self._prepared_trace, _RasterTracePreparation):
             raise TypeError("quick preview requires its immutable prepared trace")
+        if self._prepared_trace.masks.hole_cleanup is not self.hole_cleanup:
+            raise ValueError(
+                "quick preview hole diagnostics do not match its prepared trace"
+            )
         object.__setattr__(self, "contours", contours)
 
 
@@ -809,6 +909,7 @@ class PixelVectorizationResult:
     pruned_contour_count: int
     degenerate_contour_count: int
     rejected_contour_tree_count: int
+    hole_cleanup: RasterHoleCleanupDiagnostics
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_key, str) or not self.source_key:
@@ -841,6 +942,8 @@ class PixelVectorizationResult:
             _bounded_byte(self.threshold_used, "threshold_used")
         if type(self.has_usable_alpha) is not bool:
             raise ValueError("has_usable_alpha must be a boolean")
+        if not isinstance(self.hole_cleanup, RasterHoleCleanupDiagnostics):
+            raise TypeError("A raster result requires hole cleanup diagnostics")
         for value, label, minimum in (
             (self.connected_component_count, "connected_component_count", 1),
             (self.raw_contour_point_count, "raw_contour_point_count", 3),
@@ -941,6 +1044,7 @@ class PixelVectorizationResult:
             "raster_vectorization_connected_components": (
                 self.connected_component_count
             ),
+            "raster_vectorization_hole_cleanup": self.hole_cleanup.to_dict(),
             "raster_vectorization_contours": len(self.contours),
             "raster_vectorization_pruned_contours": self.pruned_contour_count,
             "raster_vectorization_degenerate_contours": (
@@ -2098,21 +2202,59 @@ def select_pixel_vectorization_auto_threshold(
             _CANCEL_CHECK.reset(cancel_token)
 
 
-@_timed_stage("component_cleanup")
 def _clean_components(
     mask: np.ndarray,
     minimum_area_mm2: float,
     width_mm: float,
     height_mm: float,
 ) -> tuple[np.ndarray, int]:
+    """Retain the historical internal cleanup signature for fit diagnostics."""
+
+    cleaned, component_count, _hole_cleanup = (
+        _clean_components_with_diagnostics(
+            mask,
+            minimum_area_mm2,
+            None,
+            None,
+            width_mm,
+            height_mm,
+        )
+    )
+    return cleaned, component_count
+
+
+@_timed_stage("component_cleanup")
+def _clean_components_with_diagnostics(
+    mask: np.ndarray,
+    minimum_area_mm2: float,
+    minimum_hole_area_mm2: float | None,
+    maximum_hole_area_mm2: float | None,
+    width_mm: float,
+    height_mm: float,
+    *,
+    protected_background_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, int, RasterHoleCleanupDiagnostics]:
     pixel_area_mm2 = width_mm * height_mm / float(mask.shape[0] * mask.shape[1])
     minimum_area_px = minimum_area_mm2 / pixel_area_mm2
+    minimum_hole_area_px = (
+        None
+        if minimum_hole_area_mm2 is None
+        else minimum_hole_area_mm2 / pixel_area_mm2
+    )
+    maximum_hole_area_px = (
+        None
+        if maximum_hole_area_mm2 is None
+        else maximum_hole_area_mm2 / pixel_area_mm2
+    )
     try:
-        cleaned, component_count = clean_foreground_components(
+        cleaned, cleanup = clean_foreground_components_with_diagnostics(
             mask,
             minimum_component_area_px=minimum_area_px,
-            minimum_hole_area_px=minimum_area_px,
+            minimum_hole_area_px=minimum_hole_area_px,
+            maximum_hole_area_px=maximum_hole_area_px,
             maximum_components=MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS,
+            protected_background_mask=protected_background_mask,
+            cancellation_checkpoint=_check_cancelled,
         )
     except ForegroundComponentLimitError as exc:
         _raise_complexity(
@@ -2120,7 +2262,23 @@ def _clean_components(
             f"{exc.count:,} connected foreground components, exceeding "
             f"the {MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS:,}-component limit"
         )
-    return cleaned, component_count
+    effective_minimum_hole_area_mm2 = (
+        minimum_area_mm2
+        if minimum_hole_area_mm2 is None
+        else minimum_hole_area_mm2
+    )
+    return (
+        cleaned,
+        cleanup.retained_component_count,
+        RasterHoleCleanupDiagnostics(
+            raw_hole_count=cleanup.raw_hole_count,
+            preserved_hole_count=cleanup.preserved_hole_count,
+            filled_below_min_count=cleanup.filled_below_min_count,
+            filled_above_max_count=cleanup.filled_above_max_count,
+            minimum_hole_area_mm2=effective_minimum_hole_area_mm2,
+            maximum_hole_area_mm2=maximum_hole_area_mm2,
+        ),
+    )
 
 
 @_timed_stage("raster_4x_preparation")
@@ -5928,11 +6086,18 @@ def _prepare_vectorization_masks(
         grayscale,
         threshold_used,
     )
-    cleaned_mask, component_count = _clean_components(
+    cleaned_mask, component_count, hole_cleanup = _clean_components_with_diagnostics(
         source_mask,
         options.minimum_feature_area_mm2,
+        options.minimum_hole_area_mm2,
+        options.maximum_hole_area_mm2,
         width_mm,
         height_mm,
+        protected_background_mask=(
+            None
+            if source.eligibility_mask is None
+            else source.eligibility_mask == 0
+        ),
     )
     if component_count:
         _preflight_contour_complexity(cleaned_mask)
@@ -5958,6 +6123,7 @@ def _prepare_vectorization_masks(
             )
         ),
         component_count=component_count,
+        hole_cleanup=hole_cleanup,
     )
 
 
@@ -5977,6 +6143,7 @@ def _pixel_mask_preview(
         connected_component_count=masks.component_count,
         displayed_width_mm=width_mm,
         displayed_height_mm=height_mm,
+        hole_cleanup=masks.hole_cleanup,
         _masks=masks,
     )
 
@@ -6220,6 +6387,7 @@ def _quick_preview_prepared_raster(
         connected_component_count=masks.component_count,
         raw_contour_point_count=raw_point_count,
         preview_point_count=preview_point_count,
+        hole_cleanup=masks.hole_cleanup,
         _prepared_trace=prepared_trace,
     )
 
@@ -6534,6 +6702,7 @@ def _vectorize_pixel_source(
             contour_extraction.degenerate_original_indices
         ),
         rejected_contour_tree_count=len(contour_extraction.rejected_root_indices),
+        hole_cleanup=mask_preview.hole_cleanup,
     )
 
 
@@ -7180,6 +7349,7 @@ def _vectorize_pixel_source_forest(
             contour_extraction.degenerate_original_indices
         ),
         rejected_contour_tree_count=len(contour_extraction.rejected_root_indices),
+        hole_cleanup=masks.hole_cleanup,
     )
     return PixelVectorizationForestResult(
         result=result,
@@ -7309,6 +7479,7 @@ def vectorize_prepared_raster(
         pruned_contour_count=pixel_result.pruned_contour_count,
         degenerate_contour_count=pixel_result.degenerate_contour_count,
         rejected_contour_tree_count=pixel_result.rejected_contour_tree_count,
+        hole_cleanup=pixel_result.hole_cleanup,
         source_identity=source.identity,
         source_sha256=source.identity.sha256,
     )
@@ -7364,6 +7535,7 @@ __all__ = [
     "RasterContourOutput",
     "RasterDetectionMode",
     "RasterVectorizationCancelledError",
+    "RasterHoleCleanupDiagnostics",
     "RasterVectorizationComplexityError",
     "RasterVectorizationError",
     "RasterVectorizationOptions",

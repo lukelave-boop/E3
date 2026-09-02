@@ -57,8 +57,13 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    pick**, then click the center of the object in the corrected camera image.
    The button reads **Sampling…** while the frame is read and the swatch updates
    when sampling succeeds. A failure is shown directly in the Trace inspector.
-5. Set the minimum/maximum area and minimum dimensions so dust, sheet edges,
-   and unrelated artwork are excluded.
+5. Set **Minimum area** / **Maximum area** and the minimum dimensions so dust,
+   sheet edges, and unrelated foreground objects are excluded. For non-grid
+   Auto and By contrast, set **Minimum hole area** / **Maximum hole area**
+   independently: enclosed holes below the minimum or above the optional maximum
+   are filled, while holes on either boundary or between them are preserved.
+   **No maximum** leaves every hole at or above the minimum eligible. These hole
+   controls do not change object-size review.
 6. For a repeated label sheet, leave **Use grid** and **Make grid cells
    identical** enabled. Enable **Infer gaps** only when you want suggested
    positions for missing or obscured cells. Disable grid inference when tracing
@@ -460,12 +465,20 @@ inference behavior.
   Automatic mode selects from the bounded, image-derived family on the selected
   local-contrast raster; manual mode applies the selected 0–255 value to that
   same raster. Polarity chooses the
-  symmetric dark or light response. Minimum area controls physical raster
-  cleanup, including tiny islands and pinholes. Complete independent root trees
-  that already violate maximum area or minimum dimensions are rejected before
-  expensive native fitting without changing their mask or splitting their
-  holes/islands. A later fitting or topology failure omits only that complete
-  root and leaves verified peers available for review.
+  symmetric dark or light response. Minimum object area removes small foreground
+  components. The independent minimum/maximum hole range fills only enclosed
+  background components outside its inclusive bounds; border-connected external
+  background is never filled. A background component touching hard-ineligible
+  pixels is protected in the same way and is not counted as a filterable hole.
+  This topology change is present in the exact 4× production Mask before contour
+  extraction and native fitting. A preserved hole
+  retains its islands and descendants normally; filling a filtered hole can
+  intentionally absorb those nested foreground islands into the parent.
+  Complete independent root trees that already violate maximum object area or
+  minimum dimensions are rejected before expensive native fitting without
+  changing their remaining mask or splitting their holes/islands. A later fitting
+  or topology failure omits only that complete root and leaves verified peers
+  available for review.
 - **By contrast**, with **Use grid** on, retains the specialized object/grid
   detector. It evaluates dark and light filled-region hypotheses from global
   Otsu, illumination-corrected, adaptive, signed-local, and closed-outline
@@ -591,6 +604,9 @@ cheap root-review filtering, native fitting, and authoritative topology and
 raster-hierarchy validation. Manual Contrast retains one raster-vectorization
 snapshot; Auto retains per-dark/per-light snapshots, the common normalization
 snapshot, its normalization key, and `background_estimate_count = 1`.
+Production raster diagnostics also retain only bounded hole-cleanup aggregates:
+raw, preserved, filled-below-minimum, and filled-above-maximum counts plus the
+effective physical limits. They do not retain a per-hole list.
 
 ### Degenerate 4× contours
 
