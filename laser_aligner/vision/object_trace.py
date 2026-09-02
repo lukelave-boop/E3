@@ -24,7 +24,10 @@ from ..geometry.polygon import (
     convex_polygon_violation_normalized_mm,
     normalize_convex_polygon,
 )
-from ..project.native_contour_fit import fit_physical_contours_to_native_path
+from ..project.native_contour_fit import (
+    PrimitiveRecoveryMetrics,
+    fit_physical_contours_to_native_path,
+)
 from ..project.path_geometry import (
     NativePathGeometry,
     PathAffineTransform,
@@ -3416,6 +3419,7 @@ def _fit_trace_candidate_native(
             "raw_contour_point_count": sum(len(contour) for contour in source_contours_px),
             "fit_input_point_count": fit.raw_point_count,
             "fitted_segment_count": fit.fitted_segment_count,
+            "primitive_recovery": fit.primitive_recovery.to_dict(),
             "native_sequences": [
                 "".join(
                     "L" if segment.__class__.__name__ == "PathLineSegment" else "C"
@@ -3985,6 +3989,12 @@ def _detect_non_grid_contrast_raster(
                     "fitted_segment_count": sum(
                         contour.fitted_segment_count for contour in group_contours
                     ),
+                    "primitive_recovery": PrimitiveRecoveryMetrics.combined(
+                        tuple(
+                            contour.primitive_recovery
+                            for contour in group_contours
+                        )
+                    ).to_dict(),
                     "native_sequences": [
                         "".join(
                             "L" if segment.__class__.__name__ == "PathLineSegment" else "C"

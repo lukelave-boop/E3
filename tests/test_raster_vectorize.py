@@ -194,6 +194,7 @@ def test_timing_instrumentation_preserves_authoritative_geometry(
         "continuous_fit_validation",
         "topology_validation",
         "adjacent_merging",
+        "primitive_recovery",
         "preview_flattening",
         "raster_hierarchy_validation",
         "native_fitting",
@@ -206,6 +207,7 @@ def test_timing_instrumentation_preserves_authoritative_geometry(
     assert "contour_extraction" not in reuse_timing.stage_seconds
     assert "native_fitting" in reuse_timing.stage_seconds
     assert "source_edge_refinement" in reuse_timing.stage_seconds
+    assert "primitive_recovery" in reuse_timing.stage_seconds
 
 
 def test_source_neutral_mask_preparation_is_exact_immutable_and_reusable(
@@ -2649,7 +2651,10 @@ def test_auto_forest_treats_cross_root_ambiguity_as_strategy_fatal(
             displayed_height_mm=48.0,
         )
 
-    assert validated_root_counts == [2, 1, 1]
+    # The recovered forest is rejected once as a complete candidate.  The
+    # source-identical baseline retry then performs the established compound
+    # and per-root isolation checks.
+    assert validated_root_counts == [2, 2, 1, 1]
 
 
 def test_auto_forest_revalidates_both_topologies_after_raster_tree_rejection(
@@ -2704,8 +2709,10 @@ def test_auto_forest_revalidates_both_topologies_after_raster_tree_rejection(
     assert len(forest.result.contours) == 1
     assert forest.failures[0].stage == "raster_hierarchy"
     assert forest.failures[0].contour_count == 3
-    assert authoritative_root_counts == [2, 1]
-    assert raster_root_counts == [2, 1, 1, 1]
+    # Recovery is prevalidated as one complete forest before the raster-tree
+    # rejection triggers an exact baseline refit and the normal isolation pass.
+    assert authoritative_root_counts == [2, 2, 1]
+    assert raster_root_counts == [2, 2, 1, 1, 1]
 
 
 def test_auto_forest_keeps_complexity_failures_strategy_fatal(

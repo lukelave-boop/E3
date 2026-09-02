@@ -95,6 +95,7 @@ from .model import (
 from .native_contour_fit import (
     PhysicalContourFitContour,
     PhysicalContourFitResult,
+    PrimitiveRecoveryMetrics,
     fit_physical_contours_to_native_path,
 )
 from .path_geometry import (
@@ -280,6 +281,7 @@ __all__ = [
     "PathSubpath",
     "PhysicalContourFitContour",
     "PhysicalContourFitResult",
+    "PrimitiveRecoveryMetrics",
     "PROJECT_EXTENSION",
     "PROJECT_SCHEMA_VERSION",
     "ProjectDocument",
