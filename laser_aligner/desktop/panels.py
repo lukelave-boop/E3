@@ -1460,10 +1460,38 @@ class TracePanel(QtWidgets.QWidget):
         self.min_area.setRange(0.01, 100_000.0)
         self.min_area.setValue(30.0)
         self.min_area.setSuffix(" mm²")
+        self.min_area.setToolTip(
+            "Reject foreground objects smaller than this area."
+        )
         self.max_area = MeasurementSpinBox("area")
         self.max_area.setRange(0.1, 1_000_000.0)
         self.max_area.setValue(20_000.0)
         self.max_area.setSuffix(" mm²")
+        self.max_area.setToolTip(
+            "Reject foreground objects larger than this area."
+        )
+        self.min_hole_area = MeasurementSpinBox("area")
+        self.min_hole_area.setRange(0.0, 100_000.0)
+        self.min_hole_area.setValue(30.0)
+        self.min_hole_area.setSuffix(" mm²")
+        self.min_hole_area.setToolTip(
+            "Fill enclosed holes smaller than this area. Used by non-grid "
+            "Auto and By contrast raster tracing to produce the cleaned Mask. "
+            "Outer silhouette ignores any enclosed contours that survive this "
+            "cleanup when it creates vector geometry."
+        )
+        self.max_hole_area = MeasurementSpinBox("area")
+        self.max_hole_area.setRange(-0.01, 1_000_000.0)
+        self.max_hole_area.setSpecialValueText("No maximum")
+        self.max_hole_area.setValue(self.max_hole_area.minimum())
+        self.max_hole_area.setSuffix(" mm²")
+        self.max_hole_area.setToolTip(
+            "Fill enclosed holes larger than this area. Holes within the selected "
+            "area range are preserved. Used by non-grid Auto and By contrast "
+            "raster tracing to produce the cleaned Mask; No maximum preserves "
+            "every hole above the minimum. Outer silhouette ignores any enclosed "
+            "contours that survive this cleanup when it creates vector geometry."
+        )
         self.min_width = MeasurementSpinBox()
         self.min_width.setRange(0.1, 1000.0)
         self.min_width.setValue(4.0)
@@ -1479,6 +1507,8 @@ class TracePanel(QtWidgets.QWidget):
         for spin in (
             self.min_area,
             self.max_area,
+            self.min_hole_area,
+            self.max_hole_area,
             self.min_width,
             self.min_height,
             self.confidence,
@@ -1530,6 +1560,12 @@ class TracePanel(QtWidgets.QWidget):
         )
         _form_row(filter_form, "Minimum area", self.min_area)
         _form_row(filter_form, "Maximum area", self.max_area)
+        self.min_hole_area_label = QtWidgets.QLabel("Minimum hole area")
+        self.max_hole_area_label = QtWidgets.QLabel("Maximum hole area")
+        self.min_hole_area_label.setToolTip(self.min_hole_area.toolTip())
+        self.max_hole_area_label.setToolTip(self.max_hole_area.toolTip())
+        filter_form.addRow(self.min_hole_area_label, self.min_hole_area)
+        filter_form.addRow(self.max_hole_area_label, self.max_hole_area)
         _form_row(filter_form, "Minimum width", self.min_width)
         _form_row(filter_form, "Minimum height", self.min_height)
         confidence_label = QtWidgets.QLabel("Auto-select")
@@ -1572,6 +1608,20 @@ class TracePanel(QtWidgets.QWidget):
             "Béziers, simplified pixel contours, or exact "
             "pixel-derived contours."
         )
+        self.trace_detail = QtWidgets.QComboBox()
+        self.trace_detail.addItem("Full detail", "full")
+        self.trace_detail.addItem("Outer silhouette", "outer_silhouette")
+        trace_detail_tip = (
+            "Full detail preserves eligible holes and nested islands in the vector "
+            "result. Outer silhouette emits only each top-level exterior, omitting "
+            "holes and everything inside them. This changes vector geometry only: "
+            "the Mask display and Minimum/Maximum hole area controls still describe "
+            "and modify the production detection mask. Grid tracing always uses "
+            "Full detail."
+        )
+        self.trace_detail.setToolTip(trace_detail_tip)
+        self.trace_detail_label = QtWidgets.QLabel("Trace detail")
+        self.trace_detail_label.setToolTip(trace_detail_tip)
         self.border_offset_mode = QtWidgets.QComboBox()
         self.border_offset_mode.addItem("Uniform", "uniform")
         self.border_offset_mode.addItem("Per edge", "custom")
@@ -1642,6 +1692,7 @@ class TracePanel(QtWidgets.QWidget):
         self.native_fitting_tolerance_label.setToolTip(
             self.native_fitting_tolerance.toolTip()
         )
+        output_form.addRow(self.trace_detail_label, self.trace_detail)
         _form_row(output_form, "Purpose", self.trace_purpose)
         _form_row(output_form, "Geometry output", self.output_mode)
         _form_row(output_form, "Offset mode", self.border_offset_mode)
@@ -1686,8 +1737,10 @@ class TracePanel(QtWidgets.QWidget):
         raster_preview_tip = (
             "Inspect the corrected camera image, exact exposed-bed suppression, "
             "exact material eligibility, normalized grayscale, or exact production "
-            "foreground mask used by this Trace request. These views are diagnostic "
-            "only and do not change vector geometry."
+            "foreground mask used by this Trace request. The Mask remains the exact "
+            "cleaned detection evidence; its internal boundaries need not become "
+            "Outer silhouette vector output. These views are diagnostic only and "
+            "do not change vector geometry."
         )
         raster_preview_label.setToolTip(raster_preview_tip)
         self.raster_preview_combo.setToolTip(raster_preview_tip)
@@ -1843,6 +1896,8 @@ class TracePanel(QtWidgets.QWidget):
             self.contrast_invert,
             self.min_area,
             self.max_area,
+            self.min_hole_area,
+            self.max_hole_area,
             self.min_width,
             self.min_height,
             self.confidence,
@@ -1853,6 +1908,7 @@ class TracePanel(QtWidgets.QWidget):
             self.snap_grid_cells,
             self.normalize_anchor,
             self.output_mode,
+            self.trace_detail,
             self.border_offset_mode,
             self.border_offset,
             *self.edge_offset_fields.values(),
@@ -1886,6 +1942,7 @@ class TracePanel(QtWidgets.QWidget):
 
     def _restore_preferences(self) -> None:
         settings = self._trace_settings
+        migrated_hole_filters = False
         settings.beginGroup("trace")
         try:
             saved_mode = settings.value(
@@ -1940,6 +1997,20 @@ class TracePanel(QtWidgets.QWidget):
             self.max_area.setValue(
                 float(settings.value("max_area_mm2", self.max_area.value()))
             )
+            if settings.contains("min_hole_area_mm2"):
+                minimum_hole_area = float(settings.value("min_hole_area_mm2"))
+            else:
+                minimum_hole_area = self.min_area.value()
+                settings.setValue("min_hole_area_mm2", minimum_hole_area)
+                migrated_hole_filters = True
+            self.min_hole_area.setValue(minimum_hole_area)
+            if settings.contains("max_hole_area_mm2"):
+                maximum_hole_area = float(settings.value("max_hole_area_mm2"))
+            else:
+                maximum_hole_area = self.max_hole_area.minimum()
+                settings.setValue("max_hole_area_mm2", maximum_hole_area)
+                migrated_hole_filters = True
+            self.max_hole_area.setValue(maximum_hole_area)
             self.min_width.setValue(
                 float(settings.value("min_width_mm", self.min_width.value()))
             )
@@ -1968,6 +2039,10 @@ class TracePanel(QtWidgets.QWidget):
             self._set_combo_data(
                 self.output_mode,
                 settings.value("output_mode", self.output_mode.currentData()),
+            )
+            self._set_combo_data(
+                self.trace_detail,
+                settings.value("trace_detail", "full"),
             )
             self._set_combo_data(
                 self.border_offset_mode,
@@ -2011,6 +2086,8 @@ class TracePanel(QtWidgets.QWidget):
                     self._sampled_bgr = None
         finally:
             settings.endGroup()
+        if migrated_hole_filters:
+            settings.sync()
 
     def _save_preferences(self, *_args: object) -> None:
         settings = self._trace_settings
@@ -2031,6 +2108,8 @@ class TracePanel(QtWidgets.QWidget):
             settings.setValue("contrast_invert", self.contrast_invert.isChecked())
             settings.setValue("min_area_mm2", self.min_area.value())
             settings.setValue("max_area_mm2", self.max_area.value())
+            settings.setValue("min_hole_area_mm2", self.min_hole_area.value())
+            settings.setValue("max_hole_area_mm2", self.max_hole_area.value())
             settings.setValue("min_width_mm", self.min_width.value())
             settings.setValue("min_height_mm", self.min_height.value())
             settings.setValue("confidence_percent", self.confidence.value())
@@ -2041,6 +2120,7 @@ class TracePanel(QtWidgets.QWidget):
             settings.setValue("snap_grid_cells", self.snap_grid_cells.isChecked())
             settings.setValue("normalize_anchor", self.normalize_anchor.currentData())
             settings.setValue("output_mode", self.output_mode.currentData())
+            settings.setValue("trace_detail", self.trace_detail.currentData())
             settings.setValue("border_offset_mode", self.border_offset_mode.currentData())
             settings.setValue("border_offset_mm", self.border_offset.value())
             for edge, field in self.edge_offset_fields.items():
@@ -2089,6 +2169,12 @@ class TracePanel(QtWidgets.QWidget):
             "contrast_invert": self.contrast_invert.isChecked(),
             "min_area_mm2": self.min_area.value(),
             "max_area_mm2": self.max_area.value(),
+            "min_hole_area_mm2": self.min_hole_area.value(),
+            "max_hole_area_mm2": (
+                None
+                if self.max_hole_area.value() <= self.max_hole_area.minimum()
+                else self.max_hole_area.value()
+            ),
             "min_width_mm": self.min_width.value(),
             "min_height_mm": self.min_height.value(),
             "confidence_threshold": self.confidence.value() / 100.0,
@@ -2099,6 +2185,11 @@ class TracePanel(QtWidgets.QWidget):
             "snap_grid_cells": self.snap_grid_cells.isChecked(),
             "normalize_anchor": str(self.normalize_anchor.currentData()),
             "output_mode": str(self.output_mode.currentData()),
+            "trace_detail": (
+                "full"
+                if self.regular_grid.isChecked()
+                else str(self.trace_detail.currentData())
+            ),
             "border_offset_mode": str(self.border_offset_mode.currentData()),
             "border_offset_mm": self.border_offset.value(),
             "border_offset_top_mm": self.edge_offset_fields["top"].value(),
@@ -2306,6 +2397,12 @@ class TracePanel(QtWidgets.QWidget):
                             for value in diagnostics.get("native_sequences", [])
                         )
                         + "."
+                    )
+                if diagnostics.get("outer_only"):
+                    geometry_tip += (
+                        " Outer silhouette output contains only this top-level "
+                        "exterior; Mask-only holes and descendants are omitted "
+                        "from the vector path."
                     )
                 if diagnostics.get("damage_suspected"):
                     reasons = "; ".join(
@@ -2590,6 +2687,8 @@ class TracePanel(QtWidgets.QWidget):
         color_mode = trace_mode == "color"
         contrast_mode = trace_mode == "contrast"
         grid_enabled = self.regular_grid.isChecked()
+        self.trace_detail_label.setEnabled(not grid_enabled)
+        self.trace_detail.setEnabled(not grid_enabled)
         manual_raster_contrast = contrast_mode and not grid_enabled
         auto_raster = auto_mode and not grid_enabled
         raster_native = manual_raster_contrast or auto_raster
@@ -2617,6 +2716,13 @@ class TracePanel(QtWidgets.QWidget):
             and self.contrast_threshold_mode.currentData() == "manual"
         )
         self.contrast_invert.setEnabled(manual_raster_contrast)
+        for widget in (
+            self.min_hole_area_label,
+            self.max_hole_area_label,
+            self.min_hole_area,
+            self.max_hole_area,
+        ):
+            widget.setEnabled(raster_native)
         self.output_mode.setEnabled(not raster_native)
         self.native_fitting_tolerance_label.setEnabled(native_output)
         self.native_fitting_tolerance.setEnabled(native_output)

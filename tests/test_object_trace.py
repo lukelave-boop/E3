@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import fields
 
 import cv2
 import numpy as np
@@ -553,6 +554,66 @@ def test_non_grid_auto_selects_color_when_luminance_is_nearly_equal() -> None:
     assert result.direct_count == 2
     assert all(item.native_verified for item in result.detections)
     assert "Auto chose: Color" in result.message
+
+
+def test_non_grid_auto_color_outer_silhouette_never_enumerates_hole_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.full((180, 240, 3), 128, dtype=np.uint8)
+    chromatic = (20, 102, 220)
+    cv2.rectangle(image, (35, 35), (100, 140), chromatic, -1)
+    cv2.rectangle(image, (55, 60), (80, 90), (128, 128, 128), -1)
+    cv2.circle(image, (175, 88), 38, chromatic, -1, lineType=cv2.LINE_8)
+    cv2.circle(image, (175, 88), 15, (128, 128, 128), -1, lineType=cv2.LINE_8)
+    original_extract = object_trace_module.extract_foreground_contours
+    retrieval_modes: list[int] = []
+
+    def recording_extract(*args: object, **kwargs: object) -> object:
+        retrieval_modes.append(int(kwargs.get("retrieval_mode", cv2.RETR_TREE)))
+        return original_extract(*args, **kwargs)
+
+    def fail_washer_enumeration(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("Outer Auto Color must not enumerate washer children")
+
+    monkeypatch.setattr(object_trace_module, "extract_foreground_contours", recording_extract)
+    monkeypatch.setattr(
+        object_trace_module,
+        "_washer_candidates",
+        fail_washer_enumeration,
+    )
+    requested = _non_grid_auto_options().to_dict()
+    requested["trace_detail"] = "outer_silhouette"
+    previews = []
+
+    result = detect_objects(
+        image,
+        TraceOptions(**requested),
+        WorkArea(0.0, 60.0, 0.0, 45.0),
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == "color"
+    assert auto["requested_options"]["trace_detail"] == "outer_silhouette"
+    assert auto["effective_options"]["trace_detail"] == "outer_silhouette"
+    assert result.options.trace_detail == "outer_silhouette"
+    assert result.diagnostics["outer_only"] is True
+    assert result.diagnostics["candidate_failure_count"] == 0
+    assert result.direct_count == 2
+    assert cv2.RETR_EXTERNAL in retrieval_modes
+    assert cv2.RETR_TREE not in retrieval_modes
+    assert all(item.shape != "washer" for item in result.detections)
+    assert all(item.diagnostics["contour_parents"] == [None] for item in result.detections)
+    assert all(item.diagnostics["contour_depths"] == [0] for item in result.detections)
+    assert all(item.diagnostics["internal_contours_enumerated"] is False for item in result.detections)
+    assert all(item.diagnostics["ignored_internal_contour_count"] is None for item in result.detections)
+    assert all(len(item.vector_contours_mm) == 1 for item in result.detections)
+    selected_preview = previews[-1]
+    assert selected_preview.selected_strategy is True
+    assert selected_preview.strategy == "color"
+    assert int(selected_preview.contour_mask[75, 65]) == 0
+    assert int(selected_preview.contour_mask[88, 175]) == 0
 
 
 def test_color_auto_counts_review_filtered_roots_as_unavailable() -> None:
@@ -1284,7 +1345,10 @@ def test_normalized_grid_retains_and_flags_cells_crossing_work_area() -> None:
     assert "outside the work area" in result.message
 
 
-def test_non_grid_edge_cropped_observation_is_rejected_by_hard_roi() -> None:
+@pytest.mark.parametrize("trace_detail", ["full", "outer_silhouette"])
+def test_non_grid_edge_cropped_observation_is_rejected_by_hard_roi(
+    trace_detail: str,
+) -> None:
     image = np.full((400, 400, 3), 230, dtype=np.uint8)
     cv2.rectangle(image, (300, 120), (399, 220), (35, 35, 35), -1)
 
@@ -1296,6 +1360,7 @@ def test_non_grid_edge_cropped_observation_is_rejected_by_hard_roi() -> None:
             min_width_mm=10.0,
             min_height_mm=10.0,
             regular_grid=False,
+            trace_detail=trace_detail,
         ),
         WorkArea(0.0, 100.0, 0.0, 100.0),
         4.0,
@@ -1303,6 +1368,10 @@ def test_non_grid_edge_cropped_observation_is_rejected_by_hard_roi() -> None:
 
     assert result.direct_count == 0
     assert result.detected is False
+    assert result.diagnostics["trace_detail"] == trace_detail
+    assert result.diagnostics["outer_only"] is (
+        trace_detail == "outer_silhouette"
+    )
     assert (
         result.diagnostics["strategy_metrics"][
             "hard_roi_boundary_rejected_candidate_count"
@@ -1970,6 +2039,111 @@ def test_trace_options_require_boolean_grid_edge_repair() -> None:
         TraceOptions(repair_grid_edges="yes")
 
 
+def test_trace_detail_defaults_validates_and_round_trips() -> None:
+    assert TraceOptions.from_mapping({}).trace_detail == "full"
+
+    outer = TraceOptions.from_mapping({"trace_detail": "OUTER_SILHOUETTE"})
+
+    assert outer.trace_detail == "outer_silhouette"
+    assert outer.to_dict()["trace_detail"] == "outer_silhouette"
+    assert TraceOptions.from_mapping(outer.to_dict()).trace_detail == "outer_silhouette"
+    with pytest.raises(ValueError, match="Unknown trace detail"):
+        TraceOptions(trace_detail="outer")
+
+
+def test_trace_options_migrate_legacy_hole_filter_once() -> None:
+    legacy = TraceOptions.from_mapping(
+        {
+            "detection_mode": "contrast",
+            "min_area_mm2": 50.0,
+            "max_area_mm2": 8_000.0,
+        }
+    )
+
+    assert legacy.min_hole_area_mm2 == pytest.approx(50.0)
+    assert legacy.max_hole_area_mm2 is None
+    saved = legacy.to_dict()
+    assert saved["min_hole_area_mm2"] == pytest.approx(50.0)
+    assert saved["max_hole_area_mm2"] is None
+
+    saved["min_area_mm2"] = 75.0
+    restored = TraceOptions.from_mapping(saved)
+    assert restored.min_area_mm2 == pytest.approx(75.0)
+    assert restored.min_hole_area_mm2 == pytest.approx(50.0)
+    assert restored.max_hole_area_mm2 is None
+
+
+def test_trace_options_round_trip_independent_hole_area_range() -> None:
+    options = TraceOptions(
+        min_area_mm2=50.0,
+        max_area_mm2=8_000.0,
+        min_hole_area_mm2=2.0,
+        max_hole_area_mm2=30.0,
+    )
+
+    assert TraceOptions.from_mapping(options.to_dict()).to_dict() == options.to_dict()
+
+
+def test_trace_hole_options_are_appended_after_legacy_positional_fields() -> None:
+    option_fields = fields(TraceOptions)
+    assert [item.name for item in option_fields[-3:]] == [
+        "min_hole_area_mm2",
+        "max_hole_area_mm2",
+        "trace_detail",
+    ]
+
+    legacy = TraceOptions(*(item.default for item in option_fields[:-3]))
+    pre_detail = TraceOptions(*(item.default for item in option_fields[:-1]))
+
+    assert legacy.min_hole_area_mm2 == pytest.approx(legacy.min_area_mm2)
+    assert legacy.max_hole_area_mm2 is None
+    assert legacy.trace_detail == "full"
+    assert pre_detail.trace_detail == "full"
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"min_area_mm2": 0.0}, "greater than zero"),
+        ({"min_area_mm2": 100_001.0}, "no greater than 100000"),
+        (
+            {"min_area_mm2": 10.0, "max_area_mm2": 9.0},
+            "at least min_area_mm2",
+        ),
+        ({"max_area_mm2": 1_000_001.0}, "no greater than 1000000"),
+        ({"min_hole_area_mm2": -0.01}, "non-negative"),
+        ({"min_hole_area_mm2": 100_001.0}, "no greater than 100000"),
+        (
+            {"min_hole_area_mm2": 2.0, "max_hole_area_mm2": 1.99},
+            "at least min_hole_area_mm2",
+        ),
+        ({"max_hole_area_mm2": 1_000_001.0}, "no greater than 1000000"),
+    ],
+)
+def test_trace_options_reject_invalid_area_ranges(
+    overrides: dict[str, float],
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        TraceOptions(**overrides)
+
+
+def test_trace_options_accept_inclusive_area_boundaries_and_unbounded_holes() -> None:
+    bounded = TraceOptions(
+        min_area_mm2=10.0,
+        max_area_mm2=10.0,
+        min_hole_area_mm2=3.0,
+        max_hole_area_mm2=3.0,
+    )
+    unbounded = TraceOptions(min_hole_area_mm2=0.0, max_hole_area_mm2=None)
+    zero_only = TraceOptions(min_hole_area_mm2=0.0, max_hole_area_mm2=0.0)
+
+    assert bounded.max_area_mm2 == bounded.min_area_mm2
+    assert bounded.max_hole_area_mm2 == bounded.min_hole_area_mm2
+    assert unbounded.max_hole_area_mm2 is None
+    assert zero_only.max_hole_area_mm2 == pytest.approx(0.0)
+
+
 def test_border_offset_expands_fitted_output():
     image = _label_scene(obscure=False)
     base = detect_objects(
@@ -2185,6 +2359,8 @@ def test_non_grid_mode_preserves_irregular_colored_silhouette():
         {"target_hue": float("nan")},
         {"hue_tolerance": float("inf")},
         {"min_area_mm2": float("nan")},
+        {"min_hole_area_mm2": float("nan")},
+        {"max_hole_area_mm2": float("inf")},
         {"target_bgr": [0, float("nan"), 0]},
         {"border_offset_top_mm": float("nan")},
     ],

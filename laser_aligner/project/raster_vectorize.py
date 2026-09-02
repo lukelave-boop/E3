@@ -20,7 +20,7 @@ from ..geometry.foreground import (
     ForegroundComponentLimitError,
     ForegroundContourLimitError,
     ForegroundContourPruneResult,
-    clean_foreground_components,
+    clean_foreground_components_with_diagnostics,
     extract_foreground_contours,
     prune_degenerate_foreground_contours,
 )
@@ -34,6 +34,14 @@ from .path_geometry import (
     flatten_native_path,
     native_path_bounds,
     reverse_subpath,
+)
+from .primitive_recovery import (
+    CircularArcHypothesis,
+    LineHypothesis,
+    canonical_cubic_arc_spans,
+    fit_circular_arc_hypothesis,
+    fit_line_hypothesis,
+    line_intersection,
 )
 from .raster_asset import (
     RasterAssetIdentity,
@@ -193,6 +201,90 @@ def _set_cancel_check(
 
 
 @dataclass(frozen=True, slots=True)
+class PrimitiveRecoveryMetrics:
+    """Bounded, source-neutral diagnostics for one fitted contour."""
+
+    baseline_segment_count: int = 0
+    final_segment_count: int = 0
+    recovered_line_count: int = 0
+    recovered_line_length_mm: float = 0.0
+    recovered_arc_count: int = 0
+    recovered_arc_length_mm: float = 0.0
+    canonical_arc_cubic_count: int = 0
+    freeform_cubic_count: int = 0
+    rejected_line_hypothesis_count: int = 0
+    rejected_arc_hypothesis_count: int = 0
+    maximum_residual_mm: float = 0.0
+    rms_residual_mm: float = 0.0
+    maximum_endpoint_adjustment_mm: float = 0.0
+    source_pixel_scale_mm: float = 0.0
+    hypothesis_count: int = 0
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "baseline_segment_count",
+            "final_segment_count",
+            "recovered_line_count",
+            "recovered_arc_count",
+            "canonical_arc_cubic_count",
+            "freeform_cubic_count",
+            "rejected_line_hypothesis_count",
+            "rejected_arc_hypothesis_count",
+            "hypothesis_count",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        for field_name in (
+            "recovered_line_length_mm",
+            "recovered_arc_length_mm",
+            "maximum_residual_mm",
+            "rms_residual_mm",
+            "maximum_endpoint_adjustment_mm",
+            "source_pixel_scale_mm",
+        ):
+            raw_value = getattr(self, field_name)
+            if isinstance(raw_value, bool) or not isinstance(raw_value, Real):
+                raise ValueError(f"{field_name} must be a finite number")
+            value = float(raw_value)
+            if not math.isfinite(value):
+                raise ValueError(f"{field_name} must be a finite number")
+            if value < 0.0:
+                raise ValueError(f"{field_name} cannot be negative")
+            object.__setattr__(self, field_name, value)
+        if self.rms_residual_mm > self.maximum_residual_mm + 1e-12:
+            raise ValueError("primitive RMS residual cannot exceed its maximum")
+
+    @classmethod
+    def combined(
+        cls,
+        metrics: tuple[PrimitiveRecoveryMetrics, ...],
+    ) -> PrimitiveRecoveryMetrics:
+        return _combine_primitive_recovery_metrics(metrics)
+
+    def to_dict(self) -> dict[str, float | int]:
+        """Return bounded JSON-safe diagnostics without geometry samples."""
+
+        return {
+            "baseline_segment_count": self.baseline_segment_count,
+            "final_segment_count": self.final_segment_count,
+            "recovered_line_count": self.recovered_line_count,
+            "recovered_line_length_mm": self.recovered_line_length_mm,
+            "recovered_arc_count": self.recovered_arc_count,
+            "recovered_arc_length_mm": self.recovered_arc_length_mm,
+            "canonical_arc_cubic_count": self.canonical_arc_cubic_count,
+            "freeform_cubic_count": self.freeform_cubic_count,
+            "rejected_line_hypothesis_count": self.rejected_line_hypothesis_count,
+            "rejected_arc_hypothesis_count": self.rejected_arc_hypothesis_count,
+            "maximum_residual_mm": self.maximum_residual_mm,
+            "rms_residual_mm": self.rms_residual_mm,
+            "maximum_endpoint_adjustment_mm": self.maximum_endpoint_adjustment_mm,
+            "source_pixel_scale_mm": self.source_pixel_scale_mm,
+            "hypothesis_count": self.hypothesis_count,
+        }
+
+
+@dataclass(frozen=True, slots=True)
 class PhysicalContourFitContour:
     """One fitted closed physical contour in a compound native path."""
 
@@ -207,6 +299,7 @@ class PhysicalContourFitContour:
     mean_fitting_error_mm: float
     rms_fitting_error_mm: float
     hard_corner_count: int
+    primitive_recovery: PrimitiveRecoveryMetrics = PrimitiveRecoveryMetrics()
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,6 +321,12 @@ class PhysicalContourFitResult:
     @property
     def fitted_segment_count(self) -> int:
         return self.geometry.segment_count
+
+    @property
+    def primitive_recovery(self) -> PrimitiveRecoveryMetrics:
+        return _combine_primitive_recovery_metrics(
+            tuple(contour.primitive_recovery for contour in self.contours)
+        )
 
 
 class RasterDetectionMode(str, Enum):
@@ -256,6 +355,40 @@ def _bounded_byte(value: object, label: str) -> int:
     return value
 
 
+def _combine_primitive_recovery_metrics(
+    metrics: tuple[PrimitiveRecoveryMetrics, ...],
+) -> PrimitiveRecoveryMetrics:
+    if not metrics:
+        return PrimitiveRecoveryMetrics()
+    return PrimitiveRecoveryMetrics(
+        baseline_segment_count=sum(item.baseline_segment_count for item in metrics),
+        final_segment_count=sum(item.final_segment_count for item in metrics),
+        recovered_line_count=sum(item.recovered_line_count for item in metrics),
+        recovered_line_length_mm=sum(
+            item.recovered_line_length_mm for item in metrics
+        ),
+        recovered_arc_count=sum(item.recovered_arc_count for item in metrics),
+        recovered_arc_length_mm=sum(item.recovered_arc_length_mm for item in metrics),
+        canonical_arc_cubic_count=sum(
+            item.canonical_arc_cubic_count for item in metrics
+        ),
+        freeform_cubic_count=sum(item.freeform_cubic_count for item in metrics),
+        rejected_line_hypothesis_count=sum(
+            item.rejected_line_hypothesis_count for item in metrics
+        ),
+        rejected_arc_hypothesis_count=sum(
+            item.rejected_arc_hypothesis_count for item in metrics
+        ),
+        maximum_residual_mm=max(item.maximum_residual_mm for item in metrics),
+        rms_residual_mm=max(item.rms_residual_mm for item in metrics),
+        maximum_endpoint_adjustment_mm=max(
+            item.maximum_endpoint_adjustment_mm for item in metrics
+        ),
+        source_pixel_scale_mm=max(item.source_pixel_scale_mm for item in metrics),
+        hypothesis_count=sum(item.hypothesis_count for item in metrics),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class RasterVectorizationOptions:
     detection_mode: RasterDetectionMode = RasterDetectionMode.AUTO_THRESHOLD
@@ -266,6 +399,8 @@ class RasterVectorizationOptions:
     smoothing_mm: float = 0.0
     simplification_tolerance_mm: float = 0.10
     contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS
+    minimum_hole_area_mm2: float | None = None
+    maximum_hole_area_mm2: float | None = None
 
     def __post_init__(self) -> None:
         try:
@@ -301,6 +436,30 @@ class RasterVectorizationOptions:
         )
         if minimum_area < 0.0:
             raise ValueError("minimum_feature_area_mm2 cannot be negative")
+        minimum_hole_area = self.minimum_hole_area_mm2
+        if minimum_hole_area is not None:
+            minimum_hole_area = _finite(
+                minimum_hole_area,
+                "minimum_hole_area_mm2",
+            )
+            if minimum_hole_area < 0.0:
+                raise ValueError("minimum_hole_area_mm2 cannot be negative")
+        effective_minimum_hole_area = (
+            minimum_area if minimum_hole_area is None else minimum_hole_area
+        )
+        maximum_hole_area = self.maximum_hole_area_mm2
+        if maximum_hole_area is not None:
+            maximum_hole_area = _finite(
+                maximum_hole_area,
+                "maximum_hole_area_mm2",
+            )
+            if maximum_hole_area < 0.0:
+                raise ValueError("maximum_hole_area_mm2 cannot be negative")
+            if maximum_hole_area < effective_minimum_hole_area:
+                raise ValueError(
+                    "maximum_hole_area_mm2 must be greater than or equal to the "
+                    "effective minimum hole area"
+                )
         if smoothing < 0.0:
             raise ValueError("smoothing_mm cannot be negative")
         if tolerance <= 0.0:
@@ -316,6 +475,68 @@ class RasterVectorizationOptions:
         object.__setattr__(self, "minimum_feature_area_mm2", minimum_area)
         object.__setattr__(self, "smoothing_mm", smoothing)
         object.__setattr__(self, "simplification_tolerance_mm", tolerance)
+        object.__setattr__(self, "minimum_hole_area_mm2", minimum_hole_area)
+        object.__setattr__(self, "maximum_hole_area_mm2", maximum_hole_area)
+
+
+@dataclass(frozen=True, slots=True)
+class RasterHoleCleanupDiagnostics:
+    """Bounded physical-area diagnostics for source-mask hole cleanup."""
+
+    raw_hole_count: int
+    preserved_hole_count: int
+    filled_below_min_count: int
+    filled_above_max_count: int
+    minimum_hole_area_mm2: float
+    maximum_hole_area_mm2: float | None
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "raw_hole_count",
+            "preserved_hole_count",
+            "filled_below_min_count",
+            "filled_above_max_count",
+        ):
+            value = getattr(self, field_name)
+            if type(value) is not int or value < 0:
+                raise ValueError(f"{field_name} must be a non-negative integer")
+        if self.raw_hole_count != (
+            self.preserved_hole_count
+            + self.filled_below_min_count
+            + self.filled_above_max_count
+        ):
+            raise ValueError("Hole cleanup diagnostic counts are inconsistent")
+        minimum_hole_area = _finite(
+            self.minimum_hole_area_mm2,
+            "minimum_hole_area_mm2",
+        )
+        if minimum_hole_area < 0.0:
+            raise ValueError("minimum_hole_area_mm2 cannot be negative")
+        maximum_hole_area = self.maximum_hole_area_mm2
+        if maximum_hole_area is not None:
+            maximum_hole_area = _finite(
+                maximum_hole_area,
+                "maximum_hole_area_mm2",
+            )
+            if maximum_hole_area < minimum_hole_area:
+                raise ValueError(
+                    "maximum_hole_area_mm2 must be greater than or equal to "
+                    "minimum_hole_area_mm2"
+                )
+        object.__setattr__(self, "minimum_hole_area_mm2", minimum_hole_area)
+        object.__setattr__(self, "maximum_hole_area_mm2", maximum_hole_area)
+
+    def to_dict(self) -> dict[str, object]:
+        """Return bounded JSON-ready cleanup diagnostics."""
+
+        return {
+            "raw_hole_count": self.raw_hole_count,
+            "preserved_hole_count": self.preserved_hole_count,
+            "filled_below_min_count": self.filled_below_min_count,
+            "filled_above_max_count": self.filled_above_max_count,
+            "minimum_hole_area_mm2": self.minimum_hole_area_mm2,
+            "maximum_hole_area_mm2": self.maximum_hole_area_mm2,
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -470,7 +691,8 @@ class PixelAutoThresholdSelection:
 class PixelVectorizationMaskPreview:
     """Exact immutable threshold preparation available before native fitting.
 
-    ``contour_mask`` is the production 4x binary mask passed to RETR_TREE.
+    ``contour_mask`` is the exact production 4x binary mask passed to the
+    selected full-hierarchy or exterior-only contour extraction.
     ``foreground_mask`` is its source-resolution display representation and is
     byte-identical to the mask returned with a successful vectorization.  This
     temporary value has no project, planning, G-code, or output authority.
@@ -484,6 +706,7 @@ class PixelVectorizationMaskPreview:
     connected_component_count: int
     displayed_width_mm: float
     displayed_height_mm: float
+    hole_cleanup: RasterHoleCleanupDiagnostics
     _masks: _RasterMaskPreparation = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -514,6 +737,8 @@ class PixelVectorizationMaskPreview:
             or self.connected_component_count < 0
         ):
             raise ValueError("connected_component_count must be non-negative")
+        if not isinstance(self.hole_cleanup, RasterHoleCleanupDiagnostics):
+            raise TypeError("A mask preview requires hole cleanup diagnostics")
         width_mm, height_mm = _display_dimensions(
             self.displayed_width_mm,
             self.displayed_height_mm,
@@ -525,6 +750,7 @@ class PixelVectorizationMaskPreview:
             or self._masks.working_mask is not self.contour_mask
             or self._masks.threshold_used != self.threshold_used
             or self._masks.component_count != self.connected_component_count
+            or self._masks.hole_cleanup is not self.hole_cleanup
         ):
             raise ValueError("Mask preview fields do not match its exact preparation")
         object.__setattr__(self, "displayed_width_mm", width_mm)
@@ -551,6 +777,7 @@ class _RasterMaskPreparation:
     working_mask: np.ndarray
     preview_mask: np.ndarray
     component_count: int
+    hole_cleanup: RasterHoleCleanupDiagnostics
 
 
 @dataclass(frozen=True, slots=True, eq=False)
@@ -614,6 +841,7 @@ class RasterVectorizationQuickPreview:
     connected_component_count: int
     raw_contour_point_count: int
     preview_point_count: int
+    hole_cleanup: RasterHoleCleanupDiagnostics
     _prepared_trace: _RasterTracePreparation = field(repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -634,8 +862,14 @@ class RasterVectorizationQuickPreview:
                 raise ValueError(f"quick preview {name} must be non-negative")
         if self.preview_point_count != sum(len(contour.points) for contour in contours):
             raise ValueError("quick preview point count does not match its contours")
+        if not isinstance(self.hole_cleanup, RasterHoleCleanupDiagnostics):
+            raise TypeError("quick preview requires hole cleanup diagnostics")
         if not isinstance(self._prepared_trace, _RasterTracePreparation):
             raise TypeError("quick preview requires its immutable prepared trace")
+        if self._prepared_trace.masks.hole_cleanup is not self.hole_cleanup:
+            raise ValueError(
+                "quick preview hole diagnostics do not match its prepared trace"
+            )
         object.__setattr__(self, "contours", contours)
 
 
@@ -660,6 +894,7 @@ class RasterVectorizedContour:
     merged_segment_count: int = 0
     longest_smooth_span_segment_count: int = 0
     threshold_points: tuple[tuple[float, float], ...] = ()
+    primitive_recovery: PrimitiveRecoveryMetrics = PrimitiveRecoveryMetrics()
 
     def __post_init__(self) -> None:
         if not isinstance(self.native_subpath, PathSubpath):
@@ -776,6 +1011,8 @@ class RasterVectorizedContour:
             smoothing_displacement,
         )
         object.__setattr__(self, "max_estimated_deviation_mm", deviation)
+        if not isinstance(self.primitive_recovery, PrimitiveRecoveryMetrics):
+            raise TypeError("primitive_recovery must be PrimitiveRecoveryMetrics")
 
     @property
     def points(self) -> tuple[tuple[float, float], ...]:
@@ -809,6 +1046,7 @@ class PixelVectorizationResult:
     pruned_contour_count: int
     degenerate_contour_count: int
     rejected_contour_tree_count: int
+    hole_cleanup: RasterHoleCleanupDiagnostics
 
     def __post_init__(self) -> None:
         if not isinstance(self.source_key, str) or not self.source_key:
@@ -841,6 +1079,8 @@ class PixelVectorizationResult:
             _bounded_byte(self.threshold_used, "threshold_used")
         if type(self.has_usable_alpha) is not bool:
             raise ValueError("has_usable_alpha must be a boolean")
+        if not isinstance(self.hole_cleanup, RasterHoleCleanupDiagnostics):
+            raise TypeError("A raster result requires hole cleanup diagnostics")
         for value, label, minimum in (
             (self.connected_component_count, "connected_component_count", 1),
             (self.raw_contour_point_count, "raw_contour_point_count", 3),
@@ -910,6 +1150,9 @@ class PixelVectorizationResult:
     def metadata(self) -> dict[str, object]:
         """Return a compact JSON-ready provenance and quality summary."""
 
+        primitive = _combine_primitive_recovery_metrics(
+            tuple(contour.primitive_recovery for contour in self.contours)
+        )
         fitting_sample_count = sum(
             contour.fitting_error_sample_count for contour in self.contours
         )
@@ -941,6 +1184,7 @@ class PixelVectorizationResult:
             "raster_vectorization_connected_components": (
                 self.connected_component_count
             ),
+            "raster_vectorization_hole_cleanup": self.hole_cleanup.to_dict(),
             "raster_vectorization_contours": len(self.contours),
             "raster_vectorization_pruned_contours": self.pruned_contour_count,
             "raster_vectorization_degenerate_contours": (
@@ -983,6 +1227,45 @@ class PixelVectorizationResult:
             "raster_vectorization_max_estimated_deviation_mm": (
                 self.max_estimated_deviation_mm
             ),
+            "raster_vectorization_primitive_baseline_segments": (
+                primitive.baseline_segment_count
+            ),
+            "raster_vectorization_primitive_final_segments": (
+                primitive.final_segment_count
+            ),
+            "raster_vectorization_recovered_lines": primitive.recovered_line_count,
+            "raster_vectorization_recovered_line_length_mm": (
+                primitive.recovered_line_length_mm
+            ),
+            "raster_vectorization_recovered_circular_arcs": (
+                primitive.recovered_arc_count
+            ),
+            "raster_vectorization_recovered_arc_length_mm": (
+                primitive.recovered_arc_length_mm
+            ),
+            "raster_vectorization_canonical_arc_cubics": (
+                primitive.canonical_arc_cubic_count
+            ),
+            "raster_vectorization_freeform_cubics": primitive.freeform_cubic_count,
+            "raster_vectorization_rejected_line_hypotheses": (
+                primitive.rejected_line_hypothesis_count
+            ),
+            "raster_vectorization_rejected_arc_hypotheses": (
+                primitive.rejected_arc_hypothesis_count
+            ),
+            "raster_vectorization_primitive_max_residual_mm": (
+                primitive.maximum_residual_mm
+            ),
+            "raster_vectorization_primitive_rms_residual_mm": (
+                primitive.rms_residual_mm
+            ),
+            "raster_vectorization_max_primitive_endpoint_adjustment_mm": (
+                primitive.maximum_endpoint_adjustment_mm
+            ),
+            "raster_vectorization_source_pixel_scale_mm": (
+                primitive.source_pixel_scale_mm
+            ),
+            "raster_vectorization_primitive_hypotheses": primitive.hypothesis_count,
             "raster_vectorization_hierarchy": [
                 {
                     "parent_index": contour.parent_index,
@@ -1163,6 +1446,7 @@ class _FittedContour:
     recursive_split_count: int = 0
     merged_segment_count: int = 0
     longest_smooth_span_segment_count: int = 0
+    primitive_recovery: PrimitiveRecoveryMetrics = PrimitiveRecoveryMetrics()
 
 
 @dataclass(frozen=True, slots=True)
@@ -1187,6 +1471,48 @@ class _FittedPiece:
     sample_error_sum_mm: float
     sample_squared_error_sum_mm2: float
     sample_count: int
+    target_indices: np.ndarray | None = None
+    primitive_kind: str | None = None
+    primitive_id: int | None = None
+    line_hypothesis: LineHypothesis | None = None
+    arc_hypothesis: CircularArcHypothesis | None = None
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _PrimitiveCandidate:
+    target_indices: np.ndarray
+    raw_points: np.ndarray
+    model_points: np.ndarray
+    hard_start: bool
+    hard_end: bool
+    line_hypothesis: LineHypothesis | None = None
+    arc_hypothesis: CircularArcHypothesis | None = None
+
+    @property
+    def kind(self) -> str:
+        return "line" if self.line_hypothesis is not None else "arc"
+
+    @property
+    def endpoint_allowance_mm(self) -> float:
+        hypothesis = self.line_hypothesis or self.arc_hypothesis
+        if hypothesis is None:
+            return 0.0
+        return hypothesis.error_budget.endpoint_adjustment_mm
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class _PrimitivePieceGroup:
+    baseline_pieces: tuple[_FittedPiece, ...]
+    target_indices: np.ndarray
+    hard_start: bool
+    hard_end: bool
+
+
+@dataclass(slots=True)
+class _PrimitiveRecoveryAudit:
+    hypothesis_count: int = 0
+    rejected_line_count: int = 0
+    rejected_arc_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -1205,6 +1531,8 @@ class _SourceEdgeRefinement:
     signed_displacements_mm: np.ndarray
     eligible: np.ndarray
     protected: np.ndarray
+    evidence_points: np.ndarray
+    evidence_eligible: np.ndarray
 
     @property
     def maximum_displacement_mm(self) -> float:
@@ -1220,6 +1548,8 @@ def _unchanged_source_edge(points: np.ndarray) -> _SourceEdgeRefinement:
         signed_displacements_mm=np.zeros(len(values), dtype=np.float64),
         eligible=np.zeros(len(values), dtype=bool),
         protected=np.ones(len(values), dtype=bool),
+        evidence_points=values.copy(),
+        evidence_eligible=np.zeros(len(values), dtype=bool),
     )
 
 
@@ -2098,21 +2428,59 @@ def select_pixel_vectorization_auto_threshold(
             _CANCEL_CHECK.reset(cancel_token)
 
 
-@_timed_stage("component_cleanup")
 def _clean_components(
     mask: np.ndarray,
     minimum_area_mm2: float,
     width_mm: float,
     height_mm: float,
 ) -> tuple[np.ndarray, int]:
+    """Retain the historical internal cleanup signature for fit diagnostics."""
+
+    cleaned, component_count, _hole_cleanup = (
+        _clean_components_with_diagnostics(
+            mask,
+            minimum_area_mm2,
+            None,
+            None,
+            width_mm,
+            height_mm,
+        )
+    )
+    return cleaned, component_count
+
+
+@_timed_stage("component_cleanup")
+def _clean_components_with_diagnostics(
+    mask: np.ndarray,
+    minimum_area_mm2: float,
+    minimum_hole_area_mm2: float | None,
+    maximum_hole_area_mm2: float | None,
+    width_mm: float,
+    height_mm: float,
+    *,
+    protected_background_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, int, RasterHoleCleanupDiagnostics]:
     pixel_area_mm2 = width_mm * height_mm / float(mask.shape[0] * mask.shape[1])
     minimum_area_px = minimum_area_mm2 / pixel_area_mm2
+    minimum_hole_area_px = (
+        None
+        if minimum_hole_area_mm2 is None
+        else minimum_hole_area_mm2 / pixel_area_mm2
+    )
+    maximum_hole_area_px = (
+        None
+        if maximum_hole_area_mm2 is None
+        else maximum_hole_area_mm2 / pixel_area_mm2
+    )
     try:
-        cleaned, component_count = clean_foreground_components(
+        cleaned, cleanup = clean_foreground_components_with_diagnostics(
             mask,
             minimum_component_area_px=minimum_area_px,
-            minimum_hole_area_px=minimum_area_px,
+            minimum_hole_area_px=minimum_hole_area_px,
+            maximum_hole_area_px=maximum_hole_area_px,
             maximum_components=MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS,
+            protected_background_mask=protected_background_mask,
+            cancellation_checkpoint=_check_cancelled,
         )
     except ForegroundComponentLimitError as exc:
         _raise_complexity(
@@ -2120,7 +2488,23 @@ def _clean_components(
             f"{exc.count:,} connected foreground components, exceeding "
             f"the {MAX_RASTER_VECTORIZATION_CONNECTED_COMPONENTS:,}-component limit"
         )
-    return cleaned, component_count
+    effective_minimum_hole_area_mm2 = (
+        minimum_area_mm2
+        if minimum_hole_area_mm2 is None
+        else minimum_hole_area_mm2
+    )
+    return (
+        cleaned,
+        cleanup.retained_component_count,
+        RasterHoleCleanupDiagnostics(
+            raw_hole_count=cleanup.raw_hole_count,
+            preserved_hole_count=cleanup.preserved_hole_count,
+            filled_below_min_count=cleanup.filled_below_min_count,
+            filled_above_max_count=cleanup.filled_above_max_count,
+            minimum_hole_area_mm2=effective_minimum_hole_area_mm2,
+            maximum_hole_area_mm2=maximum_hole_area_mm2,
+        ),
+    )
 
 
 @_timed_stage("raster_4x_preparation")
@@ -2253,14 +2637,61 @@ def _boundary_transition_count(mask: np.ndarray, *, stop_after: int) -> int:
     return total
 
 
-def _preflight_contour_complexity(mask: np.ndarray) -> None:
+def _find_contours_with_cancellation(
+    mask: np.ndarray,
+    retrieval_mode: int,
+    approximation: int,
+) -> tuple[tuple[np.ndarray, ...], np.ndarray | None]:
+    """Run one non-interruptible OpenCV extraction between cancellation polls."""
+
+    _check_cancelled()
+    contours, hierarchy = cv2.findContours(mask, retrieval_mode, approximation)
+    _check_cancelled()
+    return contours, hierarchy
+
+
+def _external_silhouette_mask(
+    mask: np.ndarray,
+) -> tuple[np.ndarray, tuple[np.ndarray, ...], np.ndarray | None]:
+    """Fill only top-level exterior boundaries for output-specific edge budgets."""
+
+    contours, hierarchy = _find_contours_with_cancellation(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    silhouette = np.zeros_like(mask)
+    if contours:
+        _check_cancelled()
+        cv2.drawContours(
+            silhouette,
+            contours,
+            -1,
+            255,
+            thickness=cv2.FILLED,
+            lineType=cv2.LINE_8,
+        )
+        _check_cancelled()
+    return silhouette, contours, hierarchy
+
+
+def _preflight_contour_complexity(
+    mask: np.ndarray,
+    contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS,
+) -> None:
     """Reject excessive edge work before allocating the 4x trace."""
+
+    contours: tuple[np.ndarray, ...] | None = None
+    hierarchy: np.ndarray | None = None
+    edge_mask = mask
+    if contour_output is RasterContourOutput.OUTER_ONLY:
+        edge_mask, contours, hierarchy = _external_silhouette_mask(mask)
 
     base_limit = math.ceil(
         MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION
         / RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
     )
-    base_transitions = _boundary_transition_count(mask, stop_after=base_limit)
+    base_transitions = _boundary_transition_count(edge_mask, stop_after=base_limit)
     projected_points = (
         base_transitions * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
     )
@@ -2272,11 +2703,12 @@ def _preflight_contour_complexity(mask: np.ndarray) -> None:
             "pre-simplification limit"
         )
 
-    contours, hierarchy = cv2.findContours(
-        mask,
-        cv2.RETR_TREE,
-        cv2.CHAIN_APPROX_SIMPLE,
-    )
+    if contours is None:
+        contours, hierarchy = _find_contours_with_cancellation(
+            mask,
+            cv2.RETR_TREE,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
     if hierarchy is None or not contours:
         raise RasterVectorizationError(
             "No closed contours were produced by the selected raster settings"
@@ -2289,9 +2721,21 @@ def _preflight_contour_complexity(mask: np.ndarray) -> None:
         )
 
 
-def _enforce_oversampled_edge_budget(mask: np.ndarray) -> None:
+def _enforce_oversampled_edge_budget(
+    mask: np.ndarray,
+    contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS,
+) -> None:
+    edge_mask = mask
+    if contour_output is RasterContourOutput.OUTER_ONLY:
+        edge_mask, contours, _hierarchy = _external_silhouette_mask(mask)
+        if len(contours) > MAX_RASTER_VECTORIZATION_CONTOURS:
+            _raise_complexity(
+                "Raster vectorization found "
+                f"{len(contours):,} exterior contours, exceeding the "
+                f"{MAX_RASTER_VECTORIZATION_CONTOURS:,}-contour limit"
+            )
     transitions = _boundary_transition_count(
-        mask,
+        edge_mask,
         stop_after=MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION,
     )
     if transitions > MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION:
@@ -3194,20 +3638,22 @@ def _refine_contour_source_edges(
             indices = _circular_indices(start, end, count)
             if _run_arc_length(indices, steps) < minimum_run_length:
                 continue
-            evidence = _straight_run_evidence(
+            run_evidence = _straight_run_evidence(
                 values,
                 indices,
                 fit_tolerance,
                 oversampled_step,
                 source_spacing,
             )
-            if evidence is not None:
-                promoted_runs.append(evidence)
+            if run_evidence is not None:
+                promoted_runs.append(run_evidence)
     for run in (*straight_runs, *promoted_runs):
         protected[_circular_indices(run.start_index, run.end_index, count)] = True
 
     eligible = np.zeros(count, dtype=bool)
+    evidence_eligible = np.zeros(count, dtype=bool)
     signed_displacements = np.zeros(count, dtype=np.float64)
+    evidence_displacements = np.zeros(count, dtype=np.float64)
     for start in range(0, count, _SOURCE_EDGE_PROFILE_CHUNK_SIZE):
         end = min(count, start + _SOURCE_EDGE_PROFILE_CHUNK_SIZE)
         fractions, profiles, in_frame = _source_edge_profiles(
@@ -3244,10 +3690,9 @@ def _refine_contour_source_edges(
             denominator,
             _SOURCE_EDGE_PROFILE_STEP_SOURCE_PIXELS,
         )
-        chunk_eligible = (
+        chunk_supported = (
             usable_tangent[start:end]
             & in_frame
-            & ~protected[start:end]
             & (normal_pitch_mm[start:end] > 1e-15)
             & (transition_counts == 1)
             & (profiles[:, 0] >= _SOURCE_EDGE_MINIMUM_ENDPOINT_MARGIN)
@@ -3264,18 +3709,28 @@ def _refine_contour_source_edges(
                 <= _SOURCE_EDGE_MAXIMUM_DISPLACEMENT_SOURCE_PIXELS
             )
         )
+        chunk_eligible = chunk_supported & ~protected[start:end]
         eligible[start:end] = chunk_eligible
+        evidence_eligible[start:end] = chunk_supported
         eligible_indices = np.flatnonzero(chunk_eligible) + start
+        evidence_indices = np.flatnonzero(chunk_supported) + start
         signed_displacements[eligible_indices] = (
             crossing_fraction[chunk_eligible]
             * normal_pitch_mm[eligible_indices]
         )
+        evidence_displacements[evidence_indices] = (
+            crossing_fraction[chunk_supported]
+            * normal_pitch_mm[evidence_indices]
+        )
     refined = values + normals * signed_displacements[:, None]
+    evidence_points = values + normals * evidence_displacements[:, None]
     return _SourceEdgeRefinement(
         points=refined,
         signed_displacements_mm=signed_displacements,
         eligible=eligible,
         protected=protected,
+        evidence_points=evidence_points,
+        evidence_eligible=evidence_eligible,
     )
 
 
@@ -3912,7 +4367,10 @@ def _attempt_cubic_piece(
     control_minimum: np.ndarray | None = None,
     control_maximum: np.ndarray | None = None,
     max_reparameterization_iterations: int = _MAX_REPARAMETERIZATION_ITERATIONS,
+    target_indices: np.ndarray | None = None,
 ) -> tuple[_FittedPiece | None, int, _CubicSegment]:
+    if target_indices is not None and len(target_indices) != len(points):
+        raise ValueError("target_indices must match cubic target points")
     parameters = _chord_parameters(points)
     split_index = max(1, min(len(points) - 2, len(points) // 2))
     best_error = math.inf
@@ -3997,6 +4455,11 @@ def _attempt_cubic_piece(
                             validation.sample_squared_error_sum_mm2
                         ),
                         sample_count=validation.sample_count,
+                        target_indices=(
+                            None
+                            if target_indices is None
+                            else np.asarray(target_indices, dtype=np.int64).copy()
+                        ),
                     ),
                     split_index,
                     segment,
@@ -4058,7 +4521,10 @@ def _attempt_line_piece(
     *,
     hard_start: bool = False,
     hard_end: bool = False,
+    target_indices: np.ndarray | None = None,
 ) -> _FittedPiece | None:
+    if target_indices is not None and len(target_indices) != len(points):
+        raise ValueError("target_indices must match line target points")
     delta = points[-1] - points[0]
     controls = np.vstack(
         (
@@ -4096,6 +4562,11 @@ def _attempt_line_piece(
         sample_error_sum_mm=validation.sample_error_sum_mm,
         sample_squared_error_sum_mm2=validation.sample_squared_error_sum_mm2,
         sample_count=validation.sample_count,
+        target_indices=(
+            None
+            if target_indices is None
+            else np.asarray(target_indices, dtype=np.int64).copy()
+        ),
     )
 
 
@@ -4132,8 +4603,11 @@ def _fit_span_pieces(
     control_maximum: np.ndarray | None = None,
     hard_start: bool = False,
     hard_end: bool = False,
+    target_indices: np.ndarray | None = None,
 ) -> list[_FittedPiece]:
     _check_cancelled()
+    if target_indices is not None and len(target_indices) != len(points):
+        raise ValueError("target_indices must match span points")
     if start_tangent is None:
         start_tangent = _endpoint_tangent(points, at_start=True)
     if end_tangent is None:
@@ -4171,6 +4645,7 @@ def _fit_span_pieces(
                 hard_end=hard_end,
                 control_minimum=control_minimum,
                 control_maximum=control_maximum,
+                target_indices=target_indices,
             )
             if cubic is not None:
                 budget.add_fitted_segments()
@@ -4181,6 +4656,7 @@ def _fit_span_pieces(
             budget,
             hard_start=hard_start,
             hard_end=hard_end,
+            target_indices=target_indices,
         )
         if line is None:
             raise RasterVectorizationError(
@@ -4209,6 +4685,7 @@ def _fit_span_pieces(
                 budget,
                 hard_start=hard_start,
                 hard_end=hard_end,
+                target_indices=target_indices,
             )
             if line is not None:
                 budget.add_fitted_segments()
@@ -4224,6 +4701,7 @@ def _fit_span_pieces(
             hard_end=hard_end,
             control_minimum=control_minimum,
             control_maximum=control_maximum,
+            target_indices=target_indices,
         )
         if cubic is not None:
             budget.add_fitted_segments()
@@ -4237,6 +4715,11 @@ def _fit_span_pieces(
                     budget,
                     hard_start=hard_start and index == 0,
                     hard_end=hard_end and index == len(points) - 2,
+                    target_indices=(
+                        None
+                        if target_indices is None
+                        else target_indices[index : index + 2]
+                    ),
                 )
                 if line is None:
                     raise RasterVectorizationError(
@@ -4273,6 +4756,9 @@ def _fit_span_pieces(
             control_maximum=control_maximum,
             hard_start=hard_start,
             hard_end=False,
+            target_indices=(
+                None if target_indices is None else target_indices[: split + 1]
+            ),
         ),
         *_fit_span_pieces(
             points[split:],
@@ -4287,6 +4773,9 @@ def _fit_span_pieces(
             control_maximum=control_maximum,
             hard_start=False,
             hard_end=hard_end,
+            target_indices=(
+                None if target_indices is None else target_indices[split:]
+            ),
         ),
     ]
 
@@ -4303,6 +4792,7 @@ def _fit_span(
     allow_unconstrained_line: bool = False,
     control_minimum: np.ndarray | None = None,
     control_maximum: np.ndarray | None = None,
+    target_indices: np.ndarray | None = None,
 ) -> list[_FittedSegment]:
     """Compatibility wrapper retaining current-main's private fit seam."""
 
@@ -4319,22 +4809,33 @@ def _fit_span(
             allow_unconstrained_line=allow_unconstrained_line,
             control_minimum=control_minimum,
             control_maximum=control_maximum,
+            target_indices=target_indices,
         )
     ]
 
 
-def _contour_spans(points: np.ndarray, anchors: list[int]) -> list[np.ndarray]:
+def _contour_span_indices(point_count: int, anchors: list[int]) -> list[np.ndarray]:
     spans: list[np.ndarray] = []
     for offset, start in enumerate(anchors):
         end = anchors[(offset + 1) % len(anchors)]
-        indices = (
-            list(range(start, end + 1))
+        indices = np.asarray(
+            (
+                list(range(start, end + 1))
             if end > start
-            else [*range(start, len(points)), *range(0, end + 1)]
+                else [*range(start, point_count), *range(0, end + 1)]
+            ),
+            dtype=np.int64,
         )
         if len(indices) >= 2:
-            spans.append(points[indices])
+            spans.append(indices)
     return spans
+
+
+def _contour_spans(points: np.ndarray, anchors: list[int]) -> list[np.ndarray]:
+    return [
+        points[indices]
+        for indices in _contour_span_indices(len(points), anchors)
+    ]
 
 
 def _piece_control_arc(piece: _FittedPiece) -> np.ndarray:
@@ -4403,6 +4904,13 @@ def _merge_smooth_pieces(
             index += 1
             continue
         target = np.vstack((first.target_points[:-1], second.target_points))
+        target_indices = (
+            None
+            if first.target_indices is None or second.target_indices is None
+            else np.concatenate(
+                (first.target_indices[:-1], second.target_indices)
+            )
+        )
         merged: _FittedPiece | None = None
         if isinstance(first.segment, _LineSegment):
             merged = _attempt_line_piece(
@@ -4411,6 +4919,7 @@ def _merge_smooth_pieces(
                 budget,
                 hard_start=first.hard_start,
                 hard_end=second.hard_end,
+                target_indices=target_indices,
             )
         else:
             merged, _split, _best = _attempt_cubic_piece(
@@ -4424,6 +4933,7 @@ def _merge_smooth_pieces(
                 control_minimum=control_minimum,
                 control_maximum=control_maximum,
                 max_reparameterization_iterations=2,
+                target_indices=target_indices,
             )
         if merged is None:
             index += 1
@@ -4437,6 +4947,1777 @@ def _merge_smooth_pieces(
         if index:
             index -= 1
     return pieces
+
+
+_MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES = 256
+_MAXIMUM_PRIMITIVE_RECOVERY_CORNERS = 64
+_MAXIMUM_PRIMITIVE_BOUNDARY_SEARCH_SAMPLES = 4096
+_PRIMITIVE_BOUNDARY_SEARCH_SOURCE_PIXELS = 8.0
+_PRIMITIVE_BOUNDARY_SEARCH_TOLERANCES = 6.0
+_SMOOTH_PRIMITIVE_JOIN_DEGREES = 3.0
+
+
+def _primitive_polyline_weights(points: np.ndarray) -> np.ndarray:
+    if len(points) <= 1:
+        return np.ones(len(points), dtype=np.float64)
+    steps = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    weights = np.empty(len(points), dtype=np.float64)
+    weights[0] = steps[0] / 2.0
+    weights[-1] = steps[-1] / 2.0
+    if len(points) > 2:
+        weights[1:-1] = (steps[:-1] + steps[1:]) / 2.0
+    if float(np.sum(weights)) <= 1e-15:
+        return np.ones(len(points), dtype=np.float64)
+    return weights
+
+
+def _primitive_error_metrics(
+    errors: np.ndarray,
+    weights: np.ndarray,
+) -> tuple[float, float]:
+    if not len(errors):
+        return 0.0, 0.0
+    maximum = float(np.max(errors))
+    weight_sum = float(np.sum(weights))
+    rms = (
+        math.sqrt(float(np.dot(weights, errors * errors)) / weight_sum)
+        if weight_sum > 1e-15
+        else maximum
+    )
+    return maximum, rms
+
+
+def _primitive_support(
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    indices: np.ndarray,
+    *,
+    closed: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    ordered = np.asarray(indices, dtype=np.int64).reshape(-1)
+    if not len(ordered):
+        return ordered, np.empty((0, 2)), np.empty((0, 2))
+    keep = np.ones(len(ordered), dtype=bool)
+    keep[1:] = ordered[1:] != ordered[:-1]
+    ordered = ordered[keep]
+    if closed and len(ordered) > 1 and ordered[0] == ordered[-1]:
+        ordered = ordered[:-1]
+    raw = raw_points[ordered].copy()
+    model = raw.copy()
+    eligible = evidence_eligible[ordered]
+    model[eligible] = evidence_points[ordered][eligible]
+    if not closed and len(model) >= 2:
+        model[0] = raw[0]
+        model[-1] = raw[-1]
+    return ordered, raw, model
+
+
+def _line_geometry_metrics(
+    points: np.ndarray,
+    start: np.ndarray,
+    end: np.ndarray,
+) -> tuple[float, float, np.ndarray]:
+    errors = _distance_to_segment(points, start, end)
+    maximum, rms = _primitive_error_metrics(
+        errors,
+        _primitive_polyline_weights(points),
+    )
+    return maximum, rms, errors
+
+
+def _line_join_allowance(hypothesis: LineHypothesis) -> float:
+    return hypothesis.error_budget.endpoint_adjustment_mm + min(
+        0.05 * hypothesis.error_budget.maximum_mm,
+        0.02 * hypothesis.error_budget.source_normal_pitch_mm,
+    )
+
+
+def _line_geometry_is_supported(
+    candidate: _PrimitiveCandidate,
+    start: np.ndarray,
+    end: np.ndarray,
+    tolerance_mm: float,
+) -> bool:
+    hypothesis = candidate.line_hypothesis
+    if hypothesis is None:
+        return False
+    delta = end - start
+    length = float(np.linalg.norm(delta))
+    if length <= 1e-15:
+        return False
+    direction = delta / length
+    angular_allowance = math.atan2(
+        2.0 * hypothesis.error_budget.endpoint_adjustment_mm,
+        max(hypothesis.support_length_mm, 1e-15),
+    )
+    if float(np.dot(direction, hypothesis.direction)) < math.cos(
+        min(math.radians(2.0), max(math.radians(0.10), angular_allowance))
+    ):
+        return False
+    raw_maximum, raw_rms, _raw_errors = _line_geometry_metrics(
+        candidate.raw_points,
+        start,
+        end,
+    )
+    model_maximum, model_rms, _model_errors = _line_geometry_metrics(
+        candidate.model_points,
+        start,
+        end,
+    )
+    endpoint_allowance = _line_join_allowance(hypothesis)
+    return bool(
+        raw_maximum <= tolerance_mm
+        and raw_rms <= max(hypothesis.error_budget.rms_mm, 0.35 * tolerance_mm)
+        and model_maximum <= hypothesis.error_budget.maximum_mm
+        and model_rms <= hypothesis.error_budget.rms_mm
+        and float(np.linalg.norm(start - candidate.raw_points[0]))
+        <= endpoint_allowance
+        and float(np.linalg.norm(end - candidate.raw_points[-1]))
+        <= endpoint_allowance
+    )
+
+
+def _bounded_arc_point_errors(
+    points: np.ndarray,
+    center: np.ndarray,
+    radius_mm: float,
+    start_angle_radians: float,
+    sweep_radians: float,
+) -> np.ndarray:
+    """Return exact point-to-bounded-circular-arc distances."""
+
+    offsets = points - center
+    radii = np.linalg.norm(offsets, axis=1)
+    radial_errors = np.abs(radii - radius_mm)
+    sweep = abs(float(sweep_radians))
+    if sweep >= 2.0 * math.pi - 1e-12:
+        return radial_errors
+    direction = 1.0 if sweep_radians > 0.0 else -1.0
+    angles = np.arctan2(offsets[:, 1], offsets[:, 0])
+    directed = np.mod(
+        direction * (angles - start_angle_radians),
+        2.0 * math.pi,
+    )
+    angular_epsilon = 1e-12
+    on_sweep = (directed <= sweep + angular_epsilon) | (
+        directed >= 2.0 * math.pi - angular_epsilon
+    )
+    start = center + radius_mm * np.asarray(
+        (
+            math.cos(start_angle_radians),
+            math.sin(start_angle_radians),
+        ),
+        dtype=np.float64,
+    )
+    end_angle = start_angle_radians + sweep_radians
+    end = center + radius_mm * np.asarray(
+        (math.cos(end_angle), math.sin(end_angle)),
+        dtype=np.float64,
+    )
+    endpoint_errors = np.minimum(
+        np.linalg.norm(points - start, axis=1),
+        np.linalg.norm(points - end, axis=1),
+    )
+    return np.where(on_sweep, radial_errors, endpoint_errors)
+
+
+def _circle_polyline_metrics(
+    points: np.ndarray,
+    center: np.ndarray,
+    radius_mm: float,
+    *,
+    closed: bool,
+    start_angle_radians: float | None = None,
+    sweep_radians: float | None = None,
+) -> tuple[float, float, float, np.ndarray]:
+    offsets = points - center
+    radii = np.linalg.norm(offsets, axis=1)
+    signed = radii - radius_mm
+    if closed:
+        point_errors = np.abs(signed)
+    else:
+        if start_angle_radians is None or sweep_radians is None:
+            raise ValueError("Open circular-arc metrics require a bounded sweep")
+        point_errors = _bounded_arc_point_errors(
+            points,
+            center,
+            radius_mm,
+            start_angle_radians,
+            sweep_radians,
+        )
+    weights = _primitive_polyline_weights(points)
+    point_maximum, rms = _primitive_error_metrics(point_errors, weights)
+    weight_sum = float(np.sum(weights))
+    signed_mean = (
+        float(np.dot(weights, signed)) / weight_sum
+        if weight_sum > 1e-15
+        else 0.0
+    )
+    starts = points if closed else points[:-1]
+    ends = np.roll(points, -1, axis=0) if closed else points[1:]
+    maximum = point_maximum
+    for start, end in zip(starts, ends, strict=True):
+        delta = end - start
+        squared_length = float(np.dot(delta, delta))
+        if squared_length <= 1e-30:
+            closest_radius = float(np.linalg.norm(start - center))
+        else:
+            parameter = float(np.dot(center - start, delta)) / squared_length
+            closest = start + min(1.0, max(0.0, parameter)) * delta
+            closest_radius = float(np.linalg.norm(closest - center))
+        farthest_radius = max(
+            float(np.linalg.norm(start - center)),
+            float(np.linalg.norm(end - center)),
+        )
+        maximum = max(
+            maximum,
+            abs(closest_radius - radius_mm),
+            abs(farthest_radius - radius_mm),
+        )
+    return maximum, rms, signed_mean, point_errors
+
+
+def _circle_geometry_is_supported(
+    candidate: _PrimitiveCandidate,
+    tolerance_mm: float,
+    *,
+    closed: bool,
+) -> bool:
+    hypothesis = candidate.arc_hypothesis
+    if hypothesis is None:
+        return False
+    raw_maximum, raw_rms, _raw_bias, _raw_errors = _circle_polyline_metrics(
+        candidate.raw_points,
+        hypothesis.center,
+        hypothesis.radius_mm,
+        closed=closed,
+        start_angle_radians=hypothesis.start_angle_radians,
+        sweep_radians=hypothesis.sweep_radians,
+    )
+    model_maximum, model_rms, model_bias, _model_errors = (
+        _circle_polyline_metrics(
+            candidate.model_points,
+            hypothesis.center,
+            hypothesis.radius_mm,
+            closed=closed,
+            start_angle_radians=hypothesis.start_angle_radians,
+            sweep_radians=hypothesis.sweep_radians,
+        )
+    )
+    return bool(
+        raw_maximum <= tolerance_mm
+        and raw_rms <= max(hypothesis.error_budget.rms_mm, 0.35 * tolerance_mm)
+        and model_maximum <= hypothesis.error_budget.maximum_mm
+        and model_rms <= hypothesis.error_budget.rms_mm
+        and abs(model_bias) <= 0.45 * hypothesis.error_budget.rms_mm
+    )
+
+
+def _attempt_recovered_line(
+    indices: np.ndarray,
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+    *,
+    hard_start: bool,
+    hard_end: bool,
+) -> _PrimitiveCandidate | None:
+    audit.hypothesis_count += 1
+    ordered, raw, model = _primitive_support(
+        raw_points,
+        evidence_points,
+        evidence_eligible,
+        indices,
+        closed=False,
+    )
+    hypothesis = fit_line_hypothesis(
+        model,
+        tolerance_mm,
+        source_pixel_spacing_mm,
+    )
+    candidate = (
+        None
+        if hypothesis is None
+        else _PrimitiveCandidate(
+            target_indices=ordered,
+            raw_points=raw,
+            model_points=model,
+            hard_start=hard_start,
+            hard_end=hard_end,
+            line_hypothesis=hypothesis,
+        )
+    )
+    if candidate is None or not _line_geometry_is_supported(
+        candidate,
+        hypothesis.start_projection,
+        hypothesis.end_projection,
+        tolerance_mm,
+    ):
+        audit.rejected_line_count += 1
+        return None
+    return candidate
+
+
+def _attempt_recovered_arc(
+    indices: np.ndarray,
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+    *,
+    hard_start: bool,
+    hard_end: bool,
+    closed: bool,
+) -> _PrimitiveCandidate | None:
+    audit.hypothesis_count += 1
+    ordered, raw, model = _primitive_support(
+        raw_points,
+        evidence_points,
+        evidence_eligible,
+        indices,
+        closed=closed,
+    )
+    hypothesis = fit_circular_arc_hypothesis(
+        model,
+        tolerance_mm,
+        source_pixel_spacing_mm,
+        closed=closed,
+    )
+    candidate = (
+        None
+        if hypothesis is None
+        else _PrimitiveCandidate(
+            target_indices=ordered,
+            raw_points=raw,
+            model_points=model,
+            hard_start=hard_start,
+            hard_end=hard_end,
+            arc_hypothesis=hypothesis,
+        )
+    )
+    if candidate is None or not _circle_geometry_is_supported(
+        candidate,
+        tolerance_mm,
+        closed=closed,
+    ):
+        audit.rejected_arc_count += 1
+        return None
+    return candidate
+
+
+def _line_circle_intersection(
+    line: LineHypothesis,
+    arc: CircularArcHypothesis,
+    observed: np.ndarray,
+) -> np.ndarray | None:
+    offset = line.origin - arc.center
+    projection = float(np.dot(offset, line.direction))
+    constant = float(np.dot(offset, offset)) - arc.radius_mm**2
+    discriminant = projection**2 - constant
+    numeric = max(1e-15, arc.radius_mm**2 * 1e-12)
+    if discriminant < -numeric:
+        return None
+    root = math.sqrt(max(0.0, discriminant))
+    candidates = (
+        line.origin + (-projection - root) * line.direction,
+        line.origin + (-projection + root) * line.direction,
+    )
+    return min(
+        candidates,
+        key=lambda point: float(np.linalg.norm(point - observed)),
+    )
+
+
+def _circle_circle_intersection(
+    first: CircularArcHypothesis,
+    second: CircularArcHypothesis,
+    observed: np.ndarray,
+) -> np.ndarray | None:
+    delta = second.center - first.center
+    distance = float(np.linalg.norm(delta))
+    if distance <= 1e-15:
+        return None
+    if distance > first.radius_mm + second.radius_mm + 1e-12:
+        return None
+    if distance < abs(first.radius_mm - second.radius_mm) - 1e-12:
+        return None
+    along = (
+        first.radius_mm**2 - second.radius_mm**2 + distance**2
+    ) / (2.0 * distance)
+    height_squared = first.radius_mm**2 - along**2
+    if height_squared < -max(1e-15, first.radius_mm**2 * 1e-12):
+        return None
+    direction = delta / distance
+    base = first.center + along * direction
+    normal = np.asarray((-direction[1], direction[0]), dtype=np.float64)
+    height = math.sqrt(max(0.0, height_squared))
+    candidates = (base - height * normal, base + height * normal)
+    return min(
+        candidates,
+        key=lambda point: float(np.linalg.norm(point - observed)),
+    )
+
+
+def _candidate_tangent(
+    candidate: _PrimitiveCandidate,
+    point: np.ndarray,
+) -> np.ndarray | None:
+    if candidate.line_hypothesis is not None:
+        return candidate.line_hypothesis.direction
+    hypothesis = candidate.arc_hypothesis
+    if hypothesis is None:
+        return None
+    radial = _unit_direction(point - hypothesis.center)
+    if radial is None:
+        return None
+    tangent = np.asarray((-radial[1], radial[0]), dtype=np.float64)
+    return tangent if hypothesis.sweep_radians > 0.0 else -tangent
+
+
+def _unbounded_line_intersection(
+    first: LineHypothesis,
+    second: LineHypothesis,
+) -> np.ndarray | None:
+    denominator = float(
+        first.direction[0] * second.direction[1]
+        - first.direction[1] * second.direction[0]
+    )
+    if abs(denominator) < math.sin(math.radians(8.0)):
+        return None
+    delta = second.origin - first.origin
+    parameter = float(
+        (delta[0] * second.direction[1] - delta[1] * second.direction[0])
+        / denominator
+    )
+    return first.origin + parameter * first.direction
+
+
+def _primitive_join(
+    previous: _PrimitiveCandidate,
+    following: _PrimitiveCandidate,
+    observed: np.ndarray,
+    *,
+    smooth: bool,
+) -> tuple[np.ndarray, float] | None:
+    point: np.ndarray | None
+    if previous.line_hypothesis is not None and following.line_hypothesis is not None:
+        intersection = line_intersection(
+            previous.line_hypothesis,
+            following.line_hypothesis,
+            observed,
+        )
+        if intersection is None:
+            point = _unbounded_line_intersection(
+                previous.line_hypothesis,
+                following.line_hypothesis,
+            )
+            adjustment = (
+                math.inf
+                if point is None
+                else float(np.linalg.norm(point - observed))
+            )
+        else:
+            point, adjustment = intersection
+    elif previous.line_hypothesis is not None and following.arc_hypothesis is not None:
+        point = _line_circle_intersection(
+            previous.line_hypothesis,
+            following.arc_hypothesis,
+            observed,
+        )
+        adjustment = (
+            math.inf if point is None else float(np.linalg.norm(point - observed))
+        )
+    elif previous.arc_hypothesis is not None and following.line_hypothesis is not None:
+        point = _line_circle_intersection(
+            following.line_hypothesis,
+            previous.arc_hypothesis,
+            observed,
+        )
+        adjustment = (
+            math.inf if point is None else float(np.linalg.norm(point - observed))
+        )
+    elif previous.arc_hypothesis is not None and following.arc_hypothesis is not None:
+        point = _circle_circle_intersection(
+            previous.arc_hypothesis,
+            following.arc_hypothesis,
+            observed,
+        )
+        adjustment = (
+            math.inf if point is None else float(np.linalg.norm(point - observed))
+        )
+    else:
+        return None
+    previous_allowance = previous.endpoint_allowance_mm
+    if previous.line_hypothesis is not None:
+        previous_allowance = _line_join_allowance(previous.line_hypothesis)
+    following_allowance = following.endpoint_allowance_mm
+    if following.line_hypothesis is not None:
+        following_allowance = _line_join_allowance(following.line_hypothesis)
+    if point is None or adjustment > min(previous_allowance, following_allowance):
+        return None
+    if smooth:
+        previous_tangent = _candidate_tangent(previous, point)
+        following_tangent = _candidate_tangent(following, point)
+        if previous_tangent is None or following_tangent is None:
+            return None
+        if float(np.dot(previous_tangent, following_tangent)) < math.cos(
+            math.radians(_SMOOTH_PRIMITIVE_JOIN_DEGREES)
+        ):
+            return None
+    return point.copy(), adjustment
+
+
+def _primitive_model_intersection(
+    previous: _PrimitiveCandidate,
+    following: _PrimitiveCandidate,
+    observed: np.ndarray,
+) -> np.ndarray | None:
+    """Return the model intersection nearest one provisional smooth boundary."""
+
+    if previous.line_hypothesis is not None and following.line_hypothesis is not None:
+        return _unbounded_line_intersection(
+            previous.line_hypothesis,
+            following.line_hypothesis,
+        )
+    if previous.line_hypothesis is not None and following.arc_hypothesis is not None:
+        return _line_circle_intersection(
+            previous.line_hypothesis,
+            following.arc_hypothesis,
+            observed,
+        )
+    if previous.arc_hypothesis is not None and following.line_hypothesis is not None:
+        return _line_circle_intersection(
+            following.line_hypothesis,
+            previous.arc_hypothesis,
+            observed,
+        )
+    if previous.arc_hypothesis is not None and following.arc_hypothesis is not None:
+        return _circle_circle_intersection(
+            previous.arc_hypothesis,
+            following.arc_hypothesis,
+            observed,
+        )
+    return None
+
+
+def _primitive_candidate_join_allowance(candidate: _PrimitiveCandidate) -> float:
+    hypothesis = candidate.line_hypothesis
+    if hypothesis is not None:
+        return _line_join_allowance(hypothesis)
+    return candidate.endpoint_allowance_mm
+
+
+def _bounded_boundary_source_indices(
+    points: np.ndarray,
+    boundary_index: int,
+    maximum_distance_mm: float,
+) -> dict[int, float]:
+    """Return source indices reached within a bounded contour distance."""
+
+    count = len(points)
+    reached = {boundary_index: 0.0}
+    maximum_steps = min(
+        max(0, count - 1),
+        _MAXIMUM_PRIMITIVE_BOUNDARY_SEARCH_SAMPLES,
+    )
+    numeric = max(1e-12, maximum_distance_mm * 1e-12)
+    for direction in (-1, 1):
+        current = boundary_index
+        distance = 0.0
+        for _step in range(maximum_steps):
+            following = (current + direction) % count
+            distance += float(np.linalg.norm(points[following] - points[current]))
+            if distance > maximum_distance_mm + numeric:
+                break
+            prior = reached.get(following)
+            if prior is None or distance < prior:
+                reached[following] = distance
+            current = following
+    return reached
+
+
+def _refined_smooth_boundary_indices(
+    candidates: list[_PrimitiveCandidate],
+    raw_points: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+) -> list[int] | None:
+    """Find source-backed nearby partitions for provisional smooth models."""
+
+    if len(candidates) < 2 or any(
+        candidate.hard_start or candidate.hard_end for candidate in candidates
+    ):
+        return None
+    maximum_search_mm = max(
+        _PRIMITIVE_BOUNDARY_SEARCH_SOURCE_PIXELS
+        * max(source_pixel_spacing_mm),
+        _PRIMITIVE_BOUNDARY_SEARCH_TOLERANCES * tolerance_mm,
+    )
+    refined: list[int] = []
+    changed = False
+    for index, following in enumerate(candidates):
+        previous = candidates[(index - 1) % len(candidates)]
+        boundary_index = int(following.target_indices[0])
+        observed = raw_points[boundary_index]
+        intersection = _primitive_model_intersection(
+            previous,
+            following,
+            observed,
+        )
+        if intersection is None or not np.isfinite(intersection).all():
+            return None
+        allowance = min(
+            _primitive_candidate_join_allowance(previous),
+            _primitive_candidate_join_allowance(following),
+        )
+        numeric = max(1e-12, allowance * 1e-12)
+        observed_error = float(np.linalg.norm(observed - intersection))
+        if observed_error <= allowance + numeric:
+            refined.append(boundary_index)
+            continue
+        choices: list[tuple[float, float, float, float, int]] = []
+        for source_index, contour_distance in _bounded_boundary_source_indices(
+            raw_points,
+            boundary_index,
+            maximum_search_mm,
+        ).items():
+            source_point = raw_points[source_index]
+            intersection_error = float(np.linalg.norm(source_point - intersection))
+            if intersection_error <= allowance + numeric:
+                choices.append(
+                    (
+                        intersection_error,
+                        contour_distance,
+                        float(source_point[0]),
+                        float(source_point[1]),
+                        source_index,
+                    )
+                )
+        if not choices:
+            return None
+        source_index = min(choices)[-1]
+        refined.append(source_index)
+        changed = changed or source_index != boundary_index
+    if not changed or len(set(refined)) != len(refined):
+        return None
+    positions, _steps, perimeter = _closed_arc_positions(raw_points)
+    if perimeter <= 1e-15:
+        return None
+    directed_length = sum(
+        float(
+            (positions[refined[(index + 1) % len(refined)]] - positions[boundary])
+            % perimeter
+        )
+        for index, boundary in enumerate(refined)
+    )
+    if abs(directed_length - perimeter) > max(1e-9, perimeter * 1e-9):
+        return None
+    return refined
+
+
+def _refit_smooth_primitive_boundaries(
+    candidates: list[_PrimitiveCandidate],
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+) -> list[_PrimitiveCandidate] | None:
+    """Repartition and refit the same smooth primitive kinds, fail closed."""
+
+    if (
+        audit.hypothesis_count + len(candidates)
+        > _MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES
+    ):
+        return None
+    boundaries = _refined_smooth_boundary_indices(
+        candidates,
+        raw_points,
+        tolerance_mm,
+        source_pixel_spacing_mm,
+    )
+    if boundaries is None:
+        return None
+    refitted: list[_PrimitiveCandidate] = []
+    for index, original in enumerate(candidates):
+        indices = _circular_indices(
+            boundaries[index],
+            boundaries[(index + 1) % len(boundaries)],
+            len(raw_points),
+        )
+        if original.line_hypothesis is not None:
+            candidate = _attempt_recovered_line(
+                indices,
+                raw_points,
+                evidence_points,
+                evidence_eligible,
+                tolerance_mm,
+                source_pixel_spacing_mm,
+                audit,
+                hard_start=False,
+                hard_end=False,
+            )
+        else:
+            candidate = _attempt_recovered_arc(
+                indices,
+                raw_points,
+                evidence_points,
+                evidence_eligible,
+                tolerance_mm,
+                source_pixel_spacing_mm,
+                audit,
+                hard_start=False,
+                hard_end=False,
+                closed=False,
+            )
+        if candidate is None:
+            return None
+        refitted.append(candidate)
+    return refitted
+
+
+def _arc_with_endpoints(
+    hypothesis: CircularArcHypothesis,
+    start: np.ndarray,
+    end: np.ndarray,
+) -> CircularArcHypothesis | None:
+    start_angle = math.atan2(
+        float(start[1] - hypothesis.center[1]),
+        float(start[0] - hypothesis.center[0]),
+    )
+    end_angle = math.atan2(
+        float(end[1] - hypothesis.center[1]),
+        float(end[0] - hypothesis.center[0]),
+    )
+    if hypothesis.sweep_radians > 0.0:
+        sweep = (end_angle - start_angle) % (2.0 * math.pi)
+    else:
+        sweep = -((start_angle - end_angle) % (2.0 * math.pi))
+    if abs(sweep) <= 1e-12:
+        return None
+    angular_change = abs(sweep - hypothesis.sweep_radians)
+    if angular_change * hypothesis.radius_mm > (
+        2.0 * hypothesis.error_budget.endpoint_adjustment_mm + 1e-12
+    ):
+        return None
+    return replace(
+        hypothesis,
+        start_angle_radians=start_angle,
+        sweep_radians=sweep,
+        maximum_endpoint_adjustment_mm=max(
+            hypothesis.maximum_endpoint_adjustment_mm,
+            abs(float(np.linalg.norm(start - hypothesis.center) - hypothesis.radius_mm)),
+            abs(float(np.linalg.norm(end - hypothesis.center) - hypothesis.radius_mm)),
+        ),
+    )
+
+
+def _line_piece_from_candidate(
+    candidate: _PrimitiveCandidate,
+    start: np.ndarray,
+    end: np.ndarray,
+    tolerance_mm: float,
+    primitive_id: int,
+) -> _FittedPiece | None:
+    hypothesis = candidate.line_hypothesis
+    if hypothesis is None or not _line_geometry_is_supported(
+        candidate,
+        start,
+        end,
+        tolerance_mm,
+    ):
+        return None
+    raw_maximum, raw_rms, errors = _line_geometry_metrics(
+        candidate.raw_points,
+        start,
+        end,
+    )
+    model_maximum, model_rms, _model_errors = _line_geometry_metrics(
+        candidate.model_points,
+        start,
+        end,
+    )
+    final_hypothesis = replace(
+        hypothesis,
+        maximum_residual_mm=max(raw_maximum, model_maximum),
+        rms_residual_mm=max(raw_rms, model_rms),
+    )
+    forward = _unit_direction(end - start)
+    if forward is None:
+        return None
+    return _FittedPiece(
+        segment=_LineSegment(start.copy(), end.copy(), raw_maximum),
+        target_points=candidate.raw_points.copy(),
+        target_parameters=_chord_parameters(candidate.raw_points),
+        start_tangent=forward,
+        end_tangent=-forward,
+        hard_start=candidate.hard_start,
+        hard_end=candidate.hard_end,
+        sample_error_sum_mm=float(np.sum(errors)),
+        sample_squared_error_sum_mm2=float(np.sum(errors * errors)),
+        sample_count=len(errors),
+        target_indices=candidate.target_indices.copy(),
+        primitive_kind="line",
+        primitive_id=primitive_id,
+        line_hypothesis=final_hypothesis,
+    )
+
+
+def _arc_pieces_from_candidate(
+    candidate: _PrimitiveCandidate,
+    start: np.ndarray,
+    end: np.ndarray,
+    tolerance_mm: float,
+    primitive_id: int,
+    *,
+    closed: bool,
+) -> list[_FittedPiece] | None:
+    hypothesis = candidate.arc_hypothesis
+    if hypothesis is None:
+        return None
+    if not closed:
+        hypothesis = _arc_with_endpoints(hypothesis, start, end)
+        if hypothesis is None:
+            return None
+        candidate = replace(candidate, arc_hypothesis=hypothesis)
+    if not _circle_geometry_is_supported(candidate, tolerance_mm, closed=closed):
+        return None
+    try:
+        canonical = canonical_cubic_arc_spans(hypothesis)
+    except ValueError:
+        return None
+    raw_maximum, raw_rms, _raw_bias, errors = _circle_polyline_metrics(
+        candidate.raw_points,
+        hypothesis.center,
+        hypothesis.radius_mm,
+        closed=closed,
+        start_angle_radians=hypothesis.start_angle_radians,
+        sweep_radians=hypothesis.sweep_radians,
+    )
+    model_maximum, model_rms, _model_bias, _model_errors = (
+        _circle_polyline_metrics(
+            candidate.model_points,
+            hypothesis.center,
+            hypothesis.radius_mm,
+            closed=closed,
+            start_angle_radians=hypothesis.start_angle_radians,
+            sweep_radians=hypothesis.sweep_radians,
+        )
+    )
+    hypothesis = replace(
+        hypothesis,
+        maximum_residual_mm=max(raw_maximum, model_maximum),
+        rms_residual_mm=max(raw_rms, model_rms),
+    )
+    maximum_representation = max(
+        span.maximum_representation_error_mm for span in canonical
+    )
+    fitting_error = raw_maximum + maximum_representation
+    if fitting_error > tolerance_mm:
+        return None
+    pieces: list[_FittedPiece] = []
+    previous_end: np.ndarray | None = None
+    first_start: np.ndarray | None = None
+    for index, span in enumerate(canonical):
+        span_start = span.start.copy() if previous_end is None else previous_end.copy()
+        span_end = span.end.copy()
+        if index == 0:
+            span_start = start.copy()
+            first_start = span_start.copy()
+        if index == len(canonical) - 1:
+            span_end = first_start.copy() if closed else end.copy()
+        controls = np.vstack(
+            (span_start, span.control_1, span.control_2, span_end)
+        )
+        if _cubic_controls_have_ambiguous_topology(controls):
+            return None
+        tangent_start = _unit_direction(span.control_1 - span_start)
+        tangent_end = _unit_direction(span.control_2 - span_end)
+        if tangent_start is None or tangent_end is None:
+            return None
+        sample_errors = errors if index == 0 else np.empty(0, dtype=np.float64)
+        pieces.append(
+            _FittedPiece(
+                segment=_CubicSegment(
+                    span_start,
+                    span.control_1.copy(),
+                    span.control_2.copy(),
+                    span_end,
+                    fitting_error,
+                ),
+                target_points=np.vstack((span_start, span_end)),
+                target_parameters=np.asarray((0.0, 1.0), dtype=np.float64),
+                start_tangent=tangent_start,
+                end_tangent=tangent_end,
+                hard_start=candidate.hard_start and index == 0,
+                hard_end=(
+                    candidate.hard_end and index == len(canonical) - 1
+                ),
+                sample_error_sum_mm=float(np.sum(sample_errors)),
+                sample_squared_error_sum_mm2=float(
+                    np.sum(sample_errors * sample_errors)
+                ),
+                sample_count=len(sample_errors),
+                target_indices=(
+                    candidate.target_indices.copy() if index == 0 else None
+                ),
+                primitive_kind="arc",
+                primitive_id=primitive_id,
+                arc_hypothesis=hypothesis,
+            )
+        )
+        previous_end = span_end
+    return pieces
+
+
+def _piece_group_indices(group: list[_FittedPiece]) -> np.ndarray | None:
+    if not group or any(piece.target_indices is None for piece in group):
+        return None
+    values = np.asarray(group[0].target_indices, dtype=np.int64).copy()
+    for piece in group[1:]:
+        following = np.asarray(piece.target_indices, dtype=np.int64)
+        if len(values) and len(following) and values[-1] == following[0]:
+            following = following[1:]
+        values = np.concatenate((values, following))
+    return values
+
+
+def _smooth_piece_groups(pieces: list[_FittedPiece]) -> list[list[_FittedPiece]]:
+    if len(pieces) < 2:
+        return [pieces.copy()]
+    is_line = [isinstance(piece.segment, _LineSegment) for piece in pieces]
+    changes = [
+        index
+        for index in range(len(pieces))
+        if is_line[index] != is_line[(index - 1) % len(pieces)]
+    ]
+    if not changes:
+        return [pieces.copy()]
+    start = changes[0]
+    ordered = [
+        pieces[(start + offset) % len(pieces)]
+        for offset in range(len(pieces))
+    ]
+    groups: list[list[_FittedPiece]] = []
+    for piece in ordered:
+        if not groups or isinstance(
+            groups[-1][-1].segment,
+            _LineSegment,
+        ) != isinstance(piece.segment, _LineSegment):
+            groups.append([piece])
+        else:
+            groups[-1].append(piece)
+    return groups
+
+
+def _baseline_piece_cycle_is_exact(
+    pieces: list[_FittedPiece],
+    point_count: int,
+) -> bool:
+    """Require a closed, ordered, one-edge-per-source-index partition."""
+
+    if not pieces or point_count < 3:
+        return False
+    coverage: list[int] = []
+    for index, piece in enumerate(pieces):
+        following = pieces[(index + 1) % len(pieces)]
+        if piece.target_indices is None or following.target_indices is None:
+            return False
+        indices = np.asarray(piece.target_indices, dtype=np.int64).reshape(-1)
+        following_indices = np.asarray(
+            following.target_indices,
+            dtype=np.int64,
+        ).reshape(-1)
+        if (
+            len(indices) < 2
+            or len(following_indices) < 2
+            or np.any(indices < 0)
+            or np.any(indices >= point_count)
+            or np.any((np.diff(indices) % point_count) != 1)
+            or int(indices[-1]) != int(following_indices[0])
+            or not np.array_equal(piece.segment.end, following.segment.start)
+        ):
+            return False
+        coverage.extend(int(value) for value in indices[:-1])
+    return bool(
+        len(coverage) == point_count
+        and np.array_equal(
+            np.sort(np.asarray(coverage, dtype=np.int64)),
+            np.arange(point_count, dtype=np.int64),
+        )
+    )
+
+
+def _primitive_piece_group(
+    pieces: list[_FittedPiece],
+) -> _PrimitivePieceGroup | None:
+    indices = _piece_group_indices(pieces)
+    if indices is None or len(indices) < 2:
+        return None
+    return _PrimitivePieceGroup(
+        baseline_pieces=tuple(pieces),
+        target_indices=indices,
+        hard_start=pieces[0].hard_start,
+        hard_end=pieces[-1].hard_end,
+    )
+
+
+def _primitive_piece_groups_from_corners(
+    pieces: list[_FittedPiece],
+    point_count: int,
+    corners: list[int],
+) -> list[_PrimitivePieceGroup] | None:
+    ordered_corners = sorted(set(corners))
+    if (
+        not 2 <= len(ordered_corners) <= _MAXIMUM_PRIMITIVE_RECOVERY_CORNERS
+        or not _baseline_piece_cycle_is_exact(pieces, point_count)
+    ):
+        return None
+    starts: dict[int, int] = {}
+    for index, piece in enumerate(pieces):
+        assert piece.target_indices is not None
+        start = int(piece.target_indices[0])
+        if start in starts:
+            return None
+        starts[start] = index
+    if any(corner not in starts for corner in ordered_corners):
+        return None
+    first_piece = starts[ordered_corners[0]]
+    ordered_pieces = [
+        pieces[(first_piece + offset) % len(pieces)]
+        for offset in range(len(pieces))
+    ]
+    corner_set = set(ordered_corners)
+    grouped_pieces: list[list[_FittedPiece]] = []
+    for piece in ordered_pieces:
+        assert piece.target_indices is not None
+        start = int(piece.target_indices[0])
+        if grouped_pieces and start in corner_set:
+            grouped_pieces.append([])
+        if not grouped_pieces:
+            grouped_pieces.append([])
+        grouped_pieces[-1].append(piece)
+    if len(grouped_pieces) != len(ordered_corners):
+        return None
+    groups: list[_PrimitivePieceGroup] = []
+    expected_spans = _contour_span_indices(point_count, ordered_corners)
+    for pieces_in_group, expected in zip(
+        grouped_pieces,
+        expected_spans,
+        strict=True,
+    ):
+        group = _primitive_piece_group(pieces_in_group)
+        if (
+            group is None
+            or not group.hard_start
+            or not group.hard_end
+            or not np.array_equal(group.target_indices, expected)
+        ):
+            return None
+        groups.append(group)
+    return groups
+
+
+def _primitive_piece_groups_from_smooth_pieces(
+    pieces: list[_FittedPiece],
+    point_count: int,
+) -> list[_PrimitivePieceGroup] | None:
+    if not _baseline_piece_cycle_is_exact(pieces, point_count):
+        return None
+    groups: list[_PrimitivePieceGroup] = []
+    for pieces_in_group in _smooth_piece_groups(pieces):
+        group = _primitive_piece_group(pieces_in_group)
+        if group is None:
+            return None
+        groups.append(group)
+    return groups
+
+
+def _consolidate_supported_line_corner_chains(
+    corners: list[int],
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+) -> list[int]:
+    """Drop only source-supported interiors of direction-compatible chains."""
+
+    ordered_corners = sorted(set(corners))
+    corner_count = len(ordered_corners)
+    if not 3 <= corner_count <= _MAXIMUM_PRIMITIVE_RECOVERY_CORNERS:
+        return ordered_corners
+
+    corner_points = raw_points[ordered_corners]
+    chord_deltas = np.roll(corner_points, -1, axis=0) - corner_points
+    chord_lengths = np.linalg.norm(chord_deltas, axis=1)
+    valid = chord_lengths > 1e-15
+    directions = np.zeros_like(chord_deltas)
+    directions[valid] = chord_deltas[valid] / chord_lengths[valid, None]
+    compatible_joins = valid & np.roll(valid, -1)
+    compatible_joins &= (
+        np.sum(directions * np.roll(directions, -1, axis=0), axis=1)
+        >= math.cos(math.radians(_SMOOTH_PRIMITIVE_JOIN_DEGREES))
+    )
+    boundaries = np.flatnonzero(~compatible_joins)
+    if not len(boundaries):
+        return ordered_corners
+
+    edge_spans = _contour_span_indices(len(raw_points), ordered_corners)
+    first_edge = (int(boundaries[0]) + 1) % corner_count
+    chains: list[list[int]] = []
+    chain = [first_edge]
+    for offset in range(1, corner_count):
+        previous_edge = (first_edge + offset - 1) % corner_count
+        edge = (first_edge + offset) % corner_count
+        if compatible_joins[previous_edge]:
+            chain.append(edge)
+        else:
+            chains.append(chain)
+            chain = [edge]
+    chains.append(chain)
+
+    retained = set(ordered_corners)
+    for edge_chain in chains:
+        if len(edge_chain) < 2:
+            continue
+        indices = edge_spans[edge_chain[0]].copy()
+        for edge in edge_chain[1:]:
+            indices = np.concatenate((indices, edge_spans[edge][1:]))
+        candidate = _attempt_recovered_line(
+            indices,
+            raw_points,
+            evidence_points,
+            evidence_eligible,
+            tolerance_mm,
+            source_pixel_spacing_mm,
+            audit,
+            hard_start=True,
+            hard_end=True,
+        )
+        if candidate is None:
+            continue
+        for edge in edge_chain[:-1]:
+            retained.discard(ordered_corners[(edge + 1) % corner_count])
+    return [corner for corner in ordered_corners if corner in retained]
+
+
+def _attempt_open_primitive_candidate(
+    indices: np.ndarray,
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+    *,
+    hard_start: bool,
+    hard_end: bool,
+) -> _PrimitiveCandidate | None:
+    if audit.hypothesis_count >= _MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES:
+        return None
+    candidate = _attempt_recovered_line(
+        indices,
+        raw_points,
+        evidence_points,
+        evidence_eligible,
+        tolerance_mm,
+        source_pixel_spacing_mm,
+        audit,
+        hard_start=hard_start,
+        hard_end=hard_end,
+    )
+    if (
+        candidate is not None
+        or audit.hypothesis_count >= _MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES
+    ):
+        return candidate
+    return _attempt_recovered_arc(
+        indices,
+        raw_points,
+        evidence_points,
+        evidence_eligible,
+        tolerance_mm,
+        source_pixel_spacing_mm,
+        audit,
+        hard_start=hard_start,
+        hard_end=hard_end,
+        closed=False,
+    )
+
+
+def _primitive_candidates_from_corners(
+    corners: list[int],
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+) -> list[_PrimitiveCandidate | None] | None:
+    ordered_corners = sorted(set(corners))
+    if not 2 <= len(ordered_corners) <= _MAXIMUM_PRIMITIVE_RECOVERY_CORNERS:
+        return None
+    candidates: list[_PrimitiveCandidate | None] = []
+    for indices in _contour_span_indices(len(raw_points), ordered_corners):
+        candidates.append(
+            _attempt_open_primitive_candidate(
+                indices,
+                raw_points,
+                evidence_points,
+                evidence_eligible,
+                tolerance_mm,
+                source_pixel_spacing_mm,
+                audit,
+                hard_start=True,
+                hard_end=True,
+            )
+        )
+    return candidates
+
+
+def _primitive_candidates_from_smooth_pieces(
+    pieces: list[_FittedPiece],
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float],
+    audit: _PrimitiveRecoveryAudit,
+) -> tuple[list[_PrimitiveCandidate | None] | None, bool]:
+    groups = _smooth_piece_groups(pieces)
+    if len(groups) == 1:
+        if any(isinstance(piece.segment, _LineSegment) for piece in groups[0]):
+            return None, False
+        indices = np.arange(len(raw_points), dtype=np.int64)
+        arc = _attempt_recovered_arc(
+            indices,
+            raw_points,
+            evidence_points,
+            evidence_eligible,
+            tolerance_mm,
+            source_pixel_spacing_mm,
+            audit,
+            hard_start=False,
+            hard_end=False,
+            closed=True,
+        )
+        return [arc], True
+    if len(groups) > _MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES:
+        return None, False
+    candidates: list[_PrimitiveCandidate | None] = []
+    for group in groups:
+        indices = _piece_group_indices(group)
+        if indices is None:
+            return None, False
+        candidates.append(
+            _attempt_open_primitive_candidate(
+                indices,
+                raw_points,
+                evidence_points,
+                evidence_eligible,
+                tolerance_mm,
+                source_pixel_spacing_mm,
+                audit,
+                hard_start=False,
+                hard_end=False,
+            )
+        )
+    return candidates, False
+
+
+def _record_rejected_primitive_candidate(
+    candidate: _PrimitiveCandidate,
+    audit: _PrimitiveRecoveryAudit,
+) -> None:
+    if candidate.line_hypothesis is not None:
+        audit.rejected_line_count += 1
+    else:
+        audit.rejected_arc_count += 1
+
+
+def _baseline_group_boundary(
+    previous: _PrimitivePieceGroup,
+    following: _PrimitivePieceGroup,
+) -> np.ndarray | None:
+    previous_end = previous.baseline_pieces[-1].segment.end
+    following_start = following.baseline_pieces[0].segment.start
+    if not np.array_equal(previous_end, following_start):
+        return None
+    return following_start.copy()
+
+
+def _candidate_boundary_lies_on_model(
+    candidate: _PrimitiveCandidate,
+    point: np.ndarray,
+) -> bool:
+    line = candidate.line_hypothesis
+    if line is not None:
+        offset = point - line.origin
+        distance = abs(
+            float(offset[0] * line.direction[1] - offset[1] * line.direction[0])
+        )
+        numeric = max(1e-12, line.support_length_mm * 1e-12)
+        return distance <= numeric
+    arc = candidate.arc_hypothesis
+    if arc is None:
+        return False
+    radial_error = abs(float(np.linalg.norm(point - arc.center)) - arc.radius_mm)
+    return radial_error <= max(1e-12, arc.radius_mm * 1e-12)
+
+
+def _resolved_primitive_group_vertices(
+    groups: list[_PrimitivePieceGroup],
+    active: list[_PrimitiveCandidate | None],
+    audit: _PrimitiveRecoveryAudit,
+    *,
+    allow_demotions: bool,
+) -> tuple[list[np.ndarray], float] | None:
+    while True:
+        vertices: list[np.ndarray] = []
+        maximum_adjustment = 0.0
+        rejected: set[int] = set()
+        for index, group in enumerate(groups):
+            previous_index = (index - 1) % len(groups)
+            previous_group = groups[previous_index]
+            previous = active[previous_index]
+            following = active[index]
+            smooth = not (previous_group.hard_end or group.hard_start)
+            if previous is not None and following is not None:
+                join = _primitive_join(
+                    previous,
+                    following,
+                    following.raw_points[0],
+                    smooth=smooth,
+                )
+                if join is None:
+                    rejected.update((previous_index, index))
+                    continue
+                point, _adjustment = join
+            else:
+                point = _baseline_group_boundary(previous_group, group)
+                if point is None:
+                    return None
+                for candidate_index, candidate in (
+                    (previous_index, previous),
+                    (index, following),
+                ):
+                    if candidate is None:
+                        continue
+                    is_arc = candidate.arc_hypothesis is not None
+                    if (is_arc or smooth) and not _candidate_boundary_lies_on_model(
+                        candidate,
+                        point,
+                    ):
+                        rejected.add(candidate_index)
+            if previous is not None:
+                maximum_adjustment = max(
+                    maximum_adjustment,
+                    float(np.linalg.norm(point - previous.raw_points[-1])),
+                )
+            if following is not None:
+                maximum_adjustment = max(
+                    maximum_adjustment,
+                    float(np.linalg.norm(point - following.raw_points[0])),
+                )
+            vertices.append(point.copy())
+        if not rejected:
+            return vertices, maximum_adjustment
+        if not allow_demotions:
+            return None
+        for index in sorted(rejected):
+            candidate = active[index]
+            if candidate is not None:
+                _record_rejected_primitive_candidate(candidate, audit)
+                active[index] = None
+
+
+def _build_grouped_primitive_recovery(
+    groups: list[_PrimitivePieceGroup],
+    candidates: list[_PrimitiveCandidate | None],
+    tolerance_mm: float,
+    audit: _PrimitiveRecoveryAudit,
+    *,
+    allow_demotions: bool,
+) -> tuple[list[_FittedPiece], float] | None:
+    if not groups or len(groups) != len(candidates):
+        return None
+    active = candidates.copy()
+    while any(candidate is not None for candidate in active):
+        resolved = _resolved_primitive_group_vertices(
+            groups,
+            active,
+            audit,
+            allow_demotions=allow_demotions,
+        )
+        if resolved is None:
+            return None
+        if not any(candidate is not None for candidate in active):
+            return None
+        vertices, maximum_adjustment = resolved
+        emitted_groups: list[list[_FittedPiece]] = []
+        failed_index: int | None = None
+        primitive_id = 0
+        for index, (group, candidate) in enumerate(
+            zip(groups, active, strict=True)
+        ):
+            if candidate is None:
+                emitted_groups.append(list(group.baseline_pieces))
+                continue
+            start = vertices[index]
+            end = vertices[(index + 1) % len(vertices)]
+            if candidate.line_hypothesis is not None:
+                piece = _line_piece_from_candidate(
+                    candidate,
+                    start,
+                    end,
+                    tolerance_mm,
+                    primitive_id,
+                )
+                emitted = None if piece is None else [piece]
+            else:
+                emitted = _arc_pieces_from_candidate(
+                    candidate,
+                    start,
+                    end,
+                    tolerance_mm,
+                    primitive_id,
+                    closed=False,
+                )
+            # A primitive model must simplify its own evidence span.  Do not
+            # let savings on a different group mask an arc expansion here.
+            if emitted is None or len(emitted) > len(group.baseline_pieces):
+                failed_index = index
+                break
+            emitted_groups.append(emitted)
+            primitive_id += 1
+        if failed_index is not None:
+            if not allow_demotions:
+                return None
+            failed = active[failed_index]
+            assert failed is not None
+            _record_rejected_primitive_candidate(failed, audit)
+            active[failed_index] = None
+            continue
+
+        tangent_rejections: set[int] = set()
+        minimum_alignment = math.cos(
+            math.radians(_SMOOTH_PRIMITIVE_JOIN_DEGREES)
+        )
+        for index, group in enumerate(groups):
+            previous_index = (index - 1) % len(groups)
+            previous_group = groups[previous_index]
+            if previous_group.hard_end or group.hard_start:
+                continue
+            previous_is_primitive = active[previous_index] is not None
+            following_is_primitive = active[index] is not None
+            if previous_is_primitive == following_is_primitive:
+                continue
+            previous_tangent = -emitted_groups[previous_index][-1].end_tangent
+            following_tangent = emitted_groups[index][0].start_tangent
+            if float(np.dot(previous_tangent, following_tangent)) < minimum_alignment:
+                tangent_rejections.add(
+                    previous_index if previous_is_primitive else index
+                )
+        if tangent_rejections:
+            if not allow_demotions:
+                return None
+            for index in sorted(tangent_rejections):
+                candidate = active[index]
+                assert candidate is not None
+                _record_rejected_primitive_candidate(candidate, audit)
+                active[index] = None
+            continue
+        recovered = [piece for group in emitted_groups for piece in group]
+        return recovered, maximum_adjustment
+    return None
+
+
+def _recovered_primitive_metrics(
+    baseline: list[_FittedPiece],
+    recovered: list[_FittedPiece],
+    audit: _PrimitiveRecoveryAudit,
+    spacing: tuple[float, float],
+    maximum_join_adjustment: float,
+) -> PrimitiveRecoveryMetrics:
+    hypotheses: dict[int, LineHypothesis | CircularArcHypothesis] = {}
+    line_lengths: dict[int, float] = {}
+    arc_lengths: dict[int, float] = {}
+    for piece in recovered:
+        primitive_id = piece.primitive_id
+        if primitive_id is None:
+            continue
+        hypothesis = piece.line_hypothesis or piece.arc_hypothesis
+        if hypothesis is None:
+            continue
+        hypotheses.setdefault(primitive_id, hypothesis)
+        if piece.line_hypothesis is not None:
+            line_lengths[primitive_id] = line_lengths.get(primitive_id, 0.0) + float(
+                np.linalg.norm(piece.segment.end - piece.segment.start)
+            )
+        elif piece.arc_hypothesis is not None:
+            arc_lengths.setdefault(primitive_id, piece.arc_hypothesis.arc_length_mm)
+    values = list(hypotheses.values())
+    return PrimitiveRecoveryMetrics(
+        baseline_segment_count=len(baseline),
+        final_segment_count=len(recovered),
+        recovered_line_count=len(line_lengths),
+        recovered_line_length_mm=sum(line_lengths.values()),
+        recovered_arc_count=len(arc_lengths),
+        recovered_arc_length_mm=sum(arc_lengths.values()),
+        canonical_arc_cubic_count=sum(
+            piece.primitive_kind == "arc" for piece in recovered
+        ),
+        freeform_cubic_count=sum(
+            isinstance(piece.segment, _CubicSegment)
+            and piece.primitive_kind != "arc"
+            for piece in recovered
+        ),
+        rejected_line_hypothesis_count=audit.rejected_line_count,
+        rejected_arc_hypothesis_count=audit.rejected_arc_count,
+        maximum_residual_mm=max(
+            (hypothesis.maximum_residual_mm for hypothesis in values),
+            default=0.0,
+        ),
+        rms_residual_mm=max(
+            (hypothesis.rms_residual_mm for hypothesis in values),
+            default=0.0,
+        ),
+        maximum_endpoint_adjustment_mm=max(
+            maximum_join_adjustment,
+            max(
+                (
+                    hypothesis.maximum_endpoint_adjustment_mm
+                    for hypothesis in values
+                ),
+                default=0.0,
+            ),
+        ),
+        source_pixel_scale_mm=max(spacing),
+        hypothesis_count=audit.hypothesis_count,
+    )
+
+
+def _baseline_primitive_metrics(
+    pieces: list[_FittedPiece],
+    source_pixel_spacing_mm: tuple[float, float] | None,
+    audit: _PrimitiveRecoveryAudit | None = None,
+) -> PrimitiveRecoveryMetrics:
+    audit = audit or _PrimitiveRecoveryAudit()
+    return PrimitiveRecoveryMetrics(
+        baseline_segment_count=len(pieces),
+        final_segment_count=len(pieces),
+        freeform_cubic_count=sum(
+            isinstance(piece.segment, _CubicSegment) for piece in pieces
+        ),
+        rejected_line_hypothesis_count=audit.rejected_line_count,
+        rejected_arc_hypothesis_count=audit.rejected_arc_count,
+        source_pixel_scale_mm=(
+            max(source_pixel_spacing_mm)
+            if source_pixel_spacing_mm is not None
+            else 0.0
+        ),
+        hypothesis_count=audit.hypothesis_count,
+    )
+
+
+@_timed_stage("primitive_recovery")
+def _recover_geometric_primitives(
+    pieces: list[_FittedPiece],
+    raw_points: np.ndarray,
+    evidence_points: np.ndarray,
+    evidence_eligible: np.ndarray,
+    corners: list[int],
+    tolerance_mm: float,
+    source_pixel_spacing_mm: tuple[float, float] | None,
+    width_mm: float,
+    height_mm: float,
+    budget: _ComplexityBudget,
+    *,
+    enabled: bool,
+) -> tuple[list[_FittedPiece], PrimitiveRecoveryMetrics]:
+    baseline = pieces.copy()
+    if (
+        not enabled
+        or source_pixel_spacing_mm is None
+        or not baseline
+        or len(raw_points) < 3
+    ):
+        return baseline, _baseline_primitive_metrics(
+            baseline,
+            source_pixel_spacing_mm,
+        )
+    spacing = tuple(float(value) for value in source_pixel_spacing_mm)
+    if (
+        len(spacing) != 2
+        or not all(math.isfinite(value) and value > 0.0 for value in spacing)
+    ):
+        return baseline, _baseline_primitive_metrics(baseline, None)
+    audit = _PrimitiveRecoveryAudit()
+    if corners:
+        corners = _consolidate_supported_line_corner_chains(
+            corners,
+            raw_points,
+            evidence_points,
+            evidence_eligible,
+            tolerance_mm,
+            (spacing[0], spacing[1]),
+            audit,
+        )
+        groups = _primitive_piece_groups_from_corners(
+            baseline,
+            len(raw_points),
+            corners,
+        )
+        candidates = _primitive_candidates_from_corners(
+            corners,
+            raw_points,
+            evidence_points,
+            evidence_eligible,
+            tolerance_mm,
+            (spacing[0], spacing[1]),
+            audit,
+        )
+        closed_arc = False
+    else:
+        groups = _primitive_piece_groups_from_smooth_pieces(
+            baseline,
+            len(raw_points),
+        )
+        candidates, closed_arc = _primitive_candidates_from_smooth_pieces(
+            baseline,
+            raw_points,
+            evidence_points,
+            evidence_eligible,
+            tolerance_mm,
+            (spacing[0], spacing[1]),
+            audit,
+        )
+    if (
+        groups is None
+        or candidates is None
+        or not candidates
+        or len(groups) != len(candidates)
+        or audit.hypothesis_count > _MAXIMUM_PRIMITIVE_RECOVERY_HYPOTHESES
+    ):
+        return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+
+    boundaries_were_refined = False
+    complete_candidates = [
+        candidate for candidate in candidates if candidate is not None
+    ]
+    if (
+        not closed_arc
+        and len(complete_candidates) == len(candidates)
+        and all(
+            not (
+                complete_candidates[(index - 1) % len(complete_candidates)].hard_end
+                or candidate.hard_start
+            )
+            for index, candidate in enumerate(complete_candidates)
+        )
+    ):
+        provisional_joins_are_valid = all(
+            _primitive_join(
+                complete_candidates[(index - 1) % len(complete_candidates)],
+                candidate,
+                candidate.raw_points[0],
+                smooth=True,
+            )
+            is not None
+            for index, candidate in enumerate(complete_candidates)
+        )
+        if not provisional_joins_are_valid:
+            refined_candidates = _refit_smooth_primitive_boundaries(
+                complete_candidates,
+                raw_points,
+                evidence_points,
+                evidence_eligible,
+                tolerance_mm,
+                (spacing[0], spacing[1]),
+                audit,
+            )
+            if refined_candidates is not None:
+                candidates = refined_candidates
+                boundaries_were_refined = True
+
+    maximum_join_adjustment = 0.0
+    if closed_arc:
+        candidate = candidates[0]
+        if candidate is None or candidate.arc_hypothesis is None:
+            return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+        hypothesis = candidate.arc_hypothesis
+        start = hypothesis.center + hypothesis.radius_mm * np.asarray(
+            (
+                math.cos(hypothesis.start_angle_radians),
+                math.sin(hypothesis.start_angle_radians),
+            ),
+            dtype=np.float64,
+        )
+        recovered = _arc_pieces_from_candidate(
+            candidate,
+            start,
+            start,
+            tolerance_mm,
+            0,
+            closed=True,
+        )
+        if recovered is None:
+            audit.rejected_arc_count += 1
+            return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+    else:
+        built = _build_grouped_primitive_recovery(
+            groups,
+            candidates,
+            tolerance_mm,
+            audit,
+            allow_demotions=not boundaries_were_refined,
+        )
+        if built is None:
+            return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+        recovered, maximum_join_adjustment = built
+    if not recovered or len(recovered) > len(baseline):
+        return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+    for index, piece in enumerate(recovered):
+        following = recovered[(index + 1) % len(recovered)]
+        if not np.array_equal(piece.segment.end, following.segment.start):
+            return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+    try:
+        fitted_for_frame = _FittedContour(
+            segments=tuple(piece.segment for piece in recovered),
+            smoothing_displacement_mm=0.0,
+            max_fitting_error_mm=max(
+                piece.segment.fitting_error_mm for piece in recovered
+            ),
+        )
+        _validate_native_subpath_in_frame(
+            _native_subpath_from_fitted_contour(
+                fitted_for_frame,
+                width_mm,
+                height_mm,
+            ),
+            width_mm,
+            height_mm,
+        )
+    except (RasterVectorizationError, ValueError):
+        return baseline, _baseline_primitive_metrics(baseline, spacing, audit)
+
+    budget.fitted_segments -= len(baseline) - len(recovered)
+    return recovered, _recovered_primitive_metrics(
+        baseline,
+        recovered,
+        audit,
+        (spacing[0], spacing[1]),
+        maximum_join_adjustment,
+    )
 
 
 def _longest_smooth_span_segment_count(pieces: list[_FittedPiece]) -> int:
@@ -4466,20 +6747,39 @@ def _fit_contour(
     *,
     source_pixel_spacing_mm: tuple[float, float] | None = None,
     classification_points: np.ndarray | None = None,
+    primitive_evidence_points: np.ndarray | None = None,
+    primitive_evidence_eligible: np.ndarray | None = None,
+    recover_primitives: bool = True,
 ) -> _FittedContour:
-    if classification_points is None:
-        raw_points = _canonicalize_closed_contour(raw_points)
-        classification = raw_points
-    else:
-        raw_points = np.asarray(raw_points, dtype=np.float64)
-        classification = np.asarray(classification_points, dtype=np.float64)
-        if classification.shape != raw_points.shape:
-            raise ValueError(
-                "classification_points must match the fitted contour shape"
-            )
-        start = _minimal_cyclic_rotation_index(classification)
-        raw_points = np.roll(raw_points, -start, axis=0).copy()
-        classification = np.roll(classification, -start, axis=0).copy()
+    raw_points = np.asarray(raw_points, dtype=np.float64)
+    classification = (
+        raw_points
+        if classification_points is None
+        else np.asarray(classification_points, dtype=np.float64)
+    )
+    evidence = (
+        raw_points
+        if primitive_evidence_points is None
+        else np.asarray(primitive_evidence_points, dtype=np.float64)
+    )
+    evidence_eligible = (
+        np.ones(len(raw_points), dtype=bool)
+        if primitive_evidence_eligible is None
+        else np.asarray(primitive_evidence_eligible, dtype=bool)
+    )
+    if classification.shape != raw_points.shape:
+        raise ValueError("classification_points must match the fitted contour shape")
+    if evidence.shape != raw_points.shape:
+        raise ValueError("primitive_evidence_points must match the fitted contour shape")
+    if evidence_eligible.shape != (len(raw_points),):
+        raise ValueError(
+            "primitive_evidence_eligible must contain one value per contour point"
+        )
+    start = _minimal_cyclic_rotation_index(classification)
+    raw_points = np.roll(raw_points, -start, axis=0).copy()
+    classification = np.roll(classification, -start, axis=0).copy()
+    evidence = np.roll(evidence, -start, axis=0).copy()
+    evidence_eligible = np.roll(evidence_eligible, -start).copy()
     corner_tolerance = options.simplification_tolerance_mm * 0.65
     fit_tolerance = options.simplification_tolerance_mm * 0.80
     corners = _corner_indices(classification, corner_tolerance)
@@ -4525,15 +6825,15 @@ def _fit_contour(
             indices = _circular_indices(start, end, len(raw_points))
             if _run_arc_length(indices, raw_steps) < minimum_run_length:
                 continue
-            evidence = _straight_run_evidence(
+            run_evidence = _straight_run_evidence(
                 classification,
                 indices,
                 fit_tolerance,
                 oversampled_step,
                 source_pixel_spacing_mm,
             )
-            if evidence is not None:
-                promoted_runs.append(evidence)
+            if run_evidence is not None:
+                promoted_runs.append(run_evidence)
         if promoted_runs:
             straight_runs = tuple(
                 run
@@ -4592,7 +6892,8 @@ def _fit_contour(
     split_start = budget.recursive_splits
     merged_start = budget.merged_segments
     pieces: list[_FittedPiece] = []
-    spans = _contour_spans(smoothed, anchors)
+    span_indices = _contour_span_indices(len(smoothed), anchors)
+    spans = [smoothed[indices] for indices in span_indices]
     contour_steps = np.linalg.norm(
         np.roll(smoothed, -1, axis=0) - smoothed,
         axis=1,
@@ -4641,7 +6942,9 @@ def _fit_contour(
             if tangent is not None:
                 smooth_anchor_tangents[start] = tangent
                 smooth_anchor_tangents[end] = tangent
-    for offset, span in enumerate(spans):
+    for offset, (span, indices) in enumerate(
+        zip(spans, span_indices, strict=True)
+    ):
         start = anchors[offset]
         end = anchors[(offset + 1) % len(anchors)]
         hard_start = start in corner_set
@@ -4668,6 +6971,7 @@ def _fit_contour(
                 budget,
                 hard_start=hard_start,
                 hard_end=hard_end,
+                target_indices=indices,
             )
             if line is not None:
                 budget.add_fitted_segments()
@@ -4687,6 +6991,7 @@ def _fit_contour(
                 control_maximum=control_maximum,
                 hard_start=hard_start,
                 hard_end=hard_end,
+                target_indices=indices,
             )
         )
     pieces = _merge_smooth_pieces(
@@ -4696,6 +7001,19 @@ def _fit_contour(
         control_maximum,
         budget,
         minimum_segment_count=max(4, len(corner_set)),
+    )
+    pieces, primitive_recovery = _recover_geometric_primitives(
+        pieces,
+        raw_points,
+        evidence,
+        evidence_eligible,
+        corners,
+        fit_tolerance,
+        source_pixel_spacing_mm,
+        width_mm,
+        height_mm,
+        budget,
+        enabled=recover_primitives,
     )
     if not pieces:
         raise RasterVectorizationError("A contour could not be fitted to vector geometry")
@@ -4722,6 +7040,7 @@ def _fit_contour(
         longest_smooth_span_segment_count=(
             _longest_smooth_span_segment_count(pieces)
         ),
+        primitive_recovery=primitive_recovery,
     )
 
 
@@ -5587,6 +7906,7 @@ def _fit_physical_contours_to_native_path(
     smoothing_mm: float = 0.0,
     classification_contours_mm: tuple[np.ndarray, ...] | list[np.ndarray] | None = None,
     frame_bounds_mm: tuple[float, float, float, float] | None = None,
+    recover_primitives: bool = True,
 ) -> PhysicalContourFitResult:
     """Fit closed physical contours with the authoritative native raster fitter.
 
@@ -5717,6 +8037,7 @@ def _fit_physical_contours_to_native_path(
             budget,
             source_pixel_spacing_mm=(spacing[0], spacing[1]),
             classification_points=classification,
+            recover_primitives=recover_primitives,
         )
         native_subpath = _native_subpath_from_fitted_contour(
             fitted, width_mm, height_mm
@@ -5760,6 +8081,7 @@ def _fit_physical_contours_to_native_path(
             recursive_split_count=fitted.recursive_split_count,
             merged_segment_count=fitted.merged_segment_count,
             longest_smooth_span_segment_count=fitted.longest_smooth_span_segment_count,
+            primitive_recovery=fitted.primitive_recovery,
         )
         fitted_results.append(internal)
         preview_world = preview_local + center
@@ -5778,12 +8100,33 @@ def _fit_physical_contours_to_native_path(
                 mean_fitting_error_mm=fitted.mean_fitting_error_mm,
                 rms_fitting_error_mm=fitted.rms_fitting_error_mm,
                 hard_corner_count=fitted.hard_corner_count,
+                primitive_recovery=fitted.primitive_recovery,
             )
         )
 
     fitted_tuple = tuple(fitted_results)
     _check_cancelled()
-    _validate_authoritative_native_topology(fitted_tuple, width_mm, height_mm)
+    try:
+        _validate_authoritative_native_topology(fitted_tuple, width_mm, height_mm)
+    except RasterVectorizationComplexityError:
+        raise
+    except RasterVectorizationError:
+        if not recover_primitives or not any(
+            contour.primitive_recovery.recovered_line_count
+            or contour.primitive_recovery.recovered_arc_count
+            for contour in fitted_tuple
+        ):
+            raise
+        return fit_physical_contours_to_native_path(
+            raw_contours,
+            parent_values,
+            source_pixel_spacing_mm=(spacing[0], spacing[1]),
+            fitting_tolerance_mm=fitting_tolerance_mm,
+            smoothing_mm=smoothing_mm,
+            classification_contours_mm=classification_contours,
+            frame_bounds_mm=frame_bounds_mm,
+            recover_primitives=False,
+        )
     geometry = NativePathGeometry(
         tuple(contour.native_subpath for contour in fitted_tuple),
         fill_rule=PathFillRule.EVENODD,
@@ -5809,6 +8152,7 @@ def fit_physical_contours_to_native_path(
     classification_contours_mm: tuple[np.ndarray, ...] | list[np.ndarray] | None = None,
     frame_bounds_mm: tuple[float, float, float, float] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    recover_primitives: bool = True,
 ) -> PhysicalContourFitResult:
     """Fit physical contours, optionally observing cooperative cancellation."""
 
@@ -5823,6 +8167,7 @@ def fit_physical_contours_to_native_path(
             smoothing_mm=smoothing_mm,
             classification_contours_mm=classification_contours_mm,
             frame_bounds_mm=frame_bounds_mm,
+            recover_primitives=recover_primitives,
         )
     finally:
         _CANCEL_CHECK.reset(cancel_token)
@@ -5928,14 +8273,21 @@ def _prepare_vectorization_masks(
         grayscale,
         threshold_used,
     )
-    cleaned_mask, component_count = _clean_components(
+    cleaned_mask, component_count, hole_cleanup = _clean_components_with_diagnostics(
         source_mask,
         options.minimum_feature_area_mm2,
+        options.minimum_hole_area_mm2,
+        options.maximum_hole_area_mm2,
         width_mm,
         height_mm,
+        protected_background_mask=(
+            None
+            if source.eligibility_mask is None
+            else source.eligibility_mask == 0
+        ),
     )
     if component_count:
-        _preflight_contour_complexity(cleaned_mask)
+        _preflight_contour_complexity(cleaned_mask, options.contour_output)
     working_mask = _oversampled_mask(
         source,
         options,
@@ -5944,7 +8296,7 @@ def _prepare_vectorization_masks(
         source_mask,
         cleaned_mask,
     )
-    _enforce_oversampled_edge_budget(working_mask)
+    _enforce_oversampled_edge_budget(working_mask, options.contour_output)
     return _RasterMaskPreparation(
         threshold_used=threshold_used,
         source_mask=_readonly(source_mask),
@@ -5958,6 +8310,7 @@ def _prepare_vectorization_masks(
             )
         ),
         component_count=component_count,
+        hole_cleanup=hole_cleanup,
     )
 
 
@@ -5977,6 +8330,7 @@ def _pixel_mask_preview(
         connected_component_count=masks.component_count,
         displayed_width_mm=width_mm,
         displayed_height_mm=height_mm,
+        hole_cleanup=masks.hole_cleanup,
         _masks=masks,
     )
 
@@ -6077,15 +8431,26 @@ def _emit_mask_ready(
 def _extract_vectorization_contours(
     mask: np.ndarray,
     approximation: int,
+    contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS,
     *,
     require_retained: bool = True,
 ) -> ForegroundContourPruneResult:
     try:
-        contours, hierarchy = extract_foreground_contours(
-            mask,
-            approximation=approximation,
-            maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
-        )
+        _check_cancelled()
+        if contour_output is RasterContourOutput.OUTER_ONLY:
+            contours, hierarchy = extract_foreground_contours(
+                mask,
+                approximation=approximation,
+                maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
+                retrieval_mode=cv2.RETR_EXTERNAL,
+            )
+        else:
+            contours, hierarchy = extract_foreground_contours(
+                mask,
+                approximation=approximation,
+                maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
+            )
+        _check_cancelled()
     except ForegroundContourLimitError as exc:
         _raise_complexity(
             "Raster vectorization found "
@@ -6097,6 +8462,7 @@ def _extract_vectorization_contours(
             "No closed contours were produced by the selected raster settings"
         ) from exc
     pruned = prune_degenerate_foreground_contours(contours, hierarchy)
+    _check_cancelled()
     if require_retained and not pruned.contours:
         raise RasterVectorizationError(
             "No closed contours were produced by the selected raster settings "
@@ -6117,6 +8483,7 @@ def _quick_preview_prepared_raster(
     contour_extraction = _extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
+        options.contour_output,
     )
     raw_contours = contour_extraction.contours
     hierarchy = contour_extraction.hierarchy
@@ -6220,6 +8587,7 @@ def _quick_preview_prepared_raster(
         connected_component_count=masks.component_count,
         raw_contour_point_count=raw_point_count,
         preview_point_count=preview_point_count,
+        hole_cleanup=masks.hole_cleanup,
         _prepared_trace=prepared_trace,
     )
 
@@ -6290,6 +8658,7 @@ def _vectorize_pixel_source(
     prepared_preview: RasterVectorizationQuickPreview | None = None,
     prepared_mask: PixelVectorizationMaskPreview | None = None,
     mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
+    recover_primitives: bool = True,
 ) -> PixelVectorizationResult:
     """Vectorize one immutable decoded pixel source without asset assumptions."""
 
@@ -6334,6 +8703,7 @@ def _vectorize_pixel_source(
         contour_extraction = _extract_vectorization_contours(
             masks.working_mask,
             cv2.CHAIN_APPROX_NONE,
+            options.contour_output,
         )
     else:
         if prepared_mask is not None:
@@ -6437,6 +8807,9 @@ def _vectorize_pixel_source(
                 height_mm / source.height_px,
             ),
             classification_points=threshold_physical,
+            primitive_evidence_points=source_edge.evidence_points,
+            primitive_evidence_eligible=source_edge.evidence_eligible,
+            recover_primitives=recover_primitives,
         )
         native_subpath = _native_subpath_from_fitted_contour(
             fitted,
@@ -6503,6 +8876,7 @@ def _vectorize_pixel_source(
                     fitted.longest_smooth_span_segment_count
                 ),
                 threshold_points=threshold_normalized,
+                primitive_recovery=fitted.primitive_recovery,
             )
         )
     if not results:
@@ -6510,8 +8884,30 @@ def _vectorize_pixel_source(
             "Raster vectorization produced no non-degenerate closed paths"
         )
     result_contours = tuple(results)
-    _validate_authoritative_native_topology(result_contours, width_mm, height_mm)
-    _validate_rasterized_topology(result_contours, working_mask.shape)
+    try:
+        _validate_authoritative_native_topology(
+            result_contours,
+            width_mm,
+            height_mm,
+        )
+        _validate_rasterized_topology(result_contours, working_mask.shape)
+    except RasterVectorizationComplexityError:
+        raise
+    except RasterVectorizationError:
+        if not recover_primitives or not any(
+            contour.primitive_recovery.recovered_line_count
+            or contour.primitive_recovery.recovered_arc_count
+            for contour in result_contours
+        ):
+            raise
+        return _vectorize_pixel_source(
+            source,
+            options,
+            displayed_width_mm=width_mm,
+            displayed_height_mm=height_mm,
+            prepared_mask=mask_preview,
+            recover_primitives=False,
+        )
     overlay = _overlay_preview(source.source_rgba, result_contours)
     maximum_deviation = max(
         contour.max_estimated_deviation_mm for contour in result_contours
@@ -6534,6 +8930,7 @@ def _vectorize_pixel_source(
             contour_extraction.degenerate_original_indices
         ),
         rejected_contour_tree_count=len(contour_extraction.rejected_root_indices),
+        hole_cleanup=mask_preview.hole_cleanup,
     )
 
 
@@ -6644,6 +9041,11 @@ def _filter_forest_roots_before_fitting(
 
     for root in roots:
         _check_cancelled()
+        review_contour_indices = (
+            root.all_contour_indices
+            if options.contour_output is RasterContourOutput.ALL_CONTOURS
+            else root.contour_indices
+        )
         physical_by_index = {
             index: _physical_contour(
                 raw_contours[index],
@@ -6652,15 +9054,15 @@ def _filter_forest_roots_before_fitting(
                 width_mm,
                 height_mm,
             )
-            for index in root.all_contour_indices
+            for index in review_contour_indices
         }
         combined = np.concatenate(tuple(physical_by_index.values()), axis=0)
         threshold_width_mm = float(np.ptp(combined[:, 0]))
         threshold_height_mm = float(np.ptp(combined[:, 1]))
         root_depth = depths[root.root_index]
-        net_area_mm2 = 0.0
+        threshold_area_mm2 = 0.0
         total_boundary_area_allowance_mm2 = 0.0
-        for index in root.all_contour_indices:
+        for index in review_contour_indices:
             physical = physical_by_index[index]
             contour_area = abs(_signed_area(physical))
             perimeter_mm = float(
@@ -6679,11 +9081,13 @@ def _filter_forest_roots_before_fitting(
                 + math.pi * maximum_boundary_displacement_mm**2
             )
             relative_depth = depths[index] - root_depth
-            net_area_mm2 += contour_area if relative_depth % 2 == 0 else -contour_area
-        net_area_mm2 = max(0.0, net_area_mm2)
+            threshold_area_mm2 += (
+                contour_area if relative_depth % 2 == 0 else -contour_area
+            )
+        threshold_area_mm2 = max(0.0, threshold_area_mm2)
         minimum_native_area_mm2 = max(
             0.0,
-            net_area_mm2
+            threshold_area_mm2
             - total_boundary_area_allowance_mm2
             - numeric_area_margin_mm2,
         )
@@ -6695,9 +9099,17 @@ def _filter_forest_roots_before_fitting(
             and maximum_area is not None
             and minimum_native_area_mm2 > maximum_area
         ):
+            area_description = (
+                f"{threshold_area_mm2:.6g} mm^2 threshold area"
+                if options.contour_output is RasterContourOutput.ALL_CONTOURS
+                else (
+                    f"{threshold_area_mm2:.6g} mm^2 exterior silhouette "
+                    "threshold area"
+                )
+            )
             reasons.append(
                 f"conservative area lower bound {minimum_native_area_mm2:.6g} "
-                f"mm^2 (from {net_area_mm2:.6g} mm^2 threshold area) exceeds "
+                f"mm^2 (from {area_description}) exceeds "
                 f"the {maximum_area:.6g} mm^2 review maximum"
             )
         if can_bound_native_geometry:
@@ -6752,6 +9164,7 @@ def _fit_forest_contour(
     width_mm: float,
     height_mm: float,
     budget: _ComplexityBudget,
+    recover_primitives: bool = True,
 ) -> RasterVectorizedContour:
     is_hole = bool(depth % 2)
     physical = _physical_contour(
@@ -6798,6 +9211,9 @@ def _fit_forest_contour(
             height_mm / source.height_px,
         ),
         classification_points=threshold_physical,
+        primitive_evidence_points=source_edge.evidence_points,
+        primitive_evidence_eligible=source_edge.evidence_eligible,
+        recover_primitives=recover_primitives,
     )
     native_subpath = _native_subpath_from_fitted_contour(
         fitted,
@@ -6853,6 +9269,7 @@ def _fit_forest_contour(
             fitted.longest_smooth_span_segment_count
         ),
         threshold_points=threshold_normalized,
+        primitive_recovery=fitted.primitive_recovery,
     )
 
 
@@ -6964,6 +9381,7 @@ def _vectorize_pixel_source_forest(
     prepared_mask: PixelVectorizationMaskPreview | None = None,
     mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
     root_review_filter: PixelVectorizationRootReviewFilter | None = None,
+    recover_primitives: bool = True,
 ) -> PixelVectorizationForestResult:
     if not isinstance(source, PixelVectorizationSource):
         raise TypeError("source must be a PixelVectorizationSource")
@@ -6998,6 +9416,7 @@ def _vectorize_pixel_source_forest(
     contour_extraction = _extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
+        options.contour_output,
         require_retained=False,
     )
     raw_contours = contour_extraction.contours
@@ -7077,6 +9496,7 @@ def _vectorize_pixel_source_forest(
                     width_mm=width_mm,
                     height_mm=height_mm,
                     budget=budget,
+                    recover_primitives=recover_primitives,
                 )
         except RasterVectorizationComplexityError:
             raise
@@ -7096,6 +9516,41 @@ def _vectorize_pixel_source_forest(
             accepted_roots.append(root)
 
     active_roots = tuple(accepted_roots)
+    if recover_primitives and active_roots:
+        active_contours = _assemble_forest_contours(
+            active_roots,
+            selected_indices=selected_indices,
+            parents=parents,
+            fitted_by_original_index=fitted_by_original_index,
+            contour_output=options.contour_output,
+        )
+        if any(
+            contour.primitive_recovery.recovered_line_count
+            or contour.primitive_recovery.recovered_arc_count
+            for contour in active_contours
+        ):
+            try:
+                _validate_authoritative_native_topology(
+                    active_contours,
+                    width_mm,
+                    height_mm,
+                )
+                _validate_rasterized_topology(
+                    active_contours,
+                    masks.working_mask.shape,
+                )
+            except RasterVectorizationComplexityError:
+                raise
+            except RasterVectorizationError:
+                return _vectorize_pixel_source_forest(
+                    source,
+                    options,
+                    displayed_width_mm=width_mm,
+                    displayed_height_mm=height_mm,
+                    prepared_mask=mask_preview,
+                    root_review_filter=root_review_filter,
+                    recover_primitives=False,
+                )
     if active_roots:
         active_roots = _isolate_invalid_forest_roots(
             active_roots,
@@ -7180,6 +9635,7 @@ def _vectorize_pixel_source_forest(
             contour_extraction.degenerate_original_indices
         ),
         rejected_contour_tree_count=len(contour_extraction.rejected_root_indices),
+        hole_cleanup=masks.hole_cleanup,
     )
     return PixelVectorizationForestResult(
         result=result,
@@ -7198,6 +9654,7 @@ def vectorize_pixel_source(
     prepared_mask: PixelVectorizationMaskPreview | None = None,
     mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    recover_primitives: bool = True,
 ) -> PixelVectorizationResult:
     """Vectorize source-neutral pixels through the authoritative raster path."""
 
@@ -7214,6 +9671,7 @@ def vectorize_pixel_source(
             prepared_preview=None,
             prepared_mask=prepared_mask,
             mask_ready=mask_ready,
+            recover_primitives=recover_primitives,
         )
     finally:
         _CANCEL_CHECK.reset(cancel_token)
@@ -7231,6 +9689,7 @@ def vectorize_pixel_source_forest(
     mask_ready: Callable[[PixelVectorizationMaskPreview], None] | None = None,
     root_review_filter: PixelVectorizationRootReviewFilter | None = None,
     cancel_check: Callable[[], bool] | None = None,
+    recover_primitives: bool = True,
 ) -> PixelVectorizationForestResult:
     """Vectorize root-isolated candidates through the shared raster pipeline."""
 
@@ -7254,6 +9713,7 @@ def vectorize_pixel_source_forest(
             prepared_mask=prepared_mask,
             mask_ready=mask_ready,
             root_review_filter=root_review_filter,
+            recover_primitives=recover_primitives,
         )
     finally:
         _CANCEL_CHECK.reset(cancel_token)
@@ -7288,6 +9748,7 @@ def vectorize_prepared_raster(
             displayed_width_mm=displayed_width_mm,
             displayed_height_mm=displayed_height_mm,
             prepared_preview=prepared_preview,
+            recover_primitives=True,
         )
         _check_cancelled()
     finally:
@@ -7309,6 +9770,7 @@ def vectorize_prepared_raster(
         pruned_contour_count=pixel_result.pruned_contour_count,
         degenerate_contour_count=pixel_result.degenerate_contour_count,
         rejected_contour_tree_count=pixel_result.rejected_contour_tree_count,
+        hole_cleanup=pixel_result.hole_cleanup,
         source_identity=source.identity,
         source_sha256=source.identity.sha256,
     )
@@ -7360,10 +9822,12 @@ __all__ = [
     "PixelAutoThresholdSelection",
     "PhysicalContourFitContour",
     "PhysicalContourFitResult",
+    "PrimitiveRecoveryMetrics",
     "RASTER_VECTORIZATION_OVERSAMPLE_FACTOR",
     "RasterContourOutput",
     "RasterDetectionMode",
     "RasterVectorizationCancelledError",
+    "RasterHoleCleanupDiagnostics",
     "RasterVectorizationComplexityError",
     "RasterVectorizationError",
     "RasterVectorizationOptions",

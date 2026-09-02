@@ -303,8 +303,26 @@ should own a physical camera at a time.
   imported-raster vectorization pipeline. Camera Auto first chooses one bounded,
   image-derived threshold or the operator supplies a manual threshold; either
   byte applies to that normalized raster, not absolute camera brightness.
-  Each root `RETR_TREE` contour plus all descendants is one indivisible temporary
-  review candidate; unrelated failing roots do not discard verified peers.
+  Source-neutral cleanup then applies separate physical foreground-component and
+  enclosed-background-hole limits. The hole range is inclusive: enclosed holes
+  below its minimum or above its optional maximum are filled, while external
+  border-connected background is never a hole. A background component touching
+  hard-ineligible pixels is likewise protected and omitted from filterable-hole
+  aggregates. Cleanup precedes exact 4× Mask reconstruction, detail-selected
+  contour extraction, and native fitting, so any accepted native topology is
+  validated against that production Mask. A later fitting failure or
+  cancellation publishes no accepted geometry, although the already-produced
+  Mask preview may remain visible. Filling a hole may intentionally absorb
+  nested foreground descendants; preserving it retains the normal even-odd
+  hierarchy.
+  Full detail uses the existing bounded `RETR_TREE` hierarchy: each root plus all
+  descendants is one indivisible temporary review candidate, and unrelated
+  failing roots do not discard verified peers. Outer silhouette instead uses
+  bounded `RETR_EXTERNAL` extraction before contour-count limits and fitting, so
+  only each disconnected root's actual exterior is authoritative. Children
+  cannot consume hierarchy/native-fit budgets or veto that root, while the
+  exterior retains its ordinary closure, source-edge, topology, bounds, and
+  complexity validation.
 - Non-grid Camera Trace **Auto detect** is orchestration, not a fourth detector.
   One corrected capture and one eligibility result become one immutable camera-
   normalization result. Auto
@@ -322,12 +340,24 @@ should own a physical camera at a time.
   than choosing the least-bad strategy.
 - The Trace panel treats those non-grid Auto choices as strategy-owned: hue,
   sample, threshold, and polarity controls are inactive, output is native
-  lines/Béziers, and border offset is zero. Explicit Color owns hue/sample;
-  explicit non-grid Contrast owns manual threshold/polarity. Grid Auto preserves
-  the specialized output and normalization controls. One read-only value shows
+  lines/Béziers, and border offset is zero. Its independent hole limits remain
+  available because both raster polarities consume them. Explicit Color owns
+  hue/sample and bypasses raster hole cleanup; explicit non-grid Contrast owns
+  manual threshold/polarity and consumes the hole limits. Grid Auto preserves
+  the specialized output and normalization controls and bypasses these hole
+  limits. One read-only value shows
   the exact winning production byte for successful Auto raster output, `N/A` for
   an Auto Color winner, and `—` before detection or after Clear, failure, or
   staleness; it never overwrites the editable manual threshold.
+- Trace detail is orthogonal to geometry representation. Missing preferences
+  select Full detail. Full detail preserves current nested topology. Outer
+  silhouette keeps the exact cleaned Mask but supplies only true external roots
+  to the shared raster and Color fitting adapters; top-level Auto propagates the
+  same choice to every eligible attempt. Grid disables the control and remains
+  specialized Full detail. Neither mode closes gaps, takes a hull, merges roots,
+  or changes threshold/eligibility evidence. Object-limit values are not
+  rewritten: Full detail retains its even-odd post-vector area basis, while
+  Outer silhouette reports and reviews the exterior geometry it emits.
 - Camera Trace **By contrast** with grid enabled retains the specialized
   global/illumination-corrected/adaptive and signed-local multi-mask detector. It
   ranks repeated-grid hypotheses by coherent filled-region support, can classify
@@ -370,7 +400,8 @@ should own a physical camera at a time.
   the immutable corrected **Camera** frame, exact production **Exposed bed**
   mask, exact material **Eligible** mask, exact polarity-specific **Normalized**
   threshold input (or grayscale context for Color), or the exact 4× production
-  contour **Mask** used by `RETR_TREE`.
+  contour **Mask** used by Full-detail `RETR_TREE` or Outer-silhouette
+  `RETR_EXTERNAL` extraction.
   The workspace validates 4× dimensions from the already-rounded source raster,
   not by re-rounding the physical area at the higher display density, so a
   fractional final pixel strip cannot reject the exact mask. Raster mask
@@ -859,8 +890,9 @@ normalized dark/light rasters enter through the source-neutral contract; the
 corrected photograph and its background model remain in the separate temporary
 camera-normalization result, and neither layer synthesizes an asset identity.
 `PixelVectorizationResult` likewise owns shared mask, contour, native path,
-hierarchy, error, and preview data, while `RasterVectorizationResult` adds
-imported-asset provenance and preserves existing project metadata.
+hierarchy, error, bounded hole-cleanup aggregates, and preview data, while
+`RasterVectorizationResult` adds imported-asset provenance and preserves
+existing project metadata.
 
 `RasterVectorizationOptions` is a frozen validated value. Automatic detection
 uses Otsu thresholding over the white-composited image and applies alpha as an
@@ -873,11 +905,16 @@ the operator's byte. Camera Auto uses the bounded selector above and then passes
 its exact winning byte through the same manual-threshold mask semantics, so the
 production mask measures local contrast rather than absolute exposure while
 ordinary imported Auto remains Otsu-compatible.
-Inversion changes foreground polarity, and
-the connected-component cleanup interprets minimum feature area in square
-millimetres from the selected image's displayed size, removing both small
-foreground islands and enclosed background pinholes while retaining larger
-holes. Preview requests use a
+Inversion changes foreground polarity. Connected-component cleanup interprets
+minimum foreground feature area and optional minimum/maximum enclosed-hole area
+in square millimetres from the selected image's displayed size. An omitted
+minimum-hole option inherits minimum feature area, and an omitted maximum is
+unbounded; therefore existing imported-raster callers preserve their former
+small-island/pinhole cleanup and do not begin filling large legitimate holes.
+Explicit callers can preserve only holes within inclusive physical bounds.
+Background connected to the image border is never filled by the maximum-hole
+rule; background connected to source-neutral ineligible pixels is equally
+protected and excluded from cleanup counts. Preview requests use a
 160 ms debounce by default. Quick and exact work each retain at most one running
 request plus the latest pending options, so slider input cannot build an
 unbounded task queue. A newer request immediately makes the prior result
@@ -894,16 +931,18 @@ vectorizer do not call `DesktopController`, `MachineService`,
 camera, planning, G-code, or execution paths.
 
 `geometry.foreground` owns source-neutral binary connected-component cleanup,
-bounded `RETR_TREE` extraction, deterministic outer-tree decomposition, and
+bounded full-hierarchy `RETR_TREE` and exterior-only `RETR_EXTERNAL` extraction,
+deterministic outer-tree decomposition, and
 even-odd tree rendering. It also owns conservative post-extraction pruning of
 non-geometric contour nodes. `project.raster_vectorize` locks homogeneous
 cleaned-mask 3×3 interiors to their source classification before contour
 extraction, while retaining bicubic localization in the transition band. This
 prevents a reproduced all-foreground threshold plateau from ringing into a
 positive-area child hole and applies symmetrically to homogeneous background.
-Real holes, gaps, component/hole cleanup, and source boundaries remain
-unchanged. Bicubic reconstruction can still overshoot near a retained edge and
-create an isolated threshold pixel; OpenCV then reports a one- or two-point,
+Real holes, gaps, component/hole cleanup, and source boundaries retain their
+explicit cleaned classification. Bicubic reconstruction can still overshoot
+near a retained edge and create an isolated threshold pixel; OpenCV then reports
+a one- or two-point,
 zero-area contour even though base-resolution component cleanup already ran. Pruning
 removes only contours with fewer than three distinct trace points or zero
 trace-pixel polygon area. It retains every positive-area contour, rebuilds the
@@ -928,12 +967,58 @@ attempts use two `PixelVectorizationSource` values derived from one immutable
 camera-normalization result. The adapter does not reconstruct non-grid raster
 geometry.
 
+After the ordinary constrained line/cubic fit and adjacent merging, that same
+source-neutral fitter runs one conservative geometric primitive-recovery stage.
+It evaluates compatible baseline spans against the ordered source-edge evidence
+already supplied to the fitter; it does not rotate or deskew the raster and does
+not change normalization, thresholding, mask reconstruction, source-edge
+localization, smoothing, corner classification, or hierarchy. Candidate lines
+use robust total least squares at their observed angle. Candidate circular arcs
+use one conceptual center, radius, direction, and sweep, then encode the accepted
+arc as bounded canonical cubic Bézier spans. It performs no OCR, glyph, logo, or
+template recognition. Source-pixel normal pitch and the
+existing fitting tolerance jointly bound maximum and RMS residual, endpoint
+movement, and join adjustment, so a wide tolerance cannot silently promote
+resolved curvature or freeform detail.
+
+Hard-corner classifications remain immutable partition boundaries across
+recovery. The observed vertex at one of those boundaries may be replaced by a
+nearby line-line, line-circle, or circle-circle intersection only when the
+adjustment fits both endpoint allowances. Smooth joins additionally require
+tangent agreement. Each source-index-exact partition tries a line, then a
+circle, then keeps that partition's original fitted objects; one partition's
+savings cannot justify expanding another partition, and recovery never increases
+the contour's segment count. No parallel-edge, constant-width, rectangle, or
+symmetry constraint is applied. The resulting native sequence must still pass the
+existing frame, continuous error, self/adjacent-arc, compound-clearance,
+even-odd, and rasterized-hierarchy validators. A rejected hypothesis, unsafe
+join, budget exhaustion, or failed composition leaves the corresponding
+baseline fitted pieces unchanged. If authoritative compound or rasterized
+topology rejects a contour set containing accepted primitives, the complete
+source-identical fit is rerun once with recovery disabled; topology complexity
+errors remain fatal. Recovery therefore changes neither the native
+path format nor downstream consumers:
+conceptual arcs remain ordinary `PathCubicSegment` values in
+`NativePathGeometry` version 1, and preview flattening, planning, G0/G1 output,
+and post-Create Straighten continue to consume ordinary line/cubic geometry.
+
+Recovery work is deterministic and bounded by the existing one-million raw
+contour-point limit, at most 64 hard-corner partitions, at most 256 primitive
+hypotheses per contour, six robust fitting iterations, at most 4,096 nearby
+source samples in each smooth-boundary search direction, and at most 64
+canonical cubics for one conceptual arc. Exceeding a primitive-local search or
+representation bound rejects recovery; existing authoritative topology-work
+limits are not weakened. `recover_primitives=False` is a non-persistent
+development/test comparison seam, not a Trace-panel option.
+
 Auto strategy failure and candidate failure are separate. A failed attempt is a
 bounded diagnostic and does not stop later strategies. Raster Auto asks the
 shared vectorizer for root-isolated results; Color Auto isolates fitting at the
-same root-tree boundary. In both cases one root plus every hole and island
-descendant is indivisible. A rejected compound tree is never split into fake
-objects. The raster forest first runs each ordinary global validator. Only a
+same root-tree boundary. In Full detail, one root plus every hole and island
+descendant is indivisible. In Outer silhouette, each externally extracted root
+alone is indivisible and descendants are never presented to fitting. A rejected
+compound tree is never split into fake objects. The raster forest first runs
+each ordinary global validator. Only a
 non-complexity global failure starts per-root diagnosis; complete surviving
 trees are rebased and the unchanged global validator runs again. A cross-root
 failure for which every tree passes alone and every complexity-limit failure
@@ -965,17 +1050,20 @@ and score terms; the operator sees only the selected-strategy summary.
 never attached to project data. It accumulates inclusive elapsed time and call
 counts for image decode/preparation, threshold, mask generation, contour extraction,
 corner classification, source-edge refinement, cubic fitting, Newton
-reparameterization, continuous fit validation, adjacent merging, authoritative
-topology, preview flattening, and rasterized hierarchy validation. Timing does
-not select algorithms or relax a budget. The five-million-step
+reparameterization, continuous fit validation, adjacent merging, primitive
+recovery, authoritative topology, preview flattening, and rasterized hierarchy
+validation. Timing does not select algorithms or relax a budget. The five-million-step
 continuous-validation limit remains authoritative;
 profiling the Coleman stencil showed that proof was inexpensive compared with
 Newton refinement, so it was not weakened or bypassed.
 
-Contour extraction interpolates the immutable pixel source to a 4× internal mask,
-uses `RETR_TREE` hierarchy, and maps contour samples into physical coordinates
-before fitting. The extracted contour and hierarchy remain the topology
-authority. For an independent contour, the exact stage estimates a local normal
+Contour extraction interpolates the immutable pixel source to a 4× internal mask
+and maps contour samples into physical coordinates before fitting. Full detail
+uses the existing `RETR_TREE` hierarchy. Outer silhouette uses `RETR_EXTERNAL`
+before contour-count validation and fitting, creates a flat root hierarchy, and
+never enumerates or fits ignored internal topology. In both cases the extracted
+contour set remains the topology authority for the selected detail. For an
+independent contour, the exact stage estimates a local normal
 over 1.25 source pixels and samples the original composited grayscale and alpha
 fields at 0.125-pixel intervals over ±1.25 source pixels. The foreground margin
 uses the same manual/Otsu/alpha threshold and inversion semantics as mask
@@ -1039,6 +1127,13 @@ corners, and adjoining transitions remain cubic segments. The
 result reports raw contour points, fitted segments, preview-flattened points,
 validated maximum/mean/RMS fit error, detected hard corners, recursive splits,
 verified merges, longest smooth-span size, and maximum estimated deviation.
+Compact primitive diagnostics additionally report baseline/final segment counts,
+recovered line and circular-arc counts and lengths, canonical arc-cubic and
+freeform-cubic counts, rejected hypotheses, maximum point residual, worst
+accepted-primitive RMS residual after final endpoint/join reconstruction (each
+reported as the worse of raw-contour and eligible source-edge evidence), maximum endpoint adjustment, and source-pixel
+scale. The separate timing snapshot records recovery time. They are bounded fit
+diagnostics, not persisted primitive semantics or physical-accuracy evidence.
 That deviation includes accepted source-edge displacement, optional smoothing,
 fitting error, and preview flattening; it is not a
 physical-accuracy certification of the source image. Highly pixel-constrained
@@ -1068,7 +1163,9 @@ coordinates, hierarchy/count consistency, and the reported maximum deviation.
 
 The created object is one schema-3 `NativePathGeometry` with `path_version: 1`,
 explicit `fill_rule: "evenodd"`, and one closed native subpath for each retained
-contour. Each subpath stores only line and cubic segments. It is normalized to
+contour. Each subpath stores only line and cubic segments; an accepted conceptual
+circular arc is represented by one or more canonical cubic segments rather than
+introducing an arc segment or changing the path version. It is normalized to
 the image-local frame and the source image `Transform` is copied, preserving
 displayed width/height, center, rotation, and horizontal/vertical mirrors.
 Parent/depth/hole provenance is retained in metadata. Outer contours and holes

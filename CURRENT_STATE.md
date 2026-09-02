@@ -7,6 +7,34 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-02**
 
+## Final feature integration cleanup
+
+The authoritative independent Trace hole-area implementation, Camera Trace
+Outer silhouette mode, and raster-native primitive recovery are consolidated on
+`integration/final-feature-cleanup` from `origin/main` revision
+`e0b0223d62d845c3297c3702bce75bf116f8658e`. Conflict reconciliation preserves
+cooperative cancellation, independent inclusive object/hole limits, protected
+background semantics, Full-detail and exterior-only topology, primitive
+recovery diagnostics/fallback, native fitting, and the newer guided calibration,
+Pi execution-policy, shutdown, Air Assist, STOP, profile, updater, and DEV TEST
+behavior already on main.
+
+Focused combined verification passes **319 Trace/raster/native/primitive tests**,
+**210 calibration, setup, remediation, honeycomb, and profile tests**, and **147
+Pi policy/execution, Air Assist, shutdown, STOP, updater, and identity tests**.
+The complete Windows four-worker suite passes **3,416 tests** with **15 expected
+platform or privilege skips**. Repository Ruff, `compileall -q laser_aligner`,
+and `git diff --check` pass.
+
+`feature/s1pro-z-homing-safety` remains intentionally deferred. Its isolated
+implementation and focused tests are complete, but the branch predates Pi-owned
+secondary Air Assist and creates a separate persistent serial owner for the same
+Creality controller. Current architecture requires Z and Air Assist to share the
+single `CrealityControllerOwner`; merging the branch unchanged would create
+competing command paths. The branch is retained until that shared-owner design
+and its focused concurrency, STOP, failure, and recovery tests are implemented.
+No new physical hardware verification is claimed by this integration.
+
 ## Active Python 3.10 post-merge compatibility correction
 
 Post-merge Windows CI run `33586179523` failed only because the test subprocess
@@ -144,6 +172,162 @@ profile with camera autostart disabled and every saved machine's
 output, job streaming, or physical hardware behavior was exercised or verified;
 the Pi was unavailable, and no connection was attempted. These identity and
 launcher controls are not safety-rated.
+## Active Camera Trace Full detail / Outer silhouette selection
+
+Camera Trace now exposes **Trace detail** immediately above **Purpose**, with
+**Full detail** as the backward-compatible default and **Outer silhouette** as
+an explicit operator choice. Full detail retains the synchronized hierarchy
+behavior: an exterior plus holes, islands, and deeper descendants form one
+indivisible review candidate. Outer silhouette emits only the true external
+closed boundary of each disconnected retained foreground root. It does not use
+a convex hull, bounding box, morphological closing, gap inference, or component
+merging, so an exterior-connected notch or U-shaped opening remains part of the
+output boundary and disconnected roots remain separate candidates.
+
+The source-neutral `RasterContourOutput.OUTER_ONLY` route is strengthened into
+a genuine exterior-only pipeline. Preview, exact, and native-forest extraction
+use bounded `RETR_EXTERNAL` work when Outer silhouette is requested, rather than
+building a `RETR_TREE` and discarding children afterward. Ignored internal
+contours therefore do not consume contour, raw-point, fitted-segment, fitting,
+or topology budgets and cannot veto a valid exterior. The exterior itself still
+passes the unchanged closedness, finite-coordinate, work-area, source-edge,
+fitting-tolerance, ambiguity, and native-complexity checks. Full detail continues
+to use its existing `RETR_TREE` hierarchy and limits.
+
+The exact cleaned binary **Mask** remains immutable evidence after eligibility,
+thresholding, foreground-component cleanup, and independent hole-area cleanup.
+Trace detail changes only which Mask boundaries become vector geometry. Surviving
+enclosed holes may therefore remain visible in Mask while Outer silhouette's
+candidate overlay and native result contain one exterior subpath. The hole Min/
+Max settings are retained and never overwritten. Object Min/Max area and Min
+width/height retain their numeric values; Full detail's post-fit area remains its
+legacy even-odd candidate area, while Outer silhouette's post-fit area describes
+the emitted exterior silhouette.
+
+Manual and bounded-Auto **By contrast** support both detail modes through the
+shared raster vectorizer. Top-level Auto propagates Outer silhouette through its
+dark-raster, light-raster, and Color attempts. Explicit/Auto Color uses external
+root extraction in Outer mode and deliberately skips washer recognition because
+that classifier enumerates child contours; thresholding and color matching are
+unchanged. Grid keeps its specialized Full-detail behavior: the Trace-detail
+control is disabled while Grid is active, its effective option is Full, and the
+operator's saved selection is restored when Grid is disabled.
+
+Trace detail is a QSettings preference, not a project-schema field. Missing or
+invalid stored preferences resolve to Full detail. Only objects created from an
+Outer silhouette result receive `trace_detail = outer_silhouette` provenance;
+legacy Full/Grid object metadata remains byte-for-byte compatible. Extraction,
+root processing, native fitting, result publication, and Create retain cooperative
+cancellation, including rejection of late cancelled Outer results. Diagnostics
+are bounded and record the detail mode, external/output root counts, area basis,
+whether child contours were enumerated, and the exterior/root-filter/work-area/
+complexity failure stage without inventing ignored-child failures.
+
+Windows automated verification passes **397 non-overlapping focused Trace,
+silhouette, hierarchy, Mask, preference, overlay, Create, and cancellation tests**
+(264 UI/Trace tests in **231.22 seconds** plus 133 core raster tests in **23.36
+seconds**). The bounded desktop-shutdown regression passes **514 tests** with
+**2 expected Windows skips** in **61.60 seconds**. The complete four-worker
+repository suite passes **3,253 tests** with **15 expected platform/privilege
+skips** in **148.36 seconds**. These are deterministic Qt-free/offscreen tests,
+not physical camera, controller, motion, or laser validation.
+
+Windows development packaging completed from verified implementation commit
+`dcef18e31ab099d6c4b402eea70b58d64b284394` as version `0.6.161` using
+Python 3.14.4, OpenCV 4.14.0, PySide6 6.11.2, PyInstaller 6.22.2, and Inno
+Setup 6.7.3. The frozen `build-info.json` records that exact revision. The
+private machine-seeded `E3-Trace-Outer-Silhouette-Setup.exe` installer is
+250,696,523 bytes with SHA-256
+`B0DE921A1E16A4EC9298BD1AD3EFD37E5DA220F7A68AC904559437DC8AAB9A50`.
+Four unrelated Codex-runtime Poppler DLLs discovered through the build host were
+identified by their recorded source paths, removed from the generated bundle,
+and excluded by recompiling the installer; the final bundle contains no
+`icu*.dll`, `libcrypto-3-x64.dll`, or `libssl-3-x64.dll`. A hidden launch with
+isolated temporary user state remained alive for the full 12-second smoke window
+without early failure, after which the test process and temporary state were
+removed. This is a frozen launch-only smoke, not an interactive GUI, physical
+camera, controller, or Close-timing test.
+
+Physical validation remains pending. The first fresh reflective-wrench A/B run
+should use **By contrast**, **Auto threshold** (the recent physical scene chose
+approximately 195), **Minimum area 50 mm²**, **Maximum area 8,000 mm²**,
+**Minimum hole area 500 mm²**, **Maximum hole area No maximum**, and **Outer
+silhouette**, then compare Full detail on the same fresh capture. Expected Outer
+behavior is the same cleaned Mask evidence, one separately numbered wrench
+candidate following the external profile, no enclosed-reflection subpaths, and
+a usable exterior native vector. Software controls are not safety-rated.
+## Active independent Camera Trace hole-area filters
+
+Non-grid Camera Trace Contrast and Auto's dark/light raster attempts now separate
+foreground-object review from enclosed-hole cleanup. The Trace Object filters are
+ordered **Minimum area**, **Maximum area**, **Minimum hole area**, **Maximum hole
+area**, **Minimum width**, and **Minimum height**, all area values use mm², and the
+hole tooltips describe enclosed holes rather than object size. Hole controls are
+available for non-grid Auto/Contrast and inactive for Grid and explicit Color.
+
+Minimum object area first removes source-resolution connected foreground
+components, including nested foreground islands. Maximum object area later
+rejects complete post-vector root candidates above its inclusive limit.
+Independently, enclosed background components below the minimum hole area or
+above the optional maximum hole area are filled; holes exactly on either bound
+or between them are preserved. `None` represents no maximum. The external
+border-connected background is never filled. Background connected to hard-
+ineligible pixels is equally protected and excluded from filterable-hole counts.
+Cleanup changes the exact production Mask before detail-selected contour
+extraction and native fitting. Full detail uses the established 4× `RETR_TREE`
+hierarchy, so preserved holes retain normal descendants and deliberately filled
+holes may absorb nested foreground islands into the parent. Outer silhouette
+uses only external contours from that same cleaned Mask. Maximum hole area never
+acts as a root/object filter.
+
+`geometry.foreground.clean_foreground_components` remains backward compatible
+while accepting independent minimum and maximum hole areas. Its detailed companion
+returns bounded counts for raw, preserved, below-minimum-filled, and above-maximum-
+filled holes. `RasterVectorizationOptions`, mask previews, quick/exact pixel and
+asset results, metadata, Camera Trace results, and Auto raster-attempt diagnostics
+carry the effective physical range and aggregate counts without retaining a
+per-hole list. Existing source-neutral callers that omit the new limits still use
+minimum feature area as minimum hole area and no maximum, preserving imported-
+raster defaults.
+
+Legacy Trace options and QSettings with no hole fields migrate once: minimum hole
+area copies the saved minimum object area and maximum hole area becomes **No
+maximum**. Persisted values are explicit thereafter, so later object-area edits do
+not recouple them. Validation rejects non-finite, negative, inverted, or out-of-
+widget-bound ranges rather than swapping or clamping them.
+
+Windows Python 3.12.13 verification on the synchronized integration worktree
+passes **349 focused Trace tests** in **67.07 seconds** and **512 bounded-shutdown
+tests** with **2 expected Windows skips** in **51.95 seconds**. The complete
+four-worker repository suite passes **3,225 tests** with **15 expected
+platform/privilege skips** in **193.41 seconds**. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass; the diff
+check reports only Git's existing LF-to-CRLF notices. Focused regressions prove
+that cancellation during source-mask hole cleanup or later native fitting
+publishes no accepted Trace result, and that both the controller and main-window
+guards prevent a late cancelled result from publishing or creating project
+geometry. This is deterministic Qt-free/offscreen automated verification, not an
+interactive camera test.
+
+Windows development packaging completed from synchronized implementation commit
+`0f237489ac73823c08cbe3c5ae92b49ed8201dc9` as version `0.6.159`. The frozen
+bundle's `build-info.json` records that exact development revision, the generated
+`E3-Trace-Hole-Area-Setup.exe` installer is 215,121,993 bytes with SHA-256
+`F7159E441CDD40E64C041604F0DCEEA7016788DA4A4CEFBBF9316B5DD2F85B2B`, and the
+bundle contains no `icu*.dll` files. A hidden launch with isolated temporary user
+state remained alive for the full 12-second smoke window without early failure.
+Hidden mode exposed no main-window handle, so the process was stopped after this
+launch-only smoke; this is not an interactive GUI or frozen Close-timing test.
+
+This feature does not change primitive recovery, Straighten, camera
+normalization, exposed-bed suppression, the Auto threshold-selection algorithm,
+Grid/Color detection, project schema, planning, motion, Air Assist, Pi execution,
+homing, arming, or laser-output authority. The synthetic mask and offscreen tests
+do not constitute physical validation; the reflective wrench still requires a
+fresh recorded camera run. The recommended first settings are **Minimum area 50
+mm²**, **Maximum area 8,000 mm²**, **Minimum hole area 500 mm²**, and **Maximum
+hole area No maximum**.
+Exercise a finite maximum-hole value once before returning it to **No maximum**.
 
 ## Active bounded desktop shutdown correction
 
@@ -401,6 +585,100 @@ and `git diff --check` passed with only Git's existing LF-to-CRLF notices. These
 are automated/simulated checks only. The only new physical evidence is the exact
 FAN2 ON result above; intended OFF and end-to-end lifecycle behavior remain
 pending physical verification.
+
+## Active raster-native geometric primitive recovery
+
+The shared source-neutral native contour fitter now runs a conservative
+primitive-recovery pass after its ordinary constrained line/cubic fit and
+adjacent merging, but before native-frame and authoritative compound-topology
+acceptance. Imported rasters, Camera Trace Contrast and Auto raster strategies,
+and the existing physical-contour adapter used by applicable Color/Grid native
+paths all enter that one stage. It does not rotate, deskew, blur, widen, or
+otherwise preprocess pixels, and it does not change camera normalization,
+eligibility, threshold selection, 4x reconstruction, smoothing, or corner
+classification.
+
+Candidate lines use deterministic robust orthogonal total least squares and keep
+the observed arbitrary angle. Candidate circles use a normalized algebraic
+initialization, bounded robust geometric refinement, and endpoint-constrained
+open-arc refinement. Acceptance checks every ordered point, maximum and
+arc-length-weighted RMS residual, signed bias, support length and sample count,
+endpoint movement, independent-half/subsample stability, monotonic order,
+angular sweep and sample gap, radius, and source-normal pixel pitch. The
+primitive maximum, RMS, endpoint, and canonical-representation budgets are the
+stricter of fixed source-pixel fractions and the existing native-fit tolerance;
+a large user tolerance therefore cannot erase resolved curvature. Strong
+grayscale/alpha threshold crossings can support primitive validation even where
+the existing source-edge output remains locked at a hard corner or persistent
+straight run.
+
+Each exact source-index partition tries a line, then a conceptual circular arc,
+then retains its original fitted line/cubic objects. A primitive may not expand
+its own partition or increase the complete contour's segment count. Hard-corner
+partitions are preserved; nearby model intersections are accepted only inside
+both endpoint allowances, nearly parallel line intersections are rejected, and
+smooth joins require at most three degrees of tangent disagreement. Ambiguous
+smooth partitions have one bounded, source-backed repartition/refit attempt.
+There is no OCR, font/glyph/logo/template inference and no parallel-edge,
+constant-width, rectangle, or symmetry regularization.
+
+Accepted conceptual arcs are encoded as mathematically derived canonical cubic
+Bézier spans of at most 90 degrees, subdivided further until exact radial-extrema
+error satisfies the representation budget, with a 64-span ceiling. Persisted
+geometry remains `NativePathGeometry` version 1 with only `PathLineSegment` and
+`PathCubicSegment`; preview, G0/G1 planning, guarded G-code, and post-Create
+Straighten require no primitive-specific path. If the complete recovered result
+fails frame, authoritative native topology, or rasterized hierarchy validation,
+the source-identical contour set is refitted once with recovery disabled.
+Complexity failures remain fatal. The non-persistent `recover_primitives=False`
+argument exists only for development comparisons and fallback; there is no new
+Trace-panel setting.
+
+Work is bounded by the existing one-million raw-point limit, 64 hard-corner
+partitions, 256 hypotheses per contour, six robust iterations, 4,096 nearby
+samples per smooth-boundary search direction, 64 canonical spans per conceptual
+arc, and the unchanged authoritative topology comparison limit. Compact result
+and Camera diagnostics report baseline/final segment counts, accepted and
+rejected primitive counts, recovered lengths, canonical/freeform cubic counts,
+worst final raw/evidence maximum and RMS residuals, endpoint movement,
+source-pixel scale, and a separate opt-in primitive-recovery timing stage; no
+point arrays or primitive
+semantics are persisted.
+
+Focused primitive, downstream, curve-fidelity, and Camera routing verification
+passes **83 tests** in **37.11 seconds**. The broader shared raster/native,
+Camera normalization/eligibility, Object Trace, and diagnostic gate passes
+**275 tests** in **154.28 seconds** with four workers. The complete Windows
+four-worker suite passes **2,980 tests** with **14 expected platform/privilege
+skips** in **253.53 seconds**. Repository Ruff,
+`python -m compileall -q laser_aligner`, and `git diff --check` pass.
+
+One uncontended Windows benchmark used an AMD Ryzen 7 8840HS, Python 3.14.4,
+NumPy 2.5.2, and OpenCV 4.14.0. Each case prepared one immutable source and exact
+4x mask, warmed both modes, then took the median of three alternating
+recovery-disabled/enabled runs in one process. Preparation was outside the wall
+median; stage values are independently measured inclusive medians and therefore
+are not additive. Times below are milliseconds; `D/E` means disabled/enabled.
+
+| Deterministic case | Segments | Primitive D/E | Topology D/E | Native fit D/E | Wall D/E |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Small Coleman E | 72 -> 54 | 0.027 / 7.276 | 3.686 / 2.967 | 16.626 / 23.593 | 28.324 / 34.572 |
+| Coleman stencil + underline | 244 -> 164 | 0.776 / 103.996 | 33.064 / 31.242 | 1,374.106 / 1,637.644 | 1,654.530 / 1,957.330 |
+| Large annular C | 84 -> 47 | 0.088 / 500.434 | 31.004 / 24.537 | 25,794.285 / 27,384.259 | 26,087.073 / 27,658.021 |
+| 100-component label | 3,600 -> 1,200 | 3.845 / 1,331.226 | 173.132 / 55.042 | 2,225.415 / 3,671.450 | 4,213.493 / 5,640.069 |
+| Medium Camera native fit | 81 -> 49 | 0.239 / 161.652 | 14.373 / 24.346 | 1,900.397 / 2,074.705 | 2,061.962 / 2,310.248 |
+| 2x Camera native fit | 392 -> 378 | 0.357 / 206.029 | 25.739 / 51.629 | 3,155.771 / 3,301.498 | 3,410.254 / 3,625.588 |
+| Maximum-area 2,048-square import | 134 -> 134 | 0.134 / 31.674 | 44.062 / 40.731 | 31,562.450 / 32,248.796 | 32,011.144 / 32,750.669 |
+
+The representative Camera wall overhead was **12.0%** at medium resolution and
+**6.3%** at 2x. The large C and exact maximum-area case were already dominated
+by baseline fitting; recovery added **6.0%** and **2.3%** respectively. The
+100-component fixture is the largest relative recovery cost at **33.9%** while
+removing 2,400 segments; it remains deterministic at 12 hypotheses per contour.
+These are synthetic/software measurements, not real-camera or physical-geometry
+evidence. A saved physical Coleman capture still needs an operator comparison of
+recovery enabled/disabled, broad-C and underline/stem fidelity, small PATENTS
+detail, post-Create Straighten composition, final Preview, and guarded output.
 
 ## Active post-Create Camera Trace orientation review / Straighten
 
@@ -714,9 +992,11 @@ can switch the frozen camera display among the corrected **Camera**, exact
 source-resolution production **Exposed bed** mask, exact source-resolution
 **Eligible** mask, normalized grayscale, and exact production **Mask**. Exposed
 bed is the same immutable array inverted to form material eligibility, not a UI
-approximation. Raster Mask is the immutable 4× binary workspace passed to `RETR_TREE`,
-not a reconstructed UI approximation. Its display uses its actual 4× pixel scale
-so all four images occupy the same physical area. Request
+approximation. Raster Mask is the immutable 4× binary workspace passed to the
+selected contour extractor (`RETR_TREE` for Full detail or external-only
+extraction for Outer silhouette), not a reconstructed UI approximation. Its
+display uses its actual 4× pixel scale so all four images occupy the same
+physical area. Request
 IDs and the camera-review signature reject stale preview, completion, and failure
 callbacks. If fitting fails after mask preparation, the camera hold and diagnostic
 views remain available until Clear or the next detection; a failure before a
@@ -752,10 +1032,11 @@ converted to eligibility-normalized raster artwork and sent through the same
 production pipeline as an imported raster:
 source-neutral immutable RGBA preparation, Otsu or manual thresholding with
 explicit polarity, physical connected-component and pinhole cleanup, 4× mask
-reconstruction, bounded `RETR_TREE` extraction, physical contour mapping,
-source-edge refinement, and the authoritative native line/cubic fitter plus all
-topology checks. Each root foreground contour and all descendants form one
-review candidate. Minimum area remains the raster cleanup scale. A conservative
+reconstruction, bounded detail-selected contour extraction, physical contour
+mapping, source-edge refinement, and the authoritative native line/cubic fitter
+plus all topology checks. In Full detail each root foreground contour and all
+descendants form one review candidate; Outer silhouette passes only each
+external root. Minimum area remains the raster cleanup scale. A conservative
 pre-fit root filter can omit a complete indivisible tree only when its threshold
 bounds and the fitter's full displacement allowance prove that maximum area or
 minimum width/height cannot pass; near-limit, smoothed, and ambiguous trees stay

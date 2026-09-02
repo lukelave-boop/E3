@@ -36,7 +36,12 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
 1. Home and park at the saved camera pose. Keep the sheet or stock flat and use
    even lighting.
 2. Open **Trace** in the Inspector.
-3. Choose **Purpose**:
+3. In **Vector output**, choose **Trace detail**. **Full detail** is the
+   backward-compatible default and preserves exteriors, holes, islands, and
+   nested topology. **Outer silhouette** fits only each retained object's
+   exterior boundary; it does not merge disconnected objects, close open gaps,
+   make a convex hull, or remove exterior-connected notches. Then choose
+   **Purpose**:
    - **Cut geometry** creates ordinary project objects that may be assigned to
      output layers;
    - **Stock boundary (layout only)** creates exactly one locked construction
@@ -57,8 +62,18 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    pick**, then click the center of the object in the corrected camera image.
    The button reads **Sampling…** while the frame is read and the swatch updates
    when sampling succeeds. A failure is shown directly in the Trace inspector.
-5. Set the minimum/maximum area and minimum dimensions so dust, sheet edges,
-   and unrelated artwork are excluded.
+5. Set **Minimum area** / **Maximum area** and the minimum dimensions so dust,
+   sheet edges, and unrelated foreground objects are excluded. For non-grid
+   Auto and By contrast, set **Minimum hole area** / **Maximum hole area**
+   independently: enclosed holes below the minimum or above the optional maximum
+   are filled, while holes on either boundary or between them are preserved.
+   **No maximum** leaves every hole at or above the minimum eligible. These hole
+   controls do not change object-size review. They always affect the cleaned
+   Mask; Outer silhouette independently ignores any surviving enclosed contours
+   when vector geometry is created and does not overwrite the saved hole range.
+   The entered object limits are never rewritten between modes. Full detail's
+   post-vector area is its existing even-odd foreground area; Outer silhouette's
+   post-vector area is the exterior silhouette it will create.
 6. For a repeated label sheet, leave **Use grid** and **Make grid cells
    identical** enabled. Enable **Infer gaps** only when you want suggested
    positions for missing or obscured cells. Disable grid inference when tracing
@@ -77,9 +92,13 @@ or one locked, non-cutting **Stock boundary** used for camera-aligned layout.
    becomes available and defaults to **Mask**. Switch among **Camera**,
    **Eligible**, **Normalized**, and **Mask** to inspect the corrected frame, the
    exact source-resolution hard-ROI/reference eligibility, the threshold input,
-   and the immutable exact 4× production contour mask used by `RETR_TREE`. The
+   and the immutable exact 4× production contour mask used for extraction. The
    desktop displays the 4× mask at 4× pixels/mm, so every mode covers the same
-   physical area without resizing production bytes. A provisional Auto message
+   physical area without resizing production bytes. Full detail extracts its
+   complete contour tree; Outer silhouette extracts only external roots. The Mask
+   itself is not filled or simplified to imitate the selected output, so its
+   surviving internal black/white boundaries need not appear in an Outer
+   silhouette candidate overlay. A provisional Auto message
    says evaluation is still running; only the selected-strategy callback says
    production/native fitting completed. Changing the selector is display-only.
 9. Review the numbered overlay and the **Geometry** column after fitting
@@ -216,9 +235,17 @@ geometry replacement.
 
 ## Classification and vector output choices
 
-Trace records a semantic classification separately from its vector-output
-choice. Direct high-confidence silhouettes may be classified as circle,
-ellipse, triangle, regular polygon, rounded rectangle, washer, or freeform contour.
+**Trace detail** selects topology before **Geometry output** selects its
+representation. Full detail preserves each root's complete exterior/hole/island
+hierarchy. Outer silhouette passes only each disconnected root's true external
+closed boundary to filtering, authoritative native fitting, review, and Create.
+It keeps real U-shapes, open channels, and concave notches; it performs no hull,
+closing, gap inference, or component merge. Grid retains its specialized
+Full-detail behavior and disables this choice.
+
+Trace records a semantic classification separately from those choices. Direct
+high-confidence silhouettes may be classified as circle, ellipse, triangle,
+regular polygon, rounded rectangle, washer, or freeform contour.
 Classification is quantitative and ambiguous outlines remain freeform. This
 classification can improve template matching; it is not itself a request to
 change how the observed pixels are reconstructed.
@@ -227,8 +254,11 @@ Washer recognition is deliberately strict. It considers only parent/child
 contours preserved by filled-region masks, fits the inner and outer circles
 independently, and checks circular residuals, circularity, containment,
 diameter ratio, and center offset. A passing annulus becomes one logical Trace
-object whose green proposed vector shows both contours. Offset or irregular
-nested contours are not forced into washers.
+object whose Full-detail green proposed vector shows both contours. Outer
+silhouette bypasses child-based washer recognition entirely and treats the
+external root as its candidate, so an ignored inner contour cannot consume work
+or veto that output. Offset or irregular nested contours are not forced into
+washers.
 
 - **Best-fit analytic shapes** uses a recognized circle, ellipse, triangle,
   regular polygon, washer, or rounded rectangle when its quantitative fit
@@ -242,8 +272,11 @@ nested contours are not forced into washers.
   vectorizer; its conditional Color attempt and explicit Color use the same
   authoritative physical fitter through the contour-tree adapter. Grid routes
   retain their specialized output choices. Independent candidates remain
-  independent, and each candidate retains its complete outer/hole/island
-  hierarchy.
+  independent. Full detail retains each candidate's complete outer/hole/island
+  hierarchy. After the baseline fit, the shared source-neutral primitive stage
+  may consolidate compatible spans into arbitrary-angle lines or conceptual
+  circular arcs. Accepted arcs remain canonical cubic Bézier segments in the
+  ordinary native path. Outer silhouette supplies one exterior subpath per root.
 - **Simplified contours** follows the detected pixel boundary and removes
   points within the **Simplify tolerance**. A lower tolerance preserves more
   edge detail. This is polygon simplification; it does not turn an irregular
@@ -254,17 +287,34 @@ nested contours are not forced into washers.
 
 For non-grid Contrast, E3 first applies the hard physical ROI, suppresses
 confidently matched exposed bed, and removes low-frequency photographic
-background variation from eligible material. It then sends that normalized raster through the imported-raster pixel
-pipeline itself: bounded Auto or manual threshold and polarity, physical component and
-pinhole cleanup, 4× mask reconstruction, `RETR_TREE`, physical mapping,
+background variation from eligible material. It then sends that normalized
+raster through the imported-raster pixel pipeline itself: bounded Auto or manual
+threshold and polarity, physical component and pinhole cleanup, 4× mask
+reconstruction, detail-selected contour extraction, physical mapping,
 source-edge refinement, native fitting, and topology validation. Each root
-foreground contour plus every descendant is one candidate. The green outline is
+foreground contour is one candidate: Full detail includes its descendants,
+whereas Outer silhouette uses bounded external extraction and never presents
+children to hierarchy limits or fitting. The green outline is
 the exact fitted geometry that will be created: real straight runs remain lines
 and curved runs use constrained cubic Béziers. No camera-specific outline
 finder, second contour extraction, or refit occurs afterward.
 
+Primitive recovery is a conservative post-fit geometry step, not image
+preprocessing. It uses the same ordered source-edge samples, source-pixel pitch,
+and fit tolerance for imported rasters and Camera Trace adapters. It performs no
+OCR, font, glyph, logo, or template recognition. It does not
+rotate or deskew camera pixels and does not change normalization, threshold
+selection, mask reconstruction, source-edge refinement, smoothing, hard-corner
+classification, or contour hierarchy. Each exact candidate partition tries a
+line, then a circle, and otherwise retains its original fitted line/cubic pieces;
+recovery never increases that partition or the complete contour's segment count.
+It does not reconcile parallel edges or impose constant width. Unsupported line or circle hypotheses,
+excessive endpoint movement, unsafe joins, and any failed frame or topology
+composition retain the original fitted line/cubic pieces.
+
 Auto's conditional Color, explicit Color, and grid routes fit chosen detector
-masks through the physical contour-tree adapter. Analytic circle, ellipse,
+masks through the detail-aware physical contour-tree adapter. Grid remains
+specialized Full detail. Analytic circle, ellipse,
 rounded-rectangle, and washer evidence keeps its semantic path when analytic
 output is chosen on the explicit Color and grid routes.
 
@@ -460,12 +510,20 @@ inference behavior.
   Automatic mode selects from the bounded, image-derived family on the selected
   local-contrast raster; manual mode applies the selected 0–255 value to that
   same raster. Polarity chooses the
-  symmetric dark or light response. Minimum area controls physical raster
-  cleanup, including tiny islands and pinholes. Complete independent root trees
-  that already violate maximum area or minimum dimensions are rejected before
-  expensive native fitting without changing their mask or splitting their
-  holes/islands. A later fitting or topology failure omits only that complete
-  root and leaves verified peers available for review.
+  symmetric dark or light response. Minimum object area removes small foreground
+  components. The independent minimum/maximum hole range fills only enclosed
+  background components outside its inclusive bounds; border-connected external
+  background is never filled. A background component touching hard-ineligible
+  pixels is protected in the same way and is not counted as a filterable hole.
+  This topology change is present in the exact 4× production Mask before contour
+  extraction and native fitting. A preserved hole
+  retains its islands and descendants normally; filling a filtered hole can
+  intentionally absorb those nested foreground islands into the parent.
+  Complete independent root trees that already violate maximum object area or
+  minimum dimensions are rejected before expensive native fitting without
+  changing their remaining mask or splitting their holes/islands. A later fitting
+  or topology failure omits only that complete root and leaves verified peers
+  available for review.
 - **By contrast**, with **Use grid** on, retains the specialized object/grid
   detector. It evaluates dark and light filled-region hypotheses from global
   Otsu, illumination-corrected, adaptive, signed-local, and closed-outline
@@ -533,7 +591,8 @@ not a second image-processing path:
 - **Normalized** is the exact polarity-specific grayscale delivered to the
   shared threshold stage for raster Contrast/Auto. For Color it is grayscale
   context; the chromatic production route remains unchanged.
-- **Mask** is the exact 4× contour mask consumed by production `RETR_TREE`,
+- **Mask** is the exact 4× contour mask consumed by the selected production
+  `RETR_TREE` full hierarchy or `RETR_EXTERNAL` exterior-only extraction,
   including the production threshold, source-resolution component cleanup, and
   4× reconstruction.
 
@@ -586,11 +645,20 @@ persisted and does not alter scoring or validation. The request boundary records
 `grayscale_preparation`, `background_estimation`,
 `normalization`, and
 `camera_normalization_total`. Shared raster timing separately records mask
-generation/preparation, threshold, component cleanup, 4× preparation, contour extraction,
-cheap root-review filtering, native fitting, and authoritative topology and
-raster-hierarchy validation. Manual Contrast retains one raster-vectorization
-snapshot; Auto retains per-dark/per-light snapshots, the common normalization
-snapshot, its normalization key, and `background_estimate_count = 1`.
+generation/preparation, threshold, component cleanup, 4× preparation, contour
+extraction, cheap root-review filtering, native fitting, primitive recovery, and authoritative
+topology and raster-hierarchy validation. Compact primitive diagnostics include
+recovered and rejected line/arc hypotheses, recovered lengths, canonical
+arc-cubic and freeform-cubic counts, maximum point and worst accepted-primitive
+RMS residuals, maximum endpoint adjustment, and source-pixel scale. The separate
+timing snapshot records recovery time. They are bounded, non-persistent
+diagnostics and do not identify a new project segment type.
+Manual Contrast retains one raster-vectorization snapshot; Auto retains
+per-dark/per-light snapshots, the common normalization snapshot, its
+normalization key, and `background_estimate_count = 1`.
+Production raster diagnostics also retain only bounded hole-cleanup aggregates:
+raw, preserved, filled-below-minimum, and filled-above-maximum counts plus the
+effective physical limits. They do not retain a per-hole list.
 
 ### Degenerate 4× contours
 
@@ -612,13 +680,15 @@ real holes, gaps, cleanup decisions, and transition-band edge localization are
 preserved.
 
 The shared pixel pipeline now prunes only contours with fewer than three
-distinct trace points or zero trace-pixel polygon area after `RETR_TREE`
-extraction. Positive-area features remain eligible. Removing a degenerate leaf
-rebuilds all `next`, `previous`, `first_child`, and `parent` links in original
-sibling order. If a degenerate contour has a legitimate descendant, its complete
-root tree is rejected rather than reparenting the descendant and changing its
-even-odd depth. Imported raster Quick Preview, exact imported vectorization,
-manual camera Contrast, and Auto raster attempts share this behavior.
+distinct trace points or zero trace-pixel polygon area after the selected
+extraction. Positive-area features remain eligible. In Full detail, removing a
+degenerate leaf rebuilds all `next`, `previous`, `first_child`, and `parent`
+links in original sibling order. If a degenerate contour has a legitimate
+descendant, its complete root tree is rejected rather than reparenting the
+descendant and changing its even-odd depth. Outer silhouette never extracts that
+descendant; only a degenerate exterior can reject its root. Imported raster Quick
+Preview, exact imported vectorization, manual camera Contrast, and Auto raster
+attempts share this behavior.
 
 ## Regular-grid inference
 
@@ -768,6 +838,17 @@ strategies use the shared raster coordinate contract; Auto Color, explicit
 Color, and grid paths retain their camera-mask physical adapter and corrected-
 pixel resolution floor.
 
+Post-fit primitive promotion is subject to that same accuracy floor. Robust
+total-least-squares lines may have any angle, and conceptual circular arcs must
+pass maximum and RMS radial error plus endpoint and join limits derived from both
+source-pixel spacing and the existing fit tolerance. Hard-corner partitions
+remain protected; an observed corner may move only to a nearby model intersection
+inside both endpoint allowances. Failed hypotheses and failed native topology
+checks fall back to the already validated baseline pieces. Canonical cubic
+storage preserves the native schema, and Straighten continues to analyze the
+resulting ordinary project lines and cubics without consulting raster pixels or
+primitive-recovery provenance.
+
 The desktop registers the center of each displayed camera pixel to the same
 OpenCV/BedMapper coordinate used by the detector. At very high zoom, a smooth
 curve will still cross different portions of the staircase-shaped edge pixels;
@@ -788,3 +869,15 @@ synthetic. The 2026-08-30 operator-reported Coleman run is useful scene evidence
 but a recorded controller/firmware/configuration run with measured placement,
 shadow, glare, focus, material height, and exposure results is still required for
 formal physical acceptance. Straighten requires its own physical review.
+
+The first reflective-wrench validation of Outer silhouette should reuse one fresh
+scene for an A/B review. Start with **By contrast**, automatic threshold (the
+recent scene selected about 195), **Minimum area 50 mm²**, **Maximum area 8,000
+mm²**, **Minimum hole area 500 mm²**, **Maximum hole area No maximum**, and
+**Trace detail Outer silhouette**. Confirm that the Mask remains faithful to the
+cleaned photographic evidence while one numbered exterior candidate follows the
+wrench, retains any exterior-connected notch, and creates one exterior subpath
+without surviving reflection-hole subpaths. Then switch only Trace detail to
+Full detail, detect again on the same fresh capture, and compare. Record the
+camera, controller, firmware, configuration, and result before calling this
+physically verified; these software controls are not safety-rated.

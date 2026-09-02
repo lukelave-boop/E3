@@ -5670,6 +5670,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
             return
         options = self._trace_result.get("options") or {}
+        trace_detail = str(options.get("trace_detail", "full")).strip().lower()
+        if trace_detail not in {"full", "outer_silhouette"}:
+            trace_detail = "full"
         grid_result = bool(
             options.get("regular_grid", False)
             or self._trace_result.get("grid")
@@ -5696,6 +5699,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             )
             if purpose == "stock":
                 objects = [mark_stock_boundary(objects[0])]
+            if trace_detail == "outer_silhouette":
+                for item in objects:
+                    item.metadata["trace_detail"] = trace_detail
             if orientation_eligible and all(
                 item.kind in {ObjectKind.PATH, ObjectKind.POLYGON}
                 for item in objects

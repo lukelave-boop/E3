@@ -24,7 +24,10 @@ from ..geometry.polygon import (
     convex_polygon_violation_normalized_mm,
     normalize_convex_polygon,
 )
-from ..project.native_contour_fit import fit_physical_contours_to_native_path
+from ..project.native_contour_fit import (
+    PrimitiveRecoveryMetrics,
+    fit_physical_contours_to_native_path,
+)
 from ..project.path_geometry import (
     NativePathGeometry,
     PathAffineTransform,
@@ -41,6 +44,7 @@ from ..project.raster_vectorize import (
     PixelVectorizationSource,
     RasterContourOutput,
     RasterDetectionMode,
+    RasterHoleCleanupDiagnostics,
     RasterVectorizationCancelledError,
     RasterVectorizationError,
     RasterVectorizationOptions,
@@ -62,6 +66,7 @@ from .camera_trace_eligibility import (
 
 TRACE_MODES = {"auto", "color", "contrast"}
 OUTPUT_MODES = {"rounded", "native", "smoothed", "exact"}
+TRACE_DETAILS = {"full", "outer_silhouette"}
 BORDER_OFFSET_MODES = {"uniform", "custom"}
 NORMALIZE_ANCHORS = {"center", "top"}
 CONTRAST_THRESHOLD_MODES = {"auto", "manual"}
@@ -92,6 +97,10 @@ def _trace_cancel_kwargs() -> dict[str, Callable[[], bool]]:
         if _TRACE_CANCEL_CHECK.get() is None
         else {"cancel_check": _trace_cancel_requested}
     )
+
+
+MAXIMUM_TRACE_MINIMUM_AREA_MM2 = 100_000.0
+MAXIMUM_TRACE_AREA_MM2 = 1_000_000.0
 
 
 def _finite_option(value: Any, label: str) -> float:
@@ -146,6 +155,9 @@ class TraceOptions:
     border_offset_left_mm: float = 0.0
     smoothing_mm: float = 0.25
     native_fitting_tolerance_mm: float = 0.10
+    min_hole_area_mm2: float | None = None
+    max_hole_area_mm2: float | None = None
+    trace_detail: str = "full"
 
     def __post_init__(self) -> None:
         self.detection_mode = str(self.detection_mode).lower()
@@ -179,14 +191,42 @@ class TraceOptions:
             raise ValueError("contrast_threshold must be an integer from 0 through 255")
         if type(self.contrast_invert) is not bool:
             raise ValueError("contrast_invert must be a JSON boolean")
-        self.min_area_mm2 = max(
-            0.01,
-            _finite_option(self.min_area_mm2, "min_area_mm2"),
+        self.min_area_mm2 = _finite_option(self.min_area_mm2, "min_area_mm2")
+        if not 0.0 < self.min_area_mm2 <= MAXIMUM_TRACE_MINIMUM_AREA_MM2:
+            raise ValueError(
+                "min_area_mm2 must be greater than zero and no greater than "
+                f"{MAXIMUM_TRACE_MINIMUM_AREA_MM2:.0f}"
+            )
+        self.max_area_mm2 = _finite_option(self.max_area_mm2, "max_area_mm2")
+        if not self.min_area_mm2 <= self.max_area_mm2 <= MAXIMUM_TRACE_AREA_MM2:
+            raise ValueError(
+                "max_area_mm2 must be at least min_area_mm2 and no greater than "
+                f"{MAXIMUM_TRACE_AREA_MM2:.0f}"
+            )
+        self.min_hole_area_mm2 = (
+            self.min_area_mm2
+            if self.min_hole_area_mm2 is None
+            else _finite_option(self.min_hole_area_mm2, "min_hole_area_mm2")
         )
-        self.max_area_mm2 = max(
-            self.min_area_mm2,
-            _finite_option(self.max_area_mm2, "max_area_mm2"),
-        )
+        if not 0.0 <= self.min_hole_area_mm2 <= MAXIMUM_TRACE_MINIMUM_AREA_MM2:
+            raise ValueError(
+                "min_hole_area_mm2 must be non-negative and no greater than "
+                f"{MAXIMUM_TRACE_MINIMUM_AREA_MM2:.0f}"
+            )
+        if self.max_hole_area_mm2 is not None:
+            self.max_hole_area_mm2 = _finite_option(
+                self.max_hole_area_mm2,
+                "max_hole_area_mm2",
+            )
+            if not (
+                self.min_hole_area_mm2
+                <= self.max_hole_area_mm2
+                <= MAXIMUM_TRACE_AREA_MM2
+            ):
+                raise ValueError(
+                    "max_hole_area_mm2 must be at least min_hole_area_mm2 and no "
+                    f"greater than {MAXIMUM_TRACE_AREA_MM2:.0f}"
+                )
         self.min_width_mm = max(
             0.1,
             _finite_option(self.min_width_mm, "min_width_mm"),
@@ -219,6 +259,9 @@ class TraceOptions:
         self.output_mode = str(self.output_mode).lower()
         if self.output_mode not in OUTPUT_MODES:
             raise ValueError(f"Unknown output mode: {self.output_mode}")
+        self.trace_detail = str(self.trace_detail).lower()
+        if self.trace_detail not in TRACE_DETAILS:
+            raise ValueError(f"Unknown trace detail: {self.trace_detail}")
         self.border_offset_mode = str(self.border_offset_mode).lower()
         if self.border_offset_mode not in BORDER_OFFSET_MODES:
             raise ValueError(
@@ -330,6 +373,13 @@ class TraceResult:
     output_work_area: dict[str, float] = field(default_factory=dict)
     diagnostics: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        self.diagnostics = {
+            **self.diagnostics,
+            "trace_detail": self.options.trace_detail,
+            "outer_only": self.options.trace_detail == "outer_silhouette",
+        }
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "detected": self.detected,
@@ -354,7 +404,8 @@ class CameraTraceRasterPreview:
     """Authority-free pixels from the exact non-grid Trace raster preparation.
 
     ``foreground_mask`` is the source-resolution result representation;
-    ``contour_mask`` is the exact production workspace passed to RETR_TREE.
+    ``contour_mask`` is the exact production workspace passed to the selected
+    full-hierarchy or exterior-only extraction.
     """
 
     strategy: str
@@ -3265,14 +3316,22 @@ def _fit_trace_candidate_native(
     pixels_per_mm: float,
     contours: tuple[np.ndarray, ...],
     tree: ForegroundContourTree,
+    *,
+    internal_contours_enumerated: bool = True,
 ) -> None:
     """Fit one already-detected contour tree through the shared native fitter."""
 
     _check_trace_cancelled()
     pitch = 1.0 / pixels_per_mm
     offset_px = options.border_offset_mm * pixels_per_mm
+    outer_only = options.trace_detail == "outer_silhouette"
+    contour_indices = (
+        (tree.root_index,) if outer_only else tuple(tree.contour_indices)
+    )
+    contour_depths = (0,) if outer_only else tuple(tree.depths)
+    contour_parents = (None,) if outer_only else tuple(tree.parents)
     source_contours_px: list[np.ndarray] = []
-    for depth, contour_index in zip(tree.depths, tree.contour_indices, strict=True):
+    for depth, contour_index in zip(contour_depths, contour_indices, strict=True):
         _check_trace_cancelled()
         points = np.asarray(contours[contour_index], dtype=np.float64).reshape(-1, 2)
         if abs(offset_px) > 1e-12:
@@ -3320,7 +3379,7 @@ def _fit_trace_candidate_native(
     fit_tolerance = max(options.native_fitting_tolerance_mm, pitch)
     fit = fit_physical_contours_to_native_path(
         physical,
-        list(tree.parents),
+        list(contour_parents),
         source_pixel_spacing_mm=(pitch, pitch),
         fitting_tolerance_mm=fit_tolerance,
         smoothing_mm=0.0,
@@ -3360,6 +3419,7 @@ def _fit_trace_candidate_native(
             "raw_contour_point_count": sum(len(contour) for contour in source_contours_px),
             "fit_input_point_count": fit.raw_point_count,
             "fitted_segment_count": fit.fitted_segment_count,
+            "primitive_recovery": fit.primitive_recovery.to_dict(),
             "native_sequences": [
                 "".join(
                     "L" if segment.__class__.__name__ == "PathLineSegment" else "C"
@@ -3377,7 +3437,26 @@ def _fit_trace_candidate_native(
             "rms_fitting_error_mm": max(
                 contour.rms_fitting_error_mm for contour in fit.contours
             ),
-            "contour_parents": list(tree.parents),
+            "trace_detail": options.trace_detail,
+            "outer_only": outer_only,
+            "area_basis": "detected_outer_contour",
+            "source_root_contour_index": int(tree.root_index),
+            "root_contour_count": 1,
+            "output_contour_count": len(fit.contours),
+            "internal_contours_enumerated": internal_contours_enumerated,
+            "ignored_internal_contour_count": (
+                None
+                if not internal_contours_enumerated
+                else len(tree.contour_indices) - 1
+                if outer_only
+                else 0
+            ),
+            **(
+                {"source_contour_count": len(tree.contour_indices)}
+                if internal_contours_enumerated
+                else {}
+            ),
+            "contour_parents": list(contour_parents),
             "contour_depths": [contour.depth for contour in fit.contours],
             "localized_edge_sample_count": localized_count,
             "maximum_edge_localization_shift_mm": localization_shift_px * pitch,
@@ -3563,9 +3642,15 @@ def _detect_non_grid_contrast_raster(
         threshold=options.contrast_threshold,
         invert=options.contrast_invert,
         minimum_feature_area_mm2=options.min_area_mm2,
+        minimum_hole_area_mm2=options.min_hole_area_mm2,
+        maximum_hole_area_mm2=options.max_hole_area_mm2,
         smoothing_mm=0.0,
         simplification_tolerance_mm=effective_tolerance,
-        contour_output=RasterContourOutput.ALL_CONTOURS,
+        contour_output=(
+            RasterContourOutput.OUTER_ONLY
+            if options.trace_detail == "outer_silhouette"
+            else RasterContourOutput.ALL_CONTOURS
+        ),
     )
     if vectorization_timing is None:
         vectorization_timing = RasterVectorizationTiming()
@@ -3583,9 +3668,15 @@ def _detect_non_grid_contrast_raster(
             threshold=auto_threshold_selection.threshold,
         )
     strategy_name = preview_strategy or f"raster_{polarity}"
+    hole_cleanup: RasterHoleCleanupDiagnostics | None = None
+
+    def hole_cleanup_diagnostics() -> dict[str, object] | None:
+        return None if hole_cleanup is None else hole_cleanup.to_dict()
 
     def trace_metadata() -> dict[str, Any]:
         return {
+            "trace_detail": options.trace_detail,
+            "outer_only": options.trace_detail == "outer_silhouette",
             "camera_raster": _camera_raster_diagnostics(
                 normalization,
                 eligibility,
@@ -3597,6 +3688,7 @@ def _detect_non_grid_contrast_raster(
                 if auto_threshold_selection is None
                 else auto_threshold_selection.to_dict()
             ),
+            "hole_cleanup": hole_cleanup_diagnostics(),
             "timing": {
                 "trace_eligibility": (
                     {}
@@ -3610,7 +3702,9 @@ def _detect_non_grid_contrast_raster(
         }
 
     def mask_ready(mask_preview: PixelVectorizationMaskPreview) -> None:
+        nonlocal hole_cleanup
         _check_trace_cancelled()
+        hole_cleanup = mask_preview.hole_cleanup
         if raster_preview_callback is None:
             return
         raster_preview_callback(
@@ -3689,6 +3783,7 @@ def _detect_non_grid_contrast_raster(
                         "invalid_candidate_count": len(forest_result.failures),
                         "root_tree_count": forest_result.root_tree_count,
                         "minimum_area_mm2": options.min_area_mm2,
+                        "hole_cleanup": hole_cleanup_diagnostics(),
                         "frame_area_mm2": raster_width_mm * raster_height_mm,
                     },
                     **trace_metadata(),
@@ -3734,6 +3829,7 @@ def _detect_non_grid_contrast_raster(
                     "invalid_candidate_count": 0,
                     "root_tree_count": 0,
                     "minimum_area_mm2": options.min_area_mm2,
+                    "hole_cleanup": hole_cleanup_diagnostics(),
                     "frame_area_mm2": raster_width_mm * raster_height_mm,
                 },
                 **trace_metadata(),
@@ -3867,12 +3963,38 @@ def _detect_non_grid_contrast_raster(
                         else len(root_groups)
                     ),
                     "raw_contour_count": len(result.contours),
+                    "trace_detail": options.trace_detail,
+                    "outer_only": options.trace_detail == "outer_silhouette",
+                    "area_basis": (
+                        "outer_silhouette_output"
+                        if options.trace_detail == "outer_silhouette"
+                        else "even_odd_output_contours"
+                    ),
+                    "root_contour_count": 1,
+                    "output_contour_count": len(group_contours),
+                    "internal_contours_enumerated": options.trace_detail == "full",
+                    "ignored_internal_contour_count": (
+                        0 if options.trace_detail == "full" else None
+                    ),
+                    **(
+                        {
+                            "source_contour_count": len(group_contours),
+                        }
+                        if options.trace_detail == "full"
+                        else {}
+                    ),
                     "raw_contour_point_count": sum(
                         contour.raw_point_count for contour in group_contours
                     ),
                     "fitted_segment_count": sum(
                         contour.fitted_segment_count for contour in group_contours
                     ),
+                    "primitive_recovery": PrimitiveRecoveryMetrics.combined(
+                        tuple(
+                            contour.primitive_recovery
+                            for contour in group_contours
+                        )
+                    ).to_dict(),
                     "native_sequences": [
                         "".join(
                             "L" if segment.__class__.__name__ == "PathLineSegment" else "C"
@@ -4053,6 +4175,7 @@ def _detect_non_grid_contrast_raster(
             for item in detections
         ),
         "minimum_area_mm2": options.min_area_mm2,
+        "hole_cleanup": hole_cleanup_diagnostics(),
         "frame_area_mm2": (
             float(np.count_nonzero(eligibility.material_eligible_mask))
             / pixels_per_mm**2
@@ -4155,6 +4278,8 @@ def _auto_attempt_diagnostics(
         output["target_hue"] = float(target_hue)
     if hue_tolerance is not None:
         output["hue_tolerance"] = float(hue_tolerance)
+    if isinstance(values.get("hole_cleanup"), Mapping):
+        output["hole_cleanup"] = dict(values["hole_cleanup"])
     for key in (
         "valid_area_mm2",
         "microscopic_candidate_count",
@@ -4548,6 +4673,8 @@ def _detect_objects(
         if isinstance(options, TraceOptions)
         else TraceOptions.from_mapping(options)
     )
+    if options.regular_grid and options.trace_detail != "full":
+        options = replace(options, trace_detail="full")
     if not isinstance(image, np.ndarray) or image.size == 0:
         raise ValueError("No rectified camera image is available")
     _require_bgr_image(image, "Rectified camera image")
@@ -4833,6 +4960,7 @@ def _detect_objects(
     for mode, mask_source, mask, hue in masks:
         _check_trace_cancelled()
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+        _check_trace_cancelled()
         candidates = []
         for contour_index, contour in enumerate(contours):
             if contour_index % 32 == 0:
@@ -4857,6 +4985,7 @@ def _detect_objects(
             )
             if mask_source in filled_region_sources
             and mask_source != "closed_outline"
+            and options.trace_detail == "full"
             else []
         )
         if washers:
@@ -4981,11 +5110,17 @@ def _detect_objects(
     if options.output_mode == "native" and (
         direct_detections or _isolate_native_candidates
     ):
+        outer_only = options.trace_detail == "outer_silhouette"
+        _check_trace_cancelled()
         try:
             native_contours, native_hierarchy = extract_foreground_contours(
                 chosen_mask,
                 maximum_contours=MAX_TRACE_CONTOURS,
+                retrieval_mode=(
+                    cv2.RETR_EXTERNAL if outer_only else cv2.RETR_TREE
+                ),
             )
+            _check_trace_cancelled()
         except (ForegroundContourLimitError, ValueError) as exc:
             raise ValueError(
                 "The selected trace result has no bounded contour hierarchy"
@@ -5006,7 +5141,11 @@ def _detect_objects(
             _check_trace_cancelled()
             tree: ForegroundContourTree | None = None
             try:
-                tree = _trace_candidate_tree(candidate, native_contours, native_trees)
+                tree = _trace_candidate_tree(
+                    candidate,
+                    native_contours,
+                    native_trees,
+                )
                 _fit_trace_candidate_native(
                     image,
                     detection,
@@ -5016,6 +5155,7 @@ def _detect_objects(
                     pixels_per_mm,
                     native_contours,
                     tree,
+                    internal_contours_enumerated=not outer_only,
                 )
             except RasterVectorizationError as exc:
                 if not _isolate_native_candidates:
@@ -5024,6 +5164,11 @@ def _detect_objects(
                 if len(native_candidate_failures) < 64:
                     native_candidate_failures.append(
                         {
+                            "stage": (
+                                "exterior_fitting"
+                                if outer_only
+                                else "native_fitting"
+                            ),
                             "root_index": None if tree is None else tree.root_index,
                             "contour_count": (
                                 0 if tree is None else len(tree.contour_indices)
@@ -5278,6 +5423,8 @@ def _detect_objects(
         camera_work_area_payload,
         output_work_area_payload,
         {
+            "trace_detail": options.trace_detail,
+            "outer_only": options.trace_detail == "outer_silhouette",
             "candidate_failures": native_candidate_failures,
             "candidate_failure_count": native_candidate_failure_count,
             "strategy_metrics": strategy_metrics,

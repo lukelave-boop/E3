@@ -414,6 +414,172 @@ def test_trace_preferences_persist_but_replace_previous_resets(
     qt_application.processEvents()
 
 
+def test_trace_detail_layout_copy_and_grid_effective_full(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    form = panel.trace_detail.parentWidget().layout()
+    assert isinstance(form, QtWidgets.QFormLayout)
+    detail_row = form.getWidgetPosition(panel.trace_detail)[0]
+    purpose_row = form.getWidgetPosition(panel.trace_purpose)[0]
+
+    assert detail_row + 1 == purpose_row
+    assert form.labelForField(panel.trace_detail).text() == "Trace detail"
+    assert [panel.trace_detail.itemText(index) for index in range(2)] == [
+        "Full detail",
+        "Outer silhouette",
+    ]
+    assert [panel.trace_detail.itemData(index) for index in range(2)] == [
+        "full",
+        "outer_silhouette",
+    ]
+    assert panel.trace_detail.currentData() == "full"
+    assert panel.options()["trace_detail"] == "full"
+    assert not panel.trace_detail.isEnabled()
+    assert "Mask display" in panel.trace_detail.toolTip()
+    assert "Minimum/Maximum hole area" in panel.trace_detail.toolTip()
+    assert "Grid tracing always uses Full detail" in panel.trace_detail.toolTip()
+    assert "exact cleaned detection evidence" in panel.raster_preview_combo.toolTip()
+    assert "need not become Outer silhouette" in panel.raster_preview_combo.toolTip()
+
+    panel.regular_grid.setChecked(False)
+    panel.set_result(
+        {
+            "message": "One current exterior",
+            "detections": [
+                {
+                    "id": "outer-candidate",
+                    "index": 1,
+                    "source": "direct",
+                    "confidence": 0.95,
+                    "selected_default": True,
+                    "shape": "contour",
+                    "width_mm": 20.0,
+                    "height_mm": 10.0,
+                    "rotation_deg": 0.0,
+                    "diagnostics": {
+                        "within_work_area": True,
+                        "trace_detail": "outer_silhouette",
+                        "outer_only": True,
+                    },
+                }
+            ],
+        }
+    )
+    assert panel.create_button.isEnabled()
+    assert "only this top-level exterior" in panel.result_tree.topLevelItem(0).toolTip(0)
+    assert "Mask-only holes and descendants" in panel.result_tree.topLevelItem(0).toolTip(0)
+    panel.trace_detail.setCurrentIndex(
+        panel.trace_detail.findData("outer_silhouette")
+    )
+    qt_application.processEvents()
+    assert panel.trace_detail.isEnabled()
+    assert panel.options()["trace_detail"] == "outer_silhouette"
+    assert not panel.create_button.isEnabled()
+
+    panel.regular_grid.setChecked(True)
+    qt_application.processEvents()
+    assert not panel.trace_detail.isEnabled()
+    assert panel.trace_detail.currentData() == "outer_silhouette"
+    assert panel.options()["trace_detail"] == "full"
+
+    panel.regular_grid.setChecked(False)
+    qt_application.processEvents()
+    assert panel.trace_detail.currentData() == "outer_silhouette"
+    assert panel.options()["trace_detail"] == "outer_silhouette"
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_detail_preference_missing_invalid_and_round_trip(
+    qt_application: QtWidgets.QApplication,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = QtCore.QSettings(
+        str(tmp_path / "trace-detail-preferences.ini"),
+        QtCore.QSettings.Format.IniFormat,
+    )
+    monkeypatch.setattr(QtCore, "QSettings", lambda *_args, **_kwargs: settings)
+
+    missing = TracePanel()
+    assert missing.trace_detail.currentData() == "full"
+    missing.close()
+    missing.deleteLater()
+    qt_application.processEvents()
+
+    settings.beginGroup("trace")
+    settings.setValue("trace_detail", "obsolete")
+    settings.endGroup()
+    settings.sync()
+    invalid = TracePanel()
+    assert invalid.trace_detail.currentData() == "full"
+    invalid.regular_grid.setChecked(False)
+    invalid.trace_detail.setCurrentIndex(
+        invalid.trace_detail.findData("outer_silhouette")
+    )
+    qt_application.processEvents()
+    invalid.close()
+    invalid.deleteLater()
+    qt_application.processEvents()
+
+    restored = TracePanel()
+    assert not restored.regular_grid.isChecked()
+    assert restored.trace_detail.currentData() == "outer_silhouette"
+    assert restored.options()["trace_detail"] == "outer_silhouette"
+
+    restored.close()
+    restored.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_hole_filter_preferences_migrate_and_round_trip_independently(
+    qt_application: QtWidgets.QApplication,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = QtCore.QSettings(
+        str(tmp_path / "legacy-trace-preferences.ini"),
+        QtCore.QSettings.Format.IniFormat,
+    )
+    settings.beginGroup("trace")
+    settings.setValue("min_area_mm2", 50.0)
+    settings.setValue("max_area_mm2", 8_000.0)
+    settings.endGroup()
+    settings.sync()
+    monkeypatch.setattr(QtCore, "QSettings", lambda *_args, **_kwargs: settings)
+
+    migrated = TracePanel()
+    assert migrated.min_hole_area.value() == pytest.approx(50.0)
+    assert migrated.options()["max_hole_area_mm2"] is None
+    settings.beginGroup("trace")
+    assert float(settings.value("min_hole_area_mm2")) == pytest.approx(50.0)
+    assert float(settings.value("max_hole_area_mm2")) == pytest.approx(-0.01)
+    settings.endGroup()
+
+    migrated.min_area.setValue(75.0)
+    qt_application.processEvents()
+    assert migrated.min_hole_area.value() == pytest.approx(50.0)
+    migrated.min_hole_area.setValue(2.0)
+    migrated.max_hole_area.setValue(30.0)
+    qt_application.processEvents()
+    migrated.close()
+    migrated.deleteLater()
+    qt_application.processEvents()
+
+    restored = TracePanel()
+    options = restored.options()
+    assert options["min_area_mm2"] == pytest.approx(75.0)
+    assert options["min_hole_area_mm2"] == pytest.approx(2.0)
+    assert options["max_hole_area_mm2"] == pytest.approx(30.0)
+
+    restored.close()
+    restored.deleteLater()
+    qt_application.processEvents()
+
+
 def test_trace_create_payload_can_keep_earlier_trace_batches(
     qt_application: QtWidgets.QApplication,
 ) -> None:
@@ -806,6 +972,69 @@ def test_trace_modes_share_filters_and_native_output_creation_controls(
     assert panel.create_button.isEnabled()
     assert panel.create_combined_button.isEnabled()
     assert "Verified native sequence" in panel.result_tree.topLevelItem(0).toolTip(4)
+
+    panel.close()
+    panel.deleteLater()
+    qt_application.processEvents()
+
+
+def test_trace_hole_filters_have_distinct_layout_copy_and_raster_applicability(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    panel = TracePanel()
+    form = panel.min_area.parentWidget().layout()
+    assert isinstance(form, QtWidgets.QFormLayout)
+    controls = (
+        panel.min_area,
+        panel.max_area,
+        panel.min_hole_area,
+        panel.max_hole_area,
+        panel.min_width,
+        panel.min_height,
+    )
+    assert [form.getWidgetPosition(control)[0] for control in controls] == list(
+        range(6)
+    )
+    assert panel.min_hole_area.suffix() == " mm²"
+    assert panel.max_hole_area.suffix() == " mm²"
+    assert panel.max_hole_area.specialValueText() == "No maximum"
+    assert panel.options()["max_hole_area_mm2"] is None
+    panel.min_hole_area.setValue(0.0)
+    panel.max_hole_area.setValue(0.0)
+    assert panel.options()["max_hole_area_mm2"] == pytest.approx(0.0)
+    assert "Fill enclosed holes smaller" in panel.min_hole_area.toolTip()
+    assert "Fill enclosed holes larger" in panel.max_hole_area.toolTip()
+    assert "selected area range are preserved" in panel.max_hole_area.toolTip()
+    assert "cleaned Mask" in panel.min_hole_area.toolTip()
+    assert "cleaned Mask" in panel.max_hole_area.toolTip()
+    assert "Outer silhouette ignores" in panel.min_hole_area.toolTip()
+    assert "Outer silhouette ignores" in panel.max_hole_area.toolTip()
+    assert "objects" not in panel.min_hole_area.toolTip().lower()
+    assert "objects" not in panel.max_hole_area.toolTip().lower()
+
+    assert not panel.min_hole_area.isEnabled()
+    assert not panel.max_hole_area.isEnabled()
+    panel.regular_grid.setChecked(False)
+    qt_application.processEvents()
+    assert panel.min_hole_area.isEnabled()
+    assert panel.max_hole_area.isEnabled()
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("color"))
+    qt_application.processEvents()
+    assert not panel.min_hole_area.isEnabled()
+    assert not panel.max_hole_area.isEnabled()
+
+    panel.mode_combo.setCurrentIndex(panel.mode_combo.findData("contrast"))
+    qt_application.processEvents()
+    assert panel.min_hole_area.isEnabled()
+    assert panel.max_hole_area.isEnabled()
+
+    panel.regular_grid.setChecked(True)
+    qt_application.processEvents()
+    assert not panel.min_hole_area.isEnabled()
+    assert not panel.max_hole_area.isEnabled()
+    assert panel.min_area.isEnabled()
+    assert panel.max_area.isEnabled()
 
     panel.close()
     panel.deleteLater()

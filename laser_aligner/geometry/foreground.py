@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
 import cv2
@@ -29,6 +31,20 @@ class ForegroundContourLimitError(ValueError):
         )
         self.count = int(count)
         self.maximum = int(maximum)
+
+
+@dataclass(frozen=True, slots=True)
+class ForegroundCleanupDiagnostics:
+    """Bounded aggregate diagnostics for one foreground cleanup pass."""
+
+    retained_component_count: int
+    raw_hole_count: int
+    preserved_hole_count: int
+    filled_below_min_count: int
+    filled_above_max_count: int
+    minimum_component_area_px: float
+    minimum_hole_area_px: float
+    maximum_hole_area_px: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,40 +101,132 @@ def readonly_array(array: np.ndarray) -> np.ndarray:
     return result
 
 
+def _validated_area_threshold(value: object, label: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{label} must be a finite non-negative number")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a finite non-negative number") from exc
+    if not math.isfinite(number) or number < 0.0:
+        raise ValueError(f"{label} must be a finite non-negative number")
+    return number
+
+
 def clean_foreground_components(
     mask: np.ndarray,
     *,
     minimum_component_area_px: float,
     minimum_hole_area_px: float | None = None,
+    maximum_hole_area_px: float | None = None,
     maximum_components: int | None = None,
+    cancellation_checkpoint: Callable[[], None] | None = None,
 ) -> tuple[np.ndarray, int]:
-    """Remove small foreground components and optionally fill small holes."""
+    """Remove small foreground components and filter enclosed holes by area.
 
+    ``minimum_hole_area_px=None`` retains the historical behavior of inheriting
+    the foreground-component minimum.  ``maximum_hole_area_px=None`` leaves the
+    hole range unbounded above.  Hole-area boundaries are inclusive: only holes
+    strictly below the minimum or strictly above the maximum are filled.
+    """
+
+    cleaned, diagnostics = clean_foreground_components_with_diagnostics(
+        mask,
+        minimum_component_area_px=minimum_component_area_px,
+        minimum_hole_area_px=minimum_hole_area_px,
+        maximum_hole_area_px=maximum_hole_area_px,
+        maximum_components=maximum_components,
+        cancellation_checkpoint=cancellation_checkpoint,
+    )
+    return cleaned, diagnostics.retained_component_count
+
+
+def clean_foreground_components_with_diagnostics(
+    mask: np.ndarray,
+    *,
+    minimum_component_area_px: float,
+    minimum_hole_area_px: float | None = None,
+    maximum_hole_area_px: float | None = None,
+    maximum_components: int | None = None,
+    protected_background_mask: np.ndarray | None = None,
+    cancellation_checkpoint: Callable[[], None] | None = None,
+) -> tuple[np.ndarray, ForegroundCleanupDiagnostics]:
+    """Clean foreground and return bounded component/hole aggregate counts.
+
+    Background connected to a protected pixel is treated like external
+    border-connected background: it is neither filled nor counted as a
+    filterable enclosed hole. This keeps upstream authority masks authoritative.
+    """
+
+    if cancellation_checkpoint is not None and not callable(
+        cancellation_checkpoint
+    ):
+        raise TypeError("cancellation_checkpoint must be callable or None")
+
+    def check_cancelled() -> None:
+        if cancellation_checkpoint is not None:
+            cancellation_checkpoint()
+
+    check_cancelled()
     binary = _binary_mask(mask)
-    minimum_component_area_px = max(0.0, float(minimum_component_area_px))
+    check_cancelled()
+    protected_background = None
+    if protected_background_mask is not None:
+        protected_background = _binary_mask(protected_background_mask)
+        if protected_background.shape != binary.shape:
+            raise ValueError("protected_background_mask must match the foreground mask")
+        check_cancelled()
+    minimum_component_area_px = _validated_area_threshold(
+        minimum_component_area_px,
+        "minimum_component_area_px",
+    )
     hole_area = (
         minimum_component_area_px
         if minimum_hole_area_px is None
-        else max(0.0, float(minimum_hole_area_px))
+        else _validated_area_threshold(
+            minimum_hole_area_px,
+            "minimum_hole_area_px",
+        )
     )
+    maximum_hole_area = (
+        None
+        if maximum_hole_area_px is None
+        else _validated_area_threshold(
+            maximum_hole_area_px,
+            "maximum_hole_area_px",
+        )
+    )
+    if maximum_hole_area is not None and maximum_hole_area < hole_area:
+        raise ValueError(
+            "maximum_hole_area_px must be greater than or equal to "
+            "minimum_hole_area_px"
+        )
     count, labels, stats, _centroids = cv2.connectedComponentsWithStats(
         binary,
         connectivity=8,
         ltype=cv2.CV_32S,
     )
-    retained_labels = [
-        index
-        for index in range(1, count)
-        if int(stats[index, cv2.CC_STAT_AREA]) >= minimum_component_area_px
-    ]
+    check_cancelled()
+    retained_labels: list[int] = []
+    for index in range(1, count):
+        if index % 256 == 0:
+            check_cancelled()
+        if int(stats[index, cv2.CC_STAT_AREA]) >= minimum_component_area_px:
+            retained_labels.append(index)
+    check_cancelled()
     if maximum_components is not None and len(retained_labels) > maximum_components:
         raise ForegroundComponentLimitError(len(retained_labels), maximum_components)
     retained = np.zeros(count, dtype=np.uint8)
     if retained_labels:
         retained[np.asarray(retained_labels, dtype=np.int64)] = 255
     cleaned = retained[labels]
+    check_cancelled()
 
-    if hole_area > 0.0 and retained_labels:
+    raw_hole_count = 0
+    preserved_hole_count = 0
+    filled_below_min_count = 0
+    filled_above_max_count = 0
+    if retained_labels:
         background_count, background_labels, background_stats, _centroids = (
             cv2.connectedComponentsWithStats(
                 cv2.bitwise_not(cleaned),
@@ -126,31 +234,74 @@ def clean_foreground_components(
                 ltype=cv2.CV_32S,
             )
         )
-        border_labels = set(
-            int(value)
-            for value in np.unique(
-                np.concatenate(
-                    (
-                        background_labels[0],
-                        background_labels[-1],
-                        background_labels[:, 0],
-                        background_labels[:, -1],
-                    )
+        check_cancelled()
+        border_values = np.unique(
+            np.concatenate(
+                (
+                    background_labels[0],
+                    background_labels[-1],
+                    background_labels[:, 0],
+                    background_labels[:, -1],
                 )
             )
         )
-        fill_labels = [
-            index
-            for index in range(1, background_count)
-            if index not in border_labels
-            and int(background_stats[index, cv2.CC_STAT_AREA]) < hole_area
-        ]
+        check_cancelled()
+        border_labels: set[int] = set()
+        for position, value in enumerate(border_values):
+            if position % 256 == 0:
+                check_cancelled()
+            border_labels.add(int(value))
+        check_cancelled()
+        if protected_background is not None:
+            protected_labels = np.unique(
+                background_labels[protected_background > 0]
+            )
+            check_cancelled()
+            for position, value in enumerate(protected_labels):
+                if position % 256 == 0:
+                    check_cancelled()
+                border_labels.add(int(value))
+            check_cancelled()
+        fill_below_min_labels: list[int] = []
+        fill_above_max_labels: list[int] = []
+        for index in range(1, background_count):
+            if index % 256 == 0:
+                check_cancelled()
+            if index in border_labels:
+                continue
+            raw_hole_count += 1
+            area = int(background_stats[index, cv2.CC_STAT_AREA])
+            if area < hole_area:
+                fill_below_min_labels.append(index)
+            elif maximum_hole_area is not None and area > maximum_hole_area:
+                fill_above_max_labels.append(index)
+        check_cancelled()
+        filled_below_min_count = len(fill_below_min_labels)
+        filled_above_max_count = len(fill_above_max_labels)
+        preserved_hole_count = (
+            raw_hole_count
+            - filled_below_min_count
+            - filled_above_max_count
+        )
+        fill_labels = [*fill_below_min_labels, *fill_above_max_labels]
         if fill_labels:
             fill = np.zeros(background_count, dtype=bool)
             fill[np.asarray(fill_labels, dtype=np.int64)] = True
             cleaned = cleaned.copy()
+            check_cancelled()
             cleaned[fill[background_labels]] = 255
-    return cleaned, len(retained_labels)
+            check_cancelled()
+    check_cancelled()
+    return cleaned, ForegroundCleanupDiagnostics(
+        retained_component_count=len(retained_labels),
+        raw_hole_count=raw_hole_count,
+        preserved_hole_count=preserved_hole_count,
+        filled_below_min_count=filled_below_min_count,
+        filled_above_max_count=filled_above_max_count,
+        minimum_component_area_px=minimum_component_area_px,
+        minimum_hole_area_px=hole_area,
+        maximum_hole_area_px=maximum_hole_area,
+    )
 
 
 def extract_foreground_contours(
@@ -158,12 +309,16 @@ def extract_foreground_contours(
     *,
     approximation: int = cv2.CHAIN_APPROX_NONE,
     maximum_contours: int | None = None,
+    retrieval_mode: int = cv2.RETR_TREE,
 ) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
-    """Extract one bounded OpenCV RETR_TREE hierarchy from a binary mask."""
+    """Extract one bounded tree or exterior-only foreground hierarchy."""
+
+    if retrieval_mode not in (cv2.RETR_TREE, cv2.RETR_EXTERNAL):
+        raise ValueError("retrieval_mode must be cv2.RETR_TREE or cv2.RETR_EXTERNAL")
 
     contours, hierarchy = cv2.findContours(
         _binary_mask(mask),
-        cv2.RETR_TREE,
+        retrieval_mode,
         approximation,
     )
     if hierarchy is None or not contours:
@@ -487,12 +642,14 @@ def render_contour_tree_mask(
 
 
 __all__ = [
+    "ForegroundCleanupDiagnostics",
     "ForegroundComponentLimitError",
     "ForegroundContourLimitError",
     "ForegroundContourPruneResult",
     "ForegroundRemovedContourTree",
     "ForegroundContourTree",
     "clean_foreground_components",
+    "clean_foreground_components_with_diagnostics",
     "contour_depth",
     "contour_tree_at_point",
     "extract_foreground_contours",
