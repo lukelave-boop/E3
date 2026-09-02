@@ -273,6 +273,15 @@ production Mask before contour extraction; the external border-connected
 background is never filled, and background touching hard-ineligible pixels is
 likewise protected. Existing Trace preferences inherit the old minimum hole
 behavior once and use no maximum-hole filter until explicitly changed.
+**Trace detail** then independently selects either the default **Full detail**
+compound hierarchy or **Outer silhouette**, which fits only each disconnected
+root's true exterior boundary. Outer silhouette does not solid-fill the Mask,
+close exterior gaps, take a convex hull, merge roots, or weaken validation;
+exterior-connected notches and concavities remain. A bounded external-only
+extraction path prevents ignored holes and nested islands from consuming
+contour-hierarchy or native-fit budgets. Manual/Auto Contrast, top-level Auto,
+and Color honor this choice, while Grid retains its specialized Full-detail
+interpretation.
 On hardware, Trace completes Home / park before acquiring the temporary
 capture-only stepper hold; only the short settle/discard/raw-frame burst is held.
 The Camera display selector exposes the exact **Camera**, **Exposed bed**,

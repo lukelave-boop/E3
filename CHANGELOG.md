@@ -6,6 +6,21 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added an explicit Camera Trace **Trace detail** choice above Purpose.
+  **Full detail** remains the default and preserves the existing exterior,
+  hole, island, and nested contour behavior. **Outer silhouette** sends only
+  each disconnected foreground root's true exterior boundary to native fitting
+  and vector creation. Its source-neutral `OUTER_ONLY` route now uses bounded
+  external-contour extraction before hierarchy limits or fitting, so ignored
+  photographic interior topology cannot veto or exhaust the exterior; open
+  notches and concavities remain part of that exterior and disconnected roots
+  remain separate. The cleaned Mask and independent hole filters remain exact
+  evidence rather than being filled for display. Manual and automatic Contrast,
+  top-level Auto, and Color honor the selection; Grid retains its specialized
+  Full-detail behavior and disables the choice. This changes no threshold
+  scoring, eligibility, calibration, planning, motion, laser, Air Assist, Pi,
+  Straighten, or primitive-recovery behavior.
+
 - Separated Camera Trace foreground-object area review from enclosed-hole
   cleanup for non-grid Contrast and Auto's dark/light raster strategies. The
   Trace panel now exposes minimum/maximum object area and minimum/maximum hole

@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 import pytest
 
+import laser_aligner.vision.object_trace as object_trace_module
 from laser_aligner.config import WorkArea
 from laser_aligner.project import (
     NativePathGeometry,
@@ -27,6 +28,7 @@ from laser_aligner.vision.camera_raster_normalization import (
     normalize_camera_trace_frame,
 )
 from laser_aligner.vision.object_trace import (
+    TraceDetectionCancelledError,
     TraceOptions,
     _normalized_raster_points_to_camera,
     detect_objects,
@@ -308,6 +310,44 @@ def test_manual_contrast_wrench_uses_independent_object_and_hole_ranges() -> Non
     assert object_maximum.direct_count == 0
 
 
+def test_manual_contrast_outer_silhouette_flattens_synthetic_wrench_tree() -> None:
+    image = _wrench_hole_scene()
+    work_area = WorkArea(0.0, 120.0, 0.0, 80.0)
+    full_options = _wrench_hole_options(max_hole_area_mm2=None)
+    full = detect_objects(image, full_options, work_area, 4.0)
+    outer = detect_objects(
+        image,
+        TraceOptions(
+            **{
+                **full_options.to_dict(),
+                "trace_detail": "outer_silhouette",
+            }
+        ),
+        work_area,
+        4.0,
+    )
+
+    assert full.direct_count == outer.direct_count == 1
+    full_detection = full.detections[0]
+    outer_detection = outer.detections[0]
+    assert sorted(full_detection.diagnostics["contour_depths"]) == [0, 1, 1, 2]
+    assert len(NativePathGeometry.from_dict(full_detection.native_path or {}).subpaths) == 4
+    assert outer_detection.diagnostics["contour_parents"] == [None]
+    assert outer_detection.diagnostics["contour_depths"] == [0]
+    assert outer_detection.diagnostics["root_contour_count"] == 1
+    assert outer_detection.diagnostics["output_contour_count"] == 1
+    assert outer_detection.diagnostics["internal_contours_enumerated"] is False
+    assert outer_detection.diagnostics["ignored_internal_contour_count"] is None
+    assert len(outer_detection.vector_contours_mm) == 1
+    assert outer_detection.native_verified
+    assert len(NativePathGeometry.from_dict(outer_detection.native_path or {}).subpaths) == 1
+
+    exterior = np.asarray(outer_detection.vector_contours_mm[0], dtype=np.float32)
+    # The open left jaw remains concave; Outer fills only enclosed topology.
+    assert cv2.pointPolygonTest(exterior, (10.0, 40.0), False) < 0
+    assert cv2.pointPolygonTest(exterior, (20.0, 40.0), False) > 0
+
+
 @pytest.mark.parametrize(
     ("light_foreground", "expected_strategy", "expected_polarity"),
     (
@@ -372,6 +412,52 @@ def test_non_grid_auto_winner_applies_explicit_hole_range_to_production_native(
     ) == [1, 2]
     assert result.options.min_hole_area_mm2 == 2.0
     assert result.options.max_hole_area_mm2 == 30.0
+
+
+@pytest.mark.parametrize(
+    ("light_foreground", "expected_strategy"),
+    [(False, "raster_dark"), (True, "raster_light")],
+)
+def test_non_grid_auto_outer_silhouette_propagates_to_selected_raster_strategy(
+    light_foreground: bool,
+    expected_strategy: str,
+) -> None:
+    previews = []
+    result = detect_objects(
+        _auto_hole_scene(light_foreground=light_foreground),
+        TraceOptions(
+            detection_mode="auto",
+            regular_grid=False,
+            trace_detail="outer_silhouette",
+            min_area_mm2=2.0,
+            max_area_mm2=2_000.0,
+            min_hole_area_mm2=2.0,
+            max_hole_area_mm2=30.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.20,
+        ),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    auto = result.diagnostics["auto"]
+    assert auto["selected_strategy"] == expected_strategy
+    assert auto["requested_options"]["trace_detail"] == "outer_silhouette"
+    assert auto["effective_options"]["trace_detail"] == "outer_silhouette"
+    assert result.options.trace_detail == "outer_silhouette"
+    assert result.diagnostics["outer_only"] is True
+    assert previews[-1].selected_strategy is True
+    assert previews[-1].strategy == expected_strategy
+    _parents, depths = _contour_tree_shape(previews[-1].contour_mask)
+    assert sorted(depths) == [0, 0, 1]
+    assert all(len(item.vector_contours_mm) == 1 for item in result.detections)
+    assert all(
+        len(NativePathGeometry.from_dict(item.native_path or {}).subpaths) == 1
+        for item in result.detections
+    )
 
 
 def test_raster_to_camera_affine_preserves_pixel_center_semantics() -> None:
@@ -700,6 +786,47 @@ def test_non_grid_contrast_supports_otsu_and_light_foreground() -> None:
     assert result.detections[0].diagnostics["invert"] is True
 
 
+def test_bounded_auto_contrast_outer_silhouette_keeps_mask_holes_only_as_evidence() -> None:
+    previews = []
+    result = detect_objects(
+        _auto_hole_scene(light_foreground=True),
+        TraceOptions(
+            detection_mode="contrast",
+            contrast_threshold_mode="auto",
+            contrast_invert=True,
+            regular_grid=False,
+            output_mode="native",
+            trace_detail="outer_silhouette",
+            min_area_mm2=2.0,
+            max_area_mm2=2_000.0,
+            min_hole_area_mm2=2.0,
+            max_hole_area_mm2=30.0,
+            min_width_mm=1.0,
+            min_height_mm=1.0,
+            confidence_threshold=0.0,
+            native_fitting_tolerance_mm=0.20,
+        ),
+        WorkArea(0.0, 60.0, 0.0, 40.0),
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    assert result.direct_count == 2
+    assert result.options.trace_detail == "outer_silhouette"
+    assert result.diagnostics["trace_detail"] == "outer_silhouette"
+    assert result.diagnostics["outer_only"] is True
+    assert len(previews) == 1
+    _parents, depths = _contour_tree_shape(previews[0].contour_mask)
+    assert sorted(depths) == [0, 0, 1]
+    assert all(len(item.vector_contours_mm) == 1 for item in result.detections)
+    assert all(
+        len(NativePathGeometry.from_dict(item.native_path or {}).subpaths) == 1
+        for item in result.detections
+    )
+    assert all(item.diagnostics["threshold_mode"] == "auto" for item in result.detections)
+    assert all(item.diagnostics["threshold_used"] is not None for item in result.detections)
+
+
 def test_light_two_level_camera_adapter_keeps_exact_hole_tree() -> None:
     image = np.full((400, 600, 3), 35, dtype=np.uint8)
     cv2.rectangle(image, (60, 70), (190, 180), (215, 215, 215), thickness=-1)
@@ -830,6 +957,131 @@ def test_explicit_color_retains_specialized_holes_despite_raster_hole_options(
     assert result.options.max_hole_area_mm2 == 1.0
 
 
+def test_explicit_color_outer_silhouette_skips_washer_child_enumeration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_extract = object_trace_module.extract_foreground_contours
+    retrieval_modes: list[int] = []
+
+    def recording_extract(*args: object, **kwargs: object) -> object:
+        retrieval_modes.append(int(kwargs.get("retrieval_mode", cv2.RETR_TREE)))
+        return original_extract(*args, **kwargs)
+
+    monkeypatch.setattr(object_trace_module, "extract_foreground_contours", recording_extract)
+    background = (128, 128, 128)
+    target = (220, 100, 161)
+    image = np.full((300, 300, 3), background, dtype=np.uint8)
+    cv2.circle(image, (150, 150), 60, target, thickness=-1, lineType=cv2.LINE_8)
+    cv2.circle(image, (150, 150), 30, background, thickness=-1, lineType=cv2.LINE_8)
+    common = {
+        "detection_mode": "color",
+        "target_bgr": target,
+        "target_hue": 150.0,
+        "hue_tolerance": 16.0,
+        "regular_grid": False,
+        "output_mode": "native",
+        "min_area_mm2": 5.0,
+        "max_area_mm2": 3_000.0,
+        "min_width_mm": 1.0,
+        "min_height_mm": 1.0,
+        "confidence_threshold": 0.0,
+        "native_fitting_tolerance_mm": 0.20,
+    }
+    work_area = WorkArea(0.0, 75.0, 0.0, 75.0)
+    full = detect_objects(image, TraceOptions(**common), work_area, 4.0)
+    retrieval_modes.clear()
+
+    def fail_washer_enumeration(*_args: object, **_kwargs: object) -> object:
+        raise AssertionError("Outer Color must not enumerate washer children")
+
+    monkeypatch.setattr(
+        object_trace_module,
+        "_washer_candidates",
+        fail_washer_enumeration,
+    )
+    previews = []
+    outer = detect_objects(
+        image,
+        TraceOptions(
+            **{
+                **common,
+                "trace_detail": "outer_silhouette",
+                "border_offset_mm": 8.0,
+            }
+        ),
+        work_area,
+        4.0,
+        raster_preview_callback=previews.append,
+    )
+
+    assert full.direct_count == outer.direct_count == 1
+    full_washer = full.detections[0]
+    outer_shape = outer.detections[0]
+    assert full_washer.shape == "washer"
+    assert outer_shape.shape != "washer"
+    assert "hole_ratio" in full_washer.diagnostics
+    assert "hole_ratio" not in outer_shape.diagnostics
+    assert len(full_washer.vector_contours_mm) == 2
+    assert len(NativePathGeometry.from_dict(full_washer.native_path or {}).subpaths) == 2
+    assert len(outer_shape.vector_contours_mm) == 1
+    assert len(NativePathGeometry.from_dict(outer_shape.native_path or {}).subpaths) == 1
+    assert outer_shape.diagnostics["contour_parents"] == [None]
+    assert outer_shape.diagnostics["contour_depths"] == [0]
+    assert outer_shape.diagnostics["root_contour_count"] == 1
+    assert outer_shape.diagnostics["output_contour_count"] == 1
+    assert outer_shape.diagnostics["internal_contours_enumerated"] is False
+    assert outer_shape.diagnostics["ignored_internal_contour_count"] is None
+    assert retrieval_modes == [cv2.RETR_EXTERNAL]
+    assert len(previews) == 1
+    assert int(previews[0].contour_mask[150, 150]) == 0
+
+
+def test_explicit_color_outer_silhouette_cancels_after_external_extraction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    image = np.full((180, 240, 3), (128, 128, 128), dtype=np.uint8)
+    target = (220, 100, 161)
+    cv2.rectangle(image, (45, 30), (195, 150), target, thickness=-1)
+    original_extract = object_trace_module.extract_foreground_contours
+    extraction_finished = False
+
+    def cancelling_extract(*args: object, **kwargs: object) -> object:
+        nonlocal extraction_finished
+        assert kwargs.get("retrieval_mode") == cv2.RETR_EXTERNAL
+        result = original_extract(*args, **kwargs)
+        extraction_finished = True
+        return result
+
+    monkeypatch.setattr(object_trace_module, "extract_foreground_contours", cancelling_extract)
+    previews = []
+    with pytest.raises(TraceDetectionCancelledError):
+        detect_objects(
+            image,
+            TraceOptions(
+                detection_mode="color",
+                target_bgr=target,
+                target_hue=150.0,
+                hue_tolerance=16.0,
+                regular_grid=False,
+                output_mode="native",
+                trace_detail="outer_silhouette",
+                min_area_mm2=5.0,
+                max_area_mm2=3_000.0,
+                min_width_mm=1.0,
+                min_height_mm=1.0,
+                confidence_threshold=0.0,
+            ),
+            WorkArea(0.0, 60.0, 0.0, 45.0),
+            4.0,
+            raster_preview_callback=previews.append,
+            cancel_check=lambda: extraction_finished,
+        )
+
+    assert extraction_finished is True
+    assert previews
+    assert all(preview.native_fitting_completed is False for preview in previews)
+
+
 def test_grid_contrast_does_not_acquire_shared_raster_hole_filtering(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -850,6 +1102,7 @@ def test_grid_contrast_does_not_acquire_shared_raster_hole_filtering(
         TraceOptions(
             detection_mode="contrast",
             regular_grid=True,
+            trace_detail="outer_silhouette",
             min_area_mm2=40.0,
             min_hole_area_mm2=0.0,
             max_hole_area_mm2=1.0,
@@ -864,6 +1117,9 @@ def test_grid_contrast_does_not_acquire_shared_raster_hole_filtering(
     assert result.direct_count == 6
     assert result.options.min_hole_area_mm2 == 0.0
     assert result.options.max_hole_area_mm2 == 1.0
+    assert result.options.trace_detail == "full"
+    assert result.diagnostics["trace_detail"] == "full"
+    assert result.diagnostics["outer_only"] is False
     assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)
 
 
@@ -887,6 +1143,7 @@ def test_grid_auto_does_not_acquire_shared_raster_hole_filtering(
         TraceOptions(
             detection_mode="auto",
             regular_grid=True,
+            trace_detail="outer_silhouette",
             min_area_mm2=40.0,
             min_hole_area_mm2=0.0,
             max_hole_area_mm2=1.0,
@@ -902,4 +1159,7 @@ def test_grid_auto_does_not_acquire_shared_raster_hole_filtering(
     assert result.grid["observed_cells"] == 6
     assert result.options.min_hole_area_mm2 == 0.0
     assert result.options.max_hole_area_mm2 == 1.0
+    assert result.options.trace_detail == "full"
+    assert result.diagnostics["trace_detail"] == "full"
+    assert result.diagnostics["outer_only"] is False
     assert all(item.diagnostics["mask_source"] != "raster_non_grid" for item in result.detections)

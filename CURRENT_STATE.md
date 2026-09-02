@@ -144,7 +144,90 @@ profile with camera autostart disabled and every saved machine's
 output, job streaming, or physical hardware behavior was exercised or verified;
 the Pi was unavailable, and no connection was attempted. These identity and
 launcher controls are not safety-rated.
+## Active Camera Trace Full detail / Outer silhouette selection
 
+Camera Trace now exposes **Trace detail** immediately above **Purpose**, with
+**Full detail** as the backward-compatible default and **Outer silhouette** as
+an explicit operator choice. Full detail retains the synchronized hierarchy
+behavior: an exterior plus holes, islands, and deeper descendants form one
+indivisible review candidate. Outer silhouette emits only the true external
+closed boundary of each disconnected retained foreground root. It does not use
+a convex hull, bounding box, morphological closing, gap inference, or component
+merging, so an exterior-connected notch or U-shaped opening remains part of the
+output boundary and disconnected roots remain separate candidates.
+
+The source-neutral `RasterContourOutput.OUTER_ONLY` route is strengthened into
+a genuine exterior-only pipeline. Preview, exact, and native-forest extraction
+use bounded `RETR_EXTERNAL` work when Outer silhouette is requested, rather than
+building a `RETR_TREE` and discarding children afterward. Ignored internal
+contours therefore do not consume contour, raw-point, fitted-segment, fitting,
+or topology budgets and cannot veto a valid exterior. The exterior itself still
+passes the unchanged closedness, finite-coordinate, work-area, source-edge,
+fitting-tolerance, ambiguity, and native-complexity checks. Full detail continues
+to use its existing `RETR_TREE` hierarchy and limits.
+
+The exact cleaned binary **Mask** remains immutable evidence after eligibility,
+thresholding, foreground-component cleanup, and independent hole-area cleanup.
+Trace detail changes only which Mask boundaries become vector geometry. Surviving
+enclosed holes may therefore remain visible in Mask while Outer silhouette's
+candidate overlay and native result contain one exterior subpath. The hole Min/
+Max settings are retained and never overwritten. Object Min/Max area and Min
+width/height retain their numeric values; Full detail's post-fit area remains its
+legacy even-odd candidate area, while Outer silhouette's post-fit area describes
+the emitted exterior silhouette.
+
+Manual and bounded-Auto **By contrast** support both detail modes through the
+shared raster vectorizer. Top-level Auto propagates Outer silhouette through its
+dark-raster, light-raster, and Color attempts. Explicit/Auto Color uses external
+root extraction in Outer mode and deliberately skips washer recognition because
+that classifier enumerates child contours; thresholding and color matching are
+unchanged. Grid keeps its specialized Full-detail behavior: the Trace-detail
+control is disabled while Grid is active, its effective option is Full, and the
+operator's saved selection is restored when Grid is disabled.
+
+Trace detail is a QSettings preference, not a project-schema field. Missing or
+invalid stored preferences resolve to Full detail. Only objects created from an
+Outer silhouette result receive `trace_detail = outer_silhouette` provenance;
+legacy Full/Grid object metadata remains byte-for-byte compatible. Extraction,
+root processing, native fitting, result publication, and Create retain cooperative
+cancellation, including rejection of late cancelled Outer results. Diagnostics
+are bounded and record the detail mode, external/output root counts, area basis,
+whether child contours were enumerated, and the exterior/root-filter/work-area/
+complexity failure stage without inventing ignored-child failures.
+
+Windows automated verification passes **397 non-overlapping focused Trace,
+silhouette, hierarchy, Mask, preference, overlay, Create, and cancellation tests**
+(264 UI/Trace tests in **231.22 seconds** plus 133 core raster tests in **23.36
+seconds**). The bounded desktop-shutdown regression passes **514 tests** with
+**2 expected Windows skips** in **61.60 seconds**. The complete four-worker
+repository suite passes **3,253 tests** with **15 expected platform/privilege
+skips** in **148.36 seconds**. These are deterministic Qt-free/offscreen tests,
+not physical camera, controller, motion, or laser validation.
+
+Windows development packaging completed from verified implementation commit
+`dcef18e31ab099d6c4b402eea70b58d64b284394` as version `0.6.161` using
+Python 3.14.4, OpenCV 4.14.0, PySide6 6.11.2, PyInstaller 6.22.2, and Inno
+Setup 6.7.3. The frozen `build-info.json` records that exact revision. The
+private machine-seeded `E3-Trace-Outer-Silhouette-Setup.exe` installer is
+250,696,523 bytes with SHA-256
+`B0DE921A1E16A4EC9298BD1AD3EFD37E5DA220F7A68AC904559437DC8AAB9A50`.
+Four unrelated Codex-runtime Poppler DLLs discovered through the build host were
+identified by their recorded source paths, removed from the generated bundle,
+and excluded by recompiling the installer; the final bundle contains no
+`icu*.dll`, `libcrypto-3-x64.dll`, or `libssl-3-x64.dll`. A hidden launch with
+isolated temporary user state remained alive for the full 12-second smoke window
+without early failure, after which the test process and temporary state were
+removed. This is a frozen launch-only smoke, not an interactive GUI, physical
+camera, controller, or Close-timing test.
+
+Physical validation remains pending. The first fresh reflective-wrench A/B run
+should use **By contrast**, **Auto threshold** (the recent physical scene chose
+approximately 195), **Minimum area 50 mm²**, **Maximum area 8,000 mm²**,
+**Minimum hole area 500 mm²**, **Maximum hole area No maximum**, and **Outer
+silhouette**, then compare Full detail on the same fresh capture. Expected Outer
+behavior is the same cleaned Mask evidence, one separately numbered wrench
+candidate following the external profile, no enclosed-reflection subpaths, and
+a usable exterior native vector. Software controls are not safety-rated.
 ## Active independent Camera Trace hole-area filters
 
 Non-grid Camera Trace Contrast and Auto's dark/light raster attempts now separate
@@ -162,10 +245,12 @@ above the optional maximum hole area are filled; holes exactly on either bound
 or between them are preserved. `None` represents no maximum. The external
 border-connected background is never filled. Background connected to hard-
 ineligible pixels is equally protected and excluded from filterable-hole counts.
-Cleanup changes the exact production Mask before 4× `RETR_TREE` extraction and
-native fitting, so preserved holes retain
-normal descendants and deliberately filled holes may absorb nested foreground
-islands into the parent. Maximum hole area never acts as a root/object filter.
+Cleanup changes the exact production Mask before detail-selected contour
+extraction and native fitting. Full detail uses the established 4× `RETR_TREE`
+hierarchy, so preserved holes retain normal descendants and deliberately filled
+holes may absorb nested foreground islands into the parent. Outer silhouette
+uses only external contours from that same cleaned Mask. Maximum hole area never
+acts as a root/object filter.
 
 `geometry.foreground.clean_foreground_components` remains backward compatible
 while accepting independent minimum and maximum hole areas. Its detailed companion
@@ -785,9 +870,11 @@ can switch the frozen camera display among the corrected **Camera**, exact
 source-resolution production **Exposed bed** mask, exact source-resolution
 **Eligible** mask, normalized grayscale, and exact production **Mask**. Exposed
 bed is the same immutable array inverted to form material eligibility, not a UI
-approximation. Raster Mask is the immutable 4× binary workspace passed to `RETR_TREE`,
-not a reconstructed UI approximation. Its display uses its actual 4× pixel scale
-so all four images occupy the same physical area. Request
+approximation. Raster Mask is the immutable 4× binary workspace passed to the
+selected contour extractor (`RETR_TREE` for Full detail or external-only
+extraction for Outer silhouette), not a reconstructed UI approximation. Its
+display uses its actual 4× pixel scale so all four images occupy the same
+physical area. Request
 IDs and the camera-review signature reject stale preview, completion, and failure
 callbacks. If fitting fails after mask preparation, the camera hold and diagnostic
 views remain available until Clear or the next detection; a failure before a
@@ -823,10 +910,11 @@ converted to eligibility-normalized raster artwork and sent through the same
 production pipeline as an imported raster:
 source-neutral immutable RGBA preparation, Otsu or manual thresholding with
 explicit polarity, physical connected-component and pinhole cleanup, 4× mask
-reconstruction, bounded `RETR_TREE` extraction, physical contour mapping,
-source-edge refinement, and the authoritative native line/cubic fitter plus all
-topology checks. Each root foreground contour and all descendants form one
-review candidate. Minimum area remains the raster cleanup scale. A conservative
+reconstruction, bounded detail-selected contour extraction, physical contour
+mapping, source-edge refinement, and the authoritative native line/cubic fitter
+plus all topology checks. In Full detail each root foreground contour and all
+descendants form one review candidate; Outer silhouette passes only each
+external root. Minimum area remains the raster cleanup scale. A conservative
 pre-fit root filter can omit a complete indivisible tree only when its threshold
 bounds and the fitter's full displacement allowance prove that maximum area or
 minimum width/height cannot pass; near-limit, smoothed, and ambiguous trees stay

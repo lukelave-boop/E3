@@ -1476,7 +1476,9 @@ class TracePanel(QtWidgets.QWidget):
         self.min_hole_area.setSuffix(" mm²")
         self.min_hole_area.setToolTip(
             "Fill enclosed holes smaller than this area. Used by non-grid "
-            "Auto and By contrast raster tracing."
+            "Auto and By contrast raster tracing to produce the cleaned Mask. "
+            "Outer silhouette ignores any enclosed contours that survive this "
+            "cleanup when it creates vector geometry."
         )
         self.max_hole_area = MeasurementSpinBox("area")
         self.max_hole_area.setRange(-0.01, 1_000_000.0)
@@ -1486,7 +1488,9 @@ class TracePanel(QtWidgets.QWidget):
         self.max_hole_area.setToolTip(
             "Fill enclosed holes larger than this area. Holes within the selected "
             "area range are preserved. Used by non-grid Auto and By contrast "
-            "raster tracing; No maximum preserves every hole above the minimum."
+            "raster tracing to produce the cleaned Mask; No maximum preserves "
+            "every hole above the minimum. Outer silhouette ignores any enclosed "
+            "contours that survive this cleanup when it creates vector geometry."
         )
         self.min_width = MeasurementSpinBox()
         self.min_width.setRange(0.1, 1000.0)
@@ -1604,6 +1608,20 @@ class TracePanel(QtWidgets.QWidget):
             "Béziers, simplified pixel contours, or exact "
             "pixel-derived contours."
         )
+        self.trace_detail = QtWidgets.QComboBox()
+        self.trace_detail.addItem("Full detail", "full")
+        self.trace_detail.addItem("Outer silhouette", "outer_silhouette")
+        trace_detail_tip = (
+            "Full detail preserves eligible holes and nested islands in the vector "
+            "result. Outer silhouette emits only each top-level exterior, omitting "
+            "holes and everything inside them. This changes vector geometry only: "
+            "the Mask display and Minimum/Maximum hole area controls still describe "
+            "and modify the production detection mask. Grid tracing always uses "
+            "Full detail."
+        )
+        self.trace_detail.setToolTip(trace_detail_tip)
+        self.trace_detail_label = QtWidgets.QLabel("Trace detail")
+        self.trace_detail_label.setToolTip(trace_detail_tip)
         self.border_offset_mode = QtWidgets.QComboBox()
         self.border_offset_mode.addItem("Uniform", "uniform")
         self.border_offset_mode.addItem("Per edge", "custom")
@@ -1674,6 +1692,7 @@ class TracePanel(QtWidgets.QWidget):
         self.native_fitting_tolerance_label.setToolTip(
             self.native_fitting_tolerance.toolTip()
         )
+        output_form.addRow(self.trace_detail_label, self.trace_detail)
         _form_row(output_form, "Purpose", self.trace_purpose)
         _form_row(output_form, "Geometry output", self.output_mode)
         _form_row(output_form, "Offset mode", self.border_offset_mode)
@@ -1718,8 +1737,10 @@ class TracePanel(QtWidgets.QWidget):
         raster_preview_tip = (
             "Inspect the corrected camera image, exact exposed-bed suppression, "
             "exact material eligibility, normalized grayscale, or exact production "
-            "foreground mask used by this Trace request. These views are diagnostic "
-            "only and do not change vector geometry."
+            "foreground mask used by this Trace request. The Mask remains the exact "
+            "cleaned detection evidence; its internal boundaries need not become "
+            "Outer silhouette vector output. These views are diagnostic only and "
+            "do not change vector geometry."
         )
         raster_preview_label.setToolTip(raster_preview_tip)
         self.raster_preview_combo.setToolTip(raster_preview_tip)
@@ -1887,6 +1908,7 @@ class TracePanel(QtWidgets.QWidget):
             self.snap_grid_cells,
             self.normalize_anchor,
             self.output_mode,
+            self.trace_detail,
             self.border_offset_mode,
             self.border_offset,
             *self.edge_offset_fields.values(),
@@ -2019,6 +2041,10 @@ class TracePanel(QtWidgets.QWidget):
                 settings.value("output_mode", self.output_mode.currentData()),
             )
             self._set_combo_data(
+                self.trace_detail,
+                settings.value("trace_detail", "full"),
+            )
+            self._set_combo_data(
                 self.border_offset_mode,
                 settings.value(
                     "border_offset_mode", self.border_offset_mode.currentData()
@@ -2094,6 +2120,7 @@ class TracePanel(QtWidgets.QWidget):
             settings.setValue("snap_grid_cells", self.snap_grid_cells.isChecked())
             settings.setValue("normalize_anchor", self.normalize_anchor.currentData())
             settings.setValue("output_mode", self.output_mode.currentData())
+            settings.setValue("trace_detail", self.trace_detail.currentData())
             settings.setValue("border_offset_mode", self.border_offset_mode.currentData())
             settings.setValue("border_offset_mm", self.border_offset.value())
             for edge, field in self.edge_offset_fields.items():
@@ -2158,6 +2185,11 @@ class TracePanel(QtWidgets.QWidget):
             "snap_grid_cells": self.snap_grid_cells.isChecked(),
             "normalize_anchor": str(self.normalize_anchor.currentData()),
             "output_mode": str(self.output_mode.currentData()),
+            "trace_detail": (
+                "full"
+                if self.regular_grid.isChecked()
+                else str(self.trace_detail.currentData())
+            ),
             "border_offset_mode": str(self.border_offset_mode.currentData()),
             "border_offset_mm": self.border_offset.value(),
             "border_offset_top_mm": self.edge_offset_fields["top"].value(),
@@ -2365,6 +2397,12 @@ class TracePanel(QtWidgets.QWidget):
                             for value in diagnostics.get("native_sequences", [])
                         )
                         + "."
+                    )
+                if diagnostics.get("outer_only"):
+                    geometry_tip += (
+                        " Outer silhouette output contains only this top-level "
+                        "exterior; Mask-only holes and descendants are omitted "
+                        "from the vector path."
                     )
                 if diagnostics.get("damage_suspected"):
                     reasons = "; ".join(
@@ -2649,6 +2687,8 @@ class TracePanel(QtWidgets.QWidget):
         color_mode = trace_mode == "color"
         contrast_mode = trace_mode == "contrast"
         grid_enabled = self.regular_grid.isChecked()
+        self.trace_detail_label.setEnabled(not grid_enabled)
+        self.trace_detail.setEnabled(not grid_enabled)
         manual_raster_contrast = contrast_mode and not grid_enabled
         auto_raster = auto_mode and not grid_enabled
         raster_native = manual_raster_contrast or auto_raster

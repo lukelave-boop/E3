@@ -558,7 +558,8 @@ class PixelAutoThresholdSelection:
 class PixelVectorizationMaskPreview:
     """Exact immutable threshold preparation available before native fitting.
 
-    ``contour_mask`` is the production 4x binary mask passed to RETR_TREE.
+    ``contour_mask`` is the exact production 4x binary mask passed to the
+    selected full-hierarchy or exterior-only contour extraction.
     ``foreground_mask`` is its source-resolution display representation and is
     byte-identical to the mask returned with a successful vectorization.  This
     temporary value has no project, planning, G-code, or output authority.
@@ -2411,14 +2412,61 @@ def _boundary_transition_count(mask: np.ndarray, *, stop_after: int) -> int:
     return total
 
 
-def _preflight_contour_complexity(mask: np.ndarray) -> None:
+def _find_contours_with_cancellation(
+    mask: np.ndarray,
+    retrieval_mode: int,
+    approximation: int,
+) -> tuple[tuple[np.ndarray, ...], np.ndarray | None]:
+    """Run one non-interruptible OpenCV extraction between cancellation polls."""
+
+    _check_cancelled()
+    contours, hierarchy = cv2.findContours(mask, retrieval_mode, approximation)
+    _check_cancelled()
+    return contours, hierarchy
+
+
+def _external_silhouette_mask(
+    mask: np.ndarray,
+) -> tuple[np.ndarray, tuple[np.ndarray, ...], np.ndarray | None]:
+    """Fill only top-level exterior boundaries for output-specific edge budgets."""
+
+    contours, hierarchy = _find_contours_with_cancellation(
+        mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+    silhouette = np.zeros_like(mask)
+    if contours:
+        _check_cancelled()
+        cv2.drawContours(
+            silhouette,
+            contours,
+            -1,
+            255,
+            thickness=cv2.FILLED,
+            lineType=cv2.LINE_8,
+        )
+        _check_cancelled()
+    return silhouette, contours, hierarchy
+
+
+def _preflight_contour_complexity(
+    mask: np.ndarray,
+    contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS,
+) -> None:
     """Reject excessive edge work before allocating the 4x trace."""
+
+    contours: tuple[np.ndarray, ...] | None = None
+    hierarchy: np.ndarray | None = None
+    edge_mask = mask
+    if contour_output is RasterContourOutput.OUTER_ONLY:
+        edge_mask, contours, hierarchy = _external_silhouette_mask(mask)
 
     base_limit = math.ceil(
         MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION
         / RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
     )
-    base_transitions = _boundary_transition_count(mask, stop_after=base_limit)
+    base_transitions = _boundary_transition_count(edge_mask, stop_after=base_limit)
     projected_points = (
         base_transitions * RASTER_VECTORIZATION_OVERSAMPLE_FACTOR
     )
@@ -2430,11 +2478,12 @@ def _preflight_contour_complexity(mask: np.ndarray) -> None:
             "pre-simplification limit"
         )
 
-    contours, hierarchy = cv2.findContours(
-        mask,
-        cv2.RETR_TREE,
-        cv2.CHAIN_APPROX_SIMPLE,
-    )
+    if contours is None:
+        contours, hierarchy = _find_contours_with_cancellation(
+            mask,
+            cv2.RETR_TREE,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
     if hierarchy is None or not contours:
         raise RasterVectorizationError(
             "No closed contours were produced by the selected raster settings"
@@ -2447,9 +2496,21 @@ def _preflight_contour_complexity(mask: np.ndarray) -> None:
         )
 
 
-def _enforce_oversampled_edge_budget(mask: np.ndarray) -> None:
+def _enforce_oversampled_edge_budget(
+    mask: np.ndarray,
+    contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS,
+) -> None:
+    edge_mask = mask
+    if contour_output is RasterContourOutput.OUTER_ONLY:
+        edge_mask, contours, _hierarchy = _external_silhouette_mask(mask)
+        if len(contours) > MAX_RASTER_VECTORIZATION_CONTOURS:
+            _raise_complexity(
+                "Raster vectorization found "
+                f"{len(contours):,} exterior contours, exceeding the "
+                f"{MAX_RASTER_VECTORIZATION_CONTOURS:,}-contour limit"
+            )
     transitions = _boundary_transition_count(
-        mask,
+        edge_mask,
         stop_after=MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION,
     )
     if transitions > MAX_RASTER_VECTORIZATION_POINTS_BEFORE_SIMPLIFICATION:
@@ -6100,7 +6161,7 @@ def _prepare_vectorization_masks(
         ),
     )
     if component_count:
-        _preflight_contour_complexity(cleaned_mask)
+        _preflight_contour_complexity(cleaned_mask, options.contour_output)
     working_mask = _oversampled_mask(
         source,
         options,
@@ -6109,7 +6170,7 @@ def _prepare_vectorization_masks(
         source_mask,
         cleaned_mask,
     )
-    _enforce_oversampled_edge_budget(working_mask)
+    _enforce_oversampled_edge_budget(working_mask, options.contour_output)
     return _RasterMaskPreparation(
         threshold_used=threshold_used,
         source_mask=_readonly(source_mask),
@@ -6244,15 +6305,26 @@ def _emit_mask_ready(
 def _extract_vectorization_contours(
     mask: np.ndarray,
     approximation: int,
+    contour_output: RasterContourOutput = RasterContourOutput.ALL_CONTOURS,
     *,
     require_retained: bool = True,
 ) -> ForegroundContourPruneResult:
     try:
-        contours, hierarchy = extract_foreground_contours(
-            mask,
-            approximation=approximation,
-            maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
-        )
+        _check_cancelled()
+        if contour_output is RasterContourOutput.OUTER_ONLY:
+            contours, hierarchy = extract_foreground_contours(
+                mask,
+                approximation=approximation,
+                maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
+                retrieval_mode=cv2.RETR_EXTERNAL,
+            )
+        else:
+            contours, hierarchy = extract_foreground_contours(
+                mask,
+                approximation=approximation,
+                maximum_contours=MAX_RASTER_VECTORIZATION_CONTOURS,
+            )
+        _check_cancelled()
     except ForegroundContourLimitError as exc:
         _raise_complexity(
             "Raster vectorization found "
@@ -6264,6 +6336,7 @@ def _extract_vectorization_contours(
             "No closed contours were produced by the selected raster settings"
         ) from exc
     pruned = prune_degenerate_foreground_contours(contours, hierarchy)
+    _check_cancelled()
     if require_retained and not pruned.contours:
         raise RasterVectorizationError(
             "No closed contours were produced by the selected raster settings "
@@ -6284,6 +6357,7 @@ def _quick_preview_prepared_raster(
     contour_extraction = _extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
+        options.contour_output,
     )
     raw_contours = contour_extraction.contours
     hierarchy = contour_extraction.hierarchy
@@ -6502,6 +6576,7 @@ def _vectorize_pixel_source(
         contour_extraction = _extract_vectorization_contours(
             masks.working_mask,
             cv2.CHAIN_APPROX_NONE,
+            options.contour_output,
         )
     else:
         if prepared_mask is not None:
@@ -6813,6 +6888,11 @@ def _filter_forest_roots_before_fitting(
 
     for root in roots:
         _check_cancelled()
+        review_contour_indices = (
+            root.all_contour_indices
+            if options.contour_output is RasterContourOutput.ALL_CONTOURS
+            else root.contour_indices
+        )
         physical_by_index = {
             index: _physical_contour(
                 raw_contours[index],
@@ -6821,15 +6901,15 @@ def _filter_forest_roots_before_fitting(
                 width_mm,
                 height_mm,
             )
-            for index in root.all_contour_indices
+            for index in review_contour_indices
         }
         combined = np.concatenate(tuple(physical_by_index.values()), axis=0)
         threshold_width_mm = float(np.ptp(combined[:, 0]))
         threshold_height_mm = float(np.ptp(combined[:, 1]))
         root_depth = depths[root.root_index]
-        net_area_mm2 = 0.0
+        threshold_area_mm2 = 0.0
         total_boundary_area_allowance_mm2 = 0.0
-        for index in root.all_contour_indices:
+        for index in review_contour_indices:
             physical = physical_by_index[index]
             contour_area = abs(_signed_area(physical))
             perimeter_mm = float(
@@ -6848,11 +6928,13 @@ def _filter_forest_roots_before_fitting(
                 + math.pi * maximum_boundary_displacement_mm**2
             )
             relative_depth = depths[index] - root_depth
-            net_area_mm2 += contour_area if relative_depth % 2 == 0 else -contour_area
-        net_area_mm2 = max(0.0, net_area_mm2)
+            threshold_area_mm2 += (
+                contour_area if relative_depth % 2 == 0 else -contour_area
+            )
+        threshold_area_mm2 = max(0.0, threshold_area_mm2)
         minimum_native_area_mm2 = max(
             0.0,
-            net_area_mm2
+            threshold_area_mm2
             - total_boundary_area_allowance_mm2
             - numeric_area_margin_mm2,
         )
@@ -6864,9 +6946,17 @@ def _filter_forest_roots_before_fitting(
             and maximum_area is not None
             and minimum_native_area_mm2 > maximum_area
         ):
+            area_description = (
+                f"{threshold_area_mm2:.6g} mm^2 threshold area"
+                if options.contour_output is RasterContourOutput.ALL_CONTOURS
+                else (
+                    f"{threshold_area_mm2:.6g} mm^2 exterior silhouette "
+                    "threshold area"
+                )
+            )
             reasons.append(
                 f"conservative area lower bound {minimum_native_area_mm2:.6g} "
-                f"mm^2 (from {net_area_mm2:.6g} mm^2 threshold area) exceeds "
+                f"mm^2 (from {area_description}) exceeds "
                 f"the {maximum_area:.6g} mm^2 review maximum"
             )
         if can_bound_native_geometry:
@@ -7167,6 +7257,7 @@ def _vectorize_pixel_source_forest(
     contour_extraction = _extract_vectorization_contours(
         masks.working_mask,
         cv2.CHAIN_APPROX_NONE,
+        options.contour_output,
         require_retained=False,
     )
     raw_contours = contour_extraction.contours

@@ -77,6 +77,48 @@ def test_contrast_native_fits_independent_candidates_and_preserves_hole_tree() -
     assert washer.diagnostics["maximum_estimated_deviation_mm"] < 0.13
 
 
+def test_manual_contrast_outer_silhouette_emits_only_top_level_exteriors() -> None:
+    common = {
+        **_native_contrast_options().to_dict(),
+        "contrast_threshold_mode": "manual",
+        "contrast_threshold": 128,
+    }
+    image = _independent_shapes_with_hole()
+    work_area = WorkArea(0.0, 150.0, 0.0, 100.0)
+    full = detect_objects(image, TraceOptions(**common), work_area, 4.0)
+    outer = detect_objects(
+        image,
+        TraceOptions(**{**common, "trace_detail": "outer_silhouette"}),
+        work_area,
+        4.0,
+    )
+
+    full_washer = max(full.detections, key=lambda detection: detection.center_mm[0])
+    outer_washer = max(outer.detections, key=lambda detection: detection.center_mm[0])
+    outer_geometry = NativePathGeometry.from_dict(outer_washer.native_path or {})
+
+    assert len(full_washer.vector_contours_mm) == 2
+    assert len(outer_washer.vector_contours_mm) == 1
+    assert len(outer_geometry.subpaths) == 1
+    assert outer_washer.diagnostics["contour_parents"] == [None]
+    assert outer_washer.diagnostics["contour_depths"] == [0]
+    assert outer_washer.diagnostics["trace_detail"] == "outer_silhouette"
+    assert outer_washer.diagnostics["outer_only"] is True
+    assert outer_washer.diagnostics["area_basis"] == "outer_silhouette_output"
+    assert outer_washer.diagnostics["root_contour_count"] == 1
+    assert outer_washer.diagnostics["output_contour_count"] == 1
+    assert outer_washer.diagnostics["internal_contours_enumerated"] is False
+    assert outer_washer.diagnostics["ignored_internal_contour_count"] is None
+    assert outer_washer.area_mm2 > full_washer.area_mm2
+    assert (
+        outer_washer.diagnostics["foreground_mask_sha256"]
+        == full_washer.diagnostics["foreground_mask_sha256"]
+    )
+    assert outer.options.trace_detail == "outer_silhouette"
+    assert outer.diagnostics["trace_detail"] == "outer_silhouette"
+    assert outer.diagnostics["outer_only"] is True
+
+
 def test_native_contrast_preview_contours_match_fitted_geometry_envelopes() -> None:
     result = detect_objects(
         _independent_shapes_with_hole(),

@@ -309,12 +309,16 @@ def extract_foreground_contours(
     *,
     approximation: int = cv2.CHAIN_APPROX_NONE,
     maximum_contours: int | None = None,
+    retrieval_mode: int = cv2.RETR_TREE,
 ) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
-    """Extract one bounded OpenCV RETR_TREE hierarchy from a binary mask."""
+    """Extract one bounded tree or exterior-only foreground hierarchy."""
+
+    if retrieval_mode not in (cv2.RETR_TREE, cv2.RETR_EXTERNAL):
+        raise ValueError("retrieval_mode must be cv2.RETR_TREE or cv2.RETR_EXTERNAL")
 
     contours, hierarchy = cv2.findContours(
         _binary_mask(mask),
-        cv2.RETR_TREE,
+        retrieval_mode,
         approximation,
     )
     if hierarchy is None or not contours:

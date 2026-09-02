@@ -201,6 +201,7 @@ class _CreationHarness:
         *,
         detected: bool = True,
         grid: bool = False,
+        trace_detail: str | None = None,
     ) -> None:
         self.document = ProjectDocument.new()
         self.active_layer_id = self.document.active_layer_id
@@ -214,6 +215,8 @@ class _CreationHarness:
             },
             "grid": {"rows": 1, "columns": len(detections)} if grid else None,
         }
+        if trace_detail is not None:
+            self._trace_result["options"]["trace_detail"] = trace_detail
         self.controller = SimpleNamespace(cancel_trace_detection=lambda: None)
         self.workspace = _CreationWorkspace()
         self.trace_panel = SimpleNamespace(clear_result=lambda: None)
@@ -677,6 +680,7 @@ def test_native_cut_creation_marks_and_selects_one_reviewable_artwork_batch(
     assert all(
         item.metadata["trace_orientation_eligible"] is True
         and item.metadata["trace_output_mode"] == "native"
+        and "trace_detail" not in item.metadata
         and "trace_correction_deg" not in item.metadata
         and "trace_straightened" not in item.metadata
         for item in objects
@@ -693,6 +697,69 @@ def test_native_cut_creation_marks_and_selects_one_reviewable_artwork_batch(
     assert [item.id for item in harness.document.objects] == [
         item.id for item in objects
     ]
+
+
+@pytest.mark.parametrize(
+    ("purpose", "combine"),
+    [
+        ("cut", False),
+        ("cut", True),
+        ("stock", False),
+    ],
+    ids=["separate", "combined", "stock"],
+)
+def test_outer_silhouette_creation_records_provenance_on_every_route(
+    purpose: str,
+    combine: bool,
+) -> None:
+    detections = [
+        _native_detection_from_world("outer-1", 1, _world_bar((30.0, 35.0))),
+        _native_detection_from_world("outer-2", 2, _world_bar((70.0, 35.0))),
+    ]
+    if purpose == "stock":
+        detections = detections[:1]
+    harness = _CreationHarness(
+        detections,
+        trace_detail="outer_silhouette",
+    )
+
+    E3MainWindow._create_traced_objects(
+        harness,
+        {
+            "selected_ids": [str(item["id"]) for item in detections],
+            "output_mode": "native",
+            "purpose": purpose,
+            "replace_previous": False,
+            "combine": combine,
+        },
+    )
+
+    expected_count = 1 if combine or purpose == "stock" else len(detections)
+    objects = list(harness.document.objects)
+    assert len(objects) == expected_count
+    assert all(
+        item.metadata["trace_detail"] == "outer_silhouette"
+        for item in objects
+    )
+    if combine:
+        combined = objects[0]
+        assert len(combined.path_geometry().subpaths) == len(detections)
+        world_paths = object_polylines(combined)
+        assert len(world_paths) == len(detections)
+        centers = []
+        bounds = []
+        for path in world_paths:
+            points = np.asarray(path.points, dtype=np.float64)
+            minimum = points.min(axis=0)
+            maximum = points.max(axis=0)
+            bounds.append((*minimum, *maximum))
+            centers.append(tuple((minimum + maximum) / 2.0))
+        assert centers == pytest.approx([(30.0, 35.0), (70.0, 35.0)])
+        assert bounds == pytest.approx(
+            [(18.0, 33.0, 42.0, 37.0), (58.0, 33.0, 82.0, 37.0)]
+        )
+    else:
+        assert all(len(item.path_geometry().subpaths) == 1 for item in objects)
 
 
 def test_straighten_and_create_are_separate_history_entries() -> None:

@@ -1022,7 +1022,15 @@ def test_cancelled_trace_late_result_cannot_publish_or_create_project_geometry()
         ),
         document=document,
         _active_trace_request_id=17,
-        _trace_result={"request_id": 17, "detections": [{"id": "stale"}]},
+        _trace_result={
+            "request_id": 17,
+            "options": {"trace_detail": "outer_silhouette"},
+            "diagnostics": {
+                "trace_detail": "outer_silhouette",
+                "outer_only": True,
+            },
+            "detections": [{"id": "stale"}],
+        },
         _trace_raster_preview_images={},
         _trace_raster_preview_area=None,
         _trace_raster_preview_signature=None,
@@ -1038,13 +1046,26 @@ def test_cancelled_trace_late_result_cannot_publish_or_create_project_geometry()
     DesktopController._trace_detection_complete(
         controller,
         17,
-        {"request_id": 17, "detections": [{"id": "stale"}]},
+        {
+            "request_id": 17,
+            "options": {"trace_detail": "outer_silhouette"},
+            "diagnostics": {
+                "trace_detail": "outer_silhouette",
+                "outer_only": True,
+            },
+            "detections": [{"id": "stale"}],
+        },
     )
     E3MainWindow._clear_trace_preview(fake)
     E3MainWindow._trace_result_ready(
         fake,
         {
             "request_id": 17,
+            "options": {"trace_detail": "outer_silhouette"},
+            "diagnostics": {
+                "trace_detail": "outer_silhouette",
+                "outer_only": True,
+            },
             "detections": [
                 {
                     "id": "stale",

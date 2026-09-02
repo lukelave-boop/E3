@@ -308,14 +308,21 @@ should own a physical camera at a time.
   below its minimum or above its optional maximum are filled, while external
   border-connected background is never a hole. A background component touching
   hard-ineligible pixels is likewise protected and omitted from filterable-hole
-  aggregates. Cleanup precedes exact 4× Mask reconstruction, `RETR_TREE`
-  extraction, and native fitting, so any accepted native topology is validated
-  against that production Mask. A later fitting failure or cancellation publishes
-  no accepted geometry, although the already-produced Mask preview may remain
-  visible. Filling a hole may intentionally absorb nested foreground descendants;
-  preserving it retains the normal even-odd hierarchy.
-  Each root `RETR_TREE` contour plus all descendants is one indivisible temporary
-  review candidate; unrelated failing roots do not discard verified peers.
+  aggregates. Cleanup precedes exact 4× Mask reconstruction, detail-selected
+  contour extraction, and native fitting, so any accepted native topology is
+  validated against that production Mask. A later fitting failure or
+  cancellation publishes no accepted geometry, although the already-produced
+  Mask preview may remain visible. Filling a hole may intentionally absorb
+  nested foreground descendants; preserving it retains the normal even-odd
+  hierarchy.
+  Full detail uses the existing bounded `RETR_TREE` hierarchy: each root plus all
+  descendants is one indivisible temporary review candidate, and unrelated
+  failing roots do not discard verified peers. Outer silhouette instead uses
+  bounded `RETR_EXTERNAL` extraction before contour-count limits and fitting, so
+  only each disconnected root's actual exterior is authoritative. Children
+  cannot consume hierarchy/native-fit budgets or veto that root, while the
+  exterior retains its ordinary closure, source-edge, topology, bounds, and
+  complexity validation.
 - Non-grid Camera Trace **Auto detect** is orchestration, not a fourth detector.
   One corrected capture and one eligibility result become one immutable camera-
   normalization result. Auto
@@ -342,6 +349,15 @@ should own a physical camera at a time.
   the exact winning production byte for successful Auto raster output, `N/A` for
   an Auto Color winner, and `—` before detection or after Clear, failure, or
   staleness; it never overwrites the editable manual threshold.
+- Trace detail is orthogonal to geometry representation. Missing preferences
+  select Full detail. Full detail preserves current nested topology. Outer
+  silhouette keeps the exact cleaned Mask but supplies only true external roots
+  to the shared raster and Color fitting adapters; top-level Auto propagates the
+  same choice to every eligible attempt. Grid disables the control and remains
+  specialized Full detail. Neither mode closes gaps, takes a hull, merges roots,
+  or changes threshold/eligibility evidence. Object-limit values are not
+  rewritten: Full detail retains its even-odd post-vector area basis, while
+  Outer silhouette reports and reviews the exterior geometry it emits.
 - Camera Trace **By contrast** with grid enabled retains the specialized
   global/illumination-corrected/adaptive and signed-local multi-mask detector. It
   ranks repeated-grid hypotheses by coherent filled-region support, can classify
@@ -384,7 +400,8 @@ should own a physical camera at a time.
   the immutable corrected **Camera** frame, exact production **Exposed bed**
   mask, exact material **Eligible** mask, exact polarity-specific **Normalized**
   threshold input (or grayscale context for Color), or the exact 4× production
-  contour **Mask** used by `RETR_TREE`.
+  contour **Mask** used by Full-detail `RETR_TREE` or Outer-silhouette
+  `RETR_EXTERNAL` extraction.
   The workspace validates 4× dimensions from the already-rounded source raster,
   not by re-rounding the physical area at the higher display density, so a
   fractional final pixel strip cannot reject the exact mask. Raster mask
@@ -914,7 +931,8 @@ vectorizer do not call `DesktopController`, `MachineService`,
 camera, planning, G-code, or execution paths.
 
 `geometry.foreground` owns source-neutral binary connected-component cleanup,
-bounded `RETR_TREE` extraction, deterministic outer-tree decomposition, and
+bounded full-hierarchy `RETR_TREE` and exterior-only `RETR_EXTERNAL` extraction,
+deterministic outer-tree decomposition, and
 even-odd tree rendering. It also owns conservative post-extraction pruning of
 non-geometric contour nodes. `project.raster_vectorize` locks homogeneous
 cleaned-mask 3×3 interiors to their source classification before contour
@@ -952,9 +970,11 @@ geometry.
 Auto strategy failure and candidate failure are separate. A failed attempt is a
 bounded diagnostic and does not stop later strategies. Raster Auto asks the
 shared vectorizer for root-isolated results; Color Auto isolates fitting at the
-same root-tree boundary. In both cases one root plus every hole and island
-descendant is indivisible. A rejected compound tree is never split into fake
-objects. The raster forest first runs each ordinary global validator. Only a
+same root-tree boundary. In Full detail, one root plus every hole and island
+descendant is indivisible. In Outer silhouette, each externally extracted root
+alone is indivisible and descendants are never presented to fitting. A rejected
+compound tree is never split into fake objects. The raster forest first runs
+each ordinary global validator. Only a
 non-complexity global failure starts per-root diagnosis; complete surviving
 trees are rebased and the unchanged global validator runs again. A cross-root
 failure for which every tree passes alone and every complexity-limit failure
@@ -993,10 +1013,13 @@ continuous-validation limit remains authoritative;
 profiling the Coleman stencil showed that proof was inexpensive compared with
 Newton refinement, so it was not weakened or bypassed.
 
-Contour extraction interpolates the immutable pixel source to a 4× internal mask,
-uses `RETR_TREE` hierarchy, and maps contour samples into physical coordinates
-before fitting. The extracted contour and hierarchy remain the topology
-authority. For an independent contour, the exact stage estimates a local normal
+Contour extraction interpolates the immutable pixel source to a 4× internal mask
+and maps contour samples into physical coordinates before fitting. Full detail
+uses the existing `RETR_TREE` hierarchy. Outer silhouette uses `RETR_EXTERNAL`
+before contour-count validation and fitting, creates a flat root hierarchy, and
+never enumerates or fits ignored internal topology. In both cases the extracted
+contour set remains the topology authority for the selected detail. For an
+independent contour, the exact stage estimates a local normal
 over 1.25 source pixels and samples the original composited grayscale and alpha
 fields at 0.125-pixel intervals over ±1.25 source pixels. The foreground margin
 uses the same manual/Otsu/alpha threshold and inversion semantics as mask

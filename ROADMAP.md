@@ -34,7 +34,8 @@ The following foundations are implemented and automated-test covered:
   high-contrast preview comparison controls;
 - unified Camera Trace review with physical material eligibility, bounded Auto
   threshold selection, independent physical object/hole area filtering for
-  non-grid raster strategies, compound native line/cubic fitting, and an
+  non-grid raster strategies, explicit full-hierarchy or exterior-only Trace
+  detail, compound native line/cubic fitting, and an
   optional post-Create geometric Straighten command over selected finished
   project artwork, while retaining the independent repeated-object/grid
   workflow;
