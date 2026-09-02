@@ -7,6 +7,25 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-02**
 
+## Active Python 3.10 post-merge compatibility correction
+
+Post-merge Windows CI run `33586179523` failed only because the test subprocess
+for invalid E3 DEV TEST pointer installation exceeded its 30-second ceiling on
+the Python 3.10 runner. The preceding PR-head Python 3.10 job passed, the PR-head
+and merge revisions have the identical Git tree, and the exact affected test
+passes locally under Python 3.10.20 in under one second. The test retains its
+exact fail-closed rejection and no-write assertions while allowing 120 seconds
+for cold Windows PowerShell/Python startup and endpoint scanning on a loaded CI
+host. Production launcher behavior and all machine, calibration, shutdown,
+Air Assist, STOP, and safety authority are unchanged.
+
+The exact affected Python 3.10 test passes in **0.88 seconds**. The complete
+CI-equivalent Python 3.10 base/non-desktop suite passes **2,716 tests with 62
+expected skips** in **143.16 seconds**, and the complete Python 3.12 desktop
+suite passes **3,270 tests with 15 expected platform or privilege skips** in
+**194.76 seconds**. Repository Ruff, `compileall -q laser_aligner`, and
+`git diff --check` pass.
+
 ## Active guided calibration and actionable preflight remediation
 
 Machine Setup now places a compact state-driven **Goal / Do this now / Done
