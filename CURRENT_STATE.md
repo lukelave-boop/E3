@@ -7,6 +7,35 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-02**
 
+## Active Pi secondary Air Assist serial framing correction
+
+The Pi-local POSIX serial transport now owns an explicit pre-command receive
+synchronization operation. After the secondary controller's startup settle
+delay, it discards queued complete lines, any unterminated receive fragment,
+and unread kernel RX bytes with `TCIFLUSH` before sending the unchanged exact
+`M106 S0` initialization handshake. Receive framing, draining,
+synchronization, close, and reopen share receive/lifecycle locking so data from
+an old descriptor cannot acknowledge a command in a new logical session.
+Output data is not flushed.
+
+An `Unknown command` rejection during the initialization handshake closes the
+untrusted session and permits exactly one reopen, settle, synchronize, and
+`M106 S0` retry. A second rejection remains fail closed. Durable recovery still
+uses the exact binding accepted with the prior job and is cleared only after an
+acknowledged OFF; disabling the current profile affects only future jobs.
+
+Focused Windows verification passes **84 secondary-controller, Air Assist,
+Pi-owned lifecycle, recovery-store, and remote-node tests**. Targeted Ruff,
+`compileall -q laser_aligner`, and `git diff --check` pass. The complete Windows
+four-worker suite passes **3,418 tests with 19 expected platform or privilege
+skips**. The new POSIX
+pseudoterminal regression covers complete CR/LF/CRLF startup lines, invalid
+UTF-8 and the exact unterminated `\x13\xfaBAD` fragment, plus bytes pending in
+kernel RX, but remains unexecuted on Windows because POSIX pseudoterminals and
+`termios` are unavailable; the available local WSL Python lacks pytest. No Pi,
+network service, real serial port, controller, fan, motion, arming, or laser was
+accessed. No new physical verification is claimed.
+
 ## Final feature integration cleanup
 
 The authoritative independent Trace hole-area implementation, Camera Trace

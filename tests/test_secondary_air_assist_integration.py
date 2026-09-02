@@ -51,7 +51,7 @@ class _FakeSecondarySerial:
         self.on_read = on_read
         self.open_calls = 0
         self.close_calls = 0
-        self.drain_calls = 0
+        self.synchronize_calls = 0
         self.writes: list[str] = []
         self._fault_lock = threading.Lock()
         self._passive_fault: BaseException | None = None
@@ -64,9 +64,8 @@ class _FakeSecondarySerial:
     def close(self) -> None:
         self.close_calls += 1
 
-    def drain(self) -> list[str]:
-        self.drain_calls += 1
-        return []
+    def synchronize_input(self) -> None:
+        self.synchronize_calls += 1
 
     def write_line(self, line: str) -> None:
         self.writes.append(line)

@@ -56,12 +56,18 @@ class PosixSerial:
         self._fault_message: str | None = None
         self._reader: threading.Thread | None = None
         self._write_lock = threading.Lock()
+        self._receive_lock = threading.RLock()
+        self._lifecycle_lock = threading.RLock()
 
     @property
     def is_open(self) -> bool:
         return self._fd is not None
 
     def open(self) -> None:
+        with self._lifecycle_lock:
+            self._open_locked()
+
+    def _open_locked(self) -> None:
         if self.is_open:
             return
         baud = _BAUD_RATES.get(self.baudrate)
@@ -88,15 +94,16 @@ class PosixSerial:
             attrs[6][termios.VMIN] = 0
             attrs[6][termios.VTIME] = 1
             termios.tcsetattr(fd, termios.TCSANOW, attrs)
-            termios.tcflush(fd, termios.TCIOFLUSH)
+            termios.tcflush(fd, termios.TCIFLUSH)
         except OSError as exc:
             os.close(fd)
             raise MachineError(f"Could not configure serial port {self.path}: {exc}") from exc
         # A transport instance may be reopened after a controller reset or
         # disconnect. Replies and partial bytes belong to the old descriptor
         # and must never acknowledge commands in the new serial session.
-        self._queue = queue.Queue(maxsize=_MAX_QUEUED_SERIAL_LINES)
-        self._buffer.clear()
+        with self._receive_lock:
+            self._queue = queue.Queue(maxsize=_MAX_QUEUED_SERIAL_LINES)
+            self._buffer.clear()
         with self._fault_lock:
             self._fault_message = None
             self._stop.clear()
@@ -105,49 +112,57 @@ class PosixSerial:
         self._reader.start()
 
     def close(self) -> None:
-        with self._fault_lock:
-            self._stop.set()
-        if self._reader and self._reader.is_alive():
-            self._reader.join(timeout=1)
-        if self._fd is not None:
-            try:
-                os.close(self._fd)
-            except OSError:
-                pass
-        self._fd = None
+        with self._lifecycle_lock:
+            with self._fault_lock:
+                self._stop.set()
+            if self._reader and self._reader.is_alive():
+                self._reader.join(timeout=1)
+            fd = self._fd
+            self._fd = None
+            self._reader = None
+            if fd is not None:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+            with self._receive_lock:
+                self._buffer.clear()
+                self._queue = queue.Queue(maxsize=_MAX_QUEUED_SERIAL_LINES)
 
     def _reader_loop(self) -> None:
-        while not self._stop.is_set() and self._fd is not None:
+        fd = self._fd
+        while not self._stop.is_set() and fd is not None:
             try:
-                readable, _, _ = select.select([self._fd], [], [], 0.1)
-                if not readable:
-                    continue
-                chunk = os.read(self._fd, 4096)
-                if not chunk:
-                    if not self._stop.is_set():
-                        self._fail_reader("Serial connection closed unexpectedly")
-                    return
-                self._buffer.extend(chunk)
-                while b"\n" in self._buffer or b"\r" in self._buffer:
-                    newline_positions = [position for position in (self._buffer.find(b"\n"), self._buffer.find(b"\r")) if position >= 0]
-                    index = min(newline_positions)
-                    if index > _MAX_SERIAL_LINE_BYTES:
+                with self._receive_lock:
+                    readable, _, _ = select.select([fd], [], [], 0.1)
+                    if not readable:
+                        continue
+                    chunk = os.read(fd, 4096)
+                    if not chunk:
+                        if not self._stop.is_set():
+                            self._fail_reader("Serial connection closed unexpectedly")
+                        return
+                    self._buffer.extend(chunk)
+                    while b"\n" in self._buffer or b"\r" in self._buffer:
+                        newline_positions = [position for position in (self._buffer.find(b"\n"), self._buffer.find(b"\r")) if position >= 0]
+                        index = min(newline_positions)
+                        if index > _MAX_SERIAL_LINE_BYTES:
+                            self._fail_reader(
+                                f"Serial response line exceeded {_MAX_SERIAL_LINE_BYTES} bytes"
+                            )
+                            return
+                        raw = bytes(self._buffer[:index])
+                        del self._buffer[: index + 1]
+                        while self._buffer and self._buffer[0] in (10, 13):
+                            del self._buffer[:1]
+                        text = raw.decode("utf-8", errors="replace").strip()
+                        if text and not self._publish_line(text):
+                            return
+                    if len(self._buffer) > _MAX_SERIAL_LINE_BYTES:
                         self._fail_reader(
                             f"Serial response line exceeded {_MAX_SERIAL_LINE_BYTES} bytes"
                         )
                         return
-                    raw = bytes(self._buffer[:index])
-                    del self._buffer[: index + 1]
-                    while self._buffer and self._buffer[0] in (10, 13):
-                        del self._buffer[:1]
-                    text = raw.decode("utf-8", errors="replace").strip()
-                    if text and not self._publish_line(text):
-                        return
-                if len(self._buffer) > _MAX_SERIAL_LINE_BYTES:
-                    self._fail_reader(
-                        f"Serial response line exceeded {_MAX_SERIAL_LINE_BYTES} bytes"
-                    )
-                    return
             except (OSError, ValueError):
                 if not self._stop.is_set():
                     self._fail_reader("Serial read failed")
@@ -169,13 +184,14 @@ class PosixSerial:
                 return
             self._fault_message = message
             self._stop.set()
-        self._buffer.clear()
-        while True:
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                break
-        self._queue.put_nowait(MachineError(message))
+        with self._receive_lock:
+            self._buffer.clear()
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    break
+            self._queue.put_nowait(MachineError(message))
 
     @property
     def fault(self) -> str | None:
@@ -217,8 +233,10 @@ class PosixSerial:
         self.write_raw(line.rstrip("\r\n").encode("ascii", errors="replace") + b"\n")
 
     def read_line(self, timeout: float = 1.0) -> str | None:
+        with self._receive_lock:
+            receive_queue = self._queue
         try:
-            response = self._queue.get(timeout=max(0.0, timeout))
+            response = receive_queue.get(timeout=max(0.0, timeout))
         except queue.Empty:
             return None
         if isinstance(response, MachineError):
@@ -226,12 +244,31 @@ class PosixSerial:
         return response
 
     def drain(self) -> list[str]:
-        lines: list[str] = []
-        while True:
+        with self._receive_lock:
+            lines: list[str] = []
+            while True:
+                try:
+                    response = self._queue.get_nowait()
+                except queue.Empty:
+                    return lines
+                if isinstance(response, MachineError):
+                    raise response
+                lines.append(response)
+
+    def synchronize_input(self) -> None:
+        """Discard every receive byte that predates the next command."""
+
+        with self._receive_lock:
+            fd = self._fd
+            if fd is None:
+                raise MachineError("Serial port is not open")
             try:
-                response = self._queue.get_nowait()
-            except queue.Empty:
-                return lines
-            if isinstance(response, MachineError):
-                raise response
-            lines.append(response)
+                termios.tcflush(fd, termios.TCIFLUSH)
+            except OSError as exc:
+                raise MachineError(f"Could not purge serial input: {exc}") from exc
+            self._buffer.clear()
+            while True:
+                try:
+                    self._queue.get_nowait()
+                except queue.Empty:
+                    return

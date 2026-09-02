@@ -128,6 +128,14 @@ exact FAN2 ON with `M106 S255`; intended OFF with `M106 S0` and the complete
 Pi-owned lifecycle remain pending physical confirmation. The secondary mode
 never uses a `P` parameter or `M107`.
 
+The Pi-local POSIX transport treats controller startup as a serial-session
+synchronization boundary. After the configured settle delay it atomically
+discards completed input lines, an unterminated receive fragment, and unread
+kernel RX bytes with an input-only flush before issuing the unchanged exact
+`M106 S0` handshake. An `Unknown command` startup rejection closes that session
+and permits one fresh-session retry; the second failure remains authoritative
+and fail closed. Receive synchronization never flushes transmitted data.
+
 ## Safety boundary
 
 The node is experimental software, not a safety-rated control. The physical

@@ -36,7 +36,7 @@ class _SerialTransport(Protocol):
 
     def read_line(self, timeout: float = 1.0) -> str | None: ...
 
-    def drain(self) -> list[str]: ...
+    def synchronize_input(self) -> None: ...
 
     def raise_if_faulted(self) -> None: ...
 
@@ -203,8 +203,9 @@ class CrealityControllerOwner:
             self._transport = transport
             transport.open()
             self._sleep(self.session.startup_delay_seconds)
-            # Startup chatter predates the next command and can never acknowledge it.
-            transport.drain()
+            # Startup chatter, including an unterminated fragment and unread
+            # kernel RX bytes, predates the next command and cannot acknowledge it.
+            transport.synchronize_input()
         except Exception as exc:
             if transport is not None:
                 self._transport = transport
@@ -390,10 +391,20 @@ class SecondaryMarlinFanController:
         self._owner._secondary_fan_enabled = False
 
     def initialize_off(self) -> None:
-        """Open the persistent session and require an acknowledged OFF."""
+        """Open the persistent session and require an acknowledged OFF.
+
+        A startup-framing rejection may receive one fresh-session retry.  The
+        rejection is never ignored; failure of the second exchange remains
+        fail closed.
+        """
 
         with self._owner._lock:
-            self._force_off()
+            try:
+                self._force_off()
+            except SecondaryControllerError as exc:
+                if "unknown command" not in str(exc).casefold():
+                    raise
+                self._force_off()
 
     def ensure_off(self) -> None:
         """Force a fresh acknowledged OFF, even when OFF was previously known."""

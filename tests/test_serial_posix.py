@@ -122,6 +122,51 @@ def test_posix_serial_latches_hangup_without_consuming_and_reopen_clears_it() ->
                 os.close(fd)
 
 
+@pytest.mark.parametrize(
+    "startup",
+    [
+        b"start\nready\n\x13\xfaBAD",
+        b"start\rready\r\x13\xfaBAD",
+        b"start\nready\n\x13\xfaBAD",
+        b"start\r\nready\r\n\x13\xfaBAD",
+    ],
+    ids=["lf", "cr", "lf-invalid-utf8", "crlf"],
+)
+def test_synchronize_input_discards_queued_partial_and_kernel_rx_bytes(
+    startup: bytes,
+) -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    master_fd, slave_fd = pty.openpty()
+    serial = PosixSerial(os.ttyname(slave_fd), 115200)
+    try:
+        serial.open()
+        os.write(master_fd, startup)
+        deadline = time.monotonic() + 1.0
+        while serial._queue.qsize() != 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert serial._queue.qsize() == 2
+        assert bytes(serial._buffer) == b"\x13\xfaBAD"
+        assert b"\x13\xfaBAD" + b"M106 S0\n" == b"\x13\xfaBADM106 S0\n"
+
+        # Keep the reader outside the kernel queue while adding one final byte.
+        # Synchronization must flush that unread byte as well as framed state.
+        with serial._receive_lock:
+            os.write(master_fd, b"K")
+            serial.synchronize_input()
+
+        assert serial.read_line(timeout=0.05) is None
+        assert bytes(serial._buffer) == b""
+        serial.write_line("M106 S0")
+        assert read_master(master_fd) == b"M106 S0\n"
+    finally:
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
 def test_posix_serial_rejects_an_unbounded_controller_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -130,8 +130,8 @@ class RecordingSecondarySerial:
     def close(self) -> None:
         self.close_calls += 1
 
-    def drain(self) -> list[str]:
-        return []
+    def synchronize_input(self) -> None:
+        return None
 
     def write_line(self, line: str) -> None:
         self.writes.append(line)

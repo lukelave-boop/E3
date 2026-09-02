@@ -32,7 +32,7 @@ class FakeSerial:
         self.on_read = on_read
         self.open_calls = 0
         self.close_calls = 0
-        self.drain_calls = 0
+        self.synchronize_calls = 0
         self.writes: list[str] = []
         self.passive_fault: BaseException | None = None
 
@@ -42,9 +42,8 @@ class FakeSerial:
     def close(self) -> None:
         self.close_calls += 1
 
-    def drain(self) -> list[str]:
-        self.drain_calls += 1
-        return []
+    def synchronize_input(self) -> None:
+        self.synchronize_calls += 1
 
     def write_line(self, line: str) -> None:
         self.writes.append(line)
@@ -115,7 +114,7 @@ def test_exact_fan2_commands_are_acknowledged_and_redundant_state_is_suppressed(
     fan.ensure_off()
 
     assert serial.open_calls == 1
-    assert serial.drain_calls == 1
+    assert serial.synchronize_calls == 1
     assert serial.writes == [
         "M106 S0",
         "M106 S255",
@@ -138,7 +137,7 @@ def test_mapping_digest_mismatch_is_rejected_without_a_write() -> None:
     assert serial.writes == ["M106 S0"]
 
 
-def test_initial_open_applies_startup_delay_and_drains_before_exact_off() -> None:
+def test_initial_open_applies_startup_delay_and_synchronizes_before_exact_off() -> None:
     delays: list[float] = []
     serial = FakeSerial(["ok"])
     _owner, fan = _controller(
@@ -150,8 +149,39 @@ def test_initial_open_applies_startup_delay_and_drains_before_exact_off() -> Non
     fan.initialize_off()
 
     assert delays == [2.0]
-    assert serial.drain_calls == 1
+    assert serial.synchronize_calls == 1
     assert serial.writes == ["M106 S0"]
+
+
+def test_startup_framing_rejection_gets_exactly_one_fresh_session_retry() -> None:
+    stale = FakeSerial(["echo:Unknown command: \x13�BADM106 S0"])
+    fresh = FakeSerial(["ok"])
+    owner, fan = _controller([stale, fresh])
+
+    fan.initialize_off()
+
+    assert stale.writes == ["M106 S0"]
+    assert stale.close_calls == 1
+    assert fresh.open_calls == 1
+    assert fresh.synchronize_calls == 1
+    assert fresh.writes == ["M106 S0"]
+    assert owner.ready is True
+    assert fan.status.enabled is False
+
+
+def test_persistent_startup_framing_rejection_fails_after_one_retry() -> None:
+    first = FakeSerial(["echo:Unknown command: BADM106 S0"])
+    second = FakeSerial(["echo:Unknown command: BADM106 S0"])
+    owner, fan = _controller([first, second])
+
+    with pytest.raises(SecondaryControllerError, match="rejected"):
+        fan.initialize_off()
+
+    assert first.writes == ["M106 S0"]
+    assert second.writes == ["M106 S0"]
+    assert first.close_calls == 1
+    assert second.close_calls == 1
+    assert owner.ready is False
 
 
 @pytest.mark.parametrize(
@@ -173,7 +203,10 @@ def test_exchange_failure_closes_and_untrusts_session(
     serial: FakeSerial,
     match: str,
 ) -> None:
-    owner, fan = _controller([serial], read_timeout_seconds=0.005)
+    serials = [serial]
+    if match == "rejected":
+        serials.append(FakeSerial(["Error:Unknown command"]))
+    owner, fan = _controller(serials, read_timeout_seconds=0.005)
 
     with pytest.raises(SecondaryControllerError, match=match):
         fan.initialize_off()
