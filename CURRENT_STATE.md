@@ -44,9 +44,10 @@ action. Saving calibration evidence invalidates stale prepared jobs and
 preflight reports through the existing `calibrationChanged` path.
 
 Focused calibration, persistence, preflight, Machine Setup, layout, navigation,
-Machine Manager, and async job-preparation verification passes **405 tests**.
-The complete Windows four-worker repository suite passes **3,223 tests** with
-**15 expected platform skips** in **254.13 seconds**. Repository Ruff,
+Machine Manager, async job-preparation, and development-identity verification
+passes **435 tests** in **130.02 seconds**. The complete Windows four-worker
+repository suite passes **3,228 tests** with **15 expected platform skips** in
+**323.28 seconds**. Repository Ruff,
 `compileall -q laser_aligner`, and `git diff --check` pass. These are
 automated/simulated and offscreen-widget checks only: no physical camera,
 controller, motion, laser output, or Air Assist test was performed. Calibration
