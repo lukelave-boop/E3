@@ -37,7 +37,10 @@ The following foundations are implemented and automated-test covered:
   post-Create geometric Straighten command over selected finished project
   artwork, while retaining the independent repeated-object/grid workflow;
 - SVG, raster-image, LightBurn, and foreign-G-code preflight;
-- structured job readiness preflight before authoritative exact planning;
+- structured job readiness preflight before authoritative exact planning,
+  including immutable numbered remediation and allowlisted UI-only navigation;
+- numbered Machine Setup guidance with an explicit capture-then-save honeycomb
+  frame workflow and independent ruler-overlay/frame status;
 - machine-aware material recipes that remain authoring aids rather than
   execution authority;
 - neutral machine transports separated from immutable GRBL and Marlin dialect

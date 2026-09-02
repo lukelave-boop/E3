@@ -105,7 +105,7 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
    reports 25/25 detected, 25/25 inliers, RMS no greater than `0.50 mm`, and
    maximum error no greater than `0.80 mm`.
 6. Click **Yes** in **Apply fresh base map**.
-7. With the new map active, click **Home / park, capture ruler overlay**. The
+7. With the new map active, click **1. Home, park & capture ruler overlay**. The
    orange outline is the configured camera/work rectangle; the green outline
    is the smaller laser-output rectangle after the configured boundary margin
    and any configured laser-spot offset.
@@ -113,10 +113,13 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
    honeycomb rulers. If origin, scale, or an edge disagrees, stop and correct
    the camera-to-machine calibration evidence before repeating Step 3. Do not
    resize the machine-output envelope merely to match the movable honeycomb.
-   The ruler overlay is a diagnostic, not automatic proof of laser reach.
+   The ruler overlay is the current image and verification evidence used by the
+   next action. It is a diagnostic, not automatic proof of laser reach, and
+   **does not save the honeycomb frame**.
 8. To establish the movable honeycomb's rigid job frame, confirm **Configured
     physical ruler span** displays the measured span configured for the running
-    saved machine, then click **Detect honeycomb automatically**. If it displays
+    saved machine, then click **2. Detect & save honeycomb frame**. This action
+    remains disabled until Step 1 has a current ruler overlay. If the span displays
     **Not configured**, use Machine Manager to configure the saved machine's
     measured physical honeycomb span before returning here; do not guess it in
     Machine Setup. Vision segments the dominant rectangle, independently fits
@@ -124,8 +127,10 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
     active bed map. It preserves their order as origin, +X, opposite, and +Y.
     **Configured physical ruler span** defines the nominal local width and
     height; it does not replace the four observed corners or fabricate measured
-    edge lengths. Printed tick recognition is not required. Review and accept
-    the magenta outline and fit report. Acceptance stores the exact reviewed
+    edge lengths. Printed tick recognition is not required. Confirm that the
+    magenta outline follows all four cutting-surface edges, then click
+    **Save honeycomb frame**. **Try again** and **Cancel** do not save the candidate.
+    Saving stores the exact reviewed
     teaching image, its four corners, and the digests that bind it to the
     schema-2 support and complete bed map.
 
@@ -135,14 +140,16 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
     moved, scaled, or non-square
     evidence blocks arming.
 
-    **Fallback: detect with 3 hints** is display/diagnostic only. Click anywhere
+    Under **Advanced / troubleshooting**, **Fallback: detect with 3 hints** is
+    labeled **Diagnostic only — does not authorize powered honeycomb-local
+    jobs.** Click anywhere
     along the X ruler, near the shared zero, and anywhere along the Y ruler. The
     clicks only identify search corridors; they are not measured points. If the
     fit fails, nothing is saved. A saved three-hint result remains legacy visual
     evidence and cannot authorize honeycomb-local or powered post-map work.
 
     **These three hints do not calibrate the camera or machine and are not used
-    as ruler coordinates.** Only the accepted automatic four-edge result
+    as ruler coordinates.** Only the saved automatic four-edge result
     establishes the execution-verifiable honeycomb-local job frame: ruler zero
     is `(0,0)`, +X follows the bottom edge, and +Y follows the left edge. New
     projects run from X0/Y0 to the configured physical span on each axis; the
@@ -162,8 +169,9 @@ restrained sacrificial sheet must cover the exact reviewed 25-cross pattern.
    software calibration gate.
 
 **Continue directly to Step 4 when:** the reviewed base map has been applied,
-the ruler overlay has no unexplained origin, scale, or crop discrepancy, and a
-current accepted automatic four-corner honeycomb frame has been recorded.
+the ruler overlay has no unexplained origin, scale, or crop discrepancy, and
+**Honeycomb frame: CURRENT** confirms that the automatic four-corner frame was
+saved. **Ruler overlay: CURRENT** alone is not completion.
 Legacy schema-1 and three-hint visual references do not qualify for any powered
 post-map Machine Setup job, including a machine-coordinate calibration job.
 The separate laser-off direction/bounds check is a pre-production hardware
@@ -179,13 +187,13 @@ saved capture receipt can be reanalyzed after an application restart.
 **Goal:** measure and, when justified, correct the remaining camera-to-machine
 error at eight positions not used by the base map.
 
-Every powered segment in this job must fit the accepted automatic four-corner
+Every powered segment in this job must fit the current saved automatic four-corner
 honeycomb support, and the complete program must fit the configured machine
 area. The prepared session binds the exact G-code, support, and bed map. Start
 rechecks containment and the immutable support/map binding, performs one
 laser-off Home, and starts without another camera capture or camera-position park.
 
-1. Confirm the accepted automatic support is current, then secure a clean
+1. Confirm the saved automatic support is current, then secure a clean
    sacrificial sheet at the same calibrated surface height.
 2. Enter a previously tested marking power,
    and click **Prepare powered mark job**.
@@ -204,8 +212,8 @@ laser-off Home, and starts without another camera capture or camera-position par
    correction is valid; Step 5 provides the independent verdict.
 7. Applying or resetting a translation/full-bed refinement changes the bed-map
    identity and clears the support. If you changed the map, return to Step 3's
-   ruler-overlay capture and accept a new automatic four-edge support before
-   preparing any other powered post-map job.
+   ruler-overlay capture, click **2. Detect & save honeycomb frame**, and then
+   click **Save honeycomb frame** before preparing another powered post-map job.
 
 **Continue to Step 5 when:** the eight-point result has been reviewed and any
 chosen eligible correction has finished applying.
@@ -222,12 +230,12 @@ before the next powered stage.
 **Goal:** independently test the final map at five positions that were not used
 to fit it.
 
-The powered five-cross session requires the current accepted automatic
+The powered five-cross session requires the current saved automatic
 four-corner support. Its powered segments must fit that polygon, its complete
 program remains machine-bounded, and **START JOB** rechecks the exact support/map
 binding before the single laser-off Home and arming sequence.
 
-1. Confirm the accepted automatic support is current, then secure a clean
+1. Confirm the saved automatic support is current, then secure a clean
    sacrificial sheet at the calibrated surface height.
 2. Enter a previously tested marking power,
    and click **Prepare powered validation job**.

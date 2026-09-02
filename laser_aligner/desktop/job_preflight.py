@@ -83,6 +83,8 @@ def _normalized_counts(report: JobPreflightReport) -> dict[str, int]:
 class JobPreflightView(QtWidgets.QWidget):
     """Embeddable, read-only, bounded presentation of a preflight report."""
 
+    navigationRequested = QtCore.Signal(str)
+
     def __init__(
         self,
         report: JobPreflightReport,
@@ -193,7 +195,7 @@ class JobPreflightView(QtWidgets.QWidget):
         )
 
         visible_findings = report.findings[:MAX_DISPLAYED_PREFLIGHT_FINDINGS]
-        for finding in visible_findings:
+        for finding_index, finding in enumerate(visible_findings):
             values = (
                 _severity_label(finding.severity),
                 _text(finding.code),
@@ -203,6 +205,7 @@ class JobPreflightView(QtWidgets.QWidget):
                 _context_text(finding.context),
             )
             item = QtWidgets.QTreeWidgetItem(values)
+            item.setData(0, QtCore.Qt.ItemDataRole.UserRole, finding_index)
             for column, cell in enumerate(values):
                 item.setToolTip(column, cell)
             self.findings_tree.addTopLevelItem(item)
@@ -224,6 +227,37 @@ class JobPreflightView(QtWidgets.QWidget):
         self.findings_tree.setColumnWidth(4, 220)
         self.findings_tree.setColumnWidth(5, 220)
         layout.addWidget(self.findings_tree, 1)
+
+        self.remediation_group = QtWidgets.QGroupBox("How to fix")
+        self.remediation_group.setObjectName("jobPreflightRemediation")
+        remediation_layout = QtWidgets.QVBoxLayout(self.remediation_group)
+        self.resolution_steps_label = QtWidgets.QLabel()
+        self.resolution_steps_label.setObjectName("jobPreflightResolutionSteps")
+        self.resolution_steps_label.setWordWrap(True)
+        self.resolution_steps_label.setMinimumWidth(0)
+        self.resolution_steps_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        remediation_layout.addWidget(self.resolution_steps_label)
+
+        self.technical_reason_label = QtWidgets.QLabel()
+        self.technical_reason_label.setObjectName("mutedLabel")
+        self.technical_reason_label.setWordWrap(True)
+        self.technical_reason_label.setMinimumWidth(0)
+        self.technical_reason_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        remediation_layout.addWidget(self.technical_reason_label)
+
+        remediation_actions = QtWidgets.QHBoxLayout()
+        remediation_actions.addStretch(1)
+        self.navigation_button = QtWidgets.QPushButton()
+        self.navigation_button.setObjectName("jobPreflightNavigationButton")
+        self.navigation_button.clicked.connect(self._request_navigation)
+        remediation_actions.addWidget(self.navigation_button)
+        remediation_layout.addLayout(remediation_actions)
+        self.remediation_group.setHidden(True)
+        layout.addWidget(self.remediation_group)
 
         self.empty_label = QtWidgets.QLabel("No preflight findings were reported.")
         self.empty_label.setObjectName("mutedLabel")
@@ -247,9 +281,83 @@ class JobPreflightView(QtWidgets.QWidget):
         self.omission_label.setHidden(not omitted_count)
         layout.addWidget(self.omission_label)
 
+        self._selected_finding_index: int | None = None
+        self.findings_tree.currentItemChanged.connect(
+            self._finding_selection_changed
+        )
+        first_actionable_item: QtWidgets.QTreeWidgetItem | None = None
+        for finding_index, finding in enumerate(visible_findings):
+            if tuple(getattr(finding, "resolution_steps", ())):
+                first_actionable_item = self.findings_tree.topLevelItem(finding_index)
+                break
+        if first_actionable_item is not None:
+            self.findings_tree.setCurrentItem(first_actionable_item)
+
+    def _finding_selection_changed(
+        self,
+        current: QtWidgets.QTreeWidgetItem | None,
+        _previous: QtWidgets.QTreeWidgetItem | None,
+    ) -> None:
+        finding_index = (
+            None
+            if current is None
+            else current.data(0, QtCore.Qt.ItemDataRole.UserRole)
+        )
+        if type(finding_index) is not int or not (
+            0 <= finding_index < len(self.report.findings)
+        ):
+            self._show_remediation(None)
+            return
+        self._show_remediation(finding_index)
+
+    def _show_remediation(self, finding_index: int | None) -> None:
+        self._selected_finding_index = finding_index
+        if finding_index is None:
+            self.remediation_group.setHidden(True)
+            return
+        finding = self.report.findings[finding_index]
+        steps = tuple(getattr(finding, "resolution_steps", ()))
+        if not steps:
+            self.remediation_group.setHidden(True)
+            return
+
+        self.resolution_steps_label.setText(
+            "\n".join(f"{index}. {step}" for index, step in enumerate(steps, 1))
+        )
+        detail = _text(getattr(finding, "detail", "")).strip()
+        self.technical_reason_label.setText(
+            f"Technical reason: {detail}" if detail else ""
+        )
+        self.technical_reason_label.setHidden(not detail)
+        navigation_target = _text(
+            getattr(finding, "navigation_target", "")
+        ).strip()
+        navigation_label = _text(
+            getattr(finding, "navigation_label", "")
+        ).strip()
+        self.navigation_button.setText(navigation_label)
+        self.navigation_button.setProperty("navigationTarget", navigation_target)
+        self.navigation_button.setVisible(bool(navigation_target and navigation_label))
+        self.remediation_group.setHidden(False)
+
+    def _request_navigation(self) -> None:
+        target = _text(self.navigation_button.property("navigationTarget")).strip()
+        if target:
+            self.navigationRequested.emit(target)
+
+    def selected_finding(self) -> object | None:
+        """Return the finding whose remediation action is currently displayed."""
+
+        finding_index = self._selected_finding_index
+        if finding_index is None or not (0 <= finding_index < len(self.report.findings)):
+            return None
+        return self.report.findings[finding_index]
+
 
 class JobPreflightDialog(QtWidgets.QDialog):
     """Standalone preflight gate, primarily used to explain blocked jobs."""
+
+    navigationRequested = QtCore.Signal(str)
 
     def __init__(
         self,
@@ -266,6 +374,9 @@ class JobPreflightDialog(QtWidgets.QDialog):
 
         layout = QtWidgets.QVBoxLayout(self)
         self.preflight_view = JobPreflightView(report, self)
+        self.preflight_view.navigationRequested.connect(
+            self.navigationRequested.emit
+        )
         layout.addWidget(self.preflight_view, 1)
 
         self.findings_tree = self.preflight_view.findings_tree

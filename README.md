@@ -153,7 +153,9 @@ Native desktop workflow:
   correction, independent 4×4 holdout validation, and guided five-point
   holdout accuracy validation. Registration and validation can use precision
   multi-frame capture and can be repeated without another home cycle to
-  separate camera variation from homing variation
+  separate camera variation from homing variation. Every numbered tab shows a
+  compact Goal / Do this now / Done when guide; Bed Mapping presents ruler
+  capture and four-edge honeycomb saving as two ordered, status-backed actions
 - Profile-driven first-run and Machine Manager for multiple saved GRBL and
   Marlin machine/tool snapshots. Edits select the next launch without
   hot-swapping the immutable running identity or contacting hardware; new
@@ -173,6 +175,9 @@ Native desktop workflow:
   hardware; refresh, report copy, and point inspection are observational. Bed
   Mapping displays the same saved-machine physical span read-only and blocks
   support detection until that dimension is configured in Machine Manager
+- Structured Job Preflight remediation with numbered recovery steps and fixed,
+  UI-only navigation to the relevant Machine Setup tab or Machine Manager;
+  navigation grants no camera, calibration, motion, or laser authority
 - Versioned `.e3template` cutting-template library with manual selection,
   geometry-based automatic matching, role-labeled camera/cut overlays, rigid
   alignment review, and one-step undo when aligned cut objects are created

@@ -42,7 +42,11 @@ from laser_aligner.project import (
     Transform,
     capture_raster_asset_identity,
 )
-from laser_aligner.project.job_preflight import JobPreflightReport
+from laser_aligner.project.job_preflight import (
+    JobPreflightReport,
+    PreflightFinding,
+    PreflightSeverity,
+)
 from laser_aligner.project.job_preflight import (
     build_job_preflight_report as _real_build_job_preflight_report,
 )
@@ -2611,6 +2615,122 @@ def test_blocked_preflight_is_modeless_and_never_invokes_exact_or_machine_action
             assert errors == []
             dialog.close()
             qt_application.processEvents()
+    finally:
+        _dispose(qt_application, window)
+
+
+def test_blocked_preflight_navigation_opens_exact_bed_mapping_target_only(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    opened: list[tuple[int, str | None, str | None]] = []
+    side_effects: list[str] = []
+    report = JobPreflightReport(
+        findings=(
+            PreflightFinding(
+                code="honeycomb.support_not_current",
+                severity=PreflightSeverity.BLOCKER,
+                title="Honeycomb frame is not current",
+                message=(
+                    "E3 does not have a current saved honeycomb frame for this "
+                    "camera-to-machine map."
+                ),
+                detail="No honeycomb support reference is recorded.",
+                resolution_steps=(
+                    "Open Tools → Machine Setup.",
+                    "Select 3. Bed Mapping.",
+                ),
+                navigation_target="machine_setup.bed_mapping",
+                navigation_label="Open Bed Mapping",
+            ),
+        )
+    )
+
+    def open_setup(
+        tab_index: int = 0,
+        *,
+        automatic_capture: str | None = None,
+        navigation_target: str | None = None,
+    ) -> None:
+        opened.append((tab_index, automatic_capture, navigation_target))
+
+    monkeypatch.setattr(window, "open_machine_setup", open_setup)
+    machine = window.runtime.context.machine
+    monkeypatch.setattr(
+        machine,
+        "prepare_photo_position",
+        lambda *_args, **_kwargs: side_effects.append("motion"),
+    )
+    monkeypatch.setattr(
+        window.runtime.context,
+        "capture_parked_work_area_reference",
+        lambda *_args, **_kwargs: side_effects.append("capture"),
+    )
+    try:
+        window._show_blocked_job_preflight(report)
+        dialog = window._job_preflight_dialog
+        assert dialog is not None
+
+        dialog.preflight_view.navigation_button.click()
+        qt_application.processEvents()
+
+        assert opened == [
+            (2, None, "machine_setup.bed_mapping"),
+        ]
+        assert side_effects == []
+        assert errors == []
+    finally:
+        _dispose(qt_application, window)
+
+
+@pytest.mark.parametrize(
+    ("finding_code", "focus_target"),
+    (
+        ("honeycomb.frame_missing", "honeycomb_span"),
+        ("honeycomb.machine_work_area_missing", "work_area"),
+        ("honeycomb.output_polygon_invalid", "guarded_output_polygon"),
+    ),
+)
+def test_machine_manager_preflight_navigation_focuses_finding_section(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    finding_code: str,
+    focus_target: str,
+) -> None:
+    window, errors, _notices = _window(tmp_path, monkeypatch)
+    opened: list[dict[str, object]] = []
+    report = JobPreflightReport(
+        findings=(
+            PreflightFinding(
+                code=finding_code,
+                severity=PreflightSeverity.BLOCKER,
+                title="Saved machine configuration is incomplete",
+                message="Review the relevant saved-machine configuration.",
+                resolution_steps=("Open Machine Manager.",),
+                navigation_target="machine_manager",
+                navigation_label="Open Machine Manager",
+            ),
+        )
+    )
+
+    monkeypatch.setattr(
+        window,
+        "open_machine_manager",
+        lambda **kwargs: opened.append(dict(kwargs)),
+    )
+    try:
+        window._show_blocked_job_preflight(report)
+        dialog = window._job_preflight_dialog
+        assert dialog is not None
+
+        dialog.preflight_view.navigation_button.click()
+        qt_application.processEvents()
+
+        assert opened == [{"focus_target": focus_target}]
+        assert errors == []
     finally:
         _dispose(qt_application, window)
 

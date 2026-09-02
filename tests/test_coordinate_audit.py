@@ -57,6 +57,18 @@ def _support(*, span: float, bed_created_at: float = 7.0):
     )
 
 
+def _legacy_support(*, span: float, bed_created_at: float = 7.0):
+    return HoneycombSupportReference.from_observations(
+        ruler_origin_machine_mm=(20.0, 30.0),
+        ruler_x_mark_machine_mm=(20.0 + span, 30.0),
+        ruler_xy_mark_machine_mm=(20.0 + span, 30.0 + span),
+        ruler_mark_mm=span,
+        support_width_mm=span,
+        support_height_mm=span,
+        bed_calibration_created_at=bed_created_at,
+    )
+
+
 def _identity(settings, expected: str | None) -> RunningMachineIdentity:
     return RunningMachineIdentity(
         machine_id="laser-one",
@@ -80,6 +92,7 @@ def test_missing_machine_honeycomb_span_is_explicit(tmp_path: Path) -> None:
     assert status["machine_identity"]["machine_name"] == "Workshop E3"
     assert status["honeycomb"]["state"] == "UNCONFIGURED"
     assert status["honeycomb"]["expected_span_mm"] is None
+    assert status["honeycomb"]["reason_codes"] == ["honeycomb.span_missing"]
     assert any("no configured physical honeycomb" in item for item in status["blockers"])
 
 
@@ -91,8 +104,76 @@ def test_configured_machine_honeycomb_span_is_used() -> None:
     )
 
     assert validity["state"] == "CURRENT"
+    assert validity["reason_codes"] == []
     assert validity["expected_span_mm"] == 191.0
     assert validity["recorded_size_mm"] == [191.0, 191.0]
+    assert validity["execution_verifiable"] is True
+
+
+def test_honeycomb_validity_exposes_structured_prerequisite_reasons() -> None:
+    current = _support(span=191.0)
+    cases = (
+        (
+            honeycomb_support_validity(
+                current,
+                bed_calibration_created_at=7.0,
+                expected_span_mm=None,
+            ),
+            "UNCONFIGURED",
+            ["honeycomb.span_missing"],
+        ),
+        (
+            honeycomb_support_validity(
+                None,
+                bed_calibration_created_at=7.0,
+                expected_span_mm=191.0,
+            ),
+            "MISSING",
+            ["honeycomb.reference_missing"],
+        ),
+        (
+            honeycomb_support_validity(
+                current,
+                bed_calibration_created_at=None,
+                expected_span_mm=191.0,
+            ),
+            "STALE",
+            ["honeycomb.bed_map_missing"],
+        ),
+        (
+            honeycomb_support_validity(
+                current,
+                bed_calibration_created_at=8.0,
+                expected_span_mm=191.0,
+            ),
+            "STALE",
+            ["honeycomb.bed_map_changed"],
+        ),
+        (
+            honeycomb_support_validity(
+                _support(span=190.0),
+                bed_calibration_created_at=7.0,
+                expected_span_mm=191.0,
+            ),
+            "STALE",
+            ["honeycomb.span_mismatch"],
+        ),
+        (
+            honeycomb_support_validity(
+                _legacy_support(span=191.0),
+                bed_calibration_created_at=7.0,
+                expected_span_mm=191.0,
+            ),
+            "STALE",
+            ["honeycomb.evidence_not_execution_verifiable"],
+        ),
+    )
+
+    for validity, expected_state, expected_codes in cases:
+        assert validity["state"] == expected_state
+        assert validity["reason_codes"] == expected_codes
+        assert validity["reasons"]
+        assert validity["execution_verifiable"] is False
 
 
 def test_calibration_binding_mismatch_is_a_blocker(tmp_path: Path) -> None:

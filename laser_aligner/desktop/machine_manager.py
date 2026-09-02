@@ -235,6 +235,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self._current_machine_id: str | None = None
         self._working_machine: MachineInstance | None = None
         self._loading = False
+        self._navigation_highlighted_widget: QtWidgets.QWidget | None = None
         self.setWindowTitle("Machine Manager")
         self.setModal(True)
         self.resize(1040, 720)
@@ -281,13 +282,13 @@ class MachineManagerDialog(QtWidgets.QDialog):
         left_layout.addLayout(left_buttons)
         splitter.addWidget(left)
 
-        editor_scroll = QtWidgets.QScrollArea()
-        editor_scroll.setWidgetResizable(True)
-        editor_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self.editor_scroll = QtWidgets.QScrollArea()
+        self.editor_scroll.setWidgetResizable(True)
+        self.editor_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
         editor = QtWidgets.QWidget()
         self.editor_layout = QtWidgets.QVBoxLayout(editor)
-        editor_scroll.setWidget(editor)
-        splitter.addWidget(editor_scroll)
+        self.editor_scroll.setWidget(editor)
+        splitter.addWidget(self.editor_scroll)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         left.setMinimumWidth(360)
@@ -530,6 +531,8 @@ class MachineManagerDialog(QtWidgets.QDialog):
 
     def _build_geometry_group(self) -> None:
         group = QtWidgets.QGroupBox("Work area and motion")
+        group.setObjectName("machineManagerGeometryGroup")
+        self.geometry_group = group
         grid = QtWidgets.QGridLayout(group)
 
         self.x_min = _double_spin(-100_000.0, 100_000.0)
@@ -584,8 +587,42 @@ class MachineManagerDialog(QtWidgets.QDialog):
         grid.addWidget(self.allow_motion, len(rows) + 1, 0, 1, 4)
         self.editor_layout.addWidget(group)
 
+    def focus_honeycomb_span(self) -> None:
+        """Reveal the saved-machine field named by preflight remediation."""
+
+        self.focus_navigation_target("honeycomb_span")
+
+    def focus_navigation_target(self, target: str) -> bool:
+        """Reveal one allowlisted saved-machine field without applying an edit."""
+
+        destinations: dict[
+            str,
+            tuple[QtWidgets.QWidget, QtWidgets.QWidget],
+        ] = {
+            "honeycomb_span": (self.honeycomb_span, self.honeycomb_span),
+            "work_area": (self.geometry_group, self.x_min),
+            "guarded_output_polygon": (self.polygon_summary, self.polygon_summary),
+        }
+        destination = destinations.get(str(target))
+        if destination is None:
+            return False
+        highlighted, focused = destination
+        previous = self._navigation_highlighted_widget
+        if previous is not None and previous is not highlighted:
+            previous.setStyleSheet("")
+        self._navigation_highlighted_widget = highlighted
+        highlighted.setStyleSheet("border: 2px solid #c98b2e;")
+        self.editor_scroll.ensureWidgetVisible(highlighted, 32, 32)
+        focused.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        focused.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+        if isinstance(focused, (QtWidgets.QLineEdit, QtWidgets.QAbstractSpinBox)):
+            focused.selectAll()
+        return True
+
     def _build_laser_group(self) -> None:
         group = QtWidgets.QGroupBox("Laser / tool-head settings")
+        group.setObjectName("machineManagerLaserGroup")
+        self.laser_group = group
         grid = QtWidgets.QGridLayout(group)
 
         self.power_mode = QtWidgets.QComboBox()
@@ -609,6 +646,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.allow_low_power_frame = QtWidgets.QCheckBox("Allow low-power framing")
         self.return_to_photo = QtWidgets.QCheckBox("Return to photo position after job")
         self.polygon_summary = QtWidgets.QLabel("")
+        self.polygon_summary.setObjectName("machineManagerGuardedPolygonSummary")
         self.polygon_summary.setWordWrap(True)
 
         rows = (

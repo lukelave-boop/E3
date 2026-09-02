@@ -28,6 +28,7 @@ from laser_aligner.desktop.controller import (
 from laser_aligner.desktop.machine_setup import (
     ImagePicker,
     MachineSetupDialog,
+    _HoneycombFrameReviewDialog,
     _work_area_reference_overlay,
 )
 from laser_aligner.desktop.qt import require_qt
@@ -104,6 +105,61 @@ def _wait_until(
         time.sleep(0.005)
 
 
+def _automatic_honeycomb_candidate(
+    runtime: CoreRuntime,
+) -> tuple[HoneycombSupportReference, HoneycombRulerDetection, np.ndarray]:
+    calibration = runtime.context.bed.calibration
+    assert calibration is not None
+    machine_corners = (
+        (10.0, 10.0),
+        (201.0, 10.0),
+        (201.0, 201.0),
+        (10.0, 201.0),
+    )
+    image_corners = tuple(
+        runtime.context.bed.mm_to_image(*point) for point in machine_corners
+    )
+    candidate = HoneycombSupportReference.from_four_corner_observations(
+        raw_corners_machine_mm=machine_corners,
+        corner_topology=(0, 1, 2, 3),
+        support_width_mm=191.0,
+        support_height_mm=191.0,
+        bed_calibration_created_at=calibration.created_at,
+    )
+    axis = RulerAxisDetection(
+        image_corners[0],
+        image_corners[1],
+        4.0,
+        191,
+        0.95,
+        2.0,
+        2.0,
+    )
+    detection = HoneycombRulerDetection(
+        ruler_origin_image_px=image_corners[0],
+        ruler_x_mark_image_px=image_corners[1],
+        ruler_xy_mark_image_px=image_corners[2],
+        axis_x=axis,
+        axis_y=RulerAxisDetection(
+            image_corners[0],
+            image_corners[3],
+            4.0,
+            191,
+            0.95,
+            2.0,
+            2.0,
+        ),
+        corner_error_px=1.0,
+        axis_angle_deg=90.0,
+        frame_corners_image_px=image_corners,
+    )
+    image = np.zeros(
+        (calibration.image_height, calibration.image_width, 3),
+        dtype=np.uint8,
+    )
+    return candidate, detection, image
+
+
 def test_machine_setup_exposes_native_camera_calibration_and_checks(
     qt_application: QtWidgets.QApplication, tmp_path: Path
 ) -> None:
@@ -124,7 +180,9 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert "machine profile custom-machine" in dialog.runtime_identity_status.text()
         assert "tool head custom-laser-head" in dialog.runtime_identity_status.text()
         assert "active calibration profile" in dialog.runtime_identity_status.text()
-        assert dialog.work_area_reference_button.text() == "Capture ruler"
+        assert dialog.work_area_reference_button.text() == (
+            "1. Home, park & capture ruler overlay"
+        )
         assert "Home / park" in dialog.work_area_reference_button.toolTip()
         assert "Camera/work: X0..220, Y0..220 mm" in (
             dialog.work_area_reference_status.text()
@@ -143,7 +201,7 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert dialog.honeycomb_ruler_mark.isReadOnly()
         assert dialog.honeycomb_ruler_mark.text() == "Not configured"
         assert dialog.honeycomb_support_auto_button.text() == (
-            "Detect honeycomb automatically"
+            "2. Detect & save honeycomb frame"
         )
         assert dialog.honeycomb_support_record_button.text() == (
             "Fallback: detect with 3 hints"
@@ -151,6 +209,8 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert "Machine Manager" in dialog.honeycomb_support_status.text()
         assert not dialog.honeycomb_support_auto_button.isEnabled()
         assert not dialog.honeycomb_support_record_button.isEnabled()
+        assert dialog.ruler_overlay_status.text() == "Ruler overlay: MISSING"
+        assert dialog.honeycomb_frame_status.text() == "Honeycomb frame: MISSING"
         assert dialog.points.rowCount() >= 4
         assert "Solved" in dialog.bed_status.text()
         assert dialog.registration_results.horizontalHeaderItem(0).text() == "Use"
@@ -188,6 +248,121 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert f"{camera.negotiated_fps:.1f} fps negotiated" in dialog.camera_status.text()
         assert dialog.base_grid_power.value() == 0
         assert dialog.base_grid_mark_size.maximum() == 5
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_machine_setup_guides_all_six_tabs_and_unifies_honeycomb_flow(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    try:
+        guides = (
+            dialog.camera_guidance,
+            dialog.lens_guidance,
+            dialog.bed_guidance,
+            dialog.registration_guidance,
+            dialog.validation_guidance,
+            dialog.audit_guidance,
+        )
+        for guide in guides:
+            fields = {
+                label.property("guidanceField"): label.text()
+                for label in guide.findChildren(QtWidgets.QLabel)
+                if label.property("guidanceField")
+            }
+            assert set(fields) == {"Goal", "Do this now", "Done when"}
+            assert all(value.strip() for value in fields.values())
+
+        assert dialog.honeycomb_frame_group.title() == "Honeycomb frame"
+        assert dialog.work_area_reference_button.text() == (
+            "1. Home, park & capture ruler overlay"
+        )
+        assert dialog.honeycomb_support_auto_button.text() == (
+            "2. Detect & save honeycomb frame"
+        )
+        assert dialog.honeycomb_step1.parent() is dialog.honeycomb_frame_group
+        assert dialog.honeycomb_step2.parent() is dialog.honeycomb_frame_group
+        honeycomb_layout = dialog.honeycomb_frame_group.layout()
+        assert honeycomb_layout is not None
+        assert honeycomb_layout.indexOf(dialog.honeycomb_step1) < (
+            honeycomb_layout.indexOf(dialog.honeycomb_step2)
+        )
+        assert not dialog.honeycomb_support_auto_button.isEnabled()
+        assert dialog.honeycomb_step_instruction.text() == (
+            "Complete step 1 first: capture a current ruler overlay."
+        )
+        assert not dialog.honeycomb_frame_group.isAncestorOf(
+            dialog.ruler_preview_clear_button
+        )
+        assert dialog.ruler_preview_clear_button.text() == "Clear ruler preview"
+        assert dialog.honeycomb_advanced_panel.isAncestorOf(
+            dialog.honeycomb_support_record_button
+        )
+        assert dialog.honeycomb_advanced_panel.isAncestorOf(
+            dialog.honeycomb_support_clear_button
+        )
+        warning = dialog.honeycomb_advanced_panel.findChild(
+            QtWidgets.QLabel,
+            "honeycombFallbackAuthorityWarning",
+        )
+        assert warning is not None
+        assert warning.text() == (
+            "Diagnostic only — does not authorize powered honeycomb-local jobs."
+        )
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+@pytest.mark.parametrize("font_scale", (1.0, 1.25, 1.5, 2.0))
+def test_honeycomb_primary_actions_fit_minimum_width_at_scaled_fonts(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    font_scale: float,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    font = QtGui.QFont(dialog.font())
+    font.setPointSizeF(max(1.0, font.pointSizeF() * font_scale))
+    dialog.setFont(font)
+    try:
+        dialog.resize(dialog.minimumSize())
+        dialog.tabs.setCurrentIndex(2)
+        dialog.show()
+        qt_application.processEvents()
+        page = dialog.bed_scroll_area
+        assert page.horizontalScrollBar().maximum() == 0
+        viewport_left = page.viewport().mapToGlobal(QtCore.QPoint()).x()
+        viewport_right = viewport_left + page.viewport().width()
+        for button in (
+            dialog.work_area_reference_button,
+            dialog.honeycomb_support_auto_button,
+        ):
+            option = QtWidgets.QStyleOptionButton()
+            option.initFrom(button)
+            option.text = button.text()
+            contents = button.style().subElementRect(
+                QtWidgets.QStyle.SubElement.SE_PushButtonContents,
+                option,
+                button,
+            )
+            wrapped = button.fontMetrics().boundingRect(
+                QtCore.QRect(0, 0, contents.width(), 10_000),
+                int(
+                    QtCore.Qt.AlignmentFlag.AlignCenter
+                    | QtCore.Qt.TextFlag.TextWordWrap
+                ),
+                button.text(),
+            )
+            assert wrapped.width() <= contents.width()
+            assert wrapped.height() <= contents.height()
+            button_left = button.mapToGlobal(QtCore.QPoint()).x()
+            assert viewport_left <= button_left
+            assert button_left + button.width() <= viewport_right
     finally:
         dialog.close()
         runtime.stop()
@@ -905,6 +1080,244 @@ def test_machine_setup_uses_configured_span_for_automatic_honeycomb_detection(
         runtime.stop()
 
 
+def test_honeycomb_review_dialog_uses_explicit_three_outcome_actions(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    review = _HoneycombFrameReviewDialog(
+        "The magenta outline is the detected cutting surface."
+    )
+    try:
+        assert review.windowTitle() == "Save detected honeycomb frame"
+        assert {
+            button.text() for button in review.findChildren(QtWidgets.QPushButton)
+        } == {"Try again", "Save honeycomb frame", "Cancel"}
+        assert review.cancel_button.isDefault()
+    finally:
+        review.close()
+
+
+@pytest.mark.parametrize(
+    "choice",
+    (
+        _HoneycombFrameReviewDialog.CANCEL,
+        _HoneycombFrameReviewDialog.TRY_AGAIN,
+    ),
+)
+def test_honeycomb_review_cancel_and_try_again_save_no_candidate(
+    choice: str,
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    candidate, detection, image = _automatic_honeycomb_candidate(runtime)
+    calibration = runtime.context.bed.calibration
+    assert calibration is not None
+    dialog._bed_image = image
+    dialog._work_area_reference_calibration = calibration
+    monkeypatch.setattr(dialog, "_review_honeycomb_frame", lambda _message: choice)
+    changed: list[bool] = []
+    dialog.calibrationChanged.connect(lambda: changed.append(True))
+    try:
+        dialog._honeycomb_detection_succeeded(
+            (candidate, detection),
+            automatic=True,
+            teaching_image=image,
+        )
+
+        assert runtime.context.honeycomb_support.reference is None
+        assert dialog._honeycomb_candidate_reference is None
+        assert dialog.honeycomb_frame_status.text() == "Honeycomb frame: MISSING"
+        assert changed == []
+        assert not (
+            runtime.context.calibration_profiles.active_dir
+            / "honeycomb_support.json"
+        ).exists()
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_saved_honeycomb_frame_is_current_immediately_survives_preview_clear_and_reload(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    candidate, detection, image = _automatic_honeycomb_candidate(runtime)
+    calibration = runtime.context.bed.calibration
+    assert calibration is not None
+    dialog._bed_image = image
+    dialog._work_area_reference_calibration = calibration
+    monkeypatch.setattr(
+        dialog,
+        "_review_honeycomb_frame",
+        lambda _message: _HoneycombFrameReviewDialog.SAVE,
+    )
+    try:
+        dialog._honeycomb_detection_succeeded(
+            (candidate, detection),
+            automatic=True,
+            teaching_image=image,
+        )
+
+        saved = runtime.context.honeycomb_support.reference
+        assert saved is not None and saved.is_execution_verifiable
+        assert runtime.context.honeycomb_support_status()["state"] == "CURRENT"
+        assert dialog.honeycomb_frame_status.text() == "Honeycomb frame: CURRENT"
+        assert "saved and current" in dialog.honeycomb_step_instruction.text()
+
+        dialog.clear_ruler_preview()
+
+        assert runtime.context.honeycomb_support.reference == saved
+        assert dialog.ruler_overlay_status.text() == "Ruler overlay: MISSING"
+        assert dialog.honeycomb_frame_status.text() == "Honeycomb frame: CURRENT"
+        assert "saved and current" in dialog.honeycomb_step_instruction.text()
+        assert (
+            runtime.context.calibration_profiles.active_dir
+            / "honeycomb_support.json"
+        ).exists()
+    finally:
+        dialog.close()
+        runtime.stop()
+
+    restarted = CoreRuntime.from_config(tmp_path / "config.json", hardware_enabled=False)
+    try:
+        status = restarted.context.honeycomb_support_status()
+        assert status["state"] == "CURRENT"
+        assert status["execution_verifiable"] is True
+    finally:
+        restarted.stop()
+
+
+def test_successful_ruler_capture_enables_and_emphasizes_step_two(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    image = np.zeros((120, 160, 3), dtype=np.uint8)
+    monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
+    monkeypatch.setattr(
+        runtime.context,
+        "capture_parked_work_area_reference",
+        lambda: image.copy(),
+    )
+    try:
+        assert not dialog.honeycomb_support_auto_button.isEnabled()
+
+        dialog.capture_work_area_reference()
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
+
+        assert dialog.ruler_overlay_status.text() == "Ruler overlay: CURRENT"
+        assert dialog.honeycomb_support_auto_button.isEnabled()
+        assert dialog.honeycomb_support_auto_button.property(
+            "nextCalibrationStep"
+        ) is True
+        assert dialog.honeycomb_support_auto_button.font().bold()
+        assert dialog.honeycomb_step_instruction.text() == (
+            "Ruler overlay captured. Next, detect and save the honeycomb frame."
+        )
+
+        dialog._work_area_reference_calibration = object()
+        dialog._refresh_work_area_reference_status()
+        assert dialog.ruler_overlay_status.text() == "Ruler overlay: STALE"
+        assert not dialog.honeycomb_support_auto_button.isEnabled()
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_machine_setup_navigation_targets_select_and_highlight_without_actions(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    dialog = MachineSetupDialog(runtime)
+    calls: list[str] = []
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        calls.append("action")
+        raise AssertionError("Navigation performed an operation")
+
+    monkeypatch.setattr(
+        runtime.context,
+        "capture_parked_work_area_reference",
+        unexpected,
+    )
+    monkeypatch.setattr(runtime.context.machine, "ensure_connected", unexpected)
+    monkeypatch.setattr(runtime.context.machine, "prepare_photo_position", unexpected)
+    targets = (
+        ("machine_setup.camera", 0),
+        ("machine_setup.lens", 1),
+        ("machine_setup.bed_mapping", 2),
+        ("machine_setup.fine_registration", 3),
+        ("machine_setup.accuracy_validation", 4),
+        ("machine_setup.coordinate_audit", 5),
+    )
+    try:
+        dialog.show()
+        for target, tab_index in targets:
+            assert dialog.focus_navigation_target(target)
+            qt_application.processEvents()
+            assert dialog.tabs.currentIndex() == tab_index
+            if target == "machine_setup.bed_mapping":
+                assert dialog.honeycomb_frame_group.property(
+                    "navigationHighlighted"
+                ) is True
+                assert dialog.honeycomb_frame_group.styleSheet()
+        assert calls == []
+        assert not dialog.focus_navigation_target("machine_setup.unknown")
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_preflight_navigation_open_does_not_index_pending_lens_evidence(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    pending_path = runtime.context.lens.image_dir / "pending-navigation.png"
+    assert cv2.imwrite(
+        str(pending_path),
+        np.zeros((80, 120, 3), dtype=np.uint8),
+    )
+    calls: list[str] = []
+
+    def unexpected_index(*_args: object, **_kwargs: object) -> None:
+        calls.append("index")
+        raise AssertionError("Preflight navigation indexed lens evidence")
+
+    monkeypatch.setattr(
+        runtime.context.lens,
+        "index_pending_captures",
+        unexpected_index,
+    )
+    dialog = MachineSetupDialog(runtime, navigation_only=True)
+    try:
+        dialog.show()
+        qt_application.processEvents()
+
+        assert calls == []
+        assert not dialog.lens_index_busy
+        assert not dialog._lens_index_start_timer.isActive()
+        assert any(
+            item.get("name") == pending_path.name
+            and item.get("index_state") == "pending"
+            for item in runtime.context.lens.status().get("images", ())
+        )
+        assert not runtime.context.lens.image_index_path.exists()
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
 def test_unconfigured_span_blocks_both_honeycomb_detection_workflows_before_io(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
@@ -1042,9 +1455,9 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
             detect_reference,
         )
         monkeypatch.setattr(
-            QtWidgets.QMessageBox,
-            "warning",
-            lambda *_args, **_kwargs: QtWidgets.QMessageBox.StandardButton.Yes,
+            dialog,
+            "_review_honeycomb_frame",
+            lambda _message: _HoneycombFrameReviewDialog.SAVE,
         )
         dialog.toggle_honeycomb_support_picking()
         assert dialog.honeycomb_support_record_button.text() == (
@@ -1069,7 +1482,8 @@ def test_machine_setup_uses_hints_only_to_detect_honeycomb_support(
         assert np.asarray(reference.support_corners_machine_mm) == pytest.approx(
             np.asarray(((10.0, 10.0), (201.0, 10.0), (201.0, 201.0), (10.0, 201.0)))
         )
-        assert runtime.context.honeycomb_support_status()["state"] == "CURRENT"
+        assert runtime.context.honeycomb_support_status()["state"] == "STALE"
+        assert dialog.honeycomb_frame_status.text() == "Honeycomb frame: STALE"
         assert dialog.honeycomb_support_record_button.text() == (
             "Fallback: detect with 3 hints"
         )

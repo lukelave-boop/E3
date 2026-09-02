@@ -422,6 +422,17 @@ class ImagePicker(QtWidgets.QLabel):
             self.reset_view()
         self._render()
 
+    def clear_image(self, message: str = "No image captured") -> None:
+        """Clear displayed pixels and reset the presentation-only view state."""
+
+        self._image = None
+        self._source_width = 0
+        self._source_height = 0
+        self._display_rect = QtCore.QRectF()
+        self.reset_view()
+        self.clear()
+        self.setText(message)
+
     @property
     def zoom_factor(self) -> float:
         return self._zoom
@@ -546,6 +557,200 @@ class ImagePicker(QtWidgets.QLabel):
         event.accept()
 
 
+class _SetupGuidance(QtWidgets.QFrame):
+    """Compact, reusable next-action guidance for a numbered Setup tab."""
+
+    def __init__(
+        self,
+        *,
+        goal: str,
+        action: str,
+        done: str,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("machineSetupStepGuidance")
+        self.setProperty("setupGuidance", True)
+        self.setFrameShape(QtWidgets.QFrame.Shape.StyledPanel)
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Maximum,
+        )
+        layout = QtWidgets.QGridLayout(self)
+        layout.setContentsMargins(10, 7, 10, 7)
+        layout.setHorizontalSpacing(10)
+        layout.setVerticalSpacing(3)
+        self.goal_label = self._add_row(layout, 0, "Goal", goal)
+        self.action_label = self._add_row(layout, 1, "Do this now", action)
+        self.done_label = self._add_row(layout, 2, "Done when", done)
+        layout.setColumnStretch(1, 1)
+
+    @staticmethod
+    def _add_row(
+        layout: QtWidgets.QGridLayout,
+        row: int,
+        heading: str,
+        text: str,
+    ) -> QtWidgets.QLabel:
+        heading_label = QtWidgets.QLabel(f"{heading}:")
+        heading_font = heading_label.font()
+        heading_font.setBold(True)
+        heading_label.setFont(heading_font)
+        heading_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft
+            | QtCore.Qt.AlignmentFlag.AlignTop
+        )
+        value = QtWidgets.QLabel(text)
+        value.setWordWrap(True)
+        value.setMinimumWidth(0)
+        value.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored,
+            QtWidgets.QSizePolicy.Policy.Minimum,
+        )
+        value.setProperty("guidanceField", heading)
+        layout.addWidget(heading_label, row, 0)
+        layout.addWidget(value, row, 1)
+        return value
+
+    def set_action(self, text: str) -> None:
+        self.action_label.setText(text)
+
+
+class _FullWidthActionButton(QtWidgets.QPushButton):
+    """A primary action button that word-wraps without changing its exact text."""
+
+    def __init__(
+        self,
+        text: str,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(text, parent)
+        policy = self.sizePolicy()
+        policy.setHorizontalPolicy(QtWidgets.QSizePolicy.Policy.Expanding)
+        policy.setVerticalPolicy(QtWidgets.QSizePolicy.Policy.Fixed)
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def heightForWidth(self, width: int) -> int:
+        option = QtWidgets.QStyleOptionButton()
+        self.initStyleOption(option)
+        contents = self.style().subElementRect(
+            QtWidgets.QStyle.SubElement.SE_PushButtonContents,
+            option,
+            self,
+        )
+        horizontal_chrome = max(0, self.width() - contents.width())
+        available = max(1, int(width) - horizontal_chrome)
+        text_rect = self.fontMetrics().boundingRect(
+            QtCore.QRect(0, 0, available, 10_000),
+            int(
+                QtCore.Qt.AlignmentFlag.AlignCenter
+                | QtCore.Qt.TextFlag.TextWordWrap
+            ),
+            self.text(),
+        )
+        vertical_chrome = max(8, self.height() - contents.height())
+        return max(super().sizeHint().height(), text_rect.height() + vertical_chrome)
+
+    def sizeHint(self) -> QtCore.QSize:
+        base = super().sizeHint()
+        width = min(base.width(), 320)
+        return QtCore.QSize(width, self.heightForWidth(width))
+
+    def minimumSizeHint(self) -> QtCore.QSize:
+        width = 220
+        return QtCore.QSize(width, self.heightForWidth(width))
+
+    def paintEvent(self, _event: QtGui.QPaintEvent) -> None:
+        option = QtWidgets.QStyleOptionButton()
+        self.initStyleOption(option)
+        text = option.text
+        option.text = ""
+        painter = QtWidgets.QStylePainter(self)
+        painter.drawControl(QtWidgets.QStyle.ControlElement.CE_PushButton, option)
+        contents = self.style().subElementRect(
+            QtWidgets.QStyle.SubElement.SE_PushButtonContents,
+            option,
+            self,
+        )
+        role = QtGui.QPalette.ColorRole.ButtonText
+        group = (
+            QtGui.QPalette.ColorGroup.Active
+            if self.isEnabled()
+            else QtGui.QPalette.ColorGroup.Disabled
+        )
+        painter.setPen(option.palette.color(group, role))
+        painter.drawText(
+            contents,
+            int(
+                QtCore.Qt.AlignmentFlag.AlignCenter
+                | QtCore.Qt.TextFlag.TextWordWrap
+            ),
+            text,
+        )
+
+
+class _HoneycombFrameReviewDialog(QtWidgets.QDialog):
+    """Explicit three-outcome review for a detected honeycomb candidate."""
+
+    SAVE = "save"
+    TRY_AGAIN = "try_again"
+    CANCEL = "cancel"
+
+    def __init__(
+        self,
+        message: str,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.choice = self.CANCEL
+        self.setWindowTitle("Save detected honeycomb frame")
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        layout = QtWidgets.QVBoxLayout(self)
+        explanation = QtWidgets.QLabel(message)
+        explanation.setObjectName("honeycombFrameReviewExplanation")
+        explanation.setWordWrap(True)
+        explanation.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(explanation)
+        buttons = QtWidgets.QDialogButtonBox()
+        self.try_again_button = buttons.addButton(
+            "Try again",
+            QtWidgets.QDialogButtonBox.ButtonRole.ActionRole,
+        )
+        self.save_button = buttons.addButton(
+            "Save honeycomb frame",
+            QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        self.cancel_button = buttons.addButton(
+            QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        self.cancel_button.setDefault(True)
+        self.cancel_button.setAutoDefault(True)
+        self.save_button.setAutoDefault(False)
+        self.try_again_button.setAutoDefault(False)
+        self.try_again_button.clicked.connect(
+            lambda: self._finish(self.TRY_AGAIN)
+        )
+        self.save_button.clicked.connect(lambda: self._finish(self.SAVE))
+        self.cancel_button.clicked.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _finish(self, choice: str) -> None:
+        self.choice = choice
+        self.done(
+            QtWidgets.QDialog.DialogCode.Accepted
+            if choice == self.SAVE
+            else QtWidgets.QDialog.DialogCode.Rejected
+        )
+
+    def reject(self) -> None:
+        self.choice = self.CANCEL
+        super().reject()
+
+
 class MachineSetupDialog(QtWidgets.QDialog):
     """Native access to every shared camera/calibration inspection operation."""
 
@@ -553,10 +758,17 @@ class MachineSetupDialog(QtWidgets.QDialog):
     registrationJobPrepared = QtCore.Signal(object)
     validationJobPrepared = QtCore.Signal(object)
 
-    def __init__(self, runtime: CoreRuntime, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self,
+        runtime: CoreRuntime,
+        parent: QtWidgets.QWidget | None = None,
+        *,
+        navigation_only: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.runtime = runtime
         self.context = runtime.context
+        self._navigation_only = bool(navigation_only)
         self._bed_image: np.ndarray | None = None
         self._work_area_reference_calibration: Any | None = None
         self._honeycomb_pick_active = False
@@ -571,6 +783,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._coordinate_audit_snapshot: dict[str, Any] | None = None
         self._coordinate_audit_point_snapshot: dict[str, Any] | None = None
         self._coordinate_audit_image_evidence: tuple[Any, ...] | None = None
+        self._navigation_highlighted_widget: QtWidgets.QWidget | None = None
         self._photo_pose_confirmed = False
         self._registration_table_updating = False
         self._bed_map_valid = False
@@ -887,7 +1100,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
 
     def _schedule_lens_index(self, lens: dict[str, Any]) -> None:
-        if self._shutdown_started:
+        if self._shutdown_started or self._navigation_only:
             return
         signature = self._pending_lens_index_signature(lens)
         if (
@@ -1081,9 +1294,162 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.tabs.addTab(scroll, title)
         return scroll
 
+    def focus_navigation_target(self, target: str) -> bool:
+        """Select and visibly focus a stable, UI-only Machine Setup destination."""
+
+        destinations: dict[str, tuple[int, QtWidgets.QWidget]] = {
+            "machine_setup.camera": (0, self.camera_guidance),
+            "machine_setup.lens": (1, self.lens_guidance),
+            "machine_setup.bed_mapping": (2, self.honeycomb_frame_group),
+            "machine_setup.fine_registration": (3, self.registration_guidance),
+            "machine_setup.accuracy_validation": (4, self.validation_guidance),
+            "machine_setup.coordinate_audit": (5, self.audit_guidance),
+        }
+        destination = destinations.get(str(target))
+        if destination is None:
+            return False
+        tab_index, widget = destination
+        previous = self._navigation_highlighted_widget
+        if previous is not None and previous is not widget:
+            previous.setProperty("navigationHighlighted", False)
+            previous.setStyleSheet("")
+        self._navigation_highlighted_widget = widget
+        widget.setProperty("navigationHighlighted", True)
+        selector = (
+            "QGroupBox" if isinstance(widget, QtWidgets.QGroupBox) else "QFrame"
+        )
+        widget.setStyleSheet(
+            f"{selector}#{widget.objectName()} {{ border: 2px solid #4f9cff; "
+            "border-radius: 4px; }}"
+        )
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+        self.tabs.setCurrentIndex(tab_index)
+        scroll = self.tabs.widget(tab_index)
+
+        def reveal() -> None:
+            if isinstance(scroll, QtWidgets.QScrollArea):
+                scroll.ensureWidgetVisible(widget, 20, 20)
+            if target == "machine_setup.bed_mapping":
+                focus = (
+                    self.honeycomb_support_auto_button
+                    if self.honeycomb_support_auto_button.isEnabled()
+                    else self.work_area_reference_button
+                )
+                focus.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
+
+        reveal()
+        QtCore.QTimer.singleShot(0, reveal)
+        return True
+
+    def _refresh_camera_lens_guidance(
+        self,
+        *,
+        camera: dict[str, Any],
+        lens: dict[str, Any],
+        readiness: dict[str, Any],
+    ) -> None:
+        readiness_state = str(readiness.get("state") or "UNKNOWN")
+        readiness_reasons = [str(item) for item in readiness.get("reasons") or ()]
+        if not bool(camera.get("connected")):
+            camera_action = (
+                "Connect the camera, then refresh the raw preview and apply "
+                "configured controls."
+            )
+        elif readiness_state == "READY":
+            camera_action = "Camera readiness is READY. Continue to 2. Lens."
+        else:
+            camera_action = (
+                "Refresh the raw preview and apply configured controls."
+                + (
+                    " Resolve: " + readiness_reasons[0]
+                    if readiness_reasons
+                    else ""
+                )
+            )
+        self.camera_guidance.set_action(camera_action)
+
+        model = lens.get("model") or {}
+        quality = model.get("quality") if isinstance(model, dict) else None
+        gate = (
+            str(quality.get("gate") or "").strip().lower()
+            if isinstance(quality, dict)
+            else ""
+        )
+        model_accepted = bool(lens.get("calibrated")) and gate in {
+            "pass",
+            "warning",
+        }
+        index = lens.get("index") or {}
+        pending = int(index.get("pending_count", 0))
+        groups = list(lens.get("resolution_groups") or ())
+        active_group = next((item for item in groups if item.get("selected")), {})
+        captures = int(active_group.get("image_count", 0))
+        minimum = int((lens.get("pattern") or {}).get("minimum_images", 0))
+        if model_accepted:
+            lens_action = "A qualified lens model is active. Continue to 3. Bed Mapping."
+        elif readiness_state != "READY":
+            lens_action = (
+                "Finish 1. Camera readiness first, then capture checkerboard views."
+            )
+        elif pending:
+            lens_action = (
+                f"Wait for {pending} checkerboard capture"
+                f"{'s' if pending != 1 else ''} to finish indexing, then solve."
+            )
+        elif captures < minimum:
+            needed = max(0, minimum - captures)
+            lens_action = (
+                f"Capture {needed} more varied current-resolution checkerboard "
+                f"view{'s' if needed != 1 else ''}."
+            )
+        else:
+            lens_action = "Solve the current-resolution calibration and review its gate."
+        self.lens_guidance.set_action(lens_action)
+
+    def _refresh_bed_guidance(
+        self,
+        *,
+        ruler_state: str,
+        frame_state: str,
+        span_configured: bool,
+    ) -> None:
+        if not hasattr(self, "bed_guidance"):
+            return
+        if not self._bed_map_valid:
+            action = (
+                "Prepare, run, capture, and apply the fresh automatic base map "
+                "before the Honeycomb frame steps."
+            )
+        elif frame_state == "CURRENT":
+            action = (
+                "The bed map and automatic four-edge honeycomb frame are current. "
+                "Continue to 4. Fine Registration."
+            )
+        elif ruler_state != "CURRENT":
+            action = "Complete Honeycomb frame step 1: capture the ruler overlay."
+        elif not span_configured:
+            action = (
+                "Configure the Physical honeycomb ruler span in Machine Manager, "
+                "then return here."
+            )
+        else:
+            action = (
+                "Complete Honeycomb frame step 2: detect, review, and save the "
+                "honeycomb frame."
+            )
+        self.bed_guidance.set_action(action)
+
     def _build_camera_tab(self) -> None:
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
+        self.camera_guidance = _SetupGuidance(
+            goal="Establish a stable camera mode.",
+            action="Refresh the raw preview and apply configured controls.",
+            done="Camera readiness is READY.",
+        )
+        self.camera_guidance.setObjectName("machineSetupCameraGuidance")
+        layout.addWidget(self.camera_guidance)
         self.camera_preview = ImagePicker(
             rotation_degrees=self._camera_view_rotation
         )
@@ -1119,6 +1485,13 @@ class MachineSetupDialog(QtWidgets.QDialog):
         body = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(body)
         layout.setContentsMargins(0, 0, 8, 0)
+        self.lens_guidance = _SetupGuidance(
+            goal="Solve lens distortion for the current resolution and focus.",
+            action="Capture the needed checkerboard views or solve the current captures.",
+            done="A qualified lens model is active.",
+        )
+        self.lens_guidance.setObjectName("machineSetupLensGuidance")
+        layout.addWidget(self.lens_guidance)
         instructions = QtWidgets.QLabel(
             "Print targets/checkerboard_9x6_20mm.svg at 100%. Capture varied views at the "
             "center, edges and corners with the complete flat checkerboard visible."
@@ -1248,7 +1621,24 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     def _build_bed_tab(self) -> None:
         tab = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(tab)
+        tab_layout = QtWidgets.QVBoxLayout(tab)
+        self.bed_guidance = _SetupGuidance(
+            goal=(
+                "Map camera pixels to machine coordinates and save the movable "
+                "honeycomb frame."
+            ),
+            action="Complete the next incomplete Bed Mapping step shown below.",
+            done=(
+                "The bed map is valid and the automatic four-edge honeycomb frame "
+                "is current."
+            ),
+        )
+        self.bed_guidance.setObjectName("machineSetupBedMappingGuidance")
+        tab_layout.addWidget(self.bed_guidance)
+        content = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(content, 1)
         left_widget = QtWidgets.QWidget()
         left_widget.setMinimumWidth(360)
         left = QtWidgets.QVBoxLayout(left_widget)
@@ -1260,6 +1650,19 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.bed_preview.setMinimumHeight(270)
         self.bed_preview.pointPicked.connect(self._bed_point_picked)
         left.addWidget(self.bed_preview, 1)
+        ruler_preview_actions = QtWidgets.QHBoxLayout()
+        ruler_preview_actions.addStretch(1)
+        self.ruler_preview_clear_button = QtWidgets.QPushButton(
+            "Clear ruler preview"
+        )
+        self.ruler_preview_clear_button.setObjectName("clearRulerPreview")
+        self.ruler_preview_clear_button.setToolTip(
+            "Clear only the captured ruler image from this Setup window. The saved "
+            "honeycomb frame is not changed."
+        )
+        self.ruler_preview_clear_button.clicked.connect(self.clear_ruler_preview)
+        ruler_preview_actions.addWidget(self.ruler_preview_clear_button)
+        left.addLayout(ruler_preview_actions)
         self.bed_status = QtWidgets.QLabel()
         self.bed_status.setWordWrap(True)
         left.addWidget(self.bed_status)
@@ -1307,19 +1710,26 @@ class MachineSetupDialog(QtWidgets.QDialog):
         base_powered.clicked.connect(lambda: self.prepare_base_bed_mapping_job(True))
         self.base_grid_capture_button.clicked.connect(self.capture_base_bed_mapping)
         self._refresh_base_grid_geometry_status()
-        layout.addWidget(left_widget, 3)
+        layout.addWidget(left_widget, 2)
 
         right_widget = QtWidgets.QWidget()
         right_widget.setMinimumWidth(280)
-        right_widget.setMaximumWidth(430)
+        right_widget.setMaximumWidth(520)
         right_widget.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Preferred,
             QtWidgets.QSizePolicy.Policy.Expanding,
         )
         right = QtWidgets.QVBoxLayout(right_widget)
         right.setContentsMargins(0, 0, 0, 0)
-        reference = QtWidgets.QGroupBox("Work-area ruler check")
-        reference_layout = QtWidgets.QVBoxLayout(reference)
+        self.honeycomb_frame_group = QtWidgets.QGroupBox("Honeycomb frame")
+        self.honeycomb_frame_group.setObjectName("honeycombFrameSection")
+        reference_layout = QtWidgets.QVBoxLayout(self.honeycomb_frame_group)
+        honeycomb_intro = QtWidgets.QLabel(
+            "Required for projects positioned on the movable honeycomb. "
+            "Complete these steps in order."
+        )
+        honeycomb_intro.setWordWrap(True)
+        reference_layout.addWidget(honeycomb_intro)
         self.work_area_reference_status = QtWidgets.QLabel()
         self.work_area_reference_status.setWordWrap(True)
         self.work_area_reference_status.setMinimumWidth(0)
@@ -1357,16 +1767,6 @@ class MachineSetupDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         reference_layout.addWidget(reference_note)
-        self.work_area_reference_button = QtWidgets.QPushButton(
-            "Capture ruler"
-        )
-        self.work_area_reference_button.setToolTip(
-            "Home / park, then capture the ruler overlay."
-        )
-        self.work_area_reference_button.clicked.connect(
-            self.capture_work_area_reference
-        )
-        reference_layout.addWidget(self.work_area_reference_button)
 
         support_geometry = QtWidgets.QGridLayout()
         support_geometry.setContentsMargins(0, 0, 0, 0)
@@ -1384,6 +1784,87 @@ class MachineSetupDialog(QtWidgets.QDialog):
         support_geometry.setColumnStretch(1, 1)
         reference_layout.addLayout(support_geometry)
 
+        self.honeycomb_step1 = QtWidgets.QWidget()
+        self.honeycomb_step1.setObjectName("honeycombFrameStep1")
+        step1_layout = QtWidgets.QVBoxLayout(self.honeycomb_step1)
+        step1_layout.setContentsMargins(0, 5, 0, 5)
+        self.honeycomb_step1_title = QtWidgets.QLabel("1. Capture ruler overlay")
+        step1_font = self.honeycomb_step1_title.font()
+        step1_font.setBold(True)
+        self.honeycomb_step1_title.setFont(step1_font)
+        step1_layout.addWidget(self.honeycomb_step1_title)
+        step1_description = QtWidgets.QLabel(
+            "Homes and parks the machine, then captures the current image used to "
+            "locate and verify the honeycomb."
+        )
+        step1_description.setWordWrap(True)
+        step1_layout.addWidget(step1_description)
+        self.work_area_reference_button = _FullWidthActionButton(
+            "1. Home, park & capture ruler overlay"
+        )
+        self.work_area_reference_button.setObjectName("captureRulerOverlayStep")
+        self.work_area_reference_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.work_area_reference_button.setToolTip(
+            "Home / park, then capture the ruler overlay."
+        )
+        self.work_area_reference_button.clicked.connect(
+            self.capture_work_area_reference
+        )
+        step1_layout.addWidget(self.work_area_reference_button)
+        self.ruler_overlay_status = QtWidgets.QLabel("Ruler overlay: MISSING")
+        self.ruler_overlay_status.setObjectName("rulerOverlayStatus")
+        step1_layout.addWidget(self.ruler_overlay_status)
+        ruler_not_saved = QtWidgets.QLabel(
+            "This step does not save the honeycomb frame."
+        )
+        ruler_not_saved.setWordWrap(True)
+        ruler_not_saved.setObjectName("rulerOverlayDoesNotSaveNote")
+        step1_layout.addWidget(ruler_not_saved)
+        reference_layout.addWidget(self.honeycomb_step1)
+
+        self.honeycomb_step2 = QtWidgets.QWidget()
+        self.honeycomb_step2.setObjectName("honeycombFrameStep2")
+        step2_layout = QtWidgets.QVBoxLayout(self.honeycomb_step2)
+        step2_layout.setContentsMargins(0, 5, 0, 5)
+        self.honeycomb_step2_title = QtWidgets.QLabel(
+            "2. Detect and save honeycomb frame"
+        )
+        step2_font = self.honeycomb_step2_title.font()
+        step2_font.setBold(True)
+        self.honeycomb_step2_title.setFont(step2_font)
+        step2_layout.addWidget(self.honeycomb_step2_title)
+        step2_description = QtWidgets.QLabel(
+            "Finds the honeycomb's four outside edges in the current ruler image. "
+            "Review the magenta outline, then save it."
+        )
+        step2_description.setWordWrap(True)
+        step2_layout.addWidget(step2_description)
+        self.honeycomb_support_auto_button = _FullWidthActionButton(
+            "2. Detect & save honeycomb frame"
+        )
+        self.honeycomb_support_auto_button.setObjectName("detectSaveHoneycombStep")
+        self.honeycomb_support_auto_button.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Expanding,
+            QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.honeycomb_support_auto_button.clicked.connect(
+            self.detect_honeycomb_support_automatically
+        )
+        step2_layout.addWidget(self.honeycomb_support_auto_button)
+        self.honeycomb_frame_status = QtWidgets.QLabel("Honeycomb frame: MISSING")
+        self.honeycomb_frame_status.setObjectName("honeycombFrameStatus")
+        step2_layout.addWidget(self.honeycomb_frame_status)
+        self.honeycomb_step_instruction = QtWidgets.QLabel(
+            "Complete step 1 first: capture a current ruler overlay."
+        )
+        self.honeycomb_step_instruction.setObjectName("honeycombFrameNextStep")
+        self.honeycomb_step_instruction.setWordWrap(True)
+        step2_layout.addWidget(self.honeycomb_step_instruction)
+        reference_layout.addWidget(self.honeycomb_step2)
+
         self.honeycomb_support_status = QtWidgets.QLabel()
         self.honeycomb_support_status.setWordWrap(True)
         self.honeycomb_support_status.setMinimumWidth(0)
@@ -1392,30 +1873,51 @@ class MachineSetupDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Policy.Minimum,
         )
         reference_layout.addWidget(self.honeycomb_support_status)
-        support_buttons = QtWidgets.QHBoxLayout()
-        self.honeycomb_support_auto_button = QtWidgets.QPushButton(
-            "Detect honeycomb automatically"
+
+        self.honeycomb_advanced_toggle = QtWidgets.QToolButton()
+        self.honeycomb_advanced_toggle.setObjectName("honeycombAdvancedToggle")
+        self.honeycomb_advanced_toggle.setText("Advanced / troubleshooting")
+        self.honeycomb_advanced_toggle.setCheckable(True)
+        self.honeycomb_advanced_toggle.setArrowType(
+            QtCore.Qt.ArrowType.RightArrow
         )
-        self.honeycomb_support_auto_button.clicked.connect(
-            self.detect_honeycomb_support_automatically
+        self.honeycomb_advanced_toggle.setToolButtonStyle(
+            QtCore.Qt.ToolButtonStyle.ToolButtonTextBesideIcon
         )
+        reference_layout.addWidget(self.honeycomb_advanced_toggle)
+        self.honeycomb_advanced_panel = QtWidgets.QWidget()
+        self.honeycomb_advanced_panel.setObjectName("honeycombAdvancedPanel")
+        advanced_layout = QtWidgets.QVBoxLayout(self.honeycomb_advanced_panel)
+        advanced_layout.setContentsMargins(12, 0, 0, 0)
+        fallback_warning = QtWidgets.QLabel(
+            "Diagnostic only — does not authorize powered honeycomb-local jobs."
+        )
+        fallback_warning.setObjectName("honeycombFallbackAuthorityWarning")
+        fallback_warning.setWordWrap(True)
+        advanced_layout.addWidget(fallback_warning)
         self.honeycomb_support_record_button = QtWidgets.QPushButton(
             "Fallback: detect with 3 hints"
         )
         self.honeycomb_support_record_button.clicked.connect(
             self.toggle_honeycomb_support_picking
         )
+        advanced_layout.addWidget(self.honeycomb_support_record_button)
         self.honeycomb_support_clear_button = QtWidgets.QPushButton(
-            "Clear visual reference"
+            "Remove saved honeycomb frame…"
+        )
+        self.honeycomb_support_clear_button.setObjectName(
+            "removeSavedHoneycombFrame"
         )
         self.honeycomb_support_clear_button.clicked.connect(
             self.clear_honeycomb_support_reference
         )
-        support_buttons.addWidget(self.honeycomb_support_auto_button, 1)
-        support_buttons.addWidget(self.honeycomb_support_record_button)
-        support_buttons.addWidget(self.honeycomb_support_clear_button)
-        reference_layout.addLayout(support_buttons)
-        right.addWidget(reference)
+        advanced_layout.addWidget(self.honeycomb_support_clear_button)
+        self.honeycomb_advanced_panel.setVisible(False)
+        self.honeycomb_advanced_toggle.toggled.connect(
+            self._toggle_honeycomb_advanced
+        )
+        reference_layout.addWidget(self.honeycomb_advanced_panel)
+        right.addWidget(self.honeycomb_frame_group)
         self._bed_dependent_actions.append(self.work_area_reference_button)
         self._bed_dependent_actions.append(self.honeycomb_support_auto_button)
         self._bed_dependent_actions.append(self.honeycomb_support_record_button)
@@ -1532,12 +2034,30 @@ class MachineSetupDialog(QtWidgets.QDialog):
         controls.addWidget(park, 0, 0)
         controls.addWidget(clear, 0, 1)
         right.addLayout(controls)
-        layout.addWidget(right_widget, 2)
+        layout.addWidget(right_widget, 3)
         self.bed_scroll_area = self._add_scrollable_tab(tab, "3 · Bed mapping")
 
     def _build_registration_tab(self) -> None:
         tab = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(tab)
+        tab_layout = QtWidgets.QVBoxLayout(tab)
+        self.registration_guidance = _SetupGuidance(
+            goal="Measure and correct repeatable residual offset.",
+            action=(
+                "Prepare and run the registration marks, then capture and review "
+                "the result."
+            ),
+            done=(
+                "The result has been reviewed and any chosen correction is applied."
+            ),
+        )
+        self.registration_guidance.setObjectName(
+            "machineSetupFineRegistrationGuidance"
+        )
+        tab_layout.addWidget(self.registration_guidance)
+        content = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(content, 1)
         left = QtWidgets.QVBoxLayout()
         self.registration_preview = ImagePicker(
             rotation_degrees=self._camera_view_rotation
@@ -1686,7 +2206,23 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     def _build_check_tab(self) -> None:
         tab = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(tab)
+        tab_layout = QtWidgets.QVBoxLayout(tab)
+        self.validation_guidance = _SetupGuidance(
+            goal="Independently verify final placement accuracy.",
+            action=(
+                "Prepare and run the validation marks, then capture and review "
+                "the result."
+            ),
+            done="Validation reports PASS.",
+        )
+        self.validation_guidance.setObjectName(
+            "machineSetupAccuracyValidationGuidance"
+        )
+        tab_layout.addWidget(self.validation_guidance)
+        content = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(content)
+        layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(content, 1)
         self.validation_preview = ImagePicker(
             rotation_degrees=self._camera_view_rotation
         )
@@ -1827,6 +2363,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
 
     def _build_coordinate_audit_tab(self) -> None:
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+        self.audit_guidance = _SetupGuidance(
+            goal="Confirm all current coordinate and profile bindings.",
+            action="Refresh the audit and resolve every blocker it reports.",
+            done="Audit reports READY.",
+        )
+        self.audit_guidance.setObjectName("machineSetupCoordinateAuditGuidance")
+        layout.addWidget(self.audit_guidance)
         self.audit_preview = ImagePicker(
             rotation_degrees=self._camera_view_rotation
         )
@@ -1845,9 +2390,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.audit_next_action = self.audit_panel.next_action
         self.audit_tree = self.audit_panel.tree
         self.audit_point_details = self.audit_panel.point_details
+        layout.addWidget(self.audit_panel, 1)
         self._bed_dependent_actions.append(self.audit_capture_button)
         self.audit_scroll_area = self._add_scrollable_tab(
-            self.audit_panel,
+            tab,
             "6 · Coordinate audit",
         )
         self._refresh_coordinate_audit()
@@ -1861,9 +2407,17 @@ class MachineSetupDialog(QtWidgets.QDialog):
         except Exception as exc:
             self.audit_panel.set_unavailable(str(exc))
             self._coordinate_audit_snapshot = None
+            self.audit_guidance.set_action(
+                "Audit status is unavailable. Resolve the reported error, then refresh."
+            )
             return
         self._coordinate_audit_snapshot = audit
         self.audit_panel.set_status(audit)
+        self.audit_guidance.set_action(
+            "Audit reports READY. Review the evidence below."
+            if str(audit.get("overall_state") or "") == "READY"
+            else "Resolve the blockers below, then click Refresh audit."
+        )
 
     def _current_coordinate_audit_image_evidence(self) -> tuple[Any, ...] | None:
         if self._bed_image is None:
@@ -2307,12 +2861,22 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.apply_dense_button.setEnabled(False)
         self.registration_status.setText(status)
         self.dense_status.setText(status)
+        if hasattr(self, "registration_guidance"):
+            self.registration_guidance.set_action(
+                "Prepare and run the registration marks, then capture and review "
+                "the result."
+            )
 
     def _invalidate_validation_review(self, status: str) -> None:
         self._dense_validation_analysis = None
         self.validation_results.setRowCount(0)
         self.apply_dense_validation_refinement_button.setEnabled(False)
         self.validation_status.setText(status)
+        if hasattr(self, "validation_guidance"):
+            self.validation_guidance.set_action(
+                "Prepare and run the validation marks, then capture and review "
+                "the result."
+            )
 
     def _invalidate_for_lens_solve(self) -> None:
         self._invalidate_lens_review("Lens solve in progress.")
@@ -2501,6 +3065,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
         readiness = self.context.camera_calibration_readiness()
         bed = self.context.bed_status()
         self._refresh_lens_status(lens, camera, readiness, bed)
+        self._refresh_camera_lens_guidance(
+            camera=camera,
+            lens=lens,
+            readiness=readiness,
+        )
         calibration = bed.get("calibration") or {}
         validity = bed.get("validity") or {}
         fine = calibration.get("fine_registration") or {}
@@ -2828,6 +3397,32 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "Fallback: detect with 3 hints"
             )
 
+    def _toggle_honeycomb_advanced(self, checked: bool) -> None:
+        self.honeycomb_advanced_panel.setVisible(bool(checked))
+        self.honeycomb_advanced_toggle.setArrowType(
+            QtCore.Qt.ArrowType.DownArrow
+            if checked
+            else QtCore.Qt.ArrowType.RightArrow
+        )
+
+    def clear_ruler_preview(self) -> None:
+        """Clear only the transient ruler capture, never saved support evidence."""
+
+        self._cancel_honeycomb_support_picking()
+        self._bed_image = None
+        self._work_area_reference_calibration = None
+        self._invalidate_coordinate_audit_image()
+        self.bed_preview.clear_image("No ruler preview captured")
+        if hasattr(self, "audit_preview"):
+            self.audit_preview.clear_image(
+                "Capture an audit view to inspect coordinates"
+            )
+        self._refresh_work_area_reference_status()
+        self._refresh_coordinate_audit()
+        self.operation_status.setText(
+            "Ruler preview cleared. The saved honeycomb frame was not changed."
+        )
+
     def _configured_honeycomb_span_or_warn(self) -> float | None:
         span = self.context.settings.machine.honeycomb_span_mm
         if span is not None:
@@ -2949,6 +3544,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
             on_failure=failed,
         )
 
+    def _review_honeycomb_frame(self, message: str) -> str:
+        review = _HoneycombFrameReviewDialog(message, self)
+        review.exec()
+        return review.choice
+
     def _honeycomb_detection_succeeded(
         self,
         result: tuple[HoneycombSupportReference, Any],
@@ -2985,24 +3585,31 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 f"{detection.axis_angle_deg:.1f} deg.\n"
             )
         )
-        answer = QtWidgets.QMessageBox.warning(
-            self,
-            "Review detected honeycomb reference",
-            method
-            + " The magenta outline comes from the detected four-corner rectangle.\n\n"
+        authority = (
+            "The magenta outline is the detected cutting surface.\n"
+            "Confirm that all four edges follow the physical honeycomb.\n"
+            "Saving establishes the current honeycomb-local X0/Y0 frame."
+            if automatic
+            else (
+                "The magenta outline is a diagnostic fallback estimate.\n"
+                "Saving retains only a visual reference; it does not establish a "
+                "current execution-verifiable honeycomb frame or authorize powered "
+                "honeycomb-local jobs."
+            )
+        )
+        choice = self._review_honeycomb_frame(
+            authority
+            + "\n\n"
+            + method
+            + "\n"
             + evidence
             + f"The {candidate.ruler_mark_mm:g} mm spans map to "
             f"{x_span:.1f} mm and {y_span:.1f} mm.\n"
             f"Detected outline: {corner_text}.\n\n"
-            "This establishes the movable honeycomb-local X0/Y0 job frame for "
-            "the camera, grid, Trace, templates, and newly generated paths. It "
-            "does not alter camera calibration, configured machine bounds, "
-            "guarded laser limits, or authorize output. Save it?",
-            QtWidgets.QMessageBox.StandardButton.Yes
-            | QtWidgets.QMessageBox.StandardButton.Cancel,
-            QtWidgets.QMessageBox.StandardButton.Cancel,
+            "Saving does not alter camera calibration, configured machine bounds, "
+            "guarded laser limits, motion authority, or laser-output authority."
         )
-        if answer == QtWidgets.QMessageBox.StandardButton.Yes:
+        if choice == _HoneycombFrameReviewDialog.SAVE:
             try:
                 save_options: dict[str, Any] = {}
                 if automatic:
@@ -3015,22 +3622,30 @@ class MachineSetupDialog(QtWidgets.QDialog):
                     **save_options,
                 )
                 self.calibrationChanged.emit()
+                self.operation_status.setText("Honeycomb frame saved.")
             except Exception as exc:
                 QtWidgets.QMessageBox.critical(
                     self, "Honeycomb support was not saved", str(exc)
                 )
+        elif choice == _HoneycombFrameReviewDialog.TRY_AGAIN:
+            self.operation_status.setText(
+                "Detected frame not saved. Check the ruler image, then run step 2 again."
+            )
+        else:
+            self.operation_status.setText("Detected honeycomb frame was not saved.")
         self._cancel_honeycomb_support_picking()
         self._render_work_area_reference_preview()
         self._refresh_work_area_reference_status()
+        self._refresh_coordinate_audit()
 
     def clear_honeycomb_support_reference(self) -> None:
         if self.context.honeycomb_support.reference is None:
             return
         answer = QtWidgets.QMessageBox.question(
             self,
-            "Clear honeycomb support",
-            "Remove the recorded movable honeycomb-support reference? Machine and "
-            "laser limits are not changed.",
+            "Remove saved honeycomb frame",
+            "Remove the saved movable honeycomb frame? The ruler preview, machine "
+            "limits, and laser limits are not changed.",
             QtWidgets.QMessageBox.StandardButton.Yes
             | QtWidgets.QMessageBox.StandardButton.Cancel,
             QtWidgets.QMessageBox.StandardButton.Cancel,
@@ -3042,6 +3657,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._cancel_honeycomb_support_picking()
         self._render_work_area_reference_preview()
         self._refresh_work_area_reference_status()
+        self._refresh_coordinate_audit()
 
     def add_bed_point(self) -> None:
         result = self._message(
@@ -3414,6 +4030,31 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.work_area_reference_status.setText(output_status)
         reference = self.context.honeycomb_support.reference
         configured_span = self.context.settings.machine.honeycomb_span_mm
+        support_validity = self.context.honeycomb_support_status()
+        calibration = self.context.bed.calibration
+        fresh_reference_image = bool(
+            self._bed_map_valid
+            and self._bed_image is not None
+            and calibration is not None
+            and self._work_area_reference_calibration is calibration
+        )
+        ruler_state = (
+            "CURRENT"
+            if fresh_reference_image
+            else "STALE"
+            if self._work_area_reference_calibration is not None
+            else "MISSING"
+        )
+        frame_state = (
+            "MISSING"
+            if reference is None
+            else "CURRENT"
+            if support_validity.get("state") == "CURRENT"
+            and bool(support_validity.get("execution_verifiable"))
+            else "STALE"
+        )
+        self.ruler_overlay_status.setText(f"Ruler overlay: {ruler_state}")
+        self.honeycomb_frame_status.setText(f"Honeycomb frame: {frame_state}")
         self.honeycomb_ruler_mark.setText(
             "Not configured"
             if configured_span is None
@@ -3446,16 +4087,18 @@ class MachineSetupDialog(QtWidgets.QDialog):
             xs = [point[0] for point in corners]
             ys = [point[1] for point in corners]
             x_span, y_span = reference.measured_ruler_span_mm
-            stale_note = ""
-            calibration = self.context.bed.calibration
-            if (
-                calibration is not None
-                and abs(
-                    calibration.created_at - reference.bed_calibration_created_at
-                )
-                > 1e-9
-            ):
-                stale_note = " Bed map changed since recording; review and re-record."
+            reasons = [str(item) for item in support_validity.get("reasons") or ()]
+            stale_note = (
+                " Current-state reason: " + "; ".join(reasons) + "."
+                if reasons
+                else ""
+            )
+            authority_note = (
+                " Diagnostic visual reference only; automatic four-edge evidence "
+                "must be detected and saved before powered honeycomb-local work."
+                if not bool(support_validity.get("execution_verifiable"))
+                else ""
+            )
             support_text = (
                 f"Honeycomb-local job frame: X0..{reference.support_width_mm:g}, "
                 f"Y0..{reference.support_height_mm:g} mm; "
@@ -3464,29 +4107,32 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 f"Y{reference.ruler_origin_machine_mm[1]:.1f}. Measured "
                 f"{reference.ruler_mark_mm:g} mm spans: X{x_span:.1f}, Y{y_span:.1f}. "
                 f"Mapped outline X{min(xs):.1f}..{max(xs):.1f}, "
-                f"Y{min(ys):.1f}..{max(ys):.1f}.{stale_note}"
+                f"Y{min(ys):.1f}..{max(ys):.1f}.{authority_note}{stale_note}"
             )
         self.honeycomb_support_status.setText(support_text)
 
-        calibration = self.context.bed.calibration
-        fresh_reference_image = (
-            self._bed_image is not None
-            and calibration is not None
-            and self._work_area_reference_calibration is calibration
-        )
         span_configured = configured_span is not None
-        if not span_configured:
-            self.honeycomb_support_auto_button.setEnabled(False)
-            self.honeycomb_support_auto_button.setToolTip(
+        can_record = bool(
+            self._bed_map_valid
+            and fresh_reference_image
+            and span_configured
+            and not self._honeycomb_pick_active
+        )
+        self.honeycomb_support_auto_button.setEnabled(can_record)
+        self.honeycomb_support_auto_button.setToolTip(
+            ""
+            if can_record
+            else (
                 "Configure the physical honeycomb span for this saved machine in "
                 "Machine Manager"
+                if not span_configured
+                else "Complete the base-map process before detecting the honeycomb"
+                if not self._bed_map_valid
+                else "Complete step 1 first: capture a current ruler overlay"
+                if not fresh_reference_image
+                else "Finish or cancel the three-hint diagnostic first"
             )
-        elif self._bed_map_valid:
-            self.honeycomb_support_auto_button.setEnabled(True)
-            self.honeycomb_support_auto_button.setToolTip(
-                "Capture a fresh ruler overlay before automatic detection"
-            )
-        can_record = self._bed_map_valid and fresh_reference_image and span_configured
+        )
         self.honeycomb_support_record_button.setEnabled(
             self._honeycomb_pick_active or can_record
         )
@@ -3502,6 +4148,50 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         self.honeycomb_support_clear_button.setEnabled(
             reference is not None and not self._honeycomb_pick_active
+        )
+        self.ruler_preview_clear_button.setEnabled(
+            self._bed_image is not None
+            or self._work_area_reference_calibration is not None
+        )
+
+        if not self._bed_map_valid:
+            instruction = (
+                "Complete the Bed Mapping base-map process before capturing the "
+                "ruler overlay."
+            )
+        elif frame_state == "CURRENT":
+            instruction = "Honeycomb frame saved and current."
+        elif not fresh_reference_image:
+            instruction = "Complete step 1 first: capture a current ruler overlay."
+        elif not span_configured:
+            instruction = (
+                "Configure the Physical honeycomb ruler span in Machine Manager, "
+                "then return to step 2."
+            )
+        else:
+            instruction = (
+                "Ruler overlay captured. Next, detect and save the honeycomb frame."
+            )
+        self.honeycomb_step_instruction.setText(instruction)
+
+        step1_is_next = bool(
+            self._bed_map_valid
+            and not fresh_reference_image
+            and frame_state != "CURRENT"
+        )
+        step2_is_next = bool(can_record and frame_state != "CURRENT")
+        for button, is_next in (
+            (self.work_area_reference_button, step1_is_next),
+            (self.honeycomb_support_auto_button, step2_is_next),
+        ):
+            button.setProperty("nextCalibrationStep", is_next)
+            button_font = button.font()
+            button_font.setBold(is_next)
+            button.setFont(button_font)
+        self._refresh_bed_guidance(
+            ruler_state=ruler_state,
+            frame_state=frame_state,
+            span_configured=span_configured,
         )
 
     def prepare_base_bed_mapping_job(self, powered: bool) -> None:
@@ -3717,6 +4407,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
             status = payload.get("reason", "Registration marks were not detected")
             precision = self._precision_capture_summary(payload.get("precision_capture"))
             self.registration_status.setText(status + (f"\n{precision}" if precision else ""))
+            self.registration_guidance.set_action(
+                "Review the capture problem, then run Home / park, precision capture "
+                "again."
+            )
             return
         self._fine_registration_measurements = list(payload.get("measurements", []))
         self._populate_registration_results(
@@ -3757,6 +4451,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if precision:
             status += f"\n{precision}"
         self.registration_status.setText(status)
+        self.registration_guidance.set_action(
+            "Review the measured result. Apply an eligible correction only if "
+            "chosen, then continue to 5. Accuracy Validation."
+        )
 
     @staticmethod
     def _precision_capture_summary(payload: Any) -> str:
@@ -4207,6 +4905,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
             status = payload.get("reason", "Validation holdouts were not detected")
             precision = self._precision_capture_summary(payload.get("precision_capture"))
             self.validation_status.setText(status + (f"\n{precision}" if precision else ""))
+            self.validation_guidance.set_action(
+                "Review the capture problem, then run Home / park, precision capture "
+                "again."
+            )
             return
 
         measurements = list(analysis.get("measurements", []))
@@ -4259,6 +4961,14 @@ class MachineSetupDialog(QtWidgets.QDialog):
         precision = self._precision_capture_summary(analysis.get("precision_capture"))
         if precision:
             self.validation_status.setText(self.validation_status.text() + f"\n{precision}")
+        self.validation_guidance.set_action(
+            "Validation reports PASS. Review 6. Coordinate Audit."
+            if bool(analysis.get("passed"))
+            else (
+                "Validation did not PASS. Return to Fine Registration for a coherent "
+                "global residual, or Bed Mapping when errors vary by position."
+            )
+        )
 
     def prepare_dense_validation_job(self, powered: bool, *, confirmation: bool = False) -> None:
         if powered:

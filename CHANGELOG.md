@@ -6,6 +6,21 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Reworked Machine Setup calibration guidance and recovery without changing
+  calibration math or execution authority. Every numbered tab now presents a
+  compact Goal / Do this now / Done when guide. Bed Mapping groups the normal
+  honeycomb workflow into **1. Home, park & capture ruler overlay** followed by
+  **2. Detect & save honeycomb frame**, with independent MISSING/CURRENT/STALE
+  status, visible prerequisite guidance, full-width scalable actions, a
+  preview-only clear control, and diagnostic-only three-hint fallback under
+  Advanced / troubleshooting. Automatic review now requires the literal **Save
+  honeycomb frame** action; Try again and Cancel save nothing. Structured
+  preflight findings now carry immutable ordered remediation and stable UI
+  navigation IDs. Blocked Job Preflight shows numbered recovery, preserves the
+  exact technical reason, and can open the precise Machine Setup tab or Machine
+  Manager field through a fixed presentation-only route that performs no
+  capture, motion, calibration write, arming, or laser action.
+
 - Replaced unbounded desktop Close with a single four-second monotonic shutdown
   deadline. Remote camera shutdown now makes blocked address resolution
   cancellable and tracks and closes active sockets so blocked fresh-frame,

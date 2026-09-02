@@ -75,14 +75,22 @@ def test_bed_provenance_survives_unchanged_restart(tmp_path: Path) -> None:
     _install_test_bed(first)
     first.start()
     try:
-        assert first.bed_calibration_validity() == {"state": "VALID", "reasons": []}
+        assert first.bed_calibration_validity() == {
+            "state": "VALID",
+            "reasons": [],
+            "reason_codes": [],
+        }
     finally:
         first.stop()
 
     second = AppContext(_settings(tmp_path))
     second.start()
     try:
-        assert second.bed_calibration_validity() == {"state": "VALID", "reasons": []}
+        assert second.bed_calibration_validity() == {
+            "state": "VALID",
+            "reasons": [],
+            "reason_codes": [],
+        }
     finally:
         second.stop()
 
@@ -107,13 +115,18 @@ def test_edited_bed_points_report_stale_model_until_resolved(tmp_path: Path) -> 
         status = context.bed_status()
         assert validity["state"] == "STALE"
         assert "points changed" in validity["reasons"][0]
+        assert validity["reason_codes"] == ["bed_map.unavailable"]
         assert status["calibrated"] is False
         assert status["model_present"] is True
         with pytest.raises(CalibrationError, match="Bed calibration is STALE"):
             context.rectified_frame(refresh=True)
 
         context.solve_bed()
-        assert context.bed_calibration_validity() == {"state": "VALID", "reasons": []}
+        assert context.bed_calibration_validity() == {
+            "state": "VALID",
+            "reasons": [],
+            "reason_codes": [],
+        }
     finally:
         context.stop()
 
@@ -131,6 +144,7 @@ def test_lens_or_focus_change_marks_same_resolution_bed_stale(tmp_path: Path) ->
         validity = context.bed_calibration_validity()
         assert validity["state"] == "STALE"
         assert "lens_model_id" in validity["reasons"][0]
+        assert validity["reason_codes"] == ["bed_map.dependency_changed"]
         assert context.status()["bed"]["calibrated"] is False
         assert context.status()["bed"]["model_present"] is True
         with pytest.raises(CalibrationError, match="Bed calibration is STALE"):
@@ -141,6 +155,7 @@ def test_lens_or_focus_change_marks_same_resolution_bed_stale(tmp_path: Path) ->
         validity = context.bed_calibration_validity()
         assert validity["state"] == "STALE"
         assert "camera" in validity["reasons"][0]
+        assert validity["reason_codes"] == ["bed_map.dependency_changed"]
     finally:
         context.stop()
 
@@ -154,7 +169,9 @@ def test_clearing_lens_blocks_bed_map_bound_to_that_model(tmp_path: Path) -> Non
         context.solve_bed()
         context.lens.clear(delete_images=False)
 
-        assert context.bed_calibration_validity()["state"] == "STALE"
+        validity = context.bed_calibration_validity()
+        assert validity["state"] == "STALE"
+        assert validity["reason_codes"] == ["bed_map.dependency_changed"]
     finally:
         context.stop()
 
@@ -172,11 +189,23 @@ def test_legacy_bed_map_is_provenance_unknown_and_blocked(tmp_path: Path) -> Non
     second = AppContext(_settings(tmp_path))
     second.start()
     try:
-        assert second.bed_calibration_validity()["state"] == "UNKNOWN"
+        validity = second.bed_calibration_validity()
+        assert validity["state"] == "UNKNOWN"
+        assert validity["reason_codes"] == ["bed_map.legacy_provenance"]
         with pytest.raises(CalibrationError, match="Bed calibration is UNKNOWN"):
             second.rectified_frame(refresh=True)
     finally:
         second.stop()
+
+
+def test_missing_bed_map_has_stable_diagnostic_reason(tmp_path: Path) -> None:
+    context = AppContext(_settings(tmp_path))
+
+    assert context.bed_calibration_validity() == {
+        "state": "MISSING",
+        "reasons": ["No bed map is installed"],
+        "reason_codes": ["bed_map.missing"],
+    }
 
 
 @pytest.mark.parametrize(

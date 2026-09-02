@@ -17,7 +17,7 @@ from laser_aligner.calibration.support import (
     HoneycombSupportReference,
 )
 from laser_aligner.camera.service import CameraStatus
-from laser_aligner.config import WorkArea, load_settings
+from laser_aligner.config import Settings, WorkArea, load_settings
 from laser_aligner.core.runtime import CoreRuntime
 from laser_aligner.errors import CalibrationError
 from laser_aligner.gcode.preview import parse_gcode_segments
@@ -493,6 +493,48 @@ def test_camera_calibration_readiness_rejects_geometry_and_control_drift(
     assert any(
         "exposure mode is unverified" in item for item in readiness["reasons"]
     )
+    assert readiness["reason_codes"] == [
+        "camera.resolution_mismatch",
+        "camera.control_unverified",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("connected", "frame_age_seconds", "expected_codes"),
+    (
+        (False, 0.1, ["camera.not_connected"]),
+        (True, None, ["camera.frame_missing"]),
+        (True, 2.01, ["camera.frame_stale"]),
+        (True, 0.1, []),
+    ),
+)
+def test_camera_calibration_readiness_has_stable_runtime_reason_codes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    connected: bool,
+    frame_age_seconds: float | None,
+    expected_codes: list[str],
+) -> None:
+    context = AppContext(_settings(tmp_path, simulation=False))
+    monkeypatch.setattr(
+        context.camera,
+        "status",
+        lambda: CameraStatus(
+            connected=connected,
+            device="/dev/video0",
+            width=context.settings.camera.width,
+            height=context.settings.camera.height,
+            fps=float(context.settings.camera.fps),
+            frames_read=10,
+            last_error=None,
+            frame_age_seconds=frame_age_seconds,
+        ),
+    )
+
+    readiness = context.camera_calibration_readiness()
+
+    assert readiness["reason_codes"] == expected_codes
+    assert readiness["state"] == ("READY" if not expected_codes else "BLOCKED")
 
 
 def _settings(
@@ -500,6 +542,7 @@ def _settings(
     *,
     simulation: bool = False,
     machine_backend: str = "serial",
+    honeycomb_span_mm: float | None = None,
 ):
     config_path = tmp_path / f"config-{simulation}-{machine_backend}.json"
     config_path.write_text(
@@ -511,7 +554,10 @@ def _settings(
                 },
                 "camera": {"autostart": False},
                 "calibration": {"bed": {"pixels_per_mm": 2}},
-                "machine": {"backend": machine_backend},
+                "machine": {
+                    "backend": machine_backend,
+                    "honeycomb_span_mm": honeycomb_span_mm,
+                },
             }
         ),
         encoding="utf-8",
@@ -612,6 +658,159 @@ def _save_execution_support(context: AppContext) -> HoneycombSupportReference:
     )
     context.honeycomb_support.save(reference)
     return reference
+
+
+def _save_bound_execution_support(
+    context: AppContext,
+    monkeypatch: pytest.MonkeyPatch,
+) -> HoneycombSupportReference:
+    reference = _save_execution_support(context)
+    assert reference.raw_corners_machine_mm is not None
+    teaching_corners = tuple(
+        context.bed.mm_to_image(*point) for point in reference.raw_corners_machine_mm
+    )
+    monkeypatch.setattr(context, "_require_valid_bed_calibration", lambda: None)
+    return context.save_honeycomb_support_reference(
+        reference,
+        teaching_image=np.full((440, 440, 3), 37, dtype=np.uint8),
+        teaching_corners_px=teaching_corners,
+    )
+
+
+def _context_with_bound_execution_support(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[Settings, AppContext, HoneycombSupportReference]:
+    settings = _settings(tmp_path, honeycomb_span_mm=190.0)
+    context = AppContext(settings)
+    context.bed.replace_points_and_solve(
+        [
+            BedPoint(0.0, 439.0, 0.0, 0.0),
+            BedPoint(439.0, 439.0, 220.0, 0.0),
+            BedPoint(439.0, 0.0, 220.0, 220.0),
+            BedPoint(0.0, 0.0, 0.0, 220.0),
+        ],
+        440,
+        440,
+    )
+    reference = _save_bound_execution_support(context, monkeypatch)
+    return settings, context, reference
+
+
+def test_honeycomb_support_status_is_current_after_restart_without_decoding_image(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings, _context, _reference = _context_with_bound_execution_support(
+        tmp_path,
+        monkeypatch,
+    )
+    restarted = AppContext(settings)
+    monkeypatch.setattr(
+        "laser_aligner.app.decode_image_payload",
+        lambda *_args, **_kwargs: pytest.fail(
+            "support status must not decode teaching-image pixels"
+        ),
+    )
+
+    status = restarted.honeycomb_support_status()
+
+    assert status["state"] == "CURRENT"
+    assert status["reasons"] == []
+    assert status["reason_codes"] == []
+    assert status["execution_verifiable"] is True
+
+
+def test_honeycomb_support_status_preserves_invalid_saved_reference_reason(
+    tmp_path: Path,
+) -> None:
+    settings = _settings(tmp_path, honeycomb_span_mm=190.0)
+    context = AppContext(settings)
+    context.honeycomb_support.path.write_text(
+        json.dumps({"schema_version": 2}),
+        encoding="utf-8",
+    )
+
+    restarted = AppContext(settings)
+    status = restarted.honeycomb_support_status()
+
+    assert restarted.honeycomb_support.load_error is not None
+    assert status["state"] == "STALE"
+    assert status["reasons"] == [restarted.honeycomb_support.load_error]
+    assert status["reason_codes"] == ["honeycomb.reference_invalid"]
+    assert status["execution_verifiable"] is False
+
+
+@pytest.mark.parametrize(
+    ("corruption", "reason_fragment"),
+    (
+        ("image_missing", "teaching image is missing"),
+        ("metadata_missing", "teaching metadata is missing"),
+        ("metadata_invalid", "teaching metadata is invalid"),
+        ("schema_invalid", "metadata schema is not 2"),
+        ("kind_invalid", "metadata kind is invalid"),
+        ("image_invalid", "teaching image is invalid or unreadable"),
+        ("image_digest_mismatch", "image digest does not match"),
+        ("corners_invalid", "four finite image corners"),
+        ("bed_mapping_mismatch", "different camera-to-machine bed map"),
+        ("support_frame_mismatch", "different honeycomb coordinate frame"),
+    ),
+)
+def test_honeycomb_support_status_rejects_stale_teaching_evidence_after_restart(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    corruption: str,
+    reason_fragment: str,
+) -> None:
+    settings, context, _reference = _context_with_bound_execution_support(
+        tmp_path,
+        monkeypatch,
+    )
+    metadata_path = context.honeycomb_visual_reference_metadata_path
+    image_path = context.honeycomb_visual_reference_path
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    if corruption == "image_missing":
+        image_path.unlink()
+    elif corruption == "metadata_missing":
+        metadata_path.unlink()
+    elif corruption == "metadata_invalid":
+        metadata_path.write_text("{", encoding="utf-8")
+    elif corruption == "schema_invalid":
+        metadata["schema_version"] = 1
+    elif corruption == "kind_invalid":
+        metadata["kind"] = "diagnostic-only"
+    elif corruption == "image_invalid":
+        image_path.write_bytes(b"not a PNG")
+    elif corruption == "image_digest_mismatch":
+        write_image_atomic(
+            image_path,
+            np.full((440, 440, 3), 91, dtype=np.uint8),
+        )
+    elif corruption == "corners_invalid":
+        metadata["cutting_surface_corners_px"] = [[1.0, 2.0]] * 3
+    elif corruption == "bed_mapping_mismatch":
+        metadata["bed_mapping_digest"] = "superseded-bed-map"
+    elif corruption == "support_frame_mismatch":
+        metadata["support_coordinate_frame_digest"] = "superseded-support"
+    else:  # pragma: no cover - the parameter table is intentionally exhaustive
+        raise AssertionError(f"Unhandled corruption case: {corruption}")
+    if corruption in {
+        "schema_invalid",
+        "kind_invalid",
+        "corners_invalid",
+        "bed_mapping_mismatch",
+        "support_frame_mismatch",
+    }:
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    restarted = AppContext(settings)
+    status = restarted.honeycomb_support_status()
+
+    assert status["state"] == "STALE"
+    assert status["reason_codes"] == ["honeycomb.teaching_image_stale"]
+    assert len(status["reasons"]) == 1
+    assert reason_fragment in status["reasons"][0].lower()
+    assert status["execution_verifiable"] is False
 
 
 def test_trace_background_requires_current_bound_teaching_reference(

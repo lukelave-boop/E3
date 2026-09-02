@@ -18,6 +18,8 @@ from laser_aligner.project import toolpath as toolpath_module
 from laser_aligner.project.job_preflight import (
     JobPreflightCancelled,
     JobPreflightContext,
+    JobPreflightReport,
+    PreflightFinding,
     PreflightSeverity,
     build_job_preflight_report,
 )
@@ -71,6 +73,35 @@ def _codes(report: object) -> tuple[str, ...]:
     return tuple(finding.code for finding in report.findings)  # type: ignore[attr-defined]
 
 
+def _honeycomb_report(**changes: object) -> JobPreflightReport:
+    frame = HoneycombCoordinateFrame(
+        origin_machine_mm=(10.0, 20.0),
+        x_axis_machine=(1.0, 0.0),
+        y_axis_machine=(0.0, 1.0),
+        width_mm=100.0,
+        height_mm=100.0,
+        provenance_digest="ab" * 32,
+    )
+    document = _rectangle_document()
+    document.coordinate_space = CoordinateSpace.HONEYCOMB_LOCAL
+    values: dict[str, object] = {
+        "coordinate_frame": frame,
+        "honeycomb_execution_signature": (
+            *frame.provenance_signature,
+            "cd" * 32,
+        ),
+        "expected_calibration_profile_id": "camera-a",
+        "active_calibration_profile_id": "camera-a",
+        "bed_calibration_state": "VALID",
+        "honeycomb_support_state": "CURRENT",
+        "physical_honeycomb_span_configured": True,
+        "camera_readiness_state": "READY",
+        "lens_model_state": "QUALIFIED",
+    }
+    values.update(changes)
+    return build_job_preflight_report(document, _context(**values))
+
+
 def test_clean_report_is_immutable_ready_and_counts_information() -> None:
     source_area = WorkArea(0.0, 100.0, 0.0, 100.0)
     context = _context(source_area)
@@ -93,6 +124,77 @@ def test_clean_report_is_immutable_ready_and_counts_information() -> None:
         report.findings = ()  # type: ignore[misc]
     with pytest.raises(TypeError):
         report.findings[0].context["changed"] = True  # type: ignore[index]
+
+
+def test_finding_remediation_is_immutable_and_canonical() -> None:
+    finding = PreflightFinding(
+        code=" HONEYCOMB.Support_Not_Current ",
+        severity="blocker",  # type: ignore[arg-type]
+        title=" Honeycomb frame is not current ",
+        message=" Fix the saved frame. ",
+        resolution_steps=(" Open setup. ", " Save the frame. "),
+        navigation_target=" MACHINE_SETUP.BED_MAPPING ",
+        navigation_label=" Open Bed Mapping ",
+    )
+
+    assert finding.code == "honeycomb.support_not_current"
+    assert finding.resolution_steps == ("Open setup.", "Save the frame.")
+    assert finding.navigation_target == "machine_setup.bed_mapping"
+    assert finding.navigation_label == "Open Bed Mapping"
+    with pytest.raises(FrozenInstanceError):
+        finding.navigation_target = "machine_manager"  # type: ignore[misc]
+
+
+@pytest.mark.parametrize(
+    "changes",
+    (
+        {"resolution_steps": ("",)},
+        {
+            "navigation_target": "machine setup",
+            "navigation_label": "Open setup",
+        },
+        {"navigation_target": "machine_manager"},
+        {"navigation_label": "Open Machine Manager"},
+    ),
+)
+def test_finding_rejects_invalid_remediation(changes: dict[str, object]) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        PreflightFinding(
+            code="test.invalid_remediation",
+            severity=PreflightSeverity.BLOCKER,
+            title="Invalid remediation",
+            message="The remediation is invalid.",
+            **changes,  # type: ignore[arg-type]
+        )
+
+
+def test_context_canonicalizes_structured_calibration_reason_codes() -> None:
+    context = _context(
+        bed_calibration_state=" stale ",
+        bed_calibration_reason_codes=(" BED_MAP.Dependency_Changed ",),
+        honeycomb_support_reason_codes=(" HONEYCOMB.Span_Missing ",),
+        camera_readiness_state=" blocked ",
+        camera_readiness_reason_codes=(" CAMERA.Not_Connected ",),
+        lens_model_state=" missing ",
+        lens_model_reason_codes=(" LENS.Model_Missing ",),
+        physical_honeycomb_span_configured=False,
+    )
+
+    assert context.bed_calibration_state == "STALE"
+    assert context.bed_calibration_reason_codes == ("bed_map.dependency_changed",)
+    assert context.honeycomb_support_reason_codes == ("honeycomb.span_missing",)
+    assert context.camera_readiness_state == "BLOCKED"
+    assert context.camera_readiness_reason_codes == ("camera.not_connected",)
+    assert context.lens_model_state == "MISSING"
+    assert context.lens_model_reason_codes == ("lens.model_missing",)
+    assert context.physical_honeycomb_span_configured is False
+
+
+def test_context_rejects_unstable_reason_codes_and_non_boolean_span() -> None:
+    with pytest.raises(ValueError, match="stable dotted identifiers"):
+        _context(bed_calibration_reason_codes=("bed map missing",))
+    with pytest.raises(TypeError, match="exact boolean or None"):
+        _context(physical_honeycomb_span_configured=0)
 
 
 def test_zero_power_and_known_execution_unready_are_warning_only() -> None:
@@ -913,6 +1015,214 @@ def test_honeycomb_coordinate_readiness_states_are_blockers(
     assert report.has_blockers
     finding = next(item for item in report.findings if item.code == expected_code)
     assert finding.detail
+
+
+def test_honeycomb_not_current_has_exact_reason_and_ordered_recovery() -> None:
+    technical_reason = "The teaching-image binding is stale"
+    report = _honeycomb_report(
+        honeycomb_support_state="STALE",
+        honeycomb_support_reasons=(technical_reason,),
+        honeycomb_support_reason_codes=("honeycomb.teaching_image_stale",),
+    )
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "honeycomb.support_not_current"
+    )
+    assert finding.severity is PreflightSeverity.BLOCKER
+    assert finding.title == "Honeycomb frame is not current"
+    assert finding.message == (
+        "E3 does not have a current saved honeycomb frame for this "
+        "camera-to-machine map."
+    )
+    assert finding.detail == technical_reason
+    assert finding.context["reason_codes"] == ("honeycomb.teaching_image_stale",)
+    assert finding.resolution_steps == (
+        "Open Tools → Machine Setup.",
+        "Select 3. Bed Mapping.",
+        "Click “1. Home, park & capture ruler overlay.”",
+        "When the ruler image appears, click “2. Detect & save honeycomb frame.”",
+        "Confirm the magenta outline and click “Save honeycomb frame.”",
+        "Return here and generate again.",
+    )
+    assert finding.navigation_target == "machine_setup.bed_mapping"
+    assert finding.navigation_label == "Open Bed Mapping"
+
+
+def test_missing_physical_honeycomb_span_routes_to_machine_manager() -> None:
+    report = _honeycomb_report(
+        honeycomb_support_state="UNCONFIGURED",
+        honeycomb_support_reasons=(
+            "The running machine has no configured physical honeycomb ruler span",
+        ),
+        honeycomb_support_reason_codes=("honeycomb.span_missing",),
+        physical_honeycomb_span_configured=False,
+    )
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "honeycomb.support_not_current"
+    )
+    assert finding.severity is PreflightSeverity.BLOCKER
+    assert finding.navigation_target == "machine_manager"
+    assert finding.navigation_label == "Open Machine Manager"
+    assert finding.resolution_steps == (
+        "Open Machine Manager.",
+        "Edit the running saved machine.",
+        "Enter the measured Physical honeycomb ruler span.",
+        "Save and relaunch as required by existing configuration semantics.",
+        "Return to Machine Setup → 3. Bed Mapping.",
+        "Capture the ruler overlay.",
+        "Detect and save the honeycomb frame.",
+    )
+
+
+def test_invalid_bed_map_recovery_does_not_skip_base_mapping() -> None:
+    report = _honeycomb_report(
+        bed_calibration_state="STALE",
+        bed_calibration_reasons=("Bed-map dependency changed: lens_model_id",),
+        bed_calibration_reason_codes=("bed_map.dependency_changed",),
+    )
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "honeycomb.bed_calibration_not_valid"
+    )
+    assert finding.severity is PreflightSeverity.BLOCKER
+    assert finding.navigation_target == "machine_setup.bed_mapping"
+    assert finding.navigation_label == "Open Bed Mapping"
+    assert "base camera-to-machine map process" in finding.resolution_steps[2]
+    base_step = next(
+        index
+        for index, step in enumerate(finding.resolution_steps)
+        if "base camera-to-machine map" in step
+    )
+    honeycomb_step = next(
+        index
+        for index, step in enumerate(finding.resolution_steps)
+        if "honeycomb frame" in step
+    )
+    assert base_step < honeycomb_step
+    assert finding.detail == "Bed-map dependency changed: lens_model_id"
+
+
+@pytest.mark.parametrize(
+    ("changes", "target", "label", "required_step"),
+    (
+        (
+            {
+                "bed_calibration_state": "STALE",
+                "bed_calibration_reason_codes": ("bed_map.dependency_changed",),
+                "camera_readiness_state": "BLOCKED",
+                "camera_readiness_reasons": ("Camera is not connected",),
+                "camera_readiness_reason_codes": ("camera.not_connected",),
+            },
+            "machine_setup.camera",
+            "Open Camera Setup",
+            "Click “Refresh raw preview.”",
+        ),
+        (
+            {
+                "bed_calibration_state": "STALE",
+                "bed_calibration_reason_codes": ("bed_map.dependency_changed",),
+                "lens_model_state": "MISSING",
+                "lens_model_reasons": ("No accepted lens model is active",),
+                "lens_model_reason_codes": ("lens.model_missing",),
+            },
+            "machine_setup.lens",
+            "Open Lens Calibration",
+            "Click “Solve current-resolution calibration.”",
+        ),
+    ),
+)
+def test_bed_map_recovery_starts_with_proven_camera_or_lens_prerequisite(
+    changes: dict[str, object],
+    target: str,
+    label: str,
+    required_step: str,
+) -> None:
+    report = _honeycomb_report(**changes)
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "honeycomb.bed_calibration_not_valid"
+    )
+    assert finding.navigation_target == target
+    assert finding.navigation_label == label
+    assert required_step in finding.resolution_steps
+    assert finding.severity is PreflightSeverity.BLOCKER
+    if target == "machine_setup.camera":
+        assert "Camera is not connected" in finding.detail
+        assert finding.context["camera_readiness_reason_codes"] == (
+            "camera.not_connected",
+        )
+    else:
+        assert "No accepted lens model is active" in finding.detail
+        assert finding.context["lens_model_reason_codes"] == (
+            "lens.model_missing",
+        )
+
+
+def test_profile_binding_mismatch_routes_to_coordinate_audit_without_rebinding() -> None:
+    report = _honeycomb_report(active_calibration_profile_id="camera-b")
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "honeycomb.profile_binding_mismatch"
+    )
+    assert finding.severity is PreflightSeverity.BLOCKER
+    assert finding.navigation_target == "machine_setup.coordinate_audit"
+    assert finding.navigation_label == "Open Coordinate Audit"
+    assert finding.context["expected_profile_id"] == "camera-a"
+    assert finding.context["active_profile_id"] == "camera-b"
+    assert any("expected calibration profile" in step for step in finding.resolution_steps)
+    assert any("deliberately use" in step for step in finding.resolution_steps)
+
+
+def test_remediation_never_parses_english_reason_text() -> None:
+    report = _honeycomb_report(
+        honeycomb_support_state="STALE",
+        honeycomb_support_reasons=(
+            "Camera is not connected, but this is arbitrary legacy wording",
+        ),
+    )
+
+    finding = next(
+        item
+        for item in report.findings
+        if item.code == "honeycomb.support_not_current"
+    )
+    assert finding.navigation_target == "machine_setup.bed_mapping"
+    assert finding.resolution_steps[2] == (
+        "Click “1. Home, park & capture ruler overlay.”"
+    )
+
+
+def test_coordinate_blocker_severities_remain_unchanged_with_remediation() -> None:
+    report = _honeycomb_report(
+        bed_calibration_state="STALE",
+        bed_calibration_reason_codes=("bed_map.dependency_changed",),
+        honeycomb_support_state="STALE",
+        honeycomb_support_reason_codes=("honeycomb.bed_map_changed",),
+        guarded_output_polygon_mm=((0.0, 0.0), (1.0, 1.0)),
+        active_calibration_profile_id="camera-b",
+    )
+    coordinate_codes = {
+        "honeycomb.bed_calibration_not_valid",
+        "honeycomb.support_not_current",
+        "honeycomb.profile_binding_mismatch",
+        "honeycomb.output_polygon_invalid",
+    }
+
+    findings = [item for item in report.findings if item.code in coordinate_codes]
+    assert {item.code for item in findings} == coordinate_codes
+    assert all(item.severity is PreflightSeverity.BLOCKER for item in findings)
+    assert all(item.resolution_steps for item in findings)
 
 
 def test_missing_raster_source_is_blocked_without_decode(tmp_path: Path) -> None:

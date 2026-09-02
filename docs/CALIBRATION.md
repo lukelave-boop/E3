@@ -83,6 +83,15 @@ application. All 25 points must be RANSAC inliers with at most `0.50 mm` RMS and
 `0.80 mm` maximum fit error. Installation is transactional and clears
 corrections tied to the previous base homography.
 
+After the base map is installed, the normal movable-support workflow is two
+ordered actions. **1. Home, park & capture ruler overlay** creates the current
+image and verification evidence; it does not save a support coordinate frame.
+Only after that status is current does **2. Detect & save honeycomb frame**
+enable. Review the magenta four-edge result and click **Save honeycomb frame**
+to persist it. **Try again** and **Cancel** leave no candidate as current. The
+three-hint fallback remains diagnostic-only under **Advanced /
+troubleshooting** and cannot authorize powered honeycomb-local work.
+
 Manual fallback remains available:
 
 1. Put the printer and bed at a repeatable photography pose. Once motion bring-up is complete, the **Park at camera pose** button sends `M5`, optionally homes, moves to the configured X/Y pose, and waits for the controller to report idle. Before that point, position the machine manually with laser power disabled.

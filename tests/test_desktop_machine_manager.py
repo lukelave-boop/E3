@@ -105,6 +105,55 @@ def test_manager_preloads_current_machine_camera_and_calibration(
     dialog.close()
 
 
+def test_manager_navigation_focuses_physical_honeycomb_span(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    dialog = MachineManagerDialog(_runtime(tmp_path))
+    dialog.show()
+    qt_application.processEvents()
+
+    dialog.focus_honeycomb_span()
+    qt_application.processEvents()
+
+    assert dialog.honeycomb_span.hasFocus()
+    assert "2px solid" in dialog.honeycomb_span.styleSheet()
+    dialog.close()
+
+
+@pytest.mark.parametrize(
+    ("target", "highlighted_name", "focused_name"),
+    (
+        ("work_area", "geometry_group", "x_min"),
+        (
+            "guarded_output_polygon",
+            "polygon_summary",
+            "polygon_summary",
+        ),
+    ),
+)
+def test_manager_navigation_focuses_context_specific_saved_machine_section(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    target: str,
+    highlighted_name: str,
+    focused_name: str,
+) -> None:
+    dialog = MachineManagerDialog(_runtime(tmp_path))
+    dialog.show()
+    qt_application.processEvents()
+
+    assert dialog.focus_navigation_target(target)
+    qt_application.processEvents()
+
+    highlighted = getattr(dialog, highlighted_name)
+    focused = getattr(dialog, focused_name)
+    assert "2px solid" in highlighted.styleSheet()
+    assert focused.hasFocus()
+    assert not dialog.focus_navigation_target("unknown")
+    dialog.close()
+
+
 def test_manager_saves_edits_without_resetting_unexposed_settings(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
