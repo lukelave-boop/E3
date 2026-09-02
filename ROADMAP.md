@@ -53,6 +53,9 @@ The following foundations are implemented and automated-test covered:
 - shared operation-color editing from Cuts/Layers and clickable Objects-row
   swatches through one undoable layer command;
 - guarded exact Preview and the existing `MachineService` execution boundary;
+- capability-gated Pi execution-policy mismatch diagnostics whose authenticated
+  profile remains subordinate to the unchanged opaque digest and whose logs
+  contain fixed field labels only;
 - bounded desktop process shutdown with active remote-camera cancellation,
   finite worker draining, shutdown-only idle-Pi Disconnect, and non-destructive
   accepted-job detach;

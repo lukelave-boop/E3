@@ -24,6 +24,7 @@ from .pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     PROTOCOL_VERSION,
@@ -75,6 +76,7 @@ MACHINE_ACTIONS = frozenset(
 SERVER_CAPABILITIES = (
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
+    CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     "same-channel-stepper-hold-v1",
 )
 
@@ -163,7 +165,7 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
             "guarded_output_polygon_mm",
             "execution_policy_digest",
         ),
-        "optional": (),
+        "optional": ("execution_policy_diagnostic",),
         "response": ("job", "ready", "verification_seconds"),
     },
     ACTION_JOB_START: {
@@ -175,7 +177,7 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
             "guarded_output_polygon_mm",
             "execution_policy_digest",
         ),
-        "optional": ("authorization_phrase",),
+        "optional": ("authorization_phrase", "execution_policy_diagnostic"),
         "response": (
             "accepted",
             "duplicate",
@@ -407,6 +409,7 @@ class PiMachineServer:
                 request.get("execution_policy_digest"),
                 label="execution_policy_digest",
             ),
+            "policy_diagnostic": request.get("execution_policy_diagnostic"),
         }
 
     def _dispatch(self, request: Mapping[str, Any], action: str) -> dict[str, Any]:

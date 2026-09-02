@@ -193,8 +193,9 @@ Native desktop workflow:
   four-second process-exit deadline; ordinary operation timeouts are unchanged
 - Authenticated, versioned Pi-owned job upload/execution with atomic local job
   storage, independent Pi preflight, durable START ownership, reconnect/status/
-  terminal-result discovery, priority STOP, bounded retention, and no fallback
-  to the incompatible legacy raw-serial bridge
+  terminal-result discovery, priority STOP, bounded retention, capability-gated
+  safe policy-mismatch field diagnostics, and no fallback to the incompatible
+  legacy raw-serial bridge
 - Validated G-code export; no operator capability requires the browser UI
 
 Follow the [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
@@ -367,6 +368,12 @@ Windows packaging and automatic-update assets are implemented and
 automated-test covered. The installed frozen PyInstaller E3 to visible Inno
 Setup handoff still requires package-level verification in a disposable
 interactive Windows environment.
+
+Windows feature builds use the separate permanent **E3 DEV TEST** launcher.
+Its stable executable and Desktop shortcut remain visually and taskbar-distinct
+from production E3, while `current-feature.json` selects the exact frozen build
+without changing machine or project behavior. See
+[the feature-test launcher workflow](docs/DEV_TEST_LAUNCHER.md).
 
 GitHub Actions has two validation tiers. Pushes to `fix/**`, `feature/**`,
 `agent/**`, `cleanup/**`, and `architecture/**` run Fast Development CI on

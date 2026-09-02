@@ -21,6 +21,27 @@ not current product capability.
   Manager field through a fixed presentation-only route that performs no
   capture, motion, calibration write, arming, or laser action.
 
+- Added capability-gated, fail-closed diagnostics for Windows/Pi execution-policy
+  mismatches. FINALIZE and START can carry a bounded authenticated copy of the
+  fixed 25-field policy profile; the Pi first proves it hashes to the existing
+  opaque policy digest, then logs only fixed differing field labels. Values,
+  credentials, arbitrary client labels, authorization phrases, and G-code are
+  never logged by this diagnostic. Older nodes receive no new field, the policy
+  digest algorithm and independent Pi preflight remain unchanged, malformed or
+  unbound diagnostics are rejected, and the desktop now directs the operator to
+  Machine Setup / Machine Manager or node diagnostics.
+
+- Added the permanent pointer-driven Windows **E3 DEV TEST** launcher workflow.
+  A separate one-file, windowed executable with an orange DEV icon validates an
+  exact bounded `current-feature.json`, matching adjacent packaged build
+  metadata, and starts only that frozen E3 EXE through a sanitized PyInstaller/
+  Win32 process boundary. Explicit environment activation gives feature builds
+  a DEV title, window icon, and `E3.DevTest` AppUserModelID while the production
+  E3 title, icon, implicit taskbar identity, settings, project data, and machine
+  behavior remain unchanged. The matching Desktop shortcut points permanently
+  to the launcher; selecting a later feature requires only an atomic pointer
+  update and never automatic taskbar pinning.
+
 - Replaced unbounded desktop Close with a single four-second monotonic shutdown
   deadline. Remote camera shutdown now makes blocked address resolution
   cancellable and tracks and closes active sockets so blocked fresh-frame,
