@@ -12,8 +12,8 @@ from __future__ import annotations
 from .raster_vectorize import (
     PhysicalContourFitContour,
     PhysicalContourFitResult,
-    RasterVectorizationCancelledError,
     PrimitiveRecoveryMetrics,
+    RasterVectorizationCancelledError,
     fit_physical_contours_to_native_path,
 )
 

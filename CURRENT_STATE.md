@@ -7,6 +7,34 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-02**
 
+## Final feature integration cleanup
+
+The authoritative independent Trace hole-area implementation, Camera Trace
+Outer silhouette mode, and raster-native primitive recovery are consolidated on
+`integration/final-feature-cleanup` from `origin/main` revision
+`e0b0223d62d845c3297c3702bce75bf116f8658e`. Conflict reconciliation preserves
+cooperative cancellation, independent inclusive object/hole limits, protected
+background semantics, Full-detail and exterior-only topology, primitive
+recovery diagnostics/fallback, native fitting, and the newer guided calibration,
+Pi execution-policy, shutdown, Air Assist, STOP, profile, updater, and DEV TEST
+behavior already on main.
+
+Focused combined verification passes **319 Trace/raster/native/primitive tests**,
+**210 calibration, setup, remediation, honeycomb, and profile tests**, and **147
+Pi policy/execution, Air Assist, shutdown, STOP, updater, and identity tests**.
+The complete Windows four-worker suite passes **3,416 tests** with **15 expected
+platform or privilege skips**. Repository Ruff, `compileall -q laser_aligner`,
+and `git diff --check` pass.
+
+`feature/s1pro-z-homing-safety` remains intentionally deferred. Its isolated
+implementation and focused tests are complete, but the branch predates Pi-owned
+secondary Air Assist and creates a separate persistent serial owner for the same
+Creality controller. Current architecture requires Z and Air Assist to share the
+single `CrealityControllerOwner`; merging the branch unchanged would create
+competing command paths. The branch is retained until that shared-owner design
+and its focused concurrency, STOP, failure, and recovery tests are implemented.
+No new physical hardware verification is claimed by this integration.
+
 ## Active Python 3.10 post-merge compatibility correction
 
 Post-merge Windows CI run `33586179523` failed only because the test subprocess
