@@ -502,7 +502,11 @@ def test_install_script_rejects_invalid_pointer_before_writing(
         cwd=repository,
         capture_output=True,
         text=True,
-        timeout=30,
+        # A cold Windows PowerShell plus Python process can exceed 30 seconds
+        # under a loaded compatibility runner before the script reaches its
+        # fail-closed pointer validation. Keep the functional assertions exact
+        # while allowing for runner startup and endpoint-scanning latency.
+        timeout=120,
         check=False,
     )
 
