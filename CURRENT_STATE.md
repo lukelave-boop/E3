@@ -5,7 +5,71 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-08-31**
+Snapshot: **2026-09-02**
+
+## Permanent Windows feature-test launcher
+
+The pointer-driven **E3 DEV TEST** launcher is implemented and installed at
+`C:\Users\lukel\Documents\E3 Dev Test\E3 DEV TEST.exe`, with its validated
+pointer beside it and a dedicated `C:\Users\lukel\Desktop\E3 DEV TEST.lnk`.
+The launcher and shortcut use the explicit `E3.DevTest` AppUserModelID and a
+separate orange DEV icon. The normal E3 executable, implicit process identity,
+icon, and Desktop shortcut remain unchanged. The normal shortcut SHA-256 stayed
+`657FC4B36FC34BF0562E793A448637BD2B37949D8187C3B473040535F325E839`
+before and after installation.
+
+The permanent launcher is a one-file Windows GUI-subsystem executable (PE
+subsystem 2), is 9,553,388 bytes, and has SHA-256
+`1828B10B2A96E9A032428E650C463D9AB9104BBF4739ED3F05BF3CAF7677232B`.
+It strictly accepts exactly the five documented pointer fields, binds version
+and revision to adjacent packaged Windows build metadata, starts only the
+selected absolute EXE through a sanitized external-process boundary, and never
+falls back to production. Pointer installation and later selection use the same
+validator and atomic writer. The Windows updater boundary strips every
+`E3_DEV_TEST*` variable so a production restart cannot inherit DEV identity.
+
+The initial selected feature is **Outer silhouette**, version `0.6.161`, branch
+`feature/trace-outer-silhouette`, exact frozen revision
+`45f428ac547f039988afbb3da2a0dd0f0e2d707a`, at
+`C:\Users\lukel\Documents\E3\.codex-worktrees\trace-outer-silhouette\dist\E3\E3.exe`.
+That EXE is 8,730,791 bytes with SHA-256
+`514B7D6A9EA03362066FAB24ABE638183790BC27DAE503142BADA5BF4C8959A5`;
+its adjacent schema-1 metadata records the same version and revision. The final
+bundle was rebuilt with the Codex Poppler directory removed inside the Python
+build process and contains zero `icu*.dll` files.
+
+Focused Windows automation passes **61 tests** across launcher validation,
+identity, desktop sources/icons, and update launching. Repository Ruff on every
+touched Python file, `compileall -q laser_aligner packaging`, and
+`git diff --check` pass. Interactive Windows process checks established all of
+the following:
+
+- the permanent launcher starts the configured frozen EXE, which remains live
+  with title `E3 DEV TEST — Outer silhouette — v0.6.161 — Untitled`;
+- a normal launch of that same bundle remains live beside it with title
+  `E3 Positioning System 0.6.161 · build 45f428ac — Untitled` and is not closed
+  or replaced;
+- neither launch creates a new `conhost.exe` process;
+- the live 32-pixel window icons differ in 980 of 1,024 pixels, with 266 orange
+  DEV pixels versus 4 in the normal icon;
+- the DEV environment reaches the pre-Qt AppUserModelID assignment and a live
+  Qt window, while the matching shortcut property is exactly `E3.DevTest`;
+- a copied launcher with no pointer shows the native
+  `E3 DEV TEST — Launch failed` dialog beginning
+  `No valid current feature build is configured` and names the missing fixed
+  pointer path; and
+- changing only a temporary `current-feature.json` selected two different
+  frozen GUI probe paths in sequence while the launcher SHA-256 remained
+  unchanged.
+
+Taskbar pinning was deliberately not automated. The permanent executable and
+matching shortcut are ready for the operator to pin, but an actual persistent
+pin/relaunch cycle remains a user action. The live smoke used an isolated local
+profile with camera autostart disabled and every saved machine's
+`allow_motion` forced false. No Pi, camera, controller, motion, arming, laser
+output, job streaming, or physical hardware behavior was exercised or verified;
+the Pi was unavailable, and no connection was attempted. These identity and
+launcher controls are not safety-rated.
 
 ## Active bounded desktop shutdown correction
 
@@ -80,6 +144,117 @@ camera service was unavailable; its CPU cancellation evidence remains
 automated. No physical controller motion, arming, laser output, accepted Pi job,
 or Air Assist action was performed, and the software shutdown controls are not
 safety-rated.
+
+## Active physical Pi execution-policy mismatch correction
+
+The physical **Home and start job** failure reported on 2026-09-01 is isolated
+to execution-policy schema drift. The selected Windows feature build is
+**Guided calibration remediation**, version `0.6.162`, revision
+`097b8fdd654233e096dfe99aae3fe94105f16373`, whose base includes the current
+25-field execution profile. Its saved active machine normalizes Air Assist to a
+trailing `None`. An authenticated, controller-inert Pi-owned job probe using
+only `G21`, `G90`, and `M5` was finalized but never started: the Pi rejected the
+current 25-field digest
+`ec4dbd1d5e30068ae126ea74034b93398e58b2d64d25e7f211d92a24d14f141f`
+and accepted the corresponding legacy 24-field digest
+`91b593c46e5b09814cd168b9fb661e4769f885265237d33043959b3406846c4f`.
+Both temporary job records were deleted.
+
+Because the Pi independently re-preflights the exact uploaded bytes before
+FINALIZE, that acceptance proves all original normalized policy fields match:
+backend and protocol; process and motion gates; homing behavior; work-area
+bounds; laser margin, offsets, and power ceiling; feed ceilings; arming timeout;
+photo position; configured guarded polygon; and the probe's absent job polygon.
+The exact difference is structural: Windows has field 25
+`air_assist.mapping = None`, while the running Pi has no field 25. Authenticated
+capabilities and status independently show the pre-Air-Assist node surface. The
+failure occurs before controller connection, Home, motion, arming, laser output,
+or Air Assist output.
+
+Authenticated shell audit then verified the exact installed unit as
+`e3-hardware-node.service`, with `WorkingDirectory` and imported source under
+`/home/greenhouse-climate/Projects/laser-camera-aligner`, production Python at
+`.venv/bin/python`, and config
+`/home/greenhouse-climate/Projects/laser-camera-aligner/config/pi-hardware.json`.
+The pre-update checkout was tracked-clean `main` at
+`ac9e123b1a4038e00a1ed19a380354b5aa0aab89`; its only untracked files were that
+config and its existing `.bak`. The service process had started after that
+commit and imported directly from the same checkout. The raw and typed Pi
+configuration had no Air Assist field, and its exact 24-field runtime profile
+matched the inert probe result. The bridge credential was checked only for
+valid presence/length and was not printed.
+
+The active Windows saved machine was also stale relative to the documented rig
+intent: it had Air Assist disabled, while the intended matched mapping is
+`secondary_marlin_fan` at 115200 baud on Pi-local endpoint
+`/dev/serial/by-id/usb-1a86_USB_Serial-if00-port0`, with the primary controller
+remaining GRBL. That configuration difference did not cause the reported
+24-versus-25-field rejection.
+
+With authenticated `job.active = null`, the Pi config was copied byte-for-byte
+to `/var/backups/e3/pi-hardware.json.20260902T021345Z`, the complete 34 MB Pi
+data directory was archived as
+`/var/backups/e3/data.20260902T021345Z.tar.gz`, and recovery branch
+`pi-preupdate-20260902T021345Z` was created. The data archive is 33 MB with
+SHA-256
+`50dac0919750fe60514b26fa84465798e64e65ee83bb09d2752aaa62086825ed`.
+The service was stopped, the clean checkout was fast-forwarded to authoritative
+`origin/main` revision `8ce92ee57454afe36dac8a27ce0485ede215eeae`, and no
+dependency manifest changed. `pip check` and `compileall -q laser_aligner`
+passed; the production venv intentionally has no pytest, so no development
+packages were installed merely to run Pi-local automation.
+
+While stopped, the Pi config received only the intended four-field Air Assist
+mapping. Both serial-by-id endpoints resolved (`ttyACM0` primary, `ttyUSB0`
+secondary). E3 DEV TEST Machine Manager then saved the identical mapping through
+the supported Windows saved-machine path, and the exact v0.6.162 build was
+relaunched after that save. Windows and Pi now independently normalize the same
+secondary profile, including `M106 S255`, `M106 S0`, and mapping digest
+`e5f4015545f71910e71441b0e702fd685bf6a6142398dc3069813ffd98a4292f`.
+Their no-job-polygon execution-policy digests both equal
+`990313a9ca97ac580a8a4f171b26c01b7685a5ea4be8a157984c9c9cd936c424`;
+with the authoritative configured polygon also used as job authority, both
+equal `743d88d293df873eb98dc281f063070baf2d6200dce56bf2903d15e821417387`.
+
+The current correction branch adds optional authenticated diagnostics under the
+new `pi-execution-policy-diagnostics-v1` capability. A supporting client sends
+the bounded canonical diagnostic preimage only for FINALIZE and START. The Pi
+recomputes and requires its SHA-256 to equal the already-authoritative submitted
+policy digest before comparing it with its independently computed local profile.
+Mismatch logs contain only fixed server-owned field labels such as
+`machine.work_area.x_max` and `air_assist.mapping`; no field values, G-code,
+credentials, authorization phrases, endpoints, or client-provided labels are
+logged. Malformed, oversized, unbound, or drifted diagnostics fail closed before
+controller writes. Older clients remain accepted by a new node, and new clients
+omit the optional field when an older node does not advertise the capability.
+
+Focused automated verification passes **120 tests** across the remote client,
+Pi server/service, Pi-owned end-to-end execution, durable job store, and remote
+node. The complete four-worker Windows suite passes **3,217 tests with 15
+expected platform skips**. Repository Ruff passes with `--no-cache` (the normal
+cached run encountered pre-existing inaccessible worktree cache directories),
+`compileall -q laser_aligner` and `git diff --check` pass, and independent safety
+review found no fail-open path or actionable correctness issue. These are
+simulated and controller-inert checks.
+
+The updated Pi service restarted successfully at revision `8ce92ee...` with PID
+83934 and a new boot ID; camera and authenticated machine services became
+available, no job was active, the primary controller remained disconnected, and
+the laser remained unarmed. Startup opened the configured secondary controller
+only for the required OFF initialization, but the Marlin response contained
+startup garbage prefixed to the echoed `M106 S0`, which was rejected as an
+unknown command. The node therefore logged
+`Secondary Marlin fan startup OFF was not acknowledged`, remained
+`secondary_air_assist.ready = false`, and kept Air Assist job START degraded.
+This is the next distinct fail-closed blocker. No retry, controller Connect,
+Home, motion, arming, laser output, Air Assist ON transition, job FINALIZE, or
+physical START was attempted after it appeared.
+
+The current honeycomb/calibration evidence was hashed before investigation and
+has not been edited. In particular, `bed_calibration.json`, the automatic
+four-edge-fit `honeycomb_support.json` (191 mm span), both detection images, and
+both visual-reference files retain their pre-investigation contents. Honeycomb
+state is not an execution-policy input and is not the cause of this failure.
 
 ## Active Pi-owned secondary-controller Air Assist correction
 

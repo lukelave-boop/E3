@@ -309,6 +309,10 @@ def _path_entry_is_in_windows_bundle(entry: str, bundle_root: str) -> bool:
 
 def _windows_installer_environment() -> dict[str, str]:
     environment = os.environ.copy()
+    for key in tuple(environment):
+        normalized = key.casefold()
+        if normalized == "e3_dev_test" or normalized.startswith("e3_dev_test_"):
+            environment.pop(key, None)
     bundle_value = getattr(sys, "_MEIPASS", None)
     if bundle_value is None:
         return environment

@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -35,14 +35,19 @@ from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     authenticate_client,
     encode_upload_chunk,
 )
 from laser_aligner.machine.pi_job_service import (
+    EXECUTION_POLICY_FIELD_LABELS,
+    EXECUTION_POLICY_MISMATCH_ERROR,
     PiJobService,
     PiJobServiceError,
     canonical_program_bytes,
+    execution_policy_diagnostic_profile,
     execution_policy_digest,
+    execution_policy_mismatch_labels,
 )
 from laser_aligner.machine.pi_job_store import PiJobStore
 from laser_aligner.machine.pi_machine_server import (
@@ -57,6 +62,7 @@ from laser_aligner.machine.pi_machine_server import (
     ACTION_MACHINE_STATUS,
     ACTION_MACHINE_STEPPER_HOLD,
     ACTION_MACHINE_STEPPER_HOLD_RELEASE,
+    SERVER_CAPABILITIES,
     PiMachineServer,
 )
 from laser_aligner.machine.remote_service import RemoteMachineService
@@ -287,6 +293,31 @@ def _service_binding(program: ValidatedProgram) -> dict[str, Any]:
     return binding
 
 
+def _upload_without_finalize(
+    harness: ServerHarness,
+    program: ValidatedProgram,
+) -> str:
+    identifier = str(uuid.uuid4())
+    payload = canonical_program_bytes(program)
+    assert _rpc(
+        harness,
+        ACTION_JOB_BEGIN,
+        job_id=identifier,
+        name="policy-diagnostic-test.gcode",
+        expected_size=len(payload),
+        expected_sha256=program.digest,
+        guarded_output_polygon_mm=None,
+    )["ok"] is True
+    assert _rpc(
+        harness,
+        ACTION_JOB_CHUNK,
+        job_id=identifier,
+        offset=0,
+        data_b64=encode_upload_chunk(payload),
+    )["ok"] is True
+    return identifier
+
+
 def _upload(
     harness: ServerHarness,
     *,
@@ -332,6 +363,270 @@ def _start_fields(job_id: str, program: ValidatedProgram) -> dict[str, Any]:
         **_binding(program),
         "authorization_phrase": MachineService.ARM_PHRASE,
     }
+
+
+def test_execution_policy_diagnostic_manifest_has_fixed_labels_and_shape() -> None:
+    assert len(EXECUTION_POLICY_FIELD_LABELS) == 25
+    assert EXECUTION_POLICY_FIELD_LABELS[8] == "machine.work_area.x_max"
+    assert EXECUTION_POLICY_FIELD_LABELS[24] == "air_assist.mapping"
+
+    profile_24 = tuple(range(24))
+    profile_25 = tuple(range(25))
+    assert execution_policy_mismatch_labels(profile_24, profile_25) == (
+        "air_assist.mapping",
+    )
+
+    changed = list(profile_25)
+    changed[8] = "different"
+    changed[24] = None
+    assert execution_policy_mismatch_labels(profile_25, changed) == (
+        "machine.work_area.x_max",
+        "air_assist.mapping",
+    )
+
+
+def test_execution_policy_diagnostic_labels_follow_machine_safety_profile_order() -> None:
+    program_text = "\n".join(("G21", "G90", "M5"))
+    guarded_polygon = (
+        (10.0, 10.0),
+        (210.0, 10.0),
+        (210.0, 210.0),
+        (10.0, 210.0),
+    )
+    mutations = (
+        ("machine.protocol", "settings.protocol", "marlin"),
+        ("machine.allow_motion", "settings.allow_motion", False),
+        ("process.hardware_enabled", "hardware_enabled", False),
+        ("process.laser_lockout", "laser_lockout", True),
+        ("machine.home_before_photo", "settings.home_before_photo", False),
+        (
+            "machine.home_and_release_after_powered_job",
+            "settings.home_and_release_after_powered_job",
+            True,
+        ),
+        ("machine.work_area.x_min", "settings.work_area.x_min", 1.0),
+        ("machine.work_area.x_max", "settings.work_area.x_max", 219.0),
+        ("machine.work_area.y_min", "settings.work_area.y_min", 2.0),
+        ("machine.work_area.y_max", "settings.work_area.y_max", 218.0),
+        (
+            "laser.boundary_margin_mm",
+            "laser_settings.boundary_margin_mm",
+            1.0,
+        ),
+        (
+            "laser.spot_offset_x_mm",
+            "laser_settings.spot_offset_x_mm",
+            1.5,
+        ),
+        (
+            "laser.spot_offset_y_mm",
+            "laser_settings.spot_offset_y_mm",
+            2.5,
+        ),
+        ("laser.power_max", "laser_settings.power_max", 999),
+        (
+            "machine.max_travel_feed_mm_min",
+            "settings.max_travel_feed_mm_min",
+            5900.0,
+        ),
+        (
+            "machine.max_work_feed_mm_min",
+            "settings.max_work_feed_mm_min",
+            5800.0,
+        ),
+        (
+            "laser.travel_feed_mm_min",
+            "laser_settings.travel_feed_mm_min",
+            2900.0,
+        ),
+        (
+            "laser.arm_timeout_seconds",
+            "laser_settings.arm_timeout_seconds",
+            61,
+        ),
+        ("machine.photo_x", "settings.photo_x", 111.0),
+        ("machine.photo_y", "settings.photo_y", 112.0),
+        ("machine.photo_z", "settings.photo_z", 12.0),
+        (
+            "laser.configured_guarded_output_polygon",
+            "laser_settings.guarded_output_polygon_mm",
+            guarded_polygon,
+        ),
+        (
+            "air_assist.mapping",
+            "settings.air_assist",
+            AirAssistSettings(mode=AirAssistMode.GRBL_COOLANT),
+        ),
+    )
+    mutation_labels = tuple(label for label, _path, _value in mutations)
+    assert EXECUTION_POLICY_FIELD_LABELS == (
+        "machine.backend",
+        *mutation_labels[:-1],
+        "job.guarded_output_polygon",
+        mutation_labels[-1],
+    )
+
+    baseline = _machine(SimulatedTransport()).preflight_program(
+        program_text
+    ).safety_profile
+    backend_index = EXECUTION_POLICY_FIELD_LABELS.index("machine.backend")
+    assert baseline[backend_index] == "serial"
+    assert tuple(index for index, value in enumerate(baseline) if value == "serial") == (
+        backend_index,
+    )
+
+    for expected_label, attribute_path, replacement in mutations:
+        changed_machine = _machine(SimulatedTransport())
+        target: object = changed_machine
+        path_parts = attribute_path.split(".")
+        for part in path_parts[:-1]:
+            target = getattr(target, part)
+        setattr(target, path_parts[-1], replacement)
+        changed = changed_machine.preflight_program(program_text).safety_profile
+        assert execution_policy_mismatch_labels(baseline, changed) == (
+            expected_label,
+        )
+
+    polygon_machine = _machine(SimulatedTransport())
+    polygon_machine.laser_settings.guarded_output_polygon_mm = guarded_polygon
+    configured_only = polygon_machine.preflight_program(program_text).safety_profile
+    configured_and_requested = polygon_machine.preflight_program(
+        program_text,
+        guarded_output_polygon_mm=guarded_polygon,
+    ).safety_profile
+    assert execution_policy_mismatch_labels(
+        configured_only,
+        configured_and_requested,
+    ) == ("job.guarded_output_polygon",)
+
+
+def test_server_advertises_policy_diagnostics_capability() -> None:
+    assert CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS in SERVER_CAPABILITIES
+
+
+def test_finalize_policy_mismatch_logs_only_fixed_field_labels(
+    server_harness: ServerHarness,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    program = server_harness.machine.preflight_program(_POWERED_PROGRAM)
+    job_id = _upload_without_finalize(server_harness, program)
+    foreign_profile = list(program.safety_profile)
+    foreign_profile[8] = float(foreign_profile[8]) + 1.0
+    foreign_program = replace(program, safety_profile=tuple(foreign_profile))
+    binding = _binding(foreign_program)
+    binding["execution_policy_diagnostic"] = execution_policy_diagnostic_profile(
+        foreign_program
+    )
+    caplog.set_level(logging.WARNING, logger="laser_aligner.machine.pi_job_service")
+
+    rejected = _rpc(
+        server_harness,
+        ACTION_JOB_FINALIZE,
+        job_id=job_id,
+        **binding,
+    )
+
+    assert rejected["ok"] is False
+    assert rejected["error"] == EXECUTION_POLICY_MISMATCH_ERROR
+    mismatch_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("execution policy mismatch:")
+    ]
+    assert mismatch_messages == [
+        "execution policy mismatch: machine.work_area.x_max"
+    ]
+    assert server_harness.machine.status()["connected"] is False
+    assert server_harness.transport.commands == []
+
+
+@pytest.mark.parametrize("malformation", ("unbound", "short", "client_label"))
+def test_finalize_rejects_malformed_or_unbound_policy_diagnostic_without_leakage(
+    server_harness: ServerHarness,
+    caplog: pytest.LogCaptureFixture,
+    malformation: str,
+) -> None:
+    program = server_harness.machine.preflight_program(_POWERED_PROGRAM)
+    job_id = _upload_without_finalize(server_harness, program)
+    diagnostic = execution_policy_diagnostic_profile(program)
+    secret = "DO-NOT-LOG-DIAGNOSTIC-VALUE"
+    if malformation == "unbound":
+        diagnostic["profile"][0] = secret
+    elif malformation == "short":
+        diagnostic["profile"].pop()
+    else:
+        diagnostic[f"untrusted-{secret}"] = "untrusted"
+    binding = _binding(program)
+    binding["execution_policy_diagnostic"] = diagnostic
+    caplog.set_level(logging.DEBUG)
+
+    rejected = _rpc(
+        server_harness,
+        ACTION_JOB_FINALIZE,
+        job_id=job_id,
+        **binding,
+    )
+
+    assert rejected["ok"] is False
+    assert rejected["error"] == (
+        "Execution-policy diagnostic profile is malformed or is not bound "
+        "to its digest"
+    )
+    assert secret not in rejected["error"]
+    assert secret not in caplog.text
+    assert "execution policy mismatch:" not in caplog.text
+    assert server_harness.machine.status()["connected"] is False
+    assert server_harness.transport.commands == []
+
+
+def test_start_policy_drift_logs_field_label_before_any_controller_write(
+    server_harness: ServerHarness,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    job_id, program, _ = _upload(server_harness)
+    server_harness.machine.settings.max_work_feed_mm_min += 1.0
+    fields = _start_fields(job_id, program)
+    fields["execution_policy_diagnostic"] = execution_policy_diagnostic_profile(
+        program
+    )
+    caplog.set_level(logging.WARNING, logger="laser_aligner.machine.pi_job_service")
+
+    rejected = _rpc(server_harness, ACTION_JOB_START, **fields)
+
+    assert rejected["ok"] is False
+    assert rejected["error"] == EXECUTION_POLICY_MISMATCH_ERROR
+    mismatch_messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("execution policy mismatch:")
+    ]
+    assert mismatch_messages == [
+        "execution policy mismatch: machine.max_work_feed_mm_min"
+    ]
+    assert server_harness.service.get(job_id)["state"] == "failed"
+    assert server_harness.machine.status()["connected"] is False
+    assert server_harness.transport.commands == []
+
+
+def test_start_rejects_unbound_policy_diagnostic_before_controller_write(
+    server_harness: ServerHarness,
+) -> None:
+    job_id, program, _ = _upload(server_harness)
+    fields = _start_fields(job_id, program)
+    diagnostic = execution_policy_diagnostic_profile(program)
+    diagnostic["profile"][0] = "unbound-client-value"
+    fields["execution_policy_diagnostic"] = diagnostic
+
+    rejected = _rpc(server_harness, ACTION_JOB_START, **fields)
+
+    assert rejected["ok"] is False
+    assert rejected["error"] == (
+        "Execution-policy diagnostic profile is malformed or is not bound "
+        "to its digest"
+    )
+    assert server_harness.service.get(job_id)["state"] == "prepared"
+    assert server_harness.machine.status()["connected"] is False
+    assert server_harness.transport.commands == []
 
 
 def test_disconnect_mid_upload_remains_receiving_inert_and_unstartable(

@@ -34,6 +34,7 @@ from .pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     MAX_JOB_BYTES,
@@ -45,7 +46,12 @@ from .pi_job_protocol import (
     request_response,
     validate_job_name,
 )
-from .pi_job_service import canonical_program_bytes, execution_policy_digest
+from .pi_job_service import (
+    EXECUTION_POLICY_MISMATCH_ERROR,
+    canonical_program_bytes,
+    execution_policy_diagnostic_profile,
+    execution_policy_digest,
+)
 from .pi_machine_server import (
     ACTION_JOB_LATEST,
     ACTION_MACHINE_COMMAND,
@@ -80,6 +86,10 @@ _PROGRAM_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _ACTIVE_JOB_STATES = frozenset({"starting", "running", "stopping"})
 _TERMINAL_JOB_STATES = frozenset(
     {"complete", "failed", "stopped", "interrupted", "deleted"}
+)
+_CLIENT_POLICY_MISMATCH_ERROR = (
+    "Windows and Pi machine-safety settings do not match. "
+    "Open Machine Setup / Machine Manager or inspect node diagnostics."
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -177,6 +187,7 @@ class RemoteMachineService:
         self._shutdown_started = False
         self._shutdown_idle_disconnect_allowed: bool | None = None
         self._capabilities_verified = False
+        self._policy_diagnostics_supported = False
 
         self._hold_lock = threading.RLock()
         self._hold_context = threading.local()
@@ -307,6 +318,8 @@ class RemoteMachineService:
                 if isinstance(raw_error, str) and raw_error
                 else f"Remote {action} request was rejected"
             )
+            if detail == EXECUTION_POLICY_MISMATCH_ERROR:
+                detail = _CLIENT_POLICY_MISMATCH_ERROR
             raise _RemoteRequestRejected(detail)
         if response.get("ok") is not True:
             raise PiJobProtocolError(
@@ -420,6 +433,9 @@ class RemoteMachineService:
                     "secondary Marlin fan capability; update/start the combined Pi node"
                 )
             with self._state_lock:
+                self._policy_diagnostics_supported = (
+                    CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS in capabilities
+                )
                 self._capabilities_verified = True
         finally:
             if capability_lock_acquired:
@@ -1280,9 +1296,8 @@ class RemoteMachineService:
                 finally:
                     sock.close()
 
-    @staticmethod
-    def _start_binding(program: ValidatedProgram) -> dict[str, Any]:
-        return {
+    def _start_binding(self, program: ValidatedProgram) -> dict[str, Any]:
+        binding: dict[str, Any] = {
             "program_digest": program.digest,
             "requires_laser_authorization": program.requires_laser_authorization,
             "requires_motion": program.requires_motion,
@@ -1291,6 +1306,13 @@ class RemoteMachineService:
             ),
             "execution_policy_digest": execution_policy_digest(program),
         }
+        with self._state_lock:
+            diagnostics_supported = self._policy_diagnostics_supported
+        if diagnostics_supported:
+            binding["execution_policy_diagnostic"] = (
+                execution_policy_diagnostic_profile(program)
+            )
+        return binding
 
     def _mark_start_uncertain(
         self,

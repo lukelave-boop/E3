@@ -22,10 +22,43 @@ LOGGER = logging.getLogger(__name__)
 
 EXECUTION_OWNER = "pi"
 EXECUTION_POLICY_SCHEMA = "e3-pi-execution-policy-v1"
+EXECUTION_POLICY_DIAGNOSTIC_SCHEMA = "e3-pi-execution-policy-diagnostic-v1"
+EXECUTION_POLICY_FIELD_LABELS = (
+    "machine.backend",
+    "machine.protocol",
+    "machine.allow_motion",
+    "process.hardware_enabled",
+    "process.laser_lockout",
+    "machine.home_before_photo",
+    "machine.home_and_release_after_powered_job",
+    "machine.work_area.x_min",
+    "machine.work_area.x_max",
+    "machine.work_area.y_min",
+    "machine.work_area.y_max",
+    "laser.boundary_margin_mm",
+    "laser.spot_offset_x_mm",
+    "laser.spot_offset_y_mm",
+    "laser.power_max",
+    "machine.max_travel_feed_mm_min",
+    "machine.max_work_feed_mm_min",
+    "laser.travel_feed_mm_min",
+    "laser.arm_timeout_seconds",
+    "machine.photo_x",
+    "machine.photo_y",
+    "machine.photo_z",
+    "laser.configured_guarded_output_polygon",
+    "job.guarded_output_polygon",
+    "air_assist.mapping",
+)
+EXECUTION_POLICY_MISMATCH_ERROR = (
+    "Execution policy does not match Pi-local safety settings"
+)
 
 _ACTIVE_STATES = frozenset({"starting", "running", "stopping"})
 _TERMINAL_STATES = frozenset({"complete", "failed", "stopped", "interrupted"})
 _STARTED_STATES = _ACTIVE_STATES | _TERMINAL_STATES
+_EXECUTION_POLICY_DIAGNOSTIC_KEYS = frozenset({"schema", "profile"})
+_MAX_EXECUTION_POLICY_DIAGNOSTIC_BYTES = 16 * 1024
 _MAX_PUBLIC_ERROR_CHARS = 512
 _WATCH_INTERVAL_SECONDS = 0.1
 
@@ -68,25 +101,103 @@ class PiJobServiceError(MachineError):
     """A high-level Pi-owned machine or job request was rejected."""
 
 
-def execution_policy_digest(program: ValidatedProgram) -> str:
-    """Return a stable digest of the exact local preflight safety authority."""
-
-    if type(program) is not ValidatedProgram or type(program.safety_profile) is not tuple:
-        raise SafetyError("Execution policy requires an exact local preflight result")
+def _canonical_execution_policy_bytes(safety_profile: object) -> bytes:
     try:
-        encoded = json.dumps(
+        return json.dumps(
             {
                 "schema": EXECUTION_POLICY_SCHEMA,
-                "safety_profile": program.safety_profile,
+                "safety_profile": safety_profile,
             },
             allow_nan=False,
             ensure_ascii=True,
             separators=(",", ":"),
             sort_keys=True,
         ).encode("ascii")
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise SafetyError("Execution policy contains non-canonical values") from exc
-    return hashlib.sha256(encoded).hexdigest()
+
+
+def execution_policy_digest(program: ValidatedProgram) -> str:
+    """Return a stable digest of the exact local preflight safety authority."""
+
+    if type(program) is not ValidatedProgram or type(program.safety_profile) is not tuple:
+        raise SafetyError("Execution policy requires an exact local preflight result")
+    return hashlib.sha256(
+        _canonical_execution_policy_bytes(program.safety_profile)
+    ).hexdigest()
+
+
+def execution_policy_diagnostic_profile(program: ValidatedProgram) -> dict[str, Any]:
+    """Return the bounded authenticated diagnostic preimage for one policy digest."""
+
+    if (
+        type(program) is not ValidatedProgram
+        or type(program.safety_profile) is not tuple
+        or len(program.safety_profile) != len(EXECUTION_POLICY_FIELD_LABELS)
+    ):
+        raise SafetyError(
+            "Execution-policy diagnostics require the exact versioned safety profile"
+        )
+    encoded = _canonical_execution_policy_bytes(program.safety_profile)
+    if len(encoded) > _MAX_EXECUTION_POLICY_DIAGNOSTIC_BYTES:
+        raise SafetyError("Execution-policy diagnostic profile exceeds its size limit")
+    # Round-trip through the same canonical representation so this helper emits
+    # only JSON values, including lists rather than Python-only tuples.
+    normalized = json.loads(encoded.decode("ascii"))["safety_profile"]
+    diagnostic = {
+        "schema": EXECUTION_POLICY_DIAGNOSTIC_SCHEMA,
+        "profile": normalized,
+    }
+    diagnostic_bytes = json.dumps(
+        diagnostic,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    if len(diagnostic_bytes) > _MAX_EXECUTION_POLICY_DIAGNOSTIC_BYTES:
+        raise SafetyError("Execution-policy diagnostic profile exceeds its size limit")
+    return diagnostic
+
+
+def _execution_policy_field_digest(value: object) -> bytes:
+    encoded = json.dumps(
+        value,
+        allow_nan=False,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+    return hashlib.sha256(encoded).digest()
+
+
+def execution_policy_mismatch_labels(
+    left: tuple[Any, ...] | list[Any],
+    right: tuple[Any, ...] | list[Any],
+) -> tuple[str, ...]:
+    """Compare policy fields while returning only the fixed manifest labels."""
+
+    if type(left) not in {tuple, list} or type(right) not in {tuple, list}:
+        return EXECUTION_POLICY_FIELD_LABELS
+    if len(left) > len(EXECUTION_POLICY_FIELD_LABELS) or len(right) > len(
+        EXECUTION_POLICY_FIELD_LABELS
+    ):
+        return EXECUTION_POLICY_FIELD_LABELS
+    mismatches: list[str] = []
+    for index, label in enumerate(EXECUTION_POLICY_FIELD_LABELS):
+        if index >= len(left) or index >= len(right):
+            mismatches.append(label)
+            continue
+        try:
+            same = hmac.compare_digest(
+                _execution_policy_field_digest(left[index]),
+                _execution_policy_field_digest(right[index]),
+            )
+        except (TypeError, ValueError, RecursionError):
+            same = False
+        if not same:
+            mismatches.append(label)
+    return tuple(mismatches)
 
 
 def canonical_program_bytes(program: ValidatedProgram) -> bytes:
@@ -217,6 +328,66 @@ class PiJobService:
     def _same_digest(left: str, right: str) -> bool:
         return hmac.compare_digest(left.encode("ascii"), right.encode("ascii"))
 
+    def _validate_policy_diagnostic(
+        self,
+        raw: object,
+        *,
+        policy_digest: str,
+    ) -> tuple[Any, ...] | None:
+        if raw is None:
+            return None
+        rejection = (
+            "Execution-policy diagnostic profile is malformed or is not bound "
+            "to its digest"
+        )
+        try:
+            if type(raw) is not dict or set(raw) != _EXECUTION_POLICY_DIAGNOSTIC_KEYS:
+                raise ValueError
+            if raw.get("schema") != EXECUTION_POLICY_DIAGNOSTIC_SCHEMA:
+                raise ValueError
+            profile = raw.get("profile")
+            if type(profile) is not list or len(profile) != len(
+                EXECUTION_POLICY_FIELD_LABELS
+            ):
+                raise ValueError
+            diagnostic_bytes = json.dumps(
+                raw,
+                allow_nan=False,
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("ascii")
+            if len(diagnostic_bytes) > _MAX_EXECUTION_POLICY_DIAGNOSTIC_BYTES:
+                raise ValueError
+            normalized_policy = _canonical_execution_policy_bytes(profile)
+            normalized_profile = tuple(
+                json.loads(normalized_policy.decode("ascii"))["safety_profile"]
+            )
+            diagnostic_digest = hashlib.sha256(normalized_policy).hexdigest()
+        except (KeyError, TypeError, ValueError, RecursionError, SafetyError):
+            raise PiJobServiceError(rejection) from None
+        if not self._same_digest(diagnostic_digest, policy_digest):
+            raise PiJobServiceError(rejection)
+        return normalized_profile
+
+    @staticmethod
+    def _log_execution_policy_mismatch(
+        diagnostic_profile: tuple[Any, ...] | None,
+        local_profile: tuple[Any, ...],
+    ) -> None:
+        if diagnostic_profile is None:
+            return
+        labels = execution_policy_mismatch_labels(
+            diagnostic_profile,
+            local_profile,
+        )
+        # A bound 25-field profile with a different aggregate digest must differ
+        # in at least one field. Keep the fallback fixed-label-only if an
+        # unexpected canonicalization edge is ever encountered.
+        if not labels:
+            labels = EXECUTION_POLICY_FIELD_LABELS
+        LOGGER.warning("execution policy mismatch: %s", ", ".join(labels))
+
     def _assert_program_binding(
         self,
         program: ValidatedProgram,
@@ -226,6 +397,7 @@ class PiJobService:
         requires_motion: object,
         guarded_output_polygon_mm: object,
         policy_digest: object,
+        diagnostic_profile: tuple[Any, ...] | None = None,
     ) -> None:
         expected_program_digest = self._require_sha256(
             program_digest,
@@ -251,7 +423,11 @@ class PiJobService:
         if program.guarded_output_polygon_mm != expected_polygon:
             raise SafetyError("Uploaded guarded output authority does not match local preflight")
         if not self._same_digest(actual_policy_digest, expected_policy_digest):
-            raise SafetyError("Execution policy does not match Pi-local safety settings")
+            self._log_execution_policy_mismatch(
+                diagnostic_profile,
+                program.safety_profile,
+            )
+            raise SafetyError(EXECUTION_POLICY_MISMATCH_ERROR)
 
     def _validate_canonical_text(
         self,
@@ -315,9 +491,18 @@ class PiJobService:
         requires_motion: bool,
         guarded_output_polygon_mm: object,
         policy_digest: str,
+        policy_diagnostic: object = None,
     ) -> dict[str, Any]:
         verification_started = time.monotonic()
         expected_polygon = _normalize_polygon(guarded_output_polygon_mm)
+        expected_policy_digest = self._require_sha256(
+            policy_digest,
+            "Execution-policy digest",
+        )
+        diagnostic_profile = self._validate_policy_diagnostic(
+            policy_diagnostic,
+            policy_digest=expected_policy_digest,
+        )
 
         def validator(
             text: str,
@@ -334,7 +519,8 @@ class PiJobService:
                 requires_laser_authorization=requires_laser_authorization,
                 requires_motion=requires_motion,
                 guarded_output_polygon_mm=expected_polygon,
-                policy_digest=policy_digest,
+                policy_digest=expected_policy_digest,
+                diagnostic_profile=diagnostic_profile,
             )
             return JobValidation(
                 program_digest=program.digest,
@@ -405,6 +591,8 @@ class PiJobService:
     def _preflight_committed_program(
         self,
         record: Mapping[str, Any],
+        *,
+        diagnostic_profile: tuple[Any, ...] | None = None,
     ) -> ValidatedProgram:
         job_id = str(record["job_id"])
         raw = self.store.read_program_bytes(job_id)
@@ -433,6 +621,7 @@ class PiJobService:
             requires_motion=_record_value(record, "requires_motion"),
             guarded_output_polygon_mm=polygon,
             policy_digest=_record_value(record, "execution_policy_digest"),
+            diagnostic_profile=diagnostic_profile,
         )
         if not self._same_digest(program.digest, actual_sha256):
             raise SafetyError("Committed bytes are not bound to the canonical program digest")
@@ -644,10 +833,19 @@ class PiJobService:
         requires_motion: bool,
         guarded_output_polygon_mm: object,
         policy_digest: str,
+        policy_diagnostic: object = None,
         authorization_phrase: str | None = None,
     ) -> dict[str, Any]:
         start_requested = time.monotonic()
         requested_generation = self.machine.operation_generation()
+        expected_policy_digest = self._require_sha256(
+            policy_digest,
+            "Execution-policy digest",
+        )
+        diagnostic_profile = self._validate_policy_diagnostic(
+            policy_diagnostic,
+            policy_digest=expected_policy_digest,
+        )
         with self._ordinary_lock:
             record = self.store.get(job_id)
             self._assert_record_binding(
@@ -656,7 +854,7 @@ class PiJobService:
                 requires_laser_authorization=requires_laser_authorization,
                 requires_motion=requires_motion,
                 guarded_output_polygon_mm=guarded_output_polygon_mm,
-                policy_digest=policy_digest,
+                policy_digest=expected_policy_digest,
             )
             state = str(_record_value(record, "state", ""))
             if state in _STARTED_STATES:
@@ -688,14 +886,18 @@ class PiJobService:
                     f"Pi-owned job {active['job_id']} is already active"
                 )
             try:
-                program = self._preflight_committed_program(record)
+                program = self._preflight_committed_program(
+                    record,
+                    diagnostic_profile=diagnostic_profile,
+                )
                 self._assert_program_binding(
                     program,
                     program_digest=program_digest,
                     requires_laser_authorization=requires_laser_authorization,
                     requires_motion=requires_motion,
                     guarded_output_polygon_mm=guarded_output_polygon_mm,
-                    policy_digest=policy_digest,
+                    policy_digest=expected_policy_digest,
+                    diagnostic_profile=diagnostic_profile,
                 )
             except Exception as exc:
                 self._update_terminal(

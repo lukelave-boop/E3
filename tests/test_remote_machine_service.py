@@ -26,13 +26,16 @@ from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     PROTOCOL_VERSION,
     PiJobProtocolError,
 )
 from laser_aligner.machine.pi_job_service import (
+    EXECUTION_POLICY_DIAGNOSTIC_SCHEMA,
     canonical_program_bytes,
+    execution_policy_diagnostic_profile,
     execution_policy_digest,
 )
 from laser_aligner.machine.pi_machine_server import (
@@ -343,6 +346,8 @@ def test_exact_upload_finalize_start_lifecycle_and_diagnostics(
     ):
         assert start[key] == finalize[key]
     assert finalize["execution_policy_digest"] == execution_policy_digest(program)
+    assert "execution_policy_diagnostic" not in finalize
+    assert "execution_policy_diagnostic" not in start
     assert "authorization_phrase" not in finalize
     assert start["authorization_phrase"] == service.ARM_PHRASE
     assert result["accepted"] is True
@@ -354,6 +359,77 @@ def test_exact_upload_finalize_start_lifecycle_and_diagnostics(
     assert result["start_latency_seconds"] >= 0.0
     assert service.armed is False
     assert service.pi_owned_job_active is True
+
+
+def test_policy_diagnostic_payload_is_capability_gated_and_repeated_at_start(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    fake.capabilities.append(CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS)
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    program = service.preflight_program(_UNPOWERED_GCODE)
+
+    service.start_preflighted_program(program, "diagnostic-job.gcode")
+
+    finalize = next(
+        request
+        for request in fake.requests
+        if request["action"] == ACTION_JOB_FINALIZE
+    )
+    start = next(
+        request for request in fake.requests if request["action"] == ACTION_JOB_START
+    )
+    expected = execution_policy_diagnostic_profile(program)
+    assert finalize["execution_policy_diagnostic"] == expected
+    assert start["execution_policy_diagnostic"] == expected
+    assert expected["schema"] == EXECUTION_POLICY_DIAGNOSTIC_SCHEMA
+    assert len(expected["profile"]) == 25
+
+
+def test_remote_policy_mismatch_uses_friendly_desktop_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+
+    def reject_finalize(
+        host: str,
+        port: int,
+        token: str,
+        request: dict[str, Any],
+        *,
+        timeout: float,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
+        if request["action"] == ACTION_JOB_FINALIZE:
+            return {
+                "ok": False,
+                "request_id": request["request_id"],
+                "error": "Execution policy does not match Pi-local safety settings",
+            }
+        return fake(
+            host,
+            port,
+            token,
+            request,
+            timeout=timeout,
+            deadline=deadline,
+        )
+
+    monkeypatch.setattr(remote_service_module, "request_response", reject_finalize)
+    service = _service()
+    program = service.preflight_program(_UNPOWERED_GCODE)
+
+    with pytest.raises(MachineError) as caught:
+        service.start_preflighted_program(program)
+
+    assert str(caught.value) == (
+        "Windows and Pi machine-safety settings do not match. "
+        "Open Machine Setup / Machine Manager or inspect node diagnostics."
+    )
+    assert all(
+        request["action"] != ACTION_JOB_START for request in fake.requests
+    )
 
 
 def test_start_response_loss_queries_same_job_without_restarting(
