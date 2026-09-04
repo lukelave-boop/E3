@@ -6,6 +6,17 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Corrected the hardened GRBL connection handshake for controllers that cleanly
+  acknowledge `$I` without returning its optional identity payload. An explicit
+  `machine.protocol = grbl` now continues into the complete fail-off, settings,
+  `$1`, modal, workspace/offset, and realtime capability verification; `$I`'s
+  acknowledgement alone never establishes trust and auto protocol does not infer
+  GRBL from it. Optional identity payload remains exposed when present,
+  contradictory positive identity still fails closed, and later incompatibility
+  now has a distinct diagnostic. Generation quarantine, fresh-session retry,
+  transaction ownership, synchronization, STOP, and READY publication gates are
+  unchanged.
+
 - Rebuilt the primary Raspberry-Pi-to-GRBL connection boundary around explicit,
   generation-bound controller sessions. Private candidates obtain exclusive
   POSIX ownership, purge complete/partial/kernel RX state, prove a quiet window,

@@ -67,6 +67,9 @@ hardware has been tested. The physical 20-cycle acceptance run remains required.
 | 58 | Recovery failure actionable | `test_recovery_failure_is_actionable_reconnect_required` | Automated |
 | 59 | Explicit reconnect after failure | `test_explicit_reconnect_after_recovery_failure` | Automated |
 | 60 | Twenty recovery cycles | `test_twenty_stop_recover_home_cycles_use_fresh_generations` | Deterministic automated; physical pending |
+| 61 | Explicit GRBL `$I` acknowledgement without optional identity payload | `test_explicit_grbl_without_optional_identity_payload_runs_full_handshake` | Automated; observed physically before correction |
+| 62 | Auto protocol `$I` acknowledgement without identity payload | `test_auto_protocol_does_not_infer_grbl_from_identity_acknowledgement` | Automated fail-closed |
+| 63 | Acknowledgement-only `$I` followed by malformed GRBL capability response | `test_explicit_grbl_without_identity_payload_still_fails_closed_on_bad_capability` | Automated fail-closed matrix |
 
 The seeded 1,000-lifecycle soak is owned by
 `test_seeded_1000_controller_session_lifecycle_soak`.

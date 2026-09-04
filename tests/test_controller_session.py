@@ -288,6 +288,112 @@ def test_connect_publishes_only_after_full_grbl_handshake(
     machine.disconnect()
 
 
+def test_explicit_grbl_without_optional_identity_payload_runs_full_handshake(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = ResponsiveTransport(
+        "identity-unavailable",
+        replies={"$I": [("ok",)]},
+    )
+    machine, _factory = make_machine(monkeypatch, transport)
+    monkeypatch.setattr(service_module, "_CONTROLLER_CONNECT_ATTEMPTS", 1)
+
+    status = machine.connect()
+
+    assert status["controller_state"] == "READY_HOME_REQUIRED"
+    assert status["connected"] is True
+    assert status["controller_diagnostics"]["firmware_identity"] == []
+    assert [write for write in transport.writes[:6]] == [
+        ("line", "$I"),
+        ("line", "M5"),
+        ("line", "$$"),
+        ("line", "$G"),
+        ("line", "$#"),
+        ("raw", b"?"),
+    ]
+    assert any(
+        "identity payload unavailable; continuing explicit-GRBL capability verification"
+        in entry
+        for entry in status["log"]
+    )
+    machine.disconnect()
+
+
+@pytest.mark.parametrize(
+    ("replies", "realtime_replies"),
+    [
+        ({"$I": [("ok",)], "$$": [("not-grbl", "ok")]}, None),
+        ({"$I": [("ok",)], "$G": [("not-grbl", "ok")]}, None),
+        ({"$I": [("ok",)], "$#": [("not-grbl", "ok")]}, None),
+        ({"$I": [("ok",)]}, [("not-grbl",)]),
+    ],
+    ids=["settings", "modal", "offsets", "realtime"],
+)
+def test_explicit_grbl_without_identity_payload_still_fails_closed_on_bad_capability(
+    monkeypatch: pytest.MonkeyPatch,
+    replies: dict[str, list[tuple[str, ...] | None]],
+    realtime_replies: list[tuple[str, ...] | None] | None,
+) -> None:
+    transport = ResponsiveTransport(
+        "bad-capability",
+        replies=replies,
+        realtime_replies=realtime_replies,
+    )
+    machine, _factory = make_machine(monkeypatch, transport)
+    monkeypatch.setattr(service_module, "_CONTROLLER_CONNECT_ATTEMPTS", 1)
+
+    with pytest.raises(MachineError, match="GRBL handshake incompatibility"):
+        machine.connect()
+
+    status = machine.status()
+    assert status["connected"] is False
+    assert status["controller_state"] == "FAULTED"
+    assert status["controller_diagnostics"]["last_failure_code"] == (
+        "controller.handshake_incompatible"
+    )
+    assert transport.closed.is_set()
+
+
+def test_auto_protocol_does_not_infer_grbl_from_identity_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = ResponsiveTransport(
+        "auto-ack-only",
+        replies={"$I": [("ok",)], "M115": [("ok",)]},
+    )
+    settings = machine_settings()
+    settings.protocol = "auto"
+    monkeypatch.setattr(service_module, "create_machine_transport", TransportFactory([transport]))
+    monkeypatch.setattr(service_module, "_CONTROLLER_CONNECT_ATTEMPTS", 1)
+    machine = MachineService(settings, LaserSettings(), hardware_enabled=True)
+
+    with pytest.raises(MachineError, match="protocol is not configured"):
+        machine.connect()
+
+    diagnostics = machine.status()["controller_diagnostics"]
+    assert diagnostics["last_failure_code"] == "controller.identity_mismatch"
+    assert "Set machine.protocol explicitly" not in diagnostics["last_failure"]
+
+
+def test_explicit_grbl_requires_identity_query_to_terminate_cleanly(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = ResponsiveTransport(
+        "identity-rejected",
+        replies={"$I": [("error:20",)]},
+    )
+    machine, _factory = make_machine(monkeypatch, transport)
+    monkeypatch.setattr(service_module, "_CONTROLLER_CONNECT_ATTEMPTS", 1)
+
+    with pytest.raises(MachineError, match="identity query did not terminate cleanly"):
+        machine.connect()
+
+    status = machine.status()
+    assert status["connected"] is False
+    assert status["controller_state"] == "FAULTED"
+    assert transport.closed.is_set()
+
+
 def test_candidate_remains_private_until_handshake_completes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -817,7 +923,7 @@ def test_wrong_controller_identity_at_configured_path_fails_closed(
     machine, _factory = make_machine(monkeypatch, transport)
     monkeypatch.setattr(service_module, "_CONTROLLER_CONNECT_ATTEMPTS", 1)
 
-    with pytest.raises(MachineError, match="could not be identified"):
+    with pytest.raises(MachineError, match="identity mismatch"):
         machine.connect()
 
     diagnostics = machine.status()["controller_diagnostics"]

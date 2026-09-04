@@ -7,6 +7,36 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-04**
 
+## Active explicit-GRBL identity-payload compatibility correction
+
+Physical diagnostics from the configured Pi/controller combination established that
+six fresh serial generations completed `$I` with a clean `ok` in 0.012530–0.013399
+seconds but returned no optional `[VER:]`, `[OPT:]`, or other identity payload. The
+pre-correction handshake rejected each generation as an identity mismatch even though
+the Pi configuration explicitly selected `machine.protocol = grbl`. This is physical
+evidence of the controller's `$I` behavior and the prior compatibility defect; it is
+not physical validation of the corrected build.
+
+For an explicitly configured GRBL session, a clean acknowledgement-only `$I` now
+records that identity payload is unavailable and proceeds to the existing complete
+GRBL capability verification. It does not treat the acknowledgement as proof of GRBL.
+Publication as `READY_HOME_REQUIRED` still requires acknowledged `M5`, a valid `$$`
+response and required `$1` validation/repair, valid `$G` and `$#` reports, and a valid
+realtime `?` status frame. Auto/unspecified protocol still requires positive identity,
+contradictory positive identity still fails closed, and malformed or incompatible
+later capability responses now report `controller.handshake_incompatible` rather than
+an identity/configuration error.
+
+Focused Windows controller-session verification passes **124 tests**, including
+acknowledgement-only and normal `$I` success, malformed `$$`/`$G`/`$#`/`?` rejection,
+auto-detection refusal, contradictory identity, stale-generation, STOP, reconnect, and
+transaction-ownership cases. The wider controller-dialect, Pi-server, and remote-service
+selection passes **264 tests**. The complete Windows four-worker suite passes **3,603
+tests with 24 expected platform or privilege skips**. Repository Ruff, `compileall -q
+laser_aligner` with an external bytecode cache, and `git diff --check` pass. No Pi,
+serial endpoint, controller, motion, arming, laser, Air Assist, camera, or other physical
+hardware was accessed for the correction.
+
 ## Active Windows frozen-startup hardening
 
 The Windows build now sanitizes its PyInstaller environment before dependency

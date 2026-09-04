@@ -1420,9 +1420,13 @@ The frozen controller-dialect registry contains only the already supported
 GRBL and Marlin policies. Each open is a private candidate with a new monotonic
 session generation. After the configured startup settle, its transport purges
 kernel RX, queued lines, and any partial receive fragment, then proves a bounded
-continuous quiet interval. A GRBL candidate must complete `$I` identity,
-acknowledged `M5`, `$$` with a valid finite `$1` repair when needed, parsed `$G`
-and `$#`, and a valid realtime `?` frame. None of these commands homes, moves,
+continuous quiet interval. Auto-detection requires positive identity payload. For an
+explicitly configured GRBL candidate, `$I` must terminate cleanly but its optional
+identity payload may be absent; acknowledgement alone is not treated as GRBL proof.
+The candidate must then complete acknowledged `M5`, `$$` with a valid finite `$1`
+repair when needed, parsed `$G` and `$#`, and a valid realtime `?` frame. These later
+responses are the capability evidence required before publication. None of these
+commands homes, moves,
 arms, enables output, enables Air Assist, or resumes work. Only the final
 compare-and-set publishes the candidate as `READY_HOME_REQUIRED`. Failed or
 ambiguous candidates are closed; bounded retry creates a wholly new transport

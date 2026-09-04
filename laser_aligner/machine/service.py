@@ -194,6 +194,7 @@ _FAILURE_CONTROLLER = "controller.failure"
 _FAILURE_OPEN = "controller.open_failed"
 _FAILURE_SYNC = "controller.sync_failed"
 _FAILURE_IDENTITY = "controller.identity_mismatch"
+_FAILURE_HANDSHAKE = "controller.handshake_incompatible"
 _FAILURE_COMMAND_TIMEOUT = "controller.command_timeout"
 _FAILURE_SESSION_QUARANTINED = "controller.session_quarantined"
 _FAILURE_RECONNECT_REQUIRED = "controller.reconnect_required"
@@ -205,9 +206,18 @@ def _connect_failure_code(error: BaseException) -> str:
     """Return one stable bounded diagnostic code for a candidate failure."""
 
     detail = str(error).lower()
+    if "grbl handshake incompatibility" in detail:
+        return _FAILURE_HANDSHAKE
     if "synchroniz" in detail or "quiet interval" in detail:
         return _FAILURE_SYNC
-    if "protocol could not be identified" in detail:
+    if any(
+        marker in detail
+        for marker in (
+            "protocol could not be identified",
+            "protocol is not configured",
+            "identity mismatch",
+        )
+    ):
         return _FAILURE_IDENTITY
     if "did not acknowledge" in detail or "overall 15 second deadline" in detail:
         return _FAILURE_COMMAND_TIMEOUT
@@ -1288,14 +1298,24 @@ class MachineService:
                     self._candidate_session = candidate
                 self._validate_candidate_air_assist(dialect)
                 if self.settings.backend == "serial" and dialect is GRBL_DIALECT:
-                    self._normalize_and_release_grbl_after_connect(
-                        session=candidate,
-                        expected_stop_epoch=expected_stop_epoch,
-                    )
-                    self._verify_grbl_candidate_alignment(
-                        candidate,
-                        expected_stop_epoch=expected_stop_epoch,
-                    )
+                    try:
+                        self._normalize_and_release_grbl_after_connect(
+                            session=candidate,
+                            expected_stop_epoch=expected_stop_epoch,
+                        )
+                        self._verify_grbl_candidate_alignment(
+                            candidate,
+                            expected_stop_epoch=expected_stop_epoch,
+                        )
+                    except (MachineError, _ControllerCommandRejected) as exc:
+                        if any(
+                            marker in str(exc).lower()
+                            for marker in ("cancelled", "superseded", "shutdown")
+                        ):
+                            raise
+                        raise MachineError(
+                            f"GRBL handshake incompatibility: {exc}"
+                        ) from exc
                 elif self.settings.backend == "serial" and dialect is MARLIN_DIALECT:
                     self._send_candidate_command(
                         candidate,
@@ -1586,15 +1606,60 @@ class MachineService:
                     expected_stop_epoch=expected_stop_epoch,
                     terminal_error_consumed=probe.terminal_error_consumed,
                 )
-            except _ControllerCommandRejected:
+            except _ControllerCommandRejected as exc:
+                if selected_protocol != "auto":
+                    raise MachineError(
+                        f"Controller identity query did not terminate cleanly: {exc}"
+                    ) from exc
                 responses = []
             if dialect.recognizes_identity(responses):
                 session.diagnostics.set_firmware_identity(responses)
                 return dialect.id
             if selected_protocol != "auto":
+                contradictory = next(
+                    (
+                        other
+                        for other in CONTROLLER_DIALECT_REGISTRY.dialects
+                        if other.id != selected_protocol
+                        and other.recognizes_identity(responses)
+                    ),
+                    None,
+                )
+                if contradictory is not None:
+                    raise MachineError(
+                        "Controller identity mismatch: configured protocol "
+                        f"{selected_protocol} but $I reported {contradictory.display_name} identity"
+                    )
+                identity_payload = tuple(
+                    response
+                    for response in responses
+                    if dialect.classify_command_response(response)
+                    is not CommandResponseKind.ACKNOWLEDGEMENT
+                )
+                if selected_protocol == "grbl" and not identity_payload:
+                    session.diagnostics.set_firmware_identity(())
+                    message = (
+                        "identity payload unavailable; continuing explicit-GRBL "
+                        "capability verification"
+                    )
+                    self._append_log("INFO", message)
+                    LOGGER.info(
+                        "primary controller %s generation=%d endpoint=%s",
+                        message,
+                        session.generation,
+                        session.resolved_endpoint,
+                    )
+                    return selected_protocol
                 break
+        if selected_protocol == "auto":
+            raise MachineError(
+                "Controller protocol is not configured and could not be inferred from "
+                "controller identity payload. Configure machine.protocol only after "
+                "verifying the controller dialect."
+            )
         raise MachineError(
-            "Controller protocol could not be identified. Set machine.protocol explicitly after running tools/controller_probe.py."
+            f"Controller identity mismatch: configured protocol {selected_protocol} "
+            "did not match the controller identity response."
         )
 
     def _validate_candidate_air_assist(self, dialect: ControllerDialect) -> None:
