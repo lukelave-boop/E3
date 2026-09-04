@@ -1828,6 +1828,14 @@ def test_workspace_template_preview_is_transient_and_independent(
     assert view.selected_object_ids() == []
 
     previous_items = list(view._template_items)
+
+    def removed_from_scene(item) -> bool:
+        try:
+            return item.scene() is None
+        except RuntimeError:
+            # PySide may destroy an unowned C++ graphics item immediately.
+            return True
+
     view.set_template_preview(
         [ellipse],
         center_x_mm=80.0,
@@ -1835,14 +1843,14 @@ def test_workspace_template_preview_is_transient_and_independent(
         rotation_deg=0.0,
     )
     assert len(view._template_items) == 1
-    assert all(item.scene() is None for item in previous_items)
+    assert all(removed_from_scene(item) for item in previous_items)
     assert len(view._trace_items) == trace_count
     assert len(view._toolpath_items) == toolpath_count
 
     current_item = view._template_items[0]
     view.clear_template_preview()
     assert view._template_items == []
-    assert current_item.scene() is None
+    assert removed_from_scene(current_item)
     assert len(view._trace_items) == trace_count
     assert len(view._toolpath_items) == toolpath_count
 

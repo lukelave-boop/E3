@@ -631,7 +631,7 @@ def test_overall_connect_deadline_clamps_identity_transaction(
     elapsed = time.monotonic() - started
 
     assert elapsed < 0.2
-    assert transport.synchronizations[0][1] <= 0.05
+    assert transport.synchronizations[0][1] <= 0.05 + 1e-9
     assert machine.status()["controller_state"] == "FAULTED"
 
 

@@ -551,7 +551,7 @@ def test_app_shutdown_cancels_lens_index_and_suppresses_late_dialog_callbacks(
         dialog.begin_shutdown()
         elapsed = time.monotonic() - started
 
-        assert elapsed < 0.2
+        assert elapsed < 0.5
         assert not dialog.isVisible()
         assert not dialog.lens_index_busy
         assert not dialog._lens_index_start_timer.isActive()

@@ -35,12 +35,13 @@ four-worker suite passes **3,587 tests with 24 expected platform or privilege
 skips**. Repository Ruff, `compileall -q laser_aligner` (with an external bytecode
 cache), and `git diff --check` pass.
 
-Windows cannot execute the 16 POSIX pseudoterminal cases; their Linux evidence is
-required from Ubuntu CI before this branch is considered verified. No Pi, network
-service, real serial device, controller, motion, arming, laser output, or physical
-STOP/recovery cycle was accessed. Physical verification remains explicitly
-pending under `docs/GRBL_SESSION_RECOVERY_VALIDATION.md`; software controls are
-not safety-rated.
+Windows cannot execute the 16 POSIX pseudoterminal cases. Ubuntu 24.04 Python
+3.12 Fast Development CI run `33827402790` passes all **305 focused POSIX serial
+and controller-session recovery tests** after correcting RX-lock starvation; its
+Ruff and dependency/bytecode jobs also pass. No Pi, network service, real serial
+device, controller, motion, arming, laser output, or physical STOP/recovery cycle
+was accessed. Physical verification remains explicitly pending under
+`docs/GRBL_SESSION_RECOVERY_VALIDATION.md`; software controls are not safety-rated.
 
 ## Active Pi secondary Air Assist serial framing correction
 
