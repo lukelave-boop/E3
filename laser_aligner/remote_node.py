@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import argparse
 import logging
-import time
+import signal
 from pathlib import Path
-from threading import Thread
+from threading import Event, Thread, current_thread, main_thread
 
 from .air_assist import (
     AirAssistCommands,
@@ -30,6 +30,34 @@ from .machine.service import MachineService
 LOGGER = logging.getLogger(__name__)
 _DEFAULT_MACHINE_PORT = 8765
 _DEFAULT_CAMERA_PORT = 8766
+
+
+def _install_termination_handlers(stop_requested: Event) -> dict[int, object]:
+    """Route SIGINT/SIGTERM through the same bounded normal cleanup path."""
+
+    if current_thread() is not main_thread():
+        return {}
+    previous: dict[int, object] = {}
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        stop_requested.set()
+
+    try:
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous[int(signum)] = signal.getsignal(signum)
+            signal.signal(signum, request_stop)
+    except BaseException:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler)
+        raise
+    return previous
+
+
+def _restore_termination_handlers(previous: dict[int, object]) -> None:
+    if current_thread() is not main_thread():
+        return
+    for signum, handler in previous.items():
+        signal.signal(signum, handler)
 
 
 def _resolved_device(path: str) -> Path:
@@ -215,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
         machine_server: PiMachineServer | None = None
         camera_server: CameraBridgeServer | None = None
         workers: list[Thread] = []
+        stop_requested = Event()
+        previous_signal_handlers: dict[int, object] = {}
         try:
             # PiJobStore construction already reconciled persisted active jobs
             # and restart recovery already attempted their exact accepted OFF.
@@ -256,9 +286,14 @@ def main(argv: list[str] | None = None) -> int:
             ]
             for worker in workers:
                 worker.start()
+            previous_signal_handlers = _install_termination_handlers(stop_requested)
             try:
                 while all(worker.is_alive() for worker in workers):
-                    time.sleep(0.5)
+                    if stop_requested.wait(0.5):
+                        break
+                if stop_requested.is_set():
+                    LOGGER.info("Stopping E3 hardware node")
+                    return 0
                 failed = next(
                     (worker.name for worker in workers if not worker.is_alive()),
                     "bridge",
@@ -268,16 +303,19 @@ def main(argv: list[str] | None = None) -> int:
                 LOGGER.info("Stopping E3 hardware node")
         finally:
             try:
-                if machine_server is not None:
-                    machine_server.stop()
-            finally:
                 try:
-                    job_service.shutdown(stop_machine=True)
+                    if machine_server is not None:
+                        machine_server.stop()
                 finally:
-                    if camera_server is not None:
-                        camera_server.stop()
-                    for worker in workers:
-                        worker.join(timeout=2.0)
+                    try:
+                        job_service.shutdown(stop_machine=True)
+                    finally:
+                        if camera_server is not None:
+                            camera_server.stop()
+                        for worker in workers:
+                            worker.join(timeout=2.0)
+            finally:
+                _restore_termination_handlers(previous_signal_handlers)
     finally:
         if secondary_air_assist is not None:
             secondary_air_assist.close()

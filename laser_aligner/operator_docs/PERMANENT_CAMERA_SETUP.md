@@ -277,8 +277,11 @@ not grant motion or laser-output authority.
 These checks do not interrupt the five calibration tabs, but they are required
 before relying on normal production output:
 
-1. Keep the laser incapable of emission. If either axis was moved by hand,
-   reconnect when required and run **Home / park** before commanding motion.
+1. Keep the laser incapable of emission. After STOP, wait for bounded
+   communication recovery; use **Reconnect** only if E3 reports RECONNECT
+   REQUIRED. If either axis was moved by hand or the controller session changed,
+   run **Home / park** once from HOME REQUIRED before commanding motion. Recovery
+   itself never Homes or moves the machine.
 2. In the main **Machine** panel, choose a small Jog step (`0.1 mm` or `1 mm`)
    and a conservative speed, then use **X−**, **X+**, **Y−**, and **Y+** to
    confirm direction and measure the physical limits. Each press begins with

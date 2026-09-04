@@ -37,6 +37,19 @@ CAPABILITY_PI_SECONDARY_MARLIN_FAN = "pi-secondary-marlin-fan-v1"
 CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS = (
     "pi-execution-policy-diagnostics-v1"
 )
+CAPABILITY_PI_CONTROLLER_SESSION = "pi-controller-session-v1"
+CAPABILITY_PI_STRUCTURED_ERRORS = "pi-structured-errors-v1"
+CAPABILITY_PI_COHERENT_STATUS = "pi-coherent-status-v1"
+
+ERROR_INVALID_REQUEST = "request.invalid"
+ERROR_REQUEST_CONFLICT = "request.conflict"
+ERROR_CONTROLLER_BUSY = "controller.busy"
+ERROR_CONTROLLER_STALE_SESSION = "controller.stale_session"
+ERROR_CONTROLLER_REJECTED = "controller.rejected"
+ERROR_SAFETY_REJECTED = "safety.rejected"
+ERROR_JOB_ACTIVE = "job.active"
+ERROR_SERVICE_SHUTTING_DOWN = "service.shutting_down"
+ERROR_INTERNAL = "service.internal"
 
 ACTION_JOB_BEGIN = "job.begin"
 ACTION_JOB_CHUNK = "job.chunk"
@@ -123,6 +136,43 @@ def validate_job_id(value: object) -> str:
 
 def validate_request_id(value: object) -> str:
     return validate_job_id(value)
+
+
+def validate_client_id(value: object) -> str:
+    """Return one canonical client UUID used only for bounded correlation."""
+
+    return validate_job_id(value)
+
+
+def validate_boot_id(value: object, *, label: str = "expected_boot_id") -> str:
+    """Return one canonical Pi process boot UUID used for request CAS."""
+
+    if type(value) is not str:
+        raise PiJobProtocolError(f"{label} must be a canonical UUID string")
+    try:
+        parsed = uuid.UUID(value)
+    except (AttributeError, ValueError) as exc:
+        raise PiJobProtocolError(
+            f"{label} must be a canonical UUID string"
+        ) from exc
+    canonical = str(parsed)
+    if value != canonical:
+        raise PiJobProtocolError(
+            f"{label} must use canonical lowercase UUID syntax"
+        )
+    return canonical
+
+
+def validate_session_generation(
+    value: object,
+    *,
+    label: str = "expected_session_generation",
+) -> int:
+    """Validate a controller-session compare-and-swap generation."""
+
+    if type(value) is not int or value < 0:
+        raise PiJobProtocolError(f"{label} must be a non-negative integer")
+    return value
 
 
 def validate_sha256(value: object, *, label: str = "sha256") -> str:
@@ -651,9 +701,21 @@ __all__ = [
     "ACTION_JOB_STATUS",
     "ACTION_JOB_STOP",
     "AuthenticatedChannel",
+    "CAPABILITY_PI_COHERENT_STATUS",
+    "CAPABILITY_PI_CONTROLLER_SESSION",
     "CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS",
     "CAPABILITY_PI_OWNED_JOBS",
     "CAPABILITY_PI_SECONDARY_MARLIN_FAN",
+    "CAPABILITY_PI_STRUCTURED_ERRORS",
+    "ERROR_CONTROLLER_BUSY",
+    "ERROR_CONTROLLER_REJECTED",
+    "ERROR_CONTROLLER_STALE_SESSION",
+    "ERROR_INTERNAL",
+    "ERROR_INVALID_REQUEST",
+    "ERROR_JOB_ACTIVE",
+    "ERROR_REQUEST_CONFLICT",
+    "ERROR_SAFETY_REJECTED",
+    "ERROR_SERVICE_SHUTTING_DOWN",
     "JOB_ACTIONS",
     "LEGACY_PROTOCOL_VERSION",
     "MAX_FRAME_PAYLOAD_BYTES",
@@ -669,11 +731,14 @@ __all__ = [
     "decode_upload_chunk",
     "encode_upload_chunk",
     "request_response",
+    "validate_boot_id",
+    "validate_client_id",
     "validate_guarded_output_polygon",
     "validate_job_id",
     "validate_job_name",
     "validate_job_size",
     "validate_request_id",
+    "validate_session_generation",
     "validate_sha256",
     "validate_upload_offset",
 ]

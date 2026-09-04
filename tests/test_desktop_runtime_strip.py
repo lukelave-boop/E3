@@ -39,8 +39,8 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
                 },
             },
             "HARDWARE LOCKED",
-            "Connected",
-            "Motion blocked",
+            "Session synchronized",
+            "Motion off",
         ),
         (
             {
@@ -51,7 +51,7 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
             },
             "HARDWARE LOCKED",
             "Disconnected",
-            "Motion blocked",
+            "Motion off",
         ),
         (
             {
@@ -64,7 +64,7 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
                 }
             },
             "HARDWARE ENABLED",
-            "Connected",
+            "Session synchronized",
             "Motion ready",
         ),
         (
@@ -79,7 +79,7 @@ def qt_application() -> Iterator[QtWidgets.QApplication]:
                 }
             },
             "LASER LOCKOUT",
-            "Connected",
+            "Session synchronized",
             "Motion ready",
         ),
     ],
@@ -117,7 +117,7 @@ def test_runtime_strip_defaults_to_locked_disconnected_and_blocked(
 
     assert strip.mode_label.text() == "HARDWARE LOCKED"
     assert strip.connection_label.text() == "Disconnected"
-    assert strip.motion_label.text() == "Motion blocked"
+    assert strip.motion_label.text() == "Motion off"
     assert strip.connect_button.text() == "Connect"
     assert strip.connect_button.isEnabled()
     assert not strip.disconnect_button.isEnabled()
@@ -175,7 +175,7 @@ def test_primary_controls_preserve_connection_gates_and_emit_requests(
     )
     assert strip.connect_button.text() == "Reconnect"
     assert strip.connect_button.isEnabled()
-    assert strip.disconnect_button.isEnabled()
+    assert not strip.disconnect_button.isEnabled()
     assert "home / park" in strip.connect_button.toolTip().lower()
     strip.connect_button.click()
     assert requests == ["connect", "disconnect", "reconnect"]
@@ -245,7 +245,8 @@ def test_runtime_strip_prioritizes_reconnect_over_home_required(
     qt_application.processEvents()
 
     assert strip.motion_label.text() == "RECONNECT REQUIRED"
-    assert "disconnect and reconnect" in strip.motion_label.toolTip().lower()
+    assert "reconnect" in strip.motion_label.toolTip().lower()
+    assert "online" not in strip.connection_label.text().lower()
     assert strip.stop_button.isEnabled()
 
 
@@ -320,7 +321,7 @@ def test_compact_strip_keeps_stop_text_visible_at_900px_with_large_font(
     assert strip.compact
     assert not strip.heading.isVisible()
     assert strip.mode_label.text() == "HARDWARE ENABLED"
-    assert strip.connection_label.text() == "ONLINE"
+    assert strip.connection_label.text() == "SESSION READY"
     assert strip.motion_label.text() == "MOTION READY"
     assert strip.stop_button.text().splitlines() == ["STOP", "LASER OFF"]
     assert strip.stop_button.isVisible()
@@ -370,7 +371,7 @@ def test_chrome_mode_is_one_line_compact_and_keeps_safety_meaning(
     assert strip.chrome_mode
     assert not strip.heading.isVisible()
     assert strip.mode_label.text() == "HW LOCKED"
-    assert strip.connection_label.text() == "ONLINE"
+    assert strip.connection_label.text() == "SESSION READY"
     assert strip.motion_label.text() == "MOTION OFF"
     assert strip.connect_button.text() == "Connect"
     assert not strip.connect_button.isEnabled()

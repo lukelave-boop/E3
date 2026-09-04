@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -89,6 +90,41 @@ def _runtime(
     )
     runtime.start()
     return runtime
+
+
+def _set_controller_state(
+    monkeypatch: pytest.MonkeyPatch,
+    runtime: CoreRuntime,
+    controller_state: str = "READY_HOME_REQUIRED",
+    *,
+    session_generation: int = 1,
+    state_revision: int = 1,
+) -> None:
+    """Give motion-bearing widget tests an explicit controller authority."""
+
+    current_status = runtime.context.machine.status
+
+    def status() -> dict[str, Any]:
+        payload = dict(current_status())
+        payload.update(
+            {
+                "controller_state": controller_state,
+                "controller_session_generation": session_generation,
+                "controller_state_revision": state_revision,
+                "connected": controller_state
+                in {"READY_HOME_REQUIRED", "READY_MOTION", "JOB_RUNNING"},
+                "connecting": controller_state
+                in {"OPENING", "SYNCHRONIZING", "RECOVERING"},
+                "controller_reconnect_required": controller_state
+                == "RECONNECT_REQUIRED",
+                "coordinate_reference_ready": controller_state
+                in {"READY_MOTION", "JOB_RUNNING"},
+                "jog_ready": controller_state == "READY_MOTION",
+            }
+        )
+        return payload
+
+    monkeypatch.setattr(runtime.context.machine, "status", status)
 
 
 def _wait_until(
@@ -183,7 +219,9 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert dialog.work_area_reference_button.text() == (
             "1. Home, park & capture ruler overlay"
         )
-        assert "Home / park" in dialog.work_area_reference_button.toolTip()
+        assert "synchronized controller session" in (
+            dialog.work_area_reference_button.toolTip()
+        )
         assert "Camera/work: X0..220, Y0..220 mm" in (
             dialog.work_area_reference_status.text()
         )
@@ -238,11 +276,14 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
         assert not dialog.registration_recapture_button.isEnabled()
         assert not dialog.validation_recapture_button.isEnabled()
         dialog._set_photo_pose_confirmed(True)
-        assert dialog.registration_recapture_button.isEnabled()
-        assert dialog.validation_recapture_button.isEnabled()
+        assert not dialog.registration_recapture_button.isEnabled()
+        assert not dialog.validation_recapture_button.isEnabled()
+        assert "synchronized controller session" in (
+            dialog.registration_recapture_button.toolTip()
+        )
         assert dialog.reverse_x.text() == "Reverse X mapping — OFF"
         assert "not operator-confirmed" in dialog.axis_mapping_status.text()
-        assert dialog.machine_connection_status.text().startswith("Machine offline")
+        assert dialog.machine_connection_status.text().startswith("DISCONNECTED")
         assert dialog.machine_connection_button.text() == "Connect machine"
         camera = runtime.context.camera.status()
         assert f"{camera.negotiated_fps:.1f} fps negotiated" in dialog.camera_status.text()
@@ -573,6 +614,7 @@ def test_coordinate_audit_new_capture_clears_clicked_point_and_copied_report(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     capture_started = threading.Event()
     release_capture = threading.Event()
@@ -679,6 +721,7 @@ def test_coordinate_audit_capture_reuses_work_area_home_park_capture(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     calls: list[str] = []
     coordinate_axis_flags: list[bool] = []
@@ -1198,6 +1241,7 @@ def test_successful_ruler_capture_enables_and_emphasizes_step_two(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path, honeycomb_span_mm=191.0)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     image = np.zeros((120, 160, 3), dtype=np.uint8)
     monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
@@ -1655,7 +1699,14 @@ def test_machine_setup_surfaces_controller_reconnect_requirement(
         monkeypatch.setattr(
             runtime.context.machine,
             "status",
-            lambda: {**status(), "connected": True},
+            lambda: {
+                **status(),
+                "controller_state": "RECONNECT_REQUIRED",
+                "controller_session_generation": 1,
+                "controller_state_revision": 2,
+                "connected": False,
+                "controller_reconnect_required": True,
+            },
         )
         runtime.context.machine._controller_reconnect_required = True
         dialog.refresh_all()
@@ -1670,6 +1721,209 @@ def test_machine_setup_surfaces_controller_reconnect_requirement(
         runtime.stop()
 
 
+def test_machine_setup_gates_motion_during_recovery_but_keeps_camera_authoring(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    dialog = MachineSetupDialog(runtime)
+    try:
+        recovering = {
+            **runtime.context.machine.status(),
+            "controller_state": "RECOVERING",
+            "controller_session_generation": 4,
+            "controller_state_revision": 8,
+            "allow_motion": True,
+        }
+        dialog.set_machine_status(recovering)
+
+        assert not dialog.park_button.isEnabled()
+        assert not dialog.work_area_reference_button.isEnabled()
+        assert not dialog.registration_capture_button.isEnabled()
+        assert dialog.lens_capture_button.isEnabled()
+        assert dialog.machine_stop_button.isEnabled()
+
+        home_required = {
+            **recovering,
+            "controller_state": "READY_HOME_REQUIRED",
+            "controller_state_revision": 9,
+        }
+        dialog.set_machine_status(home_required)
+        assert dialog.park_button.isEnabled()
+        assert dialog.work_area_reference_button.isEnabled()
+
+        dialog._photo_pose_confirmed = True
+        dialog._photo_pose_confirmed_generation = 4
+        ready_motion = {
+            **home_required,
+            "controller_state": "READY_MOTION",
+            "controller_state_revision": 10,
+            "coordinate_reference_ready": True,
+        }
+        dialog.set_machine_status(ready_motion)
+        assert not dialog.park_button.isEnabled()
+        assert dialog.registration_recapture_button.isEnabled()
+
+        dialog.set_machine_status(
+            {
+                **ready_motion,
+                "controller_session_generation": 5,
+                "controller_state_revision": 11,
+            }
+        )
+        assert not dialog.registration_recapture_button.isEnabled()
+        assert not dialog._photo_pose_confirmed
+    finally:
+        dialog.close()
+        runtime.stop()
+
+
+def test_machine_setup_queued_home_never_executes_on_recovered_session(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = _runtime(tmp_path)
+    machine = runtime.context.machine
+    original_status = machine.status
+    authority = {"session": 4, "revision": 12}
+    scope_entered = threading.Event()
+    release_scope = threading.Event()
+    ensure_calls: list[bool] = []
+    home_calls: list[bool] = []
+    publications: list[object] = []
+
+    def status() -> dict[str, Any]:
+        return {
+            **original_status(),
+            "controller_state": "READY_HOME_REQUIRED",
+            "controller_session_generation": authority["session"],
+            "controller_state_revision": authority["revision"],
+            "connected": True,
+            "allow_motion": True,
+            "coordinate_reference_ready": False,
+            "jog_ready": False,
+            "armed": False,
+            "job": {},
+        }
+
+    @contextmanager
+    def delayed_operation_scope(generation: int):
+        assert generation == machine.operation_generation()
+        scope_entered.set()
+        assert release_scope.wait(3.0)
+        yield
+
+    def ensure_connected() -> None:
+        ensure_calls.append(True)
+
+    def home_operation() -> dict[str, object]:
+        home_calls.append(True)
+        return {"position": {"x": 100.0, "y": 100.0}}
+
+    monkeypatch.setattr(machine, "status", status)
+    monkeypatch.setattr(machine, "operation_scope", delayed_operation_scope)
+    monkeypatch.setattr(machine, "ensure_connected", ensure_connected)
+    dialog = MachineSetupDialog(runtime)
+    try:
+        assert dialog._start_operation(
+            "Home / park",
+            home_operation,
+            publications.append,
+            requires_controller=True,
+        )
+        task = dialog._active_task
+        assert task is not None
+        _wait_until(qt_application, scope_entered.is_set)
+
+        authority.update(session=5, revision=20)
+        release_scope.set()
+        assert task.wait_until(time.monotonic() + 3.0)
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
+
+        assert ensure_calls == []
+        assert home_calls == []
+        assert publications == []
+        assert "discarded" in dialog.operation_status.text()
+    finally:
+        release_scope.set()
+        if dialog.operation_busy:
+            _wait_until(qt_application, lambda: not dialog.operation_busy)
+        dialog.close()
+        runtime.stop()
+
+
+@pytest.mark.parametrize("worker_fails", [False, True])
+def test_machine_setup_discards_queued_home_callbacks_after_global_stop(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    worker_fails: bool,
+) -> None:
+    runtime = _runtime(tmp_path)
+    original_status = runtime.context.machine.status
+    state = {"name": "READY_HOME_REQUIRED", "revision": 12}
+    started = threading.Event()
+    release = threading.Event()
+    successes: list[object] = []
+    failures: list[str] = []
+
+    def status() -> dict[str, Any]:
+        return {
+            **original_status(),
+            "controller_state": state["name"],
+            "controller_session_generation": 4,
+            "controller_state_revision": state["revision"],
+            "connected": state["name"] == "READY_HOME_REQUIRED",
+            "allow_motion": True,
+            "coordinate_reference_ready": False,
+            "jog_ready": False,
+            "armed": False,
+            "job": {},
+        }
+
+    def home_operation() -> dict[str, object]:
+        started.set()
+        assert release.wait(3.0)
+        if worker_fails:
+            raise RuntimeError("late Setup Home failure")
+        return {"position": {"x": 100.0, "y": 100.0}}
+
+    monkeypatch.setattr(runtime.context.machine, "status", status)
+    monkeypatch.setattr(runtime.context.machine, "ensure_connected", lambda: None)
+    dialog = MachineSetupDialog(runtime)
+    try:
+        assert dialog._start_operation(
+            "Home / park",
+            home_operation,
+            successes.append,
+            requires_controller=True,
+            on_failure=failures.append,
+        )
+        task = dialog._active_task
+        assert task is not None
+        _wait_until(qt_application, started.is_set)
+        release.set()
+        assert task.wait_until(time.monotonic() + 3.0)
+
+        # Do not process Qt events until a second client/global STOP advances
+        # only the authoritative revision. The session and local operation
+        # generation remain identical to the completed worker's authority.
+        state.update(name="STOPPING", revision=13)
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
+
+        assert successes == []
+        assert failures == []
+        assert not dialog._photo_pose_confirmed
+        assert "discarded" in dialog.operation_status.text()
+    finally:
+        release.set()
+        if dialog.operation_busy:
+            _wait_until(qt_application, lambda: not dialog.operation_busy)
+        dialog.close()
+        runtime.stop()
+
+
 def test_machine_setup_can_disconnect_and_reconnect_machine(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
@@ -1679,10 +1933,24 @@ def test_machine_setup_can_disconnect_and_reconnect_machine(
     dialog = MachineSetupDialog(runtime)
     connected = {"value": True}
     status = runtime.context.machine.status
+
+    def machine_status() -> dict[str, Any]:
+        controller_state = (
+            "READY_HOME_REQUIRED" if connected["value"] else "DISCONNECTED"
+        )
+        return {
+            **status(),
+            "controller_state": controller_state,
+            "controller_session_generation": 1,
+            "controller_state_revision": 1,
+            "connected": connected["value"],
+            "controller_reconnect_required": False,
+        }
+
     monkeypatch.setattr(
         runtime.context.machine,
         "status",
-        lambda: {**status(), "connected": connected["value"]},
+        machine_status,
     )
     monkeypatch.setattr(
         runtime.context.machine,
@@ -1697,10 +1965,12 @@ def test_machine_setup_can_disconnect_and_reconnect_machine(
     try:
         dialog.refresh_all()
         dialog.toggle_machine_connection()
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
         assert not runtime.context.machine.status()["connected"]
         assert dialog.machine_connection_button.text() == "Connect machine"
 
         dialog.toggle_machine_connection()
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
         assert runtime.context.machine.status()["connected"]
         assert dialog.machine_connection_button.text() == "Disconnect machine"
     finally:
@@ -1717,10 +1987,28 @@ def test_machine_setup_reconnect_uses_safe_connection_replacement(
     dialog = MachineSetupDialog(runtime)
     replacement_calls: list[bool] = []
     status = runtime.context.machine.status
+
+    def machine_status() -> dict[str, Any]:
+        reconnect_required = bool(
+            runtime.context.machine._controller_reconnect_required
+        )
+        return {
+            **status(),
+            "controller_state": (
+                "RECONNECT_REQUIRED"
+                if reconnect_required
+                else "READY_HOME_REQUIRED"
+            ),
+            "controller_session_generation": 2 if reconnect_required else 3,
+            "controller_state_revision": 4 if reconnect_required else 7,
+            "connected": not reconnect_required,
+            "controller_reconnect_required": reconnect_required,
+        }
+
     monkeypatch.setattr(
         runtime.context.machine,
         "status",
-        lambda: {**status(), "connected": True},
+        machine_status,
     )
 
     def replace_connection() -> dict[str, object]:
@@ -1736,6 +2024,7 @@ def test_machine_setup_reconnect_uses_safe_connection_replacement(
         runtime.context.machine._controller_reconnect_required = True
         dialog.refresh_all()
         dialog.toggle_machine_connection()
+        _wait_until(qt_application, lambda: not dialog.operation_busy)
 
         assert replacement_calls == [True]
         assert runtime.context.machine.status()["connected"] is True
@@ -1751,6 +2040,7 @@ def test_machine_setup_home_park_keeps_stop_live_and_blocks_close_until_cleanup(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     started = threading.Event()
     release = threading.Event()
@@ -1768,7 +2058,9 @@ def test_machine_setup_home_park_keeps_stop_live_and_blocks_close_until_cleanup(
     monkeypatch.setattr(
         runtime.context.machine,
         "request_stop",
-        lambda emergency=False: stop_calls.append((emergency, threading.get_ident())),
+        lambda emergency=False, **_kwargs: stop_calls.append(
+            (emergency, threading.get_ident())
+        ),
     )
     monkeypatch.setattr(QtWidgets.QMessageBox, "information", lambda *args, **kwargs: None)
     try:
@@ -1837,8 +2129,10 @@ def test_function_task_emits_exception_notes_once(
 def test_machine_setup_stop_rejects_home_park_queued_before_worker_start(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     pool = QtCore.QThreadPool()
     pool.setMaxThreadCount(1)
@@ -1928,6 +2222,7 @@ def test_machine_setup_busy_stop_and_progress_fit_at_large_text(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     release = threading.Event()
     font = QtGui.QFont(dialog.font())
@@ -2077,6 +2372,7 @@ def test_machine_setup_precision_operations_run_outside_the_gui_thread(
     context_method: str,
 ) -> None:
     runtime = _runtime(tmp_path)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     started = threading.Event()
     release = threading.Event()
@@ -2118,6 +2414,7 @@ def test_machine_setup_failed_precision_capture_discards_prior_review_state(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    _set_controller_state(monkeypatch, runtime)
     dialog = MachineSetupDialog(runtime)
     release = threading.Event()
 

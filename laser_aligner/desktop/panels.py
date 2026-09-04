@@ -14,6 +14,7 @@ from ..project import (
 )
 from ..units import parse_to_mm
 from .controls import MeasurementSpinBox
+from .machine_state import ControllerUiState, project_machine_state
 from .qt import require_qt
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY
 
@@ -1359,6 +1360,7 @@ class TracePanel(QtWidgets.QWidget):
         self._color_pick_sampling = False
         self._calibration_ready = False
         self._generate_enabled = True
+        self._machine_ui_state = project_machine_state(None)
         self._trace_settings = QtCore.QSettings("E3", "PositioningSystem")
         layout = _panel_layout(self)
 
@@ -2486,12 +2488,33 @@ class TracePanel(QtWidgets.QWidget):
 
     def set_calibration_ready(self, ready: bool) -> None:
         self._calibration_ready = bool(ready)
-        self.detect_button.setEnabled(bool(ready))
+        self._sync_detection_action()
         self._sync_output_controls()
         if not ready:
             self.status_label.setText(
                 "Bed mapping is required before camera objects can be traced."
             )
+
+    def set_machine_state(self, state: ControllerUiState) -> None:
+        """Gate only Trace's motion-bearing capture; authoring stays available."""
+
+        self._machine_ui_state = state
+        self._sync_detection_action()
+
+    def _sync_detection_action(self) -> None:
+        machine_ready = self._machine_ui_state.can_motion_calibration
+        self.detect_button.setEnabled(self._calibration_ready and machine_ready)
+        if not self._calibration_ready:
+            tooltip = "Bed mapping is required before camera objects can be traced."
+        elif not machine_ready:
+            tooltip = self._machine_ui_state.blocked_reason("Detect objects")
+        else:
+            tooltip = (
+                "On hardware this homes and parks the machine, holds both axes "
+                "through a fresh multi-frame capture, releases them, then traces "
+                "the captured image. Ensure the travel path is clear."
+            )
+        self.detect_button.setToolTip(tooltip)
 
     def raster_preview_mode(self) -> str:
         value = self.raster_preview_combo.currentData()
@@ -2908,12 +2931,8 @@ class MachinePanel(QtWidgets.QWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._busy = False
-        self._connected = False
-        self._allow_motion = False
-        self._reconnect_required = False
-        self._jog_ready = False
-        self._armed = False
-        self._job_running = False
+        self._machine_status: dict[str, Any] = {}
+        self._ui_state = project_machine_state(None)
         layout = _dense_panel_layout(self)
 
         self.state_label = QtWidgets.QLabel("Disconnected")
@@ -2988,51 +3007,20 @@ class MachinePanel(QtWidgets.QWidget):
         )
 
     def set_status(self, status: dict[str, Any] | None) -> None:
-        if not status:
-            self.state_label.setText("Controller unavailable")
-            self._connected = False
-            self._allow_motion = False
-            self._reconnect_required = False
-            self._jog_ready = False
-            self._armed = False
-            self._job_running = False
-            self._sync_action_buttons()
-            return
-        connected = bool(status.get("connected", False))
-        connecting = bool(status.get("connecting", False))
-        self._connected = connected
-        self._allow_motion = bool(status.get("allow_motion"))
-        self._reconnect_required = bool(
-            status.get("controller_reconnect_required", False)
+        self._machine_status = dict(status or {})
+        self._ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=self._busy,
         )
-        self._jog_ready = bool(status.get("jog_ready", False))
-        maximum_jog_feed = status.get("max_travel_feed_mm_min")
+        maximum_jog_feed = self._machine_status.get("max_travel_feed_mm_min")
         if type(maximum_jog_feed) in {int, float} and math.isfinite(
             float(maximum_jog_feed)
         ) and float(maximum_jog_feed) > 0:
             self.jog_speed.setMaximum(float(maximum_jog_feed))
-        armed = bool(status.get("armed", False))
-        job = status.get("job", {})
-        self._armed = armed
-        self._job_running = bool(job.get("running", False))
-        state = "RUNNING" if job.get("running") else (
-            "ARMED" if armed else "SAFE"
-        )
-        if self._reconnect_required:
-            motion_state = "RECONNECT REQUIRED"
-        elif (
-            connected
-            and status.get("backend") == "serial"
-            and status.get("allow_motion")
-            and not status.get("coordinate_reference_ready", False)
-        ):
-            motion_state = "HOME REQUIRED"
-        else:
-            motion_state = f"Motion {'ready' if self._allow_motion else 'blocked'}"
         self.state_label.setText(
-            f"{'Connecting' if connecting else ('Connected' if connected else 'Disconnected')} | "
-            f"{status.get('protocol', 'unknown')} | {state} | "
-            + motion_state
+            self._ui_state.panel_summary(
+                self._machine_status.get("protocol", "unknown")
+            )
         )
         self._sync_action_buttons()
 
@@ -3040,49 +3028,25 @@ class MachinePanel(QtWidgets.QWidget):
         """Prevent overlapping machine actions."""
 
         self._busy = bool(busy)
+        self._ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=self._busy,
+        )
         self._sync_action_buttons()
 
     def _sync_action_buttons(self) -> None:
-        self.park_button.setEnabled(
-            not self._busy
-            and self._allow_motion
-            and not self._reconnect_required
+        state = self._ui_state.with_busy(self._busy)
+        self.park_button.setEnabled(state.can_home)
+        self.jog_group.setEnabled(state.can_jog)
+        self.jog_group.setToolTip(
+            "Laser-off move; configured work-area bounds are not applied"
+            if state.can_jog
+            else state.blocked_reason("Jog")
         )
-        jog_enabled = (
-            not self._busy
-            and self._connected
-            and self._allow_motion
-            and not self._reconnect_required
-            and self._jog_ready
-            and not self._armed
-            and not self._job_running
-        )
-        self.jog_group.setEnabled(jog_enabled)
-        if self._reconnect_required:
-            jog_tip = "Disconnect and reconnect, then Home / park before jogging"
-        elif not self._connected:
-            jog_tip = "Connect and complete Home / park before jogging"
-        elif not self._allow_motion:
-            jog_tip = "Jogging is blocked by machine.allow_motion"
-        elif self._armed:
-            jog_tip = "Disarm laser control before jogging"
-        elif self._job_running:
-            jog_tip = "Wait for the controller job to finish"
-        elif not self._jog_ready:
-            jog_tip = "Complete Home / park before jogging"
-        elif self._busy:
-            jog_tip = "Wait for the current machine operation to finish"
-        else:
-            jog_tip = "Laser-off move; configured work-area bounds are not applied"
-        self.jog_group.setToolTip(jog_tip)
         self.park_button.setToolTip(
-            "Disconnect and reconnect before Home / park"
-            if self._reconnect_required
-            else (
-                "Connect automatically, then home and park at the configured camera pose"
-                if not self._connected
-                else "Home and park at the configured camera pose"
-            )
+            "Home and park at the configured camera pose"
+            if state.can_home
+            else state.blocked_reason("Home / park")
         )
 
 
@@ -3091,6 +3055,9 @@ class ConsolePanel(QtWidgets.QWidget):
 
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
+        self._busy = False
+        self._machine_status: dict[str, Any] = {}
+        self._ui_state: ControllerUiState = project_machine_state(None)
         layout = _panel_layout(self)
         self.output = QtWidgets.QPlainTextEdit()
         self.output.setReadOnly(True)
@@ -3105,8 +3072,11 @@ class ConsolePanel(QtWidgets.QWidget):
         layout.addLayout(row)
         self.send.clicked.connect(self._submit)
         self.command.returnPressed.connect(self._submit)
+        self._sync_action_state()
 
     def _submit(self) -> None:
+        if not self._ui_state.with_busy(self._busy).can_send_diagnostic:
+            return
         text = self.command.text().strip()
         if text:
             self.commandSubmitted.emit(text)
@@ -3121,6 +3091,31 @@ class ConsolePanel(QtWidgets.QWidget):
 
     def append_line(self, line: str) -> None:
         self.output.appendPlainText(line)
+
+    def set_status(self, status: dict[str, Any] | None) -> None:
+        self._machine_status = dict(status or {})
+        self._ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=self._busy,
+        )
+        self._sync_action_state()
+
+    def set_busy(self, busy: bool) -> None:
+        self._busy = bool(busy)
+        self._ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=self._busy,
+        )
+        self._sync_action_state()
+
+    def _sync_action_state(self) -> None:
+        state = self._ui_state.with_busy(self._busy)
+        enabled = state.can_send_diagnostic
+        self.command.setEnabled(enabled)
+        self.send.setEnabled(enabled)
+        reason = "" if enabled else state.blocked_reason("Diagnostic command")
+        self.command.setToolTip(reason)
+        self.send.setToolTip(reason)
 
 
 class JobProgressWidget(QtWidgets.QStackedWidget):

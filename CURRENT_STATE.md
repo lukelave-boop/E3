@@ -5,7 +5,42 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-09-02**
+Snapshot: **2026-09-03**
+
+## Active primary Raspberry-Pi-to-GRBL session hardening
+
+The primary controller path now uses one explicit, generation-bound controller
+session state machine across the Windows desktop, Pi RPC boundary, Pi-owned
+`MachineService`, and POSIX serial transport. A connection is published only
+after receive synchronization, controller identity, fail-off, settings/modal
+checks, and realtime-state validation. Recovery always creates a fresh transport,
+can publish only **Home required**, never homes or resumes automatically, and
+keeps stale workers and cleanup bound to their original transport and generation.
+
+STOP revokes job and arming authority before bounded exact-session fail-off and
+close. Home, arm, Start, diagnostics, UI actions, and Pi mutations use explicit
+state plus session/boot/client compare-and-swap metadata. The desktop has one
+authoritative projection for labels, action enablement, and remediation. The Pi
+job journal records terminal failures without retrying or resuming accepted work.
+The POSIX owner now uses process locking, `TIOCEXCL` when available, strict UTF-8
+framing, synchronized reopen, and descriptor-stable reads/writes.
+
+The 60-case fault matrix is indexed in `docs/GRBL_SESSION_FAULT_MATRIX.md` and
+includes deterministic races for reconnect while an old job worker unwinds,
+stale cleanup attempting to close a replacement, and stale work attempting to
+write it. Focused Windows verification passes **220 MachineService tests**,
+**117 controller-session tests**, **156 Pi/RPC tests**, **28 desktop state and
+reconnect tests**, and **22 strict transcript tests**. The complete Windows
+four-worker suite passes **3,587 tests with 24 expected platform or privilege
+skips**. Repository Ruff, `compileall -q laser_aligner` (with an external bytecode
+cache), and `git diff --check` pass.
+
+Windows cannot execute the 16 POSIX pseudoterminal cases; their Linux evidence is
+required from Ubuntu CI before this branch is considered verified. No Pi, network
+service, real serial device, controller, motion, arming, laser output, or physical
+STOP/recovery cycle was accessed. Physical verification remains explicitly
+pending under `docs/GRBL_SESSION_RECOVERY_VALIDATION.md`; software controls are
+not safety-rated.
 
 ## Active Pi secondary Air Assist serial framing correction
 

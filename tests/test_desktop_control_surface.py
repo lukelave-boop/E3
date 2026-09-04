@@ -108,7 +108,8 @@ def test_machine_controls_expose_guarded_jogging_and_keep_pause_disabled():
     controller = source("controller.py")
     service = (ROOT / "laser_aligner" / "machine" / "service.py").read_text()
     assert "Jogging may move beyond the configured work area" in panels
-    assert "self._jog_ready" in panels
+    assert "state.can_jog" in panels
+    assert "self._machine_ui_state" in panels
     assert "self.runtime.context.machine.jog" in controller
     assert "def jog(" in service
     assert "self.pause_button.setEnabled(False)" in runtime

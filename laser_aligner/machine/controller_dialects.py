@@ -36,7 +36,13 @@ class CommandResponseKind(str, Enum):
     ACKNOWLEDGEMENT = "acknowledgement"
     ERROR = "error"
     ALARM = "alarm"
-    CONTINUE = "continue"
+    PAYLOAD = "payload"
+    # Compatibility alias for callers that historically treated every
+    # non-terminal frame as an undifferentiated continuation.
+    CONTINUE = "payload"
+    REALTIME_STATUS = "realtime_status"
+    STARTUP = "startup"
+    MALFORMED = "malformed"
 
 
 class HomingResponseKind(str, Enum):
@@ -44,6 +50,8 @@ class HomingResponseKind(str, Enum):
     ACTIVE = "active"
     IDLE = "idle"
     REJECTION = "rejection"
+    STARTUP = "startup"
+    MALFORMED = "malformed"
     CONTINUE = "continue"
 
 
@@ -124,18 +132,36 @@ class ControllerDialect:
             for marker in self.identity_response_markers
         )
 
-    @staticmethod
-    def classify_command_response(response: str) -> CommandResponseKind:
+    def classify_command_response(self, response: str) -> CommandResponseKind:
+        if type(response) is not str or not response or response != response.strip():
+            return CommandResponseKind.MALFORMED
+        if any(ord(character) < 32 and character not in {"\t"} for character in response):
+            return CommandResponseKind.MALFORMED
         lower = response.lower()
-        if lower == "ok" or lower.startswith("ok "):
+        if lower == "ok" or (self.id == "marlin" and lower.startswith("ok ")):
             return CommandResponseKind.ACKNOWLEDGEMENT
-        if lower.startswith("error"):
+        if self.id == "grbl" and re.fullmatch(r"error:\d+", lower):
             return CommandResponseKind.ERROR
-        if lower.startswith("alarm"):
+        if self.id == "marlin" and lower.startswith("error:") and len(response) > 6:
+            return CommandResponseKind.ERROR
+        if re.fullmatch(r"alarm:\d+", lower):
             return CommandResponseKind.ALARM
-        return CommandResponseKind.CONTINUE
+        if lower.startswith(("ok", "error", "alarm")):
+            return CommandResponseKind.MALFORMED
+        if response.startswith("<") or response.endswith(">"):
+            if response.startswith("<") and response.endswith(">") and len(response) > 2:
+                return CommandResponseKind.REALTIME_STATUS
+            return CommandResponseKind.MALFORMED
+        if lower.startswith("grbl ") or lower.startswith("start"):
+            return CommandResponseKind.STARTUP
+        return CommandResponseKind.PAYLOAD
 
     def classify_homing_response(self, response: str) -> HomingResponseKind:
+        command_kind = self.classify_command_response(response)
+        if command_kind is CommandResponseKind.STARTUP:
+            return HomingResponseKind.STARTUP
+        if command_kind is CommandResponseKind.MALFORMED:
+            return HomingResponseKind.MALFORMED
         lower = response.strip().lower()
         if lower == "ok" or lower.startswith("ok "):
             return HomingResponseKind.ACKNOWLEDGEMENT

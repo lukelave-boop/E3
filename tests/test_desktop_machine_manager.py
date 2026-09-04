@@ -16,6 +16,7 @@ from PySide6 import QtWidgets
 from laser_aligner.air_assist import AirAssistMode
 from laser_aligner.calibration.profiles import signature_from_camera_settings
 from laser_aligner.config import load_settings
+from laser_aligner.deployment import load_build_info
 from laser_aligner.desktop.machine_manager import (
     MachineManagerDialog,
     _NewMachineDialog,
@@ -103,6 +104,65 @@ def test_manager_preloads_current_machine_camera_and_calibration(
     assert "Use on next launch" in dialog.lifecycle_summary.text()
 
     dialog.close()
+
+
+def test_manager_copies_bounded_sanitized_running_controller_diagnostics(
+    qt_application: QtWidgets.QApplication,
+    tmp_path: Path,
+) -> None:
+    runtime = _runtime(tmp_path)
+    runtime.context.machine = SimpleNamespace(
+        status=lambda: {
+            "controller_state": "RECONNECT_REQUIRED",
+            "controller_session_generation": 8,
+            "state_revision": 31,
+            "node_boot_id": "8ad5d842-8525-40be-93f9-f24a0305abca",
+            "node_build": {"version": "0.6.41", "revision": "piabc123"},
+            "node_protocol": "E3MACHINE/2",
+            "node_capabilities": [
+                "pi-controller-session-v1",
+                "pi-secondary-marlin-fan-v1",
+            ],
+            "protocol": "grbl",
+            "controller_diagnostics": {
+                "last_failure": "timed out awaiting ok",
+                "arm_phrase": "DO NOT COPY",
+                "transcript": ["safe diagnostic line"],
+            },
+            "arm_phrase": "DO NOT COPY",
+            "log": ["G1 X200"],
+        }
+    )
+
+    dialog = MachineManagerDialog(runtime)
+    try:
+        text = dialog.running_controller_diagnostics.toPlainText()
+        parsed = json.loads(text)
+        local_build = load_build_info()
+        assert parsed["desktop_build"]["version"] == local_build.version
+        assert parsed["desktop_build"]["revision"] == local_build.revision
+        assert parsed["node_build"] == {
+            "version": "0.6.41",
+            "revision": "piabc123",
+        }
+        assert parsed["node_protocol"] == "E3MACHINE/2"
+        assert parsed["node_capabilities"] == [
+            "pi-controller-session-v1",
+            "pi-secondary-marlin-fan-v1",
+        ]
+        assert "RECONNECT_REQUIRED" in text
+        assert "timed out awaiting ok" in text
+        assert "safe diagnostic line" in text
+        assert "DO NOT COPY" not in text
+        assert "G1 X200" not in text
+        assert len(text) <= 32_000
+
+        dialog.copy_diagnostics_button.click()
+
+        assert QtWidgets.QApplication.clipboard().text() == text
+        assert "sanitized" in dialog.status_label.text().lower()
+    finally:
+        dialog.close()
 
 
 def test_manager_navigation_focuses_physical_honeycomb_span(

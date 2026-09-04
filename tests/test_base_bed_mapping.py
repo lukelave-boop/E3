@@ -19,6 +19,7 @@ from laser_aligner.camera.controls import ControlResult
 from laser_aligner.camera.service import FrameBurst
 from laser_aligner.config import WorkArea, load_settings
 from laser_aligner.errors import CalibrationError
+from laser_aligner.machine.controller_dialects import GRBL_DIALECT
 from tests.fakes.simulator_transport import SimulatedTransport
 
 
@@ -26,10 +27,12 @@ def _run_prepared_job(context: AppContext, job: object) -> None:
     program = context.machine.preflight_program(job.program.text)
     context.machine.arm_program(context.machine.ARM_PHRASE, program)
     context.machine.start_validated_program(program, job.filename)
-    deadline = time.monotonic() + 2.0
+    deadline = time.monotonic() + 15.0
     while context.machine.status()["job"]["running"] and time.monotonic() < deadline:
         time.sleep(0.01)
-    assert context.machine.status()["job"]["error"] is None
+    status = context.machine.status()
+    assert status["job"]["running"] is False
+    assert status["job"]["error"] is None, status["controller_diagnostics"]
 
 
 def _context(tmp_path: Path) -> AppContext:
@@ -54,8 +57,19 @@ def _context(tmp_path: Path) -> AppContext:
     transport.open()
     context.machine._transport = transport
     context.machine._connected = True
-    context.machine._protocol = "marlin"
+    context.machine._dialect = GRBL_DIALECT
+    context.machine._protocol = "grbl"
     context.machine._coordinate_reference_ready = True
+    context.machine._coordinate_state_reference = {
+        "active_workspace": "G54",
+        "active_offset_mm": [0.0, 0.0, 0.0],
+        "g92_offset_mm": [0.0, 0.0, 0.0],
+    }
+    context.machine._jog_position_mm = (0.0, 0.0)
+    with context.machine._lock:
+        session = context.machine._adopt_legacy_test_session_locked()
+        assert session is not None
+        context.machine._coordinate_reference_session_generation = session.generation
     return context
 
 

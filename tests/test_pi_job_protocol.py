@@ -19,10 +19,13 @@ from laser_aligner.machine.pi_job_protocol import (
     decode_upload_chunk,
     encode_upload_chunk,
     request_response,
+    validate_boot_id,
+    validate_client_id,
     validate_guarded_output_polygon,
     validate_job_id,
     validate_job_name,
     validate_job_size,
+    validate_session_generation,
     validate_sha256,
 )
 
@@ -287,6 +290,20 @@ def test_job_id_requires_canonical_lowercase_uuid(value: object) -> None:
         validate_job_id(value)
     generated = str(uuid.uuid4())
     assert validate_job_id(generated) == generated
+
+
+def test_boot_client_and_session_generation_are_strict() -> None:
+    client_id = str(uuid.uuid4())
+    boot_id = str(uuid.uuid4())
+    assert validate_client_id(client_id) == client_id
+    assert validate_boot_id(boot_id) == boot_id
+    with pytest.raises(PiJobProtocolError):
+        validate_boot_id(boot_id.upper())
+    assert validate_session_generation(0) == 0
+    assert validate_session_generation(17) == 17
+    for invalid in (True, -1, 1.0, "1", None):
+        with pytest.raises(PiJobProtocolError):
+            validate_session_generation(invalid)
 
 
 @pytest.mark.parametrize(

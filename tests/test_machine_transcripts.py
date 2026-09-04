@@ -42,6 +42,8 @@ def raw(payload: bytes, *responses: str) -> ExpectedWrite:
 class ScriptedTransport:
     """Strict deterministic MachineTransport used only by transcript tests."""
 
+    test_only_allow_legacy_input_synchronization = True
+
     def __init__(
         self,
         steps: list[ExpectedWrite],
@@ -161,10 +163,21 @@ GRBL_OFFSETS = (
     "[G92:0.000,0.000,0.000]",
     "ok",
 )
+GRBL_REALTIME = "<Idle|MPos:0.000,0.000,0.000|WPos:0.000,0.000,0.000|WCO:0.000,0.000,0.000>"
 
 
 def grbl_connect_steps() -> list[ExpectedWrite]:
-    return [line("$$", *GRBL_SETTINGS), line("M5", "ok")]
+    return [
+        line("$I", GRBL_IDENTITY, "ok"),
+        line("M5", "ok"),
+        line("$$", *GRBL_SETTINGS),
+        *coordinate_query_steps(),
+        raw(b"?", GRBL_REALTIME),
+    ]
+
+
+def marlin_connect_steps() -> list[ExpectedWrite]:
+    return [line("M115", "FIRMWARE_NAME:Marlin 2.1.2", "ok"), line("M5", "ok")]
 
 
 def coordinate_query_steps() -> list[ExpectedWrite]:
@@ -172,13 +185,12 @@ def coordinate_query_steps() -> list[ExpectedWrite]:
 
 
 def disconnect_steps() -> list[ExpectedWrite]:
-    # disconnect() first requests a normal STOP, then performs its own close-time
-    # laser-off write. Neither best-effort cleanup consumes an acknowledgement.
-    return [line("M5"), line("M5")]
+    # The STOP-owned quarantine performs one exact-session fail-off before close.
+    return [line("M5")]
 
 
 def air_disconnect_steps(off_command: str) -> list[ExpectedWrite]:
-    return [line("M5"), line(off_command), line("M5"), line(off_command)]
+    return [line("M5"), line(off_command)]
 
 
 def machine_settings(
@@ -251,9 +263,20 @@ def test_identity_query_before_protocol_resolution_keeps_connection_error(
         (
             "grbl",
             grbl_connect_steps(),
-            [("line", "$$"), ("line", "M5")],
+            [
+                ("line", "$I"),
+                ("line", "M5"),
+                ("line", "$$"),
+                ("line", "$G"),
+                ("line", "$#"),
+                ("raw", b"?"),
+            ],
         ),
-        ("marlin", [line("M5", "ok")], [("line", "M5")]),
+        (
+            "marlin",
+            marlin_connect_steps(),
+            [("line", "M115"), ("line", "M5")],
+        ),
     ],
 )
 def test_explicit_connect_and_disconnect_have_exact_laser_off_transcript(
@@ -285,7 +308,6 @@ def test_explicit_connect_and_disconnect_have_exact_laser_off_transcript(
     assert transport.writes == [
         *expected_connect_writes,
         ("line", "M5"),
-        ("line", "M5"),
     ]
     assert machine.status()["connected"] is False
     assert machine.status()["coordinate_reference_ready"] is False
@@ -297,12 +319,11 @@ def test_explicit_connect_and_disconnect_have_exact_laser_off_transcript(
     [
         (
             [
-                line("$I", GRBL_IDENTITY, "ok"),
                 *grbl_connect_steps(),
                 *disconnect_steps(),
             ],
             "grbl",
-            ["$I", "$$", "M5", "M5", "M5"],
+            ["$I", "M5", "$$", "$G", "$#", "M5"],
         ),
         (
             [
@@ -312,7 +333,7 @@ def test_explicit_connect_and_disconnect_have_exact_laser_off_transcript(
                 *disconnect_steps(),
             ],
             "marlin",
-            ["$I", "M115", "M5", "M5", "M5"],
+            ["$I", "M115", "M5", "M5"],
         ),
     ],
 )
@@ -332,7 +353,7 @@ def test_auto_connect_identifies_each_controller_before_normalization(
 
     status = machine.connect()
     assert status["protocol"] == expected_protocol
-    assert [payload for channel, payload in transport.writes if channel == "line"] == expected_writes[: len(expected_writes) - 2]
+    assert [payload for channel, payload in transport.writes if channel == "line"] == expected_writes[:-1]
 
     machine.disconnect()
 
@@ -340,7 +361,7 @@ def test_auto_connect_identifies_each_controller_before_normalization(
     transport.assert_complete()
 
 
-def test_auto_grbl_banner_skips_identity_probe_without_extra_command(
+def test_auto_grbl_banner_still_requires_identity_probe_and_full_handshake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transport = ScriptedTransport(
@@ -357,8 +378,14 @@ def test_auto_grbl_banner_skips_identity_probe_without_extra_command(
     status = machine.connect()
 
     assert status["protocol"] == "grbl"
-    assert transport.writes == [("line", "$$"), ("line", "M5")]
-    assert ("line", "$I") not in transport.writes
+    assert transport.writes == [
+        ("line", "$I"),
+        ("line", "M5"),
+        ("line", "$$"),
+        ("line", "$G"),
+        ("line", "$#"),
+        ("raw", b"?"),
+    ]
 
     machine.disconnect()
     transport.assert_complete()
@@ -369,7 +396,6 @@ def test_identity_and_realtime_status_queries_use_the_existing_grbl_session(
 ) -> None:
     realtime = "<Idle|MPos:15,195,0|WPos:15,195,0|WCO:0,0,0>"
     steps = [
-        line("$I", GRBL_IDENTITY, "ok"),
         *grbl_connect_steps(),
         line("$I", GRBL_IDENTITY, "ok"),
         raw(b"?", realtime),
@@ -411,7 +437,7 @@ def test_marlin_identity_and_status_query_use_m115_and_m114(
     position_line = "X:15.00 Y:195.00 Z:0.00 E:0.00"
     transport = ScriptedTransport(
         [
-            line("M5", "ok"),
+            *marlin_connect_steps(),
             line("M115", identity_line, "ok"),
             line("M114", position_line, "ok"),
             *disconnect_steps(),
@@ -475,8 +501,7 @@ def test_grbl_home_park_uses_acknowledged_home_and_two_coordinate_snapshots(
     assert machine.status()["coordinate_reference_ready"] is True
     assert machine.status()["jog_position_mm"] == {"x": 15.0, "y": 195.0}
     assert transport.writes == [
-        ("line", "$$"),
-        ("line", "M5"),
+        *[(step.channel, step.payload) for step in grbl_connect_steps()],
         *[(step.channel, step.payload) for step in operation_steps],
     ]
 
@@ -522,6 +547,7 @@ def test_grbl_home_without_ok_requires_active_then_idle_before_parking(
     assert [payload for channel, payload in transport.writes if channel == "raw"] == [
         b"?",
         b"?",
+        b"?",
     ]
 
     machine.disconnect()
@@ -560,7 +586,7 @@ def test_job_start_home_establishes_coordinates_without_photo_parking(
     home_steps: list[ExpectedWrite],
     expected_writes: list[str],
 ) -> None:
-    connect = grbl_connect_steps() if protocol == "grbl" else [line("M5", "ok")]
+    connect = grbl_connect_steps() if protocol == "grbl" else marlin_connect_steps()
     transport = ScriptedTransport(
         [*connect, *home_steps, *disconnect_steps()]
     )
@@ -616,7 +642,7 @@ def test_dry_marlin_stream_waits_for_m400_before_success(
     ]
     transport = ScriptedTransport(
         [
-            line("M5", "ok"),
+            *marlin_connect_steps(),
             *setup_steps,
             *stream_steps,
             *disconnect_steps(),
@@ -836,7 +862,7 @@ def test_powered_marlin_stream_has_complete_home_park_release_transcript(
     ]
     transport = ScriptedTransport(
         [
-            line("M5", "ok"),
+            *marlin_connect_steps(),
             *job_start_steps,
             *stream_steps,
             *disconnect_steps(),
@@ -885,7 +911,7 @@ def test_powered_marlin_stream_has_complete_home_park_release_transcript(
         ),
         (
             "marlin",
-            [line("M5", "ok")],
+            marlin_connect_steps(),
             [line("M112"), line("M5")],
             [("line", "M112"), ("line", "M5")],
         ),
@@ -898,9 +924,7 @@ def test_emergency_stop_is_protocol_specific_and_m5_is_last(
     emergency: list[ExpectedWrite],
     expected_stop: list[tuple[Channel, Payload]],
 ) -> None:
-    transport = ScriptedTransport(
-        [*connect, *emergency, *disconnect_steps()]
-    )
+    transport = ScriptedTransport([*connect, *emergency])
     install_transports(monkeypatch, transport)
     machine = MachineService(
         machine_settings(protocol),
@@ -914,7 +938,7 @@ def test_emergency_stop_is_protocol_specific_and_m5_is_last(
 
     assert transport.writes[before_stop:] == expected_stop
     status = machine.status()
-    assert status["connected"] is True
+    assert status["connected"] is False
     assert status["controller_reconnect_required"] is True
     assert status["coordinate_reference_ready"] is False
     assert status["armed"] is False
@@ -937,7 +961,7 @@ def test_stop_during_active_job_cancels_stream_without_receipt(
     ]
     transport = ScriptedTransport(
         [
-            line("M5", "ok"),
+            *marlin_connect_steps(),
             line("M5", "ok"),
             line("G28", "ok"),
             line("G21", "ok"),
@@ -947,7 +971,6 @@ def test_stop_during_active_job_cancels_stream_without_receipt(
             line("M5"),
             line("M5"),
             line("M5"),
-            *disconnect_steps(),
         ]
     )
     install_transports(monkeypatch, transport)
@@ -987,13 +1010,16 @@ def test_stop_during_active_job_cancels_stream_without_receipt(
 def test_connection_write_failure_attempts_m5_then_closes_without_authority(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    transport = ScriptedTransport(
-        [
-            line("M5", error=OSError("controller write failed")),
-            line("M5"),
-        ]
+    transports = tuple(
+        ScriptedTransport(
+            [
+                line("M115", error=OSError("controller write failed")),
+                line("M5"),
+            ]
+        )
+        for _attempt in range(3)
     )
-    factory_calls = install_transports(monkeypatch, transport)
+    factory_calls = install_transports(monkeypatch, *transports)
     machine = MachineService(
         machine_settings("marlin"),
         LaserSettings(),
@@ -1003,25 +1029,27 @@ def test_connection_write_failure_attempts_m5_then_closes_without_authority(
     with pytest.raises(MachineError, match="failed while writing"):
         machine.connect()
 
-    assert factory_calls == [("serial", "scripted-controller", 115200)]
-    assert transport.writes == [("line", "M5"), ("line", "M5")]
-    assert transport.events[-1] == ("close", None)
+    assert factory_calls == [("serial", "scripted-controller", 115200)] * 3
+    for transport in transports:
+        assert transport.writes == [("line", "M115"), ("line", "M5")]
+        assert transport.events[-1] == ("close", None)
     status = machine.status()
     assert status["connected"] is False
     assert status["controller_reconnect_required"] is False
     assert status["coordinate_reference_ready"] is False
     assert status["armed"] is False
-    transport.assert_complete()
+    for transport in transports:
+        transport.assert_complete()
 
 
 def test_initial_transient_open_failure_gets_one_fresh_transport_retry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     first = ScriptedTransport(
-        [],
+        [line("M5")],
         open_error=TransientConnectionError("temporary bridge failure"),
     )
-    second = ScriptedTransport([line("M5", "ok"), *disconnect_steps()])
+    second = ScriptedTransport([*marlin_connect_steps(), *disconnect_steps()])
     factory_calls = install_transports(monkeypatch, first, second)
     machine = MachineService(
         machine_settings("marlin"),

@@ -219,6 +219,7 @@ def test_remote_service_to_pi_controller_owns_and_completes_exact_job(
     fresh_remote: RemoteMachineService | None = None
     try:
         remote.connect()
+        remote.prepare_job_start()
         program = remote.preflight_program(
             _POWERED_PROGRAM,
             guarded_output_polygon_mm=_OUTPUT_POLYGON,
@@ -428,6 +429,7 @@ def test_windows_detach_does_not_change_pi_owned_secondary_fan(
     )
     try:
         remote.connect()
+        remote.prepare_job_start()
         program = remote.preflight_program(
             secondary_program,
             guarded_output_polygon_mm=_OUTPUT_POLYGON,

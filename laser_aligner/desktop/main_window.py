@@ -136,6 +136,7 @@ from .job_preview import (
 )
 from .machine_manager import MachineManagerDialog
 from .machine_setup import MachineSetupDialog
+from .machine_state import ControllerUiState, project_machine_state
 from .panels import (
     CameraPanel,
     ConsolePanel,
@@ -404,6 +405,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self._busy = False
         self._controller_busy = False
         self._job_preparation_busy = False
+        self._machine_status: dict[str, Any] = {}
+        self._machine_ui_state: ControllerUiState = project_machine_state(None)
         self._job_preparation_label = ""
         self._job_preparation_owner: tuple[str, int] | None = None
         self._job_request_id = 0
@@ -3295,6 +3298,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         dialog.runRequested.connect(
             lambda target=dialog: self._run_from_job_preview(target)
         )
+        self._sync_job_preview_machine_gate(dialog)
         if deferred:
             dialog.renderProgress.connect(
                 lambda completed, total, request_id=request_id: (
@@ -4341,6 +4345,14 @@ class E3MainWindow(QtWidgets.QMainWindow):
             return
 
         machine = self.runtime.context.machine.status()
+        machine_ui_state = project_machine_state(
+            machine,
+            operation_busy=self._controller_busy or self._job_preparation_busy,
+        )
+        if not machine_ui_state.can_start_job:
+            self.show_error(machine_ui_state.blocked_reason("START JOB"))
+            self._sync_job_preview_machine_gate()
+            return
         phrase: str | None = None
         if self.last_job_powered:
             phrase = str(machine.get("arm_phrase", "ENABLE LASER CONTROL"))
@@ -4385,7 +4397,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "Preparing and uploading the exact job to the Raspberry Pi…"
             )
         elif self.runtime.settings.machine.backend == "serial":
-            self.show_notice("Homing and parking before job start…")
+            self.show_notice("Starting the exact validated controller job…")
 
     @staticmethod
     def _grid_spec_from_template(
@@ -4907,6 +4919,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         )
 
     def _detect_trace_objects(self, raw_options: dict[str, Any]) -> None:
+        state = project_machine_state(
+            self.runtime.context.machine.status(),
+            operation_busy=self._controller_busy or self._job_preparation_busy,
+        )
+        if not state.can_motion_calibration:
+            self.show_error(state.blocked_reason("Detect objects"))
+            return
         # A new request immediately retires any old, non-project candidate
         # overlays. Workspace project objects are owned separately and remain.
         E3MainWindow._retire_trace_preview_ui(self)
@@ -5877,12 +5896,31 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.camera_panel.set_calibration_ready(calibration_ready)
         self.trace_panel.set_calibration_ready(calibration_ready)
         self.template_panel.set_calibration_ready(calibration_ready)
-        self.machine_panel.set_status(machine)
+        self._machine_status = dict(machine or {})
+        self._machine_ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=(
+                getattr(self, "_controller_busy", False)
+                or getattr(self, "_job_preparation_busy", False)
+            ),
+        )
+        self.trace_panel.set_machine_state(self._machine_ui_state)
+        self.machine_panel.set_status(self._machine_status)
         self.runtime_strip.set_status(status)
         if machine:
+            self.console_panel.set_status(self._machine_status)
             self.console_panel.set_lines(list(machine.get("log", [])))
             self.job_progress.set_machine_status(machine)
             self.job_progress.set_job_status(machine.get("job"))
+        else:
+            self.console_panel.set_status(None)
+        setup_dialog = self._machine_setup_dialog
+        if setup_dialog is not None:
+            setup_dialog.set_machine_status(self._machine_status)
+        manager_dialog = self._machine_manager_dialog
+        if manager_dialog is not None:
+            manager_dialog.set_running_status(self._machine_status)
+        self._sync_job_preview_machine_gate()
         if state == "running":
             camera_state = "camera online" if camera and camera.get("connected") else "camera offline"
             machine_job = (machine or {}).get("job") or {}
@@ -5894,11 +5932,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             ):
                 machine_state = "Pi job running · connection lost"
             else:
-                machine_state = (
-                    f"{machine.get('protocol')} connected"
-                    if machine and machine.get("connected")
-                    else "controller offline"
-                )
+                machine_state = self._machine_ui_state.connection_text.lower()
             self.runtime_label.setText(f"{camera_state} · {machine_state}")
         else:
             self.runtime_label.setText(f"Runtime {state}")
@@ -6103,6 +6137,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.template_panel.set_busy(busy)
         self.machine_panel.set_busy(busy)
         self.runtime_strip.set_busy(busy)
+        self.console_panel.set_busy(busy)
+        self._machine_ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=busy,
+        )
+        self.trace_panel.set_machine_state(self._machine_ui_state)
+        self._sync_job_preview_machine_gate()
         if self._job_preparation_busy:
             self.statusBar().showMessage(
                 self._job_preparation_label or "Preparing exact job preview…"
@@ -6112,6 +6153,22 @@ class E3MainWindow(QtWidgets.QMainWindow):
                 "Working…" if self._controller_busy else "",
                 0 if self._controller_busy else 1000,
             )
+
+    def _sync_job_preview_machine_gate(
+        self,
+        dialog: JobPreviewDialog | None = None,
+    ) -> None:
+        target = dialog or self._job_preview_dialog
+        if target is None:
+            return
+        state = project_machine_state(
+            self._machine_status,
+            operation_busy=self._controller_busy or self._job_preparation_busy,
+        )
+        target.set_run_enabled(
+            state.can_start_job,
+            "" if state.can_start_job else state.blocked_reason("START JOB"),
+        )
 
 
     def _refresh_machine_selector(self, selected_id: str | None = None) -> None:
@@ -6178,6 +6235,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
     ) -> None:
         dialog = MachineManagerDialog(self.runtime, self)
         self._machine_manager_dialog = dialog
+        if self._machine_status:
+            dialog.set_running_status(self._machine_status)
         dialog.registryChanged.connect(self._refresh_machine_selector)
         try:
             if focus_honeycomb_span:
@@ -6222,6 +6281,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             navigation_only=navigation_target is not None,
         )
         self._machine_setup_dialog = dialog
+        if self._machine_status:
+            dialog.set_machine_status(self._machine_status)
         dialog.tabs.setCurrentIndex(tab_index)
         if navigation_target is not None:
             QtCore.QTimer.singleShot(

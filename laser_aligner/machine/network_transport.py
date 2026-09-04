@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from urllib.parse import urlsplit
 
 from ..errors import MachineError, TransientConnectionError
+from .transport import InputSynchronizationEvidence
 
 _BRIDGE_SCHEME = "e3bridge"
 _BRIDGE_VERSION = "E3BRIDGE/1"
@@ -137,6 +138,15 @@ class NetworkSerialTransport:
     @property
     def is_open(self) -> bool:
         return self._socket is not None
+
+    @property
+    def configured_endpoint(self) -> str:
+        return self.address
+
+    @property
+    def resolved_endpoint(self) -> str:
+        target = parse_bridge_uri(self.address)
+        return f"{target.host}:{target.port}"
 
     def open(self) -> None:
         if self.is_open:
@@ -289,3 +299,69 @@ class NetworkSerialTransport:
                     continue
                 if not self._receive_available(0.0):
                     return lines
+
+    def synchronize_input(
+        self,
+        *,
+        quiet_interval: float = 0.15,
+        timeout: float = 0.75,
+    ) -> InputSynchronizationEvidence:
+        """Discard framed/network-buffered RX until the bridge stays quiet.
+
+        A local POSIX endpoint additionally purges the kernel TTY queue.  At
+        this network boundary we can only prove quiet on the authenticated
+        bridge stream, so callers retain the endpoint type in their evidence.
+        """
+
+        if quiet_interval <= 0 or timeout <= 0 or quiet_interval > timeout:
+            raise ValueError(
+                "Bridge synchronization needs a positive quiet interval no longer than its timeout"
+            )
+        started = time.monotonic()
+        deadline = started + timeout
+        discarded_bytes = 0
+        discarded_lines = 0
+        observed_activity = False
+        with self._read_lock:
+            discarded_bytes += len(self._buffer)
+            discarded_lines += sum(
+                1 for byte in self._buffer if byte in {10, 13}
+            )
+            self._buffer.clear()
+            quiet_started = time.monotonic()
+            while True:
+                now = time.monotonic()
+                if now - quiet_started >= quiet_interval:
+                    return InputSynchronizationEvidence(
+                        configured_endpoint=self.configured_endpoint,
+                        resolved_endpoint=self.resolved_endpoint,
+                        quiet_interval_seconds=quiet_interval,
+                        elapsed_seconds=now - started,
+                        discarded_bytes=discarded_bytes,
+                        discarded_lines=discarded_lines,
+                        observed_activity=observed_activity,
+                    )
+                remaining = deadline - now
+                if remaining <= 0:
+                    raise MachineError(
+                        "E3 bridge input did not become quiet before the synchronization deadline"
+                    )
+                sock = self._require_socket()
+                wait = min(quiet_interval - (now - quiet_started), remaining)
+                try:
+                    readable, _, _ = select.select([sock], [], [], wait)
+                    if not readable:
+                        continue
+                    chunk = sock.recv(4096)
+                except OSError as exc:
+                    raise MachineError(
+                        f"E3 bridge synchronization read failed: {exc}"
+                    ) from exc
+                if not chunk:
+                    raise MachineError(
+                        "E3 bridge connection closed while synchronizing input"
+                    )
+                observed_activity = True
+                discarded_bytes += len(chunk)
+                discarded_lines += sum(1 for byte in chunk if byte in {10, 13})
+                quiet_started = time.monotonic()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from .machine_state import ControllerUiState, project_machine_state
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -48,12 +49,8 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self._mode_description = "Machine backend without process-level hardware access."
         self._busy = False
         self._wrapped = False
-        self._connecting = False
-        self._connected = False
-        self._motion_enabled = False
-        self._coordinate_reference_ready = False
-        self._reconnect_required = False
-        self._serial_backend = False
+        self._machine_status: Mapping[str, Any] = {}
+        self._ui_state = project_machine_state(None)
 
         layout = QtWidgets.QGridLayout(self)
         self._layout = layout
@@ -153,7 +150,6 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
 
         machine = self._machine_payload(status)
         backend = str(machine.get("backend", "")).strip().lower()
-        self._serial_backend = backend == "serial"
         hardware_enabled = bool(machine.get("hardware_enabled", False))
         laser_lockout = bool(machine.get("laser_lockout", False))
 
@@ -175,14 +171,10 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             self._mode_description = (
                 f"{backend or 'Machine'} backend without process-level hardware access."
             )
-        self._connecting = bool(machine.get("connecting", False))
-        self._connected = bool(machine.get("connected", False))
-        self._motion_enabled = bool(machine.get("allow_motion", False))
-        self._coordinate_reference_ready = bool(
-            machine.get("coordinate_reference_ready", False)
-        )
-        self._reconnect_required = bool(
-            machine.get("controller_reconnect_required", False)
+        self._machine_status = dict(machine)
+        self._ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=self._busy,
         )
         self._render_status()
 
@@ -191,40 +183,40 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         self.stop_button.setEnabled(True)
 
     def _connect_clicked(self) -> None:
-        if self._connected and self._reconnect_required:
+        if self._ui_state.controller_state == "RECONNECT_REQUIRED":
             self.reconnectRequested.emit()
         else:
             self.connectRequested.emit()
 
     def _sync_primary_controls(self) -> None:
-        reconnect_available = self._connected and self._reconnect_required
+        state = self._ui_state.with_busy(self._busy)
+        reconnect_available = state.controller_state == "RECONNECT_REQUIRED"
         self.connect_button.setText(
             "Reconnect" if reconnect_available else "Connect"
         )
-        self.connect_button.setEnabled(
-            not self._busy
-            and not self._connecting
-            and (not self._connected or reconnect_available)
-        )
+        self.connect_button.setEnabled(state.can_connect or state.can_reconnect)
         self.connect_button.setToolTip(
-            "Explicitly disconnect this untrusted session and connect again; "
-            "Home / park will still be required"
+            "Replace this untrusted controller session; Home / park will still "
+            "be required"
             if reconnect_available
-            else "Connect to the configured controller"
+            else (
+                "Connect to the configured controller"
+                if state.can_connect
+                else state.blocked_reason("Connect")
+            )
         )
-        self.disconnect_button.setEnabled(
-            not self._busy and not self._connecting and self._connected
-        )
+        self.disconnect_button.setEnabled(state.can_disconnect)
         self.disconnect_button.setToolTip(
-            "Disconnect this untrusted controller session before reconnecting"
-            if self._reconnect_required
-            else "Disconnect the controller"
+            "Disconnect the controller"
+            if state.can_disconnect
+            else state.blocked_reason("Disconnect")
         )
         # Pause/resume remains presentation-only and unavailable until the
         # controller's realtime hold behavior is physically validated.
         self.pause_button.setEnabled(False)
 
     def _render_status(self) -> None:
+        state: ControllerUiState = self._ui_state.with_busy(self._busy)
         self.heading.setVisible(not self._compact and not self._chrome_mode)
         if self._chrome_mode:
             self.stop_button.setText(_CHROME_STOP_TEXT)
@@ -252,64 +244,57 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         )
 
         connection_text = (
-            "ONLINE" if self._connected else "OFFLINE"
-        ) if self._compact or self._chrome_mode else (
-            "Connected" if self._connected else "Disconnected"
+            state.compact_connection_text
+            if self._compact or self._chrome_mode
+            else state.connection_text
+        )
+        connection_description = (
+            "Raspberry Pi controller status is unavailable or stale."
+            if state.remote and not state.node_reachable
+            else f"Authoritative controller state: {state.controller_state}."
         )
         self._set_indicator(
             self.connection_label,
             connection_text,
-            "statusGood" if self._connected else "statusBad",
-            "Controller connection is active."
-            if self._connected
-            else "Controller is disconnected.",
+            state.connection_style,
+            connection_description,
         )
 
-        reference_required = (
-            self._serial_backend
-            and self._connected
-            and self._motion_enabled
-            and not self._coordinate_reference_ready
+        motion_text = (
+            state.compact_motion_text
+            if self._compact or self._chrome_mode
+            else state.motion_text
         )
-        if self._connected and self._reconnect_required:
-            motion_text = (
-                "RECONNECT REQUIRED"
-                if self._compact or self._chrome_mode
-                else "Reconnect required"
-            )
-            motion_style = "statusBad"
+        if not state.status_trusted:
             motion_description = (
-                "Controller command ordering is no longer trusted. Disconnect and "
-                "reconnect before Home / park or job execution."
+                "Motion authority is unknown and all controller actions except "
+                "Software STOP are blocked."
             )
-        elif reference_required:
-            motion_text = (
-                "HOME REQUIRED"
-                if self._compact or self._chrome_mode
-                else "Home required"
+        elif state.controller_state == "RECONNECT_REQUIRED":
+            motion_description = (
+                "Controller command ordering is no longer trusted. Reconnect before "
+                "Home / park or job execution."
             )
-            motion_style = "statusBad"
+        elif state.controller_state == "READY_HOME_REQUIRED":
             motion_description = (
                 "Absolute machine motion is blocked until Home / park establishes "
                 "the coordinate reference for this controller session."
             )
-        else:
-            motion_text = (
-                "MOTION READY" if self._motion_enabled else "MOTION OFF"
-            ) if self._compact or self._chrome_mode else (
-                "Motion ready" if self._motion_enabled else "Motion blocked"
-            )
-            motion_style = "statusWarning" if self._motion_enabled else "statusGood"
+        elif state.controller_state == "READY_MOTION" and state.allow_motion:
             motion_description = (
-                "Configuration permits guarded machine motion and the required "
-                "coordinate reference is ready."
-                if self._motion_enabled
+                "The synchronized controller session has a current Home / park "
+                "reference and configuration permits guarded motion."
+            )
+        else:
+            motion_description = (
+                f"Motion is unavailable in controller state {state.controller_state}."
+                if state.allow_motion
                 else "Configuration blocks machine motion."
             )
         self._set_indicator(
             self.motion_label,
             motion_text,
-            motion_style,
+            state.motion_style,
             motion_description,
         )
         self._sync_primary_controls()
@@ -449,5 +434,9 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
 
         self._busy = bool(busy)
         self.setProperty("busy", self._busy)
-        self._sync_primary_controls()
+        self._ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=self._busy,
+        )
+        self._render_status()
         self.stop_button.setEnabled(True)

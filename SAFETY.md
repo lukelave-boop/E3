@@ -192,12 +192,24 @@ guarded output polygon, motion and power flags, and the normal `MachineService`
 Ordinary serial operations own their complete command/ack exchange, and
 multi-command Home / park and camera-hold sequences cannot interleave with
 another ordinary controller operation. Connect is not reported ready until its
-controller cleanup finishes. A GRBL Connect may unlock only an exact consumed
-`error:9` rejection of its laser-off command, only when Home / park is mandatory,
-and must then receive acknowledgement for a second `M5`. It performs no motion
-and does not establish coordinate trust. Software stop remains outside this
-serialization so it can still request interruption immediately. These are
-protocol-integrity guards, not emergency-stop or functional-safety mechanisms.
+private candidate has established a quiet receive boundary, positively
+identified GRBL, acknowledged `M5`, validated the finite step-idle setting, and
+completed modal, coordinate-offset, and realtime-state queries. A GRBL Connect
+may unlock only an exact consumed `error:9` rejection of its laser-off command,
+only when Home / park is mandatory, and must then receive acknowledgement for a
+second `M5`. It performs no motion and does not establish coordinate trust.
+
+Software STOP remains outside ordinary serialization so it can request
+interruption immediately. It permanently quarantines the exact old controller
+session, revokes coordinate/arming/job authority, and may begin a bounded fresh
+communication-only recovery. Recovery never Homes, moves, arms, enables output,
+enables Air Assist, or resumes work. A synchronized replacement remains **HOME
+REQUIRED** until the operator explicitly completes Home / park once. Any
+uncertain write, read, acknowledgement, framing, or ownership result also closes
+that exact generation rather than retrying on a possibly shifted response
+stream. These are protocol-integrity guards, not emergency-stop or
+functional-safety mechanisms; USB, Pi, process, network, and controller faults
+can still prevent software commands from arriving.
 
 Fine registration may apply only a reviewed, multi-point global camera-map
 translation no larger than 5 mm. Low-confidence, excessive, or

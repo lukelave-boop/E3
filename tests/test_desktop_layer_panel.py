@@ -668,6 +668,9 @@ def test_runtime_status_refreshes_recipes_from_running_identity(
         runtime_label=Sink(),
         _update_status_bar_layout=lambda: None,
         _maybe_start_calibration_capture=lambda machine: None,
+        _machine_setup_dialog=None,
+        _machine_manager_dialog=None,
+        _sync_job_preview_machine_gate=lambda: None,
     )
 
     E3MainWindow._runtime_status(

@@ -16,6 +16,7 @@ from laser_aligner.air_assist import (
 from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.errors import SafetyError
 from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
+from laser_aligner.machine.controller_session import ControllerState
 from laser_aligner.machine.secondary_controller import (
     CrealityControllerOwner,
     SecondaryMarlinFanController,
@@ -275,6 +276,14 @@ def _connected_machine(
         "g92_offset_mm": [0.0, 0.0, 0.0],
     }
     machine._jog_position_mm = (0.0, 0.0)
+    with machine._lock:
+        session = machine._session
+        assert session is not None
+        machine._coordinate_reference_session_generation = session.generation
+        machine._set_controller_state_locked(
+            ControllerState.READY_MOTION,
+            session=session,
+        )
     return machine, transport
 
 

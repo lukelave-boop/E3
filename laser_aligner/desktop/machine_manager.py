@@ -14,6 +14,10 @@ from ..errors import MachineError
 from ..machine.controller_dialects import CONTROLLER_DIALECT_REGISTRY
 from ..machine.network_transport import is_bridge_uri, parse_bridge_uri
 from ..machine.profiles import MachineInstance, MachineRegistryError
+from .machine_state import (
+    format_running_controller_diagnostics,
+    project_machine_state,
+)
 from .qt import require_qt
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -235,6 +239,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self._current_machine_id: str | None = None
         self._working_machine: MachineInstance | None = None
         self._loading = False
+        self._running_status: dict[str, Any] = {}
         self._navigation_highlighted_widget: QtWidgets.QWidget | None = None
         self.setWindowTitle("Machine Manager")
         self.setModal(True)
@@ -295,6 +300,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         splitter.setSizes([380, 660])
 
         self._build_identity_group()
+        self._build_running_diagnostics_group()
         self._build_connection_group()
         self._build_air_assist_group()
         self._build_geometry_group()
@@ -322,6 +328,78 @@ class MachineManagerDialog(QtWidgets.QDialog):
         self.close_button.clicked.connect(self.accept)
 
         self._reload_list(self.running_machine_id)
+        self._refresh_running_diagnostics()
+
+    def _build_running_diagnostics_group(self) -> None:
+        group = QtWidgets.QGroupBox("Running controller diagnostics (read-only)")
+        layout = QtWidgets.QVBoxLayout(group)
+        self.running_controller_summary = QtWidgets.QLabel()
+        self.running_controller_summary.setWordWrap(True)
+        self.running_controller_summary.setObjectName("runningControllerSummary")
+        layout.addWidget(self.running_controller_summary)
+        self.running_controller_diagnostics = QtWidgets.QPlainTextEdit()
+        self.running_controller_diagnostics.setObjectName(
+            "runningControllerDiagnostics"
+        )
+        self.running_controller_diagnostics.setReadOnly(True)
+        self.running_controller_diagnostics.setMaximumBlockCount(500)
+        self.running_controller_diagnostics.setLineWrapMode(
+            QtWidgets.QPlainTextEdit.LineWrapMode.NoWrap
+        )
+        self.running_controller_diagnostics.setMaximumHeight(220)
+        layout.addWidget(self.running_controller_diagnostics)
+        actions = QtWidgets.QHBoxLayout()
+        self.refresh_diagnostics_button = QtWidgets.QPushButton("Refresh status")
+        self.copy_diagnostics_button = QtWidgets.QPushButton("Copy diagnostics")
+        self.refresh_diagnostics_button.setToolTip(
+            "Read the current in-memory controller status; this sends no command."
+        )
+        self.copy_diagnostics_button.setToolTip(
+            "Copy the bounded, sanitized running-controller status."
+        )
+        actions.addWidget(self.refresh_diagnostics_button)
+        actions.addWidget(self.copy_diagnostics_button)
+        actions.addStretch(1)
+        layout.addLayout(actions)
+        self.refresh_diagnostics_button.clicked.connect(
+            self._refresh_running_diagnostics
+        )
+        self.copy_diagnostics_button.clicked.connect(
+            self.copy_running_controller_diagnostics
+        )
+        self.editor_layout.addWidget(group)
+
+    def _refresh_running_diagnostics(self) -> None:
+        try:
+            status = self.runtime.context.machine.status()
+        except Exception as exc:
+            self.running_controller_summary.setText(
+                f"Running controller status unavailable: {exc}"
+            )
+            self.running_controller_diagnostics.clear()
+            self.copy_diagnostics_button.setEnabled(False)
+            return
+        self.set_running_status(status)
+
+    def set_running_status(self, status: dict[str, Any] | None) -> None:
+        self._running_status = dict(status or {})
+        state = project_machine_state(self._running_status)
+        self.running_controller_summary.setText(
+            state.panel_summary(self._running_status.get("protocol", "unknown"))
+        )
+        text = format_running_controller_diagnostics(self._running_status)
+        if text != self.running_controller_diagnostics.toPlainText():
+            self.running_controller_diagnostics.setPlainText(text)
+        self.copy_diagnostics_button.setEnabled(bool(text))
+
+    def copy_running_controller_diagnostics(self) -> None:
+        text = self.running_controller_diagnostics.toPlainText()
+        if not text:
+            return
+        clipboard = QtWidgets.QApplication.clipboard()
+        if clipboard is not None:
+            clipboard.setText(text)
+            self.status_label.setText("Copied sanitized running-controller diagnostics.")
 
     def _build_identity_group(self) -> None:
         group = QtWidgets.QGroupBox("Machine identity and profile defaults")

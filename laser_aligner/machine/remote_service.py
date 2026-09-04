@@ -34,9 +34,12 @@ from .pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
+    CAPABILITY_PI_STRUCTURED_ERRORS,
     MAX_JOB_BYTES,
     MAX_UPLOAD_CHUNK_BYTES,
     PROTOCOL_VERSION,
@@ -70,6 +73,7 @@ from .pi_machine_server import (
 from .service import MachineService, ValidatedProgram
 
 _DEFAULT_RPC_TIMEOUT_SECONDS = 130.0
+_CONNECT_RPC_TIMEOUT_SECONDS = 20.0
 _MONITOR_RPC_TIMEOUT_SECONDS = 0.75
 _STOP_RPC_TIMEOUT_SECONDS = 1.0
 _SHUTDOWN_DISCONNECT_TIMEOUT_SECONDS = 0.75
@@ -83,6 +87,23 @@ _MAX_LOCAL_JOB_IDENTITIES = 32
 _START_RECOVERY_POLL_SECONDS = 2.0
 _START_RECOVERY_POLL_INTERVAL_SECONDS = 0.1
 _PROGRAM_DIGEST_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+_STRUCTURED_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_ACTION_REQUIRED_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_CONTROLLER_STATES = frozenset(
+    {
+        "DISCONNECTED",
+        "OPENING",
+        "SYNCHRONIZING",
+        "READY_HOME_REQUIRED",
+        "READY_MOTION",
+        "JOB_RUNNING",
+        "STOPPING",
+        "RECOVERING",
+        "RECONNECT_REQUIRED",
+        "FAULTED",
+        "SHUTTING_DOWN",
+    }
+)
 _ACTIVE_JOB_STATES = frozenset({"starting", "running", "stopping"})
 _TERMINAL_JOB_STATES = frozenset(
     {"complete", "failed", "stopped", "interrupted", "deleted"}
@@ -91,12 +112,40 @@ _CLIENT_POLICY_MISMATCH_ERROR = (
     "Windows and Pi machine-safety settings do not match. "
     "Open Machine Setup / Machine Manager or inspect node diagnostics."
 )
+_SESSION_MUTATING_ACTIONS = frozenset(
+    {
+        ACTION_MACHINE_CONNECT,
+        ACTION_MACHINE_DISCONNECT,
+        ACTION_MACHINE_JOG,
+        ACTION_MACHINE_PREPARE_JOB_START,
+        ACTION_MACHINE_PREPARE_PHOTO_POSITION,
+        ACTION_MACHINE_REALTIME_POSITION,
+        ACTION_MACHINE_REPLACE_CONNECTION,
+        ACTION_MACHINE_COMMAND,
+        ACTION_MACHINE_STEPPER_HOLD,
+        ACTION_JOB_START,
+    }
+)
 
 LOGGER = logging.getLogger(__name__)
 
 
 class _RemoteRequestRejected(MachineError):
     """The Pi returned a complete, authenticated rejection response."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str | None = None,
+        retryable: bool = False,
+        action_required: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.code = error_code
+        self.retryable = retryable
+        self.action_required = action_required
 
 
 def _polygon_payload(
@@ -188,6 +237,16 @@ class RemoteMachineService:
         self._shutdown_idle_disconnect_allowed: bool | None = None
         self._capabilities_verified = False
         self._policy_diagnostics_supported = False
+        self._session_metadata_supported = False
+        self._structured_errors_supported = False
+        self._coherent_status_supported = False
+        self._client_id = str(uuid.uuid4())
+        self._node_boot_id: str | None = None
+        self._node_build: dict[str, str] | None = None
+        self._node_capabilities: tuple[str, ...] | None = None
+        self._controller_state_revision: int | None = None
+        self._controller_session_generation: int | None = None
+        self._controller_state: str | None = None
 
         self._hold_lock = threading.RLock()
         self._hold_context = threading.local()
@@ -206,6 +265,11 @@ class RemoteMachineService:
                 "monitor_connected": False,
                 "status_stale": True,
                 "status_error": None,
+                "node_boot_id": None,
+                "node_build": None,
+                "node_capabilities": None,
+                "state_revision": None,
+                "controller_session_generation": None,
             }
         )
         status["job"] = self._normalize_job(status.get("job"))
@@ -296,8 +360,8 @@ class RemoteMachineService:
     def _request_id() -> str:
         return str(uuid.uuid4())
 
-    @staticmethod
     def _validate_response(
+        self,
         response: object,
         *,
         request_id: str,
@@ -320,12 +384,166 @@ class RemoteMachineService:
             )
             if detail == EXECUTION_POLICY_MISMATCH_ERROR:
                 detail = _CLIENT_POLICY_MISMATCH_ERROR
-            raise _RemoteRequestRejected(detail)
+            error_code = response.get("error_code")
+            retryable = response.get("retryable", False)
+            action_required = response.get("action_required")
+            with self._state_lock:
+                structured = self._structured_errors_supported
+                session_metadata = self._session_metadata_supported
+            if structured and (
+                type(error_code) is not str
+                or _STRUCTURED_CODE_PATTERN.fullmatch(error_code) is None
+                or type(retryable) is not bool
+                or (
+                    action_required is not None
+                    and (
+                        type(action_required) is not str
+                        or _ACTION_REQUIRED_PATTERN.fullmatch(action_required) is None
+                    )
+                )
+            ):
+                raise PiJobProtocolError(
+                    f"Remote {action} rejection omitted structured error metadata"
+                )
+            if session_metadata:
+                self._response_metadata(response, required=True)
+            raise _RemoteRequestRejected(
+                detail,
+                error_code=error_code if type(error_code) is str else None,
+                retryable=retryable is True,
+                action_required=(
+                    action_required if type(action_required) is str else None
+                ),
+            )
         if response.get("ok") is not True:
             raise PiJobProtocolError(
                 f"Remote {action} response omitted an exact success flag"
             )
         return response
+
+    def _response_metadata(
+        self,
+        response: Mapping[str, Any],
+        *,
+        required: bool | None = None,
+    ) -> tuple[str, int, int, str, dict[str, str]] | None:
+        if required is None:
+            with self._state_lock:
+                required = self._session_metadata_supported
+        fields = (
+            response.get("boot_id"),
+            response.get("state_revision"),
+            response.get("controller_session_generation"),
+            response.get("controller_state"),
+            response.get("build"),
+        )
+        if not required and all(value is None for value in fields):
+            return None
+        if response.get("protocol_version") != PROTOCOL_VERSION:
+            raise PiJobProtocolError(
+                "Remote response contained an invalid protocol version"
+            )
+        boot_id, state_revision, session_generation, controller_state, raw_build = fields
+        try:
+            canonical_boot_id = str(uuid.UUID(boot_id)) if type(boot_id) is str else ""
+        except ValueError:
+            canonical_boot_id = ""
+        if canonical_boot_id != boot_id:
+            raise PiJobProtocolError("Remote response contained an invalid Pi boot ID")
+        if type(state_revision) is not int or state_revision < 0:
+            raise PiJobProtocolError("Remote response contained an invalid state revision")
+        if type(session_generation) is not int or session_generation < 0:
+            raise PiJobProtocolError(
+                "Remote response contained an invalid controller-session generation"
+            )
+        if (
+            type(controller_state) is not str
+            or controller_state not in _CONTROLLER_STATES
+        ):
+            raise PiJobProtocolError("Remote response contained an invalid controller state")
+        if not isinstance(raw_build, Mapping):
+            raise PiJobProtocolError("Remote response contained invalid build identity")
+        version = raw_build.get("version")
+        revision = raw_build.get("revision")
+        if (
+            type(version) is not str
+            or not version
+            or len(version) > 128
+            or type(revision) is not str
+            or not revision
+            or len(revision) > 128
+        ):
+            raise PiJobProtocolError("Remote response contained invalid build identity")
+        return (
+            boot_id,
+            state_revision,
+            session_generation,
+            controller_state,
+            {"version": version, "revision": revision},
+        )
+
+    def _commit_response_metadata(
+        self,
+        response: Mapping[str, Any],
+        *,
+        required: bool | None = None,
+    ) -> tuple[bool, bool]:
+        metadata = self._response_metadata(response, required=required)
+        if metadata is None:
+            return True, False
+        boot_id, state_revision, session_generation, controller_state, build = metadata
+        with self._state_lock:
+            previous_boot = self._node_boot_id
+            boot_changed = previous_boot is not None and previous_boot != boot_id
+            if previous_boot == boot_id:
+                if self._node_build is not None and self._node_build != build:
+                    raise PiJobProtocolError(
+                        "Remote response changed build identity without a Pi restart"
+                    )
+                if (
+                    self._controller_state_revision is not None
+                    and state_revision < self._controller_state_revision
+                ) or (
+                    self._controller_session_generation is not None
+                    and session_generation < self._controller_session_generation
+                ):
+                    return False, False
+                if (
+                    self._controller_state_revision == state_revision
+                    and self._controller_state is not None
+                    and controller_state != self._controller_state
+                ):
+                    raise PiJobProtocolError(
+                        "Remote response changed controller state without a new revision"
+                    )
+            if boot_changed:
+                self._capabilities_verified = False
+                self._policy_diagnostics_supported = False
+                self._structured_errors_supported = False
+                self._coherent_status_supported = False
+                self._node_capabilities = None
+                self._authorization_epoch += 1
+                self._clear_arm_locked()
+            self._node_boot_id = boot_id
+            self._node_build = build
+            self._controller_state_revision = state_revision
+            self._controller_session_generation = session_generation
+            self._controller_state = controller_state
+            self._status_cache.update(
+                {
+                    "node_boot_id": boot_id,
+                    "node_build": copy.deepcopy(build),
+                    "node_capabilities": (
+                        None
+                        if self._node_capabilities is None
+                        else list(self._node_capabilities)
+                    ),
+                    "state_revision": state_revision,
+                    "controller_state": controller_state,
+                    "controller_session_generation": session_generation,
+                }
+            )
+        return True, boot_changed
 
     def _rpc(
         self,
@@ -339,6 +557,16 @@ class RemoteMachineService:
         request: dict[str, Any] = {"request_id": request_id, "action": action}
         if payload:
             request.update(payload)
+        with self._state_lock:
+            metadata_supported = self._session_metadata_supported
+            boot_id = self._node_boot_id
+            session_generation = self._controller_session_generation
+        if metadata_supported and action in _SESSION_MUTATING_ACTIONS:
+            request["client_id"] = self._client_id
+            if boot_id is not None:
+                request["expected_boot_id"] = boot_id
+            if session_generation is not None:
+                request["expected_session_generation"] = session_generation
         request_kwargs: dict[str, float] = {"timeout": timeout}
         if deadline is not None:
             request_kwargs["deadline"] = deadline
@@ -410,6 +638,13 @@ class RemoteMachineService:
                 )
             if (
                 not isinstance(capabilities, list)
+                or any(
+                    type(capability) is not str
+                    or not capability
+                    or len(capability) > 128
+                    for capability in capabilities
+                )
+                or len(set(capabilities)) != len(capabilities)
                 or CAPABILITY_PI_OWNED_JOBS not in capabilities
                 or not isinstance(actions, Mapping)
                 or ACTION_JOB_START not in actions
@@ -432,14 +667,44 @@ class RemoteMachineService:
                     "The remote node does not advertise the required Pi-owned "
                     "secondary Marlin fan capability; update/start the combined Pi node"
                 )
+            session_metadata_supported = (
+                CAPABILITY_PI_CONTROLLER_SESSION in capabilities
+            )
+            if session_metadata_supported:
+                accepted, _boot_changed = self._commit_response_metadata(
+                    response,
+                    required=True,
+                )
+                if not accepted:
+                    raise PiJobProtocolError(
+                        "Remote capability response regressed controller state"
+                    )
             with self._state_lock:
+                self._node_capabilities = tuple(capabilities)
+                self._status_cache["node_capabilities"] = list(capabilities)
                 self._policy_diagnostics_supported = (
                     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS in capabilities
+                )
+                self._session_metadata_supported = session_metadata_supported
+                self._structured_errors_supported = (
+                    CAPABILITY_PI_STRUCTURED_ERRORS in capabilities
+                )
+                self._coherent_status_supported = (
+                    CAPABILITY_PI_COHERENT_STATUS in capabilities
                 )
                 self._capabilities_verified = True
         finally:
             if capability_lock_acquired:
                 self._capability_lock.release()
+
+    def _require_controller_session_capability(self) -> None:
+        with self._state_lock:
+            supported = self._session_metadata_supported
+        if not supported:
+            raise PiJobProtocolError(
+                "The remote node does not advertise pi-controller-session-v1; "
+                "update/start the combined Pi node before controller operations"
+            )
 
     @staticmethod
     def _normalize_job(raw: object) -> dict[str, Any]:
@@ -566,7 +831,13 @@ class RemoteMachineService:
         raw_status: Mapping[str, Any],
         *,
         job_record: Mapping[str, Any] | None,
-    ) -> None:
+        response: Mapping[str, Any] | None = None,
+    ) -> bool:
+        boot_changed = False
+        if response is not None:
+            accepted, boot_changed = self._commit_response_metadata(response)
+            if not accepted:
+                return False
         status = copy.deepcopy(dict(raw_status))
         with self._state_lock:
             previous_job = self._status_cache.get("job")
@@ -579,10 +850,27 @@ class RemoteMachineService:
                     "execution_owner": "pi",
                     "pi_owned_execution": True,
                     "monitor_connected": monitor_connected,
-                    "status_stale": not monitor_connected,
-                    "status_error": None,
+                    "status_stale": not monitor_connected or boot_changed,
+                    "status_error": (
+                        "Pi restarted; capabilities must be revalidated"
+                        if boot_changed
+                        else None
+                    ),
+                    "node_boot_id": self._node_boot_id,
+                    "node_build": copy.deepcopy(self._node_build),
+                    "node_capabilities": (
+                        None
+                        if self._node_capabilities is None
+                        else list(self._node_capabilities)
+                    ),
+                    "state_revision": self._controller_state_revision,
+                    "controller_session_generation": (
+                        self._controller_session_generation
+                    ),
                 }
             )
+            if self._controller_state is not None:
+                status["controller_state"] = self._controller_state
             self._status_cache = status
             observed = job_record
             if observed is None and isinstance(status.get("job"), Mapping):
@@ -593,6 +881,10 @@ class RemoteMachineService:
                 self._status_cache["job"] = self._normalize_job(previous_job)
             else:
                 self._status_cache["job"] = self._normalize_job(None)
+            cached_job = self._status_cache["job"]
+            cached_job["monitor_connected"] = monitor_connected
+            cached_job["status_stale"] = self._status_cache["status_stale"]
+        return True
 
     def _cache_job_record(
         self,
@@ -642,20 +934,46 @@ class RemoteMachineService:
             raise PiJobProtocolError(f"Remote response contained invalid {key} data")
         return copy.deepcopy(dict(raw))
 
+    def _commit_current_response(
+        self,
+        response: Mapping[str, Any],
+        *,
+        action: str,
+    ) -> None:
+        accepted, boot_changed = self._commit_response_metadata(response)
+        if not accepted:
+            raise PiJobProtocolError(
+                f"Remote {action} response was older than the cached controller state"
+            )
+        if boot_changed:
+            raise PiJobProtocolError(
+                f"The Pi restarted during {action}; capabilities must be revalidated"
+            )
+
     def _refresh_once(self) -> None:
+        generation = self.operation_generation()
         self._require_capabilities(timeout=_MONITOR_RPC_TIMEOUT_SECONDS)
         machine_response = self._rpc(
             ACTION_MACHINE_STATUS,
             timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
         )
         raw_status = self._response_mapping(machine_response, "status")
-        active_response = self._rpc(
-            ACTION_JOB_ACTIVE,
-            timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
-        )
-        active_raw = active_response.get("job")
+        with self._state_lock:
+            coherent_status = self._coherent_status_supported
+        if coherent_status:
+            active_raw = machine_response.get("active_job")
+            latest_raw = machine_response.get("latest_job")
+        else:
+            active_response = self._rpc(
+                ACTION_JOB_ACTIVE,
+                timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
+            )
+            active_raw = active_response.get("job")
+            latest_raw = None
         if active_raw is not None and not isinstance(active_raw, Mapping):
             raise PiJobProtocolError("Remote active-job response was invalid")
+        if latest_raw is not None and not isinstance(latest_raw, Mapping):
+            raise PiJobProtocolError("Remote latest-job response was invalid")
 
         record = copy.deepcopy(dict(active_raw)) if isinstance(active_raw, Mapping) else None
         with self._state_lock:
@@ -676,16 +994,22 @@ class RemoteMachineService:
             )
             record = self._response_mapping(status_response, "job")
         elif record is None:
-            latest_response = self._rpc(
-                ACTION_JOB_LATEST,
-                timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
-            )
-            latest_raw = latest_response.get("job")
-            if latest_raw is not None and not isinstance(latest_raw, Mapping):
-                raise PiJobProtocolError("Remote latest-job response was invalid")
+            if not coherent_status:
+                latest_response = self._rpc(
+                    ACTION_JOB_LATEST,
+                    timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
+                )
+                latest_raw = latest_response.get("job")
+                if latest_raw is not None and not isinstance(latest_raw, Mapping):
+                    raise PiJobProtocolError("Remote latest-job response was invalid")
             if isinstance(latest_raw, Mapping):
                 record = copy.deepcopy(dict(latest_raw))
-        self._cache_remote_status(raw_status, job_record=record)
+        self._require_operation_current(generation)
+        self._cache_remote_status(
+            raw_status,
+            job_record=record,
+            response=machine_response,
+        )
 
     def _monitor_loop(self) -> None:
         delay = 0.0
@@ -841,6 +1165,8 @@ class RemoteMachineService:
         generation = self._operation_stop_epoch()
         self._require_operation_current(generation)
         self._require_capabilities(timeout=timeout, deadline=deadline)
+        self._require_controller_session_capability()
+        self._require_operation_current(generation)
         rpc_timeout = float(timeout)
         if deadline is not None:
             rpc_timeout = min(rpc_timeout, deadline - time.monotonic())
@@ -855,8 +1181,15 @@ class RemoteMachineService:
             deadline=deadline,
         )
         remote_status = self._response_mapping(response, "status")
-        self._cache_remote_status(remote_status, job_record=None)
         self._require_operation_current(generation)
+        if not self._cache_remote_status(
+            remote_status,
+            job_record=None,
+            response=response,
+        ):
+            raise PiJobProtocolError(
+                f"Remote {action} response was older than the cached controller state"
+            )
         return self.status()
 
     def connect(
@@ -867,7 +1200,10 @@ class RemoteMachineService:
     ) -> dict[str, Any]:
         self._require_hardware_authority()
         self._validate_connection_identity(port, protocol, baudrate)
-        return self._machine_status_action(ACTION_MACHINE_CONNECT)
+        return self._machine_status_action(
+            ACTION_MACHINE_CONNECT,
+            timeout=_CONNECT_RPC_TIMEOUT_SECONDS,
+        )
 
     def ensure_connected(self) -> dict[str, Any]:
         # The Pi owns the actual connection.  An authenticated idempotent connect
@@ -876,7 +1212,10 @@ class RemoteMachineService:
 
     def replace_connection(self) -> dict[str, Any]:
         self._require_hardware_authority()
-        return self._machine_status_action(ACTION_MACHINE_REPLACE_CONNECTION)
+        return self._machine_status_action(
+            ACTION_MACHINE_REPLACE_CONNECTION,
+            timeout=_CONNECT_RPC_TIMEOUT_SECONDS,
+        )
 
     def disconnect(self) -> None:
         # Never wait for an upload/START operation while attempting controller
@@ -1121,12 +1460,18 @@ class RemoteMachineService:
         generation = self._operation_stop_epoch()
         self._require_operation_current(generation)
         self._require_capabilities()
+        self._require_controller_session_capability()
+        self._require_operation_current(generation)
         response = self._rpc(
             ACTION_MACHINE_PREPARE_PHOTO_POSITION,
             {"capture_home_position": capture_home_position},
         )
         result = self._response_mapping(response, "result")
         self._require_operation_current(generation)
+        self._commit_current_response(
+            response,
+            action=ACTION_MACHINE_PREPARE_PHOTO_POSITION,
+        )
         return result
 
     def prepare_job_start(self) -> dict[str, Any]:
@@ -1134,9 +1479,15 @@ class RemoteMachineService:
         generation = self._operation_stop_epoch()
         self._require_operation_current(generation)
         self._require_capabilities()
+        self._require_controller_session_capability()
+        self._require_operation_current(generation)
         response = self._rpc(ACTION_MACHINE_PREPARE_JOB_START)
         result = self._response_mapping(response, "result")
         self._require_operation_current(generation)
+        self._commit_current_response(
+            response,
+            action=ACTION_MACHINE_PREPARE_JOB_START,
+        )
         return result
 
     def jog(self, dx_mm: float, dy_mm: float, feed_mm_min: float) -> dict[str, Any]:
@@ -1144,6 +1495,8 @@ class RemoteMachineService:
         generation = self._operation_stop_epoch()
         self._require_operation_current(generation)
         self._require_capabilities()
+        self._require_controller_session_capability()
+        self._require_operation_current(generation)
         response = self._rpc(
             ACTION_MACHINE_JOG,
             {
@@ -1154,6 +1507,7 @@ class RemoteMachineService:
         )
         result = self._response_mapping(response, "result")
         self._require_operation_current(generation)
+        self._commit_current_response(response, action=ACTION_MACHINE_JOG)
         return result
 
     def send_command(
@@ -1176,6 +1530,8 @@ class RemoteMachineService:
         )
         self._require_operation_current(generation)
         self._require_capabilities()
+        self._require_controller_session_capability()
+        self._require_operation_current(generation)
         payload: dict[str, Any] = {"line": line}
         if timeout is not None:
             payload["timeout"] = timeout
@@ -1184,6 +1540,7 @@ class RemoteMachineService:
         if not isinstance(raw, list) or any(type(item) is not str for item in raw):
             raise PiJobProtocolError("Remote command response was invalid")
         self._require_operation_current(generation)
+        self._commit_current_response(response, action=ACTION_MACHINE_COMMAND)
         return list(raw)
 
     def sample_realtime_position(
@@ -1196,19 +1553,37 @@ class RemoteMachineService:
         # Coordinate interpretation belongs to the Pi's trusted controller
         # session. A caller-provided local snapshot cannot replace it remotely.
         _ = coordinate_state
+        generation = self._operation_stop_epoch()
+        self._require_operation_current(generation)
         self._require_capabilities()
+        self._require_controller_session_capability()
+        self._require_operation_current(generation)
         response = self._rpc(
             ACTION_MACHINE_REALTIME_POSITION,
             {"timeout": timeout},
         )
-        return self._response_mapping(response, "position")
+        position = self._response_mapping(response, "position")
+        self._require_operation_current(generation)
+        self._commit_current_response(
+            response,
+            action=ACTION_MACHINE_REALTIME_POSITION,
+        )
+        return position
 
     def _open_stepper_hold(self) -> tuple[socket.socket, Any, str]:
         self._require_hardware_authority()
+        expected_stop_epoch = self._operation_stop_epoch()
+        self._require_operation_current(expected_stop_epoch)
         self._require_capabilities()
+        self._require_controller_session_capability()
+        self._require_operation_current(expected_stop_epoch)
         token = bridge_token_from_environment()
         sock: socket.socket | None = None
         request_id = self._request_id()
+        with self._state_lock:
+            metadata_supported = self._session_metadata_supported
+            boot_id = self._node_boot_id
+            session_generation = self._controller_session_generation
         try:
             sock = socket.create_connection(
                 (self._target.host, self._target.port),
@@ -1216,15 +1591,25 @@ class RemoteMachineService:
             )
             sock.settimeout(_HOLD_SESSION_TIMEOUT_SECONDS)
             channel = authenticate_client(sock, token)
-            channel.send_json(
-                {
-                    "request_id": request_id,
-                    "action": ACTION_MACHINE_STEPPER_HOLD,
-                }
-            )
+            request = {
+                "request_id": request_id,
+                "action": ACTION_MACHINE_STEPPER_HOLD,
+            }
+            if metadata_supported:
+                request["client_id"] = self._client_id
+                if boot_id is not None:
+                    request["expected_boot_id"] = boot_id
+                if session_generation is not None:
+                    request["expected_session_generation"] = session_generation
+            channel.send_json(request)
             response = self._validate_response(
                 channel.receive_json(),
                 request_id=request_id,
+                action=ACTION_MACHINE_STEPPER_HOLD,
+            )
+            self._require_operation_current(expected_stop_epoch)
+            self._commit_current_response(
+                response,
                 action=ACTION_MACHINE_STEPPER_HOLD,
             )
             lease_id = response.get("lease_id")
@@ -1238,15 +1623,20 @@ class RemoteMachineService:
                 sock.close()
             raise
 
-    def _release_stepper_hold(self, channel: Any, lease_id: str) -> None:
+    def _release_stepper_hold(
+        self,
+        channel: Any,
+        lease_id: str,
+        *,
+        expected_stop_epoch: int,
+    ) -> None:
         request_id = self._request_id()
-        channel.send_json(
-            {
-                "request_id": request_id,
-                "action": ACTION_MACHINE_STEPPER_HOLD_RELEASE,
-                "lease_id": lease_id,
-            }
-        )
+        request = {
+            "request_id": request_id,
+            "action": ACTION_MACHINE_STEPPER_HOLD_RELEASE,
+            "lease_id": lease_id,
+        }
+        channel.send_json(request)
         response = self._validate_response(
             channel.receive_json(),
             request_id=request_id,
@@ -1256,6 +1646,11 @@ class RemoteMachineService:
             raise PiJobProtocolError(
                 "Remote stepper-hold release did not match its active lease"
             )
+        self._require_operation_current(expected_stop_epoch)
+        self._commit_current_response(
+            response,
+            action=ACTION_MACHINE_STEPPER_HOLD_RELEASE,
+        )
 
     @contextmanager
     def temporary_stepper_hold(self):
@@ -1274,6 +1669,7 @@ class RemoteMachineService:
             generation = self._operation_stop_epoch()
             self._require_operation_current(generation)
             sock, channel, lease_id = self._open_stepper_hold()
+            self._require_operation_current(generation)
             self._hold_context.depth = 1
             body_error: BaseException | None = None
             try:
@@ -1284,7 +1680,11 @@ class RemoteMachineService:
             finally:
                 self._hold_context.depth = 0
                 try:
-                    self._release_stepper_hold(channel, lease_id)
+                    self._release_stepper_hold(
+                        channel,
+                        lease_id,
+                        expected_stop_epoch=generation,
+                    )
                 except Exception as cleanup_error:
                     if body_error is None:
                         raise
@@ -1357,12 +1757,29 @@ class RemoteMachineService:
         *,
         job_id: str,
         original_error: MachineError,
+        expected_stop_epoch: int,
     ) -> dict[str, Any]:
         deadline = time.monotonic() + _START_RECOVERY_POLL_SECONDS
         while True:
             try:
-                response = self._rpc(ACTION_JOB_STATUS, {"job_id": job_id})
+                self._require_operation_current(expected_stop_epoch)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    raise PiJobProtocolError(
+                        "Pi START ownership recovery deadline expired"
+                    )
+                response = self._rpc(
+                    ACTION_JOB_STATUS,
+                    {"job_id": job_id},
+                    timeout=remaining,
+                    deadline=deadline,
+                )
                 record = self._response_mapping(response, "job")
+                self._require_operation_current(expected_stop_epoch)
+                self._commit_current_response(
+                    response,
+                    action=ACTION_JOB_STATUS,
+                )
             except MachineError as recovery_error:
                 self._mark_monitor_disconnected(str(recovery_error))
                 raise MachineError(
@@ -1431,6 +1848,8 @@ class RemoteMachineService:
             self._require_hardware_authority()
             self._require_operation_current(generation)
             self._require_capabilities()
+            self._require_controller_session_capability()
+            self._require_operation_current(generation)
             self._require_current_program(program)
             validated_name = validate_job_name(name)
             canonical = canonical_program_bytes(program)
@@ -1471,6 +1890,7 @@ class RemoteMachineService:
 
             upload_started = time.monotonic()
             try:
+                self._require_operation_current(generation)
                 begin = self._rpc(
                     ACTION_JOB_BEGIN,
                     {
@@ -1483,6 +1903,8 @@ class RemoteMachineService:
                         ],
                     },
                 )
+                self._require_operation_current(generation)
+                self._commit_current_response(begin, action=ACTION_JOB_BEGIN)
                 self._cache_job_record(self._response_mapping(begin, "job"))
                 offset = 0
                 while offset < len(canonical):
@@ -1495,6 +1917,11 @@ class RemoteMachineService:
                             "offset": offset,
                             "data_b64": encode_upload_chunk(chunk),
                         },
+                    )
+                    self._require_operation_current(generation)
+                    self._commit_current_response(
+                        chunk_response,
+                        action=ACTION_JOB_CHUNK,
                     )
                     self._cache_job_record(
                         self._response_mapping(chunk_response, "job")
@@ -1515,6 +1942,11 @@ class RemoteMachineService:
                 finalize = self._rpc(
                     ACTION_JOB_FINALIZE,
                     {"job_id": job_id, **binding},
+                )
+                self._require_operation_current(generation)
+                self._commit_current_response(
+                    finalize,
+                    action=ACTION_JOB_FINALIZE,
                 )
                 if finalize.get("ready") is not True:
                     raise PiJobProtocolError(
@@ -1551,8 +1983,10 @@ class RemoteMachineService:
             )
             start_requested = time.monotonic()
             try:
+                self._require_operation_current(generation)
                 start = self._rpc(ACTION_JOB_START, start_payload)
             except _RemoteRequestRejected:
+                self._require_operation_current(generation)
                 with self._state_lock:
                     self._start_ownership_uncertain = False
                     self._accepted_job_id = None
@@ -1561,6 +1995,11 @@ class RemoteMachineService:
                     rejected_status = self._rpc(
                         ACTION_JOB_STATUS,
                         {"job_id": job_id},
+                    )
+                    self._require_operation_current(generation)
+                    self._commit_current_response(
+                        rejected_status,
+                        action=ACTION_JOB_STATUS,
                     )
                     self._cache_job_record(
                         self._response_mapping(rejected_status, "job"),
@@ -1572,7 +2011,11 @@ class RemoteMachineService:
             except MachineError as exc:
                 with self._state_lock:
                     self._upload_job_id = None
-                return self._recover_lost_start(job_id=job_id, original_error=exc)
+                return self._recover_lost_start(
+                    job_id=job_id,
+                    original_error=exc,
+                    expected_stop_epoch=generation,
+                )
             finally:
                 self._record_client_diagnostics(
                     job_id,
@@ -1582,6 +2025,8 @@ class RemoteMachineService:
                     ),
                 )
 
+            self._require_operation_current(generation)
+            self._commit_current_response(start, action=ACTION_JOB_START)
             start_job = self._response_mapping(start, "job")
             start_accepted_at = start_job.get("start_accepted_at")
             durable_acceptance = bool(
@@ -1599,7 +2044,11 @@ class RemoteMachineService:
                 )
                 with self._state_lock:
                     self._upload_job_id = None
-                return self._recover_lost_start(job_id=job_id, original_error=invalid)
+                return self._recover_lost_start(
+                    job_id=job_id,
+                    original_error=invalid,
+                    expected_stop_epoch=generation,
+                )
             job = self._cache_job_record(
                 start_job,
                 accepted=True,
@@ -1650,6 +2099,7 @@ class RemoteMachineService:
             raise TypeError("emergency must be an exact boolean")
         with self._stop_epoch_lock:
             self._stop_epoch += 1
+            stop_generation = self._stop_epoch
         with self._state_lock:
             self._authorization_epoch += 1
             self._clear_arm_locked()
@@ -1657,11 +2107,15 @@ class RemoteMachineService:
         payload: dict[str, Any] = {"emergency": emergency}
         if job_id is not None:
             payload["job_id"] = job_id
+        stop_deadline = time.monotonic() + _STOP_RPC_TIMEOUT_SECONDS
         response = self._rpc(
             ACTION_JOB_STOP,
             payload,
             timeout=_STOP_RPC_TIMEOUT_SECONDS,
+            deadline=stop_deadline,
         )
+        self._require_operation_current(stop_generation)
+        self._commit_current_response(response, action=ACTION_JOB_STOP)
         raw_job = response.get("job")
         if raw_job is not None:
             if not isinstance(raw_job, Mapping):
@@ -1767,9 +2221,13 @@ class RemoteMachineService:
                 return receipt
         if job_id is None:
             return None
+        generation = self._operation_stop_epoch()
         try:
+            self._require_operation_current(generation)
             response = self._rpc(ACTION_JOB_RESULT, {"job_id": job_id})
             job = self._response_mapping(response, "job")
+            self._require_operation_current(generation)
+            self._commit_current_response(response, action=ACTION_JOB_RESULT)
         except MachineError:
             return None
         self._cache_job_record(job, accepted=True)

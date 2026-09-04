@@ -1,4 +1,5 @@
 import hashlib
+import signal
 import threading
 import time
 import uuid
@@ -34,6 +35,35 @@ def test_remote_node_requires_explicit_hardware_gate() -> None:
     with pytest.raises(SystemExit) as exc:
         remote_node.main(["--config", "unused.json"])
     assert exc.value.code == 2
+
+
+def test_sigterm_requests_the_normal_shutdown_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    installed: dict[int, object] = {}
+    restored: list[tuple[int, object]] = []
+    previous = object()
+    monkeypatch.setattr(signal, "getsignal", lambda _signum: previous)
+    monkeypatch.setattr(
+        signal,
+        "signal",
+        lambda signum, handler: (
+            restored.append((int(signum), handler))
+            if handler is previous
+            else installed.__setitem__(int(signum), handler)
+        ),
+    )
+    stop_requested = threading.Event()
+
+    handlers = remote_node._install_termination_handlers(stop_requested)
+    sigterm_handler = installed[int(signal.SIGTERM)]
+    assert callable(sigterm_handler)
+    sigterm_handler(int(signal.SIGTERM), None)
+
+    assert stop_requested.is_set()
+    assert handlers[int(signal.SIGTERM)] is previous
+    remote_node._restore_termination_handlers(handlers)
+    assert (int(signal.SIGTERM), previous) in restored
 
 
 def test_remote_node_hosts_one_local_machine_service_and_no_raw_bridge(

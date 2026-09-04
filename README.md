@@ -21,6 +21,17 @@ stationary overhead **Logitech C920**.
 > never auto-resumes. Direct USB hardware remains Linux-only. This new ownership
 > path is software-tested but is not physically verified; see
 > [docs/NETWORK_MACHINE.md](docs/NETWORK_MACHINE.md).
+>
+> Primary-controller reliability uses generation-bound sessions. A candidate is
+> not usable until a bounded, quiet serial synchronization and complete safe
+> GRBL identity/alignment handshake succeed. Software STOP permanently
+> quarantines the old session and starts communication-only recovery; successful
+> recovery still requires one explicit **Home / park** before motion. This is a
+> software protocol-integrity measure, not a safety-rated stop or interlock. The
+> pre-change mechanisms are recorded in the
+> [primary-session failure audit](docs/GRBL_SESSION_FAILURE_AUDIT.md), and the
+> later hardware campaign is defined in the
+> [primary-session recovery validation runbook](docs/GRBL_SESSION_RECOVERY_VALIDATION.md).
 
 Read [CURRENT_STATE.md](CURRENT_STATE.md) for the active branch and verification
 boundary. [PROJECT_STATUS.md](PROJECT_STATUS.md) is the dated 2026-08-06 Windows
@@ -51,6 +62,8 @@ Shared core and browser workflow:
 - In-house SVG vector parser for paths, lines, polylines, polygons, rectangles, circles, ellipses, groups, transforms, curves, and arcs
 - Path flattening, nearest-path ordering, design bounds checks, zero-power framing, and vector G-code generation
 - Linux serial communication without a mandatory pyserial dependency
+- Exclusive Pi-local serial ownership plus transport-owned RX purge/quiet
+  evidence, with bounded failure when startup input never becomes quiet
 - GRBL/Marlin identification probes and a read-only diagnostic command console (`M5` is the only actuator command accepted there)
 - Temporary laser arming, automatic disarming, and software stop
 - Unit tests and GitHub Actions configuration
@@ -415,14 +428,16 @@ without changing machine or project behavior. See
 GitHub Actions has two validation tiers. Pushes to `fix/**`, `feature/**`,
 `agent/**`, `cleanup/**`, and `architecture/**` run Fast Development CI on
 Windows Python 3.12: repository Ruff, desktop dependency and bytecode
-validation, and the complete desktop-enabled pytest suite with four bounded
-xdist workers. Compatibility CI runs for pushes to `main`, pull requests
+validation, the complete desktop-enabled pytest suite with four bounded
+xdist workers, and a focused Ubuntu/POSIX controller-session job. Compatibility
+CI runs for pushes to `main`, pull requests
 targeting `main`, and manual dispatch. It runs serial core/non-desktop tests on
 Windows Python 3.10, serial desktop-enabled tests on Windows Python 3.12, and
-repository Ruff as a separate Windows Python 3.12 job. Linux/Pi components
-retain focused verification when changed; there is no standing Ubuntu
-compatibility matrix. Each major CI phase records its duration in the job
-summary.
+repository Ruff as a separate Windows Python 3.12 job. Its focused Ubuntu job
+continuously exercises pseudo-terminal input synchronization, controller-session
+recovery, secondary-controller framing, Pi RPC/job ownership, and remote-client
+regressions without claiming general Linux desktop support. Each major CI phase
+records its duration in the job summary.
 
 From an existing desktop-enabled virtual environment, launch the native UI with
 a completed real-machine configuration:

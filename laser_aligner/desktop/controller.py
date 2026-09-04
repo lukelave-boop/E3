@@ -27,6 +27,12 @@ from ..vision.object_trace import (
     sample_color,
 )
 from ..vision.template_alignment import TemplateAlignment, rank_templates
+from .machine_state import (
+    controller_node_boot_id,
+    controller_session_generation,
+    controller_state_revision,
+    project_machine_state,
+)
 from .qt import require_qt
 from .tasks import FunctionTask
 
@@ -50,11 +56,28 @@ _MAX_LIVE_CAMERA_INTERVAL_MS = 10_000
 
 
 @dataclass(slots=True)
+class _MachineTaskAuthority:
+    requested_operation_generation: int
+    initial_session_generation: int | None
+    initial_state_revision: int | None
+    initial_node_boot_id: str | None
+    session_lifecycle_operation: bool
+    completed_operation_generation: int | None = None
+    completed_session_generation: int | None = None
+    completed_state_revision: int | None = None
+    completed_node_boot_id: str | None = None
+    completed_controller_state: str | None = None
+    invalidated_before_execution: bool = False
+    captured: bool = False
+
+
+@dataclass(slots=True)
 class _TaskCallbacks:
     on_success: Callable[[Any], None] | None
     on_failure: Callable[[str], None] | None
     on_finished: Callable[[], None] | None
     show_busy: bool
+    machine_authority: _MachineTaskAuthority | None
 
 
 def _validate_shutdown_deadline(deadline: object) -> float:
@@ -428,6 +451,9 @@ class DesktopController(QtCore.QObject):
         self._live_camera_enabled = False
         self._live_camera_interval_ms = _DEFAULT_LIVE_CAMERA_INTERVAL_MS
         self._reported_terminal_job: tuple[object, object] | None = None
+        self._last_controller_node_boot_id: str | None = None
+        self._last_controller_session_generation: int | None = None
+        self._last_controller_state_revision: int | None = None
         self._workspace_coordinate_space = "machine"
         self._shutdown_started = False
         self._shutdown_finalized = False
@@ -595,20 +621,104 @@ class DesktopController(QtCore.QObject):
         label: str = "Operation",
         show_busy: bool = True,
         requires_controller: bool = False,
+        machine_bound: bool = False,
     ) -> FunctionTask:
         publish_ui = not self._shutdown_started
         if show_busy and publish_ui:
             self._set_busy(1)
         machine = self.runtime.context.machine
         operation_generation = machine.operation_generation()
+        machine_authority = None
+        if machine_bound or requires_controller:
+            try:
+                initial_machine_status = machine.status()
+            except Exception:
+                initial_machine_status = None
+            machine_authority = _MachineTaskAuthority(
+                requested_operation_generation=operation_generation,
+                initial_session_generation=controller_session_generation(
+                    initial_machine_status
+                ),
+                initial_state_revision=controller_state_revision(
+                    initial_machine_status
+                ),
+                initial_node_boot_id=controller_node_boot_id(initial_machine_status),
+                session_lifecycle_operation=machine_bound,
+            )
+
+        def require_initial_machine_authority() -> None:
+            if (
+                machine_authority is None
+                or machine_authority.session_lifecycle_operation
+            ):
+                return
+            try:
+                current_status = machine.status()
+            except Exception as exc:
+                machine_authority.invalidated_before_execution = True
+                raise RuntimeError(
+                    "Controller authority could not be verified before execution"
+                ) from exc
+            current_authority = (
+                controller_node_boot_id(current_status),
+                controller_session_generation(current_status),
+                controller_state_revision(current_status),
+            )
+            requested_authority = (
+                machine_authority.initial_node_boot_id,
+                machine_authority.initial_session_generation,
+                machine_authority.initial_state_revision,
+            )
+            if current_authority != requested_authority:
+                machine_authority.invalidated_before_execution = True
+                raise RuntimeError(
+                    "Controller authority changed before the queued operation began"
+                )
+
+        def capture_machine_authority() -> None:
+            if machine_authority is None:
+                return
+            try:
+                machine_authority.completed_operation_generation = (
+                    machine.operation_generation()
+                )
+            except Exception:
+                machine_authority.completed_operation_generation = None
+            try:
+                machine_status = machine.status()
+            except Exception:
+                machine_status = None
+            machine_authority.completed_session_generation = (
+                controller_session_generation(machine_status)
+            )
+            machine_authority.completed_state_revision = controller_state_revision(
+                machine_status
+            )
+            machine_authority.completed_node_boot_id = controller_node_boot_id(
+                machine_status
+            )
+            machine_authority.completed_controller_state = (
+                None
+                if machine_status is None
+                else project_machine_state(machine_status).controller_state
+            )
+            machine_authority.captured = True
 
         def guarded_callback() -> Any:
             if self._shutdown_started:
                 return None
-            with machine.operation_scope(operation_generation):
-                if requires_controller:
-                    machine.ensure_connected()
-                return callback()
+            try:
+                with machine.operation_scope(operation_generation):
+                    require_initial_machine_authority()
+                    if requires_controller:
+                        machine.ensure_connected()
+                        # A remote idempotent Connect can observe or adopt a
+                        # session recovered after this task was queued. Never
+                        # let the old task continue on that fresh generation.
+                        require_initial_machine_authority()
+                    return callback()
+            finally:
+                capture_machine_authority()
 
         task = FunctionTask(guarded_callback, label=label, cancel=cancel)
         if not publish_ui:
@@ -619,6 +729,7 @@ class DesktopController(QtCore.QObject):
             on_failure=on_failure,
             on_finished=on_finished,
             show_busy=show_busy and publish_ui,
+            machine_authority=machine_authority,
         )
         # QObject-bound slots are automatically disconnected if the controller
         # is destroyed. This avoids receiverless lambdas that could outlive the
@@ -671,7 +782,11 @@ class DesktopController(QtCore.QObject):
         if self._shutdown_started:
             return
         registration = self._task_callbacks.get(task)
-        if registration is not None and registration.on_success is not None:
+        if (
+            registration is not None
+            and self._task_authority_is_current(registration)
+            and registration.on_success is not None
+        ):
             registration.on_success(result)
 
     @QtCore.Slot(object, str)
@@ -679,7 +794,7 @@ class DesktopController(QtCore.QObject):
         if self._shutdown_started:
             return
         registration = self._task_callbacks.get(task)
-        if registration is None:
+        if registration is None or not self._task_authority_is_current(registration):
             return
         if registration.on_failure is None:
             self.errorOccurred.emit(f"{task.label} failed: {message}")
@@ -692,6 +807,10 @@ class DesktopController(QtCore.QObject):
         task: FunctionTask,
     ) -> None:
         registration = self._task_callbacks.pop(task, None)
+        authority_is_current = (
+            registration is not None
+            and self._task_authority_is_current(registration)
+        )
         if registration is not None and registration.show_busy:
             if self._shutdown_started:
                 self._active_tasks = max(0, self._active_tasks - 1)
@@ -700,6 +819,7 @@ class DesktopController(QtCore.QObject):
         self._tasks.discard(task)
         if (
             registration is not None
+            and authority_is_current
             and registration.on_finished is not None
             and not self._shutdown_started
         ):
@@ -711,6 +831,115 @@ class DesktopController(QtCore.QObject):
         ):
             self.tasksDrained.emit()
 
+    def _task_authority_is_current(self, registration: _TaskCallbacks) -> bool:
+        authority = registration.machine_authority
+        if authority is None:
+            return True
+        if (
+            not authority.captured
+            or authority.completed_controller_state is None
+            or authority.invalidated_before_execution
+        ):
+            return False
+        if authority.completed_controller_state in {
+            "STOPPING",
+            "RECOVERING",
+            "SHUTTING_DOWN",
+        }:
+            return False
+        if (
+            not authority.session_lifecycle_operation
+            and authority.completed_controller_state == "RECONNECT_REQUIRED"
+        ):
+            return False
+        machine = self.runtime.context.machine
+        completed_operation_generation = authority.completed_operation_generation
+        if completed_operation_generation is None:
+            return False
+        if (
+            not authority.session_lifecycle_operation
+            and completed_operation_generation
+            != authority.requested_operation_generation
+        ):
+            return False
+        try:
+            if machine.operation_generation() != completed_operation_generation:
+                return False
+        except Exception:
+            return False
+        try:
+            status = machine.status()
+        except Exception:
+            return False
+        current_boot_id = controller_node_boot_id(status)
+        if (
+            authority.completed_node_boot_id is not None
+            and current_boot_id != authority.completed_node_boot_id
+        ):
+            return False
+        current_session = controller_session_generation(status)
+        if (
+            authority.completed_session_generation is not None
+            and current_session != authority.completed_session_generation
+        ):
+            return False
+        if not authority.session_lifecycle_operation:
+            if (
+                authority.initial_node_boot_id is not None
+                and authority.completed_node_boot_id
+                != authority.initial_node_boot_id
+            ):
+                return False
+            if (
+                authority.initial_session_generation is not None
+                and authority.completed_session_generation
+                != authority.initial_session_generation
+            ):
+                return False
+        current_revision = controller_state_revision(status)
+        return current_revision == authority.completed_state_revision
+
+    def _accept_machine_status_revision(self, status: Mapping[str, Any]) -> bool:
+        machine = status.get("machine")
+        if not isinstance(machine, Mapping):
+            return True
+        boot_id = controller_node_boot_id(machine)
+        session_generation = controller_session_generation(machine)
+        state_revision = controller_state_revision(machine)
+        if session_generation is None and state_revision is None:
+            return True
+
+        previous_boot_id = self._last_controller_node_boot_id
+        if previous_boot_id is not None and boot_id is None:
+            return False
+        if (
+            previous_boot_id is not None
+            and boot_id is not None
+            and boot_id != previous_boot_id
+        ):
+            self._last_controller_session_generation = None
+            self._last_controller_state_revision = None
+        elif (
+            self._last_controller_state_revision is not None
+            and state_revision is not None
+            and state_revision < self._last_controller_state_revision
+        ):
+            return False
+        elif (
+            self._last_controller_session_generation is not None
+            and session_generation is not None
+            and session_generation < self._last_controller_session_generation
+        ):
+            return False
+
+        if boot_id is not None:
+            self._last_controller_node_boot_id = boot_id
+        if session_generation is not None:
+            self._last_controller_session_generation = session_generation
+        if state_revision is not None:
+            self._last_controller_state_revision = state_revision
+        return True
+
     def poll_status(self) -> None:
         if not self.runtime.running:
             return
@@ -718,6 +947,8 @@ class DesktopController(QtCore.QObject):
             status = self.runtime.status()
         except Exception as exc:
             self.errorOccurred.emit(f"Status refresh failed: {exc}")
+            return
+        if not self._accept_machine_status_revision(status):
             return
         self.statusChanged.emit(status)
         machine = status.get("machine") or {}
@@ -2481,6 +2712,7 @@ class DesktopController(QtCore.QObject):
             self.runtime.context.machine.connect,
             on_success=lambda _: self._machine_changed("Controller connected"),
             label="Controller connection",
+            machine_bound=True,
         )
 
     def reconnect_machine(self) -> None:
@@ -2492,6 +2724,7 @@ class DesktopController(QtCore.QObject):
                 "Controller reconnected; Home / park required"
             ),
             label="Controller reconnection",
+            machine_bound=True,
         )
 
     def disconnect_machine(self) -> None:
@@ -2499,6 +2732,7 @@ class DesktopController(QtCore.QObject):
             self.runtime.context.machine.disconnect,
             on_success=lambda _: self._machine_changed("Controller disconnected"),
             label="Controller disconnect",
+            machine_bound=True,
         )
 
     def park_at_camera_pose(self) -> None:
@@ -2525,7 +2759,7 @@ class DesktopController(QtCore.QObject):
             machine = self.runtime.context.machine
             try:
                 # Reject malformed, stale calibration, or out-of-envelope
-                # programs before the single job-start Home performs motion.
+                # programs before the already-homed controller starts motion.
                 self.runtime.context.validate_powered_calibration_support(gcode, name)
                 program = (
                     machine.preflight_program(gcode)
@@ -2564,12 +2798,12 @@ class DesktopController(QtCore.QObject):
             if result.get("execution_owner") == "pi":
                 self._machine_changed(f"Pi accepted and started {name}")
             else:
-                self._machine_changed(f"Homed and started {name}")
+                self._machine_changed(f"Started {name}")
 
         self._run(
             operation,
             on_success=started,
-            label="Home and start job",
+            label="Start job",
             requires_controller=True,
         )
 

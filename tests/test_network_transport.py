@@ -4,11 +4,13 @@ import hashlib
 import hmac
 import socket
 import threading
+import time
 
 import pytest
 
 from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.errors import MachineError
+from laser_aligner.machine.controller_dialects import GRBL_DIALECT
 from laser_aligner.machine.network_transport import (
     NetworkSerialTransport,
     _authenticate,
@@ -120,6 +122,7 @@ def test_machine_realtime_sampling_uses_existing_e3bridge_transport(
             conn.sendall(b"E3BRIDGE/1 READY 115200\n")
             observed.append(conn.recv(1024))
             conn.sendall(b"<Idle|MPos:15,195,0|WPos:15,195,0|WCO:0,0,0>\r\n")
+            time.sleep(0.1)
         listener.close()
 
     thread = threading.Thread(target=serve)
@@ -133,6 +136,8 @@ def test_machine_realtime_sampling_uses_existing_e3bridge_transport(
     )
     machine._transport = transport
     machine._connected = True
+    transport.test_only_allow_legacy_input_synchronization = True
+    machine._dialect = GRBL_DIALECT
     machine._protocol = "grbl"
     try:
         snapshot = machine.sample_realtime_position(timeout=1.0)

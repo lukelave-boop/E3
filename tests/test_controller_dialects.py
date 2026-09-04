@@ -307,31 +307,38 @@ def test_emergency_stop_policy_requires_exactly_one_command_form() -> None:
 
 
 @pytest.mark.parametrize(
-    ("response", "expected"),
+    ("response", "expected_grbl", "expected_marlin"),
     [
-        ("ok", CommandResponseKind.ACKNOWLEDGEMENT),
-        ("OK accepted", CommandResponseKind.ACKNOWLEDGEMENT),
-        ("error:9", CommandResponseKind.ERROR),
-        ("Error:Printer halted", CommandResponseKind.ERROR),
-        ("ALARM:1", CommandResponseKind.ALARM),
-        ("busy: processing", CommandResponseKind.CONTINUE),
-        ("<Alarm|MPos:0,0,0>", CommandResponseKind.CONTINUE),
-        ("[VER:1.1h]", CommandResponseKind.CONTINUE),
-        (" ok", CommandResponseKind.CONTINUE),
+        ("ok", CommandResponseKind.ACKNOWLEDGEMENT, CommandResponseKind.ACKNOWLEDGEMENT),
+        ("OK accepted", CommandResponseKind.MALFORMED, CommandResponseKind.ACKNOWLEDGEMENT),
+        ("error:9", CommandResponseKind.ERROR, CommandResponseKind.ERROR),
+        ("Error:Printer halted", CommandResponseKind.MALFORMED, CommandResponseKind.ERROR),
+        ("ALARM:1", CommandResponseKind.ALARM, CommandResponseKind.ALARM),
+        ("busy: processing", CommandResponseKind.CONTINUE, CommandResponseKind.CONTINUE),
+        ("<Alarm|MPos:0,0,0>", CommandResponseKind.REALTIME_STATUS, CommandResponseKind.REALTIME_STATUS),
+        ("[VER:1.1h]", CommandResponseKind.CONTINUE, CommandResponseKind.CONTINUE),
+        (" ok", CommandResponseKind.MALFORMED, CommandResponseKind.MALFORMED),
+        ("ok garbage", CommandResponseKind.MALFORMED, CommandResponseKind.ACKNOWLEDGEMENT),
+        ("error-corrupt", CommandResponseKind.MALFORMED, CommandResponseKind.MALFORMED),
+        ("alarm-no-code", CommandResponseKind.MALFORMED, CommandResponseKind.MALFORMED),
+        ("Grbl 1.1h ['$' for help]", CommandResponseKind.STARTUP, CommandResponseKind.STARTUP),
+        ("<Idle|MPos:0,0,0", CommandResponseKind.MALFORMED, CommandResponseKind.MALFORMED),
     ],
 )
 def test_command_response_classification_is_exact(
     response: str,
-    expected: CommandResponseKind,
+    expected_grbl: CommandResponseKind,
+    expected_marlin: CommandResponseKind,
 ) -> None:
-    assert GRBL_DIALECT.classify_command_response(response) is expected
-    assert MARLIN_DIALECT.classify_command_response(response) is expected
+    assert GRBL_DIALECT.classify_command_response(response) is expected_grbl
+    assert MARLIN_DIALECT.classify_command_response(response) is expected_marlin
 
 
 @pytest.mark.parametrize(
     ("response", "expected"),
     [
-        (" ok ", HomingResponseKind.ACKNOWLEDGEMENT),
+        ("ok", HomingResponseKind.ACKNOWLEDGEMENT),
+        (" ok ", HomingResponseKind.MALFORMED),
         ("error:9", HomingResponseKind.REJECTION),
         ("ALARM:1", HomingResponseKind.REJECTION),
         ("<Alarm|MPos:0,0,0>", HomingResponseKind.REJECTION),
@@ -339,6 +346,8 @@ def test_command_response_classification_is_exact(
         ("<Homing|MPos:1,1,0>", HomingResponseKind.ACTIVE),
         ("<Run:0|MPos:1,1,0>", HomingResponseKind.ACTIVE),
         ("<Idle|MPos:0,0,0>", HomingResponseKind.IDLE),
+        ("Grbl 1.1h ['$' for help]", HomingResponseKind.STARTUP),
+        ("<Idle|MPos:0,0,0", HomingResponseKind.MALFORMED),
         ("status", HomingResponseKind.CONTINUE),
     ],
 )

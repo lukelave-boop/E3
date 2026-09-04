@@ -67,6 +67,22 @@ has bounded same-boot replay handling, repeated identical upload chunks are
 idempotent, FINALIZE revalidates an existing prepared job, and duplicate START
 returns the durable state without running it again.
 
+Nodes advertising `pi-controller-session-v1`, `pi-structured-errors-v1`, and
+`pi-coherent-status-v1` attach the Pi boot ID, monotonic state revision,
+controller-session generation/state, and bounded Pi build identity to every
+response. After capability negotiation, controller-mutating requests carry a
+stable desktop client ID, the last observed controller-session generation, and
+the last observed Pi boot ID. The Pi validates the boot ID before the generation
+and validates both before any disconnect or controller side effect; a stale
+value returns retryable `controller.stale_session` with `refresh_status`.
+Metadata-free control requests are rejected. Global STOP and read-only
+capability/status observation remain available without control ownership.
+Windows validates request IDs first and then accepts status/results only when
+their boot/revision/session tuple cannot regress its cache. A Pi boot change
+clears capability/arming/session trust and forces negotiation of the running
+node. Human errors remain, with stable codes, retryability, and required-action
+fields when the capability is present.
+
 Nodes advertising `pi-execution-policy-diagnostics-v1` also accept a bounded
 authenticated diagnostic copy of the fixed execution-policy profile on FINALIZE
 and START. The Pi first proves that copy hashes to the existing opaque policy
@@ -80,9 +96,12 @@ remains authoritative.
 The stepper hold is a capture-only lease. A caller must complete Home / park,
 realtime-position sampling, and every other ordinary machine operation before
 acquiring it. The Pi deliberately keeps `_ordinary_lock` for the full held
-session, so an ordinary request on another connection waits until release; this
-prevents conflicting motion and is not a supported nesting mechanism. STOP
-continues to bypass that lock and can cancel an active hold.
+session. A conflicting Home, Jog, Start, command, or second hold from another
+connection is rejected busy at admission rather than queued for later motion.
+Connect/Reconnect are the exception: simultaneous lifecycle requests join one
+Pi-owned fresh-session operation and observe its same result. Monitoring needs
+no lease. STOP needs no lease, bypasses ordinary ownership, and can cancel an
+active hold or recovery.
 
 On the Pi, `PiJobService` owns exactly one local `MachineService`, so a remote
 client never opens, steals, or interleaves the controller serial port. Status and
@@ -92,6 +111,13 @@ calibration motion, and stepper-hold acquisition are rejected. STOP bypasses
 ordinary operation/store serialization and invokes the same immediate local
 `MachineService.request_stop()` primitive that a future physical Pi input can
 call.
+
+The server reserves authenticated worker capacity for priority STOP so ordinary
+or held requests cannot consume every admission slot. Client-supplied command
+timeouts are capped. Normal SIGINT/SIGTERM shutdown first publishes
+`SHUTTING_DOWN`, rejects new physical operations/recovery, closes admission,
+performs bounded fail-off, terminalizes durable active state, and drains workers
+under one overall deadline.
 
 The Windows and Pi saved configurations must both specify the same explicit
 primary `grbl` or `marlin` dialect and the same work area, guarded output
@@ -129,12 +155,19 @@ Pi-owned lifecycle remain pending physical confirmation. The secondary mode
 never uses a `P` parameter or `M107`.
 
 The Pi-local POSIX transport treats controller startup as a serial-session
-synchronization boundary. After the configured settle delay it atomically
-discards completed input lines, an unterminated receive fragment, and unread
-kernel RX bytes with an input-only flush before issuing the unchanged exact
-`M106 S0` handshake. An `Unknown command` startup rejection closes that session
+synchronization boundary for both primary and secondary devices. It obtains a
+canonical-path process lock and Linux `TIOCEXCL` ownership before starting a
+reader. After the configured settle delay it atomically discards completed input
+lines, an unterminated receive fragment, and unread kernel RX bytes with an
+input-only flush, then proves a bounded continuous quiet interval. Continuous
+chatter fails clearly. Receive synchronization never flushes transmitted data,
+and exclusivity is released on close or owner-process exit.
+
+For the secondary controller this precedes the unchanged exact `M106 S0`
+handshake. An `Unknown command` startup rejection closes that secondary session
 and permits one fresh-session retry; the second failure remains authoritative
-and fail closed. Receive synchronization never flushes transmitted data.
+and fail closed. For primary GRBL it precedes the full private-candidate identity
+and command-alignment handshake described below.
 
 ## Safety boundary
 
@@ -166,9 +199,9 @@ alive, and invalidate controller trust as applicable. A secondary rejection or
 timeout is itself a job failure. The sole Pi-side secondary reader also latches
 USB hangup/read failure without consuming command replies; the running job checks
 that latch between primary program lines and fails before sending further work.
-No job resumes
-automatically after controller loss. Reconnect and Home/park are required before
-later motion or arming.
+No job resumes automatically after controller loss. E3 may recover a fresh,
+identified communication session without motion; an explicit Home / park is
+still required before later motion or arming.
 
 On Pi service startup, persisted `starting`, `running`, or `stopping` metadata is
 atomically changed to `interrupted`; execution authorization is not restored and
@@ -187,25 +220,43 @@ resolves to the primary leaves recovery pending and blocks later START requests.
 After unresolved accepted bindings are reconciled, the current explicitly enabled
 secondary mapping independently establishes acknowledged startup OFF. Active
 configuration is never rewritten automatically. A process crash or power failure
-can prevent software
-cleanup while buffered controller work still exists, so the operator must use
-the physical stop/interlock, inspect both controllers, reconnect explicitly, and
-Home/park before any new run.
+can prevent software cleanup while buffered controller work still exists, so
+the operator must use the physical stop/interlock, inspect both controllers,
+establish or verify a fresh session, and Home/park before any new run.
 
-After a STOP/reset, a GRBL-derived controller can remain alarm-locked while the
-bridge and settings queries are healthy. During connection normalization only,
-an exact terminal `error:9` rejection of `M5` may be recovered with `$X` and a
-second acknowledged `M5`, and only when mandatory Home / park is configured.
-Connect does not home or move and remains HOME REQUIRED. Any other rejection,
-alarm, timeout, disconnect, failed unlock, or failed second `M5` fails closed.
+Every primary open is a new private session generation. After exclusive open,
+settle, purge, and quiet proof, explicit GRBL still must answer `$I` with a GRBL
+identity. The candidate then establishes acknowledged `M5`, queries `$$`,
+requires a valid `$1`, restores and verifies the configured finite value when it
+finds stale `$1=255`, parses `$G` and `$#` including the active workspace and
+`G92`, and requires a syntactically valid realtime `?` state frame. Only then is
+it published as `READY_HOME_REQUIRED`. It performs no Home, jog, motion, arming,
+laser output, Air Assist enable, or job resume.
 
-Before a `MachineService` instance has ever established a trusted controller
-session, a transient transport-open failure is retried exactly once after the
-failed transport is closed and a short delay. Invalid settings, unsupported
-protocol/backend choices, and missing or rejected bridge authentication are not
-retried. This startup accommodation never applies after a trusted session has
-been established; later loss or an uncertain exchange requires explicit
-disconnect/reconnect and Home / park.
+That order is deliberate: transport-owned quiet synchronization establishes a
+fresh byte boundary; `$I` proves identity; acknowledged `M5` establishes safe
+output before settings inspection; `$$` validates and, if necessary, repairs
+the finite `$1` value; `$G` establishes the modal/workspace context needed to
+interpret `$#`; and the final `?` proves realtime framing without moving the
+machine.
+
+After a STOP/reset, a GRBL-derived controller can remain alarm-locked. During
+connection normalization only, an exact terminal `error:9` rejection of `M5`
+may be recovered with `$X` and a second acknowledged `M5`, and only when
+mandatory Home / park is configured. Any other rejection, alarm, timeout,
+disconnect, failed unlock, failed second `M5`, restart banner, or malformed
+frame fails closed. Transient/ambiguous bring-up may make at most three complete
+fresh-transport attempts under one 15-second deadline. It never retries only the
+timed-out command on the same stream.
+
+Software STOP detaches the exact old generation, performs priority realtime
+stop/reset and best-effort primary `M5`, dispatches secondary OFF independently,
+closes the old transport, and starts one asynchronous communication-only
+recovery. A successful replacement ends at `READY_HOME_REQUIRED`; failure ends
+at one actionable `RECONNECT_REQUIRED`. Explicit Reconnect joins or starts the
+same Pi-owned atomic replacement rather than issuing separate desktop Disconnect
+and Connect operations. A later STOP cancels any candidate. No recovery begins
+during shutdown.
 
 GRBL Home / park normally relies on `$H`'s terminal `ok`. For compatible
 GRBL-derived controllers that omit that reply, E3 also accepts positive
@@ -213,6 +264,14 @@ realtime evidence of an active homing state followed by `Idle`. `Idle` without
 an observed active transition is not proof of homing. Alarm, error, STOP,
 disconnect, or timeout prevents the park move and invalidates the coordinate
 reference.
+
+Home / park owns one complete ordinary transaction and is accepted only for the
+current `READY_HOME_REQUIRED` generation. It publishes no coordinate reference
+until `M5`, the verified Home exchange, coordinate/zero-offset validation,
+`G21`, `G90`, optional park motion and planner completion, and the final
+coordinate query all succeed. An uncertain post-Home query quarantines that
+session and recovers communication only; it never claims Home success or
+automatically Homes again.
 
 The first physical bring-up should physically disable laser output when
 practical. When using the legacy browser entry point, `--laser-lockout` remains
@@ -258,9 +317,13 @@ terminal G-code files, any current receiving/prepared/active artifacts, and a
 24-hour stale-part cleanup on startup. Capacity fails closed when non-terminal
 records occupy every slot. Client-supplied paths are never accepted. Remote
 status/job records and Pi job-lifecycle logs are bounded and exclude bridge
-authentication secrets, authorization phrases, and G-code contents. The
-Pi-local `MachineService` controller log still contains the bounded commands it
-actually transmits and is deliberately stripped before remote status is returned.
+authentication secrets, authorization phrases, and complete G-code programs.
+The Pi strips the local top-level controller log and literal arm phrase before
+returning remote status. It intentionally retains the separately bounded,
+sanitized controller-session diagnostics and short failure transcript so a
+failed Connect or Home is diagnosable. Machine Manager can refresh and copy
+that bounded diagnostic view, including Windows/Pi build identity, protocol,
+and negotiated capabilities.
 
 The Windows facade records per-job upload bytes/time/throughput, finalization
 time, and START latency in its bounded diagnostic cache. Upload uses 64 KiB
@@ -498,8 +561,12 @@ control values, and precision-capture settings; only `camera.device` differs.
 7. Reconnect a new desktop client during a longer laser-off job and verify the
    same UUID/digest/progress without serial interruption or restart; also verify
    a completed-offline terminal result is discoverable.
-8. Exercise software STOP during a primary ACK wait, including after reconnect,
-   while keeping the physical emergency stop immediately available.
+8. Follow the separate
+   [primary GRBL session recovery runbook](GRBL_SESSION_RECOVERY_VALIDATION.md):
+   complete 20 consecutive laser-disabled short-job STOP → fresh communication
+   recovery → explicit Home cycles, including STOP during a primary ACK wait and
+   after a client reconnect, while keeping the physical emergency stop
+   immediately available.
 9. With output physically disabled, interrupt/restart the Pi service during a
    job and verify the durable state becomes `interrupted`, the restarted service
    sends no new primary program or motion commands, attempts only acknowledged

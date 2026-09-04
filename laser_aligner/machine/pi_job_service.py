@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import hmac
 import json
@@ -10,11 +11,21 @@ import time
 import uuid
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from typing import Any
 
 from ..air_assist import AirAssistCommands, AirAssistTarget
 from ..errors import MachineError, SafetyError
-from .pi_job_protocol import validate_guarded_output_polygon
+from .pi_job_protocol import (
+    ERROR_CONTROLLER_BUSY,
+    ERROR_CONTROLLER_REJECTED,
+    ERROR_CONTROLLER_STALE_SESSION,
+    ERROR_JOB_ACTIVE,
+    ERROR_SAFETY_REJECTED,
+    ERROR_SERVICE_SHUTTING_DOWN,
+    validate_guarded_output_polygon,
+    validate_session_generation,
+)
 from .pi_job_store import JobValidation, PiJobStore
 from .service import MachineService, ValidatedProgram
 
@@ -60,6 +71,7 @@ _STARTED_STATES = _ACTIVE_STATES | _TERMINAL_STATES
 _EXECUTION_POLICY_DIAGNOSTIC_KEYS = frozenset({"schema", "profile"})
 _MAX_EXECUTION_POLICY_DIAGNOSTIC_BYTES = 16 * 1024
 _MAX_PUBLIC_ERROR_CHARS = 512
+_LIFECYCLE_JOIN_TIMEOUT_SECONDS = 20.0
 _WATCH_INTERVAL_SECONDS = 0.1
 
 _PUBLIC_RECORD_FIELDS = frozenset(
@@ -99,6 +111,28 @@ _PUBLIC_RECORD_FIELDS = frozenset(
 
 class PiJobServiceError(MachineError):
     """A high-level Pi-owned machine or job request was rejected."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = ERROR_CONTROLLER_REJECTED,
+        retryable: bool = False,
+        action_required: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.retryable = retryable
+        self.action_required = action_required
+
+
+@dataclass(slots=True)
+class _LifecycleFlight:
+    expected_session_generation: int | None
+    ready: threading.Event
+    join_observed: threading.Event = field(default_factory=threading.Event)
+    result: dict[str, Any] | None = None
+    failure: tuple[str, str, bool, str | None] | None = None
 
 
 def _canonical_execution_policy_bytes(safety_profile: object) -> bytes:
@@ -263,12 +297,16 @@ class PiJobService:
         self.boot_id = str(uuid.uuid4()) if boot_id is None else str(boot_id)
         self._watch_interval = float(watch_interval_seconds)
         self._ordinary_lock = threading.RLock()
+        self._admission_lock = threading.Lock()
         self._state_lock = threading.RLock()
         self._cache_lock = threading.Lock()
         self._stop_event = threading.Event()
+        self._shutting_down = False
         self._watcher: threading.Thread | None = None
         self._active_job_id: str | None = None
         self._stop_requested_for: str | None = None
+        self._active_physical_operation: str | None = None
+        self._lifecycle_flight: _LifecycleFlight | None = None
         reconciled = self.store.reconcile_boot()
         interrupted = [
             record
@@ -303,6 +341,22 @@ class PiJobService:
         self._refresh_latest_result_cache()
         self._cached_machine_status: dict[str, Any] = {}
         self._refresh_machine_status()
+
+    def begin_shutdown(self) -> None:
+        """Close admission before sockets and controller resources are unwound."""
+
+        with self._state_lock:
+            self._shutting_down = True
+
+    def require_accepting_requests(self, operation: str) -> None:
+        with self._state_lock:
+            shutting_down = self._shutting_down
+        if shutting_down:
+            raise PiJobServiceError(
+                f"Cannot {operation} while the Pi machine service is shutting down",
+                code=ERROR_SERVICE_SHUTTING_DOWN,
+                action_required="restart_service",
+            )
 
     @staticmethod
     def _require_sha256(value: object, label: str) -> str:
@@ -647,8 +701,84 @@ class PiJobService:
         active = self._current_active_record()
         if active is not None:
             raise PiJobServiceError(
-                f"Cannot {operation} while Pi-owned job {active['job_id']} is active"
+                f"Cannot {operation} while Pi-owned job {active['job_id']} is active",
+                code=ERROR_JOB_ACTIVE,
+                retryable=True,
+                action_required="wait_for_job",
             )
+
+    def _require_session_generation(self, expected: int | None) -> None:
+        if expected is None:
+            return
+        expected = validate_session_generation(expected)
+        status = self.machine.status()
+        current = status.get("controller_session_generation")
+        if type(current) is not int or current < 0:
+            raise PiJobServiceError(
+                "Pi-local controller status omitted its session generation"
+            )
+        if expected != current:
+            raise PiJobServiceError(
+                "Controller session changed before the request could run",
+                code=ERROR_CONTROLLER_STALE_SESSION,
+                retryable=True,
+                action_required="refresh_status",
+            )
+
+    @staticmethod
+    def _busy(operation: str) -> PiJobServiceError:
+        return PiJobServiceError(
+            f"Cannot {operation} because another physical controller operation is active",
+            code=ERROR_CONTROLLER_BUSY,
+            retryable=True,
+            action_required="retry",
+        )
+
+    def _try_claim_physical_operation(self, operation: str) -> bool:
+        with self._admission_lock:
+            if not self._ordinary_lock.acquire(blocking=False):
+                return False
+            with self._state_lock:
+                self._active_physical_operation = operation
+            return True
+
+    def _release_physical_operation(self) -> None:
+        with self._admission_lock:
+            with self._state_lock:
+                self._active_physical_operation = None
+            self._ordinary_lock.release()
+
+    @staticmethod
+    def _lifecycle_failure(
+        exc: BaseException,
+    ) -> tuple[str, str, bool, str | None]:
+        code = getattr(exc, "code", None)
+        if type(code) is not str or not code:
+            code = (
+                ERROR_SAFETY_REJECTED
+                if isinstance(exc, SafetyError)
+                else ERROR_CONTROLLER_REJECTED
+            )
+        retryable = getattr(exc, "retryable", False) is True
+        action_required = getattr(exc, "action_required", None)
+        return (
+            _bounded_error(exc),
+            code,
+            retryable,
+            action_required if type(action_required) is str else None,
+        )
+
+    @staticmethod
+    def _raise_lifecycle_failure(
+        failure: tuple[str, str, bool, str | None],
+    ) -> None:
+        message, code, retryable, action_required = failure
+        raise PiJobServiceError(
+            message,
+            code=code,
+            retryable=retryable,
+            action_required=action_required,
+        )
 
     def _update_terminal(
         self,
@@ -835,6 +965,37 @@ class PiJobService:
         policy_digest: str,
         policy_diagnostic: object = None,
         authorization_phrase: str | None = None,
+        expected_session_generation: int | None = None,
+    ) -> dict[str, Any]:
+        self.require_accepting_requests("start a Pi-owned job")
+        if not self._try_claim_physical_operation("job.start"):
+            raise self._busy("start a Pi-owned job")
+        try:
+            self._require_session_generation(expected_session_generation)
+            return self._start_locked(
+                job_id,
+                program_digest=program_digest,
+                requires_laser_authorization=requires_laser_authorization,
+                requires_motion=requires_motion,
+                guarded_output_polygon_mm=guarded_output_polygon_mm,
+                policy_digest=policy_digest,
+                policy_diagnostic=policy_diagnostic,
+                authorization_phrase=authorization_phrase,
+            )
+        finally:
+            self._release_physical_operation()
+
+    def _start_locked(
+        self,
+        job_id: str,
+        *,
+        program_digest: str,
+        requires_laser_authorization: bool,
+        requires_motion: bool,
+        guarded_output_polygon_mm: object,
+        policy_digest: str,
+        policy_diagnostic: object = None,
+        authorization_phrase: str | None = None,
     ) -> dict[str, Any]:
         start_requested = time.monotonic()
         requested_generation = self.machine.operation_generation()
@@ -977,6 +1138,7 @@ class PiJobService:
         *,
         emergency: bool = False,
         requested_job_id: str | None = None,
+        _recover: bool = True,
     ) -> dict[str, Any] | None:
         if type(emergency) is not bool:
             raise PiJobServiceError("emergency must be a JSON boolean")
@@ -987,20 +1149,40 @@ class PiJobService:
             active_job_id = self._active_job_id
             if active_job_id is not None:
                 self._stop_requested_for = active_job_id
-        self.machine.request_stop(emergency=emergency)
+        self.machine.request_stop(emergency=emergency, _recover=_recover)
         LOGGER.warning(
             "Pi-local STOP issued active_job=%s emergency=%s",
             "none" if active_job_id is None else active_job_id[:8],
             emergency,
         )
         active: Mapping[str, Any] | None = None
+        if active_job_id is None and requested_job_id is not None:
+            try:
+                requested = self.store.get(requested_job_id)
+            except Exception:
+                requested = None
+            if requested is not None:
+                requested_state = str(_record_value(requested, "state", ""))
+                if requested_state in {"receiving", "prepared"}:
+                    try:
+                        requested = self._update_terminal(
+                            requested_job_id,
+                            "failed",
+                            error="STOP cancelled the job before controller START",
+                        )
+                    except Exception:
+                        pass
+                active = requested
         if active_job_id is None:
             try:
-                active = self.store.active()
+                active_record = self.store.active()
             except Exception:
-                active = None
-            if active is not None:
-                active_job_id = str(_record_value(active, "job_id", "")) or None
+                active_record = None
+            if active_record is not None:
+                active = active_record
+                active_job_id = (
+                    str(_record_value(active_record, "job_id", "")) or None
+                )
                 with self._state_lock:
                     if active_job_id is not None:
                         self._stop_requested_for = active_job_id
@@ -1073,29 +1255,155 @@ class PiJobService:
             self._refresh_latest_result_cache()
             return deleted
 
-    def _run_idle_machine_operation(self, operation: str, function: Any) -> Any:
+    def _run_idle_machine_operation(
+        self,
+        operation: str,
+        function: Any,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> Any:
+        self.require_accepting_requests(operation)
         requested_generation = self.machine.operation_generation()
-        with self._ordinary_lock:
+        if not self._try_claim_physical_operation(operation):
+            raise self._busy(operation)
+        try:
             self._require_idle(operation)
+            self._require_session_generation(expected_session_generation)
             try:
                 with self.machine.operation_scope(requested_generation):
                     return function()
             finally:
                 self._refresh_machine_status()
+        finally:
+            self._release_physical_operation()
 
-    def connect(self) -> dict[str, Any]:
-        return self._run_idle_machine_operation(
+    def _run_lifecycle_operation(
+        self,
+        operation: str,
+        function: Any,
+        *,
+        expected_session_generation: int | None,
+    ) -> dict[str, Any]:
+        """Join a concurrent connect/recovery without rerunning replacement."""
+
+        self.require_accepting_requests(operation)
+        if expected_session_generation is not None:
+            expected_session_generation = validate_session_generation(
+                expected_session_generation
+            )
+        requested_generation = self.machine.operation_generation()
+        with self._admission_lock:
+            owner = self._ordinary_lock.acquire(blocking=False)
+            if owner:
+                flight = _LifecycleFlight(
+                    expected_session_generation,
+                    threading.Event(),
+                )
+                with self._state_lock:
+                    self._active_physical_operation = "controller.lifecycle"
+                    self._lifecycle_flight = flight
+            else:
+                with self._state_lock:
+                    active_operation = self._active_physical_operation
+                    flight = self._lifecycle_flight
+                if active_operation != "controller.lifecycle" or flight is None:
+                    raise self._busy(operation)
+                if (
+                    expected_session_generation is not None
+                    and flight.expected_session_generation is not None
+                    and expected_session_generation
+                    != flight.expected_session_generation
+                ):
+                    raise PiJobServiceError(
+                        "Controller session changed before the request could join recovery",
+                        code=ERROR_CONTROLLER_STALE_SESSION,
+                        retryable=True,
+                        action_required="refresh_status",
+                    )
+                flight.join_observed.set()
+        if not owner:
+            if not flight.ready.wait(_LIFECYCLE_JOIN_TIMEOUT_SECONDS):
+                raise self._busy(operation)
+            if flight.failure is not None:
+                self._raise_lifecycle_failure(flight.failure)
+            if flight.result is None:
+                raise PiJobServiceError(
+                    "Shared controller lifecycle operation ended without a result"
+                )
+            return copy.deepcopy(flight.result)
+
+        try:
+            try:
+                self._require_idle(operation)
+                status = self.machine.status()
+                current_session_generation = status.get(
+                    "controller_session_generation"
+                )
+                newer_than_request = (
+                    expected_session_generation is not None
+                    and type(current_session_generation) is int
+                    and current_session_generation > expected_session_generation
+                )
+                stable = (
+                    newer_than_request
+                    and status.get("controller_reconnect_required") is not True
+                    and status.get("controller_recovery_in_progress") is not True
+                    and status.get("connected") is True
+                )
+                if stable:
+                    self._set_machine_status(status)
+                    result = status
+                else:
+                    self._require_session_generation(expected_session_generation)
+                    with self.machine.operation_scope(requested_generation):
+                        result = function()
+            finally:
+                self._refresh_machine_status()
+            if not isinstance(result, Mapping):
+                raise PiJobServiceError(
+                    "Controller lifecycle operation returned invalid status"
+                )
+            flight.result = copy.deepcopy(dict(result))
+            return copy.deepcopy(flight.result)
+        except Exception as exc:
+            flight.failure = self._lifecycle_failure(exc)
+            raise
+        finally:
+            with self._admission_lock:
+                with self._state_lock:
+                    if self._lifecycle_flight is flight:
+                        self._lifecycle_flight = None
+                        self._active_physical_operation = None
+                self._ordinary_lock.release()
+                flight.ready.set()
+
+    def connect(
+        self,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> dict[str, Any]:
+        return self._run_lifecycle_operation(
             "connect to the controller",
             self.machine.connect,
+            expected_session_generation=expected_session_generation,
         )
 
-    def replace_connection(self) -> dict[str, Any]:
-        return self._run_idle_machine_operation(
+    def replace_connection(
+        self,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> dict[str, Any]:
+        return self._run_lifecycle_operation(
             "replace the controller connection",
             self.machine.replace_connection,
+            expected_session_generation=expected_session_generation,
         )
 
-    def disconnect(self) -> dict[str, Any]:
+    def disconnect(
+        self,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> dict[str, Any]:
         def disconnect() -> dict[str, Any]:
             self.machine.disconnect()
             return self.machine.status()
@@ -1103,59 +1411,94 @@ class PiJobService:
         return self._run_idle_machine_operation(
             "disconnect the controller",
             disconnect,
+            expected_session_generation=expected_session_generation,
         )
 
     def prepare_photo_position(
         self,
         *,
         capture_home_position: bool = False,
+        expected_session_generation: int | None = None,
     ) -> dict[str, Any]:
         return self._run_idle_machine_operation(
             "prepare the photography position",
             lambda: self.machine.prepare_photo_position(
                 capture_home_position=capture_home_position
             ),
+            expected_session_generation=expected_session_generation,
         )
 
-    def prepare_job_start(self) -> dict[str, Any]:
+    def prepare_job_start(
+        self,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> dict[str, Any]:
         return self._run_idle_machine_operation(
             "prepare a job start",
             self.machine.prepare_job_start,
+            expected_session_generation=expected_session_generation,
         )
 
-    def jog(self, dx_mm: float, dy_mm: float, feed_mm_min: float) -> dict[str, Any]:
+    def jog(
+        self,
+        dx_mm: float,
+        dy_mm: float,
+        feed_mm_min: float,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> dict[str, Any]:
         return self._run_idle_machine_operation(
             "jog the controller",
             lambda: self.machine.jog(dx_mm, dy_mm, feed_mm_min),
+            expected_session_generation=expected_session_generation,
         )
 
     def manual_command(
         self,
         line: str,
         timeout: float | None = None,
+        *,
+        expected_session_generation: int | None = None,
     ) -> list[str]:
         return self._run_idle_machine_operation(
             "send a manual controller command",
             lambda: self.machine.send_command(line, timeout=timeout),
+            expected_session_generation=expected_session_generation,
         )
 
-    def realtime_position(self, timeout: float = 1.5) -> dict[str, Any]:
+    def realtime_position(
+        self,
+        timeout: float = 1.5,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> dict[str, Any]:
         return self._run_idle_machine_operation(
             "sample controller position",
             lambda: self.machine.sample_realtime_position(timeout=timeout),
+            expected_session_generation=expected_session_generation,
         )
 
     @contextmanager
-    def temporary_stepper_hold(self) -> Iterator[None]:
+    def temporary_stepper_hold(
+        self,
+        *,
+        expected_session_generation: int | None = None,
+    ) -> Iterator[None]:
+        self.require_accepting_requests("hold the controller steppers")
         requested_generation = self.machine.operation_generation()
-        with self._ordinary_lock:
+        if not self._try_claim_physical_operation("stepper_hold"):
+            raise self._busy("hold the controller steppers")
+        try:
             self._require_idle("hold the controller steppers")
+            self._require_session_generation(expected_session_generation)
             try:
                 with self.machine.operation_scope(requested_generation):
                     with self.machine.temporary_stepper_hold():
                         yield
             finally:
                 self._refresh_machine_status()
+        finally:
+            self._release_physical_operation()
 
     @staticmethod
     def _safe_machine_status(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -1166,35 +1509,140 @@ class PiJobService:
         status.pop("arm_phrase", None)
         return status
 
-    def _set_machine_status(self, raw: Mapping[str, Any]) -> None:
+    @staticmethod
+    def _legacy_controller_state(status: Mapping[str, Any]) -> str:
+        if status.get("controller_recovery_in_progress") is True:
+            return "RECOVERING"
+        if status.get("connecting") is True:
+            return "OPENING"
+        if status.get("controller_reconnect_required") is True:
+            return "RECONNECT_REQUIRED"
+        if status.get("connected") is not True:
+            return "DISCONNECTED"
+        if status.get("coordinate_reference_ready") is not True:
+            return "READY_HOME_REQUIRED"
+        return "READY_MOTION"
+
+    def _set_machine_status(self, raw: Mapping[str, Any]) -> bool:
         safe = self._safe_machine_status(raw)
+        session_generation = safe.get("controller_session_generation")
+        if type(session_generation) is not int or session_generation < 0:
+            raise PiJobServiceError(
+                "Pi-local controller status omitted its session generation"
+            )
+        state_revision = safe.get("controller_state_revision")
+        if type(state_revision) is not int or state_revision < 0:
+            raise PiJobServiceError(
+                "Pi-local controller status omitted its state revision"
+            )
+        controller_state = safe.get("controller_state")
+        if type(controller_state) is not str or not controller_state:
+            controller_state = self._legacy_controller_state(safe)
         safe.update(
             {
                 "boot_id": self.boot_id,
+                # `generation` is retained for older desktop clients. It is the
+                # STOP-cancellation epoch and is not a controller-session CAS.
                 "generation": self.machine.operation_generation(),
+                "controller_state": controller_state,
+                "controller_session_generation": session_generation,
+                "controller_state_revision": state_revision,
+                "state_revision": state_revision,
                 "execution_owner": EXECUTION_OWNER,
             }
         )
         with self._cache_lock:
+            cached_revision = self._cached_machine_status.get(
+                "controller_state_revision"
+            )
+            cached_generation = self._cached_machine_status.get(
+                "controller_session_generation"
+            )
+            if (
+                type(cached_revision) is int
+                and state_revision < cached_revision
+            ) or (
+                type(cached_generation) is int
+                and session_generation < cached_generation
+            ):
+                return False
             self._cached_machine_status = safe
+        return True
 
-    def _refresh_machine_status(self) -> None:
-        self._set_machine_status(self.machine.status())
+    def _refresh_machine_status(self) -> bool:
+        return self._set_machine_status(self.machine.status())
 
     def status(self) -> dict[str, Any]:
+        # MachineService recovery is asynchronous. A monitor request must sample
+        # the authoritative live state instead of freezing the status captured
+        # immediately after STOP at RECOVERING.
+        self._refresh_machine_status()
         with self._cache_lock:
             return dict(self._cached_machine_status)
 
+    def response_metadata(self) -> dict[str, Any]:
+        status = self.status()
+        return {
+            "boot_id": self.boot_id,
+            "state_revision": int(status.get("controller_state_revision", 0)),
+            "controller_session_generation": int(
+                status.get("controller_session_generation", 0)
+            ),
+            "controller_state": str(status.get("controller_state", "DISCONNECTED")),
+        }
+
+    def monitor_snapshot(self) -> dict[str, Any]:
+        """Return one bounded machine/job observation for a monitor poll."""
+
+        status = self.status()
+        active = self.active()
+        latest = None if active is not None else self.latest_result()
+        return {
+            "status": status,
+            "active_job": active,
+            "latest_job": latest,
+        }
+
     def shutdown(self, *, stop_machine: bool = True) -> None:
-        self._stop_event.set()
+        self.begin_shutdown()
+        failures: list[str] = []
         if stop_machine:
-            self.machine.request_stop(emergency=False)
+            try:
+                self.stop(emergency=False, _recover=False)
+            except Exception as exc:
+                failures.append(_bounded_error(exc))
+                try:
+                    self.machine.request_stop(emergency=False, _recover=False)
+                except Exception as fallback_exc:
+                    failures.append(_bounded_error(fallback_exc))
+            try:
+                self.machine.shutdown(deadline=time.monotonic() + 2.0)
+            except Exception as exc:
+                failures.append(_bounded_error(exc))
         watcher = self._watcher
         if watcher is not None and watcher.is_alive():
             watcher.join(timeout=2.0)
-        if stop_machine:
+        self._stop_event.set()
+        if watcher is not None and watcher.is_alive():
+            watcher.join(timeout=0.25)
+        if watcher is not None and watcher.is_alive():
+            failures.append("Pi job watcher did not stop before the shutdown deadline")
+        with self._state_lock:
+            active_job_id = self._active_job_id
+        if active_job_id is not None:
             try:
-                self.machine.disconnect()
-            except Exception:
-                pass
-        self._refresh_machine_status()
+                self._update_terminal(
+                    active_job_id,
+                    "interrupted",
+                    error="Pi machine service shut down before a terminal controller result",
+                )
+            except Exception as exc:
+                failures.append(_bounded_error(exc))
+        try:
+            self._refresh_machine_status()
+        except Exception as exc:
+            failures.append(_bounded_error(exc))
+        if failures:
+            raise PiJobServiceError(
+                f"Pi machine shutdown incomplete: {'; '.join(failures)}"
+            )

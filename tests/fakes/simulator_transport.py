@@ -8,6 +8,8 @@ from .simulator_controller import SimulatedController
 class SimulatedTransport:
     """In-process transport mechanics backed by a simulated controller peer."""
 
+    test_only_allow_legacy_input_synchronization = True
+
     def __init__(self, controller: SimulatedController | None = None):
         self.is_open = False
         self._queue: queue.Queue[str] = queue.Queue()

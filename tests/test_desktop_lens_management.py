@@ -238,6 +238,15 @@ def test_lens_tab_shows_current_group_capture_evidence_and_worst_views(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime = _runtime(tmp_path)
+    machine_status = {
+        **runtime.context.machine.status(),
+        "controller_state": "READY_HOME_REQUIRED",
+        "controller_session_generation": 1,
+        "controller_state_revision": 1,
+        "allow_motion": True,
+        "connected": True,
+    }
+    monkeypatch.setattr(runtime.context.machine, "status", lambda: machine_status)
     dialog = MachineSetupDialog(runtime)
     camera = runtime.context.camera.status()
     requested_sizes: list[tuple[int, int] | None] = []

@@ -26,9 +26,13 @@ from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
+    CAPABILITY_PI_STRUCTURED_ERRORS,
+    ERROR_SAFETY_REJECTED,
     PROTOCOL_VERSION,
     PiJobProtocolError,
 )
@@ -115,10 +119,32 @@ class FakePi:
         self.connected = True
         self.before_request: Any = None
         self.raise_for_action: dict[str, Exception] = {}
-        self.capabilities = [CAPABILITY_PI_OWNED_JOBS]
+        self.capabilities = [
+            CAPABILITY_PI_OWNED_JOBS,
+            CAPABILITY_PI_CONTROLLER_SESSION,
+            CAPABILITY_PI_STRUCTURED_ERRORS,
+            CAPABILITY_PI_COHERENT_STATUS,
+        ]
+        self.boot_id = str(uuid.uuid4())
+        self.state_revision = 0
+        self.session_generation = 0
+        self.controller_state = "READY_MOTION"
+        self.build = {"version": "test", "revision": "test-revision"}
 
     def _response(self, request: dict[str, Any], **body: Any) -> dict[str, Any]:
-        return {"ok": True, "request_id": request["request_id"], **body}
+        response = {"ok": True, "request_id": request["request_id"], **body}
+        if CAPABILITY_PI_CONTROLLER_SESSION in self.capabilities:
+            response.update(
+                {
+                    "protocol_version": PROTOCOL_VERSION,
+                    "boot_id": self.boot_id,
+                    "build": copy.deepcopy(self.build),
+                    "state_revision": self.state_revision,
+                    "controller_session_generation": self.session_generation,
+                    "controller_state": self.controller_state,
+                }
+            )
+        return response
 
     def _machine_status(self) -> dict[str, Any]:
         return {
@@ -181,7 +207,20 @@ class FakePi:
                 actions=copy.deepcopy(SERVER_ACTION_SCHEMAS),
             )
         if action == ACTION_MACHINE_STATUS:
-            return self._response(request, status=self._machine_status())
+            body: dict[str, Any] = {"status": self._machine_status()}
+            if CAPABILITY_PI_COHERENT_STATUS in self.capabilities:
+                active = (
+                    copy.deepcopy(self.jobs[self.active_job_id])
+                    if self.active_job_id is not None
+                    else None
+                )
+                latest = (
+                    copy.deepcopy(self.jobs[next(reversed(self.jobs))])
+                    if active is None and self.jobs
+                    else None
+                )
+                body.update(active_job=active, latest_job=latest)
+            return self._response(request, **body)
         if action == ACTION_MACHINE_CONNECT:
             self.connected = True
             return self._response(request, status=self._machine_status())
@@ -402,11 +441,14 @@ def test_remote_policy_mismatch_uses_friendly_desktop_error(
         deadline: float | None = None,
     ) -> dict[str, Any]:
         if request["action"] == ACTION_JOB_FINALIZE:
-            return {
-                "ok": False,
-                "request_id": request["request_id"],
-                "error": "Execution policy does not match Pi-local safety settings",
-            }
+            return fake._response(
+                request,
+                ok=False,
+                error="Execution policy does not match Pi-local safety settings",
+                error_code=ERROR_SAFETY_REJECTED,
+                retryable=False,
+                action_required=None,
+            )
         return fake(
             host,
             port,
@@ -525,6 +567,186 @@ def test_cached_status_never_performs_network_io(
     assert len(fake.requests) == calls
     assert first == second
     assert first["monitor_connected"] is True
+
+
+def test_session_capabilities_publish_boot_build_and_use_coherent_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    fake.state_revision = 7
+    fake.session_generation = 3
+    _install_fake(monkeypatch, fake)
+    service = _service()
+
+    service._refresh_once()
+
+    status = service.status()
+    assert status["node_boot_id"] == fake.boot_id
+    assert status["node_build"] == fake.build
+    assert status["state_revision"] == 7
+    assert status["controller_session_generation"] == 3
+    assert [item["action"] for item in fake.requests] == [
+        ACTION_SERVICE_CAPABILITIES,
+        ACTION_MACHINE_STATUS,
+    ]
+    assert "client_id" not in fake.requests[-1]
+
+    service.connect()
+    connect_request = fake.requests[-1]
+    assert connect_request["client_id"] == service._client_id
+    assert connect_request["expected_boot_id"] == fake.boot_id
+    assert connect_request["expected_session_generation"] == 3
+
+
+def test_stop_during_capability_negotiation_prevents_later_connect_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    stopped = False
+
+    def stop_during_capabilities(action: str, _request: dict[str, Any]) -> None:
+        nonlocal stopped
+        if action == ACTION_SERVICE_CAPABILITIES and not stopped:
+            stopped = True
+            service.request_stop()
+
+    fake.before_request = stop_during_capabilities
+
+    with pytest.raises(MachineError, match="cancelled by software STOP"):
+        service.connect()
+
+    assert [request["action"] for request in fake.requests] == [
+        ACTION_SERVICE_CAPABILITIES,
+        ACTION_JOB_STOP,
+    ]
+
+
+def test_older_same_boot_response_cannot_regress_cached_controller_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    fake.state_revision = 8
+    fake.session_generation = 4
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+
+    fake.state_revision = 7
+    fake.session_generation = 3
+    stale_response = fake._response(
+        {"request_id": str(uuid.uuid4())},
+        status={**fake._machine_status(), "connected": False},
+    )
+    accepted = service._cache_remote_status(
+        stale_response["status"],
+        job_record=None,
+        response=stale_response,
+    )
+
+    assert accepted is False
+    assert service.status()["connected"] is True
+    assert service.status()["state_revision"] == 8
+    assert service.status()["controller_session_generation"] == 4
+
+
+def test_delayed_status_after_local_stop_cannot_replace_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    fake.state_revision = 8
+    fake.session_generation = 4
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    assert service.status()["connected"] is True
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    def delay_status(action: str, _request: dict[str, Any]) -> None:
+        if action == ACTION_MACHINE_STATUS:
+            entered.set()
+            assert release.wait(2.0)
+
+    fake.before_request = delay_status
+    fake.connected = False
+    fake.state_revision = 9
+    errors: list[BaseException] = []
+
+    def refresh() -> None:
+        try:
+            service._refresh_once()
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=refresh)
+    worker.start()
+    assert entered.wait(1.0)
+    service.request_stop()
+    release.set()
+    worker.join(2.0)
+
+    assert not worker.is_alive()
+    assert len(errors) == 1
+    assert "cancelled by software STOP" in str(errors[0])
+    assert service.status()["connected"] is True
+
+
+def test_boot_change_invalidates_capability_cache_then_renegotiates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakePi()
+    fake.state_revision = 9
+    fake.session_generation = 5
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+
+    replacement_boot = str(uuid.uuid4())
+    fake.boot_id = replacement_boot
+    fake.state_revision = 0
+    fake.session_generation = 0
+    fake.connected = False
+    fake.controller_state = "DISCONNECTED"
+    fake.requests.clear()
+    service._refresh_once()
+
+    assert service.status()["node_boot_id"] == replacement_boot
+    assert service.status()["connected"] is False
+    assert service.status()["status_stale"] is True
+    assert "restarted" in str(service.status()["status_error"]).lower()
+    assert service._capabilities_verified is False
+
+    service._refresh_once()
+    assert fake.requests[-2]["action"] == ACTION_SERVICE_CAPABILITIES
+    assert fake.requests[-1]["action"] == ACTION_MACHINE_STATUS
+    assert service._capabilities_verified is True
+
+
+def test_structured_rejection_surfaces_machine_readable_fields() -> None:
+    service = _service()
+    with service._state_lock:
+        service._structured_errors_supported = True
+    request_id = str(uuid.uuid4())
+    with pytest.raises(MachineError) as caught:
+        service._validate_response(
+            {
+                "ok": False,
+                "request_id": request_id,
+                "error": "another controller operation is active",
+                "error_code": "controller.busy",
+                "retryable": True,
+                "action_required": "retry",
+            },
+            request_id=request_id,
+            action=ACTION_MACHINE_CONNECT,
+        )
+
+    assert caught.value.error_code == "controller.busy"
+    assert caught.value.retryable is True
+    assert caught.value.action_required == "retry"
 
 
 def test_background_monitor_refreshes_and_detaches_without_rpc(
@@ -738,7 +960,10 @@ def test_fresh_client_displays_latest_terminal_but_cannot_claim_receipt(
 
     assert service.status()["job"]["job_id"] == job_id
     assert service.status()["job"]["state"] == "complete"
-    assert ACTION_JOB_LATEST in [request["action"] for request in fake.requests]
+    assert [request["action"] for request in fake.requests] == [
+        ACTION_SERVICE_CAPABILITIES,
+        ACTION_MACHINE_STATUS,
+    ]
     # A new Windows process did not create this exact UUID, so it cannot use a
     # Pi terminal record as proof for a calibration run started in this process.
     assert service.successful_job_receipt(digest, not_before=0.0) is None
@@ -980,11 +1205,7 @@ def test_shutdown_capability_and_unreachable_disconnect_share_one_budget(
 
     elapsed = time.monotonic() - started
     assert elapsed < 0.3
-    assert [action for action, _timeout in calls] == [
-        ACTION_SERVICE_CAPABILITIES,
-        ACTION_MACHINE_DISCONNECT,
-    ]
-    assert 0.0 < calls[1][1] < calls[0][1] * 0.5
+    assert [action for action, _timeout in calls] == [ACTION_SERVICE_CAPABILITIES]
     assert service.status()["status_stale"] is True
 
 
@@ -1395,7 +1616,7 @@ def test_nested_stepper_hold_uses_one_outer_same_channel_lease(
     monkeypatch.setattr(
         service,
         "_release_stepper_hold",
-        lambda _channel, lease_id: released.append(lease_id),
+        lambda _channel, lease_id, **_kwargs: released.append(lease_id),
     )
 
     with service.temporary_stepper_hold():

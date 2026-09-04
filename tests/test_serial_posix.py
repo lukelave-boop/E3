@@ -1,7 +1,9 @@
+import multiprocessing
 import os
 import select
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -40,6 +42,31 @@ def test_posix_serial_round_trip_over_pseudoterminal() -> None:
 
         serial.write_raw(b"?")
         assert read_master(master_fd) == b"?"
+    finally:
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_posix_serial_invalid_utf8_after_synchronization_latches_fault() -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    master_fd, slave_fd = pty.openpty()
+    serial = PosixSerial(os.ttyname(slave_fd), 115200)
+    try:
+        serial.open()
+        serial.synchronize_input(quiet_interval=0.01, timeout=0.1)
+        os.write(master_fd, b"\xff\r\n")
+        deadline = time.monotonic() + 1.0
+        while serial.fault is None and time.monotonic() < deadline:
+            time.sleep(0.01)
+
+        with pytest.raises(MachineError, match="invalid UTF-8"):
+            serial.raise_if_faulted()
+        with pytest.raises(MachineError, match="invalid UTF-8"):
+            serial.read_line(timeout=0.1)
     finally:
         serial.close()
         os.close(master_fd)
@@ -155,12 +182,131 @@ def test_synchronize_input_discards_queued_partial_and_kernel_rx_bytes(
         # Synchronization must flush that unread byte as well as framed state.
         with serial._receive_lock:
             os.write(master_fd, b"K")
-            serial.synchronize_input()
+            evidence = serial.synchronize_input(
+                quiet_interval=0.03,
+                timeout=0.25,
+            )
 
         assert serial.read_line(timeout=0.05) is None
         assert bytes(serial._buffer) == b""
+        assert evidence.configured_endpoint == os.ttyname(slave_fd)
+        assert evidence.resolved_endpoint
+        assert evidence.quiet_interval_seconds == 0.03
+        assert evidence.elapsed_seconds >= 0.03
+        assert evidence.discarded_lines == 2
+        assert evidence.discarded_bytes >= len(b"\x13\xfaBAD")
         serial.write_line("M106 S0")
         assert read_master(master_fd) == b"M106 S0\n"
+    finally:
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_posix_serial_exclusive_owner_releases_on_close() -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    master_fd, slave_fd = pty.openpty()
+    slave_path = os.ttyname(slave_fd)
+    first = PosixSerial(slave_path, 115200)
+    second = PosixSerial(slave_path, 115200)
+    try:
+        first.open()
+        with pytest.raises(MachineError, match="already owned|already open"):
+            second.open()
+
+        first.close()
+        second.open()
+        second.write_line("M5")
+        assert read_master(master_fd) == b"M5\n"
+    finally:
+        first.close()
+        second.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_posix_serial_process_lock_releases_when_owner_process_dies(
+    tmp_path: Path,
+) -> None:
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    endpoint = str(tmp_path / "controller-device")
+    context = multiprocessing.get_context("fork")
+    ready = context.Event()
+
+    def hold_lock() -> None:
+        serial = PosixSerial(endpoint, 115200)
+        serial._exclusive_lock_fd = serial._acquire_process_lock(endpoint)
+        ready.set()
+        time.sleep(30)
+
+    owner = context.Process(target=hold_lock)
+    owner.start()
+    lock_fd: int | None = None
+    try:
+        assert ready.wait(timeout=3)
+        contender = PosixSerial(endpoint, 115200)
+        with pytest.raises(MachineError, match="already owned"):
+            contender._acquire_process_lock(endpoint)
+
+        owner.terminate()
+        owner.join(timeout=3)
+        assert not owner.is_alive()
+
+        lock_fd = contender._acquire_process_lock(endpoint)
+    finally:
+        if owner.is_alive():
+            owner.terminate()
+            owner.join(timeout=3)
+        PosixSerial._release_process_lock(lock_fd)
+
+
+def test_posix_serial_synchronization_rejects_continuous_chatter() -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    master_fd, slave_fd = pty.openpty()
+    serial = PosixSerial(os.ttyname(slave_fd), 115200)
+    stop_chatter = threading.Event()
+
+    def chatter() -> None:
+        while not stop_chatter.is_set():
+            os.write(master_fd, b"noise\r\n")
+            time.sleep(0.005)
+
+    writer: threading.Thread | None = None
+    try:
+        serial.open()
+        writer = threading.Thread(target=chatter, daemon=True)
+        writer.start()
+        with pytest.raises(MachineError, match="did not become quiet"):
+            serial.synchronize_input(quiet_interval=0.04, timeout=0.15)
+    finally:
+        stop_chatter.set()
+        if writer is not None:
+            writer.join(timeout=1)
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_posix_serial_synchronization_never_flushes_transmitted_bytes() -> None:
+    import pty
+
+    from laser_aligner.machine.serial_posix import PosixSerial
+
+    master_fd, slave_fd = pty.openpty()
+    serial = PosixSerial(os.ttyname(slave_fd), 115200)
+    try:
+        serial.open()
+        serial.write_line("M5")
+        serial.synchronize_input(quiet_interval=0.02, timeout=0.2)
+
+        assert read_master(master_fd) == b"M5\n"
     finally:
         serial.close()
         os.close(master_fd)

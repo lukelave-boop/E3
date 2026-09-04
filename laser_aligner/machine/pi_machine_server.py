@@ -7,12 +7,15 @@ import logging
 import math
 import socket
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from ..errors import MachineError, SafetyError
+from ..identity import application_version, build_revision
 from .pi_job_protocol import (
     ACTION_JOB_ACTIVE,
     ACTION_JOB_BEGIN,
@@ -24,23 +27,38 @@ from .pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
+    CAPABILITY_PI_STRUCTURED_ERRORS,
+    ERROR_CONTROLLER_BUSY,
+    ERROR_CONTROLLER_REJECTED,
+    ERROR_CONTROLLER_STALE_SESSION,
+    ERROR_INTERNAL,
+    ERROR_INVALID_REQUEST,
+    ERROR_JOB_ACTIVE,
+    ERROR_REQUEST_CONFLICT,
+    ERROR_SAFETY_REJECTED,
+    ERROR_SERVICE_SHUTTING_DOWN,
     PROTOCOL_VERSION,
     AuthenticatedChannel,
     PiJobProtocolError,
     authenticate_server,
     decode_upload_chunk,
+    validate_boot_id,
+    validate_client_id,
     validate_guarded_output_polygon,
     validate_job_id,
     validate_job_name,
     validate_job_size,
     validate_request_id,
+    validate_session_generation,
     validate_sha256,
     validate_upload_offset,
 )
-from .pi_job_service import EXECUTION_OWNER, PiJobService
+from .pi_job_service import EXECUTION_OWNER, PiJobService, PiJobServiceError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -77,6 +95,9 @@ SERVER_CAPABILITIES = (
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
+    CAPABILITY_PI_CONTROLLER_SESSION,
+    CAPABILITY_PI_STRUCTURED_ERRORS,
+    CAPABILITY_PI_COHERENT_STATUS,
     "same-channel-stepper-hold-v1",
 )
 
@@ -87,12 +108,18 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
     ACTION_SERVICE_CAPABILITIES: {
         "required": (),
         "optional": (),
-        "response": ("protocol_version", "capabilities", "actions"),
+        "response": (
+            "protocol_version",
+            "capabilities",
+            "actions",
+            "boot_id",
+            "build",
+        ),
     },
     ACTION_MACHINE_STATUS: {
         "required": (),
         "optional": (),
-        "response": ("status",),
+        "response": ("status", "active_job", "latest_job"),
     },
     ACTION_MACHINE_CONNECT: {
         "required": (),
@@ -229,11 +256,61 @@ _MONITOR_ACTIONS = frozenset(
     }
 )
 _MAX_CLIENTS = 16
+_PRIORITY_RESERVE_CLIENTS = 2
 _MAX_REPLAY_ENTRIES = 256
 _HANDSHAKE_TIMEOUT_SECONDS = 5.0
+_PRIORITY_HANDSHAKE_TIMEOUT_SECONDS = 1.0
 _REQUEST_TIMEOUT_SECONDS = 130.0
 _STEPPER_HOLD_LEASE_SECONDS = 120.0
+_MAX_COMMAND_TIMEOUT_SECONDS = 120.0
+_MAX_REALTIME_TIMEOUT_SECONDS = 10.0
 _MAX_ERROR_CHARACTERS = 512
+_SHUTDOWN_JOIN_SECONDS = 2.0
+
+_SESSION_MUTATING_ACTIONS = frozenset(
+    {
+        ACTION_MACHINE_CONNECT,
+        ACTION_MACHINE_REPLACE_CONNECTION,
+        ACTION_MACHINE_DISCONNECT,
+        ACTION_MACHINE_PREPARE_PHOTO_POSITION,
+        ACTION_MACHINE_PREPARE_JOB_START,
+        ACTION_MACHINE_JOG,
+        ACTION_MACHINE_COMMAND,
+        ACTION_MACHINE_REALTIME_POSITION,
+        ACTION_MACHINE_STEPPER_HOLD,
+        ACTION_JOB_START,
+    }
+)
+_SESSION_CONTEXT_FIELDS = (
+    "client_id",
+    "expected_boot_id",
+    "expected_session_generation",
+)
+for _session_action in _SESSION_MUTATING_ACTIONS:
+    _session_schema = SERVER_ACTION_SCHEMAS[_session_action]
+    _session_schema["required"] = (
+        *tuple(_session_schema["required"]),
+        *_SESSION_CONTEXT_FIELDS,
+    )
+_SHUTDOWN_ALLOWED_ACTIONS = _MONITOR_ACTIONS | frozenset(
+    {ACTION_SERVICE_CAPABILITIES, ACTION_JOB_STOP}
+)
+_ERROR_CODES = frozenset(
+    {
+        ERROR_CONTROLLER_BUSY,
+        ERROR_CONTROLLER_REJECTED,
+        ERROR_CONTROLLER_STALE_SESSION,
+        ERROR_INTERNAL,
+        ERROR_INVALID_REQUEST,
+        ERROR_JOB_ACTIVE,
+        ERROR_REQUEST_CONFLICT,
+        ERROR_SAFETY_REJECTED,
+        ERROR_SERVICE_SHUTTING_DOWN,
+    }
+)
+_ACTIONS_REQUIRED = frozenset(
+    {"refresh_status", "restart_service", "retry", "wait_for_job"}
+)
 
 
 @dataclass(slots=True)
@@ -264,11 +341,21 @@ def _request_fingerprint(request: Mapping[str, Any]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _number(value: object, label: str, *, positive: bool = False) -> float:
+def _number(
+    value: object,
+    label: str,
+    *,
+    positive: bool = False,
+    maximum: float | None = None,
+) -> float:
     if type(value) not in {int, float}:
         raise PiJobProtocolError(f"{label} must be a finite number")
     result = float(value)
-    if not math.isfinite(result) or (positive and result <= 0.0):
+    if (
+        not math.isfinite(result)
+        or (positive and result <= 0.0)
+        or (maximum is not None and result > maximum)
+    ):
         raise PiJobProtocolError(f"{label} must be a finite number")
     return result
 
@@ -304,6 +391,7 @@ class PiMachineServer:
         self._listener: socket.socket | None = None
         self._bound_port: int | None = None
         self._slots = threading.BoundedSemaphore(_MAX_CLIENTS)
+        self._priority_slots = threading.BoundedSemaphore(_PRIORITY_RESERVE_CLIENTS)
         self._threads_lock = threading.Lock()
         self._threads: set[threading.Thread] = set()
         self._connections: set[socket.socket] = set()
@@ -312,6 +400,10 @@ class PiMachineServer:
         self._replay_lock = threading.Lock()
         self._replay: OrderedDict[str, _ReplayEntry] = OrderedDict()
         self._lease_ids: OrderedDict[str, None] = OrderedDict()
+        self._build = {
+            "version": application_version(),
+            "revision": build_revision(),
+        }
 
     @property
     def bound_port(self) -> int:
@@ -322,6 +414,7 @@ class PiMachineServer:
     def stop(self) -> None:
         """Stop accepting network clients without stopping a Pi-owned job."""
 
+        self.service.begin_shutdown()
         self._stop.set()
         listener = self._listener
         if listener is not None:
@@ -350,6 +443,20 @@ class PiMachineServer:
         status["monitoring_requests_in_flight"] = self._monitor_count()
         return status
 
+    def _snapshot(self) -> dict[str, Any]:
+        snapshot = self.service.monitor_snapshot()
+        status = dict(snapshot["status"])
+        status["monitoring_requests_in_flight"] = self._monitor_count()
+        snapshot["status"] = status
+        return snapshot
+
+    def _response_metadata(self) -> dict[str, Any]:
+        return {
+            "protocol_version": PROTOCOL_VERSION,
+            "build": dict(self._build),
+            **self.service.response_metadata(),
+        }
+
     @staticmethod
     def _request_id_for_error(request: Mapping[str, Any]) -> str | None:
         raw = request.get("request_id")
@@ -357,15 +464,36 @@ class PiMachineServer:
             return raw
         return None
 
-    @staticmethod
     def _error_response(
+        self,
         request_id: str | None,
         exc: BaseException,
     ) -> dict[str, Any]:
+        code = getattr(exc, "code", None)
+        retryable = getattr(exc, "retryable", False)
+        action_required = getattr(exc, "action_required", None)
+        if type(code) is not str or code not in _ERROR_CODES:
+            if isinstance(exc, PiJobProtocolError):
+                code = ERROR_INVALID_REQUEST
+            elif isinstance(exc, SafetyError):
+                code = ERROR_SAFETY_REJECTED
+            elif isinstance(exc, MachineError):
+                code = ERROR_CONTROLLER_REJECTED
+            else:
+                code = ERROR_INTERNAL
         return {
             "ok": False,
             "request_id": request_id,
             "error": _bounded_error(exc),
+            "error_code": code,
+            "retryable": retryable is True,
+            "action_required": (
+                action_required
+                if type(action_required) is str
+                and action_required in _ACTIONS_REQUIRED
+                else None
+            ),
+            **self._response_metadata(),
         }
 
     @staticmethod
@@ -375,7 +503,13 @@ class PiMachineServer:
             raise PiJobProtocolError(f"Unsupported E3 machine action: {action}")
         required = set(schema["required"])
         optional = set(schema["optional"])
-        allowed = {"action", "request_id"} | required | optional
+        allowed = {
+            "action",
+            "request_id",
+            "client_id",
+            "expected_boot_id",
+            "expected_session_generation",
+        } | required | optional
         missing = required - set(request)
         if missing:
             raise PiJobProtocolError(
@@ -386,6 +520,26 @@ class PiMachineServer:
             raise PiJobProtocolError(
                 f"{action} contains unsupported fields: {', '.join(sorted(unexpected))}"
             )
+
+    @staticmethod
+    def _request_context(
+        request: Mapping[str, Any],
+    ) -> tuple[str | None, str | None, int | None]:
+        raw_client_id = request.get("client_id")
+        client_id = (
+            None if raw_client_id is None else validate_client_id(raw_client_id)
+        )
+        raw_boot_id = request.get("expected_boot_id")
+        expected_boot_id = (
+            None if raw_boot_id is None else validate_boot_id(raw_boot_id)
+        )
+        raw_generation = request.get("expected_session_generation")
+        expected = (
+            None
+            if raw_generation is None
+            else validate_session_generation(raw_generation)
+        )
+        return client_id, expected_boot_id, expected
 
     @staticmethod
     def _binding(request: Mapping[str, Any]) -> dict[str, Any]:
@@ -414,24 +568,60 @@ class PiMachineServer:
 
     def _dispatch(self, request: Mapping[str, Any], action: str) -> dict[str, Any]:
         self._validate_schema(request, action)
+        _client_id, expected_boot_id, expected_generation = self._request_context(
+            request
+        )
+        if action in _SESSION_MUTATING_ACTIONS:
+            if (
+                _client_id is None
+                or expected_boot_id is None
+                or expected_generation is None
+            ):
+                raise PiJobProtocolError(
+                    "Controller mutation requires client/session context"
+                )
+        elif (
+            _client_id is not None
+            or expected_generation is not None
+            or expected_boot_id is not None
+        ):
+            raise PiJobProtocolError(
+                "Controller-session expectations are not valid for this action"
+            )
+        if expected_boot_id is not None and expected_boot_id != self.service.boot_id:
+            raise PiJobServiceError(
+                "Pi process restarted before the request could run",
+                code=ERROR_CONTROLLER_STALE_SESSION,
+                retryable=True,
+                action_required="refresh_status",
+            )
+        if action not in _SHUTDOWN_ALLOWED_ACTIONS:
+            self.service.require_accepting_requests(action)
         if action == ACTION_SERVICE_CAPABILITIES:
             return {
                 "protocol_version": PROTOCOL_VERSION,
                 "capabilities": list(SERVER_CAPABILITIES),
                 "actions": copy.deepcopy(SERVER_ACTION_SCHEMAS),
                 "boot_id": self.service.boot_id,
+                "build": dict(self._build),
                 "execution_owner": EXECUTION_OWNER,
             }
         if action == ACTION_MACHINE_STATUS:
-            return {"status": self._status()}
+            return self._snapshot()
         if action == ACTION_MACHINE_CONNECT:
-            self.service.connect()
+            self.service.connect(
+                expected_session_generation=expected_generation,
+            )
             return {"status": self._status()}
         if action == ACTION_MACHINE_REPLACE_CONNECTION:
-            self.service.replace_connection()
+            self.service.replace_connection(
+                expected_session_generation=expected_generation,
+            )
             return {"status": self._status()}
         if action == ACTION_MACHINE_DISCONNECT:
-            self.service.disconnect()
+            self.service.disconnect(
+                expected_session_generation=expected_generation,
+            )
             return {"status": self._status()}
         if action == ACTION_MACHINE_PREPARE_PHOTO_POSITION:
             capture_home = _exact_bool(
@@ -440,11 +630,16 @@ class PiMachineServer:
             )
             return {
                 "result": self.service.prepare_photo_position(
-                    capture_home_position=capture_home
+                    capture_home_position=capture_home,
+                    expected_session_generation=expected_generation,
                 )
             }
         if action == ACTION_MACHINE_PREPARE_JOB_START:
-            return {"result": self.service.prepare_job_start()}
+            return {
+                "result": self.service.prepare_job_start(
+                    expected_session_generation=expected_generation,
+                )
+            }
         if action == ACTION_MACHINE_JOG:
             return {
                 "result": self.service.jog(
@@ -455,6 +650,7 @@ class PiMachineServer:
                         "feed_mm_min",
                         positive=True,
                     ),
+                    expected_session_generation=expected_generation,
                 )
             }
         if action == ACTION_MACHINE_COMMAND:
@@ -465,9 +661,20 @@ class PiMachineServer:
             timeout = (
                 None
                 if timeout_raw is None
-                else _number(timeout_raw, "timeout", positive=True)
+                else _number(
+                    timeout_raw,
+                    "timeout",
+                    positive=True,
+                    maximum=_MAX_COMMAND_TIMEOUT_SECONDS,
+                )
             )
-            return {"responses": self.service.manual_command(line, timeout)}
+            return {
+                "responses": self.service.manual_command(
+                    line,
+                    timeout,
+                    expected_session_generation=expected_generation,
+                )
+            }
         if action == ACTION_MACHINE_REALTIME_POSITION:
             return {
                 "position": self.service.realtime_position(
@@ -475,7 +682,9 @@ class PiMachineServer:
                         request.get("timeout", 1.5),
                         "timeout",
                         positive=True,
-                    )
+                        maximum=_MAX_REALTIME_TIMEOUT_SECONDS,
+                    ),
+                    expected_session_generation=expected_generation,
                 )
             }
         if action == ACTION_JOB_BEGIN:
@@ -518,6 +727,7 @@ class PiMachineServer:
             response = self.service.start(
                 validate_job_id(request.get("job_id")),
                 authorization_phrase=phrase,
+                expected_session_generation=expected_generation,
                 **self._binding(request),
             )
             job = response.get("job")
@@ -591,7 +801,12 @@ class PiMachineServer:
                 break
             del self._replay[removable]
 
-    def _replayable_response(self, request: Mapping[str, Any]) -> dict[str, Any]:
+    def _replayable_response(
+        self,
+        request: Mapping[str, Any],
+        *,
+        replay_wait_timeout: float = _REQUEST_TIMEOUT_SECONDS,
+    ) -> dict[str, Any]:
         request_id = validate_request_id(request.get("request_id"))
         action = request.get("action")
         if type(action) is not str:
@@ -607,18 +822,29 @@ class PiMachineServer:
                 self._replay.move_to_end(request_id)
                 owner = False
                 if entry.fingerprint != fingerprint:
-                    raise PiJobProtocolError(
-                        "request_id was already used for a different request"
+                    raise PiJobServiceError(
+                        "request_id was already used for a different request",
+                        code=ERROR_REQUEST_CONFLICT,
                     )
         if not owner:
-            if not entry.ready.wait(_REQUEST_TIMEOUT_SECONDS):
-                raise PiJobProtocolError("Original request is still in progress")
+            if not entry.ready.wait(replay_wait_timeout):
+                raise PiJobServiceError(
+                    "Original request is still in progress",
+                    code=ERROR_CONTROLLER_BUSY,
+                    retryable=True,
+                    action_required="retry",
+                )
             assert entry.response is not None
             return copy.deepcopy(entry.response)
         try:
             try:
                 body = self._dispatch_monitored(request, action)
-                response = {"ok": True, "request_id": request_id, **body}
+                response = {
+                    "ok": True,
+                    "request_id": request_id,
+                    **body,
+                    **self._response_metadata(),
+                }
             except Exception as exc:
                 response = self._error_response(request_id, exc)
             entry.response = copy.deepcopy(response)
@@ -650,16 +876,30 @@ class PiMachineServer:
             request_id = validate_request_id(request.get("request_id"))
             error_request_id = request_id
             self._validate_schema(request, ACTION_MACHINE_STEPPER_HOLD)
+            _client_id, expected_boot_id, expected_generation = self._request_context(
+                request
+            )
+            if expected_boot_id is not None and expected_boot_id != self.service.boot_id:
+                raise PiJobServiceError(
+                    "Pi process restarted before the stepper hold could run",
+                    code=ERROR_CONTROLLER_STALE_SESSION,
+                    retryable=True,
+                    action_required="refresh_status",
+                )
+            self.service.require_accepting_requests(ACTION_MACHINE_STEPPER_HOLD)
             self._claim_lease_request(request_id)
             lease_id = str(uuid.uuid4())
             release_request_id: str | None = None
-            with self.service.temporary_stepper_hold():
+            with self.service.temporary_stepper_hold(
+                expected_session_generation=expected_generation,
+            ):
                 channel.send_json(
                     {
                         "ok": True,
                         "request_id": request_id,
                         "state": "held",
                         "lease_id": lease_id,
+                        **self._response_metadata(),
                     }
                 )
                 conn.settimeout(_STEPPER_HOLD_LEASE_SECONDS)
@@ -681,6 +921,7 @@ class PiMachineServer:
                     "request_id": release_request_id,
                     "state": "released",
                     "lease_id": lease_id,
+                    **self._response_metadata(),
                 }
             )
         except Exception as exc:
@@ -691,34 +932,78 @@ class PiMachineServer:
 
     def _handle(self, conn: socket.socket, address: tuple[object, ...]) -> None:
         acquired = self._slots.acquire(blocking=False)
+        priority_acquired = False
+        if not acquired:
+            priority_acquired = self._priority_slots.acquire(blocking=False)
         authenticated = False
+        request: Mapping[str, Any] = {}
         current = threading.current_thread()
         with self._threads_lock:
             self._connections.add(conn)
         with conn:
             try:
-                if not acquired:
+                if not acquired and not priority_acquired:
                     return
-                conn.settimeout(_HANDSHAKE_TIMEOUT_SECONDS)
+                conn.settimeout(
+                    _HANDSHAKE_TIMEOUT_SECONDS
+                    if acquired
+                    else _PRIORITY_HANDSHAKE_TIMEOUT_SECONDS
+                )
                 channel = authenticate_server(conn, self.token)
                 authenticated = True
-                conn.settimeout(_REQUEST_TIMEOUT_SECONDS)
+                conn.settimeout(
+                    _REQUEST_TIMEOUT_SECONDS
+                    if acquired
+                    else _PRIORITY_HANDSHAKE_TIMEOUT_SECONDS
+                )
                 request = channel.receive_json()
+                action = request.get("action")
+                if priority_acquired and action != ACTION_JOB_STOP:
+                    channel.send_json(
+                        self._error_response(
+                            self._request_id_for_error(request),
+                            PiJobServiceError(
+                                "Server is busy; reserved admission accepts only STOP",
+                                code=ERROR_CONTROLLER_BUSY,
+                                retryable=True,
+                                action_required="retry",
+                            ),
+                        )
+                    )
+                    return
                 if request.get("action") == ACTION_MACHINE_STEPPER_HOLD:
                     self._stepper_hold_session(conn, channel, request)
                     return
                 try:
-                    response = self._replayable_response(request)
+                    response = self._replayable_response(
+                        request,
+                        replay_wait_timeout=(
+                            _PRIORITY_HANDSHAKE_TIMEOUT_SECONDS
+                            if priority_acquired
+                            else _REQUEST_TIMEOUT_SECONDS
+                        ),
+                    )
                 except Exception as exc:
                     response = self._error_response(
                         self._request_id_for_error(request),
                         exc,
                     )
                 channel.send_json(response)
+                request_id = self._request_id_for_error(request)
+                client_id = request.get("client_id")
+                LOGGER.info(
+                    "Pi RPC completed action=%s request=%s client=%s ok=%s peer=%s",
+                    action if type(action) is str else "invalid",
+                    "none" if request_id is None else request_id[:8],
+                    client_id[:8] if type(client_id) is str else "legacy",
+                    response.get("ok") is True,
+                    str(address[0])[:96] if address else "unknown",
+                )
             except Exception as exc:
                 LOGGER.warning(
-                    "E3 machine client session ended (%s)",
+                    "E3 machine client session ended (%s) peer=%s",
                     type(exc).__name__,
+                    str(address[0])[:96] if address else "unknown",
                 )
             finally:
                 if authenticated:
@@ -727,6 +1012,8 @@ class PiMachineServer:
                     )
                 if acquired:
                     self._slots.release()
+                if priority_acquired:
+                    self._priority_slots.release()
                 with self._threads_lock:
                     self._threads.discard(current)
                     self._connections.discard(conn)
@@ -766,8 +1053,12 @@ class PiMachineServer:
             self._listener = None
         with self._threads_lock:
             workers = tuple(self._threads)
+        join_deadline = time.monotonic() + _SHUTDOWN_JOIN_SECONDS
         for worker in workers:
-            worker.join(timeout=1.0)
+            remaining = join_deadline - time.monotonic()
+            if remaining <= 0.0:
+                break
+            worker.join(timeout=remaining)
 
 
 __all__ = [

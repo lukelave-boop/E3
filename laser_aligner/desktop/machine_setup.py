@@ -5,7 +5,7 @@ import json
 import math
 import threading
 from collections.abc import Callable
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Any
 
 import cv2
@@ -20,11 +20,34 @@ from ..machine.profiles import MachineRegistryError
 from ..units import parse_to_mm
 from .controls import MeasurementSpinBox
 from .coordinate_audit import CoordinateAuditPanel
+from .machine_state import (
+    ControllerUiState,
+    controller_node_boot_id,
+    controller_session_generation,
+    controller_state_revision,
+    project_machine_state,
+)
 from .qt import require_qt
 from .setup_guide import show_setup_guide
 from .tasks import FunctionTask
 
 QtCore, QtGui, QtWidgets = require_qt()
+
+
+@dataclass(slots=True)
+class _SetupMachineAuthority:
+    requested_operation_generation: int
+    initial_session_generation: int | None
+    initial_state_revision: int | None
+    initial_node_boot_id: str | None
+    session_lifecycle_operation: bool
+    completed_operation_generation: int | None = None
+    completed_session_generation: int | None = None
+    completed_state_revision: int | None = None
+    completed_node_boot_id: str | None = None
+    completed_controller_state: str | None = None
+    invalidated_before_execution: bool = False
+    captured: bool = False
 
 
 def _work_area_reference_overlay(
@@ -785,6 +808,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._coordinate_audit_image_evidence: tuple[Any, ...] | None = None
         self._navigation_highlighted_widget: QtWidgets.QWidget | None = None
         self._photo_pose_confirmed = False
+        self._photo_pose_confirmed_generation: int | None = None
+        self._machine_status: dict[str, Any] = {}
+        self._machine_ui_state: ControllerUiState = project_machine_state(None)
+        self._motion_action_buttons: list[QtWidgets.QWidget] = []
         self._registration_table_updating = False
         self._bed_map_valid = False
         self._bed_dependent_actions: list[QtWidgets.QWidget] = []
@@ -928,6 +955,97 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def operation_busy(self) -> bool:
         return self._active_task is not None
 
+    def _register_motion_action(self, action: QtWidgets.QWidget) -> None:
+        action.setProperty("controllerDomainEnabled", action.isEnabled())
+        action.setProperty("controllerDomainToolTip", action.toolTip())
+        self._motion_action_buttons.append(action)
+
+    def _is_motion_action(self, action: QtWidgets.QWidget) -> bool:
+        return any(action is candidate for candidate in self._motion_action_buttons)
+
+    def _set_domain_action_enabled(
+        self,
+        action: QtWidgets.QWidget,
+        enabled: bool,
+    ) -> None:
+        if not self._is_motion_action(action):
+            action.setEnabled(bool(enabled))
+            return
+        action.setProperty("controllerDomainEnabled", bool(enabled))
+        self._sync_motion_action_buttons()
+
+    def _sync_motion_action_buttons(self) -> None:
+        state = self._machine_ui_state.with_busy(self.operation_busy)
+        machine_ready = state.can_motion_calibration
+        for action in self._motion_action_buttons:
+            domain_ready = action.property("controllerDomainEnabled") is not False
+            action.setEnabled(domain_ready and machine_ready)
+            if machine_ready:
+                action.setToolTip(str(action.property("controllerDomainToolTip") or ""))
+            else:
+                action.setToolTip(state.blocked_reason(action.text()))
+
+    def _sync_recapture_actions(self) -> None:
+        state = self._machine_ui_state.with_busy(self.operation_busy)
+        generation_matches = (
+            self._photo_pose_confirmed_generation == state.session_generation
+        )
+        enabled = bool(
+            self._bed_map_valid
+            and self._photo_pose_confirmed
+            and generation_matches
+            and state.can_recapture_without_homing
+        )
+        for action in (
+            self.registration_recapture_button,
+            self.validation_recapture_button,
+        ):
+            action.setEnabled(enabled)
+            action.setToolTip(
+                "Reuse the current session's confirmed photography pose"
+                if enabled
+                else state.blocked_reason("Recapture without homing")
+            )
+
+    def set_machine_status(self, status: dict[str, Any] | None) -> None:
+        self._machine_status = dict(status or {})
+        self._machine_ui_state = project_machine_state(
+            self._machine_status,
+            operation_busy=self.operation_busy,
+        )
+        if self._photo_pose_confirmed and (
+            self._machine_ui_state.session_generation
+            != self._photo_pose_confirmed_generation
+            or not self._machine_ui_state.can_recapture_without_homing
+        ):
+            self._photo_pose_confirmed = False
+            self._photo_pose_confirmed_generation = None
+        self.machine_connection_status.setText(
+            self._machine_ui_state.panel_summary(
+                self._machine_status.get("protocol", "unknown")
+            )
+        )
+        state = self._machine_ui_state
+        if state.controller_state == "RECONNECT_REQUIRED":
+            self.machine_connection_button.setText("Reconnect machine")
+            enabled = state.can_reconnect
+        elif state.can_disconnect or state.controller_state in {
+            "READY_HOME_REQUIRED",
+            "READY_MOTION",
+        }:
+            self.machine_connection_button.setText("Disconnect machine")
+            enabled = state.can_disconnect
+        else:
+            self.machine_connection_button.setText("Connect machine")
+            enabled = state.can_connect
+        self.machine_connection_button.setEnabled(enabled)
+        self.machine_connection_button.setToolTip(
+            "" if enabled else state.blocked_reason(self.machine_connection_button.text())
+        )
+        self.machine_stop_button.setEnabled(True)
+        self._sync_motion_action_buttons()
+        self._sync_recapture_actions()
+
     @property
     def lens_index_busy(self) -> bool:
         return self._lens_index_task is not None
@@ -939,6 +1057,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         on_success: Callable[[Any], None],
         *,
         requires_controller: bool = False,
+        recapture_without_homing: bool = False,
+        machine_bound: bool = False,
         invalidate: Callable[[], None] | None = None,
         on_failure: Callable[[str], None] | None = None,
     ) -> bool:
@@ -946,7 +1066,65 @@ class MachineSetupDialog(QtWidgets.QDialog):
         if self._shutdown_started or self.operation_busy:
             return False
         machine = self.context.machine
+        if requires_controller:
+            self.set_machine_status(machine.status())
+            state = self._machine_ui_state
+            allowed = (
+                state.can_recapture_without_homing
+                if recapture_without_homing
+                else state.can_motion_calibration
+            )
+            if not allowed:
+                self._operation_outcome = state.blocked_reason(name)
+                self.operation_status.setText(self._operation_outcome)
+                return False
         machine_generation = machine.operation_generation()
+        machine_authority = None
+        if requires_controller or machine_bound:
+            try:
+                initial_machine_status = machine.status()
+            except Exception:
+                initial_machine_status = None
+            machine_authority = _SetupMachineAuthority(
+                requested_operation_generation=machine_generation,
+                initial_session_generation=controller_session_generation(
+                    initial_machine_status
+                ),
+                initial_state_revision=controller_state_revision(
+                    initial_machine_status
+                ),
+                initial_node_boot_id=controller_node_boot_id(initial_machine_status),
+                session_lifecycle_operation=machine_bound,
+            )
+
+        def require_initial_machine_authority() -> None:
+            if (
+                machine_authority is None
+                or machine_authority.session_lifecycle_operation
+            ):
+                return
+            try:
+                current_status = machine.status()
+            except Exception as exc:
+                machine_authority.invalidated_before_execution = True
+                raise RuntimeError(
+                    "Controller authority could not be verified before execution"
+                ) from exc
+            current_authority = (
+                controller_node_boot_id(current_status),
+                controller_session_generation(current_status),
+                controller_state_revision(current_status),
+            )
+            requested_authority = (
+                machine_authority.initial_node_boot_id,
+                machine_authority.initial_session_generation,
+                machine_authority.initial_state_revision,
+            )
+            if current_authority != requested_authority:
+                machine_authority.invalidated_before_execution = True
+                raise RuntimeError(
+                    "Controller authority changed before the queued operation began"
+                )
         if invalidate is not None:
             invalidate()
         self._operation_generation += 1
@@ -959,12 +1137,44 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.tabs.setEnabled(False)
         self.machine_connection_button.setEnabled(False)
         self.close_button.setEnabled(False)
+        self._sync_motion_action_buttons()
+        self._sync_recapture_actions()
 
         def scoped_operation() -> Any:
-            with machine.operation_scope(machine_generation):
-                if requires_controller:
-                    machine.ensure_connected()
-                return operation()
+            try:
+                with machine.operation_scope(machine_generation):
+                    require_initial_machine_authority()
+                    if requires_controller:
+                        machine.ensure_connected()
+                        require_initial_machine_authority()
+                    return operation()
+            finally:
+                if machine_authority is not None:
+                    try:
+                        machine_authority.completed_operation_generation = (
+                            machine.operation_generation()
+                        )
+                    except Exception:
+                        machine_authority.completed_operation_generation = None
+                    try:
+                        completed_status = machine.status()
+                    except Exception:
+                        completed_status = None
+                    machine_authority.completed_session_generation = (
+                        controller_session_generation(completed_status)
+                    )
+                    machine_authority.completed_state_revision = (
+                        controller_state_revision(completed_status)
+                    )
+                    machine_authority.completed_node_boot_id = controller_node_boot_id(
+                        completed_status
+                    )
+                    machine_authority.completed_controller_state = (
+                        None
+                        if completed_status is None
+                        else project_machine_state(completed_status).controller_state
+                    )
+                    machine_authority.captured = True
 
         task = FunctionTask(scoped_operation, label=f"Machine Setup: {name}")
         self._active_task = task
@@ -974,6 +1184,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 name,
                 result,
                 on_success,
+                machine_authority,
             ),
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
@@ -983,15 +1194,85 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 name,
                 message,
                 on_failure,
+                machine_authority,
             ),
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
         task.signals.finished.connect(
-            lambda generation=generation: self._operation_finished(generation),
+            lambda generation=generation: self._operation_finished(
+                generation,
+                name,
+                machine_authority,
+            ),
             QtCore.Qt.ConnectionType.QueuedConnection,
         )
         task.start_on(self._thread_pool)
         return True
+
+    def _machine_authority_is_current(
+        self,
+        authority: _SetupMachineAuthority | None,
+    ) -> bool:
+        if authority is None:
+            return True
+        if (
+            not authority.captured
+            or authority.completed_controller_state is None
+            or authority.invalidated_before_execution
+        ):
+            return False
+        if authority.completed_controller_state in {
+            "STOPPING",
+            "RECOVERING",
+            "SHUTTING_DOWN",
+        }:
+            return False
+        if (
+            not authority.session_lifecycle_operation
+            and authority.completed_controller_state == "RECONNECT_REQUIRED"
+        ):
+            return False
+        completed_operation_generation = authority.completed_operation_generation
+        if completed_operation_generation is None:
+            return False
+        if (
+            not authority.session_lifecycle_operation
+            and completed_operation_generation
+            != authority.requested_operation_generation
+        ):
+            return False
+        machine = self.context.machine
+        try:
+            if machine.operation_generation() != completed_operation_generation:
+                return False
+            status = machine.status()
+        except Exception:
+            return False
+        completed_boot_id = authority.completed_node_boot_id
+        if (
+            completed_boot_id is not None
+            and controller_node_boot_id(status) != completed_boot_id
+        ):
+            return False
+        completed_session = authority.completed_session_generation
+        if (
+            completed_session is not None
+            and controller_session_generation(status) != completed_session
+        ):
+            return False
+        if not authority.session_lifecycle_operation:
+            if (
+                authority.initial_node_boot_id is not None
+                and completed_boot_id != authority.initial_node_boot_id
+            ):
+                return False
+            if (
+                authority.initial_session_generation is not None
+                and completed_session != authority.initial_session_generation
+            ):
+                return False
+        current_revision = controller_state_revision(status)
+        return current_revision == authority.completed_state_revision
 
     def _operation_succeeded(
         self,
@@ -999,12 +1280,19 @@ class MachineSetupDialog(QtWidgets.QDialog):
         name: str,
         result: Any,
         on_success: Callable[[Any], None],
+        machine_authority: _SetupMachineAuthority | None,
     ) -> None:
         if generation != self._operation_generation or not self.operation_busy:
             return
         if generation == self._stop_requested_generation:
             self._operation_outcome = (
                 f"{name} was interrupted by Software STOP; its result was discarded."
+            )
+            return
+        if not self._machine_authority_is_current(machine_authority):
+            self._operation_outcome = (
+                f"{name} finished after controller authority changed; "
+                "its result was discarded."
             )
             return
         try:
@@ -1021,14 +1309,32 @@ class MachineSetupDialog(QtWidgets.QDialog):
         name: str,
         message: str,
         on_failure: Callable[[str], None] | None,
+        machine_authority: _SetupMachineAuthority | None,
     ) -> None:
         if generation != self._operation_generation or not self.operation_busy:
             return
         if generation == self._stop_requested_generation:
-            if on_failure is not None:
+            authority_is_current = self._machine_authority_is_current(
+                machine_authority
+            )
+            if authority_is_current and on_failure is not None:
                 on_failure(message)
             self._operation_outcome = (
-                f"{name} stopped. Cleanup reported: {message}"
+                f"{name} stopped. "
+                + (
+                    f"Cleanup reported: {message}"
+                    if authority_is_current
+                    else (
+                        f"Cleanup reported: {message}. The stale callback was "
+                        "discarded after controller authority changed."
+                    )
+                )
+            )
+            return
+        if not self._machine_authority_is_current(machine_authority):
+            self._operation_outcome = (
+                f"{name} finished after controller authority changed; "
+                "its stale error was discarded."
             )
             return
         self._operation_outcome = f"{name} failed: {message}"
@@ -1036,17 +1342,30 @@ class MachineSetupDialog(QtWidgets.QDialog):
             on_failure(message)
         QtWidgets.QMessageBox.critical(self, name, message)
 
-    def _operation_finished(self, generation: int) -> None:
+    def _operation_finished(
+        self,
+        generation: int,
+        name: str,
+        machine_authority: _SetupMachineAuthority | None,
+    ) -> None:
         if generation != self._operation_generation or not self.operation_busy:
             return
+        if (
+            not self._machine_authority_is_current(machine_authority)
+            and "discarded" not in self._operation_outcome
+        ):
+            self._operation_outcome = (
+                f"{name} finished after controller authority changed; "
+                "its stale completion was discarded."
+            )
         self._active_task = None
         self._active_operation_name = None
         self._stop_requested_generation = None
         self.operation_progress.hide()
         self.operation_status.setText(self._operation_outcome)
         self.tabs.setEnabled(True)
-        self.machine_connection_button.setEnabled(True)
         self.close_button.setEnabled(True)
+        self.set_machine_status(self.context.machine.status())
 
     def request_software_stop(self) -> None:
         """Use the same non-waiting stop latch as the main desktop STOP control."""
@@ -1709,6 +2028,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         left.addWidget(automatic)
         base_powered.clicked.connect(lambda: self.prepare_base_bed_mapping_job(True))
         self.base_grid_capture_button.clicked.connect(self.capture_base_bed_mapping)
+        self._register_motion_action(self.base_grid_capture_button)
         self._refresh_base_grid_geometry_status()
         layout.addWidget(left_widget, 2)
 
@@ -1813,6 +2133,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.work_area_reference_button.clicked.connect(
             self.capture_work_area_reference
         )
+        self._register_motion_action(self.work_area_reference_button)
         step1_layout.addWidget(self.work_area_reference_button)
         self.ruler_overlay_status = QtWidgets.QLabel("Ruler overlay: MISSING")
         self.ruler_overlay_status.setObjectName("rulerOverlayStatus")
@@ -2016,6 +2337,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         right.addWidget(axis_group)
         clear = QtWidgets.QPushButton("Clear mapping and points")
         park.clicked.connect(self.park)
+        self.park_button = park
+        self._register_motion_action(self.park_button)
         capture.clicked.connect(self.capture_bed)
         remove.clicked.connect(self.delete_bed_point)
         self.rough_grid_detect_button.clicked.connect(self.detect_cross_grid)
@@ -2171,6 +2494,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
             lambda: self.prepare_registration_job(True)
         )
         capture.clicked.connect(lambda: self.capture_fine_registration(home_first=True))
+        self.registration_capture_button = capture
+        self._register_motion_action(self.registration_capture_button)
         self.registration_recapture_button.clicked.connect(lambda: self.capture_fine_registration(home_first=False))
         self.apply_registration_button.clicked.connect(self.apply_fine_registration)
         self.apply_registration_map_button.clicked.connect(self.apply_fine_registration_homography)
@@ -2178,6 +2503,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         reset_map.clicked.connect(self.reset_fine_registration_homography)
         dense_powered.clicked.connect(lambda: self.prepare_dense_job(True))
         dense_capture.clicked.connect(self.capture_dense_calibration)
+        self.dense_capture_button = dense_capture
+        self._register_motion_action(self.dense_capture_button)
         self.apply_dense_button.clicked.connect(self.apply_dense_calibration)
         reset_dense.clicked.connect(self.reset_dense_calibration)
         self.registration_results.itemChanged.connect(self.registration_measurement_changed)
@@ -2335,12 +2662,18 @@ class MachineSetupDialog(QtWidgets.QDialog):
             lambda: self.prepare_accuracy_validation_job(True)
         )
         validation_capture.clicked.connect(lambda: self.capture_accuracy_validation(home_first=True))
+        self.validation_capture_button = validation_capture
+        self._register_motion_action(self.validation_capture_button)
         self.validation_recapture_button.clicked.connect(lambda: self.capture_accuracy_validation(home_first=False))
         dense_validation_powered.clicked.connect(lambda: self.prepare_dense_validation_job(True))
         dense_validation_capture.clicked.connect(self.capture_dense_validation)
+        self.dense_validation_capture_button = dense_validation_capture
+        self._register_motion_action(self.dense_validation_capture_button)
         self.apply_dense_validation_refinement_button.clicked.connect(self.apply_dense_validation_refinement)
         confirmation_powered.clicked.connect(lambda: self.prepare_dense_validation_job(True, confirmation=True))
         confirmation_capture.clicked.connect(lambda: self.capture_dense_validation(confirmation=True))
+        self.confirmation_capture_button = confirmation_capture
+        self._register_motion_action(self.confirmation_capture_button)
         workpiece.clicked.connect(self.detect_workpiece)
         fiducials.clicked.connect(self.detect_fiducials)
         self._bed_dependent_actions.extend(
@@ -2383,6 +2716,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.audit_panel.refreshRequested.connect(self._refresh_coordinate_audit)
         self.audit_panel.copyRequested.connect(self.copy_coordinate_audit_report)
         self.audit_capture_button = self.audit_panel.capture_button
+        self._register_motion_action(self.audit_capture_button)
         self.audit_refresh_button = self.audit_panel.refresh_button
         self.audit_copy_button = self.audit_panel.copy_button
         self.audit_overall_status = self.audit_panel.overall_status
@@ -2773,7 +3107,10 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.lens_clear_model_button.setEnabled(
             bool(lens.get("calibrated")) and not lens_busy
         )
-        self.base_grid_capture_button.setEnabled(model_accepted and ready)
+        self._set_domain_action_enabled(
+            self.base_grid_capture_button,
+            model_accepted and ready,
+        )
         readiness_tooltip = (
             "Checkerboard evidence indexing is in progress"
             if lens_busy
@@ -2809,6 +3146,11 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 )
             )
         )
+        self.base_grid_capture_button.setProperty(
+            "controllerDomainToolTip",
+            self.base_grid_capture_button.toolTip(),
+        )
+        self._sync_motion_action_buttons()
         self._populate_lens_captures(lens)
         self._populate_lens_quality(lens)
         self._schedule_lens_index(lens)
@@ -2820,13 +3162,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
         reasons = "; ".join(str(item) for item in validity.get("reasons") or [])
         unavailable = f"Requires a VALID bed map{': ' + reasons if reasons else ''}"
         for action in self._bed_dependent_actions:
-            action.setEnabled(valid)
+            self._set_domain_action_enabled(action, valid)
             ready_tooltip = (
                 "Home / park, then capture the ruler overlay."
                 if action is self.work_area_reference_button
                 else ""
             )
             action.setToolTip(ready_tooltip if valid else unavailable)
+            if self._is_motion_action(action):
+                action.setProperty("controllerDomainToolTip", action.toolTip())
         self.rough_grid_detect_button.setEnabled(valid)
         self.rough_grid_detect_button.setToolTip("" if valid else unavailable)
         if not valid:
@@ -2836,14 +3180,12 @@ class MachineSetupDialog(QtWidgets.QDialog):
         else:
             for action in self._bed_dependent_result_actions:
                 action.setToolTip("")
-        self.registration_recapture_button.setEnabled(
-            valid and self._photo_pose_confirmed
-        )
-        self.validation_recapture_button.setEnabled(valid and self._photo_pose_confirmed)
+        self._sync_recapture_actions()
         self.registration_results.setEnabled(valid)
         self.validation_results.setEnabled(valid)
         for tab_index in (3, 4, 5):
             self.tabs.setTabToolTip(tab_index, "" if valid else unavailable)
+        self._sync_motion_action_buttons()
 
     def _invalidate_lens_review(self, status: str) -> None:
         self.lens_gate_status.setText(status)
@@ -3022,27 +3364,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
     def refresh_all(self) -> None:
         self._refresh_running_machine_binding()
         machine = self.context.machine.status()
-        connected = bool(machine.get("connected"))
-        reconnect_required = bool(
-            machine.get("controller_reconnect_required", False)
-        )
-        protocol = str(machine.get("protocol") or "controller")
-        port = str(machine.get("port") or "")
-        if connected and reconnect_required:
-            machine_status = (
-                f"RECONNECT REQUIRED · {protocol} · {port} · controller command "
-                "state is untrusted"
-            )
-        elif connected:
-            machine_status = f"Machine connected · {protocol} · {port}"
-        else:
-            machine_status = f"Machine offline · {port or 'no active connection'}"
-        self.machine_connection_status.setText(machine_status)
-        self.machine_connection_button.setText(
-            "Reconnect machine"
-            if connected and reconnect_required
-            else "Disconnect machine" if connected else "Connect machine"
-        )
+        self.set_machine_status(machine)
         camera = asdict(self.context.camera.status())
         observed_fps = float(camera.get("fps") or 0.0)
         negotiated_fps = float(camera.get("negotiated_fps") or 0.0)
@@ -3106,22 +3428,27 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     def toggle_machine_connection(self) -> None:
         status = self.context.machine.status()
-        connected = bool(status.get("connected"))
-        reconnect_required = bool(status.get("controller_reconnect_required"))
-
-        def change_connection() -> Any:
-            if connected and reconnect_required:
-                return self.context.machine.replace_connection()
-            if connected:
-                return self.context.machine.disconnect()
-            return self.context.machine.connect()
-
-        result = self._message(
-            "Machine connection",
-            change_connection,
+        self.set_machine_status(status)
+        state = self._machine_ui_state
+        if state.can_reconnect:
+            name = "Controller reconnection"
+            operation = self.context.machine.replace_connection
+        elif state.can_disconnect:
+            name = "Controller disconnect"
+            operation = self.context.machine.disconnect
+        elif state.can_connect:
+            name = "Controller connection"
+            operation = self.context.machine.connect
+        else:
+            self._operation_outcome = state.blocked_reason("Machine connection")
+            self.operation_status.setText(self._operation_outcome)
+            return
+        self._start_operation(
+            name,
+            operation,
+            lambda _result: self.refresh_all(),
+            machine_bound=True,
         )
-        if result is not None or connected:
-            self.refresh_all()
 
     def refresh_camera(self) -> None:
         image = self._message("Camera preview", lambda: self.context.camera_frame(undistort=False))
@@ -4338,9 +4665,15 @@ class MachineSetupDialog(QtWidgets.QDialog):
 
     def _set_photo_pose_confirmed(self, confirmed: bool) -> None:
         self._photo_pose_confirmed = bool(confirmed)
-        enabled = self._photo_pose_confirmed and self._bed_map_valid
-        self.registration_recapture_button.setEnabled(enabled)
-        self.validation_recapture_button.setEnabled(enabled)
+        if self._photo_pose_confirmed:
+            self._machine_status = dict(self.context.machine.status())
+            self._machine_ui_state = project_machine_state(self._machine_status)
+            self._photo_pose_confirmed_generation = (
+                self._machine_ui_state.session_generation
+            )
+        else:
+            self._photo_pose_confirmed_generation = None
+        self._sync_recapture_actions()
 
     def capture_fine_registration(self, *, home_first: bool = True) -> None:
         if not home_first and not self._photo_pose_confirmed:
@@ -4368,6 +4701,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 home_first=home_first,
             ),
             requires_controller=True,
+            recapture_without_homing=not home_first,
             invalidate=invalidate,
             on_failure=lambda message: self.registration_status.setText(
                 f"Fine registration capture failed: {message}"
@@ -4883,6 +5217,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 home_first=home_first,
             ),
             requires_controller=True,
+            recapture_without_homing=not home_first,
             invalidate=invalidate,
             on_failure=lambda message: self.validation_status.setText(
                 f"Accuracy validation capture failed: {message}"

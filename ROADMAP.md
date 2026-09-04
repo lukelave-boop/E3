@@ -49,6 +49,10 @@ The following foundations are implemented and automated-test covered:
   execution authority;
 - neutral machine transports separated from immutable GRBL and Marlin dialect
   policy;
+- explicit generation-bound primary-controller sessions with private synchronized
+  candidates, exclusive Pi serial ownership, command transactions, permanent
+  uncertainty quarantine, communication-only post-STOP recovery, structured Pi
+  causality metadata, and fail-closed desktop action projection;
 - profile-driven real-machine first-run and Machine Manager flows with multiple
   saved physical machine instances;
 - immutable running-versus-next-launch machine identity;
@@ -75,8 +79,8 @@ upgrade software verification into a hardware or safety claim.
 ### Automated and software verification
 
 - Keep Fast Development and Compatibility CI aligned with the supported Windows
-  test boundary, while running focused Linux/Pi checks when those components
-  change.
+  test boundary and the standing focused Ubuntu pseudo-terminal/controller-session
+  job, without treating that job as general Linux desktop support.
 - Keep repository, dependency, workflow, packaging, launcher, and documentation
   drift checks clean.
 - Complete the installed frozen PyInstaller E3 -> HTTPS download/verification ->
@@ -108,7 +112,11 @@ configuration, environment, and result for each step:
 4. Confirm coordinate origin, X/Y directions, and active offsets.
 5. Confirm the configured photography park pose and repeatability.
 6. Exercise small conservative laser-off jogs in both directions.
-7. Exercise software STOP while retaining the physical emergency-stop boundary.
+7. Complete the documented
+   [20-cycle laser-disabled recovery sequence](docs/GRBL_SESSION_RECOVERY_VALIDATION.md)
+   (STOP → fresh communication recovery → explicit Home) while retaining the
+   physical emergency-stop boundary; record every session generation and
+   contradictory/stale result.
 8. Run and review a small centrally located zero-power job.
 9. Only with the required physical safeguards and attending operator, run one
    supervised low-risk armed test on suitable sacrificial material.

@@ -100,3 +100,41 @@ jobs:
         run: python tools/ci_timed.py "Install fast test dependencies" -- python -m pip install -e ".[desktop]" -r requirements-dev.txt
       - name: Run complete representative suite
         run: python tools/ci_timed.py "Fast pytest (4 workers)" -- python -m pytest -q -n 4
+
+  posix-controller-session:
+    name: POSIX serial and controller-session recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Upgrade pip
+        run: python tools/ci_timed.py "Upgrade pip (POSIX controller)" -- python -m pip install --upgrade pip
+      - name: Install core and test dependencies
+        run: python tools/ci_timed.py "Install POSIX controller dependencies" -- python -m pip install -e . -r requirements-dev.txt
+      - name: Run POSIX transport and recovery tests
+        run: >-
+          python tools/ci_timed.py "POSIX serial/session pytest" --
+          python -m pytest -q
+          tests/test_serial_posix.py
+          tests/test_controller_session.py
+          tests/test_machine_transcripts.py
+          tests/test_secondary_controller.py
+          tests/test_secondary_air_assist_integration.py
+          tests/test_pi_job_protocol.py
+          tests/test_pi_machine_server.py
+          tests/test_pi_owned_job_e2e.py
+          tests/test_remote_machine_service.py
+          tests/test_remote_node.py

@@ -35,7 +35,14 @@ from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_START,
     ACTION_JOB_STATUS,
     ACTION_JOB_STOP,
+    CAPABILITY_PI_COHERENT_STATUS,
+    CAPABILITY_PI_CONTROLLER_SESSION,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
+    CAPABILITY_PI_STRUCTURED_ERRORS,
+    ERROR_CONTROLLER_BUSY,
+    ERROR_CONTROLLER_REJECTED,
+    ERROR_CONTROLLER_STALE_SESSION,
+    ERROR_SERVICE_SHUTTING_DOWN,
     authenticate_client,
     encode_upload_chunk,
 )
@@ -62,6 +69,7 @@ from laser_aligner.machine.pi_machine_server import (
     ACTION_MACHINE_STATUS,
     ACTION_MACHINE_STEPPER_HOLD,
     ACTION_MACHINE_STEPPER_HOLD_RELEASE,
+    ACTION_SERVICE_CAPABILITIES,
     SERVER_CAPABILITIES,
     PiMachineServer,
 )
@@ -257,6 +265,24 @@ def _rpc(
     request_id: str | None = None,
     **fields: Any,
 ) -> dict[str, Any]:
+    session_actions = {
+        ACTION_MACHINE_CONNECT,
+        ACTION_MACHINE_REPLACE_CONNECTION,
+        ACTION_MACHINE_DISCONNECT,
+        ACTION_MACHINE_PREPARE_PHOTO_POSITION,
+        ACTION_MACHINE_PREPARE_JOB_START,
+        ACTION_MACHINE_JOG,
+        ACTION_MACHINE_COMMAND,
+        ACTION_MACHINE_STEPPER_HOLD,
+        ACTION_JOB_START,
+    }
+    if action in session_actions:
+        fields.setdefault("client_id", "00000000-0000-4000-8000-000000000001")
+        fields.setdefault("expected_boot_id", harness.service.boot_id)
+        fields.setdefault(
+            "expected_session_generation",
+            harness.machine.status()["controller_session_generation"],
+        )
     with socket.create_connection(
         ("127.0.0.1", harness.server.bound_port),
         timeout=3.0,
@@ -323,6 +349,12 @@ def _upload(
     *,
     job_id: str | None = None,
 ) -> tuple[str, ValidatedProgram, dict[str, Any]]:
+    status = harness.machine.status()
+    if not status["connected"]:
+        assert _rpc(harness, ACTION_MACHINE_CONNECT)["ok"] is True
+        status = harness.machine.status()
+    if status["controller_state"] == "READY_HOME_REQUIRED":
+        assert _rpc(harness, ACTION_MACHINE_PREPARE_JOB_START)["ok"] is True
     identifier = job_id or str(uuid.uuid4())
     program = harness.machine.preflight_program(_POWERED_PROGRAM)
     payload = canonical_program_bytes(program)
@@ -504,6 +536,241 @@ def test_server_advertises_policy_diagnostics_capability() -> None:
     assert CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS in SERVER_CAPABILITIES
 
 
+def test_server_advertises_strict_session_contract_and_response_metadata(
+    server_harness: ServerHarness,
+) -> None:
+    response = _rpc(server_harness, ACTION_SERVICE_CAPABILITIES)
+
+    assert response["ok"] is True
+    assert CAPABILITY_PI_CONTROLLER_SESSION in response["capabilities"]
+    assert CAPABILITY_PI_STRUCTURED_ERRORS in response["capabilities"]
+    assert CAPABILITY_PI_COHERENT_STATUS in response["capabilities"]
+    assert response["boot_id"] == server_harness.service.boot_id
+    assert set(response["build"]) == {"version", "revision"}
+    assert isinstance(response["state_revision"], int)
+    assert isinstance(response["controller_session_generation"], int)
+    assert response["controller_state"].isupper()
+
+    snapshot = _rpc(server_harness, ACTION_MACHINE_STATUS)
+    assert set(snapshot) >= {
+        "status",
+        "active_job",
+        "latest_job",
+        "boot_id",
+        "state_revision",
+        "controller_session_generation",
+        "controller_state",
+    }
+
+
+def _session_fields(harness: ServerHarness) -> dict[str, Any]:
+    return {
+        "client_id": "00000000-0000-4000-8000-000000000001",
+        "expected_boot_id": harness.service.boot_id,
+        "expected_session_generation": harness.machine.status()[
+            "controller_session_generation"
+        ],
+    }
+
+
+def test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected(
+    server_harness: ServerHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected = _rpc(server_harness, ACTION_MACHINE_CONNECT)
+    initial_generation = connected["controller_session_generation"]
+    server_harness.machine.request_stop(emergency=False, _recover=False)
+    server_harness.service._refresh_machine_status()
+    original_replace = server_harness.machine.replace_connection
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def blocking_replace() -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        assert release.wait(2.0)
+        return original_replace()
+
+    monkeypatch.setattr(
+        server_harness.machine,
+        "replace_connection",
+        blocking_replace,
+    )
+    results: list[dict[str, Any]] = []
+
+    def replace_from_client() -> None:
+        results.append(
+            _rpc(
+                server_harness,
+                ACTION_MACHINE_REPLACE_CONNECTION,
+                client_id=str(uuid.uuid4()),
+                expected_boot_id=server_harness.service.boot_id,
+                expected_session_generation=initial_generation,
+            )
+        )
+
+    first = threading.Thread(target=replace_from_client)
+    second = threading.Thread(target=replace_from_client)
+    first.start()
+    assert entered.wait(1.0)
+    flight = server_harness.service._lifecycle_flight
+    assert flight is not None
+    second.start()
+    assert flight.join_observed.wait(1.0)
+    release.set()
+    first.join(3.0)
+    second.join(3.0)
+
+    assert not first.is_alive() and not second.is_alive()
+    assert calls == 1
+    assert len(results) == 2
+    generations = {item["controller_session_generation"] for item in results}
+    assert len(generations) == 1
+    successor_generation = generations.pop()
+    assert successor_generation > initial_generation
+
+    stale = _rpc(
+        server_harness,
+        ACTION_MACHINE_DISCONNECT,
+        client_id=str(uuid.uuid4()),
+        expected_boot_id=server_harness.service.boot_id,
+        expected_session_generation=initial_generation,
+    )
+    assert stale["ok"] is False
+    assert stale["error_code"] == ERROR_CONTROLLER_STALE_SESSION
+    assert stale["retryable"] is True
+    current = _rpc(server_harness, ACTION_MACHINE_STATUS)
+    assert current["status"]["connected"] is True
+    assert current["controller_session_generation"] == successor_generation
+
+    stale_boot = _rpc(
+        server_harness,
+        ACTION_MACHINE_DISCONNECT,
+        client_id=str(uuid.uuid4()),
+        expected_boot_id=str(uuid.uuid4()),
+        expected_session_generation=successor_generation,
+    )
+    assert stale_boot["ok"] is False
+    assert stale_boot["error_code"] == ERROR_CONTROLLER_STALE_SESSION
+    assert _rpc(server_harness, ACTION_MACHINE_STATUS)["status"]["connected"] is True
+
+
+def test_shutdown_publishes_terminal_state_and_rejects_new_physical_work(
+    server_harness: ServerHarness,
+) -> None:
+    assert _rpc(server_harness, ACTION_MACHINE_CONNECT)["ok"] is True
+
+    server_harness.service.shutdown(stop_machine=True)
+
+    snapshot = _rpc(server_harness, ACTION_MACHINE_STATUS)
+    assert snapshot["controller_state"] == "SHUTTING_DOWN"
+    assert snapshot["status"]["controller_state"] == "SHUTTING_DOWN"
+    rejected = _rpc(server_harness, ACTION_MACHINE_CONNECT)
+    assert rejected["ok"] is False
+    assert rejected["error_code"] == ERROR_SERVICE_SHUTTING_DOWN
+    assert rejected["action_required"] == "restart_service"
+
+
+def test_reserved_admission_remains_available_for_stop(
+    server_harness: ServerHarness,
+) -> None:
+    acquired = 0
+    try:
+        for _ in range(16):
+            assert server_harness.server._slots.acquire(blocking=False)
+            acquired += 1
+        stopped = _rpc(server_harness, ACTION_JOB_STOP)
+        assert stopped["ok"] is True
+    finally:
+        for _ in range(acquired):
+            server_harness.server._slots.release()
+
+
+def test_two_clients_share_one_lifecycle_failure(
+    server_harness: ServerHarness,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connected = _rpc(server_harness, ACTION_MACHINE_CONNECT)
+    initial_generation = connected["controller_session_generation"]
+    server_harness.machine.request_stop(emergency=False, _recover=False)
+    server_harness.service._refresh_machine_status()
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def failing_replace() -> dict[str, Any]:
+        nonlocal calls
+        calls += 1
+        entered.set()
+        assert release.wait(2.0)
+        raise MachineError("shared replacement failure")
+
+    monkeypatch.setattr(
+        server_harness.machine,
+        "replace_connection",
+        failing_replace,
+    )
+    results: list[dict[str, Any]] = []
+
+    def replace_from_client() -> None:
+        results.append(
+            _rpc(
+                server_harness,
+                ACTION_MACHINE_REPLACE_CONNECTION,
+                client_id=str(uuid.uuid4()),
+                expected_boot_id=server_harness.service.boot_id,
+                expected_session_generation=initial_generation,
+            )
+        )
+
+    first = threading.Thread(target=replace_from_client)
+    second = threading.Thread(target=replace_from_client)
+    first.start()
+    assert entered.wait(1.0)
+    flight = server_harness.service._lifecycle_flight
+    assert flight is not None
+    second.start()
+    assert flight.join_observed.wait(1.0)
+    release.set()
+    first.join(3.0)
+    second.join(3.0)
+
+    assert calls == 1
+    assert len(results) == 2
+    assert {item["error"] for item in results} == {"shared replacement failure"}
+    assert {item["error_code"] for item in results} == {
+        ERROR_CONTROLLER_REJECTED
+    }
+
+
+def test_stop_tombstones_prepared_job_before_delayed_start(
+    server_harness: ServerHarness,
+) -> None:
+    job_id, program, _finalized = _upload(server_harness)
+
+    stopped = _rpc(
+        server_harness,
+        ACTION_JOB_STOP,
+        job_id=job_id,
+    )
+    assert stopped["ok"] is True
+    assert stopped["job"]["state"] == "failed"
+    assert "STOP" in stopped["job"]["error"]
+
+    delayed_start = _rpc(
+        server_harness,
+        ACTION_JOB_START,
+        **_start_fields(job_id, program),
+    )
+    assert delayed_start["ok"] is True
+    assert delayed_start["accepted"] is False
+    assert delayed_start["duplicate"] is True
+    assert delayed_start["job"]["state"] == "failed"
+    assert not server_harness.transport.gated.is_set()
+
+
 def test_finalize_policy_mismatch_logs_only_fixed_field_labels(
     server_harness: ServerHarness,
     caplog: pytest.LogCaptureFixture,
@@ -591,6 +858,7 @@ def test_start_policy_drift_logs_field_label_before_any_controller_write(
     )
     caplog.set_level(logging.WARNING, logger="laser_aligner.machine.pi_job_service")
 
+    commands_before = list(server_harness.transport.commands)
     rejected = _rpc(server_harness, ACTION_JOB_START, **fields)
 
     assert rejected["ok"] is False
@@ -604,8 +872,8 @@ def test_start_policy_drift_logs_field_label_before_any_controller_write(
         "execution policy mismatch: machine.max_work_feed_mm_min"
     ]
     assert server_harness.service.get(job_id)["state"] == "failed"
-    assert server_harness.machine.status()["connected"] is False
-    assert server_harness.transport.commands == []
+    assert server_harness.machine.status()["connected"] is True
+    assert server_harness.transport.commands == commands_before
 
 
 def test_start_rejects_unbound_policy_diagnostic_before_controller_write(
@@ -617,6 +885,7 @@ def test_start_rejects_unbound_policy_diagnostic_before_controller_write(
     diagnostic["profile"][0] = "unbound-client-value"
     fields["execution_policy_diagnostic"] = diagnostic
 
+    commands_before = list(server_harness.transport.commands)
     rejected = _rpc(server_harness, ACTION_JOB_START, **fields)
 
     assert rejected["ok"] is False
@@ -625,8 +894,8 @@ def test_start_rejects_unbound_policy_diagnostic_before_controller_write(
         "to its digest"
     )
     assert server_harness.service.get(job_id)["state"] == "prepared"
-    assert server_harness.machine.status()["connected"] is False
-    assert server_harness.transport.commands == []
+    assert server_harness.machine.status()["connected"] is True
+    assert server_harness.transport.commands == commands_before
 
 
 def test_disconnect_mid_upload_remains_receiving_inert_and_unstartable(
@@ -664,7 +933,6 @@ def test_disconnect_mid_upload_remains_receiving_inert_and_unstartable(
     )
     assert rejected["ok"] is False
     assert server_harness.machine.status()["connected"] is False
-    assert server_harness.transport.commands == []
 
 
 def test_prepared_disconnect_and_unknown_start_remain_inert(
@@ -676,8 +944,8 @@ def test_prepared_disconnect_and_unknown_start_remain_inert(
     assert prepared["job"]["state"] == "prepared"
     assert _rpc(server_harness, ACTION_JOB_ACTIVE)["job"] is None
     assert _rpc(server_harness, ACTION_JOB_LATEST)["job"] is None
-    assert server_harness.machine.status()["connected"] is False
-    assert server_harness.transport.commands == []
+    assert server_harness.machine.status()["connected"] is True
+    commands_before = list(server_harness.transport.commands)
 
     unknown = _rpc(
         server_harness,
@@ -685,8 +953,8 @@ def test_prepared_disconnect_and_unknown_start_remain_inert(
         **_start_fields(str(uuid.uuid4()), program),
     )
     assert unknown["ok"] is False
-    assert server_harness.machine.status()["connected"] is False
-    assert server_harness.transport.commands == []
+    assert server_harness.machine.status()["connected"] is True
+    assert server_harness.transport.commands == commands_before
 
 
 def test_authenticated_client_disconnect_does_not_stop_accepted_powered_job(
@@ -849,6 +1117,7 @@ def test_failed_start_before_local_acceptance_is_not_misreported_on_retry(
     program_path = server_harness.service.store.programs_dir / f"{job_id}.gcode"
     program_path.write_bytes(canonical_program_bytes(program) + b"\n")
 
+    commands_before = list(server_harness.transport.commands)
     rejected = _rpc(
         server_harness,
         ACTION_JOB_START,
@@ -866,7 +1135,7 @@ def test_failed_start_before_local_acceptance_is_not_misreported_on_retry(
     assert retry["duplicate"] is True
     assert retry["accepted"] is False
     assert retry["job"].get("ownership_accepted") is not True
-    assert server_harness.transport.commands == []
+    assert server_harness.transport.commands == commands_before
 
 
 def test_running_job_blocks_interfering_operations_and_second_start(
@@ -939,6 +1208,7 @@ def test_same_channel_stepper_hold_releases_on_client_request(
     server_harness: ServerHarness,
 ) -> None:
     assert _rpc(server_harness, "machine.connect")["ok"] is True
+    assert _rpc(server_harness, ACTION_MACHINE_PREPARE_JOB_START)["ok"] is True
     enter_request_id = str(uuid.uuid4())
     release_request_id = str(uuid.uuid4())
     with socket.create_connection(
@@ -951,15 +1221,16 @@ def test_same_channel_stepper_hold_releases_on_client_request(
             {
                 "action": ACTION_MACHINE_STEPPER_HOLD,
                 "request_id": enter_request_id,
+                **_session_fields(server_harness),
             }
         )
         held = channel.receive_json()
-        assert held == {
-            "ok": True,
-            "request_id": enter_request_id,
-            "state": "held",
-            "lease_id": held["lease_id"],
-        }
+        assert held["ok"] is True
+        assert held["request_id"] == enter_request_id
+        assert held["state"] == "held"
+        assert isinstance(held["lease_id"], str)
+        assert isinstance(held["state_revision"], int)
+        assert isinstance(held["controller_session_generation"], int)
         assert server_harness.transport.step_idle_delay_ms == 255
         channel.send_json(
             {
@@ -975,10 +1246,11 @@ def test_same_channel_stepper_hold_releases_on_client_request(
     assert server_harness.transport.step_idle_delay_ms == 250
 
 
-def test_pi_rpc_ordinary_operation_waits_for_stepper_hold_release(
+def test_pi_rpc_conflicting_operation_is_busy_during_stepper_hold(
     server_harness: ServerHarness,
 ) -> None:
     assert _rpc(server_harness, ACTION_MACHINE_CONNECT)["ok"] is True
+    assert _rpc(server_harness, ACTION_MACHINE_PREPARE_JOB_START)["ok"] is True
     enter_request_id = str(uuid.uuid4())
     release_request_id = str(uuid.uuid4())
     ordinary_started = threading.Event()
@@ -994,6 +1266,7 @@ def test_pi_rpc_ordinary_operation_waits_for_stepper_hold_release(
             {
                 "action": ACTION_MACHINE_STEPPER_HOLD,
                 "request_id": enter_request_id,
+                **_session_fields(server_harness),
             }
         )
         held = channel.receive_json()
@@ -1008,11 +1281,11 @@ def test_pi_rpc_ordinary_operation_waits_for_stepper_hold_release(
         ordinary = threading.Thread(target=prepare_photo_position, daemon=True)
         ordinary.start()
         assert ordinary_started.wait(timeout=1.0)
-        ordinary.join(timeout=0.1)
-        assert ordinary.is_alive(), (
-            "The Pi ordinary-operation lock must not permit Home / park inside "
-            "another session's active stepper hold"
-        )
+        ordinary.join(timeout=1.0)
+        assert not ordinary.is_alive()
+        assert ordinary_result["ok"] is False
+        assert ordinary_result["error_code"] == ERROR_CONTROLLER_BUSY
+        assert ordinary_result["retryable"] is True
 
         channel.send_json(
             {
@@ -1022,16 +1295,14 @@ def test_pi_rpc_ordinary_operation_waits_for_stepper_hold_release(
             }
         )
         assert channel.receive_json()["state"] == "released"
-        ordinary.join(timeout=2.0)
-
     assert not ordinary.is_alive()
-    assert ordinary_result["ok"] is True
 
 
 def test_stepper_hold_does_not_block_pi_stop_authority(
     server_harness: ServerHarness,
 ) -> None:
     assert _rpc(server_harness, ACTION_MACHINE_CONNECT)["ok"] is True
+    assert _rpc(server_harness, ACTION_MACHINE_PREPARE_JOB_START)["ok"] is True
     with socket.create_connection(
         ("127.0.0.1", server_harness.server.bound_port),
         timeout=3.0,
@@ -1042,6 +1313,7 @@ def test_stepper_hold_does_not_block_pi_stop_authority(
             {
                 "action": ACTION_MACHINE_STEPPER_HOLD,
                 "request_id": str(uuid.uuid4()),
+                **_session_fields(server_harness),
             }
         )
         held = channel.receive_json()
@@ -1061,8 +1333,8 @@ def test_stepper_hold_does_not_block_pi_stop_authority(
             }
         )
         release = channel.receive_json()
-        assert release["ok"] is False
-        assert "STOP" in release["error"]
+        assert release["ok"] is True
+        assert release["state"] == "released"
 
 
 def test_trace_capture_prepares_before_remote_hold_without_lease_timeout(
@@ -1098,18 +1370,25 @@ def test_trace_capture_prepares_before_remote_hold_without_lease_timeout(
     original_hold = server_harness.service.temporary_stepper_hold
 
     def observed_prepare_photo_position(
-        *, capture_home_position: bool = False
+        *,
+        capture_home_position: bool = False,
+        expected_session_generation: int | None = None,
     ) -> dict[str, Any]:
         events.append("pi:prepare:start")
-        result = original_prepare(capture_home_position=capture_home_position)
+        result = original_prepare(
+            capture_home_position=capture_home_position,
+            expected_session_generation=expected_session_generation,
+        )
         events.append("pi:prepare:complete")
         return result
 
     @contextmanager
-    def observed_stepper_hold():
+    def observed_stepper_hold(*, expected_session_generation: int | None = None):
         nonlocal pi_hold_active
         events.append("pi:hold:request")
-        with original_hold():
+        with original_hold(
+            expected_session_generation=expected_session_generation,
+        ):
             pi_hold_active = True
             events.append("pi:hold:active")
             try:
@@ -1213,6 +1492,7 @@ def test_stepper_hold_client_disconnect_unwinds_local_context(
     server_harness: ServerHarness,
 ) -> None:
     assert _rpc(server_harness, "machine.connect")["ok"] is True
+    assert _rpc(server_harness, ACTION_MACHINE_PREPARE_JOB_START)["ok"] is True
     sock = socket.create_connection(
         ("127.0.0.1", server_harness.server.bound_port),
         timeout=3.0,
@@ -1223,6 +1503,7 @@ def test_stepper_hold_client_disconnect_unwinds_local_context(
         {
             "action": ACTION_MACHINE_STEPPER_HOLD,
             "request_id": str(uuid.uuid4()),
+            **_session_fields(server_harness),
         }
     )
     assert channel.receive_json()["state"] == "held"

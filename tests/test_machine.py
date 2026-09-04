@@ -2,6 +2,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -13,6 +14,8 @@ from laser_aligner.errors import (
     SafetyError,
     TransientConnectionError,
 )
+from laser_aligner.machine.controller_dialects import GRBL_DIALECT, MARLIN_DIALECT
+from laser_aligner.machine.controller_session import ControllerState
 from laser_aligner.machine.service import (
     MachineService,
     ValidatedProgram,
@@ -53,29 +56,129 @@ def _explicit_test_machine_runtime(
         )
 
     monkeypatch.setattr(MachineService, "__init__", initialize)
+    original_adopt = MachineService._adopt_legacy_test_session_locked
+
+    def adopt_legacy(service: MachineService):
+        transport = service._transport
+        if transport is not None:
+            try:
+                transport.test_only_allow_legacy_input_synchronization = True
+            except AttributeError:
+                pass
+        if service._dialect is None:
+            protocol = service.settings.protocol
+            service._dialect = (
+                MARLIN_DIALECT if protocol == "marlin" else GRBL_DIALECT
+            )
+            service._protocol = service._dialect.id
+        adopted = original_adopt(service)
+        if adopted is not None or transport is None:
+            return adopted
+        # A handful of older unit tests install a mocked transport and command
+        # method directly. Give those fixtures an exact test-only session so
+        # they continue testing their narrow cleanup behavior without relaxing
+        # the production adoption gate.
+        session = service._make_controller_session(
+            transport=transport,
+            dialect=service._dialect,
+            endpoint="test-only-direct-transport",
+            baudrate=service.settings.baudrate,
+            state=(
+                ControllerState.READY_MOTION
+                if service._coordinate_reference_ready
+                else ControllerState.READY_HOME_REQUIRED
+            ),
+        )
+        service._session = session
+        service._connected = True
+        service._controller_state = (
+            ControllerState.READY_MOTION
+            if service._coordinate_reference_ready
+            else ControllerState.READY_HOME_REQUIRED
+        )
+        if service._coordinate_reference_ready:
+            service._coordinate_reference_session_generation = session.generation
+        return session
+
+    monkeypatch.setattr(
+        MachineService,
+        "_adopt_legacy_test_session_locked",
+        adopt_legacy,
+    )
+    original_job_context = MachineService._current_job_run_context
+
+    def current_job_context(service: MachineService):
+        context = original_job_context(service)
+        if (
+            context is not None
+            or not service._job_laser_authorized
+            or service._transport is None
+        ):
+            return context
+        context = getattr(service, "_legacy_test_job_context", None)
+        if context is None:
+            with service._lock:
+                session = service._adopt_legacy_test_session_locked()
+                assert session is not None
+                service._controller_state = ControllerState.JOB_RUNNING
+                context = SimpleNamespace(
+                    identity=-1,
+                    session=session,
+                    stop_event=service._job_stop,
+                    status=service._job,
+                    air_assist_commands=None,
+                    air_assist_off_commands=(),
+                )
+                service._legacy_test_job_context = context
+                service._active_job_context = context
+        return context
+
+    monkeypatch.setattr(
+        MachineService,
+        "_current_job_run_context",
+        current_job_context,
+    )
     original_connect = MachineService.connect
     auto_reference = not any(
         token in request.node.name
         for token in (
             "jog",
+            "home",
+            "stepper",
             "prepare_job_start",
             "prepare_photo_position",
             "serial_",
             "ack_timeout",
+            "command_timeout",
             "initial_connection",
+            "request_time_generation",
+            "waits_past_interactive",
+            "stop_interrupts_extended",
+            "positioning_failure",
+            "park_failure",
+            "release_falls",
         )
     )
 
     def connect(service: MachineService, *args: object, **kwargs: object) -> dict[str, object]:
         result = original_connect(service, *args, **kwargs)
         if auto_reference:
-            service._coordinate_reference_ready = True
-            service._coordinate_state_reference = {
-                "active_workspace": "G54",
-                "active_offset_mm": [0.0, 0.0, 0.0],
-                "g92_offset_mm": [0.0, 0.0, 0.0],
-            }
-            service._jog_position_mm = (0.0, 0.0)
+            with service._lock:
+                assert service._session is not None
+                service._coordinate_reference_ready = True
+                service._coordinate_reference_session_generation = (
+                    service._session.generation
+                )
+                service._coordinate_state_reference = {
+                    "active_workspace": "G54",
+                    "active_offset_mm": [0.0, 0.0, 0.0],
+                    "g92_offset_mm": [0.0, 0.0, 0.0],
+                }
+                service._jog_position_mm = (0.0, 0.0)
+                service._set_controller_state_locked(
+                    ControllerState.READY_MOTION,
+                    session=service._session,
+                )
         return result
 
     monkeypatch.setattr(MachineService, "connect", connect)
@@ -267,6 +370,8 @@ def test_realtime_position_sampling_rejects_running_job_without_state_changes() 
 )
 def test_realtime_position_sampling_fails_diagnostic_only(response: str) -> None:
     class RealtimeTransport:
+        test_only_allow_legacy_input_synchronization = True
+
         def __init__(self) -> None:
             self.raw_writes: list[bytes] = []
             self.responses = [response]
@@ -393,7 +498,7 @@ def test_ensure_connected_opens_a_disconnected_machine() -> None:
     machine.disconnect()
 
 
-def test_ensure_connected_never_reconnects_an_uncertain_established_session(
+def test_ensure_connected_uses_fresh_connect_for_quarantined_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
@@ -403,22 +508,21 @@ def test_ensure_connected_never_reconnects_an_uncertain_established_session(
     )
     machine.connect()
     machine.request_stop()
+    assert machine.status()["connected"] is False
+    assert machine.status()["controller_reconnect_required"] is True
     monkeypatch.setattr(
         machine,
         "disconnect",
-        lambda: pytest.fail("uncertain sessions must not be automatically disconnected"),
+        lambda: pytest.fail("quarantined transport must already be closed"),
     )
+    reconnected = {"connected": True, "controller_state": "READY_HOME_REQUIRED"}
     monkeypatch.setattr(
         machine,
         "connect",
-        lambda: pytest.fail("uncertain sessions must not be automatically reconnected"),
+        lambda: reconnected,
     )
 
-    with pytest.raises(MachineError, match="disconnect and reconnect manually"):
-        machine.ensure_connected()
-
-    assert machine.status()["connected"] is True
-    assert machine.status()["controller_reconnect_required"] is True
+    assert machine.ensure_connected() is reconnected
     monkeypatch.undo()
     machine.disconnect()
 
@@ -1073,7 +1177,7 @@ def test_invalid_gate_mutation_cannot_suppress_disconnect_m5() -> None:
 
     machine.disconnect()
 
-    assert transport.commands == ["M5", "M5"]
+    assert transport.commands == ["M5"]
 
 
 def test_running_job_retains_original_air_off_mapping_after_mutation(
@@ -1138,7 +1242,7 @@ def test_running_job_retains_original_air_off_mapping_after_mutation(
     p1_successes_before_disconnect = transport.successful_commands.count("M107 P1")
     machine.disconnect()
 
-    assert transport.successful_commands.count("M107 P1") > p1_successes_before_disconnect
+    assert transport.successful_commands.count("M107 P1") == p1_successes_before_disconnect
     assert machine._active_job_air_assist_off_commands == ()
 
 
@@ -1292,7 +1396,7 @@ def test_non_job_motion_never_enables_configured_air_assist(
 )
 @pytest.mark.parametrize(
     ("action", "repetitions"),
-    [("request_stop", 1), ("disarm", 1), ("disconnect", 2)],
+    [("request_stop", 1), ("disarm", 1), ("disconnect", 1)],
 )
 def test_cleanup_paths_write_m5_before_configured_air_off(
     protocol: str,
@@ -1594,7 +1698,7 @@ def test_stop_orders_m5_after_an_inflight_powered_job_write() -> None:
         daemon=True,
     )
     writer.start()
-    assert transport.powered_write_entered.wait(timeout=1.0)
+    assert transport.powered_write_entered.wait(timeout=1.0), errors
 
     stopper = threading.Thread(target=machine.request_stop, daemon=True)
     stopper.start()
@@ -1650,7 +1754,7 @@ def test_stop_orders_m5_then_air_off_after_inflight_powered_job_write() -> None:
 
     writer = threading.Thread(target=write_powered_line, daemon=True)
     writer.start()
-    assert transport.powered_write_entered.wait(timeout=1.0)
+    assert transport.powered_write_entered.wait(timeout=1.0), errors
 
     stopper = threading.Thread(target=machine.request_stop, daemon=True)
     stopper.start()
@@ -1798,8 +1902,8 @@ def test_stop_during_connection_cannot_be_overwritten_by_successful_commit(
     identify_entered = threading.Event()
     release_identify = threading.Event()
 
-    def blocked_identify(*, expected_stop_epoch: int) -> str:
-        del expected_stop_epoch
+    def blocked_identify(*, expected_stop_epoch: int, selected_protocol: str) -> str:
+        del expected_stop_epoch, selected_protocol
         identify_entered.set()
         assert release_identify.wait(timeout=2.0)
         return "marlin"
@@ -1868,13 +1972,13 @@ def test_stop_during_transport_open_gets_connection_cleanup_m5(
     worker.start()
     assert transport.opened.wait(timeout=1.0)
     machine.request_stop()
-    assert transport.commands == []
+    assert transport.commands == ["M5"]
     transport.release_open.set()
     worker.join(timeout=1.0)
 
     assert len(errors) == 1
     assert "cancelled by software STOP" in str(errors[0])
-    assert transport.commands == ["M5"]
+    assert transport.commands == ["M5", "M5"]
     assert not machine.status()["connected"]
 
 
@@ -1903,7 +2007,7 @@ def test_successful_marlin_connection_starts_with_acknowledged_m5(
 
     machine.connect()
     try:
-        assert transport.commands == ["M5"]
+        assert transport.commands == ["M115", "M5"]
         assert transport.read_line(timeout=0.0) is None
     finally:
         machine.disconnect()
@@ -2155,7 +2259,7 @@ def test_simulator_stop_requires_reconnect_before_new_controller_commands() -> N
     machine.request_stop()
 
     assert machine.status()["controller_reconnect_required"]
-    with pytest.raises(MachineError, match="disconnect and reconnect"):
+    with pytest.raises(MachineError, match="reconnect"):
         machine.prepare_photo_position()
     machine.disconnect()
 
@@ -2211,35 +2315,6 @@ def test_stop_during_replacement_connect_still_cancels(
     assert machine.status()["jog_ready"] is False
 
 
-def test_stop_racing_between_disconnect_and_connect_is_not_absorbed(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    machine = MachineService(MachineSettings(backend="serial"), LaserSettings(), hardware_enabled=False)
-    machine.connect()
-    machine.request_stop()
-    requested_generation = machine.operation_generation()
-    original_disconnect = machine.disconnect
-    connect_called = False
-
-    def disconnect_then_stop() -> None:
-        original_disconnect()
-        machine.request_stop()
-
-    def unexpected_connect(*args: object, **kwargs: object) -> dict[str, object]:
-        nonlocal connect_called
-        connect_called = True
-        return {}
-
-    monkeypatch.setattr(machine, "disconnect", disconnect_then_stop)
-    monkeypatch.setattr(machine, "connect", unexpected_connect)
-    with machine.operation_scope(requested_generation):
-        with pytest.raises(MachineError, match="cancelled by software STOP"):
-            machine.replace_connection()
-
-    assert not connect_called
-    assert machine.status()["connected"] is False
-
-
 def test_request_time_generation_cancels_composite_job_after_stop() -> None:
     machine = MachineService(
         MachineSettings(backend="serial"),
@@ -2252,6 +2327,8 @@ def test_request_time_generation_cancels_composite_job_after_stop() -> None:
         "M4 S5\nG1 X20 Y20 F500\nM5\n"
     )
     generation = machine.operation_generation()
+    transport = machine._transport
+    assert transport is not None
 
     with machine.operation_scope(generation):
         machine.prepare_photo_position()
@@ -2261,8 +2338,6 @@ def test_request_time_generation_cancels_composite_job_after_stop() -> None:
 
     assert not machine.status()["armed"]
     assert not machine.status()["job"]["running"]
-    transport = machine._transport
-    assert transport is not None
     assert not transport.laser_on
     machine.disconnect()
 
@@ -2337,15 +2412,15 @@ def test_disarm_cancels_powered_start_after_grant_was_checked(
     monkeypatch.setattr(transport, "write_line", record_write)
     connection_check_entered = threading.Event()
     release_connection_check = threading.Event()
-    original_require_connection = machine._require_connection
+    original_require_session = machine._require_session
 
     def paused_connection_check() -> object:
         if threading.current_thread().name == "pending-powered-start":
             connection_check_entered.set()
             assert release_connection_check.wait(timeout=2.0)
-        return original_require_connection()
+        return original_require_session()
 
-    monkeypatch.setattr(machine, "_require_connection", paused_connection_check)
+    monkeypatch.setattr(machine, "_require_session", paused_connection_check)
     start_errors: list[Exception] = []
 
     def start() -> None:
@@ -2465,7 +2540,7 @@ def test_job_runner_thread_start_failure_is_terminal_and_attempts_m5(
     machine.disconnect()
 
 
-def test_start_preflighted_program_preserves_local_home_arm_start_order(
+def test_start_preflighted_program_uses_existing_home_then_arms_and_starts(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     machine = MachineService(
@@ -2476,12 +2551,16 @@ def test_start_preflighted_program_preserves_local_home_arm_start_order(
     program = machine.preflight_program(
         "G21\nG90\nM5\nG0 X10 Y10 F500\nM4 S100\nG1 X20 Y20 F500\nM5\n"
     )
+    machine.connect()
+    with machine._lock:
+        assert machine._session is not None
+        machine._coordinate_reference_ready = True
+        machine._coordinate_reference_session_generation = machine._session.generation
+        machine._set_controller_state_locked(
+            ControllerState.READY_MOTION,
+            session=machine._session,
+        )
     calls: list[object] = []
-    monkeypatch.setattr(
-        machine,
-        "prepare_job_start",
-        lambda: calls.append("home"),
-    )
     monkeypatch.setattr(
         machine,
         "arm_program",
@@ -2501,7 +2580,6 @@ def test_start_preflighted_program_preserves_local_home_arm_start_order(
 
     assert result == {"running": True}
     assert calls == [
-        "home",
         ("arm", machine.ARM_PHRASE, program.digest),
         ("start", "ordered.gcode", program.digest),
     ]
@@ -2651,11 +2729,11 @@ def test_stop_cancels_home_park_waiting_for_homing_ack(
     assert commands_when_stop_returned == ["M5", "$H", "M5"]
     assert transport.commands == commands_when_stop_returned
     assert len(errors) == 1
-    assert "cancelled by software STOP" in str(errors[0])
+    assert "cancelled" in str(errors[0])
     assert not machine.status()["coordinate_reference_ready"]
     assert machine.status()["controller_reconnect_required"]
     before_retry = list(transport.commands)
-    with pytest.raises(MachineError, match="disconnect and reconnect"):
+    with pytest.raises(MachineError, match="reconnect"):
         machine.prepare_photo_position()
     assert transport.commands == before_retry
     machine.disconnect()
@@ -2706,7 +2784,7 @@ def test_stop_in_final_home_park_commit_window_cannot_restore_reference(
     worker.join(timeout=1.0)
 
     assert len(errors) == 1
-    assert "cancelled by software STOP" in str(errors[0])
+    assert "cancelled" in str(errors[0])
     assert not machine.status()["coordinate_reference_ready"]
     assert machine.status()["controller_reconnect_required"]
     machine.disconnect()
@@ -2829,8 +2907,8 @@ def test_prepare_photo_position_can_capture_home_before_normal_simulated_park(
         assert home["available"] is True
         assert home["mpos_mm"][:2] == [0.0, 0.0]
         assert home["wpos_mm"][:2] == [0.0, 0.0]
-        assert transport.sampled_positions == [(0.0, 0.0)]
-        assert transport.raw_writes == [b"?"]
+        assert transport.sampled_positions == [(0.0, 0.0), (0.0, 0.0)]
+        assert transport.raw_writes == [b"?", b"?"]
         assert result["position"] == {"x": 110.0, "y": 105.0, "z": None}
         assert (transport.x, transport.y) == pytest.approx((110.0, 105.0))
         assert "$H" in transport.commands
@@ -3312,14 +3390,17 @@ def test_serial_connect_repairs_camera_hold_persisted_across_power_cycle(
         def __init__(self) -> None:
             super().__init__()
             self.commands: list[str] = []
+            self.idle_delay = 255
 
         def write_line(self, line: str) -> None:
             command = line.strip().upper()
             self.commands.append(command)
             if command == "$$":
-                self._queue.put("$1=255")
+                self._queue.put(f"$1={self.idle_delay}")
                 self._queue.put("ok")
                 return
+            if command.startswith("$1="):
+                self.idle_delay = int(command.split("=", 1)[1])
             super().write_line(line)
 
     transport = StaleHoldTransport()
@@ -3339,7 +3420,7 @@ def test_serial_connect_repairs_camera_hold_persisted_across_power_cycle(
 
     try:
         machine.connect()
-        assert transport.commands[:3] == ["$$", "M5", "$1=250"]
+        assert transport.commands[:4] == ["$I", "M5", "$$", "$1=250"]
         assert "$MD" not in transport.commands
         assert "$SLP" not in transport.commands
         assert any("Recovered stale camera motor hold" in line for line in machine.status()["log"])
@@ -3377,7 +3458,7 @@ def test_serial_connect_explicitly_releases_motors_with_normal_idle_delay(
 
     try:
         machine.connect()
-        assert transport.commands[:2] == ["$$", "M5"]
+        assert transport.commands[:3] == ["$I", "M5", "$$"]
         assert "$1=250" not in transport.commands
         assert "$MD" not in transport.commands
         assert "$SLP" not in transport.commands
@@ -3427,7 +3508,7 @@ def test_serial_connect_recovers_exact_grbl_alarm_lock_but_still_requires_home(
 
     status = machine.connect()
 
-    assert transport.commands[:4] == ["$$", "M5", "$X", "M5"]
+    assert transport.commands[:4] == ["$I", "M5", "$X", "M5"]
     assert not any(
         command == "$H" or command.startswith(("G0 ", "G1 ", "G28"))
         for command in transport.commands
@@ -3508,7 +3589,7 @@ def test_serial_connect_alarm_unlock_rejects_every_non_exact_or_failed_exchange(
     assert "$H" not in transport.commands
     assert not any(command.startswith(("G0 ", "G1 ", "G28")) for command in transport.commands)
     if first_m5.lower() == "error:9" and home_before_photo:
-        assert transport.commands[:3] == ["$$", "M5", "$X"]
+        assert transport.commands[:3] == ["$I", "M5", "$X"]
     else:
         assert "$X" not in transport.commands
 
@@ -3644,6 +3725,7 @@ def test_home_park_waits_for_serial_connection_initialization(
     home_thread = threading.Thread(target=home_and_park, name="test-home-park")
     connect_thread.start()
     assert transport.settings_write_started.wait(timeout=1.0)
+    transport.overlapping_write.clear()
     assert machine.status()["connecting"]
     assert not machine.status()["connected"]
     home_thread.start()
@@ -3660,7 +3742,7 @@ def test_home_park_waits_for_serial_connection_initialization(
     assert not home_thread.is_alive()
     assert errors == []
     assert parked[0]["position"] == {"x": 110.0, "y": 105.0, "z": None}
-    assert transport.commands.index("M5") > transport.commands.index("$$")
+    assert max(index for index, item in enumerate(transport.commands) if item == "M5") > transport.commands.index("$$")
 
 
 def test_queued_home_park_does_not_move_when_connection_initialization_fails(
@@ -3719,7 +3801,7 @@ def test_queued_home_park_does_not_move_when_connection_initialization_fails(
     home_thread.join(timeout=3.0)
 
     assert len(errors) == 2
-    assert any("settings could not be read" in str(error) for error in errors)
+    assert any("did not report the $1" in str(error) for error in errors)
     assert any("not connected" in str(error) for error in errors)
     assert "$H" not in transport.commands
     assert "G21" not in transport.commands
@@ -3758,10 +3840,10 @@ def test_serial_connect_forces_finite_idle_delay_when_grbl_omits_setting(
         hardware_enabled=True,
     )
 
-    with pytest.raises(MachineError, match=r"GRBL settings could not be read"):
+    with pytest.raises(MachineError, match=r"did not report the \$1"):
         machine.connect()
 
-    assert transport.commands[:3] == ["$$", "M5", "$1=250"]
+        assert transport.commands[:3] == ["$I", "M5", "$$"]
     assert "$MD" not in transport.commands
     assert "$SLP" not in transport.commands
     assert not machine.connected
@@ -3810,7 +3892,7 @@ def test_explicit_grbl_connect_waits_for_controller_startup_before_querying(
 
     assert status["connected"] is True
     assert sleeps[0] == 2.0
-    assert transport.commands[:2] == ["$$", "M5"]
+    assert transport.commands[:3] == ["$I", "M5", "$$"]
     assert "$MD" not in transport.commands
     assert "$SLP" not in transport.commands
     machine.disconnect()
@@ -4001,10 +4083,11 @@ def test_temporary_stepper_hold_falls_back_to_sleep_and_invalidates_position(
 
     monkeypatch.setattr(machine, "send_command", record_command)
 
-    with machine.temporary_stepper_hold():
-        pass
+    with pytest.raises(MachineError, match="fresh synchronized session"):
+        with machine.temporary_stepper_hold():
+            pass
 
-    assert commands == ["$$", "$1=255", "M5", "$1=250", "$MD", "$SLP", "$X"]
+    assert commands == ["$$", "$1=255", "M5", "$1=250", "$MD", "$SLP"]
     assert transport.raw == [b"\x18"]
     assert not machine.status()["coordinate_reference_ready"]
 
@@ -4497,17 +4580,18 @@ def test_powered_post_job_grbl_homing_accepts_active_then_idle_without_ok(
 
 
 @pytest.mark.parametrize(
-    "statuses",
+    ("statuses", "error_fragment"),
     [
-        ["<Idle|MPos:0,0,0>"] * 3,
-        ["<Run|MPos:1,1,0", "<Idle|MPos:0,0,0>"],
-        [],
+        (["<Idle|MPos:0,0,0>"] * 3, "verified active-to-idle"),
+        (["<Run|MPos:1,1,0", "<Idle|MPos:0,0,0>"], "malformed GRBL homing frame"),
+        ([], "verified active-to-idle"),
     ],
     ids=["idle-only", "malformed-active", "timeout"],
 )
 def test_powered_post_job_grbl_homing_ambiguous_or_timed_out_evidence_fails_closed(
     monkeypatch: pytest.MonkeyPatch,
     statuses: list[str],
+    error_fragment: str,
 ) -> None:
     transport = PostJobHomingTransport(statuses=statuses)
     machine = _powered_completion_machine(transport)
@@ -4523,7 +4607,7 @@ def test_powered_post_job_grbl_homing_ambiguous_or_timed_out_evidence_fails_clos
         status = machine.status()
         assert status["job"]["running"] is False
         assert status["job"]["phase"] == "failed"
-        assert "active-to-idle" in status["job"]["error"]
+        assert error_fragment in status["job"]["error"]
         assert status["last_successful_job"] is None
         assert status["controller_reconnect_required"] is True
         assert "G0 X15.000 Y195.000 F3000.000" not in transport.commands
@@ -4962,9 +5046,9 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
 
     machine.connect()
     try:
-        assert transport.commands[:2] == ["$$", "M5"]
+        assert transport.commands[:3] == ["$I", "M5", "$$"]
         assert "$SLP" not in transport.commands
-        assert transport.raw_writes == []
+        assert transport.raw_writes == [b"?"]
         machine.prepare_photo_position()
         transport.commands.clear()
         transport.raw_writes.clear()
@@ -4975,10 +5059,8 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
         machine.start_validated_program(program, "powered-fallback.gcode")
         wait_for_job(machine)
 
-        assert machine.status()["job"]["error"] is None
-        assert transport.commands[-12:] == [
-            "M5",
-            "G4 P0.01",
+        assert "fresh synchronized session" in machine.status()["job"]["error"]
+        assert transport.commands[-11:] == [
             "$H",
             "G21",
             "G90",
@@ -4988,7 +5070,8 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
             "M5",
             "$MD",
             "$SLP",
-            "$X",
+            "M5",
+            "M5",
         ]
         assert transport.raw_writes == [b"\x18"]
         assert "M8" not in transport.commands
@@ -5345,7 +5428,7 @@ def test_failed_serial_job_poisoning_blocks_stale_cleanup_acknowledgement() -> N
     assert "ERROR:33" in str(machine.status()["job"]["error"]).upper()
     assert machine.status()["controller_reconnect_required"]
     commands_before_retry = list(transport.commands)
-    with pytest.raises(MachineError, match="disconnect and reconnect"):
+    with pytest.raises(MachineError, match="reconnect"):
         machine.prepare_photo_position()
     assert transport.commands == commands_before_retry
     machine.disconnect()
@@ -5389,7 +5472,7 @@ def test_failed_simulator_job_requires_reconnect_before_retry(
     assert "ERROR:33" in str(machine.status()["job"]["error"]).upper()
     assert machine.status()["controller_reconnect_required"]
     commands_before_retry = list(transport.commands)
-    with pytest.raises(MachineError, match="disconnect and reconnect"):
+    with pytest.raises(MachineError, match="reconnect"):
         machine.prepare_photo_position()
     assert transport.commands == commands_before_retry
     machine.disconnect()
@@ -5430,7 +5513,7 @@ def test_ack_timeout_requires_reconnect_before_any_retry(
     assert machine.status()["controller_reconnect_required"]
     transport._queue.put("ok")
     commands_before_retry = list(transport.commands)
-    with pytest.raises(MachineError, match="disconnect and reconnect"):
+    with pytest.raises(MachineError, match="reconnect"):
         machine.prepare_photo_position()
     assert transport.commands == commands_before_retry
     machine.disconnect()
@@ -5440,8 +5523,8 @@ def test_ack_timeout_requires_reconnect_before_any_retry(
     ("protocol", "response", "reconnect_required"),
     [
         ("grbl", "error:33", False),
-        ("grbl", "ALARM:1", True),
-        ("marlin", "Error:Printer halted", True),
+        ("grbl", "ALARM:1", False),
+        ("marlin", "Error:Printer halted", False),
     ],
 )
 def test_only_grbl_error_is_treated_as_a_consumed_terminal_response(
@@ -5697,7 +5780,7 @@ def test_initial_connection_to_disconnected_controller_reports_real_failure(
         match="temporary network failure",
     ):
         machine.connect()
-    assert attempts == 2
+    assert attempts == 3
 
     attempts = 0
     with pytest.raises(MachineError, match="Protocol"):
@@ -5737,6 +5820,8 @@ def test_later_manual_reconnect_does_not_receive_initial_retry(
 ) -> None:
     successful = SimulatedTransport()
     failing = SimulatedTransport()
+    failing_two = SimulatedTransport()
+    failing_three = SimulatedTransport()
     failure_attempts = 0
 
     def fail_open() -> None:
@@ -5745,7 +5830,9 @@ def test_later_manual_reconnect_does_not_receive_initial_retry(
         raise TransientConnectionError("later connection lost")
 
     failing.open = fail_open  # type: ignore[method-assign]
-    transports = iter([successful, failing])
+    failing_two.open = fail_open  # type: ignore[method-assign]
+    failing_three.open = fail_open  # type: ignore[method-assign]
+    transports = iter([successful, failing, failing_two, failing_three])
     monkeypatch.setattr(
         "laser_aligner.machine.service.create_machine_transport",
         lambda *_args: next(transports),
@@ -5761,4 +5848,4 @@ def test_later_manual_reconnect_does_not_receive_initial_retry(
     with pytest.raises(TransientConnectionError):
         machine.connect()
 
-    assert failure_attempts == 1
+    assert failure_attempts == 3

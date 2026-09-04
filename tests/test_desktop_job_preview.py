@@ -212,6 +212,35 @@ def test_preview_start_job_is_distinct_from_timeline_start(
     qt_application.processEvents()
 
 
+def test_preview_machine_gate_blocks_only_start_job(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    dialog = JobPreviewDialog(
+        _plan(),
+        (0.0, 100.0, 0.0, 100.0),
+        "state-gated.gcode",
+    )
+    requests: list[bool] = []
+    dialog.runRequested.connect(lambda: requests.append(True))
+
+    dialog.set_run_enabled(False, "Reconnect the controller before START JOB")
+
+    assert not dialog.run_button.isEnabled()
+    assert "Reconnect" in dialog.run_button.toolTip()
+    assert dialog.reset_button.isEnabled()
+    assert dialog.play_button.isEnabled()
+    dialog.run_button.click()
+    assert requests == []
+
+    dialog.set_run_enabled(True)
+    dialog.run_button.click()
+    assert requests == [True]
+
+    dialog.close()
+    dialog.deleteLater()
+    qt_application.processEvents()
+
+
 def test_warning_preflight_is_retained_in_preview_without_blocking_controls(
     qt_application: QtWidgets.QApplication,
 ) -> None:

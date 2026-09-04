@@ -29,6 +29,9 @@ def test_transport_boundary_exposes_only_communication_mechanics() -> None:
         "write_line",
         "read_line",
         "drain",
+        "configured_endpoint",
+        "resolved_endpoint",
+        "synchronize_input",
     }
     assert "MachineTransport" not in machine_package.__all__
     assert "create_machine_transport" not in machine_package.__all__

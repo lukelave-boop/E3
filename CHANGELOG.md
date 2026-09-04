@@ -6,6 +6,25 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Rebuilt the primary Raspberry-Pi-to-GRBL connection boundary around explicit,
+  generation-bound controller sessions. Private candidates obtain exclusive
+  POSIX ownership, purge complete/partial/kernel RX state, prove a quiet window,
+  and complete `$I`/`M5`/`$$`/`$G`/`$#`/`?` alignment before publishing HOME
+  REQUIRED. Ordinary transactions and jobs retain their exact transport and
+  command sequence; uncertain writes, reads, acknowledgements, framing, STOP,
+  or replacement permanently quarantine that generation. STOP remains the
+  immediate primary-first path, then asynchronously establishes communication
+  only on a fresh session without Home, motion, arming, output, Air Assist, or
+  job resume. Pi RPC responses now carry boot/build/state/session metadata and
+  structured errors, stale client actions/results fail closed, conflicting
+  physical operations are rejected instead of queued, and lifecycle recovery is
+  single-flight. The desktop presents Pi reachability separately from the 11
+  controller states, gates every motion/arming/start/manual surface, suppresses
+  stale callbacks, and exposes bounded sanitized diagnostics. Focused Ubuntu
+  pseudo-terminal/session/Pi regression CI and a deterministic recovery fault
+  matrix were added. These controls are not safety-rated and require the
+  documented 20-cycle physical validation before hardware behavior is verified.
+
 - Added conservative geometric primitive recovery after the shared native
   raster contour fit. Imported rasters and Camera Trace's Contrast, Auto,
   Color, and direct native grid adapters use the same source-neutral stage.

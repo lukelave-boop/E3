@@ -75,8 +75,12 @@ without copying LightBurn branding or changing the E3 machine-control model:
    implementations.
 2. Original icon-only File/Edit/Arrange/Job controls share one compact command
    row above the workspace.
-3. A non-hideable runtime strip always reports hardware authority, controller
-   connection, and motion permission. Connect/Reconnect, Disconnect, the
+3. A non-hideable runtime strip always reports hardware authority, Pi
+   reachability, the authoritative primary-controller session state, and motion
+   readiness separately. It distinguishes opening, synchronizing, Home required,
+   motion ready, job running, stopping, recovery, reconnect required, fault, and
+   shutdown; stale Pi status becomes controller-state unknown rather than cached
+   ONLINE. Connect/Reconnect, Disconnect, the
    intentionally disabled Pause, and software STOP share its primary-control
    region. STOP remains enabled during ordinary background work. The strip
    stays inline when space permits, moves to its own toolbar row on narrower
@@ -291,11 +295,16 @@ paths.
   program when Preview's **START JOB** delegates to the guarded run path; the
   desktop does not show a confirmation or typed-phrase dialog
 
-After software STOP or another uncertain established-session failure, the
-primary runtime strip changes its normal Connect control to an explicit
-**Reconnect** action. It performs one operator-requested disconnect/connect
-sequence and then leaves the machine HOME REQUIRED. It does not automatically
-reconnect, Home, move, resume, or arm. Desktop modal message boxes use a shared
+After software STOP, the runtime strip shows **Stopping** and then **Recovering
+controller** while the Pi quarantines the old session and attempts one bounded
+fresh communication-only recovery. Successful recovery shows **HOME REQUIRED**;
+it never Homes, moves, resumes, arms, or enables output. If recovery fails, the
+normal Connect control becomes one actionable **Reconnect**. Reconnect invokes a
+single Pi-owned atomic replace-and-synchronize operation rather than separate
+desktop Disconnect and Connect calls. Repeated/concurrent requests share one
+result and a later STOP cancels it. Home, Jog, Arm, Start, manual Send, and
+motion-producing calibration actions remain disabled outside their exact ready
+state; STOP remains available. Desktop modal message boxes use a shared
 queued first-show polish and repaint so Linux compositors receive complete
 dark-theme contents on the initial exposure without blocking the GUI event loop.
 

@@ -141,11 +141,14 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
             "job": {},
         }
     )
-    assert panel.park_button.isEnabled()
-    assert "connect automatically" in panel.park_button.toolTip().lower()
+    assert not panel.park_button.isEnabled()
+    assert "synchronized controller session" in panel.park_button.toolTip().lower()
 
     panel.set_status(
         {
+            "controller_state": "READY_HOME_REQUIRED",
+            "controller_session_generation": 1,
+            "controller_state_revision": 1,
             "connected": True,
             "armed": False,
             "protocol": "grbl",
@@ -154,10 +157,13 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
         }
     )
     assert not panel.park_button.isEnabled()
-    assert "Motion blocked" in panel.state_label.text()
+    assert "READY HOME REQUIRED" in panel.state_label.text()
 
     panel.set_status(
         {
+            "controller_state": "READY_HOME_REQUIRED",
+            "controller_session_generation": 1,
+            "controller_state_revision": 2,
             "connected": True,
             "armed": False,
             "protocol": "grbl",
@@ -175,6 +181,9 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
     )
     panel.set_status(
         {
+            "controller_state": "READY_MOTION",
+            "controller_session_generation": 1,
+            "controller_state_revision": 3,
             "connected": True,
             "armed": False,
             "protocol": "grbl",
@@ -186,6 +195,7 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
         }
     )
     assert jog_group.isEnabled()
+    assert not panel.park_button.isEnabled()
     assert panel.jog_speed.maximum() == 1200.0
     panel.jog_step.setCurrentIndex(1)
     panel.jog_right.click()
@@ -193,6 +203,9 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
 
     panel.set_status(
         {
+            "controller_state": "READY_MOTION",
+            "controller_session_generation": 1,
+            "controller_state_revision": 4,
             "connected": True,
             "armed": True,
             "protocol": "grbl",
@@ -207,6 +220,9 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
 
     panel.set_status(
         {
+            "controller_state": "RECONNECT_REQUIRED",
+            "controller_session_generation": 1,
+            "controller_state_revision": 5,
             "connected": True,
             "armed": False,
             "protocol": "grbl",
@@ -218,10 +234,13 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
     assert "RECONNECT REQUIRED" in panel.state_label.text()
     assert not panel.park_button.isEnabled()
     assert not jog_group.isEnabled()
-    assert "disconnect and reconnect" in panel.park_button.toolTip().lower()
+    assert "reconnected" in panel.park_button.toolTip().lower()
 
     panel.set_status(
         {
+            "controller_state": "READY_HOME_REQUIRED",
+            "controller_session_generation": 2,
+            "controller_state_revision": 6,
             "connected": True,
             "armed": False,
             "protocol": "grbl",
@@ -236,6 +255,9 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
     assert not jog_group.isEnabled()
     panel.set_status(
         {
+            "controller_state": "READY_HOME_REQUIRED",
+            "controller_session_generation": 2,
+            "controller_state_revision": 6,
             "connected": True,
             "armed": False,
             "protocol": "grbl",

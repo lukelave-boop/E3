@@ -755,12 +755,14 @@ def test_local_run_passes_exact_prepared_output_authority() -> None:
         last_job_work_area=(10.0, 210.0, 10.0, 210.0),
         last_job_coordinate_frame=current,
         document=SimpleNamespace(revision=3),
+        _controller_busy=False,
         _job_preparation_busy=False,
         _prepared_frame_is_current=lambda: True,
         _verify_prepared_job_assets=lambda _action: True,
         _work_area_signature=lambda _area: (10.0, 210.0, 10.0, 210.0),
         _pending_calibration_capture=None,
         _invalidate_generated_job=lambda: pytest.fail("job must remain current"),
+        _sync_job_preview_machine_gate=lambda: None,
         show_error=lambda message: pytest.fail(message),
         show_notice=lambda _message: None,
         runtime=SimpleNamespace(
@@ -772,7 +774,17 @@ def test_local_run_passes_exact_prepared_output_authority() -> None:
                 )
             ),
             context=SimpleNamespace(
-                machine=SimpleNamespace(status=lambda: {}),
+                machine=SimpleNamespace(
+                    status=lambda: {
+                        "controller_state": "READY_MOTION",
+                        "controller_session_generation": 1,
+                        "controller_state_revision": 1,
+                        "allow_motion": True,
+                        "jog_ready": True,
+                        "armed": False,
+                        "job": {},
+                    }
+                ),
             ),
         ),
         controller=SimpleNamespace(
@@ -912,8 +924,21 @@ def test_trace_self_heals_pristine_stale_local_project_before_strict_check() -> 
             mark_clean=lambda: None,
         ),
         runtime=SimpleNamespace(
-            context=SimpleNamespace(_current_honeycomb_support=lambda: support)
+            context=SimpleNamespace(
+                _current_honeycomb_support=lambda: support,
+                machine=SimpleNamespace(
+                    status=lambda: {
+                        "controller_state": "READY_HOME_REQUIRED",
+                        "controller_session_generation": 1,
+                        "controller_state_revision": 1,
+                        "allow_motion": True,
+                        "job": {},
+                    }
+                ),
+            )
         ),
+        _controller_busy=False,
+        _job_preparation_busy=False,
         controller=SimpleNamespace(detect_trace_objects=requests.append),
         _new_document=lambda: new_document,
         _invalidate_generated_job=lambda: None,
@@ -958,6 +983,21 @@ def test_new_trace_request_retires_candidates_before_detect_and_keeps_project() 
 
     fake = SimpleNamespace(
         document=document,
+        runtime=SimpleNamespace(
+            context=SimpleNamespace(
+                machine=SimpleNamespace(
+                    status=lambda: {
+                        "controller_state": "READY_HOME_REQUIRED",
+                        "controller_session_generation": 1,
+                        "controller_state_revision": 1,
+                        "allow_motion": True,
+                        "job": {},
+                    }
+                )
+            )
+        ),
+        _controller_busy=False,
+        _job_preparation_busy=False,
         controller=SimpleNamespace(
             detect_trace_objects=detect,
             review_signature_is_current=lambda _signature: False,
@@ -1819,6 +1859,33 @@ def _window(
     window.show_notice = notices.append  # type: ignore[method-assign]
     window.show()
     return window, errors, notices
+
+
+def _set_ready_motion_status(
+    window: E3MainWindow,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Publish an explicit ready session for tests that stub job submission."""
+
+    current_status = window.runtime.context.machine.status
+
+    def status() -> dict[str, object]:
+        return {
+            **current_status(),
+            "controller_state": "READY_MOTION",
+            "controller_session_generation": 1,
+            "controller_state_revision": 2,
+            "connected": True,
+            "connecting": False,
+            "controller_reconnect_required": False,
+            "coordinate_reference_ready": True,
+            "jog_ready": True,
+            "allow_motion": True,
+            "armed": False,
+        }
+
+    monkeypatch.setattr(window.runtime.context.machine, "status", status)
+    window.controller.poll_status()
 
 
 def _restore_real_job_preflight(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3311,6 +3378,7 @@ def test_preview_start_job_uses_guarded_run_path_and_releases_modal_stop(
     )
     try:
         window.runtime.settings.machine.allow_motion = True
+        _set_ready_motion_status(window, monkeypatch)
         window.controller.run_job = (  # type: ignore[method-assign]
             lambda text, name, *, arm_phrase=None: calls.append(
                 (text, name, arm_phrase)
@@ -3354,6 +3422,7 @@ def test_preview_start_job_still_rejects_stale_revision(
     )
     try:
         window.runtime.settings.machine.allow_motion = True
+        _set_ready_motion_status(window, monkeypatch)
         window.generate_toolpath()
         _wait_until(
             qt_application,
@@ -4249,7 +4318,7 @@ def test_exact_plan_controls_zero_effective_power_state_and_run_gate(
         _dispose(qt_application, window)
 
 
-def test_offline_prepared_job_reaches_controller_auto_connect_path(
+def test_offline_prepared_job_is_blocked_before_controller_auto_connect_path(
     qt_application: QtWidgets.QApplication,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -4272,11 +4341,12 @@ def test_offline_prepared_job_reaches_controller_auto_connect_path(
             )
         )
         assert window.runtime.context.machine.status()["connected"] is False
+        window._controller_busy = False
 
         window.run_current_job()
 
-        assert calls == [(job.text, "offline-prepared.gcode", None)]
-        assert errors == []
+        assert calls == []
+        assert errors == ["START JOB requires a synchronized controller session."]
     finally:
         _dispose(qt_application, window)
 
@@ -4291,6 +4361,7 @@ def test_powered_start_has_no_confirmation_and_uses_one_time_arm(
     calls: list[tuple[str, str, str | None]] = []
     try:
         window.runtime.settings.machine.allow_motion = True
+        _set_ready_motion_status(window, monkeypatch)
         window.last_job = job
         window.last_job_name = "powered-calibration.gcode"
         window.last_job_revision = window.document.revision
@@ -4313,6 +4384,7 @@ def test_powered_start_has_no_confirmation_and_uses_one_time_arm(
                 (text, name, arm_phrase)
             )
         )
+        window._controller_busy = False
 
         window.run_current_job()
 

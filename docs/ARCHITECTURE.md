@@ -1400,7 +1400,7 @@ execution authority:
 
 | Boundary | Responsibility | Explicitly not responsible for |
 |---|---|---|
-| `MachineTransport` | Open/close, raw/line writes, line reads, and drain mechanics | Controller command meaning, identity decisions, safety gates, retries, or execution authorization |
+| `MachineTransport` | Open/close, exact endpoint identity, raw/line writes, line reads, drain mechanics, and bounded input synchronization evidence; local POSIX transport additionally owns kernel/process serial exclusivity | Controller command meaning, identity decisions, safety gates, retries, or execution authorization |
 | immutable `ControllerDialect` | Pure GRBL or Marlin primary-controller identity, response classification, same-controller command policy/capabilities, and parsing semantics | Opening or writing transports, locking, secondary-controller ownership, mutable service state, authorization, or starting work |
 | local `MachineService` | Primary-controller safety and authorization gates, connection/probe timing, transport ownership, serialized command/ACK exchange, job orchestration, STOP/cancellation, and cleanup | Persisting machine/profile data, opening a configured Pi-only secondary endpoint on Windows, or delegating authority to a transport or dialect |
 | Windows `RemoteMachineService` | Exact local preflight, upload/START client, acceptance recovery, cached monitoring, reconnect identity, and priority STOP RPC | Owning Pi serial, streaming an accepted program, or falling back to raw bridge execution |
@@ -1417,15 +1417,31 @@ exports remain compatibility entry points. The current combined node does not
 construct `NetworkSerialTransport` or host the legacy raw server.
 
 The frozen controller-dialect registry contains only the already supported
-GRBL and Marlin policies. With direct-local `machine.protocol = auto`, `MachineService`
-retains the same deterministic sequence: configured startup delay and drain,
-GRBL startup-banner recognition, then `$I` with a 1.0-second response window,
-then `M115` with a 1.5-second response window, using the existing accepted
-identity markers and fail-closed result. The dialect values describe those
-semantics; `MachineService` decides when each probe may be written and owns the
-exchange. No additional probe or controller command was introduced.
+GRBL and Marlin policies. Each open is a private candidate with a new monotonic
+session generation. After the configured startup settle, its transport purges
+kernel RX, queued lines, and any partial receive fragment, then proves a bounded
+continuous quiet interval. A GRBL candidate must complete `$I` identity,
+acknowledged `M5`, `$$` with a valid finite `$1` repair when needed, parsed `$G`
+and `$#`, and a valid realtime `?` frame. None of these commands homes, moves,
+arms, enables output, enables Air Assist, or resumes work. Only the final
+compare-and-set publishes the candidate as `READY_HOME_REQUIRED`. Failed or
+ambiguous candidates are closed; bounded retry creates a wholly new transport
+and generation rather than continuing on the same response stream.
+
+The one authoritative controller-session state is one of `DISCONNECTED`,
+`OPENING`, `SYNCHRONIZING`, `READY_HOME_REQUIRED`, `READY_MOTION`,
+`JOB_RUNNING`, `STOPPING`, `RECOVERING`, `RECONNECT_REQUIRED`, `FAULTED`, or
+`SHUTTING_DOWN`. An explicit transition graph rejects impossible lifecycle
+edges. Compatibility booleans are projections of that state, so an ordinary
+command cannot see a half-open candidate or an ONLINE plus reconnect-required
+combination. Coordinate reference, jog position, arming, job authority, command
+transactions, and UI results are bound to the exact session generation.
+
 Remote profiles reject `auto` before controller/network operations and require
-the same explicit GRBL or Marlin policy on both hosts.
+the same explicit GRBL or Marlin policy on both hosts. `E3MACHINE/2` carries
+versioned controller-session capabilities and Pi build/boot/state metadata;
+protocol-compatible revisions need not be identical, while missing required
+capabilities fail with a structured explanation.
 
 `MachineSettings.air_assist` is the constrained object
 `{mode, fan_index, port, baudrate}`. Existing `grbl_coolant` and `marlin_fan`
@@ -1545,13 +1561,22 @@ controller support is claimed.
 - serializes ordinary write/ack ownership and complete Home / park or scoped
   camera-hold sequences so concurrent desktop workers cannot consume each
   other's controller replies;
+- binds every ordinary transaction to one exact session and command sequence,
+  and diverts realtime status frames from line-command acknowledgements; a
+  partial write, read failure, timeout, cancellation after write, startup frame,
+  or framing ambiguity permanently quarantines that generation;
 - permits the Coordinate Audit GRBL `?` sampler only under ordinary command
   ownership and rejects it before transmission while a streamed job is running;
 - revokes authorization on stop or disarm;
 - attempts primary `M5` on stop, disarm, disconnect, job failure, and scoped
   motor-release cleanup even when mutable configuration or controller state is
   already untrusted; secondary-controller OFF is bounded independent cleanup and
-  never moves ahead of or delays primary STOP/laser-off authority.
+  never moves ahead of or delays primary STOP/laser-off authority;
+- detaches the exact stopped session before recovery, so its delayed replies,
+  worker, cleanup, request, or client callback has no route to a replacement;
+  successful automatic recovery is communication-only and publishes
+  `READY_HOME_REQUIRED`, while failure publishes one actionable
+  `RECONNECT_REQUIRED` state.
 
 Generated powered-job programs establish `G21`, `G90`, laser off, and configured
 Air Assist off before work. For `secondary_marlin_fan`, fail-off and transitions
@@ -1612,14 +1637,24 @@ Windows-network loss. Zero-power jobs and stop, local failure, emergency, or
 controller-disconnect paths do not request this completion motion. A Pi process
 restart marks persisted `starting`, `running`, or `stopping` state interrupted
 and never resumes it. Controller reset, reconnect, emergency stop, motor release,
-or job failure invalidates the session reference. Connection status remains non-ready throughout
-protocol detection and GRBL startup cleanup. GRBL startup cleanup ordinarily
-requires an acknowledged `M5`; only the exact consumed alarm-lock rejection
-`error:9`, with mandatory Home / park configured, permits `$X` followed by a
-second required `M5`. Connect performs no homing or motion and leaves coordinate
-state untrusted. Every other rejection or ambiguous exchange fails the
-connection. Emergency stop intentionally bypasses ordinary operation
-serialization.
+or job failure invalidates the session reference. Connection status remains
+non-ready throughout protocol detection and the complete GRBL alignment
+handshake. GRBL startup cleanup ordinarily requires an acknowledged `M5`; only
+the exact consumed alarm-lock rejection `error:9`, with mandatory Home / park
+configured, permits `$X` followed by a second required `M5`. Connect and
+automatic recovery perform no homing or motion and leave coordinate state
+untrusted. Home / park is accepted only from `READY_HOME_REQUIRED` and publishes
+`READY_MOTION` atomically after its full homing, coordinate, mode, optional park,
+planner, and final coordinate validation succeeds. Every other rejection or
+ambiguous exchange fails and quarantines the exact session. A fully received,
+grammar-valid terminal `error:x` or `ALARM:x` is a consumed controller
+rejection and does not by itself make reply ownership uncertain; a partial or
+failed write, read failure, timeout, cancellation after write, restart banner,
+malformed frame, unowned reply, or response-boundary ambiguity does quarantine
+the exact session. Emergency stop
+intentionally bypasses ordinary operation serialization, then fresh
+communication recovery waits behind old-session unwinding without waiting in
+the priority STOP caller.
 
 This is an accidental-command boundary, not functional safety.
 

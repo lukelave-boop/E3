@@ -648,6 +648,8 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.max_travel_feed_mm_min = max_travel_feed_mm_min
         self._deferred_render = bool(defer_render)
         self._render_completed = not self._deferred_render
+        self._run_authorized = True
+        self._run_blocked_reason = ""
         self.setWindowTitle(f"Job Preview — {job_name}")
         self.setWindowModality(QtCore.Qt.WindowModality.WindowModal)
         minimum_size, initial_size = self._screen_limited_sizes()
@@ -1231,9 +1233,14 @@ class JobPreviewDialog(QtWidgets.QDialog):
             self.reset_button,
             self.play_button,
             self.speed_combo,
-            self.run_button,
         ):
             control.setEnabled(True)
+        self.run_button.setEnabled(self._run_authorized)
+        self.run_button.setToolTip(
+            self._run_blocked_reason
+            if not self._run_authorized
+            else "Submit this exact reviewed job through the existing guarded execution checks"
+        )
         self.set_elapsed(self.plan.total_seconds)
         QtCore.QTimer.singleShot(0, self.canvas.fit_job)
         self.renderFinished.emit()
@@ -1283,8 +1290,22 @@ class JobPreviewDialog(QtWidgets.QDialog):
             self.startHereRequested.emit(self._current_move_index)
 
     def _request_run(self) -> None:
-        if self._render_completed:
+        if self._render_completed and self._run_authorized:
             self.runRequested.emit()
+
+    def set_run_enabled(self, enabled: bool, reason: str = "") -> None:
+        """Apply current controller authority without changing preview review controls."""
+
+        self._run_authorized = bool(enabled)
+        self._run_blocked_reason = str(reason).strip()
+        available = self._render_completed and self._run_authorized
+        self.run_button.setEnabled(available)
+        self.run_button.setToolTip(
+            "Submit this exact reviewed job through the existing guarded execution checks"
+            if available
+            else self._run_blocked_reason
+            or "Wait for exact preview construction to finish"
+        )
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
         self._timer.stop()
