@@ -64,6 +64,7 @@ class PosixSerial:
         self._reader: threading.Thread | None = None
         self._write_lock = threading.Lock()
         self._receive_lock = threading.RLock()
+        self._synchronize_requested = threading.Event()
         self._lifecycle_lock = threading.RLock()
         self._exclusive_lock_fd: int | None = None
         self._resolved_path = str(Path(path).resolve())
@@ -243,8 +244,12 @@ class PosixSerial:
     def _reader_loop(self) -> None:
         fd = self._fd
         while not self._stop.is_set() and fd is not None:
+            if self._synchronize_requested.wait(0.001):
+                continue
             try:
                 with self._receive_lock:
+                    if self._synchronize_requested.is_set():
+                        continue
                     readable, _, _ = select.select([fd], [], [], 0.1)
                     if not readable:
                         continue
@@ -377,6 +382,21 @@ class PosixSerial:
         quiet_interval: float = _DEFAULT_QUIET_INTERVAL_SECONDS,
         timeout: float = _DEFAULT_SYNCHRONIZE_TIMEOUT_SECONDS,
     ) -> InputSynchronizationEvidence:
+        self._synchronize_requested.set()
+        try:
+            return self._synchronize_input_locked(
+                quiet_interval=quiet_interval,
+                timeout=timeout,
+            )
+        finally:
+            self._synchronize_requested.clear()
+
+    def _synchronize_input_locked(
+        self,
+        *,
+        quiet_interval: float,
+        timeout: float,
+    ) -> InputSynchronizationEvidence:
         """Purge RX and prove one continuous, bounded quiet interval.
 
         The sole reader is paused by ``_receive_lock`` while this routine owns
@@ -389,12 +409,16 @@ class PosixSerial:
             raise ValueError(
                 "Serial synchronization needs a positive quiet interval no longer than its timeout"
             )
-        started = time.monotonic()
-        deadline = started + timeout
         discarded_bytes = 0
         discarded_lines = 0
         observed_activity = False
         with self._receive_lock:
+            # Lock acquisition may wait behind the reader's bounded select.
+            # The synchronization deadline measures the interval during which
+            # this operation exclusively owns RX, not scheduler contention
+            # before ownership begins.
+            started = time.monotonic()
+            deadline = started + timeout
             fd = self._fd
             if fd is None:
                 raise MachineError("Serial port is not open")
