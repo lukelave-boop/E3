@@ -26,45 +26,71 @@ if ([string]::IsNullOrWhiteSpace($Revision)) {
     throw "Could not determine the E3 build revision"
 }
 
-& $python -m pip install --upgrade pyinstaller
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not install PyInstaller"
+$originalPath = $env:PATH
+$sanitizedPath = & $python .\packaging\windows_build_guard.py `
+    sanitize-path `
+    --system-root $env:WINDIR
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($sanitizedPath)) {
+    throw "Could not establish a collision-free Windows build PATH"
 }
+$env:PATH = $sanitizedPath.Trim()
 
-$version = (
-    & $python .\packaging\version_for_build.py
-).Trim()
-if ([string]::IsNullOrWhiteSpace($version)) {
-    throw "Could not determine the E3 application version"
+try {
+    & $python -m pip install --upgrade pyinstaller
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not install PyInstaller"
+    }
+
+    & $python -c "from PySide6 import QtCore, QtGui, QtWidgets"
+    if ($LASTEXITCODE -ne 0) {
+        throw "PySide6 does not import under the sanitized Windows build PATH"
+    }
+
+    $version = (
+        & $python .\packaging\version_for_build.py
+    ).Trim()
+    if ([string]::IsNullOrWhiteSpace($version)) {
+        throw "Could not determine the E3 application version"
+    }
+    $buildInfo = Join-Path $repoRoot "build-info.json"
+    & $python .\packaging\write_build_info.py `
+        --output $buildInfo `
+        --revision $Revision `
+        --channel $Channel `
+        --repository $Repository `
+        --release-tag $ReleaseTag `
+        --platform-key windows-x86_64
+    if ($LASTEXITCODE -ne 0) {
+        throw "Could not generate build-info.json"
+    }
+
+    Remove-Item .\build\E3 -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item .\dist\E3 -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item .\installer-dist -Recurse -Force -ErrorAction SilentlyContinue
+
+    & $python -m PyInstaller `
+        --noconfirm `
+        --clean `
+        --windowed `
+        --onedir `
+        --name E3 `
+        --collect-all laser_aligner `
+        --collect-all cv2 `
+        --collect-all PySide6 `
+        .\packaging\e3_entry.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller build failed"
+    }
+
+    & $python .\packaging\windows_build_guard.py `
+        validate-bundle `
+        --internal-root .\dist\E3\_internal
+    if ($LASTEXITCODE -ne 0) {
+        throw "PyInstaller collected conflicting foreign runtime DLLs"
+    }
 }
-$buildInfo = Join-Path $repoRoot "build-info.json"
-& $python .\packaging\write_build_info.py `
-    --output $buildInfo `
-    --revision $Revision `
-    --channel $Channel `
-    --repository $Repository `
-    --release-tag $ReleaseTag `
-    --platform-key windows-x86_64
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not generate build-info.json"
-}
-
-Remove-Item .\build\E3 -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item .\dist\E3 -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item .\installer-dist -Recurse -Force -ErrorAction SilentlyContinue
-
-& $python -m PyInstaller `
-    --noconfirm `
-    --clean `
-    --windowed `
-    --onedir `
-    --name E3 `
-    --collect-all laser_aligner `
-    --collect-all cv2 `
-    --collect-all PySide6 `
-    .\packaging\e3_entry.py
-if ($LASTEXITCODE -ne 0) {
-    throw "PyInstaller build failed"
+finally {
+    $env:PATH = $originalPath
 }
 
 Copy-Item $buildInfo .\dist\E3\build-info.json -Force

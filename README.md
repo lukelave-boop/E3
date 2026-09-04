@@ -419,6 +419,12 @@ automated-test covered. The installed frozen PyInstaller E3 to visible Inno
 Setup handoff still requires package-level verification in a disposable
 interactive Windows environment.
 
+The Windows build sanitizes foreign native-library directories from its
+PyInstaller environment and rejects known root-level ICU/OpenSSL collisions in
+the finished bundle. If a frozen dependency still fails before Qt can start, E3
+writes `logs/startup-error.log` under its per-user data root and presents a
+native Windows error dialog with rebuild/reinstall guidance.
+
 Windows feature builds use the separate permanent **E3 DEV TEST** launcher.
 Its stable executable and Desktop shortcut remain visually and taskbar-distinct
 from production E3, while `current-feature.json` selects the exact frozen build

@@ -14,6 +14,7 @@ from ..identity import (
     configure_windows_app_user_model_id,
 )
 from .qt import PYSIDE6_IMPORT_ERROR, require_qt
+from .startup_error import report_frozen_desktop_import_error
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -106,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
 
     if PYSIDE6_IMPORT_ERROR is not None:
+        if getattr(sys, "frozen", False):
+            report_frozen_desktop_import_error(PYSIDE6_IMPORT_ERROR)
+            return 2
         print(
             "PySide6 is not installed.\n"
             "Install the native desktop dependencies with:\n\n"
@@ -115,20 +119,26 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     QtCore, QtGui, QtWidgets = require_qt()
-    from ..core import CoreRuntime
-    from ..deployment import read_bridge_token, resolve_launch_profile, user_config_path
-    from ..first_run import inspect_simulator_recovery
-    from .controller import DESKTOP_SHUTDOWN_TIMEOUT_SECONDS
-    from .dialogs import install_modal_dialog_first_paint_fix
-    from .first_run import (
-        install_first_run_menu,
-        run_first_run_setup,
-        run_simulator_recovery,
-    )
-    from .main_window import E3MainWindow
-    from .shutdown import arm_process_exit_watchdog
-    from .theme import apply_dark_theme
-    from .update_ui import install_update_menu
+    try:
+        from ..core import CoreRuntime
+        from ..deployment import read_bridge_token, resolve_launch_profile, user_config_path
+        from ..first_run import inspect_simulator_recovery
+        from .controller import DESKTOP_SHUTDOWN_TIMEOUT_SECONDS
+        from .dialogs import install_modal_dialog_first_paint_fix
+        from .first_run import (
+            install_first_run_menu,
+            run_first_run_setup,
+            run_simulator_recovery,
+        )
+        from .main_window import E3MainWindow
+        from .shutdown import arm_process_exit_watchdog
+        from .theme import apply_dark_theme
+        from .update_ui import install_update_menu
+    except ImportError as exc:
+        if not getattr(sys, "frozen", False):
+            raise
+        report_frozen_desktop_import_error(exc)
+        return 2
 
     configure_windows_app_user_model_id()
     application = QtWidgets.QApplication([sys.argv[0]])

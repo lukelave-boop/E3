@@ -499,6 +499,8 @@ controller's realtime hold/resume behavior has been physically verified.
 - Shell-script syntax checks
 - Editable package installation without desktop dependencies
 - Friendly startup failure when PySide6 has not yet been installed
+- Persistent, bounded frozen-startup diagnostics and a native Windows dialog
+  when an import fails before Qt can create the application window
 
 At this milestone, the Qt windows still needed exercise on the Linux Mint
 workstation because PySide6 and a graphical display were not present in the

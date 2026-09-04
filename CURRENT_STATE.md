@@ -5,7 +5,32 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-09-03**
+Snapshot: **2026-09-04**
+
+## Active Windows frozen-startup hardening
+
+The Windows build now sanitizes its PyInstaller environment before dependency
+analysis and rejects the known conflicting root-level ICU/OpenSSL libraries in
+the completed bundle. This prevents tools on the invoking process `PATH` from contributing
+incompatible native libraries. The GRBL-hardening build at revision `a30f2e5`
+failed before Qt startup because PyInstaller collected ICU 78 from the bundled
+Codex/Poppler runtime; Qt 6 then loaded that `icuuc.dll` instead of the compatible
+Windows system library and `PySide6.QtCore` raised `ImportError: DLL load failed
+while importing QtCore: The specified procedure could not be found.`
+
+Frozen startup import failures now preserve the original exception and write a
+bounded diagnostic report to the per-user `logs/startup-error.log`, then show a
+native Windows error dialog that directs the operator to rebuild or reinstall
+the package. Source checkouts retain the existing PySide6 installation guidance.
+Focused startup, build-guard, source, and recovery verification passes 26 tests.
+The complete serial Windows suite passes **3,595 tests with 24 expected platform
+or privilege skips** and has one unrelated failure in the unchanged desktop-menu
+test: its `QMenu` wrapper is already deleted under the local PySide6 6.11.1
+runtime, both in the full suite and when run alone. Repository source-directory
+Ruff, `compileall -q laser_aligner` with an external bytecode cache, PowerShell
+syntax parsing, and `git diff --check` pass.
+No Pi, network service, serial device, controller, motion, arming, laser output,
+or physical hardware was accessed while diagnosing or testing this correction.
 
 ## Active primary Raspberry-Pi-to-GRBL session hardening
 

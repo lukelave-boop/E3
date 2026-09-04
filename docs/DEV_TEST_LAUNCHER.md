@@ -62,6 +62,15 @@ version is intentionally frozen, use the repository's documented
 Changing this JSON is the only normal launcher update. The pinned executable
 and Desktop shortcut remain stable.
 
+Feature builds must be produced with `packaging/build_windows.ps1`. The build
+sanitizes foreign ICU/OpenSSL directories from the PyInstaller environment and
+rejects known conflicting root-level native libraries before a build can be
+selected.
+If the selected frozen application encounters an import failure before Qt is
+available, it records the original exception and runtime context in the
+per-user `logs/startup-error.log` and displays a native Windows error dialog.
+That diagnostic is part of the selected E3 build, not the permanent launcher.
+
 ## Runtime identity
 
 The launcher supplies:
