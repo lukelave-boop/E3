@@ -30,6 +30,28 @@ _GRBL_STEP_IDLE_PATTERN = re.compile(
     r"^\s*\$1\s*=\s*(\d+)(?:\.0*)?(?:\s+\([^)]*\))?\s*$",
     re.IGNORECASE,
 )
+_ANSI_CONTROL_PATTERN = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+_ESP_IDF_DIAGNOSTIC_PATTERN = re.compile(
+    r"^[EWIDV] \(\d{1,12}\) [A-Za-z0-9_.-]{1,64}: [\x20-\x7e]{1,384}$"
+)
+_MAX_FIRMWARE_DIAGNOSTIC_FRAME = 512
+
+
+def clean_firmware_diagnostic(response: str) -> str | None:
+    """Return a bounded clean ESP-IDF log frame, or ``None``.
+
+    ANSI CSI sequences are removed only from a bounded candidate used by this
+    conservative classifier. Arbitrary controller text is otherwise untouched.
+    """
+
+    if type(response) is not str or not response or len(response) > _MAX_FIRMWARE_DIAGNOSTIC_FRAME:
+        return None
+    candidate = _ANSI_CONTROL_PATTERN.sub("", response)
+    if candidate != candidate.strip():
+        return None
+    if _ESP_IDF_DIAGNOSTIC_PATTERN.fullmatch(candidate) is None:
+        return None
+    return candidate
 
 
 class CommandResponseKind(str, Enum):
@@ -42,6 +64,7 @@ class CommandResponseKind(str, Enum):
     CONTINUE = "payload"
     REALTIME_STATUS = "realtime_status"
     STARTUP = "startup"
+    FIRMWARE_DIAGNOSTIC = "firmware_diagnostic"
     MALFORMED = "malformed"
 
 
@@ -51,6 +74,7 @@ class HomingResponseKind(str, Enum):
     IDLE = "idle"
     REJECTION = "rejection"
     STARTUP = "startup"
+    FIRMWARE_DIAGNOSTIC = "firmware_diagnostic"
     MALFORMED = "malformed"
     CONTINUE = "continue"
 
@@ -133,6 +157,8 @@ class ControllerDialect:
         )
 
     def classify_command_response(self, response: str) -> CommandResponseKind:
+        if self.id == "grbl" and clean_firmware_diagnostic(response) is not None:
+            return CommandResponseKind.FIRMWARE_DIAGNOSTIC
         if type(response) is not str or not response or response != response.strip():
             return CommandResponseKind.MALFORMED
         if any(ord(character) < 32 and character not in {"\t"} for character in response):
@@ -160,6 +186,8 @@ class ControllerDialect:
         command_kind = self.classify_command_response(response)
         if command_kind is CommandResponseKind.STARTUP:
             return HomingResponseKind.STARTUP
+        if command_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+            return HomingResponseKind.FIRMWARE_DIAGNOSTIC
         if command_kind is CommandResponseKind.MALFORMED:
             return HomingResponseKind.MALFORMED
         lower = response.strip().lower()

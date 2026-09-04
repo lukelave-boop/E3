@@ -1432,6 +1432,15 @@ compare-and-set publishes the candidate as `READY_HOME_REQUIRED`. Failed or
 ambiguous candidates are closed; bounded retry creates a wholly new transport
 and generation rather than continuing on the same response stream.
 
+The GRBL receive classifier also recognizes only bounded, structurally valid
+ESP-IDF `E`/`W`/`I`/`D`/`V (timestamp) tag: message` firmware-log frames.
+Optional ANSI CSI framing is stripped only from such candidate diagnostics for
+classification and presentation. A recognized diagnostic is recorded with its
+session generation and active transaction but is not command payload, a terminal
+acknowledgement, realtime state evidence, or a reason to extend a deadline.
+Everything outside that narrow grammar continues through the ordinary strict
+GRBL classifier.
+
 The one authoritative controller-session state is one of `DISCONNECTED`,
 `OPENING`, `SYNCHRONIZING`, `READY_HOME_REQUIRED`, `READY_MOTION`,
 `JOB_RUNNING`, `STOPPING`, `RECOVERING`, `RECONNECT_REQUIRED`, `FAULTED`, or

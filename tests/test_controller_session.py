@@ -288,6 +288,35 @@ def test_connect_publishes_only_after_full_grbl_handshake(
     machine.disconnect()
 
 
+def test_firmware_diagnostics_interleaved_with_complete_handshake_are_not_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    diagnostic = "I (42) gpio: controller diagnostic"
+    transport = ResponsiveTransport(
+        "diagnostic-handshake",
+        replies={
+            "$I": [(diagnostic, GRBL_IDENTITY, "ok")],
+            "M5": [(diagnostic, "ok")],
+            "$$": [(diagnostic, "$1=250", "$30=1000", "$32=1", "ok")],
+            "$G": [(diagnostic, GRBL_MODAL, "ok")],
+            "$#": [(diagnostic, *GRBL_OFFSETS)],
+        },
+        realtime_replies=[(diagnostic, GRBL_REALTIME)],
+    )
+    machine, _factory = make_machine(monkeypatch, transport)
+
+    status = machine.connect()
+
+    assert status["controller_state"] == "READY_HOME_REQUIRED"
+    assert status["controller_diagnostics"]["firmware_identity"] == [
+        GRBL_IDENTITY,
+        "ok",
+    ]
+    transcript = "\n".join(status["controller_diagnostics"]["transcript"])
+    assert transcript.count("firmware_diagnostic generation=1") == 6
+    machine.disconnect()
+
+
 def test_explicit_grbl_without_optional_identity_payload_runs_full_handshake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1254,6 +1283,95 @@ def test_active_idle_homing_fallback_consumes_one_delayed_home_ack(
     assert transport.writes.count(("line", "$G")) == handshake_modal_count + 1
     assert status["controller_diagnostics"]["last_failed_command"] is None
     machine.disconnect()
+
+
+ESP_IDF_GPIO_DIAGNOSTIC = (
+    "E (6594130) gpio: gpio_isr_handler_remove(480): GPIO isr service is not "
+    "installed, call gpio_install_isr_service() first"
+)
+
+
+def test_firmware_diagnostic_does_not_steal_homing_completion_or_expose_ansi(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    colored = f"\x1b[0;31m{ESP_IDF_GPIO_DIAGNOSTIC}\x1b[0m"
+    transport = ResponsiveTransport(
+        "esp-idf-home-success",
+        replies={
+            "$H": [
+                (
+                    colored,
+                    "<Home|MPos:1,1,0>",
+                    "ok",
+                    "<Idle|MPos:0,0,0>",
+                )
+            ]
+        },
+    )
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+
+    machine.prepare_job_start()
+
+    status = machine.status()
+    transcript = "\n".join(status["controller_diagnostics"]["transcript"])
+    assert status["controller_state"] == "READY_MOTION"
+    assert status["coordinate_reference_ready"] is True
+    assert "firmware_diagnostic" in transcript
+    assert "generation=1" in transcript
+    assert "transaction=$H" in transcript
+    assert ESP_IDF_GPIO_DIAGNOSTIC in transcript
+    assert "\x1b" not in transcript
+    machine.disconnect()
+
+
+def test_firmware_diagnostic_only_homing_fails_closed_and_recovers_home_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failed = ResponsiveTransport(
+        "esp-idf-home-timeout",
+        replies={"$H": [(ESP_IDF_GPIO_DIAGNOSTIC,)]},
+    )
+    replacement = ResponsiveTransport("esp-idf-home-recovery")
+    machine, _factory = make_machine(monkeypatch, failed, replacement)
+    machine.connect()
+    monkeypatch.setattr(service_module, "_GRBL_HOMING_TIMEOUT_SECONDS", 0.03)
+
+    with pytest.raises(MachineError, match="did not provide"):
+        machine.prepare_job_start()
+    wait_for_recovery(machine)
+
+    status = machine.status()
+    assert status["controller_state"] == "READY_HOME_REQUIRED"
+    assert status["coordinate_reference_ready"] is False
+    assert status["controller_session_generation"] == 2
+    assert failed.closed.is_set()
+    assert not any(
+        command.startswith("G0 ")
+        for kind, command in failed.writes
+        if kind == "line" and isinstance(command, str)
+    )
+    machine.disconnect()
+
+
+def test_firmware_diagnostic_does_not_hide_malformed_homing_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failed = ResponsiveTransport(
+        "esp-idf-home-malformed",
+        replies={"$H": [(ESP_IDF_GPIO_DIAGNOSTIC, " ok")]},
+    )
+    machine, _factory = make_machine(monkeypatch, failed)
+    machine.connect()
+    failed.synchronize_input = None  # type: ignore[method-assign]
+
+    with pytest.raises(MachineError, match="malformed"):
+        machine.prepare_job_start()
+
+    status = machine.status()
+    assert status["controller_state"] == "RECONNECT_REQUIRED"
+    assert status["coordinate_reference_ready"] is False
+    assert failed.closed.is_set()
 
 
 def test_home_and_status_poll_are_coherent_and_two_home_requests_exclude(

@@ -35,6 +35,7 @@ from .controller_dialects import (
     CommandResponseKind,
     ControllerDialect,
     HomingResponseKind,
+    clean_firmware_diagnostic,
     is_exact_grbl_locked_error_response,
     parse_grbl_coordinate_state,
     parse_grbl_realtime_status,
@@ -1147,6 +1148,40 @@ class MachineService:
         self._log.append(entry)
         LOGGER.debug("machine %s %s", direction, line)
 
+    def _classify_and_record_rx(
+        self,
+        session: ControllerSession,
+        sequence: int | None,
+        response: str,
+    ) -> CommandResponseKind:
+        kind = session.dialect.classify_command_response(response)
+        if kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+            clean = clean_firmware_diagnostic(response)
+            assert clean is not None
+            command = session.diagnostics.snapshot()["last_tx_command"] or "unowned input"
+            session.diagnostics.record_rx(sequence, clean)
+            session.diagnostics.record_event(
+                f"firmware_diagnostic generation={session.generation} "
+                f"transaction={command}: {clean}"
+            )
+            self._append_log(
+                "INFO",
+                f"Controller firmware diagnostic generation={session.generation} "
+                f"during {command}: {clean}",
+            )
+            LOGGER.warning(
+                "primary controller firmware diagnostic generation=%d sequence=%s "
+                "command=%r message=%s",
+                session.generation,
+                "-" if sequence is None else sequence,
+                command,
+                clean,
+            )
+            return kind
+        self._append_log("RX", response)
+        session.diagnostics.record_rx(sequence, response)
+        return kind
+
     def connect(
         self,
         port: str | None = None,
@@ -1567,8 +1602,7 @@ class MachineService:
                 }
             )
         for line in startup:
-            self._append_log("RX", line)
-            session.diagnostics.record_rx(None, line)
+            self._classify_and_record_rx(session, None, line)
         return startup
 
     def _identify_protocol(
@@ -1779,8 +1813,9 @@ class MachineService:
                 ) from exc
             if not response:
                 continue
-            session.diagnostics.record_rx(sequence, response)
-            self._append_log("RX", response)
+            kind = self._classify_and_record_rx(session, sequence, response)
+            if kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+                continue
             stripped = response.strip()
             if stripped.startswith("<") and stripped.endswith(">"):
                 parse_grbl_realtime_status(
@@ -1798,7 +1833,6 @@ class MachineService:
                     terminal_classification=CommandResponseKind.REALTIME_STATUS.value,
                 )
                 return
-            kind = session.dialect.classify_command_response(stripped)
             if kind is CommandResponseKind.ACKNOWLEDGEMENT:
                 raise MachineError(
                     "Unexpected unowned acknowledgement while synchronizing GRBL status"
@@ -2546,9 +2580,11 @@ class MachineService:
                     with self._stop_epoch_lock:
                         if self._stop_epoch != expected_stop_epoch:
                             raise MachineError("Operation was cancelled by software STOP")
-                self._append_log("RX", response)
-                session.diagnostics.record_rx(command_sequence, response)
-                response_kind = session.dialect.classify_command_response(response)
+                response_kind = self._classify_and_record_rx(
+                    session, command_sequence, response
+                )
+                if response_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+                    continue
                 if response_kind is CommandResponseKind.REALTIME_STATUS:
                     # Asynchronous telemetry belongs to neither command payload
                     # nor its terminal acknowledgement.
@@ -2646,9 +2682,11 @@ class MachineService:
                 ) from exc
             if not response:
                 continue
-            self._append_log("RX", response)
-            session.diagnostics.record_rx(command_sequence, response)
-            response_kind = session.dialect.classify_command_response(response)
+            response_kind = self._classify_and_record_rx(
+                session, command_sequence, response
+            )
+            if response_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+                continue
             if response_kind is CommandResponseKind.REALTIME_STATUS:
                 quiet_started = time.monotonic()
                 continue
@@ -2680,9 +2718,9 @@ class MachineService:
                 ) from exc
             if not response:
                 return
-            self._append_log("RX", response)
-            session.diagnostics.record_rx(None, response)
-            response_kind = session.dialect.classify_command_response(response)
+            response_kind = self._classify_and_record_rx(session, None, response)
+            if response_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+                continue
             if response_kind is CommandResponseKind.REALTIME_STATUS:
                 continue
             raise MachineError(
@@ -3053,10 +3091,13 @@ class MachineService:
                     continue
                 if is_cancelled():
                     raise MachineError(cancellation_message)
+                response_kind = GRBL_DIALECT.classify_homing_response(line)
+                if response_kind is HomingResponseKind.FIRMWARE_DIAGNOSTIC:
+                    self._classify_and_record_rx(session, sequence, line)
+                    continue
                 responses.append(line)
                 self._append_log("RX", line)
                 session.diagnostics.record_rx(sequence, line)
-                response_kind = GRBL_DIALECT.classify_homing_response(line)
                 if response_kind is HomingResponseKind.ACKNOWLEDGEMENT:
                     self._reject_queued_unowned_responses(
                         session,
@@ -3283,8 +3324,11 @@ class MachineService:
                 )
                 if not response:
                     continue
-                self._append_log("RX", response)
-                controller_session.diagnostics.record_rx(sequence, response)
+                response_kind = self._classify_and_record_rx(
+                    controller_session, sequence, response
+                )
+                if response_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+                    continue
                 stripped = response.strip()
                 if stripped.startswith("<") and stripped.endswith(">"):
                     snapshot = self._parse_grbl_realtime_status(
@@ -3326,9 +3370,6 @@ class MachineService:
                         terminal_classification=CommandResponseKind.REALTIME_STATUS.value,
                     )
                     return snapshot
-                response_kind = controller_session.dialect.classify_command_response(
-                    stripped
-                )
                 if response_kind in {
                     CommandResponseKind.ALARM,
                     CommandResponseKind.ERROR,

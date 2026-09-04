@@ -7,6 +7,34 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-04**
 
+## Active ESP-IDF diagnostic / GRBL serial multiplexing correction
+
+Physical validation established that the primary ESP32 controller can emit a
+well-formed ESP-IDF `E (...) tag: message` diagnostic, including ANSI color
+framing, on the same serial stream while `$H` is active. The pre-correction
+parser treated the observed `gpio_isr_handler_remove(480)` diagnostic as a
+malformed GRBL homing frame, correctly quarantined the ambiguous session, and
+successfully recovered on a fresh generation to `READY_HOME_REQUIRED` twice.
+That recovery behavior is retained; this is physical evidence of the controller
+output and prior compatibility defect, not physical validation of this correction.
+
+GRBL receive handling now conservatively classifies bounded ESP-IDF
+`E`/`W`/`I`/`D`/`V` log frames as `firmware_diagnostic`. Optional ANSI CSI
+framing is removed only for classification and operator diagnostics. Recognized
+frames remain in the bounded, generation- and transaction-labelled transcript,
+but are neither payload nor acknowledgement, supply no homing-state evidence,
+and cannot satisfy or extend a transaction deadline. Arbitrary `E` text,
+`error:x`, `ALARM:x`, malformed frames, and realtime Home/Idle states retain
+their authoritative behavior. Home still requires its existing terminal `ok`
+or verified active-to-Idle fallback before coordinate, mode, optional park,
+planner, and final-position validation can publish `READY_MOTION`.
+
+Focused Windows controller-dialect, session, machine, transcript, and Pi-server
+verification passes **467 tests**. The complete Windows four-worker suite passes
+**3,608 tests with 24 expected platform or privilege skips**. No Pi, network service, serial endpoint,
+controller, motion, arming, laser, Air Assist, camera, or other physical hardware
+was accessed for the correction. The corrected build remains physically unverified.
+
 ## Active explicit-GRBL identity-payload compatibility correction
 
 Physical diagnostics from the configured Pi/controller combination established that

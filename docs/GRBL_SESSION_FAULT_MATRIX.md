@@ -70,6 +70,11 @@ hardware has been tested. The physical 20-cycle acceptance run remains required.
 | 61 | Explicit GRBL `$I` acknowledgement without optional identity payload | `test_explicit_grbl_without_optional_identity_payload_runs_full_handshake` | Automated; observed physically before correction |
 | 62 | Auto protocol `$I` acknowledgement without identity payload | `test_auto_protocol_does_not_infer_grbl_from_identity_acknowledgement` | Automated fail-closed |
 | 63 | Acknowledgement-only `$I` followed by malformed GRBL capability response | `test_explicit_grbl_without_identity_payload_still_fails_closed_on_bad_capability` | Automated fail-closed matrix |
+| 64 | ANSI/plain ESP-IDF diagnostic classification | `test_esp_idf_firmware_diagnostics_are_narrowly_classified` | Automated; exact GPIO frame observed physically before correction |
+| 65 | ESP-IDF diagnostic interleaved through handshake | `test_firmware_diagnostics_interleaved_with_complete_handshake_are_not_payload` | Automated |
+| 66 | ESP-IDF diagnostic plus valid Home evidence | `test_firmware_diagnostic_does_not_steal_homing_completion_or_expose_ansi` | Automated; corrected behavior physically pending |
+| 67 | ESP-IDF diagnostic without Home completion | `test_firmware_diagnostic_only_homing_fails_closed_and_recovers_home_required` | Automated fail-closed recovery |
+| 68 | ESP-IDF diagnostic followed by malformed Home frame | `test_firmware_diagnostic_does_not_hide_malformed_homing_frame` | Automated fail-closed |
 
 The seeded 1,000-lifecycle soak is owned by
 `test_seeded_1000_controller_session_lifecycle_soak`.

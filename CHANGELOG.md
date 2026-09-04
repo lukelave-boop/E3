@@ -6,6 +6,14 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Added a bounded, conservative classifier for ESP-IDF firmware diagnostics
+  multiplexed onto a GRBL serial stream. Valid `E`/`W`/`I`/`D`/`V` frames are
+  retained in generation- and transaction-labelled diagnostics without stealing
+  payload or acknowledgements; ANSI control framing is removed from operator
+  presentation. These frames provide no homing evidence and do not extend
+  deadlines. Arbitrary text and malformed protocol still fail closed, while
+  `error:x`, `ALARM:x`, and realtime Home/Idle frames remain authoritative.
+
 - Corrected the hardened GRBL connection handshake for controllers that cleanly
   acknowledge `$I` without returning its optional identity payload. An explicit
   `machine.protocol = grbl` now continues into the complete fail-off, settings,

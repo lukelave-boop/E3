@@ -358,6 +358,38 @@ def test_grbl_homing_response_classification_is_exact(
     assert GRBL_DIALECT.classify_homing_response(response) is expected
 
 
+def test_esp_idf_firmware_diagnostics_are_narrowly_classified() -> None:
+    plain = (
+        "E (6594130) gpio: gpio_isr_handler_remove(480): GPIO isr service is "
+        "not installed, call gpio_install_isr_service() first"
+    )
+    colored = f"\x1b[0;31m{plain}\x1b[0m"
+
+    for response in (plain, colored, "W (42) wifi: retrying connection"):
+        assert (
+            GRBL_DIALECT.classify_command_response(response)
+            is CommandResponseKind.FIRMWARE_DIAGNOSTIC
+        )
+        assert (
+            GRBL_DIALECT.classify_homing_response(response)
+            is HomingResponseKind.FIRMWARE_DIAGNOSTIC
+        )
+
+    for response in (
+        "E arbitrary text",
+        "E (abc) gpio: invalid timestamp",
+        "E (42) bad tag: invalid tag",
+        "error:9",
+        "ALARM:1",
+        "<Home|MPos:1,1,0>",
+        "<Idle|MPos:0,0,0>",
+    ):
+        assert (
+            GRBL_DIALECT.classify_command_response(response)
+            is not CommandResponseKind.FIRMWARE_DIAGNOSTIC
+        )
+
+
 def test_marlin_does_not_infer_grbl_homing_state_evidence() -> None:
     assert (
         MARLIN_DIALECT.classify_homing_response("<Run|MPos:1,1,0>")
