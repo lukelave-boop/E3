@@ -42,8 +42,8 @@ soak's successful three-frame query using a 20 ms deadline. A temporary probe
 with 15 ms receiver scheduling delays exceeds that budget with both the baseline
 and instrumented receivers; both succeed with a one-second deadline. Only that
 soak success assertion now allows one second. Its explicit 1 ms missing-ACK
-injection and every production deadline remain unchanged. Reverification and
-deployment/physical validation remain pending.
+injection and every production deadline remain unchanged. Final reverification
+is recorded below; deployment/physical validation remain pending.
 
 The second compatibility run (33991051612) passed Linux (392 tests), Windows
 3.10 (3111 passed / 72 skipped), and lint. Windows 3.12 passed 3699 tests but
@@ -54,7 +54,18 @@ deterministic weak-reference/collection test reproduces loss of that identity.
 The bounded retry loop now retains candidates and compares object identity;
 reusing the actual same transport remains rejected. This affects connection
 attempts, not an established job's ACK wait, and is not a mid-job stall fix.
-Focused verification and final compatibility reverification are in progress.
+The corrected Windows Python 3.14 machine/session/diagnostic checks passed
+380 tests with two POSIX skips; focused WSL Linux Python 3.10 checks passed
+67 tests (pytest cache permission warning only). Ruff and compileall passed.
+Final compatibility run
+[33991802258](https://github.com/lukelave-boop/E3/actions/runs/33991802258)
+passed for b4c026d: Windows 3.10 core 3113 passed / 72 skipped; Windows 3.12
+desktop 3702 passed / 25 skipped; Linux serial/session 392 passed; Ruff passed.
+These are automated software checks, including offscreen desktop tests, not
+physical controller, laser, or camera validation. The prepared Pi handoff pins
+b4c026d3a1f835fc556f161c2553293331537763; no Windows rebuild is required.
+The intermittent physical stall remains unresolved, and this development
+branch is awaiting Pi deployment and operator evidence before integration.
 
 The subsequent 13:50:07-13:50:12 raw trace shows the ttyACM1 reader repeatedly
 returning empty 100 ms readiness waits. The reader was polling during that
