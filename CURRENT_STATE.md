@@ -7,6 +7,38 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-05**
 
+## Active primary serial timeout evidence
+
+Production Windows/Pi 0.7.0 (`1afe4fb3`) intermittently stopped while streaming
+ordinary F3000 G1 segments. Operator journals identify failed jobs e9153390,
+5ed473c0, and 18db9cc9, with successful jobs between failures. The last case
+correlates a Linux write accepting all 24 bytes at 13:34:03.840 with no further
+read syscall in the remaining approximately 20 seconds of the capture, then
+an acknowledgement timeout at 13:36:03.845. Recovery created a fresh generation
+and required Home. The controller endpoint was ttyACM1 / Espressif Device by-id;
+firmware identity was not recovered. These are physical failure observations,
+not evidence that firmware, USB, temperature, or E3 is the root cause. The
+capture omitted select/readiness waits and cannot rule out a blocked reader.
+
+The `codex/serial-timeout-evidence` revision adds observational checkpoints to
+POSIX reader/writer/queue delivery and primary receive dispatch. Before ACK
+timeout unwinding, it logs one bounded JSON evidence record per session with
+the exact command/sequence/generation, job progress, checkpoint ages/counters,
+partial-byte evidence, and targeted thread code locations (no frame locals).
+Snapshotting does not acquire serial/ingress operational locks or consume input;
+busy diagnostic/ownership gates are reported without waiting. Cleanup cannot
+replace the first record. No controller commands, timeouts, retries, arming,
+reference, or stepper policies change. This is diagnostic instrumentation, not
+a stall fix or watchdog; it only runs when the existing ACK timeout is reached.
+
+Focused local verification: Windows Python 3.14, 189 passed / 2 POSIX skips;
+WSL Linux Python 3.10, 54 passed (pytest cache permission warning only). Includes
+missing-ACK job failure/abort, first-evidence retention, broken snapshot provider,
+held ownership lock, blocked reader, partial reply and real PTY CR/CR/LF delivery.
+Ruff and compileall pass. Compatibility CI and deployment/physical validation
+remain pending. Existing auto-Home/object-layer work remains in its separate
+unmerged feature branch; production 0.7.0 does not include those features.
+
 ## 0.7.0 consolidation
 
 The operator confirmed the final post-timing-fix STOP -> Home/park -> next-job

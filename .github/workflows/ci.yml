@@ -124,6 +124,9 @@ jobs:
           python tools/ci_timed.py "POSIX serial/session pytest" --
           python -m pytest -q
           tests/test_serial_posix.py
+          tests/test_io_diagnostics.py
+          tests/test_controller_receiver.py
+          tests/test_primary_session_events.py
           tests/test_controller_session.py
           tests/test_machine_transcripts.py
           tests/test_secondary_controller.py

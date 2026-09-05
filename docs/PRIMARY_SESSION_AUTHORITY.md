@@ -66,6 +66,41 @@ completion uses the existing motion barrier, optional Home/park, and verified
 `$1=255` hold; it does not enter the abort path or discard its trusted reference.
 Marlin's ordinary stop behavior and explicit emergency M112 policy are retained.
 
+## Automatic timeout evidence
+
+On an acknowledgement deadline, before ending the transaction or retiring its
+transport, MachineService logs `primary controller ACK timeout evidence=` with
+one bounded JSON object. The session retains its first object; cleanup cannot
+replace it. This adds no commands or polling traffic to the controller.
+
+The record includes command, sequence, generation, endpoint, job progress,
+recent processed transcript, raw-reader select/read/framing/publish checkpoints,
+write syscall byte counts, queue-consumer progress, receiver ownership, and the
+reader/receiver/waiter thread identities and code locations. Raw/partial byte
+samples are limited to 32 bytes as hex. Checkpoint ages use monotonic time;
+counters belong to one opened transport and reset on reopen. Data across
+components is approximate, not an atomic machine-state snapshot. A busy
+metadata/ownership lock is reported without waiting; operational locks are not
+acquired. Snapshot errors must not replace the acknowledgement failure.
+
+Interpretation: a recent `last_select_return` with old `last_read` is evidence
+of polling without recent bytes; a nonzero partial-byte sample distinguishes
+incomplete framing; published/consumed counts and receiver pending lines help
+locate queued replies. A stale checkpoint plus targeted thread code locations
+helps identify a blocked reader. None proves a firmware or electrical cause by
+itself. A successful write only proves that the host accepted those bytes.
+This is not a watchdog: a timeout blocked before its deadline check cannot
+trigger this record. No UART, GPIO, USB, driver, or firmware guarantee is added.
+
+After a failure, collect this record with its surrounding transition/job entries:
+
+```bash
+sudo journalctl -u e3-hardware-node.service --since "15 minutes ago" \
+  --no-pager -o short-precise |
+  grep -vE 'INFO Pi RPC completed action=machine.status .*ok=True' |
+  tail -n 160
+```
+
 ## Verification and physical acceptance
 
 The deterministic coverage includes idle faults, malformed/duplicate replies,

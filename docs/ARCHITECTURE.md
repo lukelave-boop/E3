@@ -1,5 +1,13 @@
 # Architecture
 
+Primary ACK timeout observation is separate from control authority. POSIX
+transport and primary receiver maintain bounded progress metadata; MachineService
+samples it before transaction unwinding and records the first timeout for the
+exact session. Snapshots do not read serial data or take serial/ingress locks.
+Busy metadata gates yield unavailable evidence. Targeted Python thread snapshots
+contain only code locations, not local variables. These approximate observations
+never classify the controller as safe or alter timeout/STOP/recovery decisions.
+
 The 0.7.0 consolidation preserves dialect-specific completion: a successful
 GRBL Home/park verifies indefinite $1=255 hold before publishing READY_MOTION.
 A primary Marlin controller instead acknowledges its motor-release command

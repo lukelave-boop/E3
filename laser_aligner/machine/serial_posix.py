@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from ..errors import MachineError, TransientConnectionError
+from .io_diagnostics import IOProgress, thread_snapshot
 from .transport import InputSynchronizationEvidence
 
 _BAUD_RATES = {
@@ -68,6 +69,22 @@ class PosixSerial:
         self._lifecycle_lock = threading.RLock()
         self._exclusive_lock_fd: int | None = None
         self._resolved_path = str(Path(path).resolve())
+        self._read_progress = IOProgress()
+        self._write_progress = IOProgress()
+        self._consume_progress = IOProgress()
+
+    def diagnostic_snapshot(self) -> dict:
+        # No serial reads, queue drains, operational locks, or device ioctls.
+        return {
+            "reader": self._read_progress.snapshot(),
+            "writer": self._write_progress.snapshot(),
+            "queue_consumer": self._consume_progress.snapshot(),
+            "thread": thread_snapshot(self._reader),
+            "open": self._fd is not None,
+            "stop_requested": self._stop.is_set(),
+            "synchronizing": self._synchronize_requested.is_set(),
+            "fault": self._fault_message,
+        }
 
     @property
     def is_open(self) -> bool:
@@ -201,6 +218,9 @@ class PosixSerial:
         self._resolved_path = resolved_path
         self._exclusive_lock_fd = lock_fd
         self._fd = fd
+        self._read_progress = IOProgress()
+        self._write_progress = IOProgress()
+        self._consume_progress = IOProgress()
         self._reader = threading.Thread(target=self._reader_loop, name="serial-reader", daemon=True)
         try:
             self._reader.start()
@@ -244,14 +264,21 @@ class PosixSerial:
     def _reader_loop(self) -> None:
         fd = self._fd
         while not self._stop.is_set() and fd is not None:
+            self._read_progress.mark("synchronization_gate")
             if self._synchronize_requested.wait(0.001):
                 continue
             try:
                 # Readiness waiting must not exclude queue consumers: session
                 # admission and ACK boundaries use read_line(timeout=0).
+                self._read_progress.mark("select_wait")
                 readable, _, _ = select.select([fd], [], [], 0.1)
+                self._read_progress.mark(
+                    "select_ready" if readable else "select_empty",
+                    last_select_return_monotonic=time.monotonic(),
+                )
                 if not readable:
                     continue
+                self._read_progress.mark("receive_lock_wait")
                 with self._receive_lock:
                     if self._stop.is_set():
                         return
@@ -263,7 +290,12 @@ class PosixSerial:
                     readable, _, _ = select.select([fd], [], [], 0.0)
                     if not readable:
                         continue
+                    self._read_progress.mark("read_wait")
                     chunk = os.read(fd, 4096)
+                    self._read_progress.mark(
+                        "bytes_read", last_read_monotonic=time.monotonic(),
+                        last_read_bytes=len(chunk), last_read_hex=chunk[:32].hex(),
+                    )
                     if not chunk:
                         if not self._stop.is_set():
                             self._fail_reader("Serial connection closed unexpectedly")
@@ -288,19 +320,29 @@ class PosixSerial:
                             return
                         if text and not self._publish_line(text):
                             return
+                    self._read_progress.mark(
+                        "framing_complete", partial_bytes=len(self._buffer),
+                        partial_hex=bytes(self._buffer[:32]).hex(),
+                    )
                     if len(self._buffer) > _MAX_SERIAL_LINE_BYTES:
                         self._fail_reader(
                             f"Serial response line exceeded {_MAX_SERIAL_LINE_BYTES} bytes"
                         )
                         return
-            except (OSError, ValueError):
+            except (OSError, ValueError) as exc:
+                self._read_progress.mark(
+                    "read_error", exception_type=type(exc).__name__,
+                    errno=getattr(exc, "errno", None), error=str(exc)[:240],
+                )
                 if not self._stop.is_set():
                     self._fail_reader("Serial read failed")
                 return
 
     def _publish_line(self, line: str) -> bool:
         try:
+            self._read_progress.mark("publish_wait")
             self._queue.put_nowait(line)
+            self._read_progress.mark("line_published", last_publish_monotonic=time.monotonic())
             return True
         except queue.Full:
             self._fail_reader(
@@ -346,7 +388,12 @@ class PosixSerial:
             deadline = time.monotonic() + _SERIAL_WRITE_TIMEOUT_SECONDS
             while view:
                 try:
+                    self._write_progress.mark("write_wait", requested_bytes=len(view))
                     written = os.write(fd, view)
+                    self._write_progress.mark(
+                        "write_returned", accepted_bytes=written,
+                        last_write_monotonic=time.monotonic(),
+                    )
                     if written <= 0:
                         raise BlockingIOError
                     view = view[written:]
@@ -364,14 +411,19 @@ class PosixSerial:
         self.write_raw(line.rstrip("\r\n").encode("ascii", errors="replace") + b"\n")
 
     def read_line(self, timeout: float = 1.0) -> str | None:
+        self._consume_progress.mark("receive_lock_wait")
         with self._receive_lock:
             receive_queue = self._queue
         try:
+            self._consume_progress.mark("queue_wait")
             response = receive_queue.get(timeout=max(0.0, timeout))
         except queue.Empty:
+            self._consume_progress.mark("queue_empty")
             return None
         if isinstance(response, MachineError):
+            self._consume_progress.mark("queue_error")
             raise response
+        self._consume_progress.mark("line_consumed", last_consume_monotonic=time.monotonic())
         return response
 
     def drain(self) -> list[str]:

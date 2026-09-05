@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased - primary serial timeout evidence
+
+Acknowledgement timeouts now preserve the failed command, session generation,
+job progress, raw serial progress, receiver ownership, and targeted thread code
+locations before recovery. The bounded evidence appears in the Pi service
+journal automatically; manual strace is no longer the only way to distinguish
+empty polling from incomplete framing or a blocked reader at timeout. Existing
+timeout, STOP, reconnect, coordinate-reference and stepper-hold rules are unchanged.
+The intermittent physical stall remains under investigation.
+
 ## 0.7.0 - controller lifecycle consolidation
 
 Consolidates primary GRBL session ownership, Pi/desktop status authority,

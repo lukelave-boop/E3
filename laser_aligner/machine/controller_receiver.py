@@ -15,6 +15,7 @@ from contextlib import contextmanager
 
 from ..errors import MachineError
 from .controller_dialects import CommandResponseKind, ControllerDialect
+from .io_diagnostics import IOProgress, thread_snapshot
 from .transport import MachineTransport
 
 
@@ -43,6 +44,25 @@ class ControllerReceiver:
         self._fault: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+        self._progress = IOProgress()
+
+    def diagnostic_snapshot(self) -> dict:
+        result = {
+            "worker": self._progress.snapshot(),
+            "thread": thread_snapshot(self._thread),
+            "stop_requested": self._stop.is_set(),
+        }
+        if not self._condition.acquire(blocking=False):
+            result["ownership"] = {"snapshot_unavailable": "condition_busy"}
+            return result
+        try:
+            result["ownership"] = {
+                "transaction": self._transaction, "pending_lines": len(self._pending),
+                "ingress_waiters": self._ingress_waiters, "fault": self._fault,
+            }
+        finally:
+            self._condition.release()
+        return result
 
     def start(self) -> None:
         self._thread = threading.Thread(
@@ -246,15 +266,21 @@ class ControllerReceiver:
     def _run(self) -> None:
         while not self._stop.is_set() and self._owner_alive():
             try:
+                self._progress.mark("condition_wait")
                 with self._condition:
                     while self._ingress_waiters and not self._stop.is_set():
+                        self._progress.mark("consumer_priority_wait")
                         self._condition.wait()
+                self._progress.mark("ingress_wait")
                 with self._ingress:
                     if self._stop.is_set():
                         return
                     self.raise_if_faulted()
+                    self._progress.mark("transport_read_wait")
                     response = self._read_transport(timeout=0.02)
+                    self._progress.mark("transport_line" if response else "transport_empty")
                     if response:
+                        self._progress.mark("dispatch")
                         self._dispatch(response)
             except Exception as exc:
                 if self._stop.is_set():

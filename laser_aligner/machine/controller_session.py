@@ -92,6 +92,7 @@ class ControllerSessionDiagnostics:
         self._synchronization: object = None
         self._last_successful_sync_at: float | None = None
         self._firmware_identity: list[str] = []
+        self._ack_timeout_evidence: object = None
         self._transcript: deque[str] = deque(maxlen=transcript_limit)
 
     def set_state(self, state: ControllerState) -> None:
@@ -173,6 +174,14 @@ class ControllerSessionDiagnostics:
                 ),
             }
 
+    def record_ack_timeout(self, evidence: dict[str, Any]) -> bool:
+        """Keep the initiating observation even when cleanup also times out."""
+        with self._lock:
+            if self._ack_timeout_evidence is not None:
+                return False
+            self._ack_timeout_evidence = _plain_evidence(evidence)
+            return True
+
     def snapshot(self) -> dict[str, Any]:
         with self._lock:
             return {
@@ -191,6 +200,7 @@ class ControllerSessionDiagnostics:
                 "synchronization": self._synchronization,
                 "last_successful_sync_at": self._last_successful_sync_at,
                 "firmware_identity": list(self._firmware_identity),
+                "ack_timeout_evidence": self._ack_timeout_evidence,
                 "transcript": list(self._transcript),
             }
 

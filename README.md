@@ -5,6 +5,12 @@ recovery, and serial timing work. GRBL axes remain held while READY_MOTION;
 primary Marlin's configured post-job release remains dialect-specific.
 See [current verification](CURRENT_STATE.md) and [versioning](docs/VERSIONING.md).
 
+Development diagnostics now preserve primary serial/receiver evidence in the
+Pi journal automatically on an acknowledgement timeout, before recovery closes
+the session. See [timeout evidence](docs/PRIMARY_SESSION_AUTHORITY.md#automatic-timeout-evidence)
+for collection and interpretation. This instrumentation does not resolve the
+intermittent stall observed on 0.7.0.
+
 A self-hosted camera-alignment and vector-placement application for a
 laser-converted 3D printer. It includes a native PySide6 project and machine
 setup workspace plus a legacy dependency-light browser workflow. The initial hardware target is
