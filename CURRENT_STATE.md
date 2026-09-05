@@ -45,6 +45,17 @@ soak success assertion now allows one second. Its explicit 1 ms missing-ACK
 injection and every production deadline remain unchanged. Reverification and
 deployment/physical validation remain pending.
 
+The second compatibility run (33991051612) passed Linux (392 tests), Windows
+3.10 (3111 passed / 72 skipped), and lint. Windows 3.12 passed 3699 tests but
+exposed a separate existing connection-retry defect: recording only object ids
+allowed an earlier failed transport to be collected and its id recycled for a
+fresh third candidate. The retry guard could then stop after two opens. A
+deterministic weak-reference/collection test reproduces loss of that identity.
+The bounded retry loop now retains candidates and compares object identity;
+reusing the actual same transport remains rejected. This affects connection
+attempts, not an established job's ACK wait, and is not a mid-job stall fix.
+Focused verification and final compatibility reverification are in progress.
+
 The subsequent 13:50:07-13:50:12 raw trace shows the ttyACM1 reader repeatedly
 returning empty 100 ms readiness waits. The reader was polling during that
 window; whether the capture preceded recovery has not yet been confirmed.

@@ -10,6 +10,10 @@ empty polling from incomplete framing or a blocked reader at timeout. Existing
 timeout, STOP, reconnect, coordinate-reference and stepper-hold rules are unchanged.
 The intermittent physical stall remains under investigation.
 
+Connection retries retain the failed transport objects until the bounded retry
+sequence ends. This prevents recycled Python object ids from incorrectly
+rejecting a fresh connection candidate; an actual reused stream remains blocked.
+
 ## 0.7.0 - controller lifecycle consolidation
 
 Consolidates primary GRBL session ownership, Pi/desktop status authority,

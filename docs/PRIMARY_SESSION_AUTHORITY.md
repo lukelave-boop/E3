@@ -36,6 +36,11 @@ that first arrives only after a new exchange has actually begun. Ambiguous
 exchanges therefore still require a fresh session; retry on the same stream is
 not a repair strategy.
 
+The bounded connection-attempt loop retains its failed transport objects and
+compares them by identity. Retaining only integer object ids is insufficient:
+Python can recycle an id after an earlier candidate is collected. An actual
+reused transport remains rejected; a fresh third candidate must remain eligible.
+
 ## Authority and terminal outcomes
 
 Receive faults revoke the exact session, coordinate reference and temporary

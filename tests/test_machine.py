@@ -5866,6 +5866,53 @@ def test_initial_connection_to_disconnected_controller_reports_real_failure(
     assert attempts == 0
 
 
+@pytest.mark.parametrize("reuse_transport", [False, True])
+def test_connect_retries_retain_failed_transport_identity(
+    monkeypatch: pytest.MonkeyPatch, reuse_transport: bool
+) -> None:
+    import gc
+    import weakref
+
+    attempts = 0
+    previous: list[weakref.ReferenceType[SimulatedTransport]] = []
+
+    class FailingTransport(SimulatedTransport):
+        def open(self) -> None:
+            nonlocal attempts
+            attempts += 1
+            raise TransientConnectionError("temporary network failure")
+
+    def create_transport(*_args: object) -> SimulatedTransport:
+        gc.collect()
+        # All earlier candidates must stay identifiable until retries finish;
+        # otherwise a fresh object can receive a retired candidate's id().
+        assert all(reference() is not None for reference in previous)
+        if reuse_transport and previous:
+            transport = previous[0]()
+            assert transport is not None
+            return transport
+        transport = FailingTransport()
+        previous.append(weakref.ref(transport))
+        return transport
+
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport", create_transport
+    )
+    monkeypatch.setattr(
+        "laser_aligner.machine.service._INITIAL_CONNECT_RETRY_DELAY_SECONDS", 0.0
+    )
+    machine = MachineService(
+        MachineSettings(backend="serial", protocol="grbl", controller_startup_delay=0.0),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    with pytest.raises(TransientConnectionError, match="temporary network failure"):
+        machine.connect()
+    assert attempts == (1 if reuse_transport else 3)
+    assert not machine.connected
+    assert not machine.status()["coordinate_reference_ready"]
+
+
 def test_initial_bridge_authentication_failure_is_not_retried(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

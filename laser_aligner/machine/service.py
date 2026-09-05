@@ -1339,7 +1339,7 @@ class MachineService:
         with self._lock:
             self._candidate_connect_deadline = deadline
         last_error: BaseException | None = None
-        attempted_transport_ids: set[int] = set()
+        attempted_transports: list[MachineTransport] = []
         for attempt in range(1, _CONTROLLER_CONNECT_ATTEMPTS + 1):
             self._raise_if_connection_cancelled(expected_stop_epoch)
             if time.monotonic() >= deadline:
@@ -1366,12 +1366,14 @@ class MachineService:
                 active_port,
                 active_baudrate,
             )
-            if id(transport) in attempted_transport_ids:
+            if any(transport is previous for previous in attempted_transports):
                 # A retry is useful only with a genuinely new input stream.
                 # Reusing an object that may still contain a late terminal line
                 # would turn a fresh-session retry into same-session ambiguity.
                 break
-            attempted_transport_ids.add(id(transport))
+            # Retain the bounded candidates: Python may recycle an id once an
+            # earlier object is collected, even for a genuinely fresh stream.
+            attempted_transports.append(transport)
             provisional_dialect = (
                 GRBL_DIALECT
                 if selected_protocol == "auto"
