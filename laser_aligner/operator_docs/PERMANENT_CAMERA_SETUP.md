@@ -1,6 +1,6 @@
 # Permanent Camera Setup Runbook
 
-Applies to E3 Positioning System `0.6.x`, its five numbered calibration steps,
+Applies to E3 Positioning System `0.7.x`, its five numbered calibration steps,
 and the sixth read-only **Coordinate Audit** tab in **Machine Setup**.
 
 This is the canonical operator sequence. Follow the tabs from left to right.

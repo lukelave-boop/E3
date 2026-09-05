@@ -29,8 +29,18 @@ verified, not physically tested on a primary Marlin controller.
 The 0.7 series uses immutable tag v0.7.0 as its commit-count baseline. The unique
 S1 Pro Z-homing branch is excluded with operator approval and will be preserved
 under an archive tag. The paused root serial EAGAIN experiment is excluded and
-will be preserved separately. Release compatibility and frozen-build checks
-are in progress; the historical entries below retain their original context.
+will be preserved separately. Local Linux release checks passed 356 tests.
+Local Windows 3.14 full xdist run: 3692 passed, 26 skipped, one updater shutdown
+timing failure (successful exit at 3.84 s exceeded a 3 s assertion); its full
+11-test module passed on rerun. Ruff and compileall passed. These local results
+do not replace the required Windows 3.10/3.12 compatibility checks.
+
+Candidate CI 33981766662 exposed a runbook version-label mismatch after the
+minor bump. The packaged runbook now identifies the 0.7 series. Old ignored
+build-info.json in the local worktree had masked this under the runtime
+metadata fallback; it was moved aside before rechecking the release version.
+Release compatibility and frozen-build checks are in progress; the historical
+entries below retain their original context.
 
 Remaining audit work: automatic Home followed by the exact prepared job on
 START, secondary lifecycle hardening, independent cooling-fan capability, and
