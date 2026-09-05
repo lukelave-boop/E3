@@ -9,6 +9,19 @@ Snapshot: **2026-09-05**
 
 ## Active Pi status authority and repeat Home revision
 
+Operator follow-up after deploying Pi `c016e1978a3e3a5f16b1356e9036b26acfe24008`:
+reported that the correction solves the speed issue. The deployment screenshot
+shows successful imports and active/running service PID 87415, with rollback
+reference pi-before-receive-timing-20260905T172729Z. Windows remains 0.6.202.
+No measured 1500/3000 cutting times or explicit post-update STOP/Home retest
+result was provided, so this is reported symptom resolution rather than full
+physical acceptance. The previously reported GRBL controller/settings and
+verified source hashes identify the setup; firmware was not re-queried.
+Compatibility run 33980957659 remains an integration blocker: lint passed,
+Windows 3.10 and Linux failed, and Windows 3.12 was still running at this check.
+Before another feature, close the remaining validation gaps and resolve CI;
+the next planned feature remains exact prepared-job automatic Home on START.
+
 New speed investigation after the successful 0.6.202 notification retest:
 operator reports that changing the previewed feed from 1500 to 3000 did not
 visibly change physical speed. Exact comparison geometry and cutting-versus-total
