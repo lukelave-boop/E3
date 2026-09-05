@@ -1,5 +1,11 @@
 # Architecture
 
+The 0.7.0 consolidation preserves dialect-specific completion: a successful
+GRBL Home/park verifies indefinite $1=255 hold before publishing READY_MOTION.
+A primary Marlin controller instead acknowledges its motor-release command
+after parking and receives no held-coordinate authority. This primary
+completion path never releases a secondary Air Assist controller.
+
 The repository has two user interfaces over a shared camera, calibration,
 geometry, vision, G-code, and machine core.
 

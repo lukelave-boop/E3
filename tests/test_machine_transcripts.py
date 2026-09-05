@@ -844,8 +844,10 @@ def test_powered_grbl_air_assist_is_off_before_home_park_transcript(
     transport.assert_complete()
 
 
+@pytest.mark.parametrize("release_response", ["ok", "Error: release rejected"])
 def test_powered_marlin_stream_has_complete_home_park_release_transcript(
     monkeypatch: pytest.MonkeyPatch,
+    release_response: str,
 ) -> None:
     program_lines = [
         "G21",
@@ -872,7 +874,7 @@ def test_powered_marlin_stream_has_complete_home_park_release_transcript(
         line("G90", "ok"),
         line("G0 X15.000 Y195.000 F3000.000", "ok"),
         line("M400", "ok"),
-        line("M84", "ok"),
+        line("M84", release_response),
     ]
     transport = ScriptedTransport(
         [
@@ -897,15 +899,20 @@ def test_powered_marlin_stream_has_complete_home_park_release_transcript(
     machine.start_validated_program(program, "powered-marlin.gcode")
     status = wait_for_job(machine)
 
-    assert transport.writes[before_start:] == [
+    assert transport.writes[before_start:before_start + len(stream_steps)] == [
         (step.channel, step.payload) for step in stream_steps
     ]
     assert not any(channel == "raw" for channel, _payload in transport.writes)
-    assert status["job"]["phase"] == "complete"  # type: ignore[index]
-    assert status["job"]["error"] is None  # type: ignore[index]
-    assert status["last_successful_job"]["program_digest"] == program.digest  # type: ignore[index]
-    assert status["last_successful_job"]["protocol"] == "marlin"  # type: ignore[index]
-    assert status["last_successful_job"]["powered"] is True  # type: ignore[index]
+    if release_response == "ok":
+        assert status["job"]["phase"] == "complete"  # type: ignore[index]
+        assert status["job"]["error"] is None  # type: ignore[index]
+        assert status["last_successful_job"]["program_digest"] == program.digest  # type: ignore[index]
+        assert status["last_successful_job"]["protocol"] == "marlin"  # type: ignore[index]
+        assert status["last_successful_job"]["powered"] is True  # type: ignore[index]
+    else:
+        assert status["job"]["phase"] == "failed"  # type: ignore[index]
+        assert "release rejected" in status["job"]["error"]  # type: ignore[index]
+        assert not status["last_successful_job"]
     assert status["armed"] is False
     assert status["coordinate_reference_ready"] is False
     assert status["jog_ready"] is False

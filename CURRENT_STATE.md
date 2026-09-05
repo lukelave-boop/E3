@@ -7,6 +7,35 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-05**
 
+## 0.7.0 consolidation
+
+The operator confirmed the final post-timing-fix STOP -> Home/park -> next-job
+sequence on 2026-09-05 and requested consolidation into main as 0.7.0. Together
+with the reported speed recovery, this closes that specific operator retest.
+The Pi source was c016e1978a3e3a5f16b1356e9036b26acfe24008; Windows was frozen
+0.6.202/a152b50. The previously recorded GRBL setup/settings identify this
+evidence; firmware was not queried again, and no measured speed ratio was given.
+
+Compatibility run 33980957659 finished with one identical failure on Windows
+3.10, Windows 3.12 desktop, and Linux: primary Marlin's post-job M84 was missing.
+History identifies 5165777's GRBL hold change as the accidental removal. The
+correction restores acknowledged release only for the primary non-GRBL dialect
+after successful Home/park. GRBL retains $1=255 and READY_MOTION; the secondary
+Air Assist controller is not a target of this release command. A rejected M84
+must fail the job, clear reference/arming, and retain the initiating diagnostic.
+Both transcript outcomes pass locally. This Marlin correction is software
+verified, not physically tested on a primary Marlin controller.
+
+The 0.7 series uses immutable tag v0.7.0 as its commit-count baseline. The unique
+S1 Pro Z-homing branch is excluded with operator approval and will be preserved
+under an archive tag. The paused root serial EAGAIN experiment is excluded and
+will be preserved separately. Release compatibility and frozen-build checks
+are in progress; the historical entries below retain their original context.
+
+Remaining audit work: automatic Home followed by the exact prepared job on
+START, secondary lifecycle hardening, independent cooling-fan capability, and
+broader failure-sequence physical validation. These are not part of 0.7.0.
+
 ## Active Pi status authority and repeat Home revision
 
 Operator follow-up after deploying Pi `c016e1978a3e3a5f16b1356e9036b26acfe24008`:

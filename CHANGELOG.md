@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.0 - controller lifecycle consolidation
+
+Consolidates primary GRBL session ownership, Pi/desktop status authority,
+repeat Home/park, STOP recovery and job notification identity, persistent
+secondary OFF recovery, and the Pi serial receive timing correction described
+below. Successful GRBL jobs retain verified $1=255 stepper hold and coordinate
+trust. Primary Marlin machines retain their acknowledged post-job motor release;
+this does not release GRBL axes or target secondary Air Assist.
+
+The version baseline is v0.7.0. S1 Pro Z-homing remains archived, outside this
+release. Automatic Home-on-START and independent laser cooling control remain
+future audit work. See CURRENT_STATE.md for exact verification boundaries.
+
 ## 0.6.196 - bounded pre-start OFF recovery
 
 Pre-start secondary OFF permits exactly one fresh-session recovery after a

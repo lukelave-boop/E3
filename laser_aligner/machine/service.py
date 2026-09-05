@@ -5084,9 +5084,16 @@ class MachineService:
         else:
             # No validated indefinite-hold policy exists for this dialect.
             self._invalidate_coordinate_reference()
+            self._set_running_job_phase("releasing")
+            self._execute_running_job_command(
+                dialect.motor_release_command,
+                timeout=setup_timeout,
+            )
         self._append_log(
             "INFO",
-            "Powered job completed; machine homed and parked with GRBL steppers held",
+            "Powered job completed; machine homed and parked with GRBL steppers held"
+            if dialect is GRBL_DIALECT
+            else "Powered job completed; machine homed, parked, and motors released",
         )
 
     def _run_job(

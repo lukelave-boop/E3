@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Version **0.7.0** consolidates the controller/session, desktop status, STOP
+recovery, and serial timing work. GRBL axes remain held while READY_MOTION;
+primary Marlin's configured post-job release remains dialect-specific.
+See [current verification](CURRENT_STATE.md) and [versioning](docs/VERSIONING.md).
+
 A self-hosted camera-alignment and vector-placement application for a
 laser-converted 3D printer. It includes a native PySide6 project and machine
 setup workspace plus a legacy dependency-light browser workflow. The initial hardware target is

@@ -21,6 +21,13 @@ is available for the same recorded acceptance process.
 
 ## Whole-application audit sequence
 
+0.7.0 consolidates the completed lifecycle corrections. The operator reports
+speed recovery and a successful STOP/Home/next-job retest after c016e19.
+That closes the specific retest below, not the full fault-injection campaign.
+The separate S1 Pro Z-homing feature is archived for later review. Next work
+remains exact prepared-job automatic Home/START, followed by the remaining
+secondary lifecycle and cooling capability investigations.
+
 Step 1 implements continuous primary GRBL receive ownership, fault-driven trust
 revocation, reply admission boundaries, and explicit abort versus successful
 completion. Physical acceptance remains pending; see
