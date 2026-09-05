@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from .controller_dialects import ControllerDialect
+    from .controller_receiver import ControllerReceiver
     from .transport import MachineTransport
 
 
@@ -207,6 +208,7 @@ class ControllerSession:
     created_at: float
     created_monotonic: float
     diagnostics: ControllerSessionDiagnostics
+    receiver: ControllerReceiver | None = None
 
     def matches(self, other: ControllerSession | None) -> bool:
         return bool(

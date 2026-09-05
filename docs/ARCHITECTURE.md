@@ -1432,6 +1432,16 @@ compare-and-set publishes the candidate as `READY_HOME_REQUIRED`. Failed or
 ambiguous candidates are closed; bounded retry creates a wholly new transport
 and generation rather than continuing on the same response stream.
 
+After handshake, a session-owned `ControllerReceiver` must start before public
+readiness. It serializes receive dispatch with transaction admission/write and
+latches idle ALARM/restart/transport faults before later commands can enter.
+Its short authority guards also cover arming and terminal job publication.
+Unowned replies retire that exact generation; harmless realtime/ESP-IDF frames
+remain asynchronous. Every published GRBL STOP or quarantine attempts realtime
+abort before bounded M5/close. Successful completion retains the existing
+barriers and verified hold. See [primary session authority](PRIMARY_SESSION_AUTHORITY.md)
+for the lock boundaries, untagged-ACK limitation, and physical validation.
+
 The GRBL receive classifier also recognizes only bounded, structurally valid
 ESP-IDF `E`/`W`/`I`/`D`/`V (timestamp) tag: message` firmware-log frames.
 Optional ANSI CSI framing is stripped only from such candidate diagnostics for

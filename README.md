@@ -22,6 +22,12 @@ stationary overhead **Logitech C920**.
 > path is software-tested but is not physically verified; see
 > [docs/NETWORK_MACHINE.md](docs/NETWORK_MACHINE.md).
 >
+> Primary GRBL sessions now observe idle faults continuously and reject unowned
+> replies before another command writes. STOP and uncertain execution attempt
+> realtime abort before M5/close; successful jobs retain verified stepper hold.
+> See [primary session authority](docs/PRIMARY_SESSION_AUTHORITY.md) for behavior,
+> limitations, and pending physical acceptance.
+>
 > Primary-controller reliability uses generation-bound sessions. A candidate is
 > not usable until a bounded, quiet serial synchronization and complete safe
 > GRBL identity/alignment handshake succeed. Software STOP permanently

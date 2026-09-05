@@ -153,6 +153,7 @@ class ScriptedTransport:
 GRBL_IDENTITY = "[VER:1.1h.test:SCRIPTED]"
 GRBL_MODAL = "[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]"
 GRBL_SETTINGS = ("$1=250", "$30=1000", "$32=1", "ok")
+GRBL_HELD_SETTINGS = ("$1=255", "$30=1000", "$32=1", "ok")
 GRBL_OFFSETS = (
     "[G54:0.000,0.000,0.000]",
     "[G55:0.000,0.000,0.000]",
@@ -184,13 +185,21 @@ def coordinate_query_steps() -> list[ExpectedWrite]:
     return [line("$G", GRBL_MODAL, "ok"), line("$#", *GRBL_OFFSETS)]
 
 
-def disconnect_steps() -> list[ExpectedWrite]:
-    # The STOP-owned quarantine performs one exact-session fail-off before close.
-    return [line("M5")]
+def grbl_hold_steps() -> list[ExpectedWrite]:
+    return [
+        line("$$", *GRBL_SETTINGS),
+        line("$1=255", "ok"),
+        line("$$", *GRBL_HELD_SETTINGS),
+    ]
+
+
+def disconnect_steps(protocol: str = "marlin") -> list[ExpectedWrite]:
+    # GRBL aborts planner work before exact-session fail-off and close.
+    return [*([raw(b"!\x18")] if protocol == "grbl" else []), line("M5")]
 
 
 def air_disconnect_steps(off_command: str) -> list[ExpectedWrite]:
-    return [line("M5"), line(off_command)]
+    return [raw(b"!\x18"), line("M5"), line(off_command)]
 
 
 def machine_settings(
@@ -285,7 +294,7 @@ def test_explicit_connect_and_disconnect_have_exact_laser_off_transcript(
     connect_steps: list[ExpectedWrite],
     expected_connect_writes: list[tuple[Channel, Payload]],
 ) -> None:
-    transport = ScriptedTransport([*connect_steps, *disconnect_steps()])
+    transport = ScriptedTransport([*connect_steps, *disconnect_steps(protocol)])
     factory_calls = install_transports(monkeypatch, transport)
     machine = MachineService(
         machine_settings(protocol),
@@ -307,6 +316,7 @@ def test_explicit_connect_and_disconnect_have_exact_laser_off_transcript(
 
     assert transport.writes == [
         *expected_connect_writes,
+        *([("raw", b"!\x18")] if protocol == "grbl" else []),
         ("line", "M5"),
     ]
     assert machine.status()["connected"] is False
@@ -320,7 +330,7 @@ def test_explicit_connect_and_disconnect_have_exact_laser_off_transcript(
         (
             [
                 *grbl_connect_steps(),
-                *disconnect_steps(),
+                *disconnect_steps("grbl"),
             ],
             "grbl",
             ["$I", "M5", "$$", "$G", "$#", "M5"],
@@ -365,7 +375,7 @@ def test_auto_grbl_banner_still_requires_identity_probe_and_full_handshake(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     transport = ScriptedTransport(
-        [*grbl_connect_steps(), *disconnect_steps()],
+        [*grbl_connect_steps(), *disconnect_steps("grbl")],
         startup=("Grbl 1.1h ['$' for help]",),
     )
     install_transports(monkeypatch, transport)
@@ -399,7 +409,7 @@ def test_identity_and_realtime_status_queries_use_the_existing_grbl_session(
         *grbl_connect_steps(),
         line("$I", GRBL_IDENTITY, "ok"),
         raw(b"?", realtime),
-        *disconnect_steps(),
+        *disconnect_steps("grbl"),
     ]
     transport = ScriptedTransport(steps, startup=("start",))
     install_transports(monkeypatch, transport)
@@ -473,6 +483,7 @@ def test_grbl_home_park_uses_acknowledged_home_and_two_coordinate_snapshots(
 ) -> None:
     operation_steps = [
         line("M5", "ok"),
+        *grbl_hold_steps(),
         line("$H", "ok"),
         *coordinate_query_steps(),
         line("G21", "ok"),
@@ -482,7 +493,7 @@ def test_grbl_home_park_uses_acknowledged_home_and_two_coordinate_snapshots(
         *coordinate_query_steps(),
     ]
     transport = ScriptedTransport(
-        [*grbl_connect_steps(), *operation_steps, *disconnect_steps()]
+        [*grbl_connect_steps(), *operation_steps, *disconnect_steps("grbl")]
     )
     install_transports(monkeypatch, transport)
     machine = MachineService(
@@ -514,6 +525,7 @@ def test_grbl_home_without_ok_requires_active_then_idle_before_parking(
 ) -> None:
     operation_steps = [
         line("M5", "ok"),
+        *grbl_hold_steps(),
         line("$H"),
         raw(b"?", "<Home|MPos:1,1,0|FS:0,0>"),
         raw(b"?", "<Idle|MPos:0,0,0|FS:0,0>"),
@@ -525,7 +537,7 @@ def test_grbl_home_without_ok_requires_active_then_idle_before_parking(
         *coordinate_query_steps(),
     ]
     transport = ScriptedTransport(
-        [*grbl_connect_steps(), *operation_steps, *disconnect_steps()]
+        [*grbl_connect_steps(), *operation_steps, *disconnect_steps("grbl")]
     )
     install_transports(monkeypatch, transport)
     machine = MachineService(
@@ -538,8 +550,8 @@ def test_grbl_home_without_ok_requires_active_then_idle_before_parking(
     result = machine.prepare_photo_position()
 
     assert result["parked"] is True
-    assert result["transcript"][1]["command"] == "$H"
-    assert result["transcript"][1]["responses"] == [
+    assert result["transcript"][4]["command"] == "$H"
+    assert result["transcript"][4]["responses"] == [
         "<Home|MPos:1,1,0|FS:0,0>",
         "<Idle|MPos:0,0,0|FS:0,0>",
     ]
@@ -561,12 +573,13 @@ def test_grbl_home_without_ok_requires_active_then_idle_before_parking(
             "grbl",
             [
                 line("M5", "ok"),
+                *grbl_hold_steps(),
                 line("$H", "ok"),
                 *coordinate_query_steps(),
                 line("G21", "ok"),
                 line("G90", "ok"),
             ],
-            ["M5", "$H", "$G", "$#", "G21", "G90"],
+            ["M5", "$$", "$1=255", "$$", "$H", "$G", "$#", "G21", "G90"],
         ),
         (
             "marlin",
@@ -588,7 +601,7 @@ def test_job_start_home_establishes_coordinates_without_photo_parking(
 ) -> None:
     connect = grbl_connect_steps() if protocol == "grbl" else marlin_connect_steps()
     transport = ScriptedTransport(
-        [*connect, *home_steps, *disconnect_steps()]
+        [*connect, *home_steps, *disconnect_steps(protocol)]
     )
     install_transports(monkeypatch, transport)
     machine = MachineService(
@@ -676,7 +689,7 @@ def test_dry_marlin_stream_waits_for_m400_before_success(
     transport.assert_complete()
 
 
-def test_powered_grbl_stream_has_complete_home_park_release_transcript(
+def test_powered_grbl_stream_has_complete_home_park_hold_transcript(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     program_lines = [
@@ -690,6 +703,7 @@ def test_powered_grbl_stream_has_complete_home_park_release_transcript(
     ]
     job_start_steps = [
         line("M5", "ok"),
+        *grbl_hold_steps(),
         line("$H", "ok"),
         *coordinate_query_steps(),
         line("G21", "ok"),
@@ -706,9 +720,8 @@ def test_powered_grbl_stream_has_complete_home_park_release_transcript(
         line("G90", "ok"),
         line("G0 X15.000 Y195.000 F3000.000", "ok"),
         line("G4 P0.01", "ok"),
-        line("$$", *GRBL_SETTINGS),
-        line("M5", "ok"),
-        line("$MD", "ok"),
+        line("$$", *GRBL_HELD_SETTINGS),
+        *coordinate_query_steps(),
     ]
     transport = ScriptedTransport(
         [
@@ -716,7 +729,7 @@ def test_powered_grbl_stream_has_complete_home_park_release_transcript(
             *job_start_steps,
             *start_verification,
             *stream_steps,
-            *disconnect_steps(),
+            *disconnect_steps("grbl"),
         ]
     )
     install_transports(monkeypatch, transport)
@@ -744,8 +757,9 @@ def test_powered_grbl_stream_has_complete_home_park_release_transcript(
     assert status["last_successful_job"]["program_digest"] == program.digest  # type: ignore[index]
     assert status["last_successful_job"]["powered"] is True  # type: ignore[index]
     assert status["armed"] is False
-    assert status["coordinate_reference_ready"] is False
-    assert status["jog_ready"] is False
+    assert status["controller_state"] == "READY_MOTION"
+    assert status["coordinate_reference_ready"] is True
+    assert status["jog_ready"] is True
 
     machine.disconnect()
     transport.assert_complete()
@@ -769,6 +783,7 @@ def test_powered_grbl_air_assist_is_off_before_home_park_transcript(
     ]
     job_start_steps = [
         line("M5", "ok"),
+        *grbl_hold_steps(),
         line("$H", "ok"),
         *coordinate_query_steps(),
         line("G21", "ok"),
@@ -792,9 +807,8 @@ def test_powered_grbl_air_assist_is_off_before_home_park_transcript(
         line("G90", "ok"),
         line("G0 X15.000 Y195.000 F3000.000", "ok"),
         line("G4 P0.01", "ok"),
-        line("$$", *GRBL_SETTINGS),
-        line("M5", "ok"),
-        line("$MD", "ok"),
+        line("$$", *GRBL_HELD_SETTINGS),
+        *coordinate_query_steps(),
     ]
     transport = ScriptedTransport(
         [
@@ -967,8 +981,7 @@ def test_stop_during_active_job_cancels_stream_without_receipt(
             line("G21", "ok"),
             line("G90", "ok"),
             # The worker blocks awaiting this injected leading M5. STOP then
-            # owns the next M5, followed by the worker's failure cleanup M5.
-            line("M5"),
+            # owns the next M5; worker unwind must not send another fail-off.
             line("M5"),
             line("M5"),
         ]
@@ -992,7 +1005,6 @@ def test_stop_during_active_job_cancels_stream_without_receipt(
     status = wait_for_job(machine)
 
     assert transport.writes[writes_before_job:] == [
-        ("line", "M5"),
         ("line", "M5"),
         ("line", "M5"),
     ]

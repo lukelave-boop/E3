@@ -7,6 +7,41 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-05**
 
+## Active audit step 1: primary GRBL session authority
+
+Branch: `codex/primary-session-authority`, based on local 0.6.196 revision
+`5ebd15bf8675579ee150a99af27dc1cb7be37c66`. This source implementation adds
+continuous primary receive ownership after the full private handshake. Idle
+alarms, restart/framing events, and transport failures revoke exact-session
+trust; queued unowned replies cannot acknowledge new commands. Admission and
+write share one receive boundary. Arming, Home reference publication, and job
+terminal publication respect already observed faults. STOP and quarantine use
+bounded GRBL realtime abort before M5/close; normal successful jobs retain the
+existing motion barriers and verified $1=255 hold. The original failure survives
+cleanup and E3's own reset reply. Marlin ordinary/emergency policy is retained.
+
+[Primary session authority](docs/PRIMARY_SESSION_AUTHORITY.md) records the scope,
+GRBL untagged-ACK limitation, and physical acceptance sequence. Auto-Home/Start,
+desktop/Pi snapshot design, secondary lifecycle, and independent fan control are
+later audit steps. No Pi deployment or frozen feature build was made for this
+step; the permanent DEV TEST pointer still selects the previous feature.
+
+Verification: the full Windows suite completed with **3,656 passed, 24 skipped,
+2 failed**. A Home/STOP cancellation-message regression was corrected afterward.
+The final focused controller, receiver, machine, and GRBL transcript run passes
+**397 tests**, including all 27 new receiver/event races and the 1,000-lifecycle
+soak with no new surviving threads. That focused run excludes the sole unresolved,
+pre-existing Marlin powered-completion transcript failure: it expects M84, which
+the current implementation omits. Five stale GRBL transcript expectations were
+updated to the existing held-reference contract. The final full run's other Pi,
+remote, camera, desktop, and shutdown tests passed; the full suite was not repeated
+after the focused cancellation correction and cleanup-test timing corrections.
+Repository Ruff and compileall pass, and changed production sources parse with
+Python 3.10 grammar. Runtime testing uses Windows Python 3.14.4, not the supported
+Windows 3.10/3.12 CI tiers. Physical primary/Pi/laser/camera acceptance and the
+Linux serial-specific checks remain unperformed. No hardware behavior is claimed
+verified by these fake-controller tests or offscreen desktop tests.
+
 ## Active bounded persistent-secondary pre-start OFF recovery
 
 Pre-start secondary OFF permits exactly one fresh-session recovery after a

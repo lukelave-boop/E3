@@ -4308,11 +4308,15 @@ def test_grbl_home_park_uses_planner_barrier_not_realtime_idle_polling(
         hardware_enabled=True,
     )
     machine.connect()
-    monkeypatch.setattr(
-        machine,
-        "_wait_until_idle",
-        lambda timeout: pytest.fail("Home / park must not depend on realtime status"),
-    )
+    transport = machine._require_session().transport
+    original_write_raw = transport.write_raw
+
+    def reject_realtime_poll(data: bytes) -> None:
+        if data == b"?":
+            pytest.fail("Home / park must not depend on realtime status")
+        original_write_raw(data)
+
+    monkeypatch.setattr(transport, "write_raw", reject_realtime_poll)
     try:
         result = machine.prepare_photo_position()
     finally:

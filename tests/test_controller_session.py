@@ -466,18 +466,16 @@ def _capture_error(callback: Any, errors: list[BaseException]) -> None:
         errors.append(exc)
 
 
-@pytest.mark.parametrize("terminal", ["error:20", "ALARM:1"])
-def test_consumed_error_and_alarm_do_not_poison_session(
+def test_consumed_command_error_does_not_poison_session(
     monkeypatch: pytest.MonkeyPatch,
-    terminal: str,
 ) -> None:
     transport = ResponsiveTransport("consumed")
     machine, _factory = make_machine(monkeypatch, transport)
     machine.connect()
     generation = machine.status()["controller_session_generation"]
-    transport.set_next_reply("$I", terminal)
+    transport.set_next_reply("$I", "error:20")
 
-    with pytest.raises(MachineError, match=terminal.split(":", 1)[0]):
+    with pytest.raises(MachineError, match="error:20"):
         machine.send_command("$I")
 
     status = machine.status()
@@ -1212,7 +1210,7 @@ def test_mid_home_startup_or_malformed_frame_quarantines_exact_session(
     assert status["controller_state"] == "RECONNECT_REQUIRED"
     assert status["coordinate_reference_ready"] is False
     assert status["controller_diagnostics"]["last_failed_command"] == "$H"
-    assert transport.closed.is_set()
+    assert transport.closed.wait(1.0)
     assert "ok" in transport.drain()
 
 
@@ -1303,6 +1301,29 @@ def test_active_idle_homing_fallback_consumes_one_delayed_home_ack(
     machine.disconnect()
 
 
+def test_consumed_alarm_quarantines_session_and_revokes_motion_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = ResponsiveTransport("consumed-alarm")
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    machine.prepare_job_start()
+    generation = machine.status()["controller_session_generation"]
+    transport.synchronize_input = None  # type: ignore[method-assign]
+    transport.set_next_reply("$I", "ALARM:1")
+
+    with pytest.raises(MachineError, match="ALARM:1"):
+        machine.send_command("$I")
+
+    assert transport.closed.wait(1.0)
+    status = machine.status()
+    assert status["connected"] is False
+    assert status["controller_state"] == "RECONNECT_REQUIRED"
+    assert status["coordinate_reference_ready"] is False
+    assert status["armed"] is False
+    assert status["controller_session_generation"] == generation
+
+
 ESP_IDF_GPIO_DIAGNOSTIC = (
     "E (6594130) gpio: gpio_isr_handler_remove(480): GPIO isr service is not "
     "installed, call gpio_install_isr_service() first"
@@ -1389,7 +1410,7 @@ def test_firmware_diagnostic_does_not_hide_malformed_homing_frame(
     status = machine.status()
     assert status["controller_state"] == "RECONNECT_REQUIRED"
     assert status["coordinate_reference_ready"] is False
-    assert failed.closed.is_set()
+    assert failed.closed.wait(1.0)
 
 
 def test_home_and_status_poll_are_coherent_and_two_home_requests_exclude(
@@ -1515,15 +1536,15 @@ def _reconnect_while_old_job_worker_unwinds(
     monkeypatch.setattr(service_module, "_REALTIME_STOP_WRITE_DEADLINE_SECONDS", 0.02)
     cleanup_entered = threading.Event()
     cleanup_release = threading.Event()
-    original_fail_off = machine._best_effort_fail_off
+    original_secondary_off = machine._best_effort_secondary_off
 
-    def pause_stale_job_cleanup(transport: Any, *, context: str) -> None:
+    def pause_stale_job_cleanup(*, context: str, commands: Any = None) -> None:
         if context == "job cleanup":
             cleanup_entered.set()
             assert cleanup_release.wait(2.0)
-        original_fail_off(transport, context=context)
+        original_secondary_off(context=context, commands=commands)
 
-    monkeypatch.setattr(machine, "_best_effort_fail_off", pause_stale_job_cleanup)
+    monkeypatch.setattr(machine, "_best_effort_secondary_off", pause_stale_job_cleanup)
     machine.connect()
     machine.prepare_job_start()
     program = machine.preflight_program("G21\nG90\nM5\nG0 X1 Y1 F100\nM5\n")
@@ -1910,7 +1931,7 @@ def test_seeded_1000_controller_session_lifecycle_soak(
     # the soak targets lifecycle/session ownership while remaining CI-bounded.
     monkeypatch.setattr(service_module, "_POST_TERMINAL_QUIET_SECONDS", 0.0)
     machine = MachineService(machine_settings(), LaserSettings(), hardware_enabled=True)
-    initial_threads = {thread.ident for thread in threading.enumerate()}
+    initial_threads = set(threading.enumerate())
     previous_generation = 0
 
     for lifecycle in range(1_000):
@@ -2004,7 +2025,18 @@ def test_seeded_1000_controller_session_lifecycle_soak(
         previous_generation = current["controller_session_generation"]
 
     assert machine.status()["controller_session_generation"] >= 1_000
-    assert {thread.ident for thread in threading.enumerate()} == initial_threads
+    # Session retirement wakes its receiver without joining while service locks
+    # are held. Require every transient receiver/cleanup worker to settle, then
+    # require no new threads to remain. A retiring worker from an earlier test
+    # may disappear during this soak; that is not a leak. Compare thread objects
+    # rather than IDs, which the operating system can reuse across 1,000 cycles.
+    retirement_deadline = time.monotonic() + 1.0
+    while (
+        not set(threading.enumerate()).issubset(initial_threads)
+        and time.monotonic() < retirement_deadline
+    ):
+        time.sleep(0.005)
+    assert set(threading.enumerate()).issubset(initial_threads)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2035,8 +2067,8 @@ FAULT_MATRIX = (
     FaultMatrixCase(9, "duplicate ok", _CORE + "test_millisecond_delayed_duplicate_ack_is_rejected_before_next_command"),
     FaultMatrixCase(10, "status interleaved with payload", _CORE + "test_realtime_status_is_diverted_from_command_payload"),
     FaultMatrixCase(11, "startup banner mid-handshake", _CORE + "test_startup_or_malformed_frame_quarantines_and_clears_pending_transaction"),
-    FaultMatrixCase(12, "complete consumed error", _CORE + "test_consumed_error_and_alarm_do_not_poison_session"),
-    FaultMatrixCase(13, "complete consumed alarm", _CORE + "test_consumed_error_and_alarm_do_not_poison_session"),
+    FaultMatrixCase(12, "complete consumed error", _CORE + "test_consumed_command_error_does_not_poison_session"),
+    FaultMatrixCase(13, "alarm revokes controller authority", _CORE + "test_consumed_alarm_quarantines_session_and_revokes_motion_reference"),
     FaultMatrixCase(14, "exact pre-home error 9", _CORE + "test_exact_pre_home_error_9_uses_only_bounded_unlock_and_still_requires_home"),
     FaultMatrixCase(15, "non-error-9 rejection", _CORE + "test_non_error_9_pre_home_rejection_never_unlocks_or_publishes"),
     FaultMatrixCase(16, "write failure before any byte", _CORE + "test_failed_or_partial_write_quarantines_exact_session"),

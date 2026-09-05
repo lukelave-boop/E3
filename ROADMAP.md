@@ -19,6 +19,17 @@ controller/camera path. Current software verification is not physical
 acceptance. Additional named-machine support should wait until matching hardware
 is available for the same recorded acceptance process.
 
+## Whole-application audit sequence
+
+Step 1 implements continuous primary GRBL receive ownership, fault-driven trust
+revocation, reply admission boundaries, and explicit abort versus successful
+completion. Physical acceptance remains pending; see
+[primary session authority](docs/PRIMARY_SESSION_AUTHORITY.md) and
+[CURRENT_STATE.md](CURRENT_STATE.md) for test evidence. Subsequent audit steps
+remain separate: authoritative Pi/desktop snapshots, exact prepared-job
+auto-Home/Start, secondary lifecycle corrections, cooling capability validation,
+and broader physical-sequence acceptance.
+
 ## Completed foundation
 
 The following foundations are implemented and automated-test covered:

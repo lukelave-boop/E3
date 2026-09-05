@@ -18,8 +18,8 @@ hardware has been tested. The physical 20-cycle acceptance run remains required.
 | 9 | Duplicate `ok` | `test_millisecond_delayed_duplicate_ack_is_rejected_before_next_command` | Automated |
 | 10 | Interleaved status | `test_realtime_status_is_diverted_from_command_payload` | Automated |
 | 11 | Mid-handshake banner | `test_startup_or_malformed_frame_quarantines_and_clears_pending_transaction` | Automated |
-| 12 | Consumed `error:x` | `test_consumed_error_and_alarm_do_not_poison_session` | Automated |
-| 13 | Consumed `ALARM:x` | `test_consumed_error_and_alarm_do_not_poison_session` | Automated |
+| 12 | Consumed `error:x` retains trust | `test_consumed_command_error_does_not_poison_session` | Automated |
+| 13 | Consumed `ALARM:x` revokes reference/session | `test_consumed_alarm_quarantines_session_and_revokes_motion_reference` | Automated |
 | 14 | Exact pre-Home `error:9` | `test_exact_pre_home_error_9_uses_only_bounded_unlock_and_still_requires_home` | Automated |
 | 15 | Other rejection | `test_non_error_9_pre_home_rejection_never_unlocks_or_publishes` | Automated |
 | 16 | Pre-byte write failure | `test_failed_or_partial_write_quarantines_exact_session` | Automated |
@@ -50,7 +50,7 @@ hardware has been tested. The physical 20-cycle acceptance run remains required.
 | 41 | Concurrent Home | `test_home_and_status_poll_are_coherent_and_two_home_requests_exclude` | Automated |
 | 42 | Two desktop clients | `test_two_clients_share_one_replacement_and_stale_disconnect_is_rejected` | Pi RPC automated |
 | 43 | Client closes during job | `test_authenticated_client_disconnect_does_not_stop_accepted_powered_job` | Pi RPC automated |
-| 44 | USB disappears idle | `test_read_failure_quarantines_exact_session_and_records_command` | Simulated; physical pending |
+| 44 | USB disappears idle, without command/status-triggered RX | `test_idle_transport_fault_revokes_reference_without_status_consuming_rx` | Simulated; physical pending |
 | 45 | USB disappears in job | `test_pi_local_controller_failure_persists_failed_without_auto_retry` | Simulated; physical pending |
 | 46 | Same by-id reappears | `test_twenty_stop_recover_home_cycles_use_fresh_generations` | Simulated; physical pending |
 | 47 | Wrong controller at path | `test_wrong_controller_identity_at_configured_path_fails_closed` | Automated |

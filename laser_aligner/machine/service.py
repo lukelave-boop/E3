@@ -6,9 +6,10 @@ import math
 import re
 import threading
 import time
+import weakref
 from collections import deque
 from collections.abc import Callable
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
 from typing import Any
 
@@ -42,6 +43,7 @@ from .controller_dialects import (
     parse_grbl_step_idle_delay,
     resolve_air_assist_commands,
 )
+from .controller_receiver import ControllerReceiver
 from .controller_session import (
     CONNECTED_CONTROLLER_STATES,
     CONNECTING_CONTROLLER_STATES,
@@ -417,6 +419,34 @@ class MachineService:
                     f"{context} command {command!r} failed: {exc}",
                 )
 
+    def _attempt_grbl_abort(self, session: ControllerSession, *, deadline: float) -> None:
+        """Bound realtime interruption of the exact published GRBL session."""
+        policy = session.dialect.emergency_stop
+        if session.dialect is not GRBL_DIALECT or policy.raw_command is None:
+            return
+        finished = threading.Event()
+        failures: list[Exception] = []
+
+        def interrupt() -> None:
+            try:
+                session.transport.write_raw(policy.raw_command)
+            except Exception as exc:
+                failures.append(exc)
+            finally:
+                finished.set()
+
+        try:
+            threading.Thread(target=interrupt, name="controller-realtime-stop", daemon=True).start()
+        except Exception as exc:
+            self._append_log("ERROR", f"{policy.failure_label} could not start: {exc}; continuing with M5")
+            return
+        if not finished.wait(max(0.0, deadline - time.monotonic())):
+            self._append_log("ERROR", f"{policy.failure_label} write timed out; continuing with M5")
+        elif failures:
+            self._append_log("ERROR", f"{policy.failure_label} failed: {failures[0]}")
+        else:
+            self._append_log("TX", policy.success_log)
+
     def _start_bounded_stop_cleanup(
         self,
         session: ControllerSession,
@@ -455,7 +485,7 @@ class MachineService:
                 try:
                     session.transport.close()
                 except Exception as exc:
-                    session.diagnostics.record_failure(f"STOP close failed: {exc}")
+                    session.diagnostics.record_event(f"STOP close failed: {exc}")
                 finished.set()
 
         try:
@@ -483,7 +513,7 @@ class MachineService:
                 try:
                     session.transport.close()
                 except Exception as close_error:
-                    session.diagnostics.record_failure(
+                    session.diagnostics.record_event(
                         f"STOP fallback close failed: {close_error}"
                     )
             return
@@ -891,6 +921,52 @@ class MachineService:
             diagnostics=diagnostics,
         )
 
+    def _attach_controller_receiver(self, session: ControllerSession) -> ControllerSession:
+        """Attach receive ownership only after the private handshake succeeded."""
+        if session.dialect is not GRBL_DIALECT:
+            return session
+        owner = weakref.ref(self)
+
+        def failed(reason: str) -> None:
+            machine = owner()
+            if machine is not None:
+                machine._mark_controller_command_state_untrusted(session, reason=reason)
+
+        receiver = ControllerReceiver(
+            session.transport, session.dialect,
+            on_failure=failed,
+            on_idle=lambda line: session.diagnostics.record_rx(None, line),
+            owner_alive=lambda: owner() is not None,
+        )
+        return replace(session, receiver=receiver)
+
+    @staticmethod
+    def _read_session_line(session: ControllerSession, *, timeout: float) -> str | None:
+        source = session.receiver or session.transport
+        return source.read_line(timeout=timeout)
+
+    @staticmethod
+    def _raise_session_failure(session: ControllerSession) -> None:
+        if session.receiver is not None and session.receiver.failure is not None:
+            raise MachineError(session.receiver.failure)
+
+    @staticmethod
+    def _begin_session_transaction(
+        session: ControllerSession, sequence: int, write: Callable[[], None],
+    ) -> None:
+        if session.receiver is not None:
+            session.receiver.begin(sequence, write)
+        else:
+            write()
+
+    def _end_session_transaction(self, session: ControllerSession, sequence: int | None) -> None:
+        if session.receiver is not None:
+            try:
+                session.receiver.end(sequence)
+            except Exception as exc:
+                self._mark_controller_command_state_untrusted(session, reason=exc)
+                raise
+
     @staticmethod
     def _same_controller_session(
         left: ControllerSession | None,
@@ -1021,13 +1097,19 @@ class MachineService:
             if session is None:
                 self._invalidate_coordinate_reference()
                 return
+            if not self._same_controller_session(self._session, session):
+                return
             session.diagnostics.record_failure(
                 reason,
                 code=failure_code,
                 command=failed_command,
             )
-            if not self._same_controller_session(self._session, session):
-                return
+            # Use the published session, including its receive owner. Identity
+            # remains exact transport+generation even for an earlier snapshot.
+            session = self._session
+            assert session is not None
+            if session.receiver is not None:
+                session.receiver.stop()
             self._session = None
             self._transport = None
             self._invalidate_coordinate_reference()
@@ -1058,14 +1140,16 @@ class MachineService:
             if context is not None and context.session.matches(session):
                 context.stop_event.set()
             recovery_epoch = self._stop_epoch
-        self._best_effort_fail_off(
-            session.transport,
-            context="uncertain-session quarantine",
+        # Quarantine means execution/response authority is uncertain, not normal
+        # completion. GRBL M5 may wait behind powered planner work, so first
+        # attempt the same bounded realtime abort used by explicit STOP. Do not
+        # manufacture an operator STOP epoch or replace the initiating failure.
+        deadline = time.monotonic() + _REALTIME_STOP_WRITE_DEADLINE_SECONDS
+        if session.dialect is GRBL_DIALECT:
+            self._attempt_grbl_abort(session, deadline=deadline)
+        self._start_bounded_stop_cleanup(
+            session, context="uncertain-session quarantine", deadline=deadline,
         )
-        try:
-            session.transport.close()
-        except Exception as exc:
-            session.diagnostics.record_failure(f"quarantine close failed: {exc}")
         if recover and callable(getattr(session.transport, "synchronize_input", None)):
             self._schedule_controller_recovery(recovery_epoch, session=session)
 
@@ -1381,7 +1465,14 @@ class MachineService:
                             expected_stop_epoch=expected_stop_epoch,
                         )
                 self._raise_if_connection_cancelled(expected_stop_epoch)
-                with self._lock:
+                candidate = self._attach_controller_receiver(candidate)
+                if candidate.receiver is not None:
+                    candidate.receiver.start()
+                with self._lock, (
+                    candidate.receiver.authority()
+                    if candidate.receiver is not None
+                    else nullcontext()
+                ):
                     if (
                         self._candidate_session is None
                         or self._candidate_session.generation != candidate.generation
@@ -1444,6 +1535,8 @@ class MachineService:
                         and self._candidate_session.generation == candidate.generation
                     ):
                         self._candidate_session = None
+                if candidate.receiver is not None:
+                    candidate.receiver.stop()
                 self._best_effort_fail_off(
                     candidate.transport,
                     context=f"connection attempt {attempt} cleanup",
@@ -1805,7 +1898,7 @@ class MachineService:
         while time.monotonic() < deadline:
             self._raise_if_connection_cancelled(expected_stop_epoch)
             try:
-                response = session.transport.read_line(
+                response = self._read_session_line(session,
                     timeout=min(0.2, max(0.0, deadline - time.monotonic()))
                 )
             except Exception as exc:
@@ -2163,9 +2256,14 @@ class MachineService:
                     "Controller command state is untrusted after software STOP; "
                     "disconnect and reconnect before arming"
                 )
-            self._armed_until = time.time() + timeout
-            self._armed_until_monotonic = time.monotonic() + timeout
-            self._armed_program_digest = program_digest
+            with (
+                controller_session.receiver.authority()
+                if controller_session.receiver is not None
+                else nullcontext()
+            ):
+                self._armed_until = time.time() + timeout
+                self._armed_until_monotonic = time.monotonic() + timeout
+                self._armed_program_digest = program_digest
         self._append_log("INFO", "laser control armed temporarily")
         return self._armed_until
 
@@ -2252,6 +2350,7 @@ class MachineService:
                 or self._controller_state not in CONNECTED_CONTROLLER_STATES
             ):
                 raise MachineError("Controller is not connected")
+            self._raise_session_failure(session)
             return session
 
     def _require_connection(self) -> MachineTransport:
@@ -2435,6 +2534,7 @@ class MachineService:
             raise MachineError("Controller command is empty")
         session: ControllerSession
         sequence: int
+        write_error: Exception | None = None
         with self._transport_write_lock:
             if _expected_stop_epoch is not None:
                 with self._stop_epoch_lock:
@@ -2446,20 +2546,24 @@ class MachineService:
             transaction_started = time.monotonic()
             sequence = session.diagnostics.next_command(cleaned)
             try:
-                session.transport.write_line(cleaned)
+                self._begin_session_transaction(
+                    session, sequence, lambda: session.transport.write_line(cleaned),
+                )
                 self._append_log("TX", cleaned)
             except Exception as exc:
-                # A partial write can still produce a delayed response. Do not
-                # let that response acknowledge a later command after retry.
-                self._mark_controller_command_state_untrusted(
-                    session,
-                    reason=f"Command {cleaned!r} write failed: {exc}",
-                    failure_code=_FAILURE_SESSION_QUARANTINED,
-                    failed_command=cleaned,
-                )
-                raise MachineError(
-                    f"Command {cleaned!r} failed while writing: {exc}"
-                ) from exc
+                write_error = exc
+        if write_error is not None:
+            # Retire partial writes after releasing the physical-write lock,
+            # so bounded M5/close cleanup can acquire it immediately.
+            self._mark_controller_command_state_untrusted(
+                session,
+                reason=f"Command {cleaned!r} write failed: {write_error}",
+                failure_code=_FAILURE_SESSION_QUARANTINED,
+                failed_command=cleaned,
+            )
+            raise MachineError(
+                f"Command {cleaned!r} failed while writing: {write_error}"
+            ) from write_error
         acknowledgement_timeout = timeout or self.settings.read_timeout
         try:
             responses = self._wait_for_ack(
@@ -2549,6 +2653,7 @@ class MachineService:
                 self._job_context.pending_transaction = None
 
         try:
+            self._raise_session_failure(session)
             if self._job.running and job_stop is not None and job_stop.is_set():
                 raise MachineError("Job stopped")
             if require_active_session:
@@ -2557,10 +2662,10 @@ class MachineService:
                         if job_stop is not None and job_stop.is_set():
                             raise MachineError("Job stopped") from None
                         raise MachineError("Controller session was superseded")
-            transport = session.transport
             deadline = time.monotonic() + timeout
             responses: list[str] = []
             while time.monotonic() < deadline:
+                self._raise_session_failure(session)
                 if expected_stop_epoch is not None:
                     with self._stop_epoch_lock:
                         if self._stop_epoch != expected_stop_epoch:
@@ -2568,13 +2673,19 @@ class MachineService:
                 if self._job.running and job_stop is not None and job_stop.is_set():
                     raise MachineError("Job stopped")
                 try:
-                    response = transport.read_line(
+                    response = self._read_session_line(session,
                         timeout=min(0.2, max(0.0, deadline - time.monotonic()))
                     )
                 except Exception as exc:
+                    self._raise_session_failure(session)
+                    if expected_stop_epoch is not None:
+                        with self._stop_epoch_lock:
+                            if self._stop_epoch != expected_stop_epoch:
+                                raise MachineError("Operation was cancelled by software STOP") from exc
                     raise MachineError(f"Controller read failed: {exc}") from exc
                 if not response:
                     continue
+                self._raise_session_failure(session)
                 if self._job.running and job_stop is not None and job_stop.is_set():
                     raise MachineError("Job stopped")
                 if expected_stop_epoch is not None:
@@ -2642,6 +2753,7 @@ class MachineService:
             )
         finally:
             clear_pending_transaction()
+            self._end_session_transaction(session, command_sequence)
 
     def _reject_queued_unowned_responses(
         self,
@@ -2674,7 +2786,7 @@ class MachineService:
                     "Controller transaction ended without a quiet post-terminal boundary"
                 )
             try:
-                response = session.transport.read_line(
+                response = self._read_session_line(session,
                     timeout=min(quiet_remaining, transaction_remaining)
                 )
             except Exception as exc:
@@ -2702,31 +2814,6 @@ class MachineService:
             raise MachineError(
                 "Controller returned an unowned response after the terminal "
                 f"acknowledgement: {response!r} ({response_kind.value})"
-            )
-
-    def _reject_prewrite_unowned_responses(
-        self,
-        session: ControllerSession,
-    ) -> None:
-        """Reject queued non-telemetry before assigning a new line transaction."""
-
-        while True:
-            try:
-                response = session.transport.read_line(timeout=0.0)
-            except Exception as exc:
-                raise MachineError(
-                    f"Controller read failed before command write: {exc}"
-                ) from exc
-            if not response:
-                return
-            response_kind = self._classify_and_record_rx(session, None, response)
-            if response_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
-                continue
-            if response_kind is CommandResponseKind.REALTIME_STATUS:
-                continue
-            raise MachineError(
-                "Controller returned an unowned response before a new command "
-                f"could be assigned: {response!r} ({response_kind.value})"
             )
 
     def query_identity(self) -> list[str]:
@@ -2994,36 +3081,6 @@ class MachineService:
                         f"Temporary camera hold released; restored $1={restore_delay}",
                     )
 
-    def _wait_until_idle(self, timeout: float = 120.0) -> list[str]:
-        dialect = self._require_resolved_dialect()
-        transport = self._require_connection()
-        if dialect.realtime_status_query is None:
-            return self.send_command(
-                dialect.motion_barrier_command,
-                timeout=timeout,
-                _internal_motion=True,
-            )
-
-        deadline = time.monotonic() + timeout
-        responses: list[str] = []
-        while time.monotonic() < deadline:
-            transport.write_raw(dialect.realtime_status_query)
-            self._append_log("TX", "?")
-            query_deadline = min(deadline, time.monotonic() + 0.8)
-            while time.monotonic() < query_deadline:
-                line = transport.read_line(timeout=min(0.15, query_deadline - time.monotonic()))
-                if not line:
-                    continue
-                responses.append(line)
-                self._append_log("RX", line)
-                lower = line.lower()
-                if lower.startswith("<idle"):
-                    return responses
-                if lower.startswith("<alarm") or lower.startswith("alarm") or lower.startswith("error"):
-                    raise MachineError(line)
-            time.sleep(0.1)
-        raise MachineError(f"Controller did not become idle within {timeout:g} seconds")
-
     def _wait_for_motion_complete(
         self,
         timeout: float = 120.0,
@@ -3079,8 +3136,9 @@ class MachineService:
         )
 
         try:
-            write_homing_command()
+            self._begin_session_transaction(session, sequence, write_homing_command)
             while time.monotonic() < deadline:
+                self._raise_session_failure(session)
                 if is_cancelled():
                     raise MachineError(cancellation_message)
                 now = time.monotonic()
@@ -3090,11 +3148,12 @@ class MachineService:
                     next_status_query = (
                         now + _GRBL_HOMING_STATUS_QUERY_INTERVAL_SECONDS
                     )
-                line = transport.read_line(
+                line = self._read_session_line(session,
                     timeout=min(0.1, max(0.0, deadline - time.monotonic()))
                 )
                 if not line:
                     continue
+                self._raise_session_failure(session)
                 if is_cancelled():
                     raise MachineError(cancellation_message)
                 response_kind = GRBL_DIALECT.classify_homing_response(line)
@@ -3177,7 +3236,9 @@ class MachineService:
                 f"within {timeout:g} seconds"
             )
         except Exception as exc:
-            stopped = is_cancelled()
+            stopped = is_cancelled() and (
+                session.receiver is None or session.receiver.failure is None
+            )
             if not isinstance(exc, _ControllerCommandRejected):
                 failure_code = (
                     _FAILURE_COMMAND_TIMEOUT
@@ -3197,6 +3258,8 @@ class MachineService:
             if isinstance(exc, MachineError) and str(exc).startswith("Command '$H'"):
                 raise
             raise MachineError(f"Command '$H' failed: {exc}") from exc
+        finally:
+            self._end_session_transaction(session, sequence)
 
     def _execute_grbl_homing_locked(
         self,
@@ -3317,106 +3380,124 @@ class MachineService:
                 raise MachineError(
                     "Realtime MPos/WPos/WCO sampling is currently available only for GRBL"
                 )
-            with self._transport_write_lock:
-                transaction_started = time.monotonic()
-                sequence = controller_session.diagnostics.next_command("?")
-                try:
-                    transport.write_raw(dialect.realtime_status_query)
-                except Exception as exc:
-                    self._mark_controller_command_state_untrusted(
-                        controller_session,
-                        reason=f"Realtime position query write failed: {exc}",
-                    )
-                    raise MachineError(
-                        f"Realtime position query failed while writing: {exc}"
-                    ) from exc
-                self._append_log("TX", "? (realtime position snapshot)")
-            deadline = time.monotonic() + timeout_seconds
-            while time.monotonic() < deadline:
-                response = transport.read_line(
-                    timeout=min(0.2, max(0.0, deadline - time.monotonic()))
-                )
-                if not response:
-                    continue
-                response_kind = self._classify_and_record_rx(
-                    controller_session, sequence, response
-                )
-                if response_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
-                    continue
-                stripped = response.strip()
-                if stripped.startswith("<") and stripped.endswith(">"):
-                    snapshot = self._parse_grbl_realtime_status(
-                        stripped,
-                        coordinate_state=(
-                            self._coordinate_state_reference
-                            if coordinate_state is None
-                            else coordinate_state
-                        ),
-                    )
-                    if snapshot["xy_complete"] is not True:
-                        raise MachineError(
-                            "GRBL realtime status did not provide a complete XY position"
-                        )
-                    snapshot["sampled_at"] = time.time()
+            sequence: int | None = None
+            write_failed = False
+            try:
+                with self._transport_write_lock:
+                    transaction_started = time.monotonic()
+                    sequence = controller_session.diagnostics.next_command("?")
                     try:
-                        self._reject_queued_unowned_responses(
-                            controller_session,
-                            command_sequence=sequence,
-                            transaction_deadline=deadline,
+                        self._begin_session_transaction(
+                            controller_session, sequence,
+                            lambda: transport.write_raw(dialect.realtime_status_query),
                         )
                     except Exception as exc:
+                        write_failed = True
+                        raise MachineError(
+                            f"Realtime position query failed while writing: {exc}"
+                        ) from exc
+                    self._append_log("TX", "? (realtime position snapshot)")
+                deadline = time.monotonic() + timeout_seconds
+                while time.monotonic() < deadline:
+                    response = self._read_session_line(controller_session,
+                        timeout=min(0.2, max(0.0, deadline - time.monotonic()))
+                    )
+                    if not response:
+                        continue
+                    response_kind = self._classify_and_record_rx(
+                        controller_session, sequence, response
+                    )
+                    if response_kind is CommandResponseKind.FIRMWARE_DIAGNOSTIC:
+                        continue
+                    stripped = response.strip()
+                    if stripped.startswith("<") and stripped.endswith(">"):
+                        snapshot = self._parse_grbl_realtime_status(
+                            stripped,
+                            coordinate_state=(
+                                self._coordinate_state_reference
+                                if coordinate_state is None
+                                else coordinate_state
+                            ),
+                        )
+                        if snapshot["xy_complete"] is not True:
+                            raise MachineError(
+                                "GRBL realtime status did not provide a complete XY position"
+                            )
+                        snapshot["sampled_at"] = time.time()
+                        try:
+                            self._reject_queued_unowned_responses(
+                                controller_session,
+                                command_sequence=sequence,
+                                transaction_deadline=deadline,
+                            )
+                        except Exception as exc:
+                            self._mark_controller_command_state_untrusted(
+                                controller_session,
+                                reason=(
+                                    "Realtime position response boundary became "
+                                    f"ambiguous: {exc}"
+                                ),
+                                failure_code=_FAILURE_SESSION_QUARANTINED,
+                                failed_command="?",
+                            )
+                            raise MachineError(
+                                "Controller response alignment became uncertain after "
+                                "realtime sampling"
+                            ) from exc
+                        controller_session.diagnostics.record_success(
+                            sequence,
+                            started_monotonic=transaction_started,
+                            terminal_classification=CommandResponseKind.REALTIME_STATUS.value,
+                        )
+                        return snapshot
+                    if response_kind in {
+                        CommandResponseKind.ALARM,
+                        CommandResponseKind.ERROR,
+                    }:
+                        raise MachineError(
+                            f"GRBL rejected realtime position sampling: {stripped}"
+                        )
+                    if response_kind is CommandResponseKind.ACKNOWLEDGEMENT:
+                        self._mark_controller_command_state_untrusted(
+                            controller_session,
+                            reason="Unowned acknowledgement arrived during realtime position sampling",
+                        )
+                        raise MachineError(
+                            "Controller response alignment is uncertain after an unowned acknowledgement"
+                        )
+                    if response_kind in {
+                        CommandResponseKind.STARTUP,
+                        CommandResponseKind.MALFORMED,
+                    }:
                         self._mark_controller_command_state_untrusted(
                             controller_session,
                             reason=(
-                                "Realtime position response boundary became "
-                                f"ambiguous: {exc}"
+                                "Controller restart or malformed frame arrived during "
+                                "realtime position sampling"
                             ),
-                            failure_code=_FAILURE_SESSION_QUARANTINED,
-                            failed_command="?",
                         )
                         raise MachineError(
-                            "Controller response alignment became uncertain after "
-                            "realtime sampling"
-                        ) from exc
-                    controller_session.diagnostics.record_success(
-                        sequence,
-                        started_monotonic=transaction_started,
-                        terminal_classification=CommandResponseKind.REALTIME_STATUS.value,
-                    )
-                    return snapshot
-                if response_kind in {
-                    CommandResponseKind.ALARM,
-                    CommandResponseKind.ERROR,
-                }:
-                    raise MachineError(
-                        f"GRBL rejected realtime position sampling: {stripped}"
-                    )
-                if response_kind is CommandResponseKind.ACKNOWLEDGEMENT:
+                            "Controller response alignment became uncertain during realtime sampling"
+                        )
+                raise MachineError(
+                    "GRBL did not return realtime position status within "
+                    f"{timeout_seconds:g} seconds"
+                )
+            except Exception as exc:
+                # A missing/incomplete diagnostic position is not loss of
+                # controller authority. Transport faults and fatal RX events
+                # are latched by the owner; ordinary telemetry has no ACK to
+                # donate to a later command if a snapshot times out.
+                if write_failed or (
+                    controller_session.receiver is not None
+                    and controller_session.receiver.failure is not None
+                ):
                     self._mark_controller_command_state_untrusted(
-                        controller_session,
-                        reason="Unowned acknowledgement arrived during realtime position sampling",
+                        controller_session, reason=f"Realtime position sampling failed: {exc}",
                     )
-                    raise MachineError(
-                        "Controller response alignment is uncertain after an unowned acknowledgement"
-                    )
-                if response_kind in {
-                    CommandResponseKind.STARTUP,
-                    CommandResponseKind.MALFORMED,
-                }:
-                    self._mark_controller_command_state_untrusted(
-                        controller_session,
-                        reason=(
-                            "Controller restart or malformed frame arrived during "
-                            "realtime position sampling"
-                        ),
-                    )
-                    raise MachineError(
-                        "Controller response alignment became uncertain during realtime sampling"
-                    )
-            raise MachineError(
-                "GRBL did not return realtime position status within "
-                f"{timeout_seconds:g} seconds"
-            )
+                raise
+            finally:
+                self._end_session_transaction(controller_session, sequence)
 
     @staticmethod
     def _coordinate_state_difference(
@@ -3782,16 +3863,21 @@ class MachineService:
                 raise MachineError(
                     "Home / park was cancelled because its controller session was stopped or superseded"
                 )
-            self._coordinate_reference_ready = True
-            self._coordinate_reference_session_generation = (
-                controller_session.generation
-            )
-            self._coordinate_state_reference = coordinate_state
-            self._jog_position_mm = (x, y) if park_at_photo_position else None
-            self._set_controller_state_locked(
-                ControllerState.READY_MOTION,
-                session=controller_session,
-            )
+            with (
+                controller_session.receiver.authority()
+                if controller_session.receiver is not None
+                else nullcontext()
+            ):
+                self._coordinate_reference_ready = True
+                self._coordinate_reference_session_generation = (
+                    controller_session.generation
+                )
+                self._coordinate_state_reference = coordinate_state
+                self._jog_position_mm = (x, y) if park_at_photo_position else None
+                self._set_controller_state_locked(
+                    ControllerState.READY_MOTION,
+                    session=controller_session,
+                )
         return {
             "position": (
                 {"x": x, "y": y, "z": self.settings.photo_z}
@@ -4825,13 +4911,16 @@ class MachineService:
         if context is None:
             raise MachineError("Controller job context is unavailable")
         job_stop = context.stop_event
+        self._raise_session_failure(context.session)
         if job_stop.is_set():
             raise MachineError("Job stopped")
         if self._execute_secondary_air_assist_instruction(command):
             return False
         self._raise_if_secondary_faulted()
 
+        write_error: Exception | None = None
         with self._transport_write_lock:
+            self._raise_session_failure(context.session)
             if job_stop.is_set():
                 raise MachineError("Job stopped")
             self._check_line_safety(command, job_execution=True)
@@ -4853,22 +4942,30 @@ class MachineService:
                 else None
             )
             try:
-                context.session.transport.write_line(command)
+                if sequence is not None:
+                    self._begin_session_transaction(
+                        context.session, sequence,
+                        lambda: context.session.transport.write_line(command),
+                    )
+                else:
+                    context.session.transport.write_line(command)
                 self._append_log("TX", command)
             except Exception as exc:
-                self._mark_controller_command_state_untrusted(
-                    context.session,
-                    reason=f"Job command {command!r} write failed: {exc}",
-                )
-                raise MachineError(
-                    f"Job command {command!r} failed while writing: {exc}"
-                ) from exc
+                write_error = exc
             if sequence is not None:
                 self._job_context.pending_transaction = (
                     context.session,
                     sequence,
                     transaction_started,
                 )
+        if write_error is not None:
+            self._mark_controller_command_state_untrusted(
+                context.session,
+                reason=f"Job command {command!r} write failed: {write_error}",
+            )
+            raise MachineError(
+                f"Job command {command!r} failed while writing: {write_error}"
+            ) from write_error
         return True
 
     def _finish_powered_job_home_park_and_hold(self) -> None:
@@ -4953,7 +5050,11 @@ class MachineService:
         if context is None:
             raise MachineError("Post-job Home / park lost its controller job context")
         if dialect is GRBL_DIALECT:
-            with self._lock:
+            with self._lock, (
+                context.session.receiver.authority()
+                if context.session.receiver is not None
+                else nullcontext()
+            ):
                 if not self._same_controller_session(self._session, context.session):
                     raise MachineError("Post-job Home / park controller session was superseded")
                 self._coordinate_reference_ready = True
@@ -5042,6 +5143,7 @@ class MachineService:
                         self.settings.read_timeout,
                     ),
                 )
+            self._raise_session_failure(context.session)
             if context.stop_event.is_set():
                 raise MachineError("Job stopped")
         except BaseException as exc:
@@ -5051,7 +5153,11 @@ class MachineService:
                     and self._last_controller_stop_at is not None
                     and self._last_controller_stop_at >= context.status.started_at
                 )
-            error = "Job stopped" if stopped_by_request else str(exc)
+            error = (
+                context.session.receiver.failure
+                if context.session.receiver is not None and context.session.receiver.failure
+                else "Job stopped" if stopped_by_request else str(exc)
+            )
             # After any failed streamed command, the controller's receive queue
             # and planner acknowledgement position are not provable. Keep the
             # transport subject to a reconnect boundary so stale acknowledgements
@@ -5062,12 +5168,6 @@ class MachineService:
             )
             LOGGER.error("Controller job failed: %s", exc)
             self._append_log("ERROR", f"Controller job failed: {exc}")
-            # Retain an explicit exact-session laser-off attempt even though
-            # quarantine also performs fail-off before close.
-            self._best_effort_fail_off(
-                context.session.transport,
-                context="job cleanup",
-            )
             self._best_effort_secondary_off(
                 context="job cleanup",
                 commands=context.air_assist_commands,
@@ -5075,7 +5175,12 @@ class MachineService:
         finally:
             with self._lock:
                 is_current = self._active_job_context is context
-                with self._stop_epoch_lock:
+                with self._stop_epoch_lock, (
+                    context.session.receiver.terminal_evidence()
+                    if context.session.receiver is not None
+                    else nullcontext(None)
+                ) as receive_failure:
+                    error = error or receive_failure
                     if error is None and context.stop_event.is_set():
                         error = "Job stopped"
                     context.status.finished_at = time.time()
@@ -5115,6 +5220,8 @@ class MachineService:
                             and self._controller_state
                             is ControllerState.JOB_RUNNING
                         ):
+                            if receive_failure is not None:
+                                self._invalidate_coordinate_reference()
                             coordinate_ready = bool(
                                 self._coordinate_reference_ready
                                 and self._coordinate_reference_session_generation
@@ -5122,12 +5229,21 @@ class MachineService:
                             )
                             self._set_controller_state_locked(
                                 (
-                                    ControllerState.READY_MOTION
+                                    ControllerState.RECONNECT_REQUIRED
+                                    if receive_failure is not None
+                                    else ControllerState.READY_MOTION
                                     if coordinate_ready
                                     else ControllerState.READY_HOME_REQUIRED
                                 ),
                                 session=context.session,
+                                failure=receive_failure,
                             )
+            if receive_failure is not None:
+                # Finish exact-session retirement outside publication locks;
+                # a delayed receiver callback is harmless and idempotent.
+                self._mark_controller_command_state_untrusted(
+                    context.session, reason=receive_failure,
+                )
             self._job_context.current = None
             self._job_context.pending_transaction = None
 
@@ -5175,6 +5291,10 @@ class MachineService:
                 _recover,
             )
 
+        for retired in (session, candidate):
+            if retired is not None and retired.receiver is not None:
+                retired.receiver.stop()
+
         quarantined: list[ControllerSession] = []
         for item in (session, candidate):
             if item is not None and all(
@@ -5183,50 +5303,18 @@ class MachineService:
                 quarantined.append(item)
 
         if session is not None:
-            transport = session.transport
             stop_dialect = session.dialect
+            # Between ACK and the next barrier, no transaction may be active
+            # while accepted planner motion is still running. STOP always
+            # retires GRBL authority; never infer physical idle from RPC/job
+            # flags or line-transaction ownership.
             stop_policy = (
                 stop_dialect.emergency_stop
-                if emergency
+                if emergency or session.dialect is GRBL_DIALECT
                 else None
             )
             if stop_policy is not None and stop_policy.raw_command is not None:
-                finished = threading.Event()
-                failures: list[Exception] = []
-
-                def realtime_stop() -> None:
-                    try:
-                        transport.write_raw(stop_policy.raw_command)
-                    except Exception as exc:
-                        failures.append(exc)
-                    finally:
-                        finished.set()
-
-                try:
-                    threading.Thread(
-                        target=realtime_stop,
-                        name="controller-realtime-stop",
-                        daemon=True,
-                    ).start()
-                except Exception as exc:
-                    self._append_log(
-                        "ERROR",
-                        f"{stop_policy.failure_label} could not start: {exc}; continuing with M5",
-                    )
-                else:
-                    remaining = max(0.0, stop_call_deadline - time.monotonic())
-                    if not finished.wait(remaining):
-                        self._append_log(
-                            "ERROR",
-                            f"{stop_policy.failure_label} write timed out; continuing with M5",
-                        )
-                    elif failures:
-                        self._append_log(
-                            "ERROR",
-                            f"{stop_policy.failure_label} failed: {failures[0]}",
-                        )
-                    else:
-                        self._append_log("TX", stop_policy.success_log)
+                self._attempt_grbl_abort(session, deadline=stop_call_deadline)
         for item in quarantined:
             is_primary = session is not None and item.transport is session.transport
             item_stop_policy = (

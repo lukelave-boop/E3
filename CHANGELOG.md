@@ -12,6 +12,15 @@ and primary GRBL readiness/stepper-hold behavior are unchanged.
 
 ## Unreleased
 
+Primary GRBL sessions now observe idle alarms, restarts, malformed input, and
+transport faults continuously. Queued unowned replies cannot acknowledge a new
+command; arming and job completion respect already observed faults. Ordinary
+GRBL STOP/disarm/disconnect and session quarantine attempt realtime hold/reset
+before bounded M5/close. Successful jobs still retain verified $1=255 hold and
+coordinate trust. Fault evidence survives cleanup, and receiver startup must
+succeed before readiness is published. Physical validation is pending; see
+[primary session authority](docs/PRIMARY_SESSION_AUTHORITY.md).
+
 Pi Start now synchronizes idle secondary RX before a fresh acknowledged
 `M106 S0` and uses the existing bounded framing-rejection reopen policy.
 Startup/restart OFF and exact typed mappings remain unchanged. Failed Start
