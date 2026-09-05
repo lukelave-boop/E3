@@ -9,6 +9,24 @@ Snapshot: **2026-09-05**
 
 ## Active Pi status authority and repeat Home revision
 
+Operator acceptance follow-up for Windows 0.6.202 / `a152b50` on 2026-09-05:
+reported Connect, Generate, Start, interrupt with STOP, then Generate and Start
+again working without the previous error dialog. This records physical
+operator-observed success for that sequence, not complete system acceptance.
+The report does not specify the intervening Home sequence, so it does not
+verify automatic Home on START or motion admission without Home. The hardware
+is the previously reported GRBL setup; exact firmware/configuration and deployed
+Pi revision were not independently re-read during this retest.
+
+The preceding 0.6.202 PI NOT RESPONDING screen coincided with SSH reachable and
+both service ports refusing connections. Operator-provided systemd output at
+11:05:19 MDT showed MainPID=0, inactive/dead, Result=success, ExecMainStatus=0,
+and NRestarts=0. After instructions to start the service, the operator attributed
+the stopped service to their own action and reported the successful sequence
+above. This connection incident is not evidence of a 0.6.202 client regression.
+The full compatibility failures below still block integration/release. No
+production code or frozen build changed for this acceptance record.
+
 Operator follow-up on the 0.6.200 handoff: initially reported no problems, then
 reported the requested consecutive small powered-job sequence worked. After
 interrupting with STOP, homing, and requesting another job, the desktop showed
