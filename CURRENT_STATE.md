@@ -21,6 +21,14 @@ Layer assignment is consistently selected-object scoped in Cuts rows, bottom
 tiles, and the Cuts dropdown; each Objects-row dropdown targets only that row.
 Selection refresh follows actual layer IDs, shared settings remain shared, and
 assignment uses existing undo/persistence and generated-job invalidation.
+Final interaction review added a regression for Output/Show checkbox focus:
+these shared layer edits do not reassign shapes, and later explicit dropdown
+assignment still works. The frozen candidate is rebuilt with this correction.
+The affected desktop/trace regressions pass **41 tests** after this correction
+and updating the trace-selection harness for active-layer presentation. Candidate
+CI 33985655932 passed Windows 3.10, Ruff, and Linux; Windows 3.12 reported only
+eight missing-active-layer-field failures in that old test harness (3705 passed).
+The final candidate receives a fresh full compatibility run.
 
 Source verification: Windows Python 3.14 affected regressions **601 passed**;
 WSL/Linux Python 3.10 focused Pi/session/serial checks **202 passed** (one benign

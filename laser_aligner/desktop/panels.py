@@ -451,6 +451,10 @@ class LayerPanel(QtWidgets.QWidget):
         del previous
         if self._updating or current is None or self._document is None:
             return
+        if self.layer_list.currentColumn() in {3, 4}:
+            # Focusing another row's Output/Show checkbox edits that shared
+            # setting; it is not a request to assign selected shapes.
+            return
         layer_id = str(current.data(QtCore.Qt.ItemDataRole.UserRole))
         self._show_layer(self._document.get_layer(layer_id))
         self._update_action_states()

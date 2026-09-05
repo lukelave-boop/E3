@@ -105,3 +105,22 @@ def test_queued_assignment_uses_selection_at_click_time(editor):
     app.processEvents()
     assert first.layer_id == new.id
     assert second.layer_id == old.id
+
+
+@pytest.mark.parametrize("column", [3, 4])
+def test_layer_output_and_visibility_checkboxes_do_not_reassign_shapes(editor, column):
+    app, window, first, second, old, new = editor
+    tree = window.layer_panel.layer_list
+    row = tree.topLevelItem(len(window.document.layers) - 1)
+    tree.setCurrentItem(row, column)
+    row.setCheckState(column, QtCore.Qt.CheckState.Unchecked)
+    app.processEvents()
+    assert first.layer_id == second.layer_id == old.id
+    updated_layer = window.document.get_layer(new.id)
+    assert not (updated_layer.output_enabled if column == 3 else updated_layer.visible)
+    combo = window.layer_panel.layer_combo
+    combo.setCurrentIndex(combo.findData(new.id))
+    combo.activated.emit(combo.currentIndex())
+    app.processEvents()
+    assert first.layer_id == new.id
+    assert second.layer_id == old.id

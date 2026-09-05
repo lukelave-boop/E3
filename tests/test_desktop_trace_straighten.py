@@ -248,6 +248,7 @@ class _Workspace:
 class _Harness:
     def __init__(self, document: ProjectDocument) -> None:
         self.document = document
+        self.active_layer_id = document.active_layer_id
         self.history = CommandStack()
         self.workspace = _Workspace()
         self.transform_panel = _TransformPanel()
@@ -272,6 +273,10 @@ class _Harness:
             ),
         }
         self.refresh_calls: list[list[str]] = []
+
+    def set_active_layer(self, layer_id: str) -> None:
+        self.document.get_layer(layer_id)
+        self.active_layer_id = layer_id
 
     def _update_status_bar_layout(self) -> None:
         pass
