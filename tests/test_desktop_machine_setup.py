@@ -1761,7 +1761,7 @@ def test_machine_setup_gates_motion_during_recovery_but_keeps_camera_authoring(
             "coordinate_reference_ready": True,
         }
         dialog.set_machine_status(ready_motion)
-        assert not dialog.park_button.isEnabled()
+        assert dialog.park_button.isEnabled()
         assert dialog.registration_recapture_button.isEnabled()
 
         dialog.set_machine_status(

@@ -60,6 +60,8 @@ def _enabled_capabilities(controller_state: str) -> set[str]:
             "READY_MOTION",
             {
                 "disconnect",
+                "home",
+                "motion_calibration",
                 "jog",
                 "arm",
                 "start_job",
@@ -84,7 +86,7 @@ def test_all_controller_states_have_one_authoritative_action_matrix(
     assert _enabled_capabilities(controller_state) == expected
 
 
-def test_home_is_allowed_only_from_ready_home_required() -> None:
+def test_home_is_allowed_from_both_idle_ready_states() -> None:
     for controller_state in CONTROLLER_STATES:
         projection = project_machine_state(
             {
@@ -96,7 +98,7 @@ def test_home_is_allowed_only_from_ready_home_required() -> None:
             }
         )
         assert projection.can_home is (
-            controller_state == "READY_HOME_REQUIRED"
+            controller_state in {"READY_HOME_REQUIRED", "READY_MOTION"}
         )
 
 
@@ -151,7 +153,7 @@ def test_remote_stale_or_disconnected_monitor_revokes_every_ordinary_action() ->
     )
 
     assert not projection.status_trusted
-    assert projection.compact_connection_text == "PI OFFLINE"
+    assert projection.compact_connection_text == "PI NOT RESPONDING"
     assert projection.compact_motion_text == "STATE UNKNOWN"
     assert "READY MOTION" not in projection.panel_summary("grbl")
     assert _enabled_capabilities("READY_MOTION") != {"stop"}
@@ -160,6 +162,35 @@ def test_remote_stale_or_disconnected_monitor_revokes_every_ordinary_action() ->
         for capability in _CAPABILITIES
         if getattr(projection, f"can_{capability}")
     } == {"stop"}
+
+
+def test_reachable_pi_with_stale_machine_status_is_not_presented_as_offline():
+    status = {
+        "controller_state": "READY_MOTION", "pi_owned_execution": True,
+        "node_reachable": True, "monitor_connected": False, "status_stale": True,
+        "allow_motion": True, "jog_ready": True, "job": {},
+        "job_status_error": "job details timed out",
+    }
+    projection = project_machine_state(status)
+    assert projection.compact_connection_text == "STATUS UNAVAILABLE"
+    assert projection.compact_motion_text == "STATE UNKNOWN"
+    assert "PI REACHABLE" in projection.panel_summary("grbl")
+    assert not projection.can_home
+    assert not projection.can_start_job
+    assert not projection.can_jog
+    assert projection.can_stop
+    diagnostics = json.loads(format_running_controller_diagnostics(status))
+    assert diagnostics["node_reachable"] is True
+    assert "fresh Pi machine snapshot" in diagnostics["current_action_required"]
+    assert diagnostics["job_status_error"] == "job details timed out"
+
+
+@pytest.mark.parametrize("blocker", [{"armed": True}, {"job": {"running": True}}])
+def test_repeat_home_rejects_armed_or_running_machine(blocker):
+    projection = project_machine_state({
+        "controller_state": "READY_MOTION", "allow_motion": True, **blocker,
+    })
+    assert not projection.can_home
 
 
 def test_boot_id_fallback_accepts_authoritative_pi_name() -> None:

@@ -931,6 +931,8 @@ class PiMachineServer:
                 pass
 
     def _handle(self, conn: socket.socket, address: tuple[object, ...]) -> None:
+        started = time.monotonic()
+        stage = "admission"
         acquired = self._slots.acquire(blocking=False)
         priority_acquired = False
         if not acquired:
@@ -949,6 +951,7 @@ class PiMachineServer:
                     if acquired
                     else _PRIORITY_HANDSHAKE_TIMEOUT_SECONDS
                 )
+                stage = "authentication"
                 channel = authenticate_server(conn, self.token)
                 authenticated = True
                 conn.settimeout(
@@ -956,6 +959,7 @@ class PiMachineServer:
                     if acquired
                     else _PRIORITY_HANDSHAKE_TIMEOUT_SECONDS
                 )
+                stage = "request_read"
                 request = channel.receive_json()
                 action = request.get("action")
                 if priority_acquired and action != ACTION_JOB_STOP:
@@ -972,8 +976,10 @@ class PiMachineServer:
                     )
                     return
                 if request.get("action") == ACTION_MACHINE_STEPPER_HOLD:
+                    stage = "stepper_hold"
                     self._stepper_hold_session(conn, channel, request)
                     return
+                stage = "dispatch"
                 try:
                     response = self._replayable_response(
                         request,
@@ -988,6 +994,7 @@ class PiMachineServer:
                         self._request_id_for_error(request),
                         exc,
                     )
+                stage = "response_write"
                 channel.send_json(response)
                 request_id = self._request_id_for_error(request)
                 client_id = request.get("client_id")
@@ -1000,10 +1007,19 @@ class PiMachineServer:
                     str(address[0])[:96] if address else "unknown",
                 )
             except Exception as exc:
+                action = request.get("action")
+                request_id = self._request_id_for_error(request)
                 LOGGER.warning(
-                    "E3 machine client session ended (%s) peer=%s",
+                    "E3 machine client session ended (%s) peer=%s stage=%s "
+                    "action=%s request=%s authenticated=%s elapsed_seconds=%.3f detail=%s",
                     type(exc).__name__,
                     str(address[0])[:96] if address else "unknown",
+                    stage,
+                    action if type(action) is str and action in SERVER_ACTION_SCHEMAS else "unknown",
+                    "none" if request_id is None else request_id[:8],
+                    authenticated,
+                    time.monotonic() - started,
+                    _bounded_error(exc),
                 )
             finally:
                 if authenticated:

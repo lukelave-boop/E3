@@ -7,6 +7,43 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-05**
 
+## Active Pi status authority and repeat Home revision
+
+Branch `codex/status-authority-home` is isolated from `55741cc` in a separate
+worktree. It includes independent machine/job observation freshness, coherent
+job-record reuse, three-second machine-snapshot expiry, five-second authenticated
+node-contact reporting, rejection of superseded observations and retired Pi boot
+responses, bounded RPC failure diagnostics, and idle/disarmed explicit repeat
+Home/park. Repeat Home invalidates reference before I/O and requires the full
+held-stepper Home/park validation before READY_MOTION. STOP and controller
+quarantine remain fail-closed. [Pi status authority](docs/REMOTE_STATUS_AUTHORITY.md)
+records the contracts and physical validation procedure.
+
+Prior-build operator evidence: Pi `55741cc` plus Windows 0.6.196 successfully
+connected to the original Espressif Device by-id path (ttyACM1), homed/parked,
+held READY_MOTION, completed successive powered circles, and stopped powered
+motion/output immediately with Home required. A subsequent Home failed waiting
+for `$$`; Pi status replies and service uptime continued, with contemporaneous
+USB/undervoltage evidence. After removing the unrelated Espressif JTAG device,
+Home succeeded but desktop PI OFFLINE flashes persisted, including with live
+overlay off. These observations verify the reported prior-build sequences only;
+they do not establish the cause of every timeout or acceptance of this revision.
+The earlier experimental serial EAGAIN edit remains outside this worktree and
+is not included. Automatic Home on START, secondary redesign, and independent
+laser fan control remain separate work.
+
+Verification: the full local run passed 3,666 tests with 24 platform skips and
+five failures. Four were old queued/disabled-Home expectations updated to the
+explicit idle-only contract. The final affected controller, MachineService,
+remote/Pi server, and offscreen desktop run passes 552 tests. A subsequent
+diagnostics-view addition passes all 33 projection/runtime-strip tests.
+Repository Ruff and compileall pass. The remaining full-suite failure is the
+previously recorded Marlin powered-completion transcript expecting M84; it is
+unchanged here. Local runtime is Windows Python 3.14.4, not supported Windows
+3.10/3.12 CI. Frozen build, supported CI, Linux runtime checks, and this revision's
+physical acceptance remain pending. No production hardware was contacted during
+this implementation. The branch is not ready to merge pending those gates.
+
 ## Active audit step 1: primary GRBL session authority
 
 Branch: `codex/primary-session-authority`, based on local 0.6.196 revision

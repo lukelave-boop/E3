@@ -969,6 +969,100 @@ def test_fresh_client_displays_latest_terminal_but_cannot_claim_receipt(
     assert service.successful_job_receipt(digest, not_before=0.0) is None
 
 
+def test_job_monitor_failure_preserves_fresh_authoritative_machine_status(monkeypatch):
+    fake = FakePi()
+    fake.capabilities.remove(CAPABILITY_PI_COHERENT_STATUS)
+    fake.raise_for_action[ACTION_JOB_ACTIVE] = MachineError("job detail timed out")
+    _install_fake(monkeypatch, fake)
+    service = _service()
+
+    service._refresh_once()
+
+    status = service.status()
+    assert status["node_reachable"] is True
+    assert status["monitor_connected"] is True
+    assert status["status_stale"] is False
+    assert status["controller_state"] == "READY_MOTION"
+    assert status["job_status_error"] == "job detail timed out"
+    assert status["job"]["status_stale"] is True
+
+
+def test_job_only_reply_cannot_revive_expired_machine_state(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    now = time.monotonic()
+    monkeypatch.setattr(remote_service_module.time, "monotonic", lambda: now + 4.0)
+    service._rpc(ACTION_JOB_ACTIVE)
+    service._cache_job_record({"state": "complete", "running": False})
+
+    status = service.status()
+    assert status["node_reachable"] is True
+    assert status["status_stale"] is True
+    assert status["monitor_connected"] is False
+    assert "expired" in status["status_error"]
+    monkeypatch.setattr(remote_service_module.time, "monotonic", lambda: now + 10.0)
+    assert service.status()["node_reachable"] is False
+
+
+def test_delayed_failed_machine_poll_does_not_erase_newer_home_snapshot(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+
+    def delayed_failure():
+        # A command response arrives while this older monitoring RPC is pending.
+        fake.state_revision += 1
+        service._cache_remote_status(
+            fake._machine_status(), job_record=None,
+            response=fake._response({"request_id": str(uuid.uuid4())}),
+        )
+        service._monitor_stop.set()
+        raise MachineError("old polling request timed out")
+
+    monkeypatch.setattr(service, "_refresh_once", delayed_failure)
+    service._monitor_loop()
+    assert service.status()["status_stale"] is False
+    assert service.status()["status_error"] is None
+
+
+def test_late_job_failure_after_new_snapshot_does_not_mask_new_result(monkeypatch):
+    fake = FakePi()
+    fake.capabilities.remove(CAPABILITY_PI_COHERENT_STATUS)
+    _install_fake(monkeypatch, fake)
+    service = _service()
+
+    def newer_snapshot(action, request):
+        if action == ACTION_JOB_ACTIVE:
+            service._cache_remote_status(
+                fake._machine_status(), job_record={"state": "stopped"},
+                response=fake._response(request),
+            )
+            raise MachineError("superseded job poll failed")
+
+    fake.before_request = newer_snapshot
+    service._refresh_once()
+    assert service.status()["job_status_error"] is None
+    assert service.status()["job"]["state"] == "stopped"
+
+
+def test_delayed_previous_boot_snapshot_cannot_restore_retired_authority(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    old_response = fake._response({"request_id": str(uuid.uuid4())})
+    fake.boot_id = str(uuid.uuid4())
+    service._refresh_once()
+    service._refresh_once()
+    assert service._cache_remote_status(
+        fake._machine_status(), job_record=None, response=old_response,
+    ) is False
+    assert service.status()["node_boot_id"] == fake.boot_id
+
+
 def test_new_upload_monitoring_supersedes_prior_terminal_job(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1020,7 +1114,8 @@ def test_new_upload_monitoring_supersedes_prior_terminal_job(
             for request in fake.requests
             if request["action"] == ACTION_JOB_STATUS
         ]
-        assert status_requests[-1]["job_id"] == second_job_id
+        # The coherent machine snapshot already carries this exact upload.
+        assert not status_requests
         assert service.status()["job"]["job_id"] == second_job_id
     finally:
         release_finalize.set()

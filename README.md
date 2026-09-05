@@ -28,6 +28,11 @@ stationary overhead **Logitech C920**.
 > See [primary session authority](docs/PRIMARY_SESSION_AUTHORITY.md) for behavior,
 > limitations, and pending physical acceptance.
 >
+> Desktop monitoring publishes machine snapshots independently of optional job
+> details. Stale machine status blocks motion without claiming a controller
+> reset. Explicit **Home / park** can be repeated while idle and disarmed in
+> READY_MOTION. See [Pi status authority](docs/REMOTE_STATUS_AUTHORITY.md).
+>
 > Primary-controller reliability uses generation-bound sessions. A candidate is
 > not usable until a bounded, quiet serial synchronization and complete safe
 > GRBL identity/alignment handshake succeed. Software STOP permanently

@@ -26,8 +26,9 @@ revocation, reply admission boundaries, and explicit abort versus successful
 completion. Physical acceptance remains pending; see
 [primary session authority](docs/PRIMARY_SESSION_AUTHORITY.md) and
 [CURRENT_STATE.md](CURRENT_STATE.md) for test evidence. Subsequent audit steps
-remain separate: authoritative Pi/desktop snapshots, exact prepared-job
-auto-Home/Start, secondary lifecycle corrections, cooling capability validation,
+now include the implemented Pi/desktop snapshot correction and explicit repeat
+Home, pending physical acceptance; see [Pi status authority](docs/REMOTE_STATUS_AUTHORITY.md).
+Remaining work includes exact prepared-job auto-Home/Start, secondary lifecycle corrections, cooling capability validation,
 and broader physical-sequence acceptance.
 
 ## Completed foundation

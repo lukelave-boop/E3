@@ -165,7 +165,7 @@ class ControllerUiState:
             and self.allow_motion
             and not self.armed
             and not self.job_running
-            and self.controller_state == "READY_HOME_REQUIRED"
+            and self.controller_state in {"READY_HOME_REQUIRED", "READY_MOTION"}
         )
 
     @property
@@ -226,8 +226,8 @@ class ControllerUiState:
 
     @property
     def compact_connection_text(self) -> str:
-        if self.remote and not self.node_reachable:
-            return "PI OFFLINE"
+        if self.remote and not self.status_trusted:
+            return "STATUS UNAVAILABLE" if self.node_reachable else "PI NOT RESPONDING"
         return {
             "DISCONNECTED": "OFFLINE",
             "OPENING": "OPENING",
@@ -244,8 +244,8 @@ class ControllerUiState:
 
     @property
     def connection_text(self) -> str:
-        if self.remote and not self.node_reachable:
-            return "Pi offline"
+        if self.remote and not self.status_trusted:
+            return "Machine status unavailable" if self.node_reachable else "Pi not responding"
         return {
             "DISCONNECTED": "Disconnected",
             "OPENING": "Opening controller",
@@ -310,8 +310,8 @@ class ControllerUiState:
         label = str(action).strip() or "This action"
         if self.operation_busy:
             return f"{label} is unavailable while another machine operation is active."
-        if self.remote and not self.node_reachable:
-            return f"{label} is unavailable because Raspberry Pi status is offline or stale."
+        if self.remote and not self.status_trusted:
+            return f"{label} is unavailable until a fresh Raspberry Pi machine status is received."
         if not self.state_valid:
             return f"{label} is unavailable because the controller reported an invalid state."
         if self.controller_state == "RECONNECT_REQUIRED":
@@ -336,7 +336,7 @@ class ControllerUiState:
             # Reachability is intentionally distinct from controller-session
             # authority; never render the old contradictory ONLINE + RECONNECT
             # combination.
-            parts.append("PI REACHABLE" if self.node_reachable else "PI OFFLINE")
+            parts.append("PI REACHABLE" if self.node_reachable else "PI NOT RESPONDING")
         parts.append(
             "CONTROLLER STATE UNTRUSTED"
             if not self.status_trusted
@@ -377,7 +377,9 @@ def project_machine_state(
     stale_present = "status_stale" in machine
     status_stale = remote and machine.get("status_stale") is True
     node_reachable = not remote or (
-        (not monitor_present or machine.get("monitor_connected") is True)
+        machine.get("node_reachable") is True
+        if "node_reachable" in machine
+        else (not monitor_present or machine.get("monitor_connected") is True)
         and (not stale_present or not status_stale)
     )
     return ControllerUiState(
@@ -442,6 +444,8 @@ def running_controller_diagnostics(status: Mapping[str, Any] | None) -> dict[str
         "FAULTED": "Correct configuration, then Connect",
         "SHUTTING_DOWN": "None; application is shutting down",
     }[projection.controller_state]
+    if projection.remote and not projection.status_trusted:
+        current_action_required = "Wait for a fresh Pi machine snapshot"
     payload: dict[str, object] = {
         "desktop_build": {
             "version": local_build.version,
@@ -457,8 +461,10 @@ def running_controller_diagnostics(status: Mapping[str, Any] | None) -> dict[str
         "node_protocol": _sanitized_value(machine.get("node_protocol")),
         "node_capabilities": _sanitized_value(machine.get("node_capabilities")),
         "monitor_connected": machine.get("monitor_connected"),
+        "node_reachable": projection.node_reachable,
         "status_stale": machine.get("status_stale"),
         "status_error": _sanitized_value(machine.get("status_error")),
+        "job_status_error": _sanitized_value(machine.get("job_status_error")),
         "protocol": _sanitized_value(machine.get("protocol")),
         "configured_endpoint": _sanitized_value(machine.get("port")),
     }

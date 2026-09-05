@@ -82,6 +82,8 @@ _HOLD_CONNECT_TIMEOUT_SECONDS = 5.0
 _HOLD_SESSION_TIMEOUT_SECONDS = 180.0
 _DEFAULT_MONITOR_INTERVAL_SECONDS = 0.75
 _MAX_MONITOR_BACKOFF_SECONDS = 8.0
+_MACHINE_STATUS_MAX_AGE_SECONDS = 3.0
+_NODE_CONTACT_MAX_AGE_SECONDS = 5.0
 _MAX_CLIENT_DIAGNOSTIC_JOBS = 8
 _MAX_LOCAL_JOB_IDENTITIES = 32
 _START_RECOVERY_POLL_SECONDS = 2.0
@@ -247,6 +249,10 @@ class RemoteMachineService:
         self._controller_state_revision: int | None = None
         self._controller_session_generation: int | None = None
         self._controller_state: str | None = None
+        self._last_machine_status_monotonic: float | None = None
+        self._last_node_response_monotonic: float | None = None
+        self._machine_observation_sequence = 0
+        self._retired_boot_ids: set[str] = set()
 
         self._hold_lock = threading.RLock()
         self._hold_context = threading.local()
@@ -265,6 +271,8 @@ class RemoteMachineService:
                 "monitor_connected": False,
                 "status_stale": True,
                 "status_error": None,
+                "node_reachable": False,
+                "job_status_error": None,
                 "node_boot_id": None,
                 "node_build": None,
                 "node_capabilities": None,
@@ -500,6 +508,8 @@ class RemoteMachineService:
             return True, False
         boot_id, state_revision, session_generation, controller_state, build = metadata
         with self._state_lock:
+            if boot_id in self._retired_boot_ids:
+                return False, False
             previous_boot = self._node_boot_id
             boot_changed = previous_boot is not None and previous_boot != boot_id
             if previous_boot == boot_id:
@@ -524,6 +534,7 @@ class RemoteMachineService:
                         "Remote response changed controller state without a new revision"
                     )
             if boot_changed:
+                self._retired_boot_ids.add(previous_boot)
                 self._capabilities_verified = False
                 self._policy_diagnostics_supported = False
                 self._structured_errors_supported = False
@@ -531,6 +542,15 @@ class RemoteMachineService:
                 self._node_capabilities = None
                 self._authorization_epoch += 1
                 self._clear_arm_locked()
+            if (
+                boot_changed
+                or self._controller_state_revision != state_revision
+                or self._controller_session_generation != session_generation
+            ):
+                # Metadata from a job-only reply cannot refresh the rest of a
+                # machine snapshot from an older controller state/generation.
+                self._status_cache["status_stale"] = True
+                self._status_cache["monitor_connected"] = False
             self._node_boot_id = boot_id
             self._node_build = build
             self._controller_state_revision = state_revision
@@ -577,18 +597,29 @@ class RemoteMachineService:
         request_kwargs: dict[str, float] = {"timeout": timeout}
         if deadline is not None:
             request_kwargs["deadline"] = deadline
-        response = request_response(
-            self._target.host,
-            self._target.port,
-            bridge_token_from_environment(),
-            request,
-            **request_kwargs,
-        )
-        return self._validate_response(
-            response,
-            request_id=request_id,
-            action=action,
-        )
+        started = time.monotonic()
+        try:
+            response = request_response(
+                self._target.host,
+                self._target.port,
+                bridge_token_from_environment(),
+                request,
+                **request_kwargs,
+            )
+            # An authenticated reply proves contact, not machine authority.
+            with self._state_lock:
+                self._last_node_response_monotonic = time.monotonic()
+            return self._validate_response(
+                response, request_id=request_id, action=action,
+            )
+        except MachineError as exc:
+            LOGGER.warning(
+                "Pi request failed action=%s request=%s elapsed_seconds=%.3f "
+                "timeout_seconds=%.3f error=%s detail=%s",
+                action, request_id[:8], time.monotonic() - started,
+                timeout, type(exc).__name__, " ".join(str(exc).split())[:512],
+            )
+            raise
 
     def _require_capabilities(
         self,
@@ -840,13 +871,16 @@ class RemoteMachineService:
         job_record: Mapping[str, Any] | None,
         response: Mapping[str, Any] | None = None,
     ) -> bool:
-        boot_changed = False
-        if response is not None:
-            accepted, boot_changed = self._commit_response_metadata(response)
-            if not accepted:
-                return False
         status = copy.deepcopy(dict(raw_status))
         with self._state_lock:
+            boot_changed = False
+            if response is not None:
+                accepted, boot_changed = self._commit_response_metadata(response)
+                if not accepted:
+                    return False
+            self._last_machine_status_monotonic = time.monotonic()
+            self._last_node_response_monotonic = time.monotonic()
+            self._machine_observation_sequence += 1
             previous_job = self._status_cache.get("job")
             monitor_connected = not self._detached
             status.update(
@@ -863,6 +897,7 @@ class RemoteMachineService:
                         if boot_changed
                         else None
                     ),
+                    "job_status_error": None,
                     "node_boot_id": self._node_boot_id,
                     "node_build": copy.deepcopy(self._node_build),
                     "node_capabilities": (
@@ -904,13 +939,18 @@ class RemoteMachineService:
             monitor_connected = not self._detached
             job["monitor_connected"] = monitor_connected
             job["status_stale"] = not monitor_connected
-            self._status_cache["monitor_connected"] = monitor_connected
-            self._status_cache["status_stale"] = not monitor_connected
-            self._status_cache["status_error"] = None
+            self._status_cache["job_status_error"] = None
             return copy.deepcopy(job)
 
-    def _mark_monitor_disconnected(self, error: str | None) -> None:
+    def _mark_monitor_disconnected(
+        self, error: str | None, *, expected_observation: int | None = None,
+    ) -> None:
         with self._state_lock:
+            if (
+                expected_observation is not None
+                and expected_observation != self._machine_observation_sequence
+            ):
+                return
             self._status_cache["monitor_connected"] = False
             self._status_cache["status_stale"] = True
             self._status_cache["status_error"] = error
@@ -965,6 +1005,38 @@ class RemoteMachineService:
             timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
         )
         raw_status = self._response_mapping(machine_response, "status")
+        self._require_operation_current(generation)
+        # Publish this independently of any later job-detail request. Keep
+        # STOP's epoch check and publication atomic with respect to STOP.
+        with self._stop_epoch_lock:
+            if self._stop_epoch != generation:
+                raise MachineError("Operation was cancelled by software STOP")
+            if not self._cache_remote_status(
+                raw_status, job_record=None, response=machine_response,
+            ):
+                return
+            with self._state_lock:
+                observation = self._machine_observation_sequence
+        try:
+            self._refresh_job_status(
+                machine_response, generation=generation, observation=observation,
+            )
+        except MachineError as exc:
+            # Job monitoring has its own freshness. It cannot erase a valid
+            # machine snapshot or imply that the Pi/controller disconnected.
+            with self._stop_epoch_lock, self._state_lock:
+                if (
+                    generation == self._stop_epoch
+                    and observation == self._machine_observation_sequence
+                ):
+                    self._status_cache["job_status_error"] = str(exc)
+                    self._status_cache["job"]["status_stale"] = True
+            LOGGER.warning("Pi job monitoring failed: %s", " ".join(str(exc).split())[:512])
+
+    def _refresh_job_status(
+        self, machine_response: Mapping[str, Any], *, generation: int, observation: int,
+    ) -> None:
+        job_response = machine_response
         with self._state_lock:
             coherent_status = self._coherent_status_supported
         if coherent_status:
@@ -976,6 +1048,7 @@ class RemoteMachineService:
                 timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
             )
             active_raw = active_response.get("job")
+            job_response = active_response
             latest_raw = None
         if active_raw is not None and not isinstance(active_raw, Mapping):
             raise PiJobProtocolError("Remote active-job response was invalid")
@@ -994,12 +1067,16 @@ class RemoteMachineService:
                 else self._accepted_job_id
             )
         if record is None and tracked_job_id is not None:
-            status_response = self._rpc(
-                ACTION_JOB_STATUS,
-                {"job_id": tracked_job_id},
-                timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
-            )
-            record = self._response_mapping(status_response, "job")
+            if isinstance(latest_raw, Mapping) and latest_raw.get("job_id") == tracked_job_id:
+                record = copy.deepcopy(dict(latest_raw))
+            else:
+                status_response = self._rpc(
+                    ACTION_JOB_STATUS,
+                    {"job_id": tracked_job_id},
+                    timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
+                )
+                record = self._response_mapping(status_response, "job")
+                job_response = status_response
         elif record is None:
             if not coherent_status:
                 latest_response = self._rpc(
@@ -1007,26 +1084,38 @@ class RemoteMachineService:
                     timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
                 )
                 latest_raw = latest_response.get("job")
+                job_response = latest_response
                 if latest_raw is not None and not isinstance(latest_raw, Mapping):
                     raise PiJobProtocolError("Remote latest-job response was invalid")
             if isinstance(latest_raw, Mapping):
                 record = copy.deepcopy(dict(latest_raw))
-        self._require_operation_current(generation)
-        self._cache_remote_status(
-            raw_status,
-            job_record=record,
-            response=machine_response,
-        )
+        with self._stop_epoch_lock:
+            if self._stop_epoch != generation:
+                raise MachineError("Operation was cancelled by software STOP")
+            with self._state_lock:
+                # A delayed job read cannot overwrite a newer lifecycle result.
+                if observation != self._machine_observation_sequence:
+                    return
+                accepted, boot_changed = self._commit_response_metadata(job_response)
+                if accepted and not boot_changed and record is not None:
+                    self._cache_job_record(record)
 
     def _monitor_loop(self) -> None:
         delay = 0.0
         failures = 0
         while not self._monitor_stop.wait(delay):
+            generation = self.operation_generation()
+            with self._state_lock:
+                observation = self._machine_observation_sequence
             try:
                 self._refresh_once()
             except MachineError as exc:
                 failures += 1
-                self._mark_monitor_disconnected(str(exc))
+                with self._stop_epoch_lock:
+                    if generation == self._stop_epoch:
+                        self._mark_monitor_disconnected(
+                            str(exc), expected_observation=observation,
+                        )
                 delay = min(
                     _MAX_MONITOR_BACKOFF_SECONDS,
                     self._monitor_interval_seconds * (2 ** min(failures - 1, 4)),
@@ -1133,6 +1222,19 @@ class RemoteMachineService:
         with self._state_lock:
             self._expire_arm_locked()
             status = copy.deepcopy(self._status_cache)
+            now = time.monotonic()
+            status["node_reachable"] = (
+                not self._detached
+                and self._last_node_response_monotonic is not None
+                and now - self._last_node_response_monotonic <= _NODE_CONTACT_MAX_AGE_SECONDS
+            )
+            if (
+                self._last_machine_status_monotonic is not None
+                and now - self._last_machine_status_monotonic > _MACHINE_STATUS_MAX_AGE_SECONDS
+            ):
+                status["status_stale"] = True
+                status["monitor_connected"] = False
+                status["status_error"] = status.get("status_error") or "Machine status expired; waiting for a fresh Pi snapshot"
             status["armed"] = self._armed_program_digest is not None
             status["armed_until"] = (
                 self._armed_until if self._armed_program_digest is not None else None

@@ -3576,6 +3576,15 @@ class MachineService:
                 "absolute positions match the physical machine: " + "; ".join(nonzero)
             )
 
+    @contextmanager
+    def _manual_home_command_scope(self):
+        if not self._command_lock.acquire(blocking=False):
+            raise MachineError("Home / park is unavailable while another controller operation is active")
+        try:
+            yield
+        finally:
+            self._command_lock.release()
+
     def prepare_photo_position(
         self, *, capture_home_position: bool = False
     ) -> dict[str, Any]:
@@ -3590,12 +3599,13 @@ class MachineService:
         started = time.monotonic()
         with self._lock:
             attempt_session = self._session
-        with self._command_lock:
+        with self._manual_home_command_scope():
             try:
                 result = self._prepare_photo_position_locked(
                     operation_stop_epoch=operation_stop_epoch,
                     park_at_photo_position=True,
                     capture_home_position=capture_home_position,
+                    allow_rehome=True,
                 )
             except BaseException as exc:
                 self._log_home_outcome(
@@ -3702,6 +3712,7 @@ class MachineService:
         operation_stop_epoch: int,
         park_at_photo_position: bool,
         capture_home_position: bool,
+        allow_rehome: bool = False,
     ) -> dict[str, Any]:
         with self._stop_epoch_lock:
             if self._stop_epoch != operation_stop_epoch:
@@ -3711,7 +3722,11 @@ class MachineService:
             raise MachineError("Cannot move to the photography position while a job is running")
         controller_session = self._require_session()
         with self._lock:
-            if self._controller_state is not ControllerState.READY_HOME_REQUIRED:
+            if self.armed:
+                raise SafetyError("Disarm before Home / park")
+            if self._controller_state is not ControllerState.READY_HOME_REQUIRED and not (
+                allow_rehome and self._controller_state is ControllerState.READY_MOTION
+            ):
                 raise MachineError(
                     "Home / park is allowed only when the synchronized controller "
                     "session requires Home"
@@ -3754,7 +3769,12 @@ class MachineService:
             transcript.append({"command": command, "responses": responses})
             return responses
 
-        self._invalidate_coordinate_reference()
+        with self._lock:
+            self._invalidate_coordinate_reference()
+            if self._controller_state is ControllerState.READY_MOTION:
+                self._set_controller_state_locked(
+                    ControllerState.READY_HOME_REQUIRED, session=controller_session,
+                )
         dialect = self._require_resolved_dialect()
         try:
             self._laser_off_with_pre_home_grbl_unlock(

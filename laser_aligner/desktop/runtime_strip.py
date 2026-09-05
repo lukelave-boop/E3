@@ -250,7 +250,7 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
         )
         connection_description = (
             "Raspberry Pi controller status is unavailable or stale."
-            if state.remote and not state.node_reachable
+            if state.remote and not state.status_trusted
             else f"Authoritative controller state: {state.controller_state}."
         )
         self._set_indicator(

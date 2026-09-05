@@ -1143,6 +1143,65 @@ def test_home_is_generation_gated_and_rejected_when_already_motion_ready(
     machine.disconnect()
 
 
+def test_repeat_manual_home_invalidates_reference_and_rejects_concurrent_home(monkeypatch):
+    transport = ResponsiveTransport("repeat-home")
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    machine.prepare_photo_position()
+    generation = machine.status()["controller_session_generation"]
+    transport.block_command = "$H"
+    transport.write_release.clear()
+    results, errors = [], []
+    worker = threading.Thread(target=lambda: _capture_result(
+        machine.prepare_photo_position, results, errors,
+    ))
+    worker.start()
+    try:
+        assert transport.write_entered.wait(1.0)
+        assert machine.status()["coordinate_reference_ready"] is False
+        assert machine.status()["controller_state"] == "READY_HOME_REQUIRED"
+        with pytest.raises(MachineError, match="another controller operation"):
+            machine.prepare_photo_position()
+    finally:
+        transport.write_release.set()
+        worker.join(2.0)
+    assert not worker.is_alive()
+    assert errors == []
+    assert machine.status()["controller_state"] == "READY_MOTION"
+    assert machine.status()["controller_session_generation"] == generation
+    assert machine.status()["coordinate_reference_ready"] is True
+    assert transport.step_idle_delay_ms == 255
+    assert transport.writes.count(("line", "$H")) == 2
+    machine.disconnect()
+
+
+def test_repeat_manual_home_failure_cannot_keep_old_reference(monkeypatch):
+    transport = ResponsiveTransport("repeat-home-error")
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    machine.prepare_photo_position()
+    transport.set_next_reply("$H", "error:9")
+    with pytest.raises(MachineError):
+        machine.prepare_photo_position()
+    assert machine.status()["coordinate_reference_ready"] is False
+    assert machine.status()["controller_state"] != "READY_MOTION"
+    machine.disconnect()
+
+
+def test_repeat_manual_home_rejects_armed_session_without_moving(monkeypatch):
+    transport = ResponsiveTransport("repeat-home-armed")
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    machine.prepare_photo_position()
+    machine.arm(machine.ARM_PHRASE)
+    writes = list(transport.writes)
+    with pytest.raises(SafetyError, match="Disarm"):
+        machine.prepare_photo_position()
+    assert transport.writes == writes
+    assert machine.status()["coordinate_reference_ready"] is True
+    machine.disconnect()
+
+
 def test_explicit_home_then_start_reuses_exact_reference_without_second_home(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1487,18 +1546,25 @@ def test_realtime_status_completion_rejects_delayed_unowned_ack(
     assert transport.closed.is_set()
 
 
+@pytest.mark.parametrize("repeat_manual", [False, True])
 def test_stop_during_homing_quarantines_old_generation_without_ready_publish(
     monkeypatch: pytest.MonkeyPatch,
+    repeat_manual: bool,
 ) -> None:
     old = ResponsiveTransport("stopped-home")
     fresh = ResponsiveTransport("after-stopped-home")
     machine, _factory = make_machine(monkeypatch, old, fresh)
     machine.connect()
+    if repeat_manual:
+        machine.prepare_photo_position()
     old.block_command = "$H"
     old.write_release.clear()
     errors: list[BaseException] = []
     worker = threading.Thread(
-        target=lambda: _capture_error(machine.prepare_job_start, errors),
+        target=lambda: _capture_error(
+            machine.prepare_photo_position if repeat_manual else machine.prepare_job_start,
+            errors,
+        ),
         daemon=True,
     )
     worker.start()

@@ -3688,7 +3688,7 @@ def test_grbl_step_idle_delay_parser_accepts_report_variants_only(
     assert MachineService._reported_grbl_step_idle_delay(responses) == expected
 
 
-def test_home_park_waits_for_serial_connection_initialization(
+def test_home_park_rejects_busy_serial_connection_initialization(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class BlockingSettingsTransport(SimulatedTransport):
@@ -3762,12 +3762,16 @@ def test_home_park_waits_for_serial_connection_initialization(
 
     assert not connect_thread.is_alive()
     assert not home_thread.is_alive()
-    assert errors == []
-    assert parked[0]["position"] == {"x": 110.0, "y": 105.0, "z": None}
-    assert max(index for index, item in enumerate(transport.commands) if item == "M5") > transport.commands.index("$$")
+    assert len(errors) == 1
+    assert "another controller operation" in str(errors[0])
+    assert parked == []
+    assert "$H" not in transport.commands
+    # Once idle, a new explicit request can run the full sequence.
+    assert machine.prepare_photo_position()["position"] == {"x": 110.0, "y": 105.0, "z": None}
+    machine.disconnect()
 
 
-def test_queued_home_park_does_not_move_when_connection_initialization_fails(
+def test_busy_home_park_does_not_move_when_connection_initialization_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MissingSettingTransport(SimulatedTransport):
@@ -3818,13 +3822,14 @@ def test_queued_home_park_does_not_move_when_connection_initialization_fails(
     connect_thread.start()
     assert transport.settings_write_started.wait(timeout=1.0)
     home_thread.start()
+    home_thread.join(timeout=1.0)
     transport.release_settings_write.set()
     connect_thread.join(timeout=3.0)
     home_thread.join(timeout=3.0)
 
     assert len(errors) == 2
     assert any("did not report the $1" in str(error) for error in errors)
-    assert any("not connected" in str(error) for error in errors)
+    assert any("another controller operation" in str(error) for error in errors)
     assert "$H" not in transport.commands
     assert "G21" not in transport.commands
     assert not machine.status()["connected"]

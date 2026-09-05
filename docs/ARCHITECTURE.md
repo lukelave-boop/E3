@@ -1666,9 +1666,15 @@ handshake. GRBL startup cleanup ordinarily requires an acknowledged `M5`; only
 the exact consumed alarm-lock rejection `error:9`, with mandatory Home / park
 configured, permits `$X` followed by a second required `M5`. Connect and
 automatic recovery perform no homing or motion and leave coordinate state
-untrusted. Home / park is accepted only from `READY_HOME_REQUIRED` and publishes
+untrusted. Explicit Home / park accepts idle, disarmed `READY_HOME_REQUIRED`
+and `READY_MOTION`; repeat Home invalidates the previous reference before I/O,
+rejects concurrent controller work, and publishes
 `READY_MOTION` atomically after its continuous GRBL hold, full homing, coordinate,
-mode, optional park, planner, and final coordinate validation succeed. Every other rejection or
+mode, optional park, planner, and final coordinate validation succeed. The
+separate job-start preparation operation retains its one-Home contract. Desktop
+machine snapshots and supplemental job freshness are independent; bounded
+observation expiry and retired boot identities prevent old state becoming fresh.
+See [Pi status authority](REMOTE_STATUS_AUTHORITY.md). Every other rejection or
 ambiguous exchange fails and quarantines the exact session. A fully received,
 grammar-valid terminal `error:x` or `ALARM:x` is a consumed controller
 rejection and does not by itself make reply ownership uncertain; a partial or

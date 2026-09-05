@@ -12,6 +12,14 @@ and primary GRBL readiness/stepper-hold behavior are unchanged.
 
 ## Unreleased
 
+Desktop machine snapshots now publish independently of optional job details;
+job-only replies cannot refresh stale machine state. Coherent job records avoid
+redundant RPCs, and delayed failures/retired Pi boots cannot restore older
+authority. Status unavailability is distinguished from missing Pi responses.
+Pi session errors retain bounded stage/cause diagnostics. Explicit Home/park
+can be repeated from idle/disarmed READY_MOTION and re-establishes the reference
+through the full sequence. See [Pi status authority](docs/REMOTE_STATUS_AUTHORITY.md).
+
 Primary GRBL sessions now observe idle alarms, restarts, malformed input, and
 transport faults continuously. Queued unowned replies cannot acknowledge a new
 command; arming and job completion respect already observed faults. Ordinary

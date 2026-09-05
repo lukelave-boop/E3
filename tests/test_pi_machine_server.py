@@ -222,6 +222,25 @@ def server_harness(
         _close_harness(harness)
 
 
+def test_disposable_authenticated_session_failure_preserves_cause_and_controller(
+    server_harness, caplog,
+):
+    harness = server_harness
+    before = harness.machine.status()["controller_session_generation"]
+    caplog.set_level(logging.WARNING)
+    with socket.create_connection(("127.0.0.1", harness.server.bound_port)) as sock:
+        sock.settimeout(2.0)
+        authenticate_client(sock, _TOKEN)
+        # Disconnect before submitting any request; the controller is not owned
+        # by this short-lived authenticated observer.
+    _wait_until(lambda: "stage=request_read" in caplog.text)
+    assert "PiJobProtocolError" in caplog.text
+    assert "authenticated=True" in caplog.text
+    assert "detail=" in caplog.text
+    assert _TOKEN not in caplog.text
+    assert harness.machine.status()["controller_session_generation"] == before
+
+
 def _new_harness(
     root: Path,
     monkeypatch: pytest.MonkeyPatch,
