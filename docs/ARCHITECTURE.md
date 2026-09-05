@@ -1725,3 +1725,12 @@ Windows and Linux. Direct local serial and camera hardware remain Linux-only:
 Platform implementations must remain lazy so unavailable hardware backends do
 not prevent portable libraries from importing or create fake availability. See
 `CURRENT_STATE.md` for the verification record and recommended next sequence.
+
+Pi Start now synchronizes idle secondary RX before a fresh acknowledged
+`M106 S0` and uses the existing bounded framing-rejection reopen policy.
+Startup/restart OFF and exact typed mappings remain unchanged. Failed Start
+preserves bounded secondary diagnostics; cleanup STOP no longer manufactures an
+operator STOP. Desktop rejection returns promptly and reports the error once,
+including when controller cleanup invalidates its session. Physical retesting
+remains required; the original physical exception was not retained, so idle RX
+contamination or a framing rejection cannot be confirmed from that log alone.

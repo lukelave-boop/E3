@@ -1113,18 +1113,36 @@ class PiJobService:
                     int(local_job.get("total_lines") or len(program.lines)),
                 )
             except Exception as exc:
-                self.machine.request_stop(emergency=False)
-                with self._state_lock:
-                    was_stopped = self._stop_requested_for == job_id
-                was_stopped = was_stopped or (
+                # Snapshot cancellation before our own cleanup changes generation.
+                was_stopped = (
                     self.machine.operation_generation() != requested_generation
                 )
-                self._update_terminal(
-                    job_id,
-                    "stopped" if was_stopped else "failed",
-                    error=None if was_stopped else _bounded_error(exc),
-                )
-                self._refresh_machine_status()
+                original_error = _bounded_error(exc)
+                try:
+                    self.machine.request_stop(emergency=False)
+                except Exception as cleanup_exc:
+                    LOGGER.warning("Pi job START cleanup failed id=%s: %s",
+                                   job_id[:8], _bounded_error(cleanup_exc))
+                with self._state_lock:
+                    was_stopped = was_stopped or self._stop_requested_for == job_id
+                LOGGER.error("Pi job START failed id=%s stopped=%s: %s",
+                             job_id[:8], was_stopped, original_error)
+                try:
+                    self._update_terminal(
+                        job_id,
+                        "stopped" if was_stopped else "failed",
+                        error=None if was_stopped else original_error,
+                    )
+                except Exception as journal_exc:
+                    LOGGER.error("Pi job START journal failed id=%s: %s",
+                                 job_id[:8], _bounded_error(journal_exc))
+                    with self._state_lock:
+                        if self._active_job_id == job_id:
+                            self._active_job_id = None
+                try:
+                    self._refresh_machine_status()
+                except Exception:
+                    pass
                 raise
             return {
                 "accepted": True,

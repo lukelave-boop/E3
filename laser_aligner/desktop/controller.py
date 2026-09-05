@@ -794,8 +794,35 @@ class DesktopController(QtCore.QObject):
         if self._shutdown_started:
             return
         registration = self._task_callbacks.get(task)
-        if registration is None or not self._task_authority_is_current(registration):
+        if registration is None:
             return
+        current = self._task_authority_is_current(registration)
+        # A Pi START failure can itself invalidate the remote controller session.
+        # Report that failure, but retain suppression after a local operator STOP.
+        authority = registration.machine_authority
+        if (
+            not current
+            and task.label == "Start job"
+            and bool(getattr(self.runtime.context.machine, "pi_owned_execution", False))
+            and authority is not None
+            and not authority.invalidated_before_execution
+        ):
+            current = (
+                self.runtime.context.machine.operation_generation()
+                == authority.requested_operation_generation
+            )
+        if not current:
+            return
+        if task.label == "Start job" and bool(
+            getattr(self.runtime.context.machine, "pi_owned_execution", False)
+        ):
+            job = self.runtime.context.machine.status().get("job") or {}
+            job_id = job.get("job_id")
+            if job_id:
+                reported = getattr(self, "_reported_terminal_job", None)
+                if reported is not None and reported[0] == job_id:
+                    return
+                self._reported_start_failure_job = job_id
         if registration.on_failure is None:
             self.errorOccurred.emit(f"{task.label} failed: {message}")
         else:
@@ -963,7 +990,10 @@ class DesktopController(QtCore.QObject):
             and terminal_key != self._reported_terminal_job
         ):
             self._reported_terminal_job = terminal_key
-            if job.get("error"):
+            if job.get("error") and not (
+                job.get("job_id") is not None
+                and job.get("job_id") == getattr(self, "_reported_start_failure_job", None)
+            ):
                 self.errorOccurred.emit(f"Controller job failed: {job['error']}")
 
     def refresh_camera_image(self) -> None:

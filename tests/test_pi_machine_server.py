@@ -1692,3 +1692,56 @@ def test_powered_pi_completion_homes_parks_and_retains_held_reference(
         assert transport.y == pytest.approx(110.0)
     finally:
         _close_harness(harness)
+
+@pytest.mark.parametrize("external_stop,cleanup_failure", [(False, False), (False, True), (True, False)])
+def test_start_exception_preserved_before_cleanup_generation_change(
+    server_harness: ServerHarness, monkeypatch: pytest.MonkeyPatch,
+    external_stop: bool, cleanup_failure: bool,
+) -> None:
+    job_id, program, _ = _upload(server_harness)
+    machine = server_harness.machine
+    original_stop = machine.request_stop
+    before = list(server_harness.transport.commands)
+
+    def fail_start(*args, **kwargs):
+        if external_stop:
+            server_harness.service.stop()
+        raise RuntimeError("secondary OFF failed: original diagnostic")
+
+    def cleanup(*args, **kwargs):
+        original_stop(*args, **kwargs)
+        if cleanup_failure:
+            raise RuntimeError("cleanup must not replace original")
+
+    monkeypatch.setattr(machine, "start_preflighted_program", fail_start)
+    monkeypatch.setattr(machine, "request_stop", cleanup)
+    response = _rpc(server_harness, ACTION_JOB_START, **_start_fields(job_id, program))
+    monkeypatch.setattr(machine, "request_stop", original_stop)
+    assert response["ok"] is False
+    record = server_harness.service.get(job_id)
+    assert record["state"] == ("stopped" if external_stop else "failed")
+    assert record["error"] == (None if external_stop else "secondary OFF failed: original diagnostic")
+    assert server_harness.service.active() is None
+    assert _GATED_COMMAND not in server_harness.transport.commands[len(before):]
+
+
+def test_secondary_prestart_off_failure_is_durable_pi_failure(
+    server_harness: ServerHarness, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from tests.test_secondary_controller import FakeSerial, _controller
+
+    serial = FakeSerial(["ok", "error: physical secondary diagnostic"])
+    _, fan = _controller([serial])
+    fan.initialize_off()  # Same persistent owner that acknowledged restart OFF.
+    job_id, program, _ = _upload(server_harness)
+    monkeypatch.setattr(server_harness.machine, "_secondary_controller_for", lambda _: fan)
+    before = len(server_harness.transport.commands)
+    response = _rpc(server_harness, ACTION_JOB_START, **_start_fields(job_id, program))
+    assert response["ok"] is False
+    record = server_harness.service.get(job_id)
+    assert record["state"] == "failed"
+    assert "physical secondary diagnostic" in record["error"]
+    assert "acknowledged OFF" in record["error"]
+    assert serial.writes[:2] == ["M106 S0", "M106 S0"]
+    assert _GATED_COMMAND not in server_harness.transport.commands[before:]
+    assert not server_harness.machine.status()["job"]["running"]

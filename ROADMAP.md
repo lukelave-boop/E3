@@ -174,3 +174,12 @@ A production-oriented release requires:
   software controls as safety-rated;
 - documentation that clearly separates automated, offscreen, interactive,
   historical, package-level, and physical evidence.
+
+Pi Start now synchronizes idle secondary RX before a fresh acknowledged
+`M106 S0` and uses the existing bounded framing-rejection reopen policy.
+Startup/restart OFF and exact typed mappings remain unchanged. Failed Start
+preserves bounded secondary diagnostics; cleanup STOP no longer manufactures an
+operator STOP. Desktop rejection returns promptly and reports the error once,
+including when controller cleanup invalidates its session. Physical retesting
+remains required; the original physical exception was not retained, so idle RX
+contamination or a framing rejection cannot be confirmed from that log alone.

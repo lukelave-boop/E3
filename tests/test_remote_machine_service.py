@@ -1756,3 +1756,24 @@ def test_runtime_stop_detaches_accepted_remote_job_without_rpc(
 
     assert fake.requests == []
     assert machine.status()["status_stale"] is True
+
+
+def test_start_rejection_does_not_wait_for_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    original_rpc = service._rpc
+
+    def rpc(action, payload=None, **kwargs):
+        if action == ACTION_JOB_START:
+            raise remote_service_module._RemoteRequestRejected("secondary OFF diagnostic")
+        if action == ACTION_JOB_STATUS:
+            pytest.fail("Rejected START must not wait for status")
+        return original_rpc(action, payload, **kwargs)
+
+    monkeypatch.setattr(service, "_rpc", rpc)
+    program = service.preflight_program(_POWERED_GCODE)
+    with pytest.raises(MachineError, match="secondary OFF diagnostic"):
+        service.start_preflighted_program(program, authorization_phrase=service.ARM_PHRASE)
+    assert not service.pi_owned_job_active
+    assert service.status()["job"]["running"] is False

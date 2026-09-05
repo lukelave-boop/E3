@@ -114,7 +114,7 @@ def test_exact_fan2_commands_are_acknowledged_and_redundant_state_is_suppressed(
     fan.ensure_off()
 
     assert serial.open_calls == 1
-    assert serial.synchronize_calls == 1
+    assert serial.synchronize_calls == 2
     assert serial.writes == [
         "M106 S0",
         "M106 S255",
@@ -405,3 +405,41 @@ def test_session_and_binding_snapshots_are_immutable_and_construction_does_not_o
         owner.session.port = "/dev/ttyUSB9"  # type: ignore[misc]
     with pytest.raises(FrozenInstanceError):
         fan.binding.port = "/dev/ttyUSB9"  # type: ignore[misc]
+
+
+def test_persistent_prestart_off_discards_idle_rx_and_requires_new_ack() -> None:
+    class IdleSerial(FakeSerial):
+        def synchronize_input(self):
+            super().synchronize_input()
+            self.responses.clear()
+
+        def write_line(self, line):
+            super().write_line(line)
+            self.responses.append("ok")
+
+    serial = IdleSerial()
+    owner, fan = _controller([serial])
+    fan.initialize_off()
+    serial.responses.extend(["Error: stale idle fragment", "ok"])
+    fan.ensure_off()
+    assert owner.ready
+    assert serial.open_calls == 1
+    assert serial.synchronize_calls == 2
+    assert serial.writes == ["M106 S0", "M106 S0"]
+    serial.write_line = lambda line: serial.writes.append(line)
+    serial.responses.append("ok")
+    with pytest.raises(SecondaryControllerError, match="timed out"):
+        fan.ensure_off()
+    assert not owner.ready
+
+
+def test_prestart_framing_rejection_uses_same_bounded_reopen_as_restart() -> None:
+    current = FakeSerial(["ok", "echo:Unknown command: corrupt M106 S0"])
+    fresh = FakeSerial(["ok"])
+    owner, fan = _controller([current, fresh])
+    fan.initialize_off()
+    fan.ensure_off()
+    assert owner.ready
+    assert current.writes == ["M106 S0", "M106 S0"]
+    assert fresh.writes == ["M106 S0"]
+    assert current.close_calls == 1

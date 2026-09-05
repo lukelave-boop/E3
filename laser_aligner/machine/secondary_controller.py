@@ -410,7 +410,15 @@ class SecondaryMarlinFanController:
         """Force a fresh acknowledged OFF, even when OFF was previously known."""
 
         with self._owner._lock:
-            self._force_off()
+            # Idle RX (including partial frames and stale acknowledgements) must
+            # not contaminate the next OFF exchange on the persistent session.
+            self._owner._refresh_transport_fault_locked()
+            if self._owner._trusted and self._owner._transport is not None:
+                try:
+                    self._owner._transport.synchronize_input()
+                except Exception as exc:
+                    raise self._owner._fail_locked(exc) from exc
+            self.initialize_off()
 
     def set_enabled(
         self,

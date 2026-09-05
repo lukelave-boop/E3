@@ -7,6 +7,30 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-05**
 
+## Active Pi secondary pre-start OFF and Start-error correction
+
+Pi Start now synchronizes idle secondary RX before a fresh acknowledged
+`M106 S0` and uses the existing bounded framing-rejection reopen policy.
+Startup/restart OFF and exact typed mappings remain unchanged. Failed Start
+preserves bounded secondary diagnostics; cleanup STOP no longer manufactures an
+operator STOP. Desktop rejection returns promptly and reports the error once,
+including when controller cleanup invalidates its session. Physical retesting
+remains required; the original physical exception was not retained, so idle RX
+contamination or a framing rejection cannot be confirmed from that log alone.
+
+User-supplied physical evidence at 51657773 records restart OFF, Home with
+acknowledged `$1=255`, and READY_MOTION, followed by pre-start secondary OFF
+failure and cleanup restoring `$1=250` / HOME_REQUIRED. No primary Start
+transaction was recorded. This validates those observed prior-build transitions,
+not this correction or successful powered execution. Motion code is unchanged.
+
+Focused Windows Pi/remote/desktop checks pass 98 tests; secondary/integration/
+desktop checks pass 48 tests (overlapping desktop selection). The focused MachineService/session/Pi/secondary/desktop selection passed
+480 tests with 16 expected Windows POSIX skips before the final added cases.
+Repository Ruff, compileall, and diff whitespace checks pass. Full pytest is
+intentionally skipped. No physical hardware, camera, or Pi was contacted. Frozen build smoke
+and operator verification remain pending at this source snapshot.
+
 ## Active GRBL motion-readiness stepper-hold correction
 
 `READY_MOTION` now requires a Home-established coordinate reference for the exact

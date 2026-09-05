@@ -531,7 +531,8 @@ class MachineService:
             controller.ensure_off()
         except Exception as exc:
             raise SafetyError(
-                "Pi-owned secondary Air Assist could not establish acknowledged OFF"
+                "Pi-owned secondary Air Assist could not establish acknowledged OFF: "
+                + " ".join(str(exc).split())[:320]
             ) from exc
         self._append_log("AUX", "M106 S0 (acknowledged pre-start OFF)")
 

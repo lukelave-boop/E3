@@ -394,3 +394,52 @@ def test_controller_background_cancel_callback_is_invoked_on_shutdown(
 
     assert cancelled.is_set()
     task.run()
+
+
+@pytest.mark.parametrize("operator_stop", [False, True])
+def test_pi_start_failure_survives_remote_cleanup_but_not_operator_stop(operator_stop):
+    machine = SimpleNamespace(
+        pi_owned_execution=True,
+        operation_generation=lambda: 2 if operator_stop else 1,
+        status=lambda: {"job": {"job_id": "rejected-job"}},
+    )
+    task = SimpleNamespace(label="Start job")
+    # Use a hashable stand-in for a registered worker.
+    class Task:
+        label = "Start job"
+    task = Task()
+    registration = SimpleNamespace(
+        machine_authority=SimpleNamespace(
+            requested_operation_generation=1, invalidated_before_execution=False,
+        ), on_failure=None,
+    )
+    controller = SimpleNamespace(
+        _shutdown_started=False, _task_callbacks={task: registration},
+        _task_authority_is_current=lambda _: False,
+        runtime=SimpleNamespace(context=SimpleNamespace(machine=machine)),
+        errorOccurred=_Signal(),
+    )
+    DesktopController._task_failed(controller, task, "secondary OFF failed")
+    assert len(controller.errorOccurred.messages) == (0 if operator_stop else 1)
+    if not operator_stop:
+        assert controller._reported_start_failure_job == "rejected-job"
+
+
+def test_pi_start_and_terminal_poll_report_error_only_once():
+    job = {"job_id": "failed-start", "running": False,
+           "finished_at": 123, "error": "secondary OFF failed"}
+    controller = SimpleNamespace(
+        runtime=SimpleNamespace(running=True, status=lambda: {"machine": {"job": job}}),
+        _accept_machine_status_revision=lambda _: True,
+        statusChanged=SimpleNamespace(emit=lambda _: None),
+        errorOccurred=_Signal(), _reported_terminal_job=None,
+        _reported_start_failure_job="failed-start",
+    )
+    DesktopController.poll_status(controller)
+    DesktopController.poll_status(controller)
+    assert controller.errorOccurred.messages == []
+    controller._reported_start_failure_job = None
+    controller._reported_terminal_job = None
+    DesktopController.poll_status(controller)
+    DesktopController.poll_status(controller)
+    assert len(controller.errorOccurred.messages) == 1

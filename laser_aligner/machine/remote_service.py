@@ -402,13 +402,20 @@ class RemoteMachineService:
                     )
                 )
             ):
-                raise PiJobProtocolError(
-                    f"Remote {action} rejection omitted structured error metadata"
+                raise _RemoteRequestRejected(
+                    " ".join(detail.split())[:512]
+                    + " (rejection omitted structured error metadata)"
                 )
             if session_metadata:
-                self._response_metadata(response, required=True)
+                try:
+                    self._response_metadata(response, required=True)
+                except PiJobProtocolError as exc:
+                    raise _RemoteRequestRejected(
+                        " ".join(detail.split())[:512]
+                        + " (rejection contained invalid session metadata)"
+                    ) from exc
             raise _RemoteRequestRejected(
-                detail,
+                " ".join(detail.split())[:512],
                 error_code=error_code if type(error_code) is str else None,
                 retryable=retryable is True,
                 action_required=(
@@ -1805,7 +1812,8 @@ class RemoteMachineService:
                 self._cache_job_record(record, accepted=False)
                 raise MachineError(
                     "The Pi did not accept START before the response was lost; the "
-                    "prepared or failed job was not restarted automatically"
+                    "prepared or failed job was not restarted automatically. "
+                    + " ".join(str(record.get("error") or original_error).split())[:512]
                 ) from original_error
             if time.monotonic() >= deadline:
                 raise MachineError(
@@ -1985,28 +1993,17 @@ class RemoteMachineService:
             try:
                 self._require_operation_current(generation)
                 start = self._rpc(ACTION_JOB_START, start_payload)
-            except _RemoteRequestRejected:
+            except _RemoteRequestRejected as exc:
                 self._require_operation_current(generation)
                 with self._state_lock:
                     self._start_ownership_uncertain = False
                     self._accepted_job_id = None
                     self._upload_job_id = None
-                try:
-                    rejected_status = self._rpc(
-                        ACTION_JOB_STATUS,
-                        {"job_id": job_id},
+                    self._status_cache["job"].update(
+                        state="failed", phase="failed", running=False,
+                        ownership_uncertain=False, execution_owner="none",
+                        error=" ".join(str(exc).split())[:512],
                     )
-                    self._require_operation_current(generation)
-                    self._commit_current_response(
-                        rejected_status,
-                        action=ACTION_JOB_STATUS,
-                    )
-                    self._cache_job_record(
-                        self._response_mapping(rejected_status, "job"),
-                        accepted=False,
-                    )
-                except MachineError:
-                    pass
                 raise
             except MachineError as exc:
                 with self._state_lock:

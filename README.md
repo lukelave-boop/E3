@@ -643,3 +643,12 @@ Keep `config/local.json`, captures, calibration photographs, logs, and generated
 ## Safety
 
 Read [SAFETY.md](SAFETY.md) before connecting the application to real hardware. A 10 W, approximately 455 nm diode laser is capable of permanent eye injury, fire, harmful smoke generation, and damage from reflected beams. Never leave a laser job unattended.
+
+Pi Start now synchronizes idle secondary RX before a fresh acknowledged
+`M106 S0` and uses the existing bounded framing-rejection reopen policy.
+Startup/restart OFF and exact typed mappings remain unchanged. Failed Start
+preserves bounded secondary diagnostics; cleanup STOP no longer manufactures an
+operator STOP. Desktop rejection returns promptly and reports the error once,
+including when controller cleanup invalidates its session. Physical retesting
+remains required; the original physical exception was not retained, so idle RX
+contamination or a framing rejection cannot be confirmed from that log alone.
