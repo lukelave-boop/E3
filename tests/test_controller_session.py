@@ -2044,7 +2044,10 @@ def test_seeded_1000_controller_session_lifecycle_soak(
 
         if injected == "status_frame":
             transport.set_next_reply("$I", GRBL_REALTIME, GRBL_IDENTITY, "ok")
-            assert machine.send_command("$I") == [GRBL_IDENTITY, "ok"]
+            # This soak checks ownership across 1,000 lifecycles, not whether
+            # three receiver-thread dispatches fit a 20 ms scheduling budget.
+            # Keep the explicit 1 ms missing-ACK injection below unchanged.
+            assert machine.send_command("$I", timeout=1.0) == [GRBL_IDENTITY, "ok"]
         elif injected == "delayed_ack":
             transport.set_next_timeout("$I")
             with pytest.raises(MachineError, match="acknowledge"):

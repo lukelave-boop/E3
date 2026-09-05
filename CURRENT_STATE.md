@@ -35,8 +35,22 @@ Focused local verification: Windows Python 3.14, 189 passed / 2 POSIX skips;
 WSL Linux Python 3.10, 54 passed (pytest cache permission warning only). Includes
 missing-ACK job failure/abort, first-evidence retention, broken snapshot provider,
 held ownership lock, blocked reader, partial reply and real PTY CR/CR/LF delivery.
-Ruff and compileall pass. Compatibility CI and deployment/physical validation
-remain pending. Existing auto-Home/object-layer work remains in its separate
+Ruff and compileall pass. Additional Windows integration checks passed 112 tests
+with two POSIX skips. Compatibility run 33988310114 passed Windows 3.10, Linux,
+and lint; Windows 3.12 passed 3699 tests but failed the existing 1000-session
+soak's successful three-frame query using a 20 ms deadline. A temporary probe
+with 15 ms receiver scheduling delays exceeds that budget with both the baseline
+and instrumented receivers; both succeed with a one-second deadline. Only that
+soak success assertion now allows one second. Its explicit 1 ms missing-ACK
+injection and every production deadline remain unchanged. Reverification and
+deployment/physical validation remain pending.
+
+The subsequent 13:50:07-13:50:12 raw trace shows the ttyACM1 reader repeatedly
+returning empty 100 ms readiness waits. The reader was polling during that
+window; whether the capture preceded recovery has not yet been confirmed.
+It does not establish the controller/USB root cause.
+
+Existing auto-Home/object-layer work remains in its separate
 unmerged feature branch; production 0.7.0 does not include those features.
 
 ## 0.7.0 consolidation
