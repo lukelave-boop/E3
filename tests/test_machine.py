@@ -3379,7 +3379,7 @@ def test_temporary_stepper_hold_restores_grbl_idle_delay_after_capture_failure(
             commands.append("capture")
             raise CameraError("capture failed")
 
-    assert commands == ["$$", "$1=255", "capture", "M5", "$1=250", "$MD"]
+    assert commands == ["$$", "$1=255", "capture", "M5", "$1=250"]
     assert "M8" not in commands
 
 
@@ -4035,10 +4035,10 @@ def test_temporary_stepper_hold_repairs_existing_stale_continuous_hold(
     with machine.temporary_stepper_hold():
         commands.append("capture")
 
-    assert commands == ["$$", "capture", "M5", "$1=250", "$MD"]
+    assert commands == ["$$", "capture", "M5", "$1=250"]
 
 
-def test_temporary_stepper_hold_falls_back_to_sleep_and_invalidates_position(
+def test_temporary_stepper_hold_uses_finite_idle_delay_without_sleep(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class ResetTransport:
@@ -4083,12 +4083,11 @@ def test_temporary_stepper_hold_falls_back_to_sleep_and_invalidates_position(
 
     monkeypatch.setattr(machine, "send_command", record_command)
 
-    with pytest.raises(MachineError, match="fresh synchronized session"):
-        with machine.temporary_stepper_hold():
-            pass
+    with machine.temporary_stepper_hold():
+        pass
 
-    assert commands == ["$$", "$1=255", "M5", "$1=250", "$MD", "$SLP"]
-    assert transport.raw == [b"\x18"]
+    assert commands == ["$$", "$1=255", "M5", "$1=250"]
+    assert transport.raw == []
     assert not machine.status()["coordinate_reference_ready"]
 
 
@@ -4125,7 +4124,7 @@ def test_temporary_stepper_hold_cleanup_reaches_disable_after_prior_failures(
         with machine.temporary_stepper_hold():
             pass
 
-    assert commands == ["$$", "$1=255", "M5", "$1=250", "$MD"]
+    assert commands == ["$$", "$1=255", "M5", "$1=250"]
     assert "M5 failed" in str(error.value)
     assert "idle-delay restore failed" in str(error.value)
     assert not machine.status()["coordinate_reference_ready"]
@@ -4167,7 +4166,7 @@ def test_temporary_stepper_hold_attaches_cleanup_failure_to_capture_error(
     assert len(notes) == 1
     assert "cleanup incomplete" in notes[0]
     assert "M5 failed" in notes[0]
-    assert commands == ["$$", "$1=255", "M5", "$1=250", "$MD"]
+    assert commands == ["$$", "$1=255", "M5", "$1=250"]
 
 
 def test_home_park_recovers_only_post_sleep_m5_alarm(
@@ -4525,9 +4524,8 @@ def test_powered_post_job_grbl_homing_accepts_normal_ok() -> None:
         assert transport.commands.index("$H") < transport.commands.index(
             "G0 X15.000 Y195.000 F3000.000"
         )
-        assert transport.commands.index("G0 X15.000 Y195.000 F3000.000") < transport.commands.index(
-            "$MD"
-        )
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
     finally:
         machine.disconnect()
 
@@ -4572,9 +4570,8 @@ def test_powered_post_job_grbl_homing_accepts_active_then_idle_without_ok(
         assert transport.commands.index("$H") < transport.commands.index(
             "G0 X15.000 Y195.000 F3000.000"
         )
-        assert transport.commands.index("G4 P0.01", transport.commands.index("$H")) < (
-            transport.commands.index("$MD")
-        )
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
     finally:
         machine.disconnect()
 
@@ -4736,15 +4733,13 @@ def test_powered_job_owns_machine_through_drain_home_park_and_release() -> None:
     transport.enabled = True
     try:
         digest = _start_powered_completion_job(machine)
-        for phase in ("draining", "homing", "parking", "releasing"):
+        for phase in ("draining", "homing", "parking"):
             assert transport.entered[phase].wait(timeout=1.0)
             status = machine.status()
             assert status["job"]["running"] is True
             assert status["job"]["phase"] == phase
             assert status["job"]["finished_at"] is None
             assert status["last_successful_job"] is None
-            if phase == "parking":
-                assert "$MD" not in transport.commands
             transport.release(phase)
 
         wait_for_job(machine)
@@ -4755,7 +4750,9 @@ def test_powered_job_owns_machine_through_drain_home_park_and_release() -> None:
         assert status["last_successful_job"]["program_digest"] == digest
         park_index = transport.commands.index("G0 X15.000 Y195.000 F3000.000")
         park_barrier_index = transport.commands.index("G4 P0.01", park_index)
-        assert park_index < park_barrier_index < transport.commands.index("$MD")
+        assert park_index < park_barrier_index
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
     finally:
         machine.disconnect()
 
@@ -4816,7 +4813,7 @@ def test_successful_powered_serial_job_homes_parks_and_releases_motors(
         assert not status["coordinate_reference_ready"]
         assert transport.x == pytest.approx(15)
         assert transport.y == pytest.approx(195)
-        assert transport.commands[-10:] == [
+        assert transport.commands[-9:] == [
             "M5",
             "G4 P0.01",
             "$H",
@@ -4826,7 +4823,6 @@ def test_successful_powered_serial_job_homes_parks_and_releases_motors(
             "G4 P0.01",
             "$$",
             "M5",
-            "$MD",
         ]
         assert "M9" not in transport.commands
     finally:
@@ -5005,7 +5001,7 @@ def test_stop_during_final_ack_cannot_publish_success_receipt(
     machine.disconnect()
 
 
-def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
+def test_powered_job_physical_unsupported_md_transcript_uses_finite_idle_release(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RejectMotorDisableTransport(SimulatedTransport):
@@ -5018,7 +5014,7 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
             command = line.strip().upper()
             self.commands.append(command)
             if command == "$MD":
-                self._queue.put("error:20")
+                self._queue.put("error:2")
                 return
             super().write_line(line)
 
@@ -5049,7 +5045,8 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
         assert transport.commands[:3] == ["$I", "M5", "$$"]
         assert "$SLP" not in transport.commands
         assert transport.raw_writes == [b"?"]
-        machine.prepare_photo_position()
+        if machine.status()["controller_state"] == "READY_HOME_REQUIRED":
+            machine.prepare_photo_position()
         transport.commands.clear()
         transport.raw_writes.clear()
         program = machine.preflight_program(
@@ -5059,8 +5056,10 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
         machine.start_validated_program(program, "powered-fallback.gcode")
         wait_for_job(machine)
 
-        assert "fresh synchronized session" in machine.status()["job"]["error"]
-        assert transport.commands[-11:] == [
+        status = machine.status()
+        assert status["job"]["error"] is None
+        assert status["job"]["phase"] == "complete"
+        assert transport.commands[-7:] == [
             "$H",
             "G21",
             "G90",
@@ -5068,12 +5067,10 @@ def test_powered_job_release_falls_back_to_sleep_reset_without_fan_commands(
             "G4 P0.01",
             "$$",
             "M5",
-            "$MD",
-            "$SLP",
-            "M5",
-            "M5",
         ]
-        assert transport.raw_writes == [b"\x18"]
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
+        assert transport.raw_writes == []
         assert "M8" not in transport.commands
         assert "M9" not in transport.commands
         assert not machine.status()["coordinate_reference_ready"]
@@ -5236,7 +5233,9 @@ def test_post_job_positioning_failure_still_attempts_motor_release(
         assert status["job"]["phase"] == "failed"
         assert any("ERROR Controller job failed" in line for line in status["log"])
         assert transport.commands.index("G4 P0.01") < transport.commands.index("$H")
-        assert "$MD" in transport.commands
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
+        assert "M5" in transport.commands
         assert not any(command.startswith("G0 ") for command in transport.commands[-5:])
     finally:
         machine.disconnect()
@@ -5296,7 +5295,9 @@ def test_post_job_park_failure_still_attempts_motor_release(
         assert error is not None
         assert "G0 X15.000 Y195.000" in error
         assert "$H" in transport.commands
-        assert "$MD" in transport.commands
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
+        assert "M5" in transport.commands
         assert transport.commands.count("G4 P0.01") == 1
         assert transport.commands.index("G4 P0.01") < transport.commands.index("$H")
         assert transport.x == pytest.approx(0)

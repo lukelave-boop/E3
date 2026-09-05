@@ -122,7 +122,8 @@ With `machine.home_and_release_after_powered_job` enabled, a successfully
 completed powered job also performs `M5`, waits for all accepted toolpath
 motion to finish, homes, returns to the configured camera pose, waits for the
 park move to finish, restores the configured normal GRBL idle delay if
-necessary, and releases the motors. A secondary Air Assist program keeps strict
+necessary, and lets standard GRBL step-idle behavior release the motors. A
+secondary Air Assist program keeps strict
 non-comment `E3AIRASSIST <mapping-sha256> ON|OFF` instructions in its immutable
 program bytes. The Pi intercepts them before the primary GRBL stream and
 acknowledges primary `M5` before secondary `M106 S0` and completion motion. Keep
@@ -135,9 +136,9 @@ failure, emergency action, disconnect, or zero-power job.
 to 250 ms for this profile. The application temporarily uses `$1=255` only
 during parked camera capture. Because `$1` persists in controller storage, a
 crash can leave that hold active across power cycles; the next serial connection
-detects exactly `255`, restores the configured normal value, and explicitly
-releases the motors. Connection always requests an explicit motor release even
-when `$1` already reports its expected finite value. A same-primary Air Assist
+detects exactly `255` and restores the configured normal value. Standard GRBL
+then releases the motors after that finite `$1` delay. `$SLP` is not used as a
+motor-release action because it sleeps the controller. A same-primary Air Assist
 mapping establishes its trusted OFF command after laser off. Separately, the
 Pi's `CrealityControllerOwner` establishes and acknowledges secondary
 `M106 S0`; Windows connection or detach causes no fan transition. STOP keeps

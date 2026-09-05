@@ -2846,7 +2846,6 @@ class MachineService:
 
         session = GRBL_DIALECT.grbl_session
         assert session is not None
-        controller_session = self._require_session()
         timeout = _PHOTO_COMMAND_ACK_TIMEOUT_SECONDS
         failures: list[str] = []
 
@@ -2871,33 +2870,13 @@ class MachineService:
                 failures.append(f"idle-delay restore failed: {exc}")
 
         try:
-            execute(session.motor_disable_command)
-            self._append_log("INFO", f"{context}: motors released with $MD")
-        except MachineError as disable_error:
+            # Standard GRBL releases stepper enable after the finite $1 delay.
+            # $MD is unsupported by some firmware, and $SLP sleeps the controller
+            # rather than merely releasing its motors.
             self._append_log(
                 "INFO",
-                f"{context}: $MD unavailable ({disable_error}); falling back to GRBL sleep",
+                f"{context}: motors release through finite GRBL $1 step-idle delay",
             )
-            try:
-                execute(session.motor_sleep_command)
-                time.sleep(session.sleep_before_reset_seconds)
-                with self._transport_write_lock:
-                    if job_execution and self._current_job_stop_event().is_set():
-                        raise MachineError("Job stopped")
-                    controller_session.transport.write_raw(session.soft_reset_command)
-                self._append_log("TX", f"GRBL soft reset after {context} $SLP")
-                self._mark_controller_command_state_untrusted(
-                    controller_session,
-                    reason=(
-                        f"GRBL soft reset after {context} requires a fresh synchronized session"
-                    ),
-                )
-                raise MachineError(
-                    "GRBL sleep fallback reset the controller; a fresh synchronized "
-                    "session and explicit Home are required"
-                )
-            except Exception as exc:
-                failures.append(f"explicit motor release failed: {exc}")
         finally:
             self._invalidate_coordinate_reference()
             if not job_execution:

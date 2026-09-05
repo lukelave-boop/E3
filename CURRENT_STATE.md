@@ -7,6 +7,24 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-04**
 
+## Active GRBL post-job motor-release correction
+
+Physical validation established that a powered job and its automatic Home / park
+completed successfully, after which this controller rejected `$MD` with `error:2`,
+accepted `$SLP`, reported `[MSG:Sleeping]`, and stopped answering fresh `$I`
+handshakes. GRBL cleanup now restores the configured validated finite `$1` value
+and relies on normal GRBL step-idle release behavior. It does not send `$MD` or
+use controller sleep merely to release motors, so unsupported nonessential
+release extensions cannot turn a completed powered job and successful Home / park
+into a generic controller-job failure. M5, Home / park, coordinate invalidation,
+STOP, session quarantine/reconnect behavior, Air Assist, and ESP-IDF diagnostic
+handling are unchanged. The correction remains physically unverified.
+Focused Windows verification passes **409 tests** across MachineService, GRBL
+dialect, and controller-session coverage. Repository Ruff, `compileall -q
+laser_aligner`, and `git diff --check` pass. The complete repository pytest suite
+was intentionally not run for this narrow correction. No Pi, controller, laser,
+motion hardware, Air Assist hardware, camera, or serial endpoint was accessed.
+
 ## Active ESP-IDF diagnostic / GRBL serial multiplexing correction
 
 Physical validation established that the primary ESP32 controller can emit a
