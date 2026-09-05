@@ -181,6 +181,7 @@ def test_bottom_palette_describes_fill_and_disabled_operations(
 
 def test_layer_panel_inline_state_and_quick_editor_keep_existing_signals(
     qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     document = _document_with_operations()
     panel = LayerPanel()
@@ -206,12 +207,14 @@ def test_layer_panel_inline_state_and_quick_editor_keep_existing_signals(
         {"output_enabled": False, "visible": True},
     )
 
-    panel.name_edit.setText("Updated operation")
-    panel.name_edit.editingFinished.emit()
+    monkeypatch.setattr(
+        QtWidgets.QInputDialog, "getText", lambda *args, **kwargs: ("Updated operation", True),
+    )
+    panel.rename_button.click()
     qt_application.processEvents()
     assert edits[-1][0] == document.layers[1].id
     assert edits[-1][1]["name"] == "Updated operation"
-    assert edits[-1][1]["mode"] == LayerMode.FILL.value
+    assert edits[-1][1] == {"name": "Updated operation"}
 
     panel.up_button.click()
     panel.remove_button.click()

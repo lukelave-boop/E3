@@ -1,5 +1,22 @@
 # Generated-job Preview
 
+**START JOB** accepts an idle, disarmed, authoritative HOME_REQUIRED session.
+On the Pi, the durable prepared job enters its start operation and MachineService
+runs the full Home/park sequence before arming or streaming that exact program.
+READY_MOTION skips this initial Home; configured post-job Home/park is unchanged.
+STOP, failed Home, changed session, disarm, or changed execution policy prevents
+continuation. A new explicit Start is required after recovery. Preview does not
+draw the preparatory Home/park moves. Update both desktop and Pi for this behavior;
+an older Pi can reject Start until Home is performed manually.
+
+To assign a cut/layer, select shapes and choose a Cuts/Layers row, the cut-name
+dropdown, or a bottom color tile. Only the selected shapes are reassigned. With
+no selection, the choice sets the active layer for new shapes. The Objects tab
+also provides a layer dropdown for each individual object. Selecting one shape
+updates the Cuts panel to its actual assigned layer. Speed, power, and color
+remain shared settings of a layer; **Rename…** renames that layer. Assignment is
+undoable, saved in the project, and invalidates a previously generated job.
+
 For native project generation, the desktop first builds a structured,
 Qt-neutral job-preflight report from a detached project snapshot. A blocking
 report stops before exact toolpath generation and opens a reusable non-modal

@@ -7,6 +7,35 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-05**
 
+## Active: automatic Home and object layer assignment
+
+`codex/auto-home-object-layers` follows the operator's reported successful 0.7.0
+Pi update and regular Windows application update. This report does not establish
+new firmware/configuration measurements or validate the new behavior physically.
+
+MachineService now owns conditional Home/park as part of one immutable prepared
+job start, binding STOP, authorization, and session generations across the
+sequence. Pi durable job ownership and duplicate-START handling remain in place.
+Desktop explicit HOME_REQUIRED permits Start but still rejects direct arming.
+Layer assignment is consistently selected-object scoped in Cuts rows, bottom
+tiles, and the Cuts dropdown; each Objects-row dropdown targets only that row.
+Selection refresh follows actual layer IDs, shared settings remain shared, and
+assignment uses existing undo/persistence and generated-job invalidation.
+
+Source verification: Windows Python 3.14 affected regressions **601 passed**;
+WSL/Linux Python 3.10 focused Pi/session/serial checks **202 passed** (one benign
+pytest cache-permission warning). Repository Ruff and compileall pass. Desktop
+coverage is offscreen widget interaction plus reviewed offscreen panel renders;
+the exact frozen build and supported-version CI outcomes belong to the feature
+handoff. Tests preserve the fail-closed legacy-status gate and cover per-object
+assignment, undo/redo, persistence, distinct generated feeds, full automatic
+Home, repeated jobs, and failed/cancelled starts. Pi socket tests pass for
+connection loss during conditional Home and STOP cancelling the pending start.
+No physical controller, camera, laser, or interactive operator test has been
+performed for this feature yet. Required validation: Start from HOME_REQUIRED,
+repeat from held READY_MOTION, STOP during automatic Home, failed Home, and
+independent layer assignment through each dropdown/row/tile followed by Preview.
+
 ## 0.7.0 consolidation
 
 The operator confirmed the final post-timing-fix STOP -> Home/park -> next-job

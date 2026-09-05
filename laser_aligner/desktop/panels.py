@@ -150,8 +150,14 @@ class LayerPanel(QtWidgets.QWidget):
 
         identity_row = QtWidgets.QHBoxLayout()
         identity_row.setSpacing(4)
-        self.name_edit = QtWidgets.QLineEdit()
-        self.name_edit.setPlaceholderText("Operation name")
+        self.layer_combo = QtWidgets.QComboBox()
+        self.layer_combo.setObjectName("cutLayerSelector")
+        self.layer_combo.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Ignored, QtWidgets.QSizePolicy.Policy.Fixed,
+        )
+        self.layer_combo.setToolTip("Assign a cut/layer to the selected objects")
+        self.rename_button = QtWidgets.QPushButton("Rename…")
+        self.rename_button.setToolTip("Rename this shared operation layer")
         self.color_button = QtWidgets.QPushButton("")
         self.color_button.setFixedWidth(30)
         self.color_button.setAccessibleName("Change operation layer color")
@@ -171,7 +177,8 @@ class LayerPanel(QtWidgets.QWidget):
         for mode in LayerMode:
             self.mode_combo.addItem(mode.value.title(), mode.value)
         identity_row.addWidget(self.color_button)
-        identity_row.addWidget(self.name_edit, 1)
+        identity_row.addWidget(self.layer_combo, 1)
+        identity_row.addWidget(self.rename_button)
         identity_row.addWidget(self.mode_combo)
         editor_layout.addLayout(identity_row)
 
@@ -324,7 +331,8 @@ class LayerPanel(QtWidgets.QWidget):
         self.remove_button.clicked.connect(self._remove_clicked)
         self.up_button.clicked.connect(lambda: self._move_clicked(-1))
         self.down_button.clicked.connect(lambda: self._move_clicked(1))
-        self.name_edit.editingFinished.connect(self._emit_edit)
+        self.layer_combo.activated.connect(self._choose_layer)
+        self.rename_button.clicked.connect(self._rename_layer)
         self.mode_combo.currentIndexChanged.connect(self._emit_edit)
         self.mode_combo.currentIndexChanged.connect(self._sync_scan_controls)
         self.speed_spin.editingFinished.connect(self._emit_edit)
@@ -345,8 +353,10 @@ class LayerPanel(QtWidgets.QWidget):
         self._updating = True
         try:
             self.layer_list.clear()
+            self.layer_combo.clear()
             selected_row = 0
             for row, layer in enumerate(document.layers):
+                self.layer_combo.addItem(layer.name, layer.id)
                 item = _LayerOperationsItem(
                     [
                         layer.name,
@@ -418,6 +428,21 @@ class LayerPanel(QtWidgets.QWidget):
         item = self.layer_list.currentItem()
         return None if item is None else str(item.data(QtCore.Qt.ItemDataRole.UserRole))
 
+    def _choose_layer(self, index: int) -> None:
+        if not self._updating and index >= 0:
+            self.layer_list.setCurrentRow(index)
+
+    def _rename_layer(self) -> None:
+        layer_id = self.current_layer_id()
+        if layer_id is None or self._document is None:
+            return
+        name, accepted = QtWidgets.QInputDialog.getText(
+            self, "Rename operation layer", "Name:",
+            text=self._document.get_layer(layer_id).name,
+        )
+        if accepted and name.strip():
+            self.layerEdited.emit(layer_id, {"name": name.strip()})
+
     def _selection_changed(
         self,
         current: QtWidgets.QTreeWidgetItem | None,
@@ -453,7 +478,7 @@ class LayerPanel(QtWidgets.QWidget):
     def _show_layer(self, layer: OperationLayer) -> None:
         self._updating = True
         try:
-            self.name_edit.setText(layer.name)
+            self.layer_combo.setCurrentIndex(self.layer_combo.findData(layer.id))
             _set_operation_color_swatch(self.color_button, layer.color)
             self.mode_combo.setCurrentIndex(
                 max(0, self.mode_combo.findData(layer.mode.value))
@@ -506,7 +531,6 @@ class LayerPanel(QtWidgets.QWidget):
         self.layerEdited.emit(
             layer_id,
             {
-                "name": self.name_edit.text(),
                 "mode": self.mode_combo.currentData(),
                 "speed_mm_min": self.speed_spin.value(),
                 "power_percent": self.power_spin.value(),
@@ -3280,6 +3304,7 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
 
 class ObjectPanel(QtWidgets.QWidget):
     selectionRequested = QtCore.Signal(list)
+    assignLayerRequested = QtCore.Signal(list, str)
     objectEdited = QtCore.Signal(str, dict)
     layerColorEditRequested = QtCore.Signal(str)
     rasterVectorizeRequested = QtCore.Signal(str)
@@ -3388,10 +3413,19 @@ class ObjectPanel(QtWidgets.QWidget):
                         self.layerColorEditRequested.emit(layer_id)
                     )
                 )
-                layer_label = QtWidgets.QLabel(layer.name, layer_cell)
-                layer_label.setObjectName("objectLayerName")
+                layer_selector = QtWidgets.QComboBox(layer_cell)
+                layer_selector.setObjectName("objectLayerSelector")
+                layer_selector.setToolTip("Assign a cut/layer to this object only")
+                for option in document.layers:
+                    layer_selector.addItem(option.name, option.id)
+                layer_selector.setCurrentIndex(layer_selector.findData(layer.id))
+                layer_selector.activated.connect(
+                    lambda index, object_id=scene_object.id, selector=layer_selector: (
+                        self.assignLayerRequested.emit([object_id], selector.itemData(index))
+                    )
+                )
                 layer_layout.addWidget(color_button)
-                layer_layout.addWidget(layer_label)
+                layer_layout.addWidget(layer_selector)
                 self.tree.setItemWidget(item, 1, layer_cell)
                 item.setSizeHint(1, QtCore.QSize(0, 28))
                 item.setSelected(scene_object.id in selected)

@@ -981,6 +981,7 @@ class PiJobService:
                 policy_digest=policy_digest,
                 policy_diagnostic=policy_diagnostic,
                 authorization_phrase=authorization_phrase,
+                expected_session_generation=expected_session_generation,
             )
         finally:
             self._release_physical_operation()
@@ -996,6 +997,7 @@ class PiJobService:
         policy_digest: str,
         policy_diagnostic: object = None,
         authorization_phrase: str | None = None,
+        expected_session_generation: int | None = None,
     ) -> dict[str, Any]:
         start_requested = time.monotonic()
         requested_generation = self.machine.operation_generation()
@@ -1083,6 +1085,7 @@ class PiJobService:
                         program,
                         str(_record_value(record, "name", "generated.gcode")),
                         authorization_phrase=authorization_phrase,
+                        expected_session_generation=expected_session_generation,
                     )
                 if not isinstance(local_job, dict) or not bool(local_job.get("running")):
                     raise PiJobServiceError(

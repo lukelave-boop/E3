@@ -367,12 +367,13 @@ def _upload(
     harness: ServerHarness,
     *,
     job_id: str | None = None,
+    home: bool = True,
 ) -> tuple[str, ValidatedProgram, dict[str, Any]]:
     status = harness.machine.status()
     if not status["connected"]:
         assert _rpc(harness, ACTION_MACHINE_CONNECT)["ok"] is True
         status = harness.machine.status()
-    if status["controller_state"] == "READY_HOME_REQUIRED":
+    if home and status["controller_state"] == "READY_HOME_REQUIRED":
         assert _rpc(harness, ACTION_MACHINE_PREPARE_JOB_START)["ok"] is True
     identifier = job_id or str(uuid.uuid4())
     program = harness.machine.preflight_program(_POWERED_PROGRAM)
@@ -1098,7 +1099,9 @@ def test_high_level_job_logs_are_bounded_and_omit_authorization_and_gcode(
 def test_duplicate_start_never_reruns_and_replay_cache_echoes_request_id(
     server_harness: ServerHarness,
 ) -> None:
-    job_id, program, _ = _upload(server_harness)
+    job_id, program, _ = _upload(server_harness, home=False)
+    assert server_harness.machine.status()["controller_state"] == "READY_HOME_REQUIRED"
+    assert "$H" not in server_harness.transport.commands
     request_id = str(uuid.uuid4())
     first = _rpc(
         server_harness,
@@ -1125,6 +1128,7 @@ def test_duplicate_start_never_reruns_and_replay_cache_echoes_request_id(
     assert duplicate["duplicate"] is True
     assert server_harness.transport.gated.wait(timeout=2.0)
     assert server_harness.transport.commands.count(_GATED_COMMAND) == 1
+    assert server_harness.transport.commands.count("$H") == 1
     server_harness.transport.release()
     _wait_until(lambda: server_harness.service.get(job_id)["state"] == "complete")
 

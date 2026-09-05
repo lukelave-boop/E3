@@ -1,5 +1,19 @@
 # Architecture
 
+Conditional Home-on-START belongs to `MachineService.start_preflighted_program`,
+inside the Pi-owned durable start operation for remote execution. The same
+immutable validated program, request STOP generation, authorization generation,
+and controller session span Home, revalidation, arming, and acceptance. Desktop
+state permits Start from explicit HOME_REQUIRED but does not permit direct
+arming there or infer this permission from missing legacy reference fields.
+RPC client lifetime does not own this operation; STOP still defeats continuation.
+
+Desktop layer assignment remains `AssignLayerCommand` over object IDs, with no
+project schema change. Cuts rows, palette tiles, and dropdowns use a queued
+assignment handler that captures targets at the click and returns from Qt's
+native signal before rebuilding widgets. Selection-driven presentation refresh
+does not assign layers or modify their shared settings.
+
 The 0.7.0 consolidation preserves dialect-specific completion: a successful
 GRBL Home/park verifies indefinite $1=255 hold before publishing READY_MOTION.
 A primary Marlin controller instead acknowledges its motor-release command

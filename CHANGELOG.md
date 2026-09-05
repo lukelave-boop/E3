@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased - automatic Home and object layer assignment
+
+- START JOB in HOME_REQUIRED runs full Home/park on the machine owner before
+  arming and executing the same prepared job. READY_MOTION skips initial Home.
+  STOP/disarm, session changes, failed Home, or policy drift cancel continuation.
+- Cuts/Layers rows and bottom tiles now consistently assign selected shapes.
+  Selecting a shape displays its actual layer without reassigning other shapes.
+- Cut/layer dropdowns are available above the Cuts settings and in each Objects
+  row. The latter targets only that object. Shared layer renaming remains separate.
+- No project schema, GRBL stepper-hold, or secondary Air Assist policy changes.
+
 ## 0.7.0 - controller lifecycle consolidation
 
 Consolidates primary GRBL session ownership, Pi/desktop status authority,

@@ -1212,10 +1212,6 @@ def test_explicit_home_then_start_reuses_exact_reference_without_second_home(
     machine.connect()
     program = machine.preflight_program("G21\nG90\nM5\nG0 X1 Y1 F100\nM5\n")
 
-    with pytest.raises(SafetyError, match="completed explicitly"):
-        machine.start_preflighted_program(program, "blocked-before-home.gcode")
-    assert transport.writes.count(("line", "$H")) == 0
-
     machine.prepare_job_start()
     home_count = transport.writes.count(("line", "$H"))
     modal_count = transport.writes.count(("line", "$G"))
@@ -1245,6 +1241,98 @@ def test_explicit_home_then_start_reuses_exact_reference_without_second_home(
     assert transport.step_idle_delay_ms == 255
     assert transport.writes.count(("line", "$H")) == home_count
     machine.disconnect()
+
+
+@pytest.mark.parametrize("powered", [False, True])
+def test_start_homes_then_runs_exact_program_and_keeps_held_reference(monkeypatch, powered):
+    transport = ResponsiveTransport("auto-home-start")
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    text = "G21\nG90\nM5\nG0 X1 Y1 F100\n"
+    if powered:
+        text += "M4 S100\nG1 X2 Y2 F250\n"
+    program = machine.preflight_program(text + "M5\n")
+    phrase = machine.ARM_PHRASE if powered else None
+    try:
+        for name in ("first.gcode", "second.gcode"):
+            machine.start_preflighted_program(program, name, authorization_phrase=phrase)
+            machine._job_thread.join(2)
+            assert not machine._job_thread.is_alive()
+            assert machine.status()["job"]["error"] is None
+            assert machine.status()["controller_state"] == "READY_MOTION"
+        writes = transport.writes
+        # Powered completion retains the configured post-job Home.
+        assert writes.count(("line", "$H")) == (3 if powered else 1)
+        assert writes.index(("line", "$H")) < writes.index(("line", "G0 X1 Y1 F100"))
+        assert writes.count(("line", "G0 X1 Y1 F100")) == 2
+        if powered:
+            assert writes.count(("line", "G1 X2 Y2 F250")) == 2
+        assert transport.step_idle_delay_ms == 255
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize("phrase", [None, "incorrect"])
+def test_start_rejects_missing_or_invalid_authorization_before_home(monkeypatch, phrase):
+    transport = ResponsiveTransport("invalid-start")
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    program = machine.preflight_program("G21\nG90\nM5\nG0 X1 Y1 F100\nM4 S100\nG1 X2 Y2 F250\nM5\n")
+    writes = list(transport.writes)
+    try:
+        with pytest.raises(SafetyError, match="authorization|phrase"):
+            machine.start_preflighted_program(program, authorization_phrase=phrase)
+        assert transport.writes == writes
+        assert not machine.status()["armed"]
+    finally:
+        machine.disconnect()
+
+
+@pytest.mark.parametrize("cancel", ["stop", "disarm", "policy", "session"])
+def test_start_cannot_continue_after_authority_changes_during_home(monkeypatch, cancel):
+    transport = ResponsiveTransport("cancel-auto-home")
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    program = machine.preflight_program("G21\nG90\nM5\nG0 X1 Y1 F100\nM4 S100\nG1 X2 Y2 F250\nM5\n")
+    home = machine.prepare_photo_position
+
+    def home_then_cancel():
+        result = home()
+        if cancel == "stop":
+            machine.request_stop(emergency=False)
+        elif cancel == "disarm":
+            machine.disarm()
+        elif cancel == "policy":
+            machine.settings.allow_motion = False
+        else:
+            machine.disconnect()
+        return result
+
+    monkeypatch.setattr(machine, "prepare_photo_position", home_then_cancel)
+    try:
+        with pytest.raises((MachineError, SafetyError)):
+            machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+        assert ("line", "$H") in transport.writes
+        assert ("line", "M4 S100") not in transport.writes
+        assert not machine.status()["armed"]
+        assert not machine.status()["job"]["running"]
+    finally:
+        machine.disconnect()
+
+
+def test_failed_automatic_home_never_streams_prepared_job(monkeypatch):
+    transport = ResponsiveTransport("failed-auto-home", replies={"$H": [("error:9",)]})
+    machine, _factory = make_machine(monkeypatch, transport)
+    machine.connect()
+    program = machine.preflight_program("G21\nG90\nM5\nG0 X1 Y1 F100\nM4 S100\nG1 X2 Y2 F250\nM5\n")
+    try:
+        with pytest.raises(MachineError):
+            machine.start_preflighted_program(program, authorization_phrase=machine.ARM_PHRASE)
+        assert ("line", "M4 S100") not in transport.writes
+        assert not machine.status()["coordinate_reference_ready"]
+        assert not machine.status()["armed"]
+    finally:
+        machine.disconnect()
 
 
 @pytest.mark.parametrize(

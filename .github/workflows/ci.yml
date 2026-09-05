@@ -130,6 +130,7 @@ jobs:
           tests/test_secondary_air_assist_integration.py
           tests/test_pi_job_protocol.py
           tests/test_pi_machine_server.py
+          tests/test_pi_auto_home.py
           tests/test_pi_owned_job_e2e.py
           tests/test_remote_machine_service.py
           tests/test_remote_node.py

@@ -54,7 +54,7 @@ def _enabled_capabilities(controller_state: str) -> set[str]:
         ("SYNCHRONIZING", {"stop"}),
         (
             "READY_HOME_REQUIRED",
-            {"disconnect", "home", "send_diagnostic", "motion_calibration", "stop"},
+            {"disconnect", "home", "start_job", "send_diagnostic", "motion_calibration", "stop"},
         ),
         (
             "READY_MOTION",

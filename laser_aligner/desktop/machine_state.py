@@ -193,7 +193,9 @@ class ControllerUiState:
 
     @property
     def can_start_job(self) -> bool:
-        return self.can_arm
+        # START owns conditional Home before arming; direct arming still needs
+        # an already established motion reference.
+        return self.can_arm or (self.explicit_state and self.can_home)
 
     @property
     def can_send_diagnostic(self) -> bool:

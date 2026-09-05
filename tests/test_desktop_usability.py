@@ -38,7 +38,7 @@ def test_workspace_has_fit_selection_zoom_and_space_pan():
 def test_palette_click_assigns_selected_objects():
     main_window = _source("main_window.py")
 
-    assert "_palette_layer_selected" in main_window
+    assert "_queue_layer_choice" in main_window
     assert "selected objects are assigned to this layer" in main_window
 
 

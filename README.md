@@ -49,7 +49,9 @@ stationary overhead **Logitech C920**.
 > not usable until a bounded, quiet serial synchronization and complete safe
 > GRBL identity/alignment handshake succeed. Software STOP permanently
 > quarantines the old session and starts communication-only recovery; successful
-> recovery still requires one explicit **Home / park** before motion. This is a
+> recovery still requires **Home / park** before job motion. **START JOB** now
+> performs that full sequence automatically when HOME_REQUIRED, then runs the
+> exact prepared job only after success. STOP cancels that pending start. This is a
 > software protocol-integrity measure, not a safety-rated stop or interlock. The
 > pre-change mechanisms are recorded in the
 > [primary-session failure audit](docs/GRBL_SESSION_FAILURE_AUDIT.md), and the

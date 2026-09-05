@@ -352,6 +352,7 @@ class LayerPaletteBar(QtWidgets.QWidget):
 
 class E3MainWindow(QtWidgets.QMainWindow):
     shutdownStarted = QtCore.Signal(float)
+    layerChoiceRequested = QtCore.Signal(list, str)
 
     def __init__(
         self,
@@ -1107,10 +1108,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self._rectangle_draw_committed
         )
 
-        self.palette.layerSelected.connect(self._palette_layer_selected)
+        self.layerChoiceRequested.connect(
+            self._apply_layer_choice, QtCore.Qt.ConnectionType.QueuedConnection,
+        )
+        self.palette.layerSelected.connect(self._queue_layer_choice)
         self.palette.addLayerRequested.connect(self.add_layer)
         self.palette.presetLayerRequested.connect(self.add_palette_layer)
-        self.layer_panel.activeLayerChanged.connect(self.set_active_layer)
+        self.layer_panel.activeLayerChanged.connect(self._queue_layer_choice)
         # Layer table checkbox edits originate inside QTreeWidget::itemChanged.
         # Updating the project synchronously rebuilds that same tree, so defer
         # the edit until Qt has returned from the native itemChanged signal.
@@ -1123,6 +1127,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.layer_panel.moveLayerRequested.connect(self.move_layer)
 
         self.object_panel.selectionRequested.connect(self.workspace.select_objects)
+        self.object_panel.assignLayerRequested.connect(self.layerChoiceRequested.emit)
         # Editing a tree item executes a history command, whose synchronous
         # refresh rebuilds this same tree.  Queue the edit until Qt has returned
         # from QTreeWidget::itemChanged so the emitting item is never deleted
@@ -1363,6 +1368,13 @@ class E3MainWindow(QtWidgets.QMainWindow):
                     self._expanding_group_selection = False
                 object_ids = list(expanded)
         objects = [known[object_id] for object_id in object_ids]
+        selected_layers = {item.layer_id for item in objects}
+        if len(selected_layers) == 1:
+            layer_id = next(iter(selected_layers))
+            if layer_id != self.active_layer_id:
+                # Presentation follows actual assignment. Programmatic panel
+                # refresh must never assign a layer to the selection.
+                self.set_active_layer(layer_id)
         count = len(objects)
         if not objects:
             selection_text = "0 objects selected"
@@ -1463,13 +1475,20 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.layer_panel.set_document(self.document, layer_id)
         self.palette.set_layers(self.document.layers, layer_id)
 
-    def _palette_layer_selected(self, layer_id: str) -> None:
+    def _queue_layer_choice(self, layer_id: str) -> None:
+        # Capture the selection now, but let the native tree/button signal
+        # return before history refresh rebuilds its widgets.
+        self.layerChoiceRequested.emit(self.workspace.selected_object_ids(), layer_id)
+
+    def _apply_layer_choice(self, selected: list[str], layer_id: str) -> None:
+        if layer_id not in {layer.id for layer in self.document.layers}:
+            return
+        known = {item.id: item for item in self.document.objects}
         self.set_active_layer(layer_id)
-        selected = self.workspace.selected_object_ids()
         changed = [
             object_id
             for object_id in selected
-            if self.document.get_object(object_id).layer_id != layer_id
+            if object_id in known and known[object_id].layer_id != layer_id
         ]
         if changed:
             layer = self.document.get_layer(layer_id)
@@ -4394,7 +4413,8 @@ class E3MainWindow(QtWidgets.QMainWindow):
             getattr(self.runtime.context.machine, "pi_owned_execution", False)
         ):
             self.show_notice(
-                "Preparing and uploading the exact job to the Raspberry Pi…"
+                "Preparing and uploading the exact job to the Raspberry Pi; "
+                "Home / park will run first if required…"
             )
         elif self.runtime.settings.machine.backend == "serial":
             self.show_notice("Starting the exact validated controller job…")

@@ -2267,12 +2267,21 @@ class MachineService:
         self._append_log("INFO", "laser control armed temporarily")
         return self._armed_until
 
-    def arm_program(self, phrase: str, program: ValidatedProgram) -> float:
+    def arm_program(
+        self, phrase: str, program: ValidatedProgram, *,
+        _expected_authorization_epoch: int | None = None,
+    ) -> float:
         arm_stop_epoch = self._operation_stop_epoch()
         with self._stop_epoch_lock:
             if self._stop_epoch != arm_stop_epoch:
                 raise MachineError("Arming was cancelled by software STOP")
-            arm_authorization_epoch = self._authorization_epoch
+            arm_authorization_epoch = (
+                self._authorization_epoch
+                if _expected_authorization_epoch is None
+                else _expected_authorization_epoch
+            )
+            if self._authorization_epoch != arm_authorization_epoch:
+                raise MachineError("Arming was cancelled by disarm")
             self._clear_arm_authorization()
         self._require_current_safety_profile(program)
         return self.arm(
@@ -4656,6 +4665,7 @@ class MachineService:
         name: str = "generated.gcode",
         *,
         authorization_phrase: str | None = None,
+        expected_session_generation: int | None = None,
     ) -> dict[str, Any]:
         """Run the complete guarded local start sequence for one exact program.
 
@@ -4665,32 +4675,52 @@ class MachineService:
         prevents UI code from pretending that a network transport owns execution.
         """
 
-        # Revalidate at the public start boundary. Physical Home is an explicit
-        # operator action: Start may use only the coordinate authority already
-        # established for this exact READY_MOTION session and never homes again.
-        self._require_current_safety_profile(program)
-        if self.settings.backend == "serial":
+        # Home and execution belong to one request, immutable program, and
+        # controller session. STOP/disarm during Home must defeat continuation;
+        # taking a fresh authorization generation after Home would revive it.
+        stop_epoch = self._operation_stop_epoch()
+        with self._stop_epoch_lock:
+            authorization_epoch = self._authorization_epoch
+        with self._lock:
+            requested_session = self._session
+        with self.operation_scope(stop_epoch), self._command_lock:
+            self._require_operation_generation_current(stop_epoch, operation="Start")
+            self._require_current_safety_profile(program)
+            if program.requires_laser_authorization:
+                if authorization_phrase is None:
+                    raise SafetyError(
+                        "This powered program requires explicit START authorization"
+                    )
+                if authorization_phrase.strip() != self.ARM_PHRASE:
+                    raise SafetyError("Arming phrase did not match")
             with self._lock:
-                session = self._session
-                motion_ready = bool(
-                    session is not None
-                    and self._controller_state is ControllerState.READY_MOTION
-                    and self._coordinate_reference_ready
-                    and self._coordinate_reference_session_generation
-                    == session.generation
+                self._require_expected_session_generation_locked(
+                    expected_session_generation, operation="Start",
                 )
-            if not motion_ready:
-                raise SafetyError(
-                    "Home / park must be completed explicitly for the current "
-                    "controller session before Start"
+                session = self._require_session()
+                if session is not requested_session:
+                    raise MachineError("Controller session changed before Start")
+                needs_home = (
+                    self.settings.backend == "serial"
+                    and self._controller_state is ControllerState.READY_HOME_REQUIRED
                 )
-        if program.requires_laser_authorization:
-            if authorization_phrase is None:
-                raise SafetyError(
-                    "This powered program requires explicit START authorization"
+            if needs_home:
+                self._append_log("INFO", "START: Home / park before exact prepared job")
+                self.prepare_photo_position()
+            self._require_operation_generation_current(stop_epoch, operation="Start")
+            with self._lock:
+                if self._require_session() is not session:
+                    raise MachineError("Controller session changed during Start")
+            self._require_current_safety_profile(program)
+            with self._stop_epoch_lock:
+                if self._authorization_epoch != authorization_epoch:
+                    raise MachineError("Start was cancelled by disarm or controller recovery")
+            if program.requires_laser_authorization:
+                self.arm_program(
+                    authorization_phrase, program,
+                    _expected_authorization_epoch=authorization_epoch,
                 )
-            self.arm_program(authorization_phrase, program)
-        return self.start_validated_program(program, name)
+            return self.start_validated_program(program, name)
 
     def start_job(self, text: str, name: str = "generated.gcode") -> dict[str, Any]:
         start_stop_epoch = self._operation_stop_epoch()

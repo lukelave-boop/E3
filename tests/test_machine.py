@@ -2564,7 +2564,7 @@ def test_start_preflighted_program_uses_existing_home_then_arms_and_starts(
     monkeypatch.setattr(
         machine,
         "arm_program",
-        lambda phrase, exact: calls.append(("arm", phrase, exact.digest)),
+        lambda phrase, exact, **kwargs: calls.append(("arm", phrase, exact.digest)),
     )
     monkeypatch.setattr(
         machine,
