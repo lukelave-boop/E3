@@ -41,6 +41,41 @@ protocols, not physical hardware; frozen build verification and operator
 acceptance remain pending. Existing supported compatibility failures below
 remain unresolved, so this branch is not ready to merge or release.
 
+Follow-up frozen source: `a152b50b5c693720c4ab6892554885f2e4d43de5`, version
+0.6.202, built separately under `.codex-worktrees/job-lifecycle-build` so the
+running 0.6.200 bundle remains intact. The isolated offscreen frozen EXE stayed
+alive for 15.29 seconds with no startup error or stderr. PyInstaller's module
+manifest resolves both changed modules to this exact build worktree. Changed
+Python files also parse with Python 3.10 grammar. No interactive GUI or new
+physical validation was performed by the agent.
+
+Follow-up compatibility run `33979147338`: Ruff passed. Linux passed 350 tests
+and failed three: the two previously recorded $1/M84 fixtures, plus
+`test_invalid_realtime_handshake_never_publishes_candidate[timeout]`, which
+expected the status-timeout diagnostic but failed earlier at the quiet terminal
+boundary. That controller/transport path is unchanged by this Windows follow-up;
+the extra failure is not declared benign or resolved. Windows 3.10 passed 3,091
+tests with 68 skips and 11 failures; Windows 3.12 passed 3,675 with 21 skips and
+16 failures. Neither changed test module failed. Full-suite failures remain in
+controller/serial transcripts, asynchronous motion/completion/STOP, Pi-server
+integration, and secondary timeout recovery tests. They overlap prior baseline
+failures but vary by run; no claim is made that every failure is harmless.
+[Exact compatibility run](https://github.com/lukelave-boop/E3/actions/runs/33979147338)
+remains red and blocks integration/release.
+
+The required Windows packaging script completed successfully, including native
+bundle validation and installer creation. The permanent E3 DEV TEST pointer now
+selects exact 0.6.202 / `a152b50` at
+`C:\Users\lukel\Documents\E3\.codex-worktrees\job-lifecycle-build\dist\E3\E3.exe`,
+feature **STOP recovery and job status**. No currently running app was closed.
+This follow-up is Windows-client-only; retain the previously deployed 0.6.200
+Pi source. Operator retest: save/close the idle old app, reopen E3 DEV TEST,
+then repeat a small job, STOP, Home/park, and a new job. Expected STOP must not
+display a delayed failure for the new job; normal pending Start must not itself
+mark machine status unavailable. Actual status failures remain possible and
+are not hidden. Matching Pi logs are still required to attribute the reported
+physical incident conclusively.
+
 Branch `codex/status-authority-home` is isolated from `55741cc` in a separate
 worktree. It includes independent machine/job observation freshness, coherent
 job-record reuse, three-second machine-snapshot expiry, five-second authenticated
