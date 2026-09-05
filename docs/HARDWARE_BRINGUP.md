@@ -121,8 +121,8 @@ not succeeded in the current connection.
 With `machine.home_and_release_after_powered_job` enabled, a successfully
 completed powered job also performs `M5`, waits for all accepted toolpath
 motion to finish, homes, returns to the configured camera pose, waits for the
-park move to finish, restores the configured normal GRBL idle delay if
-necessary, and lets standard GRBL step-idle behavior release the motors. A
+park move to finish, verifies continuous GRBL stepper hold, and retains the
+trusted coordinate reference for another job in the same session. A
 secondary Air Assist program keeps strict
 non-comment `E3AIRASSIST <mapping-sha256> ON|OFF` instructions in its immutable
 program bytes. The Pi intercepts them before the primary GRBL stream and
@@ -132,12 +132,13 @@ The desktop reports the finishing phase explicitly and raises an error if a
 completion command fails. This post-job motion is not attempted after a stop,
 failure, emergency action, disconnect, or zero-power job.
 
-`machine.grbl_step_idle_delay_ms` is the normal non-camera value and defaults
-to 250 ms for this profile. The application temporarily uses `$1=255` only
-during parked camera capture. Because `$1` persists in controller storage, a
+`machine.grbl_step_idle_delay_ms` is the released/Home-required value and defaults
+to 250 ms for this profile. The application uses `$1=255` throughout
+`READY_MOTION`. Because `$1` persists in controller storage, a
 crash can leave that hold active across power cycles; the next serial connection
 detects exactly `255` and restores the configured normal value. Standard GRBL
-then releases the motors after that finite `$1` delay. `$SLP` is not used as a
+publishes only `HOME_REQUIRED`; intentional release restores that finite delay.
+`$SLP` is not used as a
 motor-release action because it sleeps the controller. A same-primary Air Assist
 mapping establishes its trusted OFF command after laser off. Separately, the
 Pi's `CrealityControllerOwner` establishes and acknowledges secondary

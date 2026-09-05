@@ -2651,7 +2651,8 @@ def test_home_park_rejects_grbl_offsets_before_issuing_park_move(
     monkeypatch.setattr(
         machine,
         "send_command",
-        lambda command, **_kwargs: commands.append(command) or ["ok"],
+        lambda command, **_kwargs: commands.append(command)
+        or (["$1=255", "ok"] if command == "$$" else ["ok"]),
     )
     monkeypatch.setattr(
         machine,
@@ -2671,7 +2672,7 @@ def test_home_park_rejects_grbl_offsets_before_issuing_park_move(
     with pytest.raises(SafetyError, match="G54 XY"):
         machine.prepare_photo_position()
 
-    assert commands == ["M5", "$H"]
+    assert commands == ["M5", "$$", "$H"]
     assert not any(command.startswith("G0 ") for command in commands)
 
 
@@ -2726,7 +2727,14 @@ def test_stop_cancels_home_park_waiting_for_homing_ack(
     commands_when_stop_returned = list(transport.commands)
     worker.join(timeout=1.0)
 
-    assert commands_when_stop_returned == ["M5", "$H", "M5"]
+    assert commands_when_stop_returned == [
+        "M5",
+        "$$",
+        "$1=255",
+        "$$",
+        "$H",
+        "M5",
+    ]
     assert transport.commands == commands_when_stop_returned
     assert len(errors) == 1
     assert "cancelled" in str(errors[0])
@@ -2955,7 +2963,19 @@ def test_prepare_job_start_homes_without_parking_in_simulation(
         assert result["position"] is None
         assert result["homed"] is True
         assert result["parked"] is False
-        assert transport.commands == ["M5", "$H", "$G", "$#", "G21", "G90"]
+        assert transport.commands == [
+            "M5",
+            "$$",
+            "$1=255",
+            "$$",
+            "$H",
+            "$G",
+            "$#",
+            "G21",
+            "G90",
+        ]
+        assert transport.step_idle_delay_ms == 255
+        assert machine.status()["controller_state"] == "READY_MOTION"
         assert machine.status()["coordinate_reference_ready"] is True
         assert machine.status()["jog_ready"] is False
     finally:
@@ -3312,6 +3332,8 @@ def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
     ) -> list[str]:
         del _expected_stop_epoch
         recorded.append((command, timeout, _internal_motion))
+        if command == "$$":
+            return ["$1=255", "ok"]
         if command == "$G":
             return ["[GC:G0 G54 G17 G21 G90 G94 M5 M9 T0 F0 S0]", "ok"]
         if command == "$#":
@@ -3336,7 +3358,7 @@ def test_prepare_photo_position_allows_six_seconds_for_setup_acknowledgements(
     finally:
         machine.disconnect()
 
-    actions = [item for item in recorded if item[0] not in {"$G", "$#"}]
+    actions = [item for item in recorded if item[0] not in {"$$", "$G", "$#"}]
     assert actions[0] == ("M5", 6.0, True)
     assert actions[1] == ("$H", 120.0, True)
     assert actions[2] == ("G21", 6.0, True)
@@ -4203,7 +4225,7 @@ def test_home_park_recovers_only_post_sleep_m5_alarm(
             first_m5 = False
             rejection = _ControllerCommandRejected("error:9")
             raise MachineError("Command 'M5' failed: error:9") from rejection
-        return ["ok"]
+        return ["$1=255", "ok"] if command == "$$" else ["ok"]
 
     monkeypatch.setattr(machine, "send_command", record_command)
     monkeypatch.setattr(
@@ -4228,7 +4250,7 @@ def test_home_park_recovers_only_post_sleep_m5_alarm(
 
     machine.prepare_photo_position()
 
-    assert commands[:4] == ["M5", "$X", "M5", "$H"]
+    assert commands[:5] == ["M5", "$X", "M5", "$$", "$H"]
     assert machine.status()["coordinate_reference_ready"]
 
 
@@ -4299,6 +4321,9 @@ def test_grbl_home_park_uses_planner_barrier_not_realtime_idle_polling(
     commands = [item["command"] for item in result["transcript"]]
     assert commands == [
         "M5",
+        "$$",
+        "$1=255",
+        "$$",
         "$H",
         "G21",
         "G90",
@@ -4757,7 +4782,7 @@ def test_powered_job_owns_machine_through_drain_home_park_and_release() -> None:
         machine.disconnect()
 
 
-def test_successful_powered_serial_job_homes_parks_and_releases_motors(
+def test_successful_powered_serial_job_homes_parks_and_keeps_motors_held(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RecordingTransport(SimulatedTransport):
@@ -4810,10 +4835,12 @@ def test_successful_powered_serial_job_homes_parks_and_releases_motors(
         status = machine.status()
         assert status["job"]["error"] is None
         assert status["job"]["phase"] == "complete"
-        assert not status["coordinate_reference_ready"]
+        assert status["coordinate_reference_ready"]
+        assert status["controller_state"] == "READY_MOTION"
+        assert transport.step_idle_delay_ms == 255
         assert transport.x == pytest.approx(15)
         assert transport.y == pytest.approx(195)
-        assert transport.commands[-9:] == [
+        assert transport.commands[-10:] == [
             "M5",
             "G4 P0.01",
             "$H",
@@ -4822,7 +4849,8 @@ def test_successful_powered_serial_job_homes_parks_and_releases_motors(
             "G0 X15.000 Y195.000 F3000.000",
             "G4 P0.01",
             "$$",
-            "M5",
+            "$G",
+            "$#",
         ]
         assert "M9" not in transport.commands
     finally:
@@ -5001,7 +5029,7 @@ def test_stop_during_final_ack_cannot_publish_success_receipt(
     machine.disconnect()
 
 
-def test_powered_job_physical_unsupported_md_transcript_uses_finite_idle_release(
+def test_powered_job_physical_unsupported_md_transcript_keeps_grbl_hold(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RejectMotorDisableTransport(SimulatedTransport):
@@ -5059,21 +5087,52 @@ def test_powered_job_physical_unsupported_md_transcript_uses_finite_idle_release
         status = machine.status()
         assert status["job"]["error"] is None
         assert status["job"]["phase"] == "complete"
-        assert transport.commands[-7:] == [
-            "$H",
-            "G21",
-            "G90",
-            "G0 X110.000 Y110.000 F3000.000",
-            "G4 P0.01",
-            "$$",
-            "M5",
-        ]
+        assert "$H" in transport.commands
+        assert "G0 X110.000 Y110.000 F3000.000" in transport.commands
+        assert transport.commands[-3:] == ["$$", "$G", "$#"]
         assert "$MD" not in transport.commands
         assert "$SLP" not in transport.commands
         assert transport.raw_writes == []
         assert "M8" not in transport.commands
         assert "M9" not in transport.commands
-        assert not machine.status()["coordinate_reference_ready"]
+        assert machine.status()["coordinate_reference_ready"]
+        assert machine.status()["controller_state"] == "READY_MOTION"
+        assert transport.step_idle_delay_ms == 255
+    finally:
+        machine.disconnect()
+
+
+def test_intentional_grbl_motor_release_requires_home_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    transport = SimulatedTransport()
+    monkeypatch.setattr(
+        "laser_aligner.machine.service.create_machine_transport",
+        lambda _backend, _port, _baudrate: transport,
+    )
+    machine = MachineService(
+        MachineSettings(
+            backend="serial",
+            protocol="grbl",
+            allow_motion=True,
+            home_before_photo=True,
+        ),
+        LaserSettings(),
+        hardware_enabled=True,
+    )
+    machine.connect()
+    try:
+        machine.prepare_job_start()
+        assert machine.status()["controller_state"] == "READY_MOTION"
+        assert transport.step_idle_delay_ms == 255
+
+        with machine.temporary_stepper_hold():
+            pass
+
+        status = machine.status()
+        assert status["controller_state"] == "READY_HOME_REQUIRED"
+        assert not status["coordinate_reference_ready"]
+        assert transport.step_idle_delay_ms == 250
     finally:
         machine.disconnect()
 
@@ -5645,8 +5704,17 @@ def test_grbl_homing_without_ok_requires_active_then_idle_before_park(
     result = machine.prepare_photo_position()
 
     assert result["position"] == {"x": 110.0, "y": 105.0, "z": None}
-    assert transport.commands[:4] == ["M5", "$H", "G21", "G90"]
-    assert transport.commands[4].startswith("G0 X110.000 Y105.000")
+    assert transport.commands[:8] == [
+        "M5",
+        "$$",
+        "$1=255",
+        "$$",
+        "$H",
+        "G21",
+        "G90",
+        "G0 X110.000 Y105.000 F3000.000",
+    ]
+    assert transport.commands[7].startswith("G0 X110.000 Y105.000")
     assert not any(command.startswith(("M3", "M4")) for command in transport.commands)
     assert machine.status()["coordinate_reference_ready"]
     assert machine._jog_position_mm == (110.0, 105.0)

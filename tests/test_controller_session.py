@@ -62,6 +62,7 @@ class ResponsiveTransport:
         self.write_release = threading.Event()
         self.write_release.set()
         self.concurrent_line_write_detected = False
+        self.step_idle_delay_ms = 250
         self._startup = startup
         self._open_error = open_error
         self._responses: queue.Queue[str] = queue.Queue()
@@ -131,6 +132,8 @@ class ResponsiveTransport:
             command = " ".join(line.strip().upper().split())
             with self._lock:
                 self.writes.append(("line", command))
+            if command.startswith("$1="):
+                self.step_idle_delay_ms = int(command.split("=", 1)[1])
             if command == self.block_command:
                 self.write_entered.set()
                 if not self.write_release.wait(2.0):
@@ -171,12 +174,16 @@ class ResponsiveTransport:
             except queue.Empty:
                 return lines
 
-    @staticmethod
-    def _default_response(command: str) -> tuple[str, ...]:
+    def _default_response(self, command: str) -> tuple[str, ...]:
         if command == "$I":
             return (GRBL_IDENTITY, "ok")
         if command == "$$":
-            return ("$1=250", "$30=1000", "$32=1", "ok")
+            return (
+                f"$1={self.step_idle_delay_ms}",
+                "$30=1000",
+                "$32=1",
+                "ok",
+            )
         if command == "$G":
             return (GRBL_MODAL, "ok")
         if command == "$#":
@@ -1155,6 +1162,7 @@ def test_explicit_home_then_start_reuses_exact_reference_without_second_home(
     modal_count = transport.writes.count(("line", "$G"))
     offsets_count = transport.writes.count(("line", "$#"))
     assert home_count == 1
+    assert transport.step_idle_delay_ms == 255
 
     machine.start_preflighted_program(program, "after-explicit-home.gcode")
     job_worker = machine._job_thread
@@ -1167,6 +1175,16 @@ def test_explicit_home_then_start_reuses_exact_reference_without_second_home(
     assert transport.writes.count(("line", "$H")) == home_count
     assert transport.writes.count(("line", "$G")) > modal_count
     assert transport.writes.count(("line", "$#")) > offsets_count
+
+    machine.start_preflighted_program(program, "second-held-session-job.gcode")
+    second_worker = machine._job_thread
+    assert second_worker is not None
+    second_worker.join(2.0)
+    assert not second_worker.is_alive()
+    assert machine.status()["job"]["error"] is None
+    assert machine.status()["controller_state"] == "READY_MOTION"
+    assert transport.step_idle_delay_ms == 255
+    assert transport.writes.count(("line", "$H")) == home_count
     machine.disconnect()
 
 

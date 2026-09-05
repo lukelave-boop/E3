@@ -631,7 +631,7 @@ class MachineManagerDialog(QtWidgets.QDialog):
         )
         self.home_before_photo = QtWidgets.QCheckBox("Home before photo position")
         self.release_after_job = QtWidgets.QCheckBox(
-            "Home and release motors after powered job"
+            "Home and park after powered job (keep motors held)"
         )
         self.allow_motion = QtWidgets.QCheckBox(
             "Allow motion when this machine is running"

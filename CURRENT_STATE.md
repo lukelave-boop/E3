@@ -5,9 +5,20 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-09-04**
+Snapshot: **2026-09-05**
 
-## Active GRBL post-job motor-release correction
+## Active GRBL motion-readiness stepper-hold correction
+
+`READY_MOTION` now requires a Home-established coordinate reference for the exact
+controller generation and a controller-verified continuous GRBL stepper hold
+(`$1=255`). Normal successful jobs keep that held reference, including after the
+configured powered-job Home / park completion, so another job may start without
+Home while the same trusted held session remains valid. Intentional motor release,
+STOP, fault, quarantine, reconnect, restart, or uncertain controller communication
+invalidates the reference and requires Home. No `$SLP` or `$MD` command is used.
+This correction has automated verification only and remains physically unverified.
+
+## Prior GRBL post-job motor-release correction
 
 Physical validation established that a powered job and its automatic Home / park
 completed successfully, after which this controller rejected `$MD` with `error:2`,

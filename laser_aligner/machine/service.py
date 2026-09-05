@@ -2893,6 +2893,32 @@ class MachineService:
         if failures:
             raise MachineError(f"{context} cleanup incomplete: {'; '.join(failures)}")
 
+    def _ensure_grbl_steppers_held(
+        self,
+        execute: Callable[[str], list[str]],
+        *,
+        context: str,
+    ) -> None:
+        """Verify GRBL's supported indefinite stepper hold before trusting position."""
+
+        session = GRBL_DIALECT.grbl_session
+        assert session is not None
+        responses = execute(session.settings_query_command)
+        current = self._reported_grbl_step_idle_delay(responses)
+        if current is None:
+            raise MachineError(
+                f"{context}: GRBL did not report the $1 step-idle delay"
+            )
+        held = session.held_step_idle_delay_ms
+        if current != held:
+            execute(session.format_step_idle_delay(held))
+            verification = execute(session.settings_query_command)
+            if self._reported_grbl_step_idle_delay(verification) != held:
+                raise MachineError(
+                    f"{context}: GRBL did not verify the held-stepper $1={held} policy"
+                )
+        self._append_log("INFO", f"{context}: GRBL steppers held with $1={held}")
+
     @contextmanager
     def temporary_stepper_hold(self):
         """Keep GRBL steppers energized only for a scoped camera operation."""
@@ -3243,6 +3269,14 @@ class MachineService:
             offsets_command,
             timeout=max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout),
         )
+        return self._parse_grbl_coordinate_state(modal, offsets)
+
+    def _read_running_job_grbl_coordinate_state(
+        self, *, timeout: float
+    ) -> dict[str, Any]:
+        modal_command, offsets_command = GRBL_DIALECT.coordinate_state_query_commands
+        modal = self._execute_running_job_command(modal_command, timeout=timeout)
+        offsets = self._execute_running_job_command(offsets_command, timeout=timeout)
         return self._parse_grbl_coordinate_state(modal, offsets)
 
     @classmethod
@@ -3645,6 +3679,11 @@ class MachineService:
                 execute,
                 context="Home / park",
             )
+            if dialect is GRBL_DIALECT:
+                self._ensure_grbl_steppers_held(
+                    execute,
+                    context="Home / park",
+                )
             if self.settings.home_before_photo:
                 if dialect is GRBL_DIALECT:
                     homing_responses = self._execute_grbl_homing_locked(
@@ -4831,8 +4870,8 @@ class MachineService:
                 )
         return True
 
-    def _finish_powered_job_home_park_and_release(self) -> None:
-        """Home, park, and release a serial machine after a successful laser job."""
+    def _finish_powered_job_home_park_and_hold(self) -> None:
+        """Home and park after a successful laser job, retaining GRBL coordinate trust."""
 
         self._require_safety_configuration()
         dialect = self._require_resolved_dialect()
@@ -4843,10 +4882,9 @@ class MachineService:
         x = float(self.settings.photo_x)
         y = float(self.settings.photo_y)
         travel_feed = float(self.laser_settings.travel_feed_mm_min)
-        configured_idle_delay = self.settings.grbl_step_idle_delay_ms
-
         setup_timeout = max(_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS, self.settings.read_timeout)
         positioning_error: Exception | None = None
+        coordinate_state: dict[str, Any] | None = None
         try:
             if not self.settings.work_area.contains(
                 x,
@@ -4894,63 +4932,39 @@ class MachineService:
                 dialect.motion_barrier_command,
                 timeout=max(120.0, self.settings.read_timeout),
             )
-        except BaseException as exc:
-            positioning_error = exc
-
-        release_error: Exception | None = None
-        try:
-            self._set_running_job_phase("releasing")
             if dialect is GRBL_DIALECT:
-                session = dialect.grbl_session
-                assert session is not None
-                try:
-                    responses = self._execute_running_job_command(
-                        session.settings_query_command,
+                self._ensure_grbl_steppers_held(
+                    lambda command: self._execute_running_job_command(
+                        command,
                         timeout=setup_timeout,
-                    )
-                    restore_idle_delay = (
-                        configured_idle_delay
-                        if self._reported_grbl_step_idle_delay(responses)
-                        == session.held_step_idle_delay_ms
-                        else None
-                    )
-                except Exception as settings_error:
-                    # The release must still be attempted. Restoring the configured
-                    # finite delay is safer than risking a persisted $1=255 hold.
-                    restore_idle_delay = configured_idle_delay
-                    self._append_log(
-                        "INFO",
-                        "Could not inspect GRBL $1 after the job; forcing the configured "
-                        f"finite delay before release ({settings_error})",
-                    )
-                self._release_grbl_motors(
-                    restore_idle_delay=restore_idle_delay,
-                    job_execution=True,
+                    ),
                     context="post-job Home / park",
                 )
-            else:
-                self._execute_running_job_command(
-                    dialect.motor_release_command,
-                    timeout=setup_timeout,
+                coordinate_state = self._read_running_job_grbl_coordinate_state(
+                    timeout=setup_timeout
                 )
-        except Exception as exc:
-            release_error = exc
-
-        # Released axes are convenient for access but no longer a trusted
-        # absolute coordinate reference.
-        self._invalidate_coordinate_reference()
+                self._require_zero_xy_coordinate_offsets(coordinate_state)
+        except BaseException as exc:
+            positioning_error = exc
         if positioning_error is not None:
-            if release_error is not None:
-                _add_exception_note(
-                    positioning_error,
-                    f"Post-job motor release also failed: {release_error}"
-                )
             raise positioning_error
-        if release_error is not None:
-            raise release_error
+        context = self._current_job_run_context()
+        if context is None:
+            raise MachineError("Post-job Home / park lost its controller job context")
+        if dialect is GRBL_DIALECT:
+            with self._lock:
+                if not self._same_controller_session(self._session, context.session):
+                    raise MachineError("Post-job Home / park controller session was superseded")
+                self._coordinate_reference_ready = True
+                self._coordinate_reference_session_generation = context.session.generation
+                self._coordinate_state_reference = coordinate_state
+                self._jog_position_mm = (x, y)
+        else:
+            # No validated indefinite-hold policy exists for this dialect.
+            self._invalidate_coordinate_reference()
         self._append_log(
             "INFO",
-            "Powered job completed; machine homed, parked, and motors released",
+            "Powered job completed; machine homed and parked with GRBL steppers held",
         )
 
     def _run_job(
@@ -5014,7 +5028,7 @@ class MachineService:
                 )
             air_assist_off_acknowledged = True
             if run_completion:
-                self._finish_powered_job_home_park_and_release()
+                self._finish_powered_job_home_park_and_hold()
             elif self.settings.backend == "serial" and requires_motion:
                 # Controller acknowledgement proves planner acceptance, not
                 # physical completion. Do not publish a successful terminal

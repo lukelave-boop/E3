@@ -1653,7 +1653,7 @@ def test_pi_local_controller_failure_persists_failed_without_auto_retry(
         _close_harness(harness)
 
 
-def test_powered_pi_completion_homes_parks_restores_hold_and_releases(
+def test_powered_pi_completion_homes_parks_and_retains_held_reference(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1677,23 +1677,17 @@ def test_powered_pi_completion_homes_parks_restores_hold_and_releases(
         transport.release()
         _wait_until(lambda: harness.service.get(job_id)["state"] == "complete")
 
-        assert transport.commands[-11:] == [
-            "M5",
-            "G4 P0.01",
-            "$H",
-            "G21",
-            "G90",
-            "G0 X110.000 Y110.000 F3000.000",
-            "G4 P0.01",
-            "$$",
-            "M5",
-            "$1=250",
-            "$MD",
-        ]
+        assert "$H" in transport.commands
+        assert "G0 X110.000 Y110.000 F3000.000" in transport.commands
+        assert transport.commands[-3:] == ["$$", "$G", "$#"]
+        assert "$MD" not in transport.commands
+        assert "$SLP" not in transport.commands
         result = _rpc(harness, ACTION_JOB_RESULT, job_id=job_id)
         assert result["job"]["state"] == "complete"
         assert result["job"]["completed_lines"] == len(program.lines)
-        assert transport.step_idle_delay_ms == 250
+        assert transport.step_idle_delay_ms == 255
+        assert harness.machine.status()["controller_state"] == "READY_MOTION"
+        assert harness.machine.status()["coordinate_reference_ready"] is True
         assert transport.x == pytest.approx(110.0)
         assert transport.y == pytest.approx(110.0)
     finally:

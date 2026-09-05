@@ -75,8 +75,8 @@ emission has stopped or that the area is safe to enter.
   emergency. If an axis was moved by hand, Home / park again before jogging.
 - A successful powered serial job automatically issues primary-controller `M5`,
   waits behind all accepted toolpath motion, homes, parks at the configured
-  camera pose, waits for that move to finish, restores the normal GRBL step-idle
-  delay if necessary, and releases the motors. Secondary-controller Air Assist
+  camera pose, waits for that move to finish, and verifies continuous GRBL
+  stepper hold before retaining motion readiness. Secondary-controller Air Assist
   programs carry strict non-comment `E3AIRASSIST <mapping-sha256> ON|OFF`
   instructions in the immutable program bytes. The Pi validates and intercepts
   them before the primary GRBL stream; the primary never receives those
@@ -129,22 +129,18 @@ emission has stopped or that the area is safe to enter.
   that map is required before support corners can be expressed in machine
   coordinates. It remains machine-bounded. Review its exact pattern and use a
   rigidly restrained sacrificial sheet that covers every displayed target.
-- Parked-bed precision capture temporarily keeps GRBL motors energized and
-  begins that scoped hold only after Home / park and every other required
-  ordinary controller operation have completed. The hold covers the camera
-  burst, not the motion required to reach the trusted photography pose, and
-  explicitly disables them after its final frame, using FluidNC motor-disable
-  or standard GRBL sleep/reset as available, while preserving the prior
-  step-idle setting. Releasing motors invalidates trusted position and requires
+- Parked-bed precision capture requires the continuous GRBL hold established by
+  Home / park and retains it through the camera burst. Its explicit cleanup
+  restores the configured finite step-idle setting. Releasing motors invalidates trusted position and requires
   another Home / park before subsequent hardware work. Motor
   holding is not a safety brake. After an application crash or power fault,
   verify that the axes and controller idle-delay setting returned to the
   expected state before touching or operating the machine.
-- Continuous GRBL hold (`$1=255`) is reserved for the scoped camera window.
-  Every serial GRBL connection explicitly releases the motors. If it finds a
-  stale `255`, it first restores configured `machine.grbl_step_idle_delay_ms`;
-  the default for this profile is 250 ms. A controller that does not report
-  `$1` is rejected after a best-effort finite-delay restore and motor release.
+- Continuous GRBL hold (`$1=255`) is required while `READY_MOTION` is published.
+  A fresh serial connection restores configured `machine.grbl_step_idle_delay_ms`
+  (250 ms by default) and remains `HOME_REQUIRED`; only successful Home / park
+  establishes and verifies the hold. Intentional release restores the finite
+  delay and immediately invalidates motion readiness.
 - For accuracy validation, inspect the separate five-cross holdout path in
   Preview before running its powered job. It remains subject to the automatic
   four-corner support binding above. Validation reports camera-to-laser error

@@ -1642,7 +1642,7 @@ or expose values through an unauthenticated interface.
 
 After successful powered streaming, the job remains active through
 `M5 → planner-complete barrier → home → G21/G90 → park → motion-complete
-barrier → motor release`. Stream acknowledgements use a cancellation-aware
+barrier → verified continuous stepper hold`. Stream acknowledgements use a cancellation-aware
 completion timeout because GRBL can delay `ok` while its planner drains; the
 short interactive-command timeout is not evidence that a queued job failed.
 For Pi-owned execution this sequence is local and survives monitoring-client or
@@ -1657,8 +1657,8 @@ the exact consumed alarm-lock rejection `error:9`, with mandatory Home / park
 configured, permits `$X` followed by a second required `M5`. Connect and
 automatic recovery perform no homing or motion and leave coordinate state
 untrusted. Home / park is accepted only from `READY_HOME_REQUIRED` and publishes
-`READY_MOTION` atomically after its full homing, coordinate, mode, optional park,
-planner, and final coordinate validation succeeds. Every other rejection or
+`READY_MOTION` atomically after its continuous GRBL hold, full homing, coordinate,
+mode, optional park, planner, and final coordinate validation succeed. Every other rejection or
 ambiguous exchange fails and quarantines the exact session. A fully received,
 grammar-valid terminal `error:x` or `ALARM:x` is a consumed controller
 rejection and does not by itself make reply ownership uncertain; a partial or

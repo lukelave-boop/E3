@@ -6,6 +6,13 @@ Entries in this section are chronological. Simulator references in earlier
 entries describe behavior that existed before the removal entries below and are
 not current product capability.
 
+- Corrected GRBL motion readiness so `READY_MOTION` is published only after Home
+  establishes the current generation's coordinate reference and the controller
+  verifies continuous stepper hold (`$1=255`). Successful jobs retain that held
+  reference, including post-job Home / park, so another job may start without a
+  redundant Home. Intentional release, STOP, fault, reconnect, restart, or serial
+  uncertainty still invalidates readiness. No `$SLP` or `$MD` is emitted.
+
 - Added a bounded, conservative classifier for ESP-IDF firmware diagnostics
   multiplexed onto a GRBL serial stream. Valid `E`/`W`/`I`/`D`/`V` frames are
   retained in generation- and transaction-labelled diagnostics without stealing

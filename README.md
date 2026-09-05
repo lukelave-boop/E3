@@ -201,7 +201,8 @@ Native desktop workflow:
   template-library or project-object creation
 - Guarded controller connection, camera-pose parking, diagnostics, job run, and
   software stop; successful powered jobs drain queued motion, Home/park, and
-  only then release the motors, with visible completion phases and failure alert
+  retain controller-verified GRBL stepper hold and coordinate trust, with visible
+  completion phases and failure alert
 - Bounded desktop shutdown with active remote-camera socket interruption, a
   short idle-Pi Disconnect attempt, non-destructive detach for Pi-owned jobs,
   cooperative CPU cancellation, late-callback suppression, and a hard

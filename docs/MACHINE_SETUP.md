@@ -632,10 +632,11 @@ auto-resumes it.
 After a successful powered job, `machine.home_and_release_after_powered_job`
 keeps the job in its running state while the controller acknowledges `M5`,
 drains all accepted toolpath motion, homes, returns to the configured camera
-pose, waits for the park move to finish, and releases the motors. When Air
+pose, waits for the park move to finish, and retains the verified GRBL stepper
+hold and coordinate reference. When Air
 Assist is configured, the finalized program and local cleanup establish assist
 OFF after laser off before that completion motion. The default completion
-sequence is enabled. The Laser panel labels the drain, home, park, and release phases; a completion-command failure also
+sequence is enabled. The Laser panel labels the drain, home, and park phases; a completion-command failure also
  raises a one-time desktop error. The engraving may already be complete, so
  inspect the controller log and machine state before retrying. Zero-power jobs, stopped
  or failed jobs, emergency actions, and controller/serial disconnects skip the
@@ -643,9 +644,9 @@ sequence is enabled. The Laser panel labels the drain, home, park, and release p
  START acceptance is different: it does not interrupt the job or its Pi-local
  normal completion sequence.
 
-GRBL continuous hold (`$1=255`) is used only around a camera capture. Normal
-Home / park motion completes before the hold is acquired. Normal cleanup
-restores the value that preceded the capture. If an interrupted run
+GRBL continuous hold (`$1=255`) is required throughout `READY_MOTION` and is
+verified before Home establishes coordinate trust. Intentional capture cleanup
+restores the configured finite release value and requires Home again. If an interrupted run
 leaves `255` persisted across a controller restart, the next serial connection
 restores `machine.grbl_step_idle_delay_ms`, which defaults to 250 ms. This
 recovery then explicitly releases the motors. Connection requests motor release
