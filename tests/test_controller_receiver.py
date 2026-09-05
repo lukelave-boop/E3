@@ -50,6 +50,65 @@ def _join_receiver(receiver: ControllerReceiver) -> None:
         assert not receiver._thread.is_alive()
 
 
+@pytest.mark.parametrize("outcome", ["ready", "unowned", "retired"])
+def test_pending_admission_gets_next_ingress_turn_without_losing_fault_checks(outcome):
+    polling = threading.Event()
+    admission_waiting = threading.Event()
+    release_admission = threading.Event()
+    wrote = threading.Event()
+    errors = []
+
+    class Transport(_QueuedTransport):
+        def read_line(self, timeout):
+            if timeout > 0:
+                polling.set()
+            return super().read_line(timeout)
+
+    transport = Transport()
+    receiver = _receiver(transport, on_failure=lambda _: None)
+    lock = threading.Lock()
+
+    class DelayedAdmissionLock:
+        def __enter__(self):
+            if threading.current_thread().name == "test-admission":
+                admission_waiting.set()
+                assert release_admission.wait(2)
+            lock.acquire()
+
+        def __exit__(self, *args):
+            lock.release()
+
+    receiver._ingress = DelayedAdmissionLock()
+
+    def admit():
+        try:
+            receiver.begin(1, wrote.set)
+        except MachineError as exc:
+            errors.append(str(exc))
+
+    consumer = threading.Thread(target=admit, name="test-admission")
+    consumer.start()
+    try:
+        assert admission_waiting.wait(1)
+        receiver.start()
+        # Admission has registered but has not acquired ingress. The worker
+        # must not jump ahead and begin another blocking transport read.
+        assert not polling.wait(0.05)
+        if outcome == "unowned":
+            transport.input.put("ok")
+        elif outcome == "retired":
+            receiver.stop()
+        release_admission.set()
+        consumer.join(2)
+        assert not consumer.is_alive()
+        assert wrote.is_set() is (outcome == "ready")
+        assert bool(errors) is (outcome != "ready")
+    finally:
+        release_admission.set()
+        consumer.join(2)
+        _join_receiver(receiver)
+
+
 @pytest.mark.parametrize(
     ("incoming", "detail"),
     [

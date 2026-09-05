@@ -1679,6 +1679,11 @@ replace new upload/Start records at an unchanged controller revision. Pending
 START does not invalidate a fresh machine snapshot; actual response loss does.
 Raw controller job diagnostics remain separate from durable Pi job identity.
 Desktop errors require fresh terminal records and deduplicate by Pi job UUID.
+Raw serial readiness waits run outside the queue/framing gate, with readiness
+rechecked under that gate before reading. The primary receive worker gives
+pending admission and boundary consumers the next ingress turn instead of
+repeatedly reacquiring it for another blocking poll. See
+[serial receive timing](SERIAL_RECEIVE_TIMING.md).
 See [Pi status authority](REMOTE_STATUS_AUTHORITY.md). Every other rejection or
 ambiguous exchange fails and quarantines the exact session. A fully received,
 grammar-valid terminal `error:x` or `ALARM:x` is a consumed controller

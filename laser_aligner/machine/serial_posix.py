@@ -247,10 +247,20 @@ class PosixSerial:
             if self._synchronize_requested.wait(0.001):
                 continue
             try:
+                # Readiness waiting must not exclude queue consumers: session
+                # admission and ACK boundaries use read_line(timeout=0).
+                readable, _, _ = select.select([fd], [], [], 0.1)
+                if not readable:
+                    continue
                 with self._receive_lock:
+                    if self._stop.is_set():
+                        return
                     if self._synchronize_requested.is_set():
                         continue
-                    readable, _, _ = select.select([fd], [], [], 0.1)
+                    # Synchronization may have drained/flushed the descriptor
+                    # since the outer select. Only consume readiness proven
+                    # while holding the same gate as synchronization.
+                    readable, _, _ = select.select([fd], [], [], 0.0)
                     if not readable:
                         continue
                     chunk = os.read(fd, 4096)
@@ -413,7 +423,7 @@ class PosixSerial:
         discarded_lines = 0
         observed_activity = False
         with self._receive_lock:
-            # Lock acquisition may wait behind the reader's bounded select.
+            # Lock acquisition may wait behind the reader's framing work.
             # The synchronization deadline measures the interval during which
             # this operation exclusively owns RX, not scheduler contention
             # before ownership begins.

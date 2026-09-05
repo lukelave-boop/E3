@@ -9,6 +9,72 @@ Snapshot: **2026-09-05**
 
 ## Active Pi status authority and repeat Home revision
 
+New speed investigation after the successful 0.6.202 notification retest:
+operator reports that changing the previewed feed from 1500 to 3000 did not
+visibly change physical speed. Exact comparison geometry and cutting-versus-total
+duration have not yet been confirmed. Production code/configuration is unchanged.
+Local generation of a 30 mm ellipse emits 72 G1 segments with the requested
+F1500 versus F3000. MachineService rejects excessive feeds instead of silently
+clamping them. The streaming path waits for each ACK and a 10 ms quiet boundary.
+
+Authenticated read-only Pi machine.status returned READY_MOTION, a successful
+82-line powered job, and the configured Espressif Device by-id endpoint. Its
+retained transcript shows approximately 15 short F1500 moves between 11:07:23
+and 11:07:26, followed by Home/park. Post-job controller settings report
+$110=$111=10000, $120=$121=500, and $1=255. The Pi advertises version 0.6.200
+but revision `723b7eb7`, not the previously assumed deployment SHA; verify the
+actual Pi checkout/source before attributing all local findings to deployment.
+The operator subsequently supplied HEAD `3f3c25bc0b0d3cf4b90c2a3688e4eb5efbdab5de`
+and exact SHA-256 hashes of service.py, serial_posix.py, and controller_receiver.py;
+all three match that commit. Only the two local Pi config files are untracked.
+The code identity is therefore verified despite stale advertised build metadata.
+
+Code-derived timing flaw: PosixSerial._reader_loop holds _receive_lock across
+a 100 ms select, while read_line(timeout=0) first acquires that same lock.
+ControllerReceiver uses these supposedly nonblocking reads under _ingress at
+admission and quiet-boundary checks. A local Linux WSL pseudoterminal probe of
+the unchanged production transport measured 91.44 ms average zero-timeout reads;
+the combined receiver probe exceeded its 25-second diagnostic deadline, with
+the consumer waiting for _ingress and the receive owner waiting for the raw
+reader's _receive_lock. A Windows queue-only fake did not model this raw-reader
+lock and averaged 34.04 ms per ACK/quiet/end cycle. This demonstrates a missed
+transport deadline/lock-contention defect, not proof that every observed speed
+limit has that cause. No physical motion or controller command was initiated
+by these probes; hardware rate/override changes and safety-check removal are
+not proposed. Investigative script is ignored under build/investigate_speed.py.
+
+Implemented Pi-side timing correction: raw readiness waiting moves outside
+the queue/framing gate, and readiness is rechecked under the synchronization
+gate before consuming bytes. The primary receiver registers pending consumer
+work so the polling thread cannot repeatedly reacquire ingress ahead of it.
+No ACK quiet interval, response ownership, STOP, Home, feed, arming, or controller
+setting was changed. The same WSL probe now measures 0.04 ms zero-timeout reads
+and 22.73 ms ACK cycles (44.0 lines/s). After the serial-only correction it still
+measured 828.87 ms cycles, demonstrating why both cooperating layers matter.
+These are local PTY timings with immediate fake ACKs, not physical Pi speeds.
+See [serial receive timing](docs/SERIAL_RECEIVE_TIMING.md) for the cause, design,
+regression risks, and operator validation. Windows receiver/session/remote and
+shutdown checks pass 223 tests; a separate initial run passed 30 and explicitly
+skipped 18 POSIX cases. Final Linux tests and deployment handoff follow below.
+Keep the frozen Windows 0.6.202 bundle; this correction executes on the Pi.
+The first broad Linux run passed 177 tests and failed three assertions in two
+handshake fault fixtures: their 10 ms total command budget could fail at the
+mandatory 10 ms quiet interval before reaching the intended fault. Those two
+fixtures now allow 100 ms without changing production timing or expected fault
+classification; all six affected cases pass on Windows. The relevant PTY
+MachineService fixture now persists acknowledged $1 writes and asserts actual
+job completion. Linux rerun results follow at handoff.
+The rerun exposed the same insufficient budget in a third recovery fixture;
+that test now also reaches its intended missing-$#-ACK failure before recovery.
+Final Linux Python 3.10.12 POSIX/receiver/primary-event/controller-session run:
+180 passed in 35.79 s, including the actual PTY transport tests. All seven
+affected handshake/recovery fixture cases pass on Windows after those test-only
+changes. Repository Ruff, compileall, and diff whitespace checks pass. The
+existing full compatibility failures remain unresolved until the new CI run
+completes; this is a Pi feature-test correction, not a main/release integration.
+Physical 1500/3000 speed comparison and STOP/Home/repeat-job acceptance remain
+pending. No Pi deployment or hardware motion was performed by the agent.
+
 Operator acceptance follow-up for Windows 0.6.202 / `a152b50` on 2026-09-05:
 reported Connect, Generate, Start, interrupt with STOP, then Generate and Start
 again working without the previous error dialog. This records physical

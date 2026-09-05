@@ -35,6 +35,10 @@ stationary overhead **Logitech C920**.
 > Pending Start preserves machine-status freshness. Job failure dialogs identify
 > the Pi job, ignore stale/nonterminal records, and treat expected STOP as a
 > normal outcome while retaining distinct cleanup failures.
+> Pi serial timing now separates idle readiness waits from queue access and
+> gives pending command/boundary work a turn before another receive poll.
+> See [serial receive timing](docs/SERIAL_RECEIVE_TIMING.md) for regression
+> evidence and the remaining physical speed retest.
 >
 > Primary-controller reliability uses generation-bound sessions. A candidate is
 > not usable until a bounded, quiet serial synchronization and complete safe

@@ -37,6 +37,7 @@ class ControllerReceiver:
         self._owner_alive = owner_alive
         self._ingress = threading.Lock()
         self._condition = threading.Condition()
+        self._ingress_waiters = 0
         self._pending: deque[str] = deque()
         self._transaction: int | None = None
         self._fault: str | None = None
@@ -159,7 +160,7 @@ class ControllerReceiver:
     def begin(self, sequence: int, write: Callable[[], None]) -> None:
         """Drain idle input and admit/write an exchange under receive ownership."""
         try:
-            with self._ingress:
+            with self._consumer_ingress():
                 self.raise_if_faulted()
                 with self._condition:
                     if self._transaction is not None:
@@ -188,7 +189,7 @@ class ControllerReceiver:
             raise
 
     def end(self, sequence: int | None) -> None:
-        with self._ingress:
+        with self._consumer_ingress():
             with self._condition:
                 if self._transaction != sequence:
                     return
@@ -218,7 +219,7 @@ class ControllerReceiver:
         # A condition timeout alone does not prove a wire boundary: the worker
         # may still be in its raw read. Serialize one nonblocking read before
         # declaring the receive queue quiet, including on coarse Windows timers.
-        with self._ingress:
+        with self._consumer_ingress():
             self.raise_if_faulted()
             response = self._read_transport(timeout=0.0)
             if response:
@@ -227,9 +228,27 @@ class ControllerReceiver:
                 self.raise_if_faulted()
                 return self._pending.popleft() if self._pending else None
 
+    @contextmanager
+    def _consumer_ingress(self) -> Iterator[None]:
+        # Python locks do not promise FIFO acquisition. A polling reader must
+        # yield the next turn to queued admission/terminal-boundary work rather
+        # than repeatedly reacquire ingress for another blocking read.
+        with self._condition:
+            self._ingress_waiters += 1
+        try:
+            with self._ingress:
+                yield
+        finally:
+            with self._condition:
+                self._ingress_waiters -= 1
+                self._condition.notify_all()
+
     def _run(self) -> None:
         while not self._stop.is_set() and self._owner_alive():
             try:
+                with self._condition:
+                    while self._ingress_waiters and not self._stop.is_set():
+                        self._condition.wait()
                 with self._ingress:
                     if self._stop.is_set():
                         return
@@ -245,6 +264,6 @@ class ControllerReceiver:
                 # must occur outside ingress/condition ownership.
                 self._on_failure(str(exc))
                 return
-            # Yield between reads so command admission cannot starve behind a
-            # fast test transport or continuous asynchronous telemetry.
+            # Avoid a busy loop when a transport returns immediately. Pending
+            # consumer priority is enforced explicitly above, not by sleep(0).
             time.sleep(0)

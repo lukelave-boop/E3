@@ -48,6 +48,90 @@ def test_posix_serial_round_trip_over_pseudoterminal() -> None:
         os.close(slave_fd)
 
 
+def test_serial_queue_reads_do_not_wait_for_reader_select(monkeypatch) -> None:
+    import pty
+
+    from laser_aligner.machine import serial_posix
+
+    master_fd, slave_fd = pty.openpty()
+    serial = serial_posix.PosixSerial(os.ttyname(slave_fd))
+    entered = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    results = []
+    original_select = serial_posix.select.select
+
+    def blocked_select(readers, writers, errors, timeout):
+        if threading.current_thread().name == "serial-reader" and timeout == 0.1:
+            entered.set()
+            release.wait(3)
+            return [], [], []
+        return original_select(readers, writers, errors, timeout)
+
+    def consume():
+        results.append(serial.read_line(timeout=0))
+        finished.set()
+
+    monkeypatch.setattr(serial_posix.select, "select", blocked_select)
+    consumer = threading.Thread(target=consume)
+    try:
+        serial.open()
+        assert entered.wait(1)
+        consumer.start()
+        # The raw reader is deliberately still waiting; no tight latency
+        # threshold or fast mock transport is needed to expose lock coupling.
+        assert finished.wait(1), "queue read blocked behind raw readiness wait"
+        assert results == [None]
+        assert not release.is_set()
+    finally:
+        release.set()
+        if consumer.ident is not None:
+            consumer.join(2)
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
+def test_reader_rechecks_readiness_after_concurrent_synchronization(monkeypatch) -> None:
+    import pty
+
+    from laser_aligner.machine import serial_posix
+
+    master_fd, slave_fd = pty.openpty()
+    serial = serial_posix.PosixSerial(os.ttyname(slave_fd))
+    ready = threading.Event()
+    release = threading.Event()
+    original_select = serial_posix.select.select
+
+    def held_ready(readers, writers, errors, timeout):
+        result = original_select(readers, writers, errors, timeout)
+        if (threading.current_thread().name == "serial-reader" and timeout == 0.1
+                and result[0] and not ready.is_set()):
+            ready.set()
+            release.wait(3)
+        return result
+
+    monkeypatch.setattr(serial_posix.select, "select", held_ready)
+    try:
+        serial.open()
+        os.write(master_fd, b"old-ok\npartial")
+        assert ready.wait(1)
+        # The outer select saw bytes, but synchronization owns their disposal.
+        # The reader must not trust its stale readiness after this returns.
+        serial.synchronize_input(quiet_interval=0.01, timeout=0.5)
+        release.set()
+        assert serial.read_line(timeout=0.1) is None
+        serial.raise_if_faulted()
+        os.write(master_fd, b"fresh-ok\n")
+        assert serial.read_line(timeout=1) == "fresh-ok"
+        serial.raise_if_faulted()
+    finally:
+        release.set()
+        serial.close()
+        os.close(master_fd)
+        os.close(slave_fd)
+
+
 def test_posix_serial_invalid_utf8_after_synchronization_latches_fault() -> None:
     import pty
 
@@ -389,6 +473,7 @@ def test_machine_service_over_pseudoterminal() -> None:
 
     def controller() -> None:
         buffer = bytearray()
+        step_idle_delay = 250
         while not stop.is_set():
             readable, _, _ = select.select([master_fd], [], [], 0.05)
             if not readable:
@@ -409,7 +494,10 @@ def test_machine_service_over_pseudoterminal() -> None:
                     if line == "$I":
                         os.write(master_fd, b"[VER:1.1h.test:PTY]\r\nok\r\n")
                     elif line == "$$":
-                        os.write(master_fd, b"$1=250\r\n$30=1000\r\n$32=1\r\nok\r\n")
+                        os.write(master_fd, f"$1={step_idle_delay}\r\n$30=1000\r\n$32=1\r\nok\r\n".encode())
+                    elif line.startswith("$1="):
+                        step_idle_delay = int(line.split("=", 1)[1])
+                        os.write(master_fd, b"ok\r\n")
                     elif line == "$G":
                         os.write(
                             master_fd,
@@ -467,6 +555,8 @@ def test_machine_service_over_pseudoterminal() -> None:
         while machine.status()["job"]["running"] and time.monotonic() < deadline:
             time.sleep(0.01)
         assert machine.status()["job"]["error"] is None
+        assert not machine.status()["job"]["running"]
+        assert "$1=255" in commands
         assert "$H" in commands
         assert "G0 X100.000 Y100.000 F3000.000" in commands
         assert "M4S5" in commands

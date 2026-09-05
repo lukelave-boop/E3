@@ -12,6 +12,12 @@ and primary GRBL readiness/stepper-hold behavior are unchanged.
 
 ## Unreleased
 
+Pi serial queue reads no longer wait behind a 100 ms raw readiness poll.
+Synchronization rechecks readiness under its existing gate, and the primary
+receive worker yields to pending command/boundary operations. This removes two
+sources of command starvation without changing ACK ownership, the quiet
+interval, feed settings, STOP, or held-reference validation.
+
 Windows pending START no longer declares monitoring disconnected before dispatch.
 Fresh job identities and lifecycle observation guards prevent old terminal data
 from leaking into the next job. Failure dialogs require fresh terminal Pi job

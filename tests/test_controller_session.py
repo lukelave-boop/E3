@@ -906,7 +906,9 @@ def test_invalid_realtime_handshake_never_publishes_candidate(
     )
     machine, _factory = make_machine(monkeypatch, transport)
     monkeypatch.setattr(service_module, "_CONTROLLER_CONNECT_ATTEMPTS", 1)
-    monkeypatch.setattr(service_module, "_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS", 0.01)
+    # Reach the intended realtime fault after complete line transactions. A
+    # 10 ms total budget cannot reliably include the 10 ms quiet boundary.
+    monkeypatch.setattr(service_module, "_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS", 0.1)
 
     with pytest.raises(MachineError, match=match):
         machine.connect()
@@ -1841,7 +1843,8 @@ def test_connect_stage_faults_fail_closed(
     transport = ResponsiveTransport("stage-fault", replies={command: [responses]})
     machine, _factory = make_machine(monkeypatch, transport)
     monkeypatch.setattr(service_module, "_CONTROLLER_CONNECT_ATTEMPTS", 1)
-    monkeypatch.setattr(service_module, "_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS", 0.01)
+    # Earlier valid transactions must complete before the selected stage fails.
+    monkeypatch.setattr(service_module, "_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS", 0.1)
 
     with pytest.raises(MachineError, match=error_match):
         machine.connect()
@@ -1920,7 +1923,9 @@ def test_physical_dollar_hash_failure_sequence_has_all_seven_outcomes(
         failed_home_session,
         final_session,
     )
-    monkeypatch.setattr(service_module, "_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS", 0.01)
+    # Recovery must reach the planned missing-$#-ACK stage, not exhaust the
+    # entire setup budget on an earlier valid transaction's quiet interval.
+    monkeypatch.setattr(service_module, "_PHOTO_COMMAND_ACK_TIMEOUT_SECONDS", 0.1)
     monkeypatch.setattr(service_module, "_REALTIME_STOP_WRITE_DEADLINE_SECONDS", 0.02)
     machine.connect()
     machine.prepare_job_start()

@@ -30,6 +30,9 @@ now include the implemented Pi/desktop snapshot correction and explicit repeat
 Home, pending physical acceptance; see [Pi status authority](docs/REMOTE_STATUS_AUTHORITY.md).
 The STOP/Home/next-job follow-up separates pending START, delayed job observations,
 and terminal notifications; Windows verification precedes operator retesting.
+The subsequent speed report exposed nested serial/receiver lock contention;
+the [timing correction](docs/SERIAL_RECEIVE_TIMING.md) retains response ownership
+and requires Linux transport tests and a physical speed/STOP retest.
 Remaining work includes exact prepared-job auto-Home/Start, secondary lifecycle corrections, cooling capability validation,
 and broader physical-sequence acceptance.
 
