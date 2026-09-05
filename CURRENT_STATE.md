@@ -25,7 +25,7 @@ and READY_HOME_REQUIRED. This verifies those observed prior-build behaviors.
 The new recovery remains physically unverified.
 
 Focused Windows secondary/controller integration, Pi server, and desktop shutdown
-checks pass 99 tests. Repository Ruff, compileall, and diff checks pass. No full
+checks pass 100 tests. Repository Ruff, compileall, and diff checks pass. No full
 pytest or hardware access. Frozen build/smoke verification is pending.
 
 ## Active Pi secondary pre-start OFF and Start-error correction

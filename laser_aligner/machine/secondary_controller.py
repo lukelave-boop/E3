@@ -422,7 +422,8 @@ class SecondaryMarlinFanController:
                     self._owner._transport.synchronize_input()
                 except Exception as exc:
                     raise self._owner._fail_locked(exc) from exc
-                self._force_off()
+                self._owner._execute_acknowledged(_FAN_OFF_COMMAND, allow_open=False)
+                self._owner._secondary_fan_enabled = False
             except SecondaryControllerError as original:
                 _LOGGER.warning(
                     "Pre-start secondary OFF: persistent attempt failed: %s",

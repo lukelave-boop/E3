@@ -501,3 +501,20 @@ def test_prestart_rx_sync_fault_recovers_with_startup_settle():
     assert fresh.writes == ["M106 S0"]
     assert delays == [2, 2]
     assert owner.ready
+
+
+def test_fault_detected_after_rx_sync_cannot_add_an_implicit_reopen():
+    current = FakeSerial(["ok"])
+    fresh = FakeSerial([])
+    owner, fan = _controller([current, fresh], read_timeout_seconds=0.005)
+    fan.initialize_off()
+    def fault_after_sync():
+        current.passive_fault = OSError("fault after RX sync")
+    current.synchronize_input = fault_after_sync
+    with pytest.raises(SecondaryControllerError, match="fresh-session OFF retry failed"):
+        fan.ensure_off()
+    assert current.writes == ["M106 S0"]
+    assert current.close_calls == 1
+    assert fresh.open_calls == 1
+    assert fresh.writes == ["M106 S0"]
+    assert not owner.ready
