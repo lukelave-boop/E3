@@ -252,6 +252,7 @@ class RemoteMachineService:
         self._last_machine_status_monotonic: float | None = None
         self._last_node_response_monotonic: float | None = None
         self._machine_observation_sequence = 0
+        self._job_observation_sequence = 0
         self._retired_boot_ids: set[str] = set()
 
         self._hold_lock = threading.RLock()
@@ -815,6 +816,7 @@ class RemoteMachineService:
         accepted: bool | None = None,
     ) -> dict[str, Any]:
         job = self._normalize_job(record)
+        self._job_observation_sequence += 1
         job_id = job.get("job_id")
         digest = job.get("program_digest")
         if isinstance(job_id, str):
@@ -914,13 +916,12 @@ class RemoteMachineService:
             if self._controller_state is not None:
                 status["controller_state"] = self._controller_state
             self._status_cache = status
+            self._status_cache["controller_job"] = copy.deepcopy(status.get("job"))
             observed = job_record
-            if observed is None and isinstance(status.get("job"), Mapping):
-                observed = status["job"]
+            if observed is None and isinstance(previous_job, Mapping):
+                observed = {**previous_job, "status_stale": True}
             if observed is not None:
                 self._observe_job_locked(observed)
-            elif isinstance(previous_job, Mapping):
-                self._status_cache["job"] = self._normalize_job(previous_job)
             else:
                 self._status_cache["job"] = self._normalize_job(None)
             cached_job = self._status_cache["job"]
@@ -1003,6 +1004,8 @@ class RemoteMachineService:
     def _refresh_once(self) -> None:
         generation = self.operation_generation()
         self._require_capabilities(timeout=_MONITOR_RPC_TIMEOUT_SECONDS)
+        with self._state_lock:
+            requested_job_observation = self._job_observation_sequence
         machine_response = self._rpc(
             ACTION_MACHINE_STATUS,
             timeout=_MONITOR_RPC_TIMEOUT_SECONDS,
@@ -1021,7 +1024,8 @@ class RemoteMachineService:
             tracked_job_id = self._upload_job_id or (
                 self._tracked_job_id if self._start_ownership_uncertain else self._accepted_job_id
             )
-            if self._coherent_status_supported:
+            job_superseded = requested_job_observation != self._job_observation_sequence
+            if self._coherent_status_supported and not job_superseded:
                 active = machine_response.get("active_job")
                 latest = machine_response.get("latest_job")
                 if isinstance(active, Mapping):
@@ -1032,15 +1036,21 @@ class RemoteMachineService:
                     job_record = latest
             previous_job = self._status_cache.get("job")
             if job_record is None and isinstance(previous_job, Mapping) and previous_job.get("job_id"):
-                job_record = {**previous_job, "status_stale": True}
+                job_record = (
+                    previous_job if job_superseded else {**previous_job, "status_stale": True}
+                )
             if not self._cache_remote_status(
                 raw_status, job_record=job_record, response=machine_response,
             ):
                 return
             observation = self._machine_observation_sequence
+            job_observation = self._job_observation_sequence
+        if job_superseded:
+            return
         try:
             self._refresh_job_status(
                 machine_response, generation=generation, observation=observation,
+                job_observation=job_observation,
             )
         except MachineError as exc:
             # Job monitoring has its own freshness. It cannot erase a valid
@@ -1049,6 +1059,7 @@ class RemoteMachineService:
                 if (
                     generation == self._stop_epoch
                     and observation == self._machine_observation_sequence
+                    and job_observation == self._job_observation_sequence
                 ):
                     self._status_cache["job_status_error"] = str(exc)
                     self._status_cache["job"]["status_stale"] = True
@@ -1056,6 +1067,7 @@ class RemoteMachineService:
 
     def _refresh_job_status(
         self, machine_response: Mapping[str, Any], *, generation: int, observation: int,
+        job_observation: int,
     ) -> None:
         job_response = machine_response
         with self._state_lock:
@@ -1115,7 +1127,10 @@ class RemoteMachineService:
                 raise MachineError("Operation was cancelled by software STOP")
             with self._state_lock:
                 # A delayed job read cannot overwrite a newer lifecycle result.
-                if observation != self._machine_observation_sequence:
+                if (
+                    observation != self._machine_observation_sequence
+                    or job_observation != self._job_observation_sequence
+                ):
                     return
                 accepted, boot_changed = self._commit_response_metadata(job_response)
                 if accepted and not boot_changed and record is not None:
@@ -1864,12 +1879,24 @@ class RemoteMachineService:
                 self._tracked_job_id = job_id
                 self._tracked_program_digest = program.digest
                 previous = self._status_cache.get("job")
-                record = dict(previous) if isinstance(previous, Mapping) else {}
+                record = (
+                    dict(previous)
+                    if isinstance(previous, Mapping) and previous.get("job_id") == job_id
+                    else {}
+                )
                 record.update(
                     {
                         "job_id": job_id,
                         "name": name,
                         "state": "starting",
+                        "phase": "starting",
+                        "error": None,
+                        "started_at": None,
+                        "finished_at": None,
+                        "ownership_accepted": False,
+                        "start_accepted_at": None,
+                        "completed_lines": 0,
+                        "status_stale": False,
                         "program_digest": program.digest,
                         "requires_laser_authorization": (
                             program.requires_laser_authorization
@@ -1877,10 +1904,7 @@ class RemoteMachineService:
                         "requires_motion": program.requires_motion,
                     }
                 )
-                self._observe_job_locked(record)
-        self._mark_monitor_disconnected(
-            "START response was lost; querying the same Pi job before any further action"
-        )
+                self._cache_job_record(record)
 
     def _recover_lost_start(
         self,
@@ -1889,6 +1913,9 @@ class RemoteMachineService:
         original_error: MachineError,
         expected_stop_epoch: int,
     ) -> dict[str, Any]:
+        self._mark_monitor_disconnected(
+            "START response unavailable; querying the same Pi job before any further action"
+        )
         deadline = time.monotonic() + _START_RECOVERY_POLL_SECONDS
         while True:
             try:
@@ -2018,6 +2045,11 @@ class RemoteMachineService:
                 self._upload_job_id = job_id
                 self._tracked_job_id = job_id
                 self._tracked_program_digest = program.digest
+                self._cache_job_record({
+                    "job_id": job_id, "name": validated_name, "state": "receiving",
+                    "phase": "uploading", "program_digest": program.digest,
+                    "ownership_accepted": False,
+                })
 
             upload_started = time.monotonic()
             try:

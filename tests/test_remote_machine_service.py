@@ -1016,6 +1016,83 @@ def test_machine_publication_preserves_pi_ownership_while_job_detail_fails(monke
     assert service.pi_owned_job_active is True
 
 
+def test_raw_controller_stop_is_not_a_durable_pi_job(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    raw = fake._machine_status()
+    raw["job"].update(error="Job stopped", finished_at=123, phase="failed")
+    service._cache_remote_status(raw, job_record=None)
+    status = service.status()
+    assert status["controller_job"]["error"] == "Job stopped"
+    assert status["job"]["error"] is None
+    assert status["job"]["finished_at"] is None
+
+
+@pytest.mark.parametrize("action", [ACTION_MACHINE_STATUS, ACTION_JOB_ACTIVE])
+@pytest.mark.parametrize("fails", [False, True])
+def test_delayed_job_observation_cannot_replace_new_upload(monkeypatch, action, fails):
+    fake = FakePi()
+    if action == ACTION_JOB_ACTIVE:
+        fake.capabilities.remove(CAPABILITY_PI_COHERENT_STATUS)
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    old_id = str(uuid.uuid4())
+    new_id = str(uuid.uuid4())
+    fake.jobs[old_id] = {"job_id": old_id, "state": "stopped",
+                         "finished_at": 123, "error": "Job stopped",
+                         "ownership_accepted": True}
+    # Simulate a captured active response arriving after a new local upload.
+    fake.active_job_id = old_id
+    service._refresh_once()
+
+    def new_upload(request_action, request):
+        if request_action == action:
+            service._cache_job_record({"job_id": new_id, "state": "receiving"})
+            if fails:
+                raise MachineError("delayed observation failed")
+
+    fake.before_request = new_upload
+    if fails and action == ACTION_MACHINE_STATUS:
+        with pytest.raises(MachineError, match="delayed observation failed"):
+            service._refresh_once()
+    else:
+        service._refresh_once()
+    status = service.status()
+    assert status["job"]["job_id"] == new_id
+    assert status["job"]["error"] is None
+    assert status["job"]["finished_at"] is None
+    assert status["job_status_error"] is None
+
+
+def test_normal_start_preserves_fresh_machine_and_has_no_prior_terminal_error(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    service._cache_job_record({"job_id": "previous-job", "state": "stopped",
+                               "finished_at": 123, "error": "Job stopped"})
+    inspected = []
+
+    def inspect_pending(action, request):
+        if action in {ACTION_JOB_BEGIN, ACTION_JOB_START}:
+            status = service.status()
+            assert status["status_stale"] is False
+            assert status["status_error"] is None
+            assert status["job"]["job_id"] == request["job_id"]
+            assert status["job"]["finished_at"] is None
+            assert status["job"]["error"] is None
+            assert status["job"]["ownership_accepted"] is False
+            assert status["job"]["monitor_connected"] is True
+            assert status["job_status_error"] is None
+            inspected.append(action)
+
+    fake.before_request = inspect_pending
+    receipt = service.start_validated_program(service.preflight_program(_UNPOWERED_GCODE), "new.gcode")
+    assert inspected == [ACTION_JOB_BEGIN, ACTION_JOB_START]
+    assert receipt["ownership_accepted"] is True
+
+
 def test_job_only_reply_cannot_revive_expired_machine_state(monkeypatch):
     fake = FakePi()
     _install_fake(monkeypatch, fake)

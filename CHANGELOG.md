@@ -12,6 +12,12 @@ and primary GRBL readiness/stepper-hold behavior are unchanged.
 
 ## Unreleased
 
+Windows pending START no longer declares monitoring disconnected before dispatch.
+Fresh job identities and lifecycle observation guards prevent old terminal data
+from leaking into the next job. Failure dialogs require fresh terminal Pi job
+records, identify the job, and deduplicate by UUID; expected STOP is quiet while
+distinct cleanup and actual failed/interrupted outcomes remain visible.
+
 Desktop machine snapshots now publish independently of optional job details;
 job-only replies cannot refresh stale machine state. Coherent job records avoid
 redundant RPCs, and delayed failures/retired Pi boots cannot restore older

@@ -32,6 +32,9 @@ stationary overhead **Logitech C920**.
 > details. Stale machine status blocks motion without claiming a controller
 > reset. Explicit **Home / park** can be repeated while idle and disarmed in
 > READY_MOTION. See [Pi status authority](docs/REMOTE_STATUS_AUTHORITY.md).
+> Pending Start preserves machine-status freshness. Job failure dialogs identify
+> the Pi job, ignore stale/nonterminal records, and treat expected STOP as a
+> normal outcome while retaining distinct cleanup failures.
 >
 > Primary-controller reliability uses generation-bound sessions. A candidate is
 > not usable until a bounded, quiet serial synchronization and complete safe

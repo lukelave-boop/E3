@@ -451,6 +451,7 @@ class DesktopController(QtCore.QObject):
         self._live_camera_enabled = False
         self._live_camera_interval_ms = _DEFAULT_LIVE_CAMERA_INTERVAL_MS
         self._reported_terminal_job: tuple[object, object] | None = None
+        self._reported_terminal_jobs: dict[tuple[object, object], None] = {}
         self._last_controller_node_boot_id: str | None = None
         self._last_controller_session_generation: int | None = None
         self._last_controller_state_revision: int | None = None
@@ -980,21 +981,43 @@ class DesktopController(QtCore.QObject):
         self.statusChanged.emit(status)
         machine = status.get("machine") or {}
         job = machine.get("job") or {}
+        pi_job = machine.get("pi_owned_execution") is True or bool(job.get("job_id"))
+        if pi_job and (
+            not job.get("job_id")
+            or job.get("status_stale", False)
+            or job.get("state") not in {"complete", "failed", "stopped", "interrupted"}
+        ):
+            return
+        # STOP is an expected terminal outcome. Preserve any distinct cleanup
+        # failure instead of suppressing all errors on stopped records.
+        if pi_job and job.get("state") == "stopped" and job.get("error") in (None, "", "Job stopped"):
+            return
         terminal_key = (
             job.get("job_id") or job.get("started_at"),
-            job.get("finished_at"),
+            None if pi_job else job.get("finished_at"),
         )
+        reported_jobs = getattr(self, "_reported_terminal_jobs", {})
         if (
             not job.get("running", False)
             and job.get("finished_at") is not None
+            and job.get("error")
             and terminal_key != self._reported_terminal_job
+            and terminal_key not in reported_jobs
         ):
             self._reported_terminal_job = terminal_key
-            if job.get("error") and not (
+            reported_jobs[terminal_key] = None
+            if len(reported_jobs) > 64:
+                del reported_jobs[next(iter(reported_jobs))]
+            self._reported_terminal_jobs = reported_jobs
+            if not (
                 job.get("job_id") is not None
                 and job.get("job_id") == getattr(self, "_reported_start_failure_job", None)
             ):
-                self.errorOccurred.emit(f"Controller job failed: {job['error']}")
+                label = (
+                    f"Pi job {job.get('name') or 'unnamed'} [{str(job['job_id'])[:8]}]"
+                    if pi_job else "Controller job"
+                )
+                self.errorOccurred.emit(f"{label} failed: {job['error']}")
 
     def refresh_camera_image(self) -> None:
         # Repeating live-overlay timer ticks are intentionally dropped while

@@ -9,6 +9,38 @@ Snapshot: **2026-09-05**
 
 ## Active Pi status authority and repeat Home revision
 
+Operator follow-up on the 0.6.200 handoff: initially reported no problems, then
+reported the requested consecutive small powered-job sequence worked. After
+interrupting with STOP, homing, and requesting another job, the desktop showed
+"Controller job failed: Job stopped" together with STATUS UNAVAILABLE / STATE
+UNKNOWN. The operator clarified that the new job continued after the popup,
+even before dismissing it. The originating Pi job UUID is not established.
+Controller/firmware/configuration identity remains
+the prior reported setup, not independently re-read for this observation.
+
+Read-only follow-up investigation reproduced that DesktopController.poll_status
+emits this generic failure for a stale `state=stopped` job, and can emit it twice
+for the same UUID if finished_at changes. This is a demonstrated notification
+classification/deduplication weakness, not proof of the physical incident's
+cause. Code also marked every pending START as a lost response before sending
+the request, and could reuse a previous terminal record when forming the new
+starting record. Job reads lacked an independent lifecycle publication guard.
+
+The Windows follow-up separates pending START from actual response loss,
+creates fresh upload/start records, rejects job observations superseded by a
+new lifecycle, and keeps raw controller diagnostics outside durable Pi job
+identity. Desktop terminal errors require fresh terminal Pi records, identify
+the job name/UUID, and deduplicate by UUID. Expected STOP is quiet; distinct
+cleanup failures and actual failed/interrupted jobs remain visible. No Pi,
+controller, Home, arming, STOP, or serial implementation changes are included.
+Windows Python 3.14.4 focused remote-client, offscreen desktop job/reconnect,
+shutdown, and Pi-owned protocol end-to-end tests pass: 179 tests. Final cache
+freshness refinements pass all 81 remote-client/notification/shutdown tests.
+Repository Ruff and compileall pass. These use fake controllers and loopback
+protocols, not physical hardware; frozen build verification and operator
+acceptance remain pending. Existing supported compatibility failures below
+remain unresolved, so this branch is not ready to merge or release.
+
 Branch `codex/status-authority-home` is isolated from `55741cc` in a separate
 worktree. It includes independent machine/job observation freshness, coherent
 job-record reuse, three-second machine-snapshot expiry, five-second authenticated

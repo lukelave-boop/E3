@@ -60,6 +60,25 @@ machine-observation availability. It is not the Pi's process or USB state.
 Camera status remains separate. A camera response cannot make machine state
 fresh, and disabling the overlay is not a prerequisite for these semantics.
 
+## Job lifecycle and notifications
+
+Pending START records uncertainty about Pi ownership, not a failed monitoring
+connection. Only an actual unavailable START response invokes recovery for the
+same UUID. New upload/start records cannot inherit an earlier job's error or
+finish time. Polling captures a separate job observation sequence so a delayed
+machine/job response cannot replace a newer lifecycle publication, even when
+the controller state revision did not change. Raw `MachineService.job` remains
+available as `controller_job` diagnostics; only durable Pi records supply the
+desktop's logical job identity and acceptance.
+
+Terminal notifications require fresh Pi job details and an explicit terminal
+state. Errors include the job name and short UUID and are deduplicated by UUID
+within a bounded 64-error history. Expected `stopped` outcomes, including the
+legacy exact `Job stopped` text, do not produce failure dialogs. Distinct STOP
+cleanup errors and `failed`/`interrupted` errors remain visible. A stale job is
+not marked reported; its genuine failure can be reported when fresh details
+arrive. Fresh job details can report an error even if machine status is stale.
+
 ## Explicit Home/park
 
 The operator may request Home/park in either READY_HOME_REQUIRED or READY_MOTION

@@ -426,7 +426,7 @@ def test_pi_start_failure_survives_remote_cleanup_but_not_operator_stop(operator
 
 
 def test_pi_start_and_terminal_poll_report_error_only_once():
-    job = {"job_id": "failed-start", "running": False,
+    job = {"job_id": "failed-start", "state": "failed", "running": False,
            "finished_at": 123, "error": "secondary OFF failed"}
     controller = SimpleNamespace(
         runtime=SimpleNamespace(running=True, status=lambda: {"machine": {"job": job}}),
@@ -440,6 +440,59 @@ def test_pi_start_and_terminal_poll_report_error_only_once():
     assert controller.errorOccurred.messages == []
     controller._reported_start_failure_job = None
     controller._reported_terminal_job = None
+    controller._reported_terminal_jobs = {}
+    DesktopController.poll_status(controller)
+    DesktopController.poll_status(controller)
+    assert len(controller.errorOccurred.messages) == 1
+
+
+@pytest.mark.parametrize("state,error,stale,expected", [
+    ("stopped", "Job stopped", False, False),
+    ("stopped", None, False, False),
+    ("stopped", "secondary OFF failed", False, True),
+    ("failed", "Job stopped", False, True),
+    ("interrupted", "Pi restarted", False, True),
+    ("failed", "secondary OFF failed", True, False),
+    ("starting", "Job stopped", False, False),
+    ("receiving", "Job stopped", False, False),
+])
+def test_pi_terminal_notification_requires_fresh_terminal_failure(state, error, stale, expected):
+    job = {"job_id": "old-job-12345", "name": "circle.gcode", "state": state,
+           "running": False, "finished_at": 123, "error": error, "status_stale": stale}
+    controller = SimpleNamespace(
+        runtime=SimpleNamespace(running=True, status=lambda: {"machine": {
+            "pi_owned_execution": True, "status_stale": True, "job": job,
+        }}),
+        _accept_machine_status_revision=lambda _: True,
+        statusChanged=SimpleNamespace(emit=lambda _: None),
+        errorOccurred=_Signal(), _reported_terminal_job=None,
+    )
+    DesktopController.poll_status(controller)
+    assert len(controller.errorOccurred.messages) == int(expected)
+    if expected:
+        assert "circle.gcode [old-job-]" in controller.errorOccurred.messages[0]
+        # Same UUID, amended finish timestamp, and an intervening job must not
+        # redisplay an old failure as if it belonged to the new job.
+        job["job_id"] = "another-job"
+        DesktopController.poll_status(controller)
+        job["job_id"] = "old-job-12345"
+        job["finished_at"] = 124
+        DesktopController.poll_status(controller)
+        assert len(controller.errorOccurred.messages) == 2
+
+
+def test_pi_stale_failure_is_reported_once_when_fresh():
+    job = {"job_id": "failure", "state": "failed", "running": False,
+           "finished_at": 123, "error": "controller alarm", "status_stale": True}
+    controller = SimpleNamespace(
+        runtime=SimpleNamespace(running=True, status=lambda: {"machine": {"job": job}}),
+        _accept_machine_status_revision=lambda _: True,
+        statusChanged=SimpleNamespace(emit=lambda _: None),
+        errorOccurred=_Signal(), _reported_terminal_job=None,
+    )
+    DesktopController.poll_status(controller)
+    assert controller.errorOccurred.messages == []
+    job["status_stale"] = False
     DesktopController.poll_status(controller)
     DesktopController.poll_status(controller)
     assert len(controller.errorOccurred.messages) == 1

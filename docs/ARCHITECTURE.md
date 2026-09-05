@@ -1674,6 +1674,11 @@ mode, optional park, planner, and final coordinate validation succeed. The
 separate job-start preparation operation retains its one-Home contract. Desktop
 machine snapshots and supplemental job freshness are independent; bounded
 observation expiry and retired boot identities prevent old state becoming fresh.
+Job observations also have a local lifecycle sequence so delayed reads cannot
+replace new upload/Start records at an unchanged controller revision. Pending
+START does not invalidate a fresh machine snapshot; actual response loss does.
+Raw controller job diagnostics remain separate from durable Pi job identity.
+Desktop errors require fresh terminal records and deduplicate by Pi job UUID.
 See [Pi status authority](REMOTE_STATUS_AUTHORITY.md). Every other rejection or
 ambiguous exchange fails and quarantines the exact session. A fully received,
 grammar-valid terminal `error:x` or `ALARM:x` is a consumed controller
