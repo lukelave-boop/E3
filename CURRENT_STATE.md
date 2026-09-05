@@ -40,9 +40,9 @@ diagnostics-view addition passes all 33 projection/runtime-strip tests.
 Repository Ruff and compileall pass. The remaining full-suite failure is the
 previously recorded Marlin powered-completion transcript expecting M84; it is
 unchanged here. Local runtime is Windows Python 3.14.4, not supported Windows
-3.10/3.12 CI. Frozen build, supported CI, Linux runtime checks, and this revision's
-physical acceptance remain pending. No production hardware was contacted during
-this implementation. The branch is not ready to merge pending those gates.
+3.10/3.12 CI. Final build and supported CI evidence follow below; this revision's
+physical acceptance remains pending. No production hardware was contacted during
+this implementation. The branch is not ready to merge with compatibility red.
 
 Final publication review additionally preserves coherent Pi job ownership in the
 same machine-cache publication and retains prior durable ownership while legacy
@@ -51,7 +51,8 @@ locally owned or idle. Remote, Pi execution, and shutdown regression tests pass
 115 cases, including two new intermediate-publication tests. Ruff/compileall
 pass. The preliminary e66b1e0 Windows 0.6.199 package passed its isolated
 15.18-second offscreen launch check; it is superseded by this ownership
-correction and is not the operator handoff. A replacement freeze is pending.
+correction and is not the operator handoff. Final frozen 0.6.200 uses exact
+source 3f3c25bc0b0d3cf4b90c2a3688e4eb5efbdab5de.
 
 Compatibility run 33975743576 tested e66b1e0: Ruff passed; Windows 3.10 reported
 3,088 passed / 68 skipped / 6 failed; Windows 3.12 reported 3,664 passed / 21
@@ -60,6 +61,37 @@ pseudoterminal fixture and Marlin M84 expectation). Windows failures include
 short fake-controller deadlines/event waits and incomplete-job assertions;
 baseline run 33976246701 on deployed 55741cc is being compared before those
 are classified. No green compatibility or production-readiness claim is made.
+
+Baseline comparison completed: run 33976246701 on unchanged deployed 55741cc
+reported Windows 3.10: 3,071 passed / 68 skipped / 10 failed; Windows 3.12:
+3,651 passed / 21 skipped / 10 failed; Linux: 333 passed / 2 failed. The two
+Linux failures are identical to e66b1e0. Windows reproduces overlapping
+controller deadline/event-wait, secondary completion, and receipt/park timing
+failures, with some differing failed tests across runs. This establishes an
+unhealthy pre-existing CI baseline, not proof that every differing failure is
+benign. Final source 3f3c25b (0.6.200) completed CI run 33976703955: Ruff passed;
+Windows 3.10: 3,084 passed / 68 skipped / 12 failed; Windows 3.12: 3,667 passed /
+21 skipped / 9 failed; Linux: 345 passed / 2 failed. New monitoring, repeat-Home,
+and ownership tests passed. The Linux failures are the same two fixture issues;
+Windows retains varying short-deadline/event/unfinished-job failures including
+overlap with the unchanged baseline. Compatibility remains red, not waived.
+
+Final build: `packaging/build_windows.ps1` completed successfully for 0.6.200 /
+3f3c25b. Analysis records confirm the changed packaged modules come from this
+isolated worktree. The exact frozen executable passed a 15.20-second offscreen
+launch-only smoke with no early exit or startup-error report. Camera autostart
+and motion were disabled, the controller endpoint was unselected, and app/data
+paths were temporary. This is not an interactive GUI, camera, Pi, motion, or
+laser test. Changed Python files parse with Python 3.10 grammar.
+
+The permanent E3 DEV TEST pointer was atomically selected using
+`packaging/set_dev_test_feature.py`. It selects this worktree's
+`dist/E3/E3.exe`, version 0.6.200, revision 3f3c25b, feature
+"Pi status authority and repeat Home". Adjacent build-info metadata matches.
+The old running E3 process and the normal launcher were not replaced. The Pi
+has not been updated by this implementation; operator commands and the first
+idle/repeat-Home test are in `build/PI_UPDATE_AND_TEST.md` (local handoff artifact).
+The script's Bash/Python syntax was checked without executing it on hardware.
 
 ## Active audit step 1: primary GRBL session authority
 
