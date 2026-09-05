@@ -725,3 +725,28 @@ def test_secondary_cable_loss_after_on_fails_job_with_primary_m5_cleanup(
         assert recovery.writes == ["M106 S0"]
     finally:
         machine.disconnect()
+
+
+def test_second_start_recovers_persistent_secondary_timeout(monkeypatch):
+    commands = _binding()
+    current = _FakeSecondarySerial()
+    fresh = _FakeSecondarySerial()
+    fan = _fan_controller(commands, [current, fresh], read_timeout_seconds=0.005)
+    machine, primary = _connected_machine(
+        monkeypatch, settings=_machine_settings(), secondary=fan,
+    )
+    text = _generated_job(commands, second_air=None).text
+    try:
+        _arm_and_start(machine, text)
+        assert _wait_for_job(machine)["phase"] == "complete"
+        assert current.open_calls == 1
+        current.default_response = None
+        primary.commands.clear()
+        _arm_and_start(machine, text)
+        assert _wait_for_job(machine)["phase"] == "complete"
+        assert current.close_calls == 1
+        assert fresh.open_calls == fresh.synchronize_calls == 1
+        assert fresh.writes == ["M106 S0", "M106 S255", "M106 S0"]
+        assert any(command.startswith("M4 S") for command in primary.commands)
+    finally:
+        machine.disconnect()

@@ -418,7 +418,7 @@ def test_persistent_prestart_off_discards_idle_rx_and_requires_new_ack() -> None
             self.responses.append("ok")
 
     serial = IdleSerial()
-    owner, fan = _controller([serial])
+    owner, fan = _controller([serial, FakeSerial([])])
     fan.initialize_off()
     serial.responses.extend(["Error: stale idle fragment", "ok"])
     fan.ensure_off()
@@ -443,3 +443,61 @@ def test_prestart_framing_rejection_uses_same_bounded_reopen_as_restart() -> Non
     assert current.writes == ["M106 S0", "M106 S0"]
     assert fresh.writes == ["M106 S0"]
     assert current.close_calls == 1
+
+
+@pytest.mark.parametrize("failure", [None, OSError("read failed"), "echo:Unknown command: bad OFF"])
+@pytest.mark.parametrize("retry_fails", [False, True])
+def test_prestart_uncertain_off_has_one_fresh_attempt(failure, retry_fails, caplog):
+    current = FakeSerial(["ok"])
+    fresh = FakeSerial([] if retry_fails else ["ok"])
+    owner, fan = _controller([current, fresh], read_timeout_seconds=0.005)
+    fan.initialize_off()
+    current.responses = [failure]
+    with caplog.at_level("INFO"):
+        if retry_fails:
+            with pytest.raises(SecondaryControllerError, match="fresh-session OFF retry failed"):
+                fan.ensure_off()
+        else:
+            fan.ensure_off()
+    assert current.close_calls == 1
+    assert current.writes == ["M106 S0", "M106 S0"]
+    assert fresh.open_calls == fresh.synchronize_calls == 1
+    assert fresh.writes == ["M106 S0"]
+    assert fresh.close_calls == int(retry_fails)
+    assert owner.ready is (not retry_fails)
+    assert "persistent attempt failed" in caplog.text
+    assert "fresh-session retry started" in caplog.text
+    assert ("fresh-session retry failed" if retry_fails else "fresh-session retry acknowledged") in caplog.text
+
+
+@pytest.mark.parametrize("failure", [None, OSError("ON read failed"), "echo:Unknown command: ON"])
+def test_uncertain_on_never_reopens_or_replays(failure):
+    current = FakeSerial(["ok", failure])
+    unused = FakeSerial(["ok"])
+    owner, fan = _controller([current, unused], read_timeout_seconds=0.005)
+    fan.initialize_off()
+    with pytest.raises(SecondaryControllerError):
+        fan.set_enabled(True, mapping_digest=fan.binding.mapping_digest)
+    assert current.writes == ["M106 S0", "M106 S255"]
+    assert current.close_calls == 1
+    assert unused.open_calls == 0
+    assert not owner.ready
+    assert fan.status.enabled is None
+
+
+def test_prestart_rx_sync_fault_recovers_with_startup_settle():
+    current = FakeSerial(["ok"])
+    fresh = FakeSerial(["ok"])
+    delays = []
+    owner, fan = _controller([current, fresh], startup_delay_seconds=2, sleep=delays.append)
+    fan.initialize_off()
+    def fail_sync():
+        raise OSError("RX synchronization failed")
+    current.synchronize_input = fail_sync
+    fan.ensure_off()
+    assert current.close_calls == 1
+    assert current.writes == ["M106 S0"]
+    assert fresh.open_calls == fresh.synchronize_calls == 1
+    assert fresh.writes == ["M106 S0"]
+    assert delays == [2, 2]
+    assert owner.ready

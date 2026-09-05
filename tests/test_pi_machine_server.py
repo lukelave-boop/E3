@@ -1731,7 +1731,8 @@ def test_secondary_prestart_off_failure_is_durable_pi_failure(
     from tests.test_secondary_controller import FakeSerial, _controller
 
     serial = FakeSerial(["ok", "error: physical secondary diagnostic"])
-    _, fan = _controller([serial])
+    fresh = FakeSerial([])
+    _, fan = _controller([serial, fresh], read_timeout_seconds=0.005)
     fan.initialize_off()  # Same persistent owner that acknowledged restart OFF.
     job_id, program, _ = _upload(server_harness)
     monkeypatch.setattr(server_harness.machine, "_secondary_controller_for", lambda _: fan)
@@ -1741,6 +1742,9 @@ def test_secondary_prestart_off_failure_is_durable_pi_failure(
     record = server_harness.service.get(job_id)
     assert record["state"] == "failed"
     assert "physical secondary diagnostic" in record["error"]
+    assert "fresh-session OFF retry failed" in record["error"]
+    assert fresh.open_calls == 1
+    assert fresh.writes == ["M106 S0"]
     assert "acknowledged OFF" in record["error"]
     assert serial.writes[:2] == ["M106 S0", "M106 S0"]
     assert _GATED_COMMAND not in server_harness.transport.commands[before:]

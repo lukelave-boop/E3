@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.196 - bounded pre-start OFF recovery
+
+Pre-start secondary OFF permits exactly one fresh-session recovery after a
+persistent-session synchronization, write, acknowledgement, or framing failure.
+The existing owner closes the uncertain session, reopens, settles, synchronizes,
+and requires a new acknowledged `M106 S0` before primary streaming. Failure of
+that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
+ON is never automatically replayed. Startup/restart, STOP, mapping validation,
+and primary GRBL readiness/stepper-hold behavior are unchanged.
+
 ## Unreleased
 
 Pi Start now synchronizes idle secondary RX before a fresh acknowledged

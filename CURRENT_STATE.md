@@ -7,6 +7,27 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-05**
 
+## Active bounded persistent-secondary pre-start OFF recovery
+
+Pre-start secondary OFF permits exactly one fresh-session recovery after a
+persistent-session synchronization, write, acknowledgement, or framing failure.
+The existing owner closes the uncertain session, reopens, settles, synchronizes,
+and requires a new acknowledged `M106 S0` before primary streaming. Failure of
+that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
+ON is never automatically replayed. Startup/restart, STOP, mapping validation,
+and primary GRBL readiness/stepper-hold behavior are unchanged.
+
+User-reported 0.6.195 physical evidence: first powered circle START accepted at
+05:46:27 and completed at 05:46:37, retaining READY_MOTION. Second Start failed
+on secondary OFF acknowledgement timeout without primary execution; the desktop
+reported the preserved error and Pi recorded FAILED. Cleanup restored $1=250
+and READY_HOME_REQUIRED. This verifies those observed prior-build behaviors.
+The new recovery remains physically unverified.
+
+Focused Windows secondary/controller integration, Pi server, and desktop shutdown
+checks pass 99 tests. Repository Ruff, compileall, and diff checks pass. No full
+pytest or hardware access. Frozen build/smoke verification is pending.
+
 ## Active Pi secondary pre-start OFF and Start-error correction
 
 Pi Start now synchronizes idle secondary RX before a fresh acknowledged
@@ -28,8 +49,12 @@ Focused Windows Pi/remote/desktop checks pass 98 tests; secondary/integration/
 desktop checks pass 48 tests (overlapping desktop selection). The focused MachineService/session/Pi/secondary/desktop selection passed
 480 tests with 16 expected Windows POSIX skips before the final added cases.
 Repository Ruff, compileall, and diff whitespace checks pass. Full pytest is
-intentionally skipped. No physical hardware, camera, or Pi was contacted. Frozen build smoke
-and operator verification remain pending at this source snapshot.
+intentionally skipped. No physical hardware, camera, or Pi was contacted. Frozen 0.6.195 at dd2a0020acf010570144c7f91c8ce7a95ed19ab9 passed
+the isolated offscreen 15.29-second launch-only smoke without early exit or
+startup-error reports. Camera autostart and motion were disabled, the controller
+endpoint was unselected, and user data paths were temporary. This was not an
+interactive GUI or physical test. The permanent E3 DEV TEST pointer selects
+that exact bundle. Operator verification remains pending.
 
 ## Active GRBL motion-readiness stepper-hold correction
 

@@ -9,6 +9,7 @@ session is opened.
 
 from __future__ import annotations
 
+import logging
 import math
 import os
 import time
@@ -25,6 +26,7 @@ _FAN_ON_COMMAND = "M106 S255"
 _FAN_OFF_COMMAND = "M106 S0"
 _MAX_COMMAND_CHARACTERS = 160
 _MAX_RESPONSE_DIAGNOSTIC_CHARACTERS = 160
+_LOGGER = logging.getLogger(__name__)
 
 
 class _SerialTransport(Protocol):
@@ -407,18 +409,42 @@ class SecondaryMarlinFanController:
                 self._force_off()
 
     def ensure_off(self) -> None:
-        """Force a fresh acknowledged OFF, even when OFF was previously known."""
+        """Pre-start OFF permits one fresh session after persistent uncertainty."""
 
         with self._owner._lock:
-            # Idle RX (including partial frames and stale acknowledgements) must
-            # not contaminate the next OFF exchange on the persistent session.
-            self._owner._refresh_transport_fault_locked()
-            if self._owner._trusted and self._owner._transport is not None:
+            if not self._owner._trusted or self._owner._transport is None:
+                self.initialize_off()
+                return
+            _LOGGER.info("Pre-start secondary OFF: persistent attempt started")
+            try:
+                self._owner.raise_if_faulted()
                 try:
                     self._owner._transport.synchronize_input()
                 except Exception as exc:
                     raise self._owner._fail_locked(exc) from exc
-            self.initialize_off()
+                self._force_off()
+            except SecondaryControllerError as original:
+                _LOGGER.warning(
+                    "Pre-start secondary OFF: persistent attempt failed: %s",
+                    _bounded_detail(original),
+                )
+                self._owner.close()
+                _LOGGER.info("Pre-start secondary OFF: fresh-session retry started")
+                try:
+                    # Do not nest initialize_off's framing retry: this is the
+                    # sole fresh attempt, using the owner's settle/sync path.
+                    self._force_off()
+                except SecondaryControllerError as retry:
+                    _LOGGER.warning(
+                        "Pre-start secondary OFF: fresh-session retry failed: %s",
+                        _bounded_detail(retry),
+                    )
+                    raise SecondaryControllerError(
+                        f"{original}; fresh-session OFF retry failed: {_bounded_detail(retry)}"
+                    ) from retry
+                _LOGGER.info("Pre-start secondary OFF: fresh-session retry acknowledged")
+            else:
+                _LOGGER.info("Pre-start secondary OFF: persistent attempt acknowledged")
 
     def set_enabled(
         self,

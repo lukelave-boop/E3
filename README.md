@@ -652,3 +652,13 @@ operator STOP. Desktop rejection returns promptly and reports the error once,
 including when controller cleanup invalidates its session. Physical retesting
 remains required; the original physical exception was not retained, so idle RX
 contamination or a framing rejection cannot be confirmed from that log alone.
+
+## Pre-start secondary OFF recovery
+
+Pre-start secondary OFF permits exactly one fresh-session recovery after a
+persistent-session synchronization, write, acknowledgement, or framing failure.
+The existing owner closes the uncertain session, reopens, settles, synchronizes,
+and requires a new acknowledged `M106 S0` before primary streaming. Failure of
+that sole retry preserves both bounded diagnostics and rejects Start. Air Assist
+ON is never automatically replayed. Startup/restart, STOP, mapping validation,
+and primary GRBL readiness/stepper-hold behavior are unchanged.
