@@ -27,9 +27,12 @@ Both transcript outcomes pass locally. This Marlin correction is software
 verified, not physically tested on a primary Marlin controller.
 
 The 0.7 series uses immutable tag v0.7.0 as its commit-count baseline. The unique
-S1 Pro Z-homing branch is excluded with operator approval and will be preserved
-under an archive tag. The paused root serial EAGAIN experiment is excluded and
-will be preserved separately. Local Linux release checks passed 356 tests.
+S1 Pro Z-homing branch is excluded with operator approval and preserved at
+`archive/s1pro-z-homing-safety-2026-09-05` (bffecea). The paused root serial EAGAIN
+experiment and physical notes are excluded and preserved in the named local
+stash `pre-0.7.0 paused serial EAGAIN experiment and physical notes`, with
+matching file backups under ignored build/consolidation-0.7.0. Local Linux
+release checks passed 356 tests.
 Local Windows 3.14 full xdist run: 3692 passed, 26 skipped, one updater shutdown
 timing failure (successful exit at 3.84 s exceeded a 3 s assertion); its full
 11-test module passed on rerun. Ruff and compileall passed. These local results
@@ -39,8 +42,16 @@ Candidate CI 33981766662 exposed a runbook version-label mismatch after the
 minor bump. The packaged runbook now identifies the 0.7 series. Old ignored
 build-info.json in the local worktree had masked this under the runtime
 metadata fallback; it was moved aside before rechecking the release version.
-Release compatibility and frozen-build checks are in progress; the historical
-entries below retain their original context.
+The seven version/runbook checks pass with the actual 0.7.0 runtime version.
+The release compatibility record is
+[run 33982196816](https://github.com/lukelave-boop/E3/actions/runs/33982196816).
+Integration requires green Windows 3.10 core, Windows 3.12 desktop, Linux
+controller-session, and lint jobs. This final documentation record changes no
+production or test code after that candidate. Frozen build identity and its
+isolated offscreen launch result are reported in the release handoff; neither
+that check nor offscreen widget tests constitute a real camera/controller test.
+Historical entries below retain their original context and are superseded by
+this consolidation record where they describe earlier integration blockers.
 
 Remaining audit work: automatic Home followed by the exact prepared job on
 START, secondary lifecycle hardening, independent cooling-fan capability, and
