@@ -74,6 +74,13 @@ existing full compatibility failures remain unresolved until the new CI run
 completes; this is a Pi feature-test correction, not a main/release integration.
 Physical 1500/3000 speed comparison and STOP/Home/repeat-job acceptance remain
 pending. No Pi deployment or hardware motion was performed by the agent.
+Pi candidate source is `c016e1978a3e3a5f16b1356e9036b26acfe24008` on
+`codex/status-authority-home`; full compatibility run `33980957659` was
+dispatched for that source. Guarded operator commands and the speed/STOP retest
+are in ignored `build/PI_SPEED_UPDATE.md`; the extracted script passed Bash
+syntax checking without execution. Windows remains the exact previously
+selected frozen 0.6.202 build. The Pi configuration and paused root EAGAIN
+experiment were not modified or included.
 
 Operator acceptance follow-up for Windows 0.6.202 / `a152b50` on 2026-09-05:
 reported Connect, Generate, Start, interrupt with STOP, then Generate and Start
