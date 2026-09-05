@@ -44,6 +44,23 @@ unchanged here. Local runtime is Windows Python 3.14.4, not supported Windows
 physical acceptance remain pending. No production hardware was contacted during
 this implementation. The branch is not ready to merge pending those gates.
 
+Final publication review additionally preserves coherent Pi job ownership in the
+same machine-cache publication and retains prior durable ownership while legacy
+job details refresh. The intermediate cache must never make a Pi-owned job look
+locally owned or idle. Remote, Pi execution, and shutdown regression tests pass
+115 cases, including two new intermediate-publication tests. Ruff/compileall
+pass. The preliminary e66b1e0 Windows 0.6.199 package passed its isolated
+15.18-second offscreen launch check; it is superseded by this ownership
+correction and is not the operator handoff. A replacement freeze is pending.
+
+Compatibility run 33975743576 tested e66b1e0: Ruff passed; Windows 3.10 reported
+3,088 passed / 68 skipped / 6 failed; Windows 3.12 reported 3,664 passed / 21
+skipped / 10 failed. Linux reported 343 passed / 2 failed (the older fixed-$1=250
+pseudoterminal fixture and Marlin M84 expectation). Windows failures include
+short fake-controller deadlines/event waits and incomplete-job assertions;
+baseline run 33976246701 on deployed 55741cc is being compared before those
+are classified. No green compatibility or production-readiness claim is made.
+
 ## Active audit step 1: primary GRBL session authority
 
 Branch: `codex/primary-session-authority`, based on local 0.6.196 revision

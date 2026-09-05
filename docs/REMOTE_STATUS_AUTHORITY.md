@@ -28,7 +28,10 @@ or camera-server failures.
 ## Observation contract
 
 - The authenticated `machine.status` body and its boot, generation, and revision
-  metadata publish together, before optional job-detail requests.
+  metadata publish together, before optional job-detail requests. Coherent Pi
+  job ownership publishes with them. Where job details need another RPC, the
+  prior durable job identity/acceptance remains present, marked stale; a raw
+  controller job without Pi acceptance cannot temporarily replace it.
 - A job-detail failure marks job detail stale and records `job_status_error`.
   It cannot discard a successfully published machine snapshot. Coherent active
   and latest job records are reused when they identify the exact tracked job.

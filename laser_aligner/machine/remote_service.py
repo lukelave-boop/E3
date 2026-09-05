@@ -925,7 +925,10 @@ class RemoteMachineService:
                 self._status_cache["job"] = self._normalize_job(None)
             cached_job = self._status_cache["job"]
             cached_job["monitor_connected"] = monitor_connected
-            cached_job["status_stale"] = self._status_cache["status_stale"]
+            cached_job["status_stale"] = (
+                self._status_cache["status_stale"]
+                or isinstance(observed, Mapping) and observed.get("status_stale") is True
+            )
         return True
 
     def _cache_job_record(
@@ -1008,15 +1011,33 @@ class RemoteMachineService:
         self._require_operation_current(generation)
         # Publish this independently of any later job-detail request. Keep
         # STOP's epoch check and publication atomic with respect to STOP.
-        with self._stop_epoch_lock:
+        with self._stop_epoch_lock, self._state_lock:
             if self._stop_epoch != generation:
                 raise MachineError("Operation was cancelled by software STOP")
+            # Coherent job ownership belongs to this same publication. A raw
+            # MachineService job lacks the durable Pi acceptance marker and
+            # must not temporarily replace a known Pi-owned job during refresh.
+            job_record = None
+            tracked_job_id = self._upload_job_id or (
+                self._tracked_job_id if self._start_ownership_uncertain else self._accepted_job_id
+            )
+            if self._coherent_status_supported:
+                active = machine_response.get("active_job")
+                latest = machine_response.get("latest_job")
+                if isinstance(active, Mapping):
+                    job_record = active
+                elif active is None and isinstance(latest, Mapping) and (
+                    tracked_job_id is None or latest.get("job_id") == tracked_job_id
+                ):
+                    job_record = latest
+            previous_job = self._status_cache.get("job")
+            if job_record is None and isinstance(previous_job, Mapping) and previous_job.get("job_id"):
+                job_record = {**previous_job, "status_stale": True}
             if not self._cache_remote_status(
-                raw_status, job_record=None, response=machine_response,
+                raw_status, job_record=job_record, response=machine_response,
             ):
                 return
-            with self._state_lock:
-                observation = self._machine_observation_sequence
+            observation = self._machine_observation_sequence
         try:
             self._refresh_job_status(
                 machine_response, generation=generation, observation=observation,

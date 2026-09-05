@@ -987,6 +987,35 @@ def test_job_monitor_failure_preserves_fresh_authoritative_machine_status(monkey
     assert status["job"]["status_stale"] is True
 
 
+@pytest.mark.parametrize("coherent", [False, True])
+def test_machine_publication_preserves_pi_ownership_while_job_detail_fails(monkeypatch, coherent):
+    fake = FakePi()
+    if not coherent:
+        fake.capabilities.remove(CAPABILITY_PI_COHERENT_STATUS)
+    job_id = str(uuid.uuid4())
+    fake.jobs[job_id] = {
+        "job_id": job_id, "state": "running", "ownership_accepted": True,
+    }
+    fake.active_job_id = job_id
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+
+    def failing_detail(*args, **kwargs):
+        # Inspect the intermediate publication, before supplemental work can
+        # restore job ownership. Closing Windows here must still detach only.
+        assert service.status()["job"]["job_id"] == job_id
+        assert service.status()["job"]["ownership_accepted"] is True
+        assert service.pi_owned_job_active is True
+        raise MachineError("optional job detail unavailable")
+
+    monkeypatch.setattr(service, "_refresh_job_status", failing_detail)
+    service._refresh_once()
+    assert service.status()["status_stale"] is False
+    assert service.status()["job"]["status_stale"] is True
+    assert service.pi_owned_job_active is True
+
+
 def test_job_only_reply_cannot_revive_expired_machine_state(monkeypatch):
     fake = FakePi()
     _install_fake(monkeypatch, fake)
