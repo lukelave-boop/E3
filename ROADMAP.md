@@ -4,6 +4,8 @@ Probe priority: verify the new single native fast/slow homing test with a 5 mm i
 lift and final Z 20 clearance, following successful operator-observed deployment/stow.
 Reference/measurement admission remains held during this correction; the earlier
 repeated G30 procedure is withdrawn.
+The supplied terminal history confirms a completed native test with final Z 20;
+verify the 5 mm version and the corrected repeat/pre-check handling next.
 
 Material-height work now has a two-plane camera calibration study with a
 separate intermediate-height check and an operator-positioned probe measurement

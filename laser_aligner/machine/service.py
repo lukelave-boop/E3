@@ -4137,12 +4137,17 @@ class MachineService:
 
             self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
             self._z_probe_result = None
-            self._z_probe_active = True
+            self._z_probe_active = operation != "native_test"
+            if operation == "native_test":
+                probe.native_motion_started = False
+
+            def native_motion_start():
+                self._z_probe_active = True
             try:
                 with guard():
                     pass
                 if operation == "native_test":
-                    result = probe.native_cycle_test(guard=guard)
+                    result = probe.native_cycle_test(guard=guard, on_motion_start=native_motion_start)
                 elif operation == "reference":
                     result = probe.establish_reference(
                         clearance_z_mm=clearance, support_height_mm=support,
@@ -4166,7 +4171,13 @@ class MachineService:
                 for entry in probe.transcript:
                     self._append_log("Z PROBE", json.dumps(entry))
                 self._append_log("ERROR", f"Probe failed: {exc}")
-                if self.operation_generation() == epoch:
+                LOGGER.warning(
+                    "Probe operation=%s failed motion_started=%s detail=%s",
+                    operation, self._z_probe_active, str(exc)[:512],
+                )
+                if self.operation_generation() == epoch and (
+                    operation != "native_test" or probe.native_motion_started
+                ):
                     self.request_stop(_recover=False)
                 raise
             finally:

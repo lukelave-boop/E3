@@ -28,6 +28,11 @@ a verified relative 5 mm lift, one G28 Z R0 and final verified Z 20 clearance.
 There is no manual M280 or G30 in this path, and it never publishes a reference
 or material height. Reference/Measure remain suspended independently. The native
 test is an operator-triggered physical test, not a software bypass for measurement.
+Native pre-checks run before `_z_probe_active` is set. Their exchanges retain
+deadline/socket/session guards but opt out of M112 because no motion was sent.
+The first attempted lift marks motion active before writing; subsequent failures
+retain the existing stop path. Reset/unhomed Z zero and homed Z 20 clearance are
+the two admitted initial states. Each operator invocation still homes only once.
 
 `machine/z_probe.py` is a typed client of the same `CrealityControllerOwner`
 used by secondary Air Assist. `MachineService.probe_z` owns disarmed admission,

@@ -11,6 +11,28 @@ Snapshot: **2026-09-06**
 
 ### Single native fast/slow test requested by the operator
 
+The complete operator terminal history established the first failure's cause.
+On Pi 0.7.27/fingerprint `4dfe696e` (20 mm initial-lift implementation), one
+native test completed: initial Z 0.03 to 20.03, one `G28 Z R0`, known Z at 5.00
+after M420 S0, and final Z 20.00. The succeeding 0.7.28 attempt rejected that
+position because it required reset Z zero. Its exception handler unnecessarily
+issued STOP/secondary interruption before any Z move. A later attempt therefore
+reported the shared controller disconnected. The old-process M106 timeout was
+not the first cause of these new-process failures.
+
+The fix admits reset/unhomed Z near zero or homed Z 20 clearance. Native pre-check
+rejections preserve healthy connections; uncertain serial exchanges still close
+the secondary without M112. Motion-active state begins before the first lift
+attempt, preserving stop behavior after that point. Warning logs now include
+the original error and whether motion had started. This is source/fake-test work
+only; no hardware was operated by the assistant. The successful 20 mm-version
+transcript does not physically verify the 5 mm-version or this follow-up.
+
+Follow-up Windows verification: **157 focused tests passed** across native
+probing, diagnostic CLI, Z core/service/RPC and the secondary controller owner.
+Repository Ruff, compileall and diff checks passed. These used fake controllers;
+the revised pre-check and connection handling remain physically unverified.
+
 Follow-up: the operator requested a 5 mm initial lift. The host now verifies
 that smaller relative lift before the same single native homing cycle; final
 absolute Z 20 clearance remains unchanged. The Ender's own deployment clearance
@@ -23,8 +45,8 @@ assistant; the revised sequence remains pending operator testing.
 The operator asked to simplify the test to one native fast approach, backoff,
 and slow approach. The new CLI `native-cycle --confirm-native-cycle` submits
 the separate `native_test` operation through MachineService/Pi admission. It
-requires the primary Home / park border pose, a freshly reset Ender near logical
-Z zero, a visibly retracted steady pin, disconnected secondary XY, laser unable
+requires the primary Home / park border pose, an Ender at reset or homed Z 20
+clearance, a visibly retracted steady pin, disconnected secondary XY, laser unable
 to emit and space for a 5 mm initial lift and final Z 20 clearance. Pin-only confirmation cannot
 authorize this operation. No hardware commands or service restarts were performed
 by the assistant; operator installation and physical testing remain pending.

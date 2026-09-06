@@ -34,8 +34,8 @@ thickness or create a reference. Reference/Measure remain held while this simple
 sequence is tested. The native command may home virtual Creality XY first; those
 motors must remain disconnected. Primary XY does not move during the test.
 
-The operator must have a freshly reset Ender with the pin visibly retracted and
-its normal steady light. Confirm space for the **5 mm initial lift and final Z 20 mm clearance**, and keep the laser unable to emit. Use Connect machine and
+The Ender may start at its reset position or at homed Z 20 mm clearance left
+by the previous test. Its pin must be visibly retracted with a normal steady light. Confirm space for the **5 mm initial lift and final Z 20 mm clearance**, and keep the laser unable to emit. Use Connect machine and
 Home / park yourself to place the probe above the solid black border. In Windows
 PowerShell from the source checkout, the operator can then run:
 
@@ -45,12 +45,18 @@ PowerShell from the source checkout, the operator can then run:
 
 The dedicated flag confirms those conditions; pin-only confirmation is not
 accepted for this test. Identity and retracted input are checked first. Initial
-logical Z must be within 0.25 mm of zero, matching this rig's observed reset
-state; this is not proof of physical headroom. The initial lift must complete
+logical Z must either be within 0.25 mm of zero with Z reported unhomed, or
+within 0.05 mm of 20 with Z reported homed. These are not proof of physical headroom. The initial lift must complete
 and report a 5 mm increase before native homing starts. R0 omits G28's redundant
 initial clearance. After homing, Z must be reported known, with retracted input
 and the historically observed Z 5 mm position, before the final clearance move.
 Missing or unexpected replies reject the result without another motion command.
+Before the first attempted Z move, an ordinary failed pre-check leaves the
+primary connection and motion readiness intact. A failed serial exchange still
+closes its uncertain secondary connection, but does not send M112. Once a Z move
+is attempted, the existing stop/close behavior applies. Failures log their reason
+and whether motion had started. A successful test can be invoked again by the
+operator without resetting the Ender; there is no automatic repeat.
 
 Observe the initial lift, fast touch, backoff, slow touch and final clearance,
 and report the actual sequence with the JSON result. The installed firmware

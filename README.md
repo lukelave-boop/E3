@@ -8,6 +8,8 @@ accepted border result is not physical safety validation.
 The separately confirmed [native-cycle test](docs/MATERIAL_HEIGHT.md#single-native-fastslow-cycle-test)
 uses a 5 mm initial lift, one native Z homing cycle and final Z 20 mm clearance. It moves Z but
 does not report material thickness; physical verification is pending.
+The test accepts either reset position or already-homed Z 20 clearance, and a
+rejected pre-check no longer shuts down otherwise healthy connections.
 
 An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
 can preserve two measured-height base maps, check a third height independently,

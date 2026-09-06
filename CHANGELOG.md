@@ -2,6 +2,10 @@
 
 ## Unreleased - material-height calibration study
 
+- Allow a separately requested native test from the homed Z 20 clearance left
+  by its predecessor. Pre-motion rejection no longer triggers controller shutdown;
+  serial uncertainty still closes the affected connection, and motion failures
+  retain stop handling. Log the original failure reason at warning level.
 - Add an operator-confirmed native-cycle diagnostic: verified 5 mm initial upward lift,
   one native G28 Z homing cycle and final clearance. No G30 repetition or manual
   pin commands are interleaved. It has no material-height authority and does not

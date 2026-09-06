@@ -77,11 +77,14 @@ class CrealityZProbe:
         self.reference: ProbeReference | None = None
         self.transcript: list[dict[str, object]] = []
         self._generation: int | None = None
+        self.native_motion_started = False
 
     def invalidate(self) -> None:
         self.reference = None
 
-    def _execute(self, command: str, guard: WriteGuardFactory) -> tuple[str, ...]:
+    def _execute(
+        self, command: str, guard: WriteGuardFactory, *, motion_possible: bool = True,
+    ) -> tuple[str, ...]:
         if self._generation != self.owner.generation:
             raise MachineError("Creality session changed; reference the border again")
         entry: dict[str, object] = {"command": command, "responses": []}
@@ -90,7 +93,8 @@ class CrealityZProbe:
             lines = self.owner._execute_acknowledged(
                 command, write_guard=guard, allow_open=False,
                 timeout=90.0 if command.split()[0] == "G28" else 30.0,
-                on_failure=self._on_failure,
+                on_failure=self._on_failure if motion_possible else lambda: None,
+                interrupt_on_failure=motion_possible,
             )
         except Exception as exc:
             entry["error"] = str(exc)
@@ -108,7 +112,9 @@ class CrealityZProbe:
         if abs(actual - clearance) > 0.05:
             raise MachineError("Probe retract did not reach the requested Z clearance")
 
-    def native_cycle_test(self, *, guard: WriteGuardFactory) -> dict[str, object]:
+    def native_cycle_test(
+        self, *, guard: WriteGuardFactory, on_motion_start: Callable[[], None] = lambda: None,
+    ) -> dict[str, object]:
         """One operator-confirmed native Z homing cycle, without a height result.
 
         The operator confirms space for the 5 mm initial lift and final Z 20,
@@ -119,26 +125,38 @@ class CrealityZProbe:
         """
         self.invalidate()
         self.transcript = []
+        self.native_motion_started = False
         self.owner.raise_if_faulted()
         if not self.owner.ready:
             raise MachineError("The shared Creality controller must be connected before probing")
         self._generation = self.owner.generation
-        firmware = " ".join(self._execute("M115", guard))
+        def precheck(command: str) -> tuple[str, ...]:
+            return self._execute(command, guard, motion_possible=False)
+
+        firmware = " ".join(precheck("M115"))
         if "marlin" not in firmware.lower() or "ender-3 s1 pro" not in firmware.lower():
             raise MachineError("Expected the existing Ender-3 S1 Pro / Marlin controller")
-        states = [line.strip().lower() for line in self._execute("M119", guard)
-                  if line.strip().lower().startswith("z_min:")]
+        flags = [line.strip().lower() for line in precheck("M119")]
+        states = [line for line in flags if line.startswith("z_min:")]
         if states != ["z_min: triggered"]:
             raise MachineError("Native test requires the operator-observed retracted pin and z_min: TRIGGERED")
-        self._execute("G21", guard)
-        self._execute("G90", guard)
-        initial = parse_position(self._execute("M114", guard))
-        # Keep this first test close to the reset state observed on this rig.
-        # A logical position is not proof of physical headroom.
-        if not -0.25 <= initial <= 0.25:
-            raise MachineError("Native test requires a freshly reset Ender near logical Z zero")
-        self._execute("M84 S0", guard)
-        self._execute("G91", guard)
+        precheck("G21")
+        precheck("G90")
+        initial = parse_position(precheck("M114"))
+        known = [line for line in flags if line.startswith("test_axis_known_z_flag")]
+        reset_position = -0.25 <= initial <= 0.25 and known == ["test_axis_known_z_flag = false"]
+        homed_clearance = abs(initial - 20.0) <= 0.05 and known == ["test_axis_known_z_flag = true"]
+        # Accept the observed reset state or an already-homed clearance. Neither
+        # numerical state proves the operator-confirmed physical headroom.
+        if not (reset_position or homed_clearance):
+            raise SafetyError(
+                f"Cannot start here: the Ender reports Z {initial:.3f} mm. "
+                "Start from its reset position or homed Z 20 mm clearance. No Z move was sent."
+            )
+        precheck("M84 S0")
+        precheck("G91")
+        self.native_motion_started = True
+        on_motion_start()
         self._execute("G1 Z5.000 F300", guard)
         self._execute("G90", guard)
         self._execute("M400", guard)

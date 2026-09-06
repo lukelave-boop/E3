@@ -39,7 +39,7 @@ emission has stopped or that the area is safe to enter.
   any controller command; this software restriction is not safety-rated.
 
 - The separate native-cycle diagnostic moves Z on explicit operator request.
-  It requires a freshly reset Ender, retracted steady pin, solid border under
+  It requires the Ender at reset or homed Z 20 clearance, a retracted steady pin, solid border under
   the probe, disconnected Creality XY, laser unable to emit and space for the initial
   5 mm lift and final Z 20 mm clearance. It verifies an initial lift, runs one native homing cycle,
   and verifies final clearance. Homing changes Z zero; this is not a material

@@ -55,7 +55,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--confirm-native-cycle", action="store_true",
         help=(
-            "Required for native-cycle: I will operate the test; the freshly reset Ender's "
+            "Required for native-cycle: I will operate the test; the Ender is at its reset "
+            "position or homed Z 20 mm clearance; its "
             "pin is retracted with steady normal light; the initial 5 mm lift and final "
             "Z 20 mm clearance are physically available; the probe is over the solid border after E3 Home/park; "
             "Creality XY motors are disconnected; the laser cannot emit"

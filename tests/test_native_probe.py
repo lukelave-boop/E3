@@ -91,6 +91,31 @@ def test_bad_initial_state_never_moves(native_probe, command, response):
     with pytest.raises(MachineError):
         run(probe)
     assert not any(line.startswith(("G1 ", "G28")) for line in serial.writes)
+    assert "M112" not in serial.writes
+    assert not probe.native_motion_started
+
+
+def test_second_operator_test_starts_from_homed_clearance_without_reset(native_probe):
+    serial, probe, _ = native_probe
+    run(probe)
+    assert serial.z == 20 and serial.homed
+    run(probe)
+    assert serial.z == 20
+    assert serial.writes.count("G28 Z R0") == 2
+    assert serial.writes.count("G1 Z5.000 F300") == 2
+    assert "M112" not in serial.writes
+    assert serial.open_calls == 1
+
+
+@pytest.mark.parametrize(("z", "homed"), [(20, False), (0, True), (10, True), (30, True)])
+def test_inconsistent_or_unknown_start_state_is_rejected_without_reset(native_probe, z, homed):
+    serial, probe, _ = native_probe
+    serial.z, serial.homed = z, homed
+    with pytest.raises(MachineError, match="Cannot start here"):
+        run(probe)
+    assert not probe.native_motion_started
+    assert "M112" not in serial.writes
+    assert serial.close_calls == 0
 
 
 def test_failed_initial_lift_never_homes(native_probe):
@@ -154,6 +179,42 @@ def fields(harness, **changes):
                 expected_session_generation=harness.machine.status()["controller_session_generation"],
                 operation="native_test", confirmed=True, clearance_z_mm=20,
                 support_height_mm=-1.5, **changes)
+
+
+def test_rejected_precheck_keeps_primary_and_secondary_connections(native_rpc, caplog):
+    harness, serial = native_rpc
+    serial.z = 10
+    before = harness.machine.status()["controller_session_generation"]
+    result = helpers._rpc(harness, ACTION_MACHINE_PROBE_Z, **fields(harness))
+    assert not result["ok"]
+    assert "No Z move was sent" in result["error"]
+    status = harness.machine.status()
+    assert status["connected"] and status["coordinate_reference_ready"]
+    assert status["controller_session_generation"] == before
+    assert harness.machine._z_probe.owner.ready
+    assert "M112" not in serial.writes
+    assert serial.close_calls == 0
+    assert "motion_started=False" in caplog.text
+
+
+def test_rejected_precheck_after_success_does_not_reuse_motion_flag(native_rpc):
+    harness, serial = native_rpc
+    assert helpers._rpc(harness, ACTION_MACHINE_PROBE_Z, **fields(harness))["ok"]
+    serial.z = 10
+    assert not helpers._rpc(harness, ACTION_MACHINE_PROBE_Z, **fields(harness))["ok"]
+    assert harness.machine.status()["connected"]
+    assert "M112" not in serial.writes
+
+
+def test_precheck_serial_error_closes_only_uncertain_secondary(native_rpc):
+    harness, serial = native_rpc
+    serial.overrides["M115"] = ["Error:synthetic query failure"]
+    result = helpers._rpc(harness, ACTION_MACHINE_PROBE_Z, **fields(harness))
+    assert not result["ok"]
+    assert harness.machine.status()["connected"]
+    assert not harness.machine._z_probe.owner.ready
+    assert "M112" not in serial.writes
+    assert not any(line.startswith(("G1 ", "G28")) for line in serial.writes)
 
 
 def test_native_rpc_is_separate_from_suspended_measurement_and_replay_is_cached(native_rpc):
