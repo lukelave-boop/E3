@@ -4073,15 +4073,16 @@ class MachineService:
         The exact existing Creality owner also serves Air Assist. No primary XY
         movement occurs here; Home / park and Jog retain their existing paths.
         """
-        if _PROBE_SUSPENSION_REASON and operation != "native_test":
+        native_operation = type(operation) is str and operation in {"native_test", "native_reference", "native_measure"}
+        if _PROBE_SUSPENSION_REASON and not native_operation:
             raise SafetyError(_PROBE_SUSPENSION_REASON)
-        if type(operation) is not str or operation not in {"reference", "measure", "native_test"}:
-            raise SafetyError("Probe operation must be reference, measure or native_test")
+        if type(operation) is not str or operation not in {"reference", "measure", "native_test", "native_reference", "native_measure"}:
+            raise SafetyError("Unknown probe operation")
         if confirmed is not True:
             raise SafetyError("Confirm the solid probe surface, disconnected Creality XY and Z clearance")
         clearance = finite_number(clearance_z_mm, "Z clearance", 20, 80)
         support = finite_number(support_height_mm, "Honeycomb height", -20, 20)
-        if operation == "native_test" and clearance != 20.0:
+        if native_operation and clearance != 20.0:
             raise SafetyError("The native cycle test uses a 5 mm initial lift and fixed Z 20 mm final clearance")
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
@@ -4104,16 +4105,16 @@ class MachineService:
             position = self._jog_position_mm
             if not self.settings.work_area.contains(*position):
                 raise SafetyError("The current probe carriage position is outside the configured work area")
-            if operation in {"reference", "native_test"} and any(
+            if operation in {"reference", "native_test", "native_reference"} and any(
                 abs(actual - expected) > 0.01
                 for actual, expected in zip(
                     position, (self.settings.photo_x, self.settings.photo_y), strict=True
                 )
             ):
                 raise SafetyError("Return to Home / park over the black border before referencing Z")
-            if operation == "measure" and probe.reference is None:
+            if operation in {"measure", "native_measure"} and probe.reference is None:
                 raise SafetyError("Reference the border before measuring material")
-            if operation == "measure" and probe.reference is not None and (
+            if operation in {"measure", "native_measure"} and probe.reference is not None and (
                 clearance != probe.reference.clearance_z_mm
                 or support != probe.reference.support_height_mm
             ):
@@ -4137,8 +4138,8 @@ class MachineService:
 
             self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
             self._z_probe_result = None
-            self._z_probe_active = operation != "native_test"
-            if operation == "native_test":
+            self._z_probe_active = not native_operation
+            if native_operation:
                 probe.native_motion_started = False
 
             def native_motion_start():
@@ -4148,6 +4149,17 @@ class MachineService:
                     pass
                 if operation == "native_test":
                     result = probe.native_cycle_test(guard=guard, on_motion_start=native_motion_start)
+                elif operation == "native_reference":
+                    result = probe.native_reference(
+                        support_height_mm=support, primary_generation=session.generation,
+                        stop_epoch=epoch, carriage_xy_mm=position, guard=guard,
+                        on_motion_start=native_motion_start,
+                    )
+                elif operation == "native_measure":
+                    result = probe.native_measure(
+                        primary_generation=session.generation, stop_epoch=epoch,
+                        carriage_xy_mm=position, guard=guard, on_motion_start=native_motion_start,
+                    )
                 elif operation == "reference":
                     result = probe.establish_reference(
                         clearance_z_mm=clearance, support_height_mm=support,
@@ -4162,7 +4174,7 @@ class MachineService:
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
                 with guard():
                     self._z_probe_result = result
-                if operation == "native_test":
+                if native_operation:
                     LOGGER.info("Native probe cycle test: %s", json.dumps(result, ensure_ascii=True))
                 return result
             except BaseException as exc:
@@ -4176,7 +4188,7 @@ class MachineService:
                     operation, self._z_probe_active, str(exc)[:512],
                 )
                 if self.operation_generation() == epoch and (
-                    operation != "native_test" or probe.native_motion_started
+                    not native_operation or probe.native_motion_started
                 ):
                     self.request_stop(_recover=False)
                 raise

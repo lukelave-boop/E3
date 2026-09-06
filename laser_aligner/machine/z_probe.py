@@ -12,7 +12,7 @@ import re
 import statistics
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 
 from ..errors import MachineError, SafetyError
 from .secondary_controller import CrealityControllerOwner, WriteGuardFactory
@@ -68,6 +68,7 @@ class ProbeReference:
     carriage_xy_mm: tuple[float, float]
     firmware: str
     measured_at: float
+    method: str = "contact_samples"
 
 
 class CrealityZProbe:
@@ -78,9 +79,11 @@ class CrealityZProbe:
         self.transcript: list[dict[str, object]] = []
         self._generation: int | None = None
         self.native_motion_started = False
+        self.native_border_checked = False
 
     def invalidate(self) -> None:
         self.reference = None
+        self.native_border_checked = False
 
     def _execute(
         self, command: str, guard: WriteGuardFactory, *, motion_possible: bool = True,
@@ -180,6 +183,98 @@ class CrealityZProbe:
             "reference_ready": False, "operator_observation_required": True,
             "firmware": firmware, "transcript": list(self.transcript),
         }
+
+    def native_reference(
+        self, *, support_height_mm: float, primary_generation: int, stop_epoch: int,
+        carriage_xy_mm: tuple[float, float], guard: WriteGuardFactory,
+        on_motion_start: Callable[[], None],
+    ) -> dict[str, object]:
+        support = finite_number(support_height_mm, "Honeycomb relative to border", -20, 20)
+        result = self.native_cycle_test(guard=guard, on_motion_start=on_motion_start)
+        reference = ProbeReference(
+            self.owner.generation, primary_generation, stop_epoch, 0.0, (), 20.0,
+            support, carriage_xy_mm, str(result["firmware"]), time.time(), "native_homing",
+        )
+        with guard():
+            self.reference = reference
+        return {"kind": "native_border_reference", "reference": asdict(reference),
+                "border_check_required": True, "transcript": list(self.transcript)}
+
+    def native_measure(
+        self, *, primary_generation: int, stop_epoch: int,
+        carriage_xy_mm: tuple[float, float], guard: WriteGuardFactory,
+        on_motion_start: Callable[[], None],
+    ) -> dict[str, object]:
+        """One G30 at clearance, retaining the native border's coordinate frame."""
+        self.native_motion_started = False
+        self.transcript = []
+        reference = self.reference
+        if reference is None or reference.method != "native_homing" or (
+            reference.controller_generation != self.owner.generation
+            or reference.primary_generation != primary_generation
+            or reference.stop_epoch != stop_epoch
+        ):
+            self.invalidate()
+            raise SafetyError("Run reference-border in this controller session first")
+        checking_border = not self.native_border_checked
+        if checking_border and any(
+            abs(a - b) > 0.01 for a, b in zip(carriage_xy_mm, reference.carriage_xy_mm, strict=True)
+        ):
+            raise SafetyError("First run measure-height over the border before jogging to material")
+        self.owner.raise_if_faulted()
+        if not self.owner.ready:
+            raise MachineError("The shared Creality controller must be connected before probing")
+        self._generation = reference.controller_generation
+
+        def precheck(command: str) -> tuple[str, ...]:
+            return self._execute(command, guard, motion_possible=False)
+
+        flags = [line.strip().lower() for line in precheck("M119")]
+        if (
+            [line for line in flags if line.startswith("test_axis_known_z_flag")]
+            != ["test_axis_known_z_flag = true"]
+            or [line for line in flags if line.startswith("z_min:")] != ["z_min: triggered"]
+        ):
+            raise MachineError("Expected homed Z and the operator-observed retracted pin")
+        precheck("G21")
+        precheck("G90")
+        current = parse_position(precheck("M114"))
+        if abs(current - reference.clearance_z_mm) > 0.05:
+            raise MachineError("Z moved from the recorded clearance; reference the border again")
+        self.native_motion_started = True
+        on_motion_start()
+        # E1 explicitly requests firmware deployment/stow. No raw servo handling,
+        # repeated G30, rehoming or coordinate reset is interleaved.
+        contact = parse_contact(self._execute("G30 X110 Y110 E1", guard))
+        if not -2 <= contact <= reference.clearance_z_mm - 5:
+            raise MachineError("Contact is outside the measurement range; no further move sent")
+        flags = [line.strip().lower() for line in self._execute("M119", guard)]
+        if (
+            [line for line in flags if line.startswith("test_axis_known_z_flag")]
+            != ["test_axis_known_z_flag = true"]
+            or [line for line in flags if line.startswith("z_min:")] != ["z_min: triggered"]
+        ):
+            raise MachineError("Probe did not report the expected retracted and homed state")
+        returned = parse_position(self._execute("M114", guard))
+        if not -2 <= returned <= reference.clearance_z_mm + 0.05:
+            raise MachineError("Unexpected post-probe Z; no further move sent")
+        self._raise(reference.clearance_z_mm, guard)
+        if checking_border:
+            if abs(contact) > 0.5:
+                raise MachineError("Border contact is not near homed zero; no material reference accepted")
+            reference = replace(reference, border_z_mm=contact, border_samples_mm=(contact,))
+            with guard():
+                self.reference = reference
+                self.native_border_checked = True
+            return {"kind": "native_border_check", "border_z_mm": contact,
+                    "reference": asdict(reference), "clearance_z_mm": reference.clearance_z_mm,
+                    "transcript": list(self.transcript)}
+        height = contact - reference.border_z_mm
+        return {"kind": "surface_measurement", "surface_height_mm": height,
+                "thickness_above_honeycomb_mm": height - reference.support_height_mm,
+                "samples_mm": [contact], "spread_mm": None, "sample_count": 1,
+                "carriage_xy_mm": list(carriage_xy_mm), "measured_at": time.time(),
+                "reference": asdict(reference), "transcript": list(self.transcript)}
 
     def _samples(self, clearance: float, guard: WriteGuardFactory) -> tuple[float, ...]:
         samples: list[float] = []

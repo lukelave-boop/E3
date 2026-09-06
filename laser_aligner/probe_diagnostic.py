@@ -32,7 +32,8 @@ def _parser() -> argparse.ArgumentParser:
             "Operator CR Touch diagnostics. Inspect/deploy/stow have NO AXIS MOTION. "
             "Deploy/stow move the PIN. "
             "Native-cycle MOVES Z: raise 5 mm, one native homing cycle, then Z 20 mm "
-            "clearance. It does not measure material height. No automatic connection, "
+            "clearance. Reference-border stores that datum; measure-height checks the border first, "
+            "then measures one material contact per request. No automatic connection, "
             "primary XY motion, retry or laser enable."
         ),
         epilog=(
@@ -41,7 +42,7 @@ def _parser() -> argparse.ArgumentParser:
             "No action is retried automatically."
         ),
     )
-    parser.add_argument("pin_action", choices=("inspect", "deploy", "stow", "native-cycle"))
+    parser.add_argument("pin_action", choices=("inspect", "deploy", "stow", "native-cycle", "reference-border", "measure-height"))
     parser.add_argument("--host", default="127.0.0.1", help="Pi service host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="Pi service port (default: 8765)")
     parser.add_argument("--token-file", type=Path, help="Read the saved authentication token from this file")
@@ -62,6 +63,12 @@ def _parser() -> argparse.ArgumentParser:
             "Creality XY motors are disconnected; the laser cannot emit"
         ),
     )
+    parser.add_argument(
+        "--confirm-height-test", action="store_true",
+        help="Required for reference-border/measure-height: I control the test; the pin is retracted, "
+             "Z 20 clearance clears the solid surface and fits the gantry; Creality XY motors are "
+             "disconnected; the laser cannot emit. Reference starts over the border with 5 mm lift room.",
+    )
     return parser
 
 
@@ -81,7 +88,7 @@ def _run(args: argparse.Namespace, token: str) -> dict[str, Any]:
     if not capabilities["ok"]:
         return capabilities
     actions = capabilities.get("actions")
-    native = args.pin_action == "native-cycle"
+    native = args.pin_action in {"native-cycle", "reference-border", "measure-height"}
     action = _NATIVE_ACTION if native else _PIN_ACTION
     if not isinstance(actions, dict) or action not in actions:
         raise MachineError("The Pi service does not support pin diagnostics; update the Pi service first")
@@ -95,7 +102,9 @@ def _run(args: argparse.Namespace, token: str) -> dict[str, Any]:
     boot_id = validate_boot_id(status.get("boot_id"))
     generation = validate_session_generation(status.get("controller_session_generation"))
     fields = (
-        {"operation": "native_test", "confirmed": args.confirm_native_cycle,
+        {"operation": {"native-cycle": "native_test", "reference-border": "native_reference",
+                       "measure-height": "native_measure"}[args.pin_action],
+         "confirmed": args.confirm_native_cycle if args.pin_action == "native-cycle" else args.confirm_height_test,
          "clearance_z_mm": 20.0, "support_height_mm": -1.5}
         if native else {"pin_action": args.pin_action, "confirmed": args.confirm_pin_clearance}
     )
@@ -114,6 +123,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # Reject missing confirmation before reading credentials or making RPCs.
         if args.pin_action == "native-cycle" and not args.confirm_native_cycle:
             raise ValueError("Native Z motion requires the operator's --confirm-native-cycle flag")
+        if args.pin_action in {"reference-border", "measure-height"} and not args.confirm_height_test:
+            raise ValueError("Height testing requires the operator's --confirm-height-test flag")
         if args.pin_action in {"deploy", "stow"} and not args.confirm_pin_clearance:
             raise ValueError("Deploy/stow require the operator's --confirm-pin-clearance flag")
         if not args.host.strip() or not 1 <= args.port <= 65535:

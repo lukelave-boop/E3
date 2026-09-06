@@ -166,3 +166,20 @@ def test_help_is_explicit_about_pin_actuation(rpc, capsys):
     assert "move the PIN" in output
     assert "--confirm-pin-clearance" in output
     assert rpc[0] == []
+
+
+@pytest.mark.parametrize(("action", "operation"), [
+    ("reference-border", "native_reference"), ("measure-height", "native_measure"),
+])
+def test_height_cli_has_separate_confirmation_and_one_request(rpc, capsys, action, operation):
+    calls, responses = rpc
+    assert cli.main([action, "--confirm-native-cycle"]) == 1
+    assert not calls
+    assert "--confirm-height-test" in capsys.readouterr().out
+    responses["service.capabilities"]["actions"]["machine.probe_z"] = {}
+    responses["machine.probe_z"] = {"ok": True, "result": {"kind": "test"}}
+    assert cli.main([action, "--confirm-height-test"]) == 0
+    assert len(calls) == 3
+    assert calls[-1][2]["operation"] == operation
+    assert calls[-1][2]["confirmed"] is True
+    assert calls[-1][2]["support_height_mm"] == -1.5

@@ -1,5 +1,7 @@
 # Roadmap
 
+Material-height next step: operator-test the single-contact border check and a known-thickness material, then wire the accepted path into desktop controls and camera correction. The native homing cycle has operator acceptance.
+
 Probe priority: verify the new single native fast/slow homing test with a 5 mm initial
 lift and final Z 20 clearance, following successful operator-observed deployment/stow.
 Reference/measurement admission remains held during this correction; the earlier

@@ -1,5 +1,7 @@
 # Architecture
 
+Source CLI native_reference/native_measure operations use MachineService admission and the existing Creality owner. Native homing stores a provisional session-bound datum; an explicit G30 border check establishes measured zero before material contacts. Each request retains coordinates, verifies homed/retracted state and final clearance, and reports one sample without a repeatability estimate. Legacy GUI operations remain suspended.
+
 The material-height calibration study in `calibration/surface.py` fits a single
 camera pose to original undistorted correspondences at two known Z planes using
 fixed lens intrinsics. A third plane is scored independently. `AppContext` owns

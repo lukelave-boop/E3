@@ -33,6 +33,12 @@ emission has stopped or that the area is safe to enter.
 
 ## Before every real job
 
+- Source CLI reference-border/measure-height are separate operator-confirmed
+  motion tests. Homing establishes a border frame; a single border G30 check
+  precedes material contacts. They retain firmware probe handling and require
+  observed clearance and a retracted pin. The new measurement combination is
+  physically unverified and does not enable legacy desktop probe actions.
+
 - Material-height probing is currently suspended after an operator observed
   descent without pin deployment. Do not run Reference border or Measure Z
   offset on earlier feature builds. The updated Pi rejects both actions before

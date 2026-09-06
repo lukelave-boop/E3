@@ -1,5 +1,7 @@
 # Changelog
 
+Added operator-run native border reference and single-contact height tests, with a required border zero check, signed honeycomb offset, verified final clearance and session/STOP invalidation. The native homing cycle has operator acceptance; the G30 measurement combination awaits physical testing.
+
 ## Unreleased - material-height calibration study
 
 - Allow a separately requested native test from the homed Z 20 clearance left

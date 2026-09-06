@@ -16,6 +16,46 @@ tracing/jobs is still unfinished.
 
 ## Single native fast/slow cycle test
 
+The operator accepted this native homing cycle on 0.7.29. For the next
+single-contact measurement test, see the procedure below. G30's internal
+touches are firmware-controlled and are not claimed identical to G28.
+
+### Current height test using the source CLI
+
+Keep the laser unable to emit, Creality XY disconnected and the pin visibly
+retracted with steady normal light. Confirm clearance for the initial 5 mm
+lift and final Z 20. Connect and Home / park over the solid border in E3, then
+run in Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner.probe_diagnostic reference-border --host 192.168.5.18 --confirm-height-test
+```
+
+This runs the accepted homing cycle and stores a provisional datum. Do not
+Home again, reset, disconnect or move Z between reference and measurement.
+Before jogging anywhere, run one border contact check:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner.probe_diagnostic measure-height --host 192.168.5.18 --confirm-height-test
+```
+
+One G30 X110 Y110 E1 must report contact within 0.5 mm of homed zero. That value
+becomes the actual border reference after the final Z 20 lift is verified.
+Review the printed result and physical movement before continuing. No automatic
+repeat or recovery is performed. This new combination is physically unverified.
+
+After the border check, use E3 laser-off Jog to position above solid material.
+Confirm Z 20 clears it, then run measure-height once more. A 12 mm sheet on this
+operator's honeycomb should report approximately +10.5 mm relative to the border
+and 12 mm thickness: honeycomb is 1.5 mm below the border. Paper/spacers count.
+One reading has no repeatability estimate. Contacts outside -2 to +15 mm in the
+border homing frame are rejected; these checks do not bound firmware descent.
+Session/home/STOP/failure invalidates reference. Legacy desktop probe buttons
+remain blocked pending physical testing. Height does not automatically change
+camera calibration or laser settings.
+
+### Original native-cycle diagnostic
+
 The operator requested a simpler test using the Ender's native routine.
 `native-cycle` makes a verified 5 mm relative upward lift, runs one `G28 Z R0`,
 then returns to logical Z 20 mm. No G30 calls, manual M280 commands, repeated

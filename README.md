@@ -1,5 +1,7 @@
 # Laser Camera Aligner / E3 Positioning System
 
+Source material-height tests now provide `reference-border` and `measure-height` with a required border contact check and one contact per material reading. See [the test procedure](docs/MATERIAL_HEIGHT.md#current-height-test-using-the-source-cli). Physical measurement validation is pending; legacy desktop probe buttons remain blocked.
+
 **Material-height Z sequences are under correction** after observed descent
 without pin deployment. Reference and Measure remain blocked while separate
 [operator-run pin diagnostics](docs/MATERIAL_HEIGHT.md#operator-run-pin-diagnostics)

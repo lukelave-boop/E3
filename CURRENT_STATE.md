@@ -9,6 +9,37 @@ Snapshot: **2026-09-06**
 
 ## Active: existing-controller Z offset measurement
 
+### Native border reference and single-contact height test
+
+Operator acceptance on 2026-09-06: Pi 0.7.29/fingerprint `cc4c1cfe`, Marlin
+2.0.8.26F4 (Jan 9 2023), completed request `ab50464a`: initial Z 0.03 to 5.03,
+one G28 Z R0, known Z 5.00 after M420 S0, final Z 20.00. The operator described
+the physical sequence as close enough to intended. This verifies that homing
+test on this rig, not the new G30 measurement combination.
+
+New source CLI reference-border/measure-height operations require their own
+--confirm-height-test flag. Reference uses that native cycle and stores a
+session-bound provisional border datum. First measurement must remain at the
+border: one G30 X110 Y110 E1 must report contact within 0.5 mm of zero, with
+homed/retracted state and verified final Z 20. The actual contact replaces the
+provisional zero. The operator can then jog over material and request one G30
+per reading without rehoming or resetting coordinates. Thickness subtracts the
+border contact and signed honeycomb offset (-1.5 mm here). One sample has no
+repeatability estimate. Contact acceptance is -2 through +15 mm in the border
+homing frame; this does not alter firmware travel limits or prove clearance.
+
+G30 owns deployment, internal touches and stow. Its internal sequence is not
+claimed identical to G28. There are no raw servo commands or automatic repeats.
+Legacy desktop Reference/Measure remain blocked until operator testing of this
+new combination. No hardware, service, camera or GUI operation was performed by
+the assistant. Session/home/STOP invalidation remains in force.
+
+Windows verification for the new height path: **193 focused tests passed**
+across native height/cycle, CLI, Z core/service/RPC and secondary ownership.
+Tests use fake controllers and loopback RPCs; no GUI or physical test was run.
+Repository Ruff, compileall and diff checks passed. The new test file is included
+in the Linux/Pi compatibility job; full compatibility CI is a separate check.
+
 ### Single native fast/slow test requested by the operator
 
 The complete operator terminal history established the first failure's cause.
