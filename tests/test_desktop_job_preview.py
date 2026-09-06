@@ -370,7 +370,7 @@ def test_preview_scrubber_reports_explicit_power_and_coordinates(
     dialog.set_elapsed(plan.moves[1].start_seconds + 0.1)
 
     assert "POWER 20.0% / S200" in dialog.move_label.text()
-    assert "16.67 mm/s · 16.7%" in dialog.move_label.text()
+    assert "16.67%" in dialog.move_label.text()
     assert "F1000" not in dialog.move_label.full_text
     assert "Line 01" in dialog.move_label.text()
     assert "Machine X80.000 Y20.000" in dialog.move_label.full_text
@@ -530,10 +530,12 @@ def test_preview_layer_table_controls_only_that_operation(
     assert dialog.layer_tree.topLevelItemCount() == 1
     layer = dialog.layer_tree.topLevelItem(0)
     assert layer.text(1) == "Line 01 · Line"
-    assert layer.text(4) == "16.67 mm/s · 16.7%"
+    assert layer.text(4) == "16.67%"
     assert layer.text(5) == "V +0 / R +0"
-    assert "20.0% / S200" in layer.text(6)
-    assert "16.67 mm/s · 16.7% of configured 100.00 mm/s work limit" in layer.toolTip(4)
+    assert layer.text(6) == "20.0%"
+    assert "100% = 6000 mm/min" in layer.toolTip(4)
+    assert "Stored speed: 1000 mm/min" in layer.toolTip(4)
+    assert "S200" in layer.toolTip(6)
     layer.setCheckState(0, QtCore.Qt.CheckState.Unchecked)
     qt_application.processEvents()
 
@@ -561,7 +563,7 @@ def test_preview_shows_layer_air_status_and_exact_finalized_commands(
     dialog.show()
     qt_application.processEvents()
 
-    assert dialog.layer_tree.topLevelItem(0).text(7) == "Air assist: On"
+    assert dialog.layer_tree.topLevelItem(0).text(7) == "On"
     assert dialog.air_assist_group is not None
     assert dialog.air_assist_list is not None
     command_rows = [
@@ -653,7 +655,8 @@ def test_preview_reports_layer_power_correction_metadata(
 
     row = dialog.layer_tree.topLevelItem(0)
     assert row.text(5) == "V -25 / R +40"
-    assert row.text(6) == "18.0% / S180"
+    assert row.text(6) == "18.0%"
+    assert "S180" in row.toolTip(6)
 
     dialog.close()
     dialog.deleteLater()
@@ -770,12 +773,17 @@ def test_preview_remains_useful_at_compact_geometry_with_large_text(
         assert dialog.sidebar.width() >= 300
         assert not dialog.canvas.geometry().intersects(dialog.sidebar.geometry())
         header = dialog.layer_tree.header()
-        final_column_right = (
-            header.sectionViewportPosition(7) + header.sectionSize(7)
+        # Compact windows scroll instead of squeezing every column to fragments.
+        assert header.sectionSize(1) >= 200
+        assert dialog.layer_tree.horizontalScrollBar().maximum() > 0
+        dialog.layer_tree.horizontalScrollBar().setValue(
+            dialog.layer_tree.horizontalScrollBar().maximum()
         )
-        assert final_column_right <= dialog.layer_tree.viewport().width()
+        last_column = header.logicalIndex(header.count() - 1)
+        assert header.sectionViewportPosition(last_column) < dialog.layer_tree.viewport().width()
         assert "…" in dialog.move_label.text()
-        assert dialog.move_label.toolTip() == dialog.move_label.full_text
+        assert dialog.move_label.toolTip().startswith(dialog.move_label.full_text)
+        assert "Stored speed: 1000 mm/min" in dialog.move_label.toolTip()
         assert dialog.move_label.width() <= dialog.contentsRect().width()
     finally:
         if dialog is not None:
@@ -783,6 +791,94 @@ def test_preview_remains_useful_at_compact_geometry_with_large_text(
             dialog.deleteLater()
             qt_application.processEvents()
         qt_application.setFont(original_font)
+
+
+def test_preview_opens_with_readable_operations_and_balanced_details(
+    qt_application: QtWidgets.QApplication,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        JobPreviewDialog, "_available_screen_size", lambda self: QtCore.QSize(1500, 1000),
+    )
+    report = JobPreflightReport(findings=(PreflightFinding(
+        code="geometry.complex_bounds_deferred",
+        severity=PreflightSeverity.INFO,
+        title="Complex geometry checks",
+        message="Review the exact generated path.",
+    ),))
+    plan = _plan()
+    dialog = JobPreviewDialog(
+        plan, (0.0, 100.0, 0.0, 100.0), "readable.gcode",
+        max_work_feed_mm_min=4000, max_travel_feed_mm_min=8000,
+        preflight_report=report,
+    )
+    try:
+        dialog.show()
+        qt_application.processEvents()
+        canvas_width, details_width = dialog.body_splitter.sizes()
+        assert 0.45 < details_width / (canvas_width + details_width) < 0.57
+        header = dialog.layer_tree.header()
+        for column in (1, 4, 6):
+            assert header.sectionViewportPosition(column) >= 0
+            assert (
+                header.sectionViewportPosition(column) + header.sectionSize(column)
+                <= dialog.layer_tree.viewport().width()
+            )
+        assert dialog.layer_tree.topLevelItem(0).text(4) == "25%"
+        assert dialog.preflight_view is not None
+        assert dialog.layer_tree.y() < dialog.preflight_view.y()
+        assert dialog.layer_tree.height() < 150
+        findings_header = dialog.preflight_view.findings_tree.header()
+        assert findings_header.visualIndex(2) < findings_header.visualIndex(1)
+        assert dialog.preflight_view.status_label.isVisibleTo(dialog.sidebar)
+        assert dialog.run_button.isVisibleTo(dialog)
+
+        # The visual changes leave exact feed, power, and layer visibility intact.
+        assert dialog.plan is plan
+        assert plan.moves[1].feed_mm_min == 1000
+        assert plan.moves[1].power == 200
+        dialog.set_elapsed(plan.moves[0].start_seconds + 0.01)
+        assert "25%" in dialog.move_label.full_text  # F2000 / travel limit 8000
+        assert "100% = 8000 mm/min" in dialog.move_label.toolTip()
+        assert "travel speed limit" in dialog.move_label.toolTip()
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qt_application.processEvents()
+
+
+def test_preview_warning_is_in_initial_viewport_even_with_many_operations(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    plan = _plan()
+    prepared = prepare_job_preview(plan)
+    prepared = replace(prepared, layer_rows=tuple(
+        replace(prepared.layer_rows[0], id=f"layer-{index}", name=f"Operation {index}")
+        for index in range(6)
+    ))
+    report = JobPreflightReport(findings=(PreflightFinding(
+        code="bounds.near_edge", severity=PreflightSeverity.WARNING,
+        title="Near edge", message="Review the job near the work-area edge.",
+    ),))
+    dialog = JobPreviewDialog(
+        plan, (0, 100, 0, 100), "compact-warning.gcode",
+        prepared=prepared, preflight_report=report, max_work_feed_mm_min=6000,
+    )
+    try:
+        dialog.resize(700, 520)
+        dialog.show()
+        qt_application.processEvents()
+        assert dialog.preflight_view is not None
+        label = dialog.preflight_view.status_label
+        viewport = dialog.sidebar.viewport()
+        bounds = QtCore.QRect(label.mapTo(viewport, QtCore.QPoint()), label.size())
+        assert viewport.rect().contains(bounds)
+        assert label.objectName() == "statusWarning"
+        assert dialog.run_button.isVisibleTo(dialog)
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        qt_application.processEvents()
 
 
 def test_controller_progress_does_not_overwrite_prepared_power(
@@ -853,7 +949,7 @@ def test_preview_explains_automatic_post_job_motion_is_not_drawn(
     notes = [
         label.text()
         for label in dialog.findChildren(QtWidgets.QLabel)
-        if "end of the generated G-code stream" in label.text()
+        if "cyan marker shows the head position" in label.text()
     ]
     assert len(notes) == 1
     assert "Home / park" in notes[0]

@@ -69,14 +69,14 @@ def test_layer_panel_summarizes_operations_and_preserves_list_api(
 ) -> None:
     del qt_application
     document = _document_with_operations()
-    panel = LayerPanel()
+    panel = LayerPanel(max_work_feed_mm_min=6000)
 
     panel.set_document(document, document.layers[1].id)
 
     assert panel.layer_list.count() == 2
     assert panel.layer_list.item(0).text() == "Cut outline"
     assert panel.layer_list.item(0).text(1) == "Line"
-    assert panel.layer_list.item(0).text(2) == "1250 / 42.5%"
+    assert panel.layer_list.item(0).text(2) == "20.83% / 42.5%"
     assert panel.layer_list.item(0).checkState(3) == QtCore.Qt.CheckState.Checked
     assert panel.layer_list.item(1).text(1) == "Fill"
     assert panel.layer_list.item(1).checkState(3) == QtCore.Qt.CheckState.Unchecked
@@ -318,7 +318,7 @@ def test_layer_numeric_editor_emits_once_when_the_value_is_committed(
     qt_application: QtWidgets.QApplication,
 ) -> None:
     document = _document_with_operations()
-    panel = LayerPanel()
+    panel = LayerPanel(max_work_feed_mm_min=6000)
     panel.set_document(document)
     panel.show()
     qt_application.processEvents()
@@ -329,7 +329,7 @@ def test_layer_numeric_editor_emits_once_when_the_value_is_committed(
 
     panel.speed_spin.setFocus()
     panel.speed_spin.lineEdit().selectAll()
-    QtTest.QTest.keyClicks(panel.speed_spin.lineEdit(), "2345.6")
+    QtTest.QTest.keyClicks(panel.speed_spin.lineEdit(), "40")
     qt_application.processEvents()
 
     assert edits == []
@@ -342,7 +342,7 @@ def test_layer_numeric_editor_emits_once_when_the_value_is_committed(
 
     assert len(edits) == 1
     assert edits[0][0] == document.active_layer_id
-    assert edits[0][1]["speed_mm_min"] == pytest.approx(2345.6)
+    assert edits[0][1]["speed_mm_min"] == pytest.approx(2400)
 
     panel.close()
     panel.deleteLater()
@@ -456,6 +456,7 @@ def test_material_panel_lists_complete_recipes_compatible_first_and_guards_apply
         database,
         machine_profile_id="machine-a",
         tool_head_profile_id="tool-a",
+        max_work_feed_mm_min=6000,
     )
     applied: list[MaterialPreset] = []
     errors: list[str] = []
@@ -468,7 +469,7 @@ def test_material_panel_lists_complete_recipes_compatible_first_and_guards_apply
     ]
     assert listed_ids == [exact.id, tool_only.id, universal.id, incompatible.id]
     exact_item = panel.list.item(0)
-    assert "3.2 mm · Raster · 1375 mm/min · 28.5% · 3 passes" in exact_item.text()
+    assert "3.2 mm · Raster · 22.92% speed · 28.5% power · 3 passes" in exact_item.text()
     assert "Exact machine + tool" in exact_item.text()
     assert "machine machine-a + tool tool-a" in exact_item.text()
 
@@ -705,13 +706,16 @@ def test_layer_panel_fits_360_pixel_inspector_with_large_text(
     )
     assert scroll.horizontalScrollBar().maximum() == 0
     assert panel.width() <= scroll.viewport().width()
-    assert (
-        sum(
-            panel.layer_list.columnWidth(column)
-            for column in range(panel.layer_list.columnCount())
-        )
-        <= panel.layer_list.viewport().width()
-    )
+    # The panel still fits a narrow inspector, while readable table columns
+    # scroll instead of being forcibly compressed and made non-resizable.
+    column_scroll = panel.layer_list.horizontalScrollBar()
+    assert column_scroll.maximum() > 0
+    column_scroll.setValue(column_scroll.maximum())
+    qt_application.processEvents()
+    header = panel.layer_list.header()
+    last = panel.layer_list.columnCount() - 1
+    assert header.sectionViewportPosition(last) >= 0
+    assert header.sectionViewportPosition(last) + header.sectionSize(last) <= header.width()
     for button in panel.findChildren(QtWidgets.QAbstractButton):
         if not button.isVisible() or not button.text():
             continue

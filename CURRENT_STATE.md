@@ -7,6 +7,41 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-06**
 
+## Active: desktop columns, percentage speeds, and Preview layout
+
+The operator requested manually resizable columns throughout the desktop,
+percentage speed presentation, and a readable initial Preview layout. All twelve
+desktop column views now share Interactive headers, readable initial widths,
+and native divider dragging/double-click fitting, including the last column.
+Manual widths survive data refreshes for the lifetime of the view.
+
+Job/layer/material/marking speed uses the running maximum work feed as 100%; Jog
+uses the running maximum travel feed. Exact mm/min and the reference remain in
+tooltips. Engineering limits stay physical values. Opening, refreshing, and
+changing the display reference preserve exact saved feeds and do not silently
+clamp over-limit data. Existing project/material schemas, G-code feed values,
+machine safety checks, and primary/secondary serial behavior are unchanged.
+
+Preview starts near an equal canvas/details split, puts operation names and
+speed/power first, and uses compact tables for small jobs. Longer tables and
+narrow windows scroll. Preflight titles/messages precede technical codes, and
+the canvas/details divider remains draggable.
+
+Offscreen mouse tests cover every column in all twelve views, divider
+double-click, and width retention after refresh. Percentage tests use real
+keystrokes for fractions and invalid input, preserve exact legacy feeds, and
+check unchanged G-code on display-only round trips. The final Preview/speed
+checks passed 51 tests, header-related checks passed 96, and the updated dock
+harness passed all ten layout checks. Repository Ruff and compileall passed.
+Rendered Preview was reviewed at 1320x820 and 900x680; a viewport-containment
+test keeps the warning summary initially visible at 700x520 with six operations.
+
+The full local Windows Python 3.14 run passed 3,776 tests with 28 skips and found
+ten outdated dock-harness fixtures (corrected above) plus one Pi auto-Home test
+shutdown race under four-worker execution, under separate investigation. Full
+supported-version compatibility CI and frozen-build verification follow. No
+interactive operator, real camera, controller, or laser verification is claimed.
+
 ## Active: upload/start status and progress
 
 The operator reports START taking more than ten seconds and desktop screenshots

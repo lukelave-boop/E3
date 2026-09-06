@@ -18,6 +18,7 @@ from ..config import effective_laser_output_area
 from ..core import CoreRuntime
 from ..machine.profiles import MachineRegistryError
 from ..units import parse_to_mm
+from .columns import configure_resizable_columns
 from .controls import MeasurementSpinBox
 from .coordinate_audit import CoordinateAuditPanel
 from .machine_state import (
@@ -29,6 +30,7 @@ from .machine_state import (
 )
 from .qt import require_qt
 from .setup_guide import show_setup_guide
+from .speed_controls import PercentageSpeedSpinBox
 from .tasks import FunctionTask
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -1867,14 +1869,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         )
         self.lens_captures.setAlternatingRowColors(True)
         self.lens_captures.setMinimumHeight(170)
-        capture_header = self.lens_captures.horizontalHeader()
-        for column in range(1, 6):
-            capture_header.setSectionResizeMode(
-                column,
-                QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
-            )
-        capture_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        capture_header.setSectionResizeMode(6, QtWidgets.QHeaderView.ResizeMode.Stretch)
+        configure_resizable_columns(
+            self.lens_captures, (180, 110, 65, 145, 100, 100, 240),
+        )
         captures_layout.addWidget(self.lens_captures)
         evidence_actions = QtWidgets.QHBoxLayout()
         self.lens_delete_capture_button = QtWidgets.QPushButton("Delete selected capture")
@@ -1903,13 +1900,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             QtWidgets.QAbstractItemView.SelectionMode.NoSelection
         )
         self.lens_view_errors.setMaximumHeight(155)
-        error_header = self.lens_view_errors.horizontalHeader()
-        error_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        for column in range(1, 5):
-            error_header.setSectionResizeMode(
-                column,
-                QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
-            )
+        configure_resizable_columns(self.lens_view_errors, (230, 60, 90, 90, 90))
         quality_layout.addWidget(self.lens_view_errors)
         layout.addWidget(quality_group)
 
@@ -2004,10 +1995,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.base_grid_mark_size.setSuffix(" mm")
         self.base_grid_mark_size.setValue(4.0)
         self.base_grid_mark_size.valueChanged.connect(self._refresh_base_grid_geometry_status)
-        self.base_grid_speed = MeasurementSpinBox("speed")
-        self.base_grid_speed.setRange(1.0, 50000.0)
-        self.base_grid_speed.setDecimals(0)
-        self.base_grid_speed.setSuffix(" mm/min")
+        self.base_grid_speed = PercentageSpeedSpinBox(
+            self.context.settings.machine.max_work_feed_mm_min,
+        )
         self.base_grid_speed.setValue(self.context.settings.laser.engrave_feed_mm_min)
         for label, widget in (
             ("Verified power", self.base_grid_power),
@@ -2304,7 +2294,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         next_target.clicked.connect(lambda: self.move_bed_target(1))
         self.points = QtWidgets.QTableWidget(0, 5)
         self.points.setHorizontalHeaderLabels(("Label", "Image X", "Image Y", "Machine X", "Machine Y"))
-        self.points.horizontalHeader().setSectionResizeMode(QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        configure_resizable_columns(self.points, (180, 100, 100, 110, 110))
         self.points.setMinimumHeight(150)
         manual_layout.addWidget(self.points, 1)
         controls = QtWidgets.QGridLayout()
@@ -2414,10 +2404,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.registration_mark_size.setDecimals(1)
         self.registration_mark_size.setSuffix(" mm")
         self.registration_mark_size.setValue(5.0)
-        self.registration_speed = MeasurementSpinBox("speed")
-        self.registration_speed.setRange(1.0, 50000.0)
-        self.registration_speed.setDecimals(0)
-        self.registration_speed.setSuffix(" mm/min")
+        self.registration_speed = PercentageSpeedSpinBox(
+            self.context.settings.machine.max_work_feed_mm_min,
+        )
         self.registration_speed.setValue(self.context.settings.laser.engrave_feed_mm_min)
         form.addRow("Verified marking power", self.registration_power)
         form.addRow("Cross size", self.registration_mark_size)
@@ -2445,8 +2434,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.registration_results.setHorizontalHeaderLabels(
             ("Use", "#", "Command X", "Command Y", "Observed X", "Observed Y", "ΔX", "ΔY")
         )
-        self.registration_results.horizontalHeader().setSectionResizeMode(
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        configure_resizable_columns(
+            self.registration_results, (50, 40, 110, 110, 110, 110, 85, 85),
         )
         right.addWidget(self.registration_results, 1)
         correction_row = QtWidgets.QHBoxLayout()
@@ -2578,10 +2567,9 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.validation_mark_size.setDecimals(1)
         self.validation_mark_size.setSuffix(" mm")
         self.validation_mark_size.setValue(5.0)
-        self.validation_speed = MeasurementSpinBox("speed")
-        self.validation_speed.setRange(1.0, 50000.0)
-        self.validation_speed.setDecimals(0)
-        self.validation_speed.setSuffix(" mm/min")
+        self.validation_speed = PercentageSpeedSpinBox(
+            self.context.settings.machine.max_work_feed_mm_min,
+        )
         self.validation_speed.setValue(self.context.settings.laser.engrave_feed_mm_min)
         form.addRow("Verified marking power", self.validation_power)
         form.addRow("Cross size", self.validation_mark_size)
@@ -2638,8 +2626,8 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 "Error",
             )
         )
-        self.validation_results.horizontalHeader().setSectionResizeMode(
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents
+        configure_resizable_columns(
+            self.validation_results, (40, 110, 110, 110, 110, 85, 85, 85),
         )
         right.addWidget(self.validation_results, 1)
 

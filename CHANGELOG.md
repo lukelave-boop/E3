@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased - readable tables, relative speed, and Preview
+
+- All desktop table columns can be resized with the mouse, including the last
+  column. Refreshing rows retains manual widths; divider double-click fits text.
+- Cut/layer, material, marking, and Jog speed controls display percentages of
+  the running machine's configured speed limits. Hover reveals the exact feed
+  and reference. Opening or refreshing a panel does not change stored speeds;
+  project/material schemas and generated G-code remain unchanged.
+- Preview opens with about half its width for details, compact operation and
+  finding summaries, and speed/power percentages. Technical codes and power
+  values remain available through columns and tooltips. The canvas/details
+  divider remains adjustable; narrow windows scroll instead of crushing columns.
+
 ## Unreleased - upload/start status and progress
 
 - Pi machine/job monitoring no longer waits behind upload syncing or program

@@ -292,7 +292,9 @@ def test_machine_panel_is_dense_without_duplicate_primary_controls(
     )
     assert jog_group.isEnabled()
     assert panel.park_button.isEnabled()
-    assert panel.jog_speed.maximum() == 1200.0
+    assert panel.jog_speed.speed_limit == 1200.0
+    assert panel.jog_speed.value() == 2000.0
+    panel.jog_speed.setValue(1200.0)
     panel.jog_step.setCurrentIndex(1)
     panel.jog_right.click()
     assert jog_requests == [(1.0, 0.0, 1200.0)]

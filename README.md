@@ -107,9 +107,15 @@ Shared core and browser workflow:
 
 Native desktop workflow:
 
-- Dimensional inputs accept either metric or imperial suffixes (`25.4 mm` or
-  `1 in`; likewise `mm²`/`in²` and `mm/min`/`in/min`) while project geometry,
-  calibration, safety bounds, and generated G-code remain in millimetres
+- Dimensional inputs accept metric or imperial suffixes (`25.4 mm` or `1 in`;
+  likewise `mm²`/`in²`). Job and Jog speeds use percentages of the running
+  machine's configured work and travel limits respectively. Hover for the exact
+  mm/min value and 100% reference. Engineering speed limits remain explicit
+  physical values; project and controller values retain their existing units.
+- Every desktop table supports dragging column dividers, including the last
+  column, and double-clicking a divider to fit its contents. Widths survive row
+  refreshes for that panel's lifetime. Preview opens with balanced canvas/details
+  space and readable operation names, speed, and power before technical fields.
 - LightBurn-inspired compact icon chrome with a bright drafting bed, persistent
   runtime/safety status, always-present selection properties, one full-height
   right sidebar for Cuts, Camera, Objects, Shape, Templates, Trace, Machine, and

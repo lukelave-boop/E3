@@ -9,8 +9,10 @@ from typing import TYPE_CHECKING
 
 from ..gcode.job_plan import JobPlan, PlannedMove
 from ..project.job_preflight import JobPreflightReport
+from .columns import configure_resizable_columns
 from .job_preflight import JobPreflightView
 from .qt import require_qt
+from .speed_controls import format_speed_percent, speed_tooltip
 
 if TYPE_CHECKING:
     from ..calibration.support import HoneycombCoordinateFrame
@@ -18,8 +20,8 @@ if TYPE_CHECKING:
 QtCore, QtGui, QtWidgets = require_qt()
 
 
-_DEFAULT_DIALOG_WIDTH = 1120
-_DEFAULT_DIALOG_HEIGHT = 760
+_DEFAULT_DIALOG_WIDTH = 1320
+_DEFAULT_DIALOG_HEIGHT = 820
 _MIN_DIALOG_WIDTH = 700
 _MIN_DIALOG_HEIGHT = 520
 _SCREEN_WIDTH_RESERVE = 32
@@ -27,7 +29,6 @@ _SCREEN_HEIGHT_RESERVE = 48
 _MIN_CANVAS_WIDTH = 360
 _MIN_CANVAS_HEIGHT = 240
 _MIN_SIDEBAR_WIDTH = 300
-_DEFAULT_SIDEBAR_WIDTH = 340
 _MAX_AIR_ASSIST_EVENT_ROWS = 100
 
 RenderKey = tuple[str, str, float | None]
@@ -149,21 +150,20 @@ def _speed_text(
 ) -> str:
     if not feeds:
         return "—"
-    maximum = (
-        float(maximum_feed_mm_min)
-        if maximum_feed_mm_min is not None and maximum_feed_mm_min > 0
-        else None
+    formatter = speed_tooltip if detailed else format_speed_percent
+    return ", ".join(formatter(feed, maximum_feed_mm_min) for feed in feeds)
+
+
+def _size_summary_table(tree: QtWidgets.QTreeWidget) -> None:
+    """Keep short summaries compact; long lists scroll within their own table."""
+    row_height = max(tree.fontMetrics().height() + 6, tree.sizeHintForRow(0))
+    height = (
+        tree.header().sizeHint().height()
+        + min(6, tree.topLevelItemCount()) * row_height
+        + tree.horizontalScrollBar().sizeHint().height()
+        + 4
     )
-    values: list[str] = []
-    for feed in feeds:
-        speed = feed / 60.0
-        text = f"{speed:.2f} mm/s"
-        if maximum is not None:
-            text += f" · {feed / maximum * 100.0:.1f}%"
-            if detailed:
-                text += f" of configured {maximum / 60.0:.2f} mm/s work limit"
-        values.append(text)
-    return ", ".join(values)
+    tree.setFixedHeight(max(95, min(220, height)))
 
 
 def _display_color(value: object, fallback: str = "#E35D6A") -> str:
@@ -190,9 +190,10 @@ class _ElidedLabel(QtWidgets.QLabel):
     def full_text(self) -> str:
         return self._full_text
 
-    def set_full_text(self, value: object) -> None:
+    def set_full_text(self, value: object, *, detail: str = "") -> None:
         self._full_text = str(value)
-        self.setAccessibleDescription(self._full_text)
+        self._detail_text = detail
+        self.setAccessibleDescription(self._full_text + (f"\n{detail}" if detail else ""))
         self._refresh_text()
 
     def _refresh_text(self) -> None:
@@ -203,11 +204,9 @@ class _ElidedLabel(QtWidgets.QLabel):
             width,
         )
         super().setText(rendered)
-        self.setToolTip(
-            html.escape(self._full_text, quote=True)
-            if rendered != self._full_text
-            else ""
-        )
+        detail = getattr(self, "_detail_text", "")
+        tooltip = self._full_text + (f"\n{detail}" if detail else "")
+        self.setToolTip(html.escape(tooltip, quote=True) if detail or rendered != self._full_text else "")
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
@@ -676,9 +675,8 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.heading.setMinimumWidth(0)
         layout.addWidget(self.heading)
         completion_note = QtWidgets.QLabel(
-            "The cyan head marker is the end of the generated G-code stream. "
-            "On a successful powered hardware run, configured Home / park and "
-            "motor-release completion runs afterward and is not drawn here."
+            "The cyan marker shows the head position in the generated job. "
+            "Configured post-job Home / park is not drawn here."
         )
         completion_note.setObjectName("mutedLabel")
         completion_note.setTextFormat(QtCore.Qt.TextFormat.PlainText)
@@ -730,15 +728,23 @@ class JobPreviewDialog(QtWidgets.QDialog):
         side_layout.setContentsMargins(4, 0, 4, 0)
         side_layout.setSpacing(6)
 
+        operations_heading = QtWidgets.QLabel("Operations")
+        operations_heading.setObjectName("panelHeading")
+        side_layout.addWidget(operations_heading)
+        self.layer_tree = self._build_layer_tree()
+        side_layout.addWidget(self.layer_tree)
+
         self.preflight_view: JobPreflightView | None = None
         if preflight_report is not None:
             self.preflight_view = JobPreflightView(preflight_report, side_page)
-            self.preflight_view.findings_tree.setMinimumHeight(150)
-            self.preflight_view.findings_tree.setMaximumHeight(220)
+            _size_summary_table(self.preflight_view.findings_tree)
+            # Put the human-readable finding before its technical identifier.
+            findings_header = self.preflight_view.findings_tree.header()
+            findings_header.moveSection(findings_header.visualIndex(1), 3)
+            # Keep the review outcome visible before even a long operations
+            # list. Reuse the same label; the immutable report has one summary.
+            side_layout.insertWidget(0, self.preflight_view.status_label)
             side_layout.addWidget(self.preflight_view)
-
-        self.layer_tree = self._build_layer_tree()
-        side_layout.addWidget(self.layer_tree)
 
         self.air_assist_group: QtWidgets.QGroupBox | None = None
         self.air_assist_list: QtWidgets.QListWidget | None = None
@@ -854,15 +860,9 @@ class JobPreviewDialog(QtWidgets.QDialog):
         self.sidebar.setWidget(side_page)
         self.body_splitter.addWidget(self.sidebar)
         self.body_splitter.setStretchFactor(0, 1)
-        self.body_splitter.setStretchFactor(1, 0)
+        self.body_splitter.setStretchFactor(1, 1)
         self.body_splitter.setSizes(
-            [
-                max(
-                    _MIN_CANVAS_WIDTH,
-                    initial_size.width() - _DEFAULT_SIDEBAR_WIDTH - 20,
-                ),
-                _DEFAULT_SIDEBAR_WIDTH,
-            ]
+            [int(initial_size.width() * 0.48), int(initial_size.width() * 0.52)]
         )
 
         self.travel_check.toggled.connect(self.canvas.set_show_travel)
@@ -1073,7 +1073,7 @@ class JobPreviewDialog(QtWidgets.QDialog):
         tree.setRootIsDecorated(False)
         tree.setAlternatingRowColors(True)
         tree.setMinimumWidth(0)
-        tree.setMinimumHeight(130)
+        tree.setMinimumHeight(95)
         tree.setMaximumHeight(220)
         tree.setSizeAdjustPolicy(
             QtWidgets.QAbstractScrollArea.SizeAdjustPolicy.AdjustIgnored
@@ -1098,9 +1098,8 @@ class JobPreviewDialog(QtWidgets.QDialog):
                     ),
                     f"V {row.vector_power_correction:+g} / "
                     f"R {row.raster_power_correction:+g}",
-                    f"{row.power / self.plan.power_max * 100:.1f}% / "
-                    f"S{row.power:g}",
-                    f"Air assist: {'On' if row.air_assist else 'Off'}",
+                    f"{row.power / self.plan.power_max * 100:.1f}%",
+                    "On" if row.air_assist else "Off",
                 ]
             )
             item.setData(0, QtCore.Qt.ItemDataRole.UserRole, row.id)
@@ -1121,20 +1120,16 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 )
                 for column in range(1, 8)
             )
+            details += f" · Exact maximum power S{row.power:g}"
             for column in range(tree.columnCount()):
                 item.setToolTip(column, html.escape(details, quote=True))
             tree.addTopLevelItem(item)
         tree.itemChanged.connect(self._layer_visibility_changed)
+        configure_resizable_columns(tree, (50, 205, 85, 65, 75, 110, 95, 85))
         header = tree.header()
-        header.setStretchLastSection(True)
-        header.setMinimumSectionSize(28)
-        for column in range(tree.columnCount()):
-            header.setSectionResizeMode(
-                column,
-                QtWidgets.QHeaderView.ResizeMode.Interactive,
-            )
-        for column, width in enumerate((28, 42, 30, 28, 38, 42, 64, 48)):
-            header.resizeSection(column, width)
+        for position, column in enumerate((0, 1, 4, 6, 3, 2, 7, 5)):
+            header.moveSection(header.visualIndex(column), position)
+        _size_summary_table(tree)
         return tree
 
     def _layer_visibility_changed(
@@ -1208,7 +1203,12 @@ class JobPreviewDialog(QtWidgets.QDialog):
                 f"{_speed_text((move.feed_mm_min,), maximum_feed_mm_min=(self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min))} · "
                 f"Move {move.index + 1}/{len(self.plan.moves)} · "
                 f"pass {move.pass_index}/{move.pass_count} "
-                f"· {coordinate_text}"
+                f"· {coordinate_text}",
+                detail=speed_tooltip(
+                    move.feed_mm_min,
+                    self.max_travel_feed_mm_min if move.rapid else self.max_work_feed_mm_min,
+                    limit_kind="travel" if move.rapid else "work",
+                ),
             )
         self.start_here_button.setEnabled(self._current_move_index is not None)
 

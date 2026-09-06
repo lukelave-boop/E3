@@ -1252,6 +1252,25 @@ Start Here replacement programs carry the configured photography pose in job
 metadata, so their rebuilt plan includes the actual laser-off approach from the
 controller's Home/park position to the reviewed move boundary.
 
+Desktop table headers use one `configure_resizable_columns` policy: one-time
+readable widths, Interactive resize mode for every column, no stretched last
+column, and native horizontal scrolling/divider double-click sizing. Data
+refreshes do not reset the operator's widths. The lifetime is the view itself;
+this does not add a project field or a separate settings persistence domain.
+Preview starts near a 48/52 canvas/details split and orders names, speed, and
+power before less common technical fields. Small summaries do not reserve
+large empty table areas, while long tables scroll.
+
+`PercentageSpeedSpinBox` presents relative speed while its Python `value()` and
+`setValue()` boundary retains canonical mm/min. Work controls use the running
+machine's maximum work feed and Jog uses its maximum travel feed. The configured
+ceilings remain physical engineering inputs. Exact loaded feeds survive rounded
+display text, focus changes, and reference changes, including pre-existing
+over-limit values, which are shown honestly rather than silently reduced.
+Relative editing requires an explicit finite positive reference; all normal
+machine preflight and feed-limit checks remain authoritative. Project/material
+persistence and generated programs contain physical feeds, never percentages.
+
 The Preview is a window-modal UI gate, not a machine-authority layer. Its
 **START JOB** signal closes the dialog synchronously so STOP is available, then
 calls the existing guarded main-window run path. Main-window controls can reopen

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from ..project import DEFAULT_IMPORTER_REGISTRY, ImportScanManifest
+from .columns import configure_resizable_columns
 from .qt import require_qt
 
 QtCore, _QtGui, QtWidgets = require_qt()
@@ -246,20 +247,7 @@ class ImportReviewDialog(QtWidgets.QDialog):
             self.layer_table.setItem(0, 0, item)
             self.layer_table.setSpan(0, 0, 1, 4)
 
-        header = self.layer_table.horizontalHeader()
-        header.setSectionResizeMode(
-            0,
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
-        )
-        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(
-            2,
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
-        )
-        header.setSectionResizeMode(
-            3,
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
-        )
+        configure_resizable_columns(self.layer_table, (120, 280, 120, 85))
         visible_rows = min(max(1, len(visible_layers)), 5)
         table_height = (
             self.layer_table.horizontalHeader().sizeHint().height()

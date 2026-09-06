@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .columns import configure_resizable_columns
 from .qt import require_qt
 
 QtCore, _QtGui, QtWidgets = require_qt()
@@ -80,10 +81,7 @@ class CoordinateAuditPanel(QtWidgets.QWidget):
         self.tree.setObjectName("coordinateAuditTree")
         self.tree.setColumnCount(2)
         self.tree.setHeaderLabels(("Evidence", "Value"))
-        self.tree.header().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.tree.header().setStretchLastSection(True)
+        configure_resizable_columns(self.tree, (230, 280))
         details_layout.addWidget(self.tree, 1)
         point_group = QtWidgets.QGroupBox("Clicked corrected-camera point")
         point_layout = QtWidgets.QVBoxLayout(point_group)

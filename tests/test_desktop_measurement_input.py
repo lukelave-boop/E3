@@ -66,7 +66,7 @@ def test_display_storage_converts_explicit_mm_while_showing_inches(
 def test_jog_step_accepts_inches_and_emits_canonical_mm(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    panel = MachinePanel()
+    panel = MachinePanel(max_travel_feed_mm_min=6000)
     requests: list[tuple[float, float, float]] = []
     panel.jogRequested.connect(
         lambda x, y, feed: requests.append((x, y, feed))
@@ -80,7 +80,7 @@ def test_jog_step_accepts_inches_and_emits_canonical_mm(
 def test_invalid_jog_step_never_emits_motion_request(
     qt_application: QtWidgets.QApplication,
 ) -> None:
-    panel = MachinePanel()
+    panel = MachinePanel(max_travel_feed_mm_min=6000)
     requests: list[tuple[float, float, float]] = []
     panel.jogRequested.connect(
         lambda x, y, feed: requests.append((x, y, feed))

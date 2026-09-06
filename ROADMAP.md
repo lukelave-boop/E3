@@ -1,5 +1,10 @@
 # Roadmap
 
+Desktop readability now includes resizable columns throughout the app, relative
+speed controls, and balanced Preview defaults. Validate the new layout and
+percentage entry in E3 DEV TEST. A future hybrid speed display can build on the
+existing physical feed values; no project migration is required for this display.
+
 Upload/start monitoring now avoids the durable job store's disk transaction lock,
 and the desktop shows submission progress separately from machine authority.
 Validate the combined feature on the Pi, including long uploads, slow verification,

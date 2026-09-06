@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from heapq import nsmallest
 
 from ..project.job_preflight import JobPreflightReport
+from .columns import configure_resizable_columns
 from .qt import require_qt
 
 QtCore, _QtGui, QtWidgets = require_qt()
@@ -210,22 +211,9 @@ class JobPreflightView(QtWidgets.QWidget):
                 item.setToolTip(column, cell)
             self.findings_tree.addTopLevelItem(item)
 
-        header = self.findings_tree.header()
-        header.setSectionResizeMode(
-            0,
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
+        configure_resizable_columns(
+            self.findings_tree, (85, 220, 240, 320, 260, 260),
         )
-        header.setSectionResizeMode(
-            1,
-            QtWidgets.QHeaderView.ResizeMode.ResizeToContents,
-        )
-        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        header.setSectionResizeMode(4, QtWidgets.QHeaderView.ResizeMode.Interactive)
-        header.setSectionResizeMode(5, QtWidgets.QHeaderView.ResizeMode.Interactive)
-        self.findings_tree.setColumnWidth(2, 180)
-        self.findings_tree.setColumnWidth(4, 220)
-        self.findings_tree.setColumnWidth(5, 220)
         layout.addWidget(self.findings_tree, 1)
 
         self.remediation_group = QtWidgets.QGroupBox("How to fix")

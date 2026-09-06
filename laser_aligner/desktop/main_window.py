@@ -152,6 +152,7 @@ from .qt import require_qt
 from .raster_vectorize_dialog import RasterVectorizationDialog
 from .runtime_strip import RuntimeSafetyStrip
 from .setup_guide import show_setup_guide
+from .speed_controls import format_speed_percent, speed_tooltip
 from .stock_layout_bar import StockLayoutToolBar
 from .template_designer import WORK_AREA_TOLERANCE_MM, GridTemplateDesignerDialog
 from .template_panel import TemplatePanel
@@ -236,8 +237,12 @@ class LayerPaletteBar(QtWidgets.QWidget):
     addLayerRequested = QtCore.Signal()
     presetLayerRequested = QtCore.Signal(str)
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self, parent: QtWidgets.QWidget | None = None,
+        *, max_work_feed_mm_min: float | None = None,
+    ) -> None:
         super().__init__(parent)
+        self._max_work_feed_mm_min = max_work_feed_mm_min
         outer = QtWidgets.QHBoxLayout(self)
         outer.setContentsMargins(2, 1, 2, 1)
         outer.setSpacing(3)
@@ -309,8 +314,9 @@ class LayerPaletteBar(QtWidgets.QWidget):
                 mode_status = f"{layer.mode.value.title()} toolpath"
                 button.setToolTip(
                     f"{index:02d} · {layer.name}\n"
-                    f"{mode_status} · {layer.speed_mm_min:g} mm/min · "
-                    f"{layer.power_percent:g}%\n"
+                    f"{mode_status} · {format_speed_percent(layer.speed_mm_min, self._max_work_feed_mm_min)} speed · "
+                    f"{layer.power_percent:g}% power\n"
+                    f"{speed_tooltip(layer.speed_mm_min, self._max_work_feed_mm_min)}\n"
                     f"Output {'on' if layer.output_enabled else 'off'} · "
                     f"{'shown' if layer.visible else 'hidden'}\n"
                     "Click to make active; selected objects are assigned to this layer."
@@ -960,7 +966,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.stock_layout_toolbar,
         )
 
-        self.palette = LayerPaletteBar()
+        self.palette = LayerPaletteBar(
+            max_work_feed_mm_min=self.runtime.settings.machine.max_work_feed_mm_min,
+        )
         palette_toolbar = QtWidgets.QToolBar("Layer palette", self)
         palette_toolbar.setObjectName("layerPaletteToolbar")
         palette_toolbar.addWidget(self.palette)
@@ -985,7 +993,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         return dock
 
     def _create_docks(self) -> None:
-        self.layer_panel = LayerPanel()
+        self.layer_panel = LayerPanel(
+            max_work_feed_mm_min=self.runtime.settings.machine.max_work_feed_mm_min,
+        )
         self.object_panel = ObjectPanel()
         self.transform_panel = TransformPanel()
         self.trace_panel = TracePanel()
@@ -994,7 +1004,9 @@ class E3MainWindow(QtWidgets.QMainWindow):
         self.camera_panel.set_focus_controls(
             dict(self.runtime.settings.camera.controls)
         )
-        self.machine_panel = MachinePanel()
+        self.machine_panel = MachinePanel(
+            max_travel_feed_mm_min=self.runtime.settings.machine.max_travel_feed_mm_min,
+        )
         machine_profile_id, tool_head_profile_id = (
             E3MainWindow._running_material_profile_ids(self)
         )
@@ -1002,6 +1014,7 @@ class E3MainWindow(QtWidgets.QMainWindow):
             self.material_database,
             machine_profile_id=machine_profile_id,
             tool_head_profile_id=tool_head_profile_id,
+            max_work_feed_mm_min=self.runtime.settings.machine.max_work_feed_mm_min,
         )
         self.console_panel = ConsolePanel()
         # Design, camera, machine, and material controls share one full-height

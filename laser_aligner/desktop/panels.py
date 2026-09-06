@@ -13,9 +13,11 @@ from ..project import (
     Transform,
 )
 from ..units import parse_to_mm
+from .columns import configure_resizable_columns
 from .controls import MeasurementSpinBox
 from .machine_state import ControllerUiState, project_machine_state
 from .qt import require_qt
+from .speed_controls import PercentageSpeedSpinBox, format_speed_percent, speed_tooltip
 from .theme import DEFAULT_CAMERA_OVERLAY_OPACITY
 
 QtCore, QtGui, QtWidgets = require_qt()
@@ -94,10 +96,14 @@ class LayerPanel(QtWidgets.QWidget):
     removeLayerRequested = QtCore.Signal(str)
     moveLayerRequested = QtCore.Signal(str, int)
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self, parent: QtWidgets.QWidget | None = None,
+        *, max_work_feed_mm_min: float | None = None,
+    ) -> None:
         super().__init__(parent)
         self._document: ProjectDocument | None = None
         self._updating = False
+        self._max_work_feed_mm_min = max_work_feed_mm_min
 
         layout = _dense_panel_layout(self)
 
@@ -116,30 +122,7 @@ class LayerPanel(QtWidgets.QWidget):
         self.layer_list.setHeaderLabels(
             ["Layer", "Mode", "Spd / Pwr", "Out", "Show"]
         )
-        self.layer_list.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        )
-        header = self.layer_list.header()
-        header.setStretchLastSection(False)
-        # The two stretch columns may need to collapse on a 360 px inspector
-        # with large system text. The selected-operation editor still exposes
-        # every value without relying on the abbreviated table cells.
-        header.setMinimumSectionSize(28)
-        header.setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeMode.Stretch
-        )
-        header.setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        header.setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.Stretch
-        )
-        header.setSectionResizeMode(
-            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        header.setSectionResizeMode(
-            4, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
+        configure_resizable_columns(self.layer_list, (260, 70, 105, 45, 55))
         layout.addWidget(self.layer_list, 1)
 
         editor = QtWidgets.QWidget()
@@ -186,10 +169,7 @@ class LayerPanel(QtWidgets.QWidget):
         settings_grid.setContentsMargins(0, 0, 0, 0)
         settings_grid.setHorizontalSpacing(4)
         settings_grid.setVerticalSpacing(2)
-        self.speed_spin = MeasurementSpinBox("speed")
-        self.speed_spin.setRange(1.0, 100000.0)
-        self.speed_spin.setDecimals(1)
-        self.speed_spin.setToolTip("Operation speed in millimetres per minute")
+        self.speed_spin = PercentageSpeedSpinBox(max_work_feed_mm_min)
         self.speed_spin.setSizePolicy(
             QtWidgets.QSizePolicy.Policy.Ignored,
             QtWidgets.QSizePolicy.Policy.Fixed,
@@ -402,8 +382,10 @@ class LayerPanel(QtWidgets.QWidget):
                     else QtCore.Qt.CheckState.Unchecked,
                 )
                 details = (
-                    f"{layer.speed_mm_min:g} mm/min · {layer.power_percent:g}% power · "
-                    f"{layer.passes} pass{'es' if layer.passes != 1 else ''}"
+                    f"{format_speed_percent(layer.speed_mm_min, self._max_work_feed_mm_min)} speed · "
+                    f"{layer.power_percent:g}% power · "
+                    f"{layer.passes} pass{'es' if layer.passes != 1 else ''}\n"
+                    f"{speed_tooltip(layer.speed_mm_min, self._max_work_feed_mm_min)}"
                 )
                 item.setToolTip(2, details)
                 if not layer.visible:
@@ -420,9 +402,11 @@ class LayerPanel(QtWidgets.QWidget):
         finally:
             self._updating = False
 
-    @staticmethod
-    def _operation_summary(layer: OperationLayer) -> str:
-        return f"{layer.speed_mm_min:g} / {layer.power_percent:g}%"
+    def _operation_summary(self, layer: OperationLayer) -> str:
+        return (
+            f"{format_speed_percent(layer.speed_mm_min, self._max_work_feed_mm_min)} / "
+            f"{layer.power_percent:g}%"
+        )
 
     def current_layer_id(self) -> str | None:
         item = self.layer_list.currentItem()
@@ -1803,21 +1787,7 @@ class TracePanel(QtWidgets.QWidget):
         )
         self.result_tree.setRootIsDecorated(False)
         self.result_tree.setAlternatingRowColors(True)
-        self.result_tree.header().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.result_tree.header().setSectionResizeMode(
-            1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.result_tree.header().setSectionResizeMode(
-            2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.result_tree.header().setSectionResizeMode(
-            3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents
-        )
-        self.result_tree.header().setSectionResizeMode(
-            4, QtWidgets.QHeaderView.ResizeMode.Stretch
-        )
+        configure_resizable_columns(self.result_tree, (48, 40, 110, 110, 200))
         self.select_all_checkbox = QtWidgets.QCheckBox("Select / deselect all")
         self.select_all_checkbox.setTristate(True)
         self.select_all_checkbox.setEnabled(False)
@@ -2956,7 +2926,10 @@ class MachinePanel(QtWidgets.QWidget):
     parkRequested = QtCore.Signal()
     jogRequested = QtCore.Signal(float, float, float)
 
-    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+    def __init__(
+        self, parent: QtWidgets.QWidget | None = None,
+        *, max_travel_feed_mm_min: float | None = None,
+    ) -> None:
         super().__init__(parent)
         self._busy = False
         self._machine_status: dict[str, Any] = {}
@@ -2982,10 +2955,8 @@ class MachinePanel(QtWidgets.QWidget):
             self.jog_step.addItem(f"{value:g} mm", value)
         self.jog_step.setEditable(True)
         self.jog_step.setToolTip("Jog distance; enter a value in mm or in")
-        self.jog_speed = MeasurementSpinBox("speed")
-        self.jog_speed.setRange(1.0, 10000.0)
+        self.jog_speed = PercentageSpeedSpinBox(max_travel_feed_mm_min, limit_kind="travel")
         self.jog_speed.setValue(2000.0)
-        self.jog_speed.setSuffix(" mm/min")
         self.jog_up = QtWidgets.QPushButton("Y+")
         self.jog_down = QtWidgets.QPushButton("Y−")
         self.jog_left = QtWidgets.QPushButton("X−")
@@ -3021,6 +2992,10 @@ class MachinePanel(QtWidgets.QWidget):
         self.jog_right.clicked.connect(lambda: self._jog(1.0, 0.0))
 
     def _jog(self, x_direction: float, y_direction: float) -> None:
+        limit = self.jog_speed.speed_limit
+        if limit is None or not 1 <= self.jog_speed.value() <= limit:
+            self.state_label.setText("Choose a jog speed within the configured travel limit")
+            return
         try:
             step = parse_to_mm(self.jog_step.currentText(), "mm")
         except ValueError:
@@ -3044,7 +3019,7 @@ class MachinePanel(QtWidgets.QWidget):
         if type(maximum_jog_feed) in {int, float} and math.isfinite(
             float(maximum_jog_feed)
         ) and float(maximum_jog_feed) > 0:
-            self.jog_speed.setMaximum(float(maximum_jog_feed))
+            self.jog_speed.set_speed_limit(float(maximum_jog_feed))
         self.state_label.setText(
             self._ui_state.panel_summary(
                 self._machine_status.get("protocol", "unknown")
@@ -3396,11 +3371,7 @@ class ObjectPanel(QtWidgets.QWidget):
             QtWidgets.QAbstractItemView.EditTrigger.EditKeyPressed
             | QtWidgets.QAbstractItemView.EditTrigger.SelectedClicked
         )
-        self.tree.header().setStretchLastSection(False)
-        self.tree.header().setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeMode.Stretch)
-        self.tree.header().setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.header().setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
-        self.tree.header().setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeMode.ResizeToContents)
+        configure_resizable_columns(self.tree, (180, 230, 70, 70))
         layout.addWidget(self.tree)
         self.tree.itemSelectionChanged.connect(self._selection_changed)
         self.tree.itemChanged.connect(self._item_changed)
@@ -3576,6 +3547,7 @@ class MaterialPanel(QtWidgets.QWidget):
         *,
         machine_profile_id: str | None = None,
         tool_head_profile_id: str | None = None,
+        max_work_feed_mm_min: float | None = None,
     ) -> None:
         super().__init__(parent)
         self.database = database
@@ -3583,6 +3555,7 @@ class MaterialPanel(QtWidgets.QWidget):
         self._current_id: int | None = None
         self._machine_profile_id = machine_profile_id
         self._tool_head_profile_id = tool_head_profile_id
+        self._max_work_feed_mm_min = max_work_feed_mm_min
 
         layout = _panel_layout(self)
         self.search = QtWidgets.QLineEdit()
@@ -3604,9 +3577,7 @@ class MaterialPanel(QtWidgets.QWidget):
         self.mode_combo = QtWidgets.QComboBox()
         for mode in LayerMode:
             self.mode_combo.addItem(mode.value.title(), mode.value)
-        self.speed_spin = MeasurementSpinBox("speed")
-        self.speed_spin.setRange(1.0, 100000.0)
-        self.speed_spin.setSuffix(" mm/min")
+        self.speed_spin = PercentageSpeedSpinBox(max_work_feed_mm_min)
         self.power_spin = QtWidgets.QDoubleSpinBox()
         self.power_spin.setRange(0.0, 100.0)
         self.power_spin.setSuffix(" %")
@@ -3756,7 +3727,8 @@ class MaterialPanel(QtWidgets.QWidget):
                 item = QtWidgets.QListWidgetItem(
                     f"{preset.material} · {preset.name}\n"
                     f"{thickness} · {preset.mode.value.title()} · "
-                    f"{preset.speed_mm_min:g} mm/min · {preset.power_percent:g}% · "
+                    f"{format_speed_percent(preset.speed_mm_min, self._max_work_feed_mm_min)} speed · "
+                    f"{preset.power_percent:g}% power · "
                     f"{preset.passes} pass{'es' if preset.passes != 1 else ''}\n"
                     f"{compatibility.label} · {self._scope_text(preset)}"
                 )
@@ -3766,7 +3738,8 @@ class MaterialPanel(QtWidgets.QWidget):
                     item.setForeground(QtGui.QColor("#9A9A9A"))
                 item.setToolTip(
                     f"Compatibility: {compatibility.label}\n"
-                    f"Scope: {self._scope_text(preset)}"
+                    f"Scope: {self._scope_text(preset)}\n"
+                    f"{speed_tooltip(preset.speed_mm_min, self._max_work_feed_mm_min)}"
                 )
                 self.list.addItem(item)
                 if preset.id == current_id:
