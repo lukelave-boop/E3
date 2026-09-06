@@ -36,11 +36,30 @@ harness passed all ten layout checks. Repository Ruff and compileall passed.
 Rendered Preview was reviewed at 1320x820 and 900x680; a viewport-containment
 test keeps the warning summary initially visible at 700x520 with six operations.
 
-The full local Windows Python 3.14 run passed 3,776 tests with 28 skips and found
-ten outdated dock-harness fixtures (corrected above) plus one Pi auto-Home test
-shutdown race under four-worker execution, under separate investigation. Full
-supported-version compatibility CI and frozen-build verification follow. No
-interactive operator, real camera, controller, or laser verification is claimed.
+The initial local Windows Python 3.14 run passed 3,776 tests with 28 skips and
+found ten outdated dock-harness fixtures (corrected above) plus one Pi auto-Home
+shutdown race under four-worker execution. The final full run on frozen source
+`5a6122b76bcf47109d9efc0ea8628edf4eb757ca` passed **3,800 tests, 28 skips**.
+
+The separate shutdown race was reproduced deterministically: `_update_terminal`
+persists `stopped` before clearing `_active_job_id`, while concurrent shutdown
+tries to classify that still-active ID as `interrupted`. The job store correctly
+rejects replacing a terminal outcome. The Pi code is unchanged by this desktop
+revision; this needs a separate lifecycle correction and does not explain the
+intermittent physical streaming stall. The final full-run pass does not resolve
+this scheduling-dependent finding.
+
+Supported-version compatibility CI awaits explicit approval for publishing the
+21-file desktop commit to the public development branch; automatic approval
+review rejected that push because the earlier authorization covered diagnostics.
+The required Windows packaging script completed for **0.7.10**, source
+`5a6122b76bcf47109d9efc0ea8628edf4eb757ca`, in the isolated
+`readable-desktop-build` checkout. The native bundle guard passed and the frozen
+app stayed alive for an isolated 15.2-second offscreen startup check with no
+startup error or stderr output. The permanent E3 DEV TEST pointer was selected
+atomically through `packaging/set_dev_test_feature.py` and matches that EXE's
+adjacent version/revision metadata. Installed production E3 was not changed.
+No interactive operator, real camera, controller, or laser verification is claimed.
 
 ## Active: upload/start status and progress
 
