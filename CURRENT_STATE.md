@@ -7,6 +7,26 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-06**
 
+## Main consolidation
+
+At the operator's request, `main` now integrates the completed auto-Home/layer,
+upload/status, desktop readability, and serial-diagnostics work. Feature tip
+`1e61b6c0b0bc8719382d6fc23ae52a1cb749434d` already contains diagnostics tip
+`151a504bb3a70d096974206308bad911b249d941`; main advances without replacing newer
+code or resolving conflicts. The root checkout uses `main` again.
+
+Pre-integration [compatibility run 34030594529](https://github.com/lukelave-boop/E3/actions/runs/34030594529)
+passed all four jobs on that feature tip: Windows Python 3.10 core, Windows
+Python 3.12 desktop, Linux/Pi serial and recovery, and Ruff. The consolidation
+adds only these verification notes to the tested tree; no runtime code changes.
+
+Completed development refs are removed after publishing the integrated main
+tip. Detached worktrees, the existing 0.7.10 E3 DEV TEST target, local scratch
+files, stashes, and the `archive/s1pro-z-homing-safety-2026-09-05` tag are retained.
+This is branch consolidation, not filesystem cleanup. The previously recorded
+Pi shutdown race and intermittent physical streaming stall remain known gaps;
+consolidation and passing automated checks do not claim to resolve either.
+
 ## Active: desktop columns, percentage speeds, and Preview layout
 
 The operator requested manually resizable columns throughout the desktop,
@@ -52,7 +72,8 @@ this scheduling-dependent finding.
 The operator reports that the 0.7.10 feature build looks good and has explicitly
 approved pushing the desktop changes and verification notes to the public
 development branch. This is general operator feedback, not an additional
-controller or laser test record. Supported-version compatibility CI is next.
+controller or laser test record. Supported-version compatibility CI passed on
+the published feature tip as recorded above.
 The required Windows packaging script completed for **0.7.10**, source
 `5a6122b76bcf47109d9efc0ea8628edf4eb757ca`, in the isolated
 `readable-desktop-build` checkout. The native bundle guard passed and the frozen
