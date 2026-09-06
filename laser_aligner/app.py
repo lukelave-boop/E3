@@ -60,6 +60,7 @@ from .calibration.support import (
     HoneycombSupportReference,
     HoneycombSupportStore,
 )
+from .calibration.surface import SurfaceCalibrationStore, SurfaceHeightModel
 from .camera.service import (
     CameraService,
     FrameBurst,
@@ -348,6 +349,7 @@ class AppContext:
         calibration_dir = self.calibration_profiles.active_dir
         self.lens = LensCalibrator(calibration_dir, settings.calibration.lens)
         self.bed = BedMapper(calibration_dir, settings.calibration.bed, settings.machine.work_area)
+        self.surface_calibration = SurfaceCalibrationStore(calibration_dir)
         self.honeycomb_support = HoneycombSupportStore(calibration_dir)
         self.fixture_reach = FixtureReachStore(
             settings.app.data_dir,
@@ -2713,6 +2715,43 @@ class AppContext:
             label=str(payload.get("label", ""))[:80],
         )
         return self.bed.add_point(point)
+
+    def surface_calibration_binding(self) -> dict[str, Any]:
+        """Exact provenance for diagnostic height maps; no hardware queries."""
+        lens = self.lens.model
+        if lens is None:
+            raise CalibrationError("Solve the lens calibration before collecting height maps")
+        signature = signature_from_camera_settings(self.settings.camera)
+        if signature.autofocus:
+            raise CalibrationError("Height calibration requires fixed manual camera focus")
+        if signature != self.calibration_profiles.current:
+            raise CalibrationError("Camera optical settings changed; reopen the matching calibration profile")
+        return {
+            "machine_id": self.machine_id,
+            "calibration_profile": self.calibration_profiles.current.key,
+            "camera_geometry": self._bed_provenance(),
+        }
+
+    def save_surface_height_map(self, slot: str, height_mm: float, reference: str) -> dict[str, Any]:
+        self._require_valid_bed_calibration()
+        binding = self.surface_calibration_binding()
+        calibration, lens = self.bed.calibration, self.lens.model
+        if calibration is None or lens is None:
+            raise CalibrationError("Current lens and base bed maps are required")
+        return self.surface_calibration.save_map(
+            slot, height_mm=height_mm, reference=reference, calibration=calibration,
+            points=self.bed.points, lens=lens, work_area=self.settings.machine.work_area,
+            binding=binding,
+        ).to_dict()
+
+    def solve_surface_height_model(self) -> SurfaceHeightModel:
+        binding = self.surface_calibration_binding()
+        lens = self.lens.model
+        if lens is None:
+            raise CalibrationError("Lens calibration is required")
+        return self.surface_calibration.solve(
+            lens=lens, work_area=self.settings.machine.work_area, binding=binding,
+        )
 
     def solve_bed(self) -> dict[str, Any]:
         image = self.bed_reference()

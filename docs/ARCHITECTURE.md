@@ -1,5 +1,14 @@
 # Architecture
 
+The material-height calibration study in `calibration/surface.py` fits a single
+camera pose to original undistorted correspondences at two known Z planes using
+fixed lens intrinsics. A third plane is scored independently. `AppContext` owns
+its profile-scoped atomic evidence store; `desktop/surface_height.py` provides
+collection and diagnostic image review. It never replaces the active bed map or
+enters the current desktop/browser execution pipeline. The remaining explicit
+support/material-plane integration and shared-owner probe redesign are specified
+in [MATERIAL_HEIGHT.md](MATERIAL_HEIGHT.md).
+
 Development update publication owns package retention after verified manifest
 promotion. Current and two recent package pairs stay available; dated GitHub
 asset labels persist a seven-day retirement grace for older packages. Incoming

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased - material-height calibration study
+
+- Machine Setup's manual Bed Mapping controls now include a height study:
+  save separately measured lower/upper base maps, fit one physical camera pose,
+  check an independent middle height, and preview a corrected photograph within
+  the measured interval. Signed heights support a fixed border above or below
+  the honeycomb top. Evidence persists separately with optical/machine binding.
+- This is diagnostic collection and review. Production tracing/job coordinates
+  and probe/controller commands are unchanged; automatic thickness measurement
+  still requires supported and physically verified firmware behavior.
+
 ## Unreleased - development release retention
 
 - Successful update publication now keeps the current Windows/Linux packages

@@ -1,5 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
+An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
+can preserve two measured-height base maps, check a third height independently,
+and preview a height-specific camera correction. It does not yet apply height
+compensation to tracing/jobs or enable automatic probe measurement.
+
 The development START flow displays acknowledged upload progress, verification,
 and starting while Pi status monitoring remains responsive during upload syncing
 and validation. Brief refresh gaps are distinguished from failed status requests;

@@ -7,6 +7,43 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-06**
 
+## Active: material-height calibration study and probe redesign
+
+Branch `codex/material-height-calibration` adds a profile-scoped two-height
+calibration study. Original undistorted point observations at two measured
+parallel planes fit one physical camera pose with fixed lens intrinsics; a
+third middle height is held out of fitting. Signed heights use the fixed black
+honeycomb border at Home / park as the proposed datum. Endpoint maps, source
+identities and optical/machine provenance persist atomically under schema 1.
+The UI saves maps and previews a height-specific image within the measured
+interval. It does not activate the model in tracing, support teaching, projects,
+job generation or execution; no controller or firmware commands have changed.
+
+The operator reports that Home / park naturally locates the probe over the
+border and offers to measure the border-to-honeycomb offset. The value/sign
+have not yet been supplied. The operator also reports no firmware change since
+the archived Z work (`bffecea`, tag `archive/s1pro-z-homing-safety-2026-09-05`).
+That work homes onto a known surface; its recorded G30 acknowledges without
+motion and G28 resets logical Z, so it is not an unknown-thickness measurement.
+Treat current automatic measurement capability as unsupported. Preserve the
+border reference and redesign measurement to require controller-local bounded
+contact reporting without re-zeroing. Porting Z onto the current shared
+`CrealityControllerOwner`, physical firmware selection/verification, and explicit
+support/material-plane runtime integration remain unfinished. The complete
+design and operator study workflow are in [docs/MATERIAL_HEIGHT.md](docs/MATERIAL_HEIGHT.md).
+
+Local Windows Python 3.14 verification passes **156 focused tests**, including
+43 new geometry/persistence/AppContext/offscreen-widget checks. Tests predict
+unseen intermediate heights and bed positions from a synthetic tilted camera,
+reject stale/inconsistent/out-of-range inputs, retain independent check failure,
+and prove study operations do not query hardware or alter the active bed map.
+Existing base mapping, calibration provenance/profiles and Machine Setup tests
+also pass. Repository Ruff, compileall and diff checks pass. The 920x700 study
+dialog was rendered offscreen and visually reviewed with the production dark
+theme and Segoe UI font; the image stays outside Git. No interactive GUI,
+physical camera, probe, controller or laser validation is claimed, and no new
+frozen feature build or supported-version Compatibility CI run is recorded yet.
+
 ## Physical stall evidence: 2026-09-06 08:11
 
 Operator-provided Pi service, automatic ACK evidence, and kernel excerpts record

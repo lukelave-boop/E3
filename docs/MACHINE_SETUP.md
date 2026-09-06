@@ -1,5 +1,11 @@
 # Native machine setup
 
+The optional **Material height calibration study** lives under Bed mapping's
+**Show manual / CSV fallback** controls. It preserves measured maps at two
+heights and checks an independent intermediate plane. It provides diagnostic
+image previews only; see [the height workflow](MATERIAL_HEIGHT.md) for fixed-border
+reference conventions and remaining probe/production integration.
+
 > **Operator directions:** Follow the packaged
 > [Permanent Camera Setup Runbook](../laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md).
 > It is the canonical current-version five-step calibration sequence. Machine

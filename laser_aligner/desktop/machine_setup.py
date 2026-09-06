@@ -795,6 +795,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self.context = runtime.context
         self._navigation_only = bool(navigation_only)
         self._bed_image: np.ndarray | None = None
+        self._surface_capture_binding: dict[str, Any] | None = None
         self._work_area_reference_calibration: Any | None = None
         self._honeycomb_pick_active = False
         self._honeycomb_pick_points: list[tuple[float, float]] = []
@@ -2344,11 +2345,31 @@ class MachineSetupDialog(QtWidgets.QDialog):
         ):
             manual_controls.addWidget(button, index // 2, index % 2)
         manual_layout.addLayout(manual_controls)
+        self.surface_height_button = QtWidgets.QPushButton("Material height calibration study…")
+        self.surface_height_button.setObjectName("surfaceHeightCalibration")
+        self.surface_height_button.clicked.connect(self.open_surface_height_study)
+        manual_layout.addWidget(self.surface_height_button)
         controls.addWidget(park, 0, 0)
         controls.addWidget(clear, 0, 1)
         right.addLayout(controls)
         layout.addWidget(right_widget, 3)
         self.bed_scroll_area = self._add_scrollable_tab(tab, "3 · Bed mapping")
+
+    def open_surface_height_study(self) -> None:
+        from .surface_height import SurfaceHeightDialog
+
+        preview = ImagePicker()
+        dialog = SurfaceHeightDialog(
+            self.context, preview, self._bed_image, self,
+            image_binding=self._surface_capture_binding,
+        )
+        dialog.exec()
+
+    def _remember_surface_capture_binding(self) -> None:
+        try:
+            self._surface_capture_binding = self.context.surface_calibration_binding()
+        except Exception:
+            self._surface_capture_binding = None
 
     def _build_registration_tab(self) -> None:
         tab = QtWidgets.QWidget()
@@ -3605,6 +3626,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             self._invalidate_coordinate_audit_image()
             self._work_area_reference_calibration = None
             self._bed_image = image
+            self._remember_surface_capture_binding()
             self.bed_preview.set_image(self._bed_image)
 
         self._start_operation("Precision bed capture", operation, succeeded)
@@ -3623,6 +3645,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
             image, calibration = result
             self._cancel_honeycomb_support_picking()
             self._bed_image = image
+            self._remember_surface_capture_binding()
             self._work_area_reference_calibration = calibration
             self._render_work_area_reference_preview()
             self._refresh_work_area_reference_status()
@@ -4574,6 +4597,7 @@ class MachineSetupDialog(QtWidgets.QDialog):
                 cv2.LINE_AA,
             )
         self._bed_image = image
+        self._remember_surface_capture_binding()
         self.bed_preview.set_image(preview)
         if not detection.get("detected"):
             self.base_grid_status.setText(str(detection.get("reason", "Base grid was not detected")))

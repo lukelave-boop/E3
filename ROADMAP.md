@@ -1,5 +1,12 @@
 # Roadmap
 
+Material-height work now has a two-plane camera calibration study with a
+separate intermediate-height check. Next: physically validate it, establish a
+controller-supported contact measurement that preserves the fixed-border Z
+reference, share Z with the existing Creality/Air Assist owner, then integrate
+explicit material/support planes and provenance into tracing and execution.
+See [height model and probe redesign](docs/MATERIAL_HEIGHT.md).
+
 Development release publication now includes package retention: current plus
 two recent versions, followed by a seven-day retirement grace for older packages.
 Observe the first live retirement/deletion cycle; see [update policy](docs/UPDATES.md#package-retention).
