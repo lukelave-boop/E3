@@ -49,14 +49,27 @@ The classifier/dialect/secondary integration checks passed 90 tests.
 
 This existing feature branch now includes the verified serial diagnostics and
 connection-retry correction alongside automatic Home and layer assignment, so
-the next matched desktop/Pi handoff preserves those changes. Final compatibility,
-frozen build, and physical validation results remain pending for this revision.
+the next matched desktop/Pi handoff preserves those changes. Physical validation
+remains pending for this revision.
 
 Combined Windows Python 3.14 machine/Pi/desktop checks passed 602 tests with
 two explicit POSIX skips. The final compact-panel/classifier checks passed 23
 tests; repository Ruff and compileall passed. Desktop verification includes
 offscreen widget interaction and reviewed rendered strips/progress bars.
 No real camera, controller, laser, or interactive operator test was performed.
+
+Compatibility run
+[34027973127](https://github.com/lukelave-boop/E3/actions/runs/34027973127)
+passed at 7ceeaeab2f9a1c7cc210f83e287eb23399d52ea7: Windows 3.10 core 3160 passed /
+73 skipped; Windows 3.12 desktop 3767 passed / 25 skipped; Linux serial/session
+411 passed; Ruff passed. The exact frozen Windows build is 0.7.8 at that revision,
+produced with packaging/build_windows.ps1 in the isolated upload-start-build
+checkout. Bundle validation and a 15-second isolated offscreen launch passed
+with no startup errors, camera autostart disabled and hardware authority absent.
+The permanent E3 DEV TEST pointer selects this exact build. The matched Pi
+update is pinned to the same revision and includes a rollback tag; it was
+syntax-checked but has not been executed by the agent. The normal installed E3
+application remains unchanged. This development branch awaits operator testing.
 
 ## Active: automatic Home and object layer assignment
 
