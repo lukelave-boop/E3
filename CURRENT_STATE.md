@@ -11,16 +11,25 @@ Snapshot: **2026-09-06**
 
 ### Single native fast/slow test requested by the operator
 
+Follow-up: the operator requested a 5 mm initial lift. The host now verifies
+that smaller relative lift before the same single native homing cycle; final
+absolute Z 20 clearance remains unchanged. The Ender's own deployment clearance
+is firmware-controlled and may add a lift. Primary XY Home / park does not prove
+the probe's Z clearance. **51 focused native-cycle/CLI tests passed**, including
+rejection of an uncompleted initial lift and suppression of final motion after
+failure. Ruff and compileall passed. No physical action was performed by the
+assistant; the revised sequence remains pending operator testing.
+
 The operator asked to simplify the test to one native fast approach, backoff,
 and slow approach. The new CLI `native-cycle --confirm-native-cycle` submits
 the separate `native_test` operation through MachineService/Pi admission. It
 requires the primary Home / park border pose, a freshly reset Ender near logical
 Z zero, a visibly retracted steady pin, disconnected secondary XY, laser unable
-to emit and 20 mm of actual upward gantry headroom. Pin-only confirmation cannot
+to emit and space for a 5 mm initial lift and final Z 20 clearance. Pin-only confirmation cannot
 authorize this operation. No hardware commands or service restarts were performed
 by the assistant; operator installation and physical testing remain pending.
 
-The sequence verifies an initial relative 20 mm lift, runs exactly one
+The sequence verifies an initial relative 5 mm lift, runs exactly one
 `G28 Z R0`, requires the Creality known-Z report and the historically observed
 retracted logical Z 5 mm state, then verifies final absolute Z 20 clearance.
 Firmware owns both approaches and pin handling. No manual M280, G30, retry or

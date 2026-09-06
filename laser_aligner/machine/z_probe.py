@@ -111,7 +111,8 @@ class CrealityZProbe:
     def native_cycle_test(self, *, guard: WriteGuardFactory) -> dict[str, object]:
         """One operator-confirmed native Z homing cycle, without a height result.
 
-        The operator confirms 20 mm of upward headroom, a retracted normal pin,
+        The operator confirms space for the 5 mm initial lift and final Z 20,
+        a retracted normal pin,
         solid border beneath it and disconnected secondary XY motors. Native
         G28 may home its virtual XY; only the secondary Z motor is connected.
         Homing establishes a new origin, so this cannot measure material height.
@@ -138,11 +139,11 @@ class CrealityZProbe:
             raise MachineError("Native test requires a freshly reset Ender near logical Z zero")
         self._execute("M84 S0", guard)
         self._execute("G91", guard)
-        self._execute("G1 Z20.000 F300", guard)
+        self._execute("G1 Z5.000 F300", guard)
         self._execute("G90", guard)
         self._execute("M400", guard)
         raised = parse_position(self._execute("M114", guard))
-        if abs(raised - initial - 20.0) > 0.05:
+        if abs(raised - initial - 5.0) > 0.05:
             raise MachineError("Initial upward clearance lift was not confirmed; native homing not started")
         # R0 omits G28's redundant initial clearance; the host just completed it.
         # Firmware owns deployment, fast approach, bump, slow approach and stow.

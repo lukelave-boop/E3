@@ -31,7 +31,7 @@ def _parser() -> argparse.ArgumentParser:
         description=(
             "Operator CR Touch diagnostics. Inspect/deploy/stow have NO AXIS MOTION. "
             "Deploy/stow move the PIN. "
-            "Native-cycle MOVES Z: raise 20 mm, one native homing cycle, then Z 20 mm "
+            "Native-cycle MOVES Z: raise 5 mm, one native homing cycle, then Z 20 mm "
             "clearance. It does not measure material height. No automatic connection, "
             "primary XY motion, retry or laser enable."
         ),
@@ -56,8 +56,8 @@ def _parser() -> argparse.ArgumentParser:
         "--confirm-native-cycle", action="store_true",
         help=(
             "Required for native-cycle: I will operate the test; the freshly reset Ender's "
-            "pin is retracted with steady normal light; 20 mm upward gantry travel is "
-            "physically available; the probe is over the solid border after E3 Home/park; "
+            "pin is retracted with steady normal light; the initial 5 mm lift and final "
+            "Z 20 mm clearance are physically available; the probe is over the solid border after E3 Home/park; "
             "Creality XY motors are disconnected; the laser cannot emit"
         ),
     )

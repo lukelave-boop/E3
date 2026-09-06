@@ -4082,7 +4082,7 @@ class MachineService:
         clearance = finite_number(clearance_z_mm, "Z clearance", 20, 80)
         support = finite_number(support_height_mm, "Honeycomb height", -20, 20)
         if operation == "native_test" and clearance != 20.0:
-            raise SafetyError("The native cycle test uses a fixed 20 mm upward lift and final clearance")
+            raise SafetyError("The native cycle test uses a 5 mm initial lift and fixed Z 20 mm final clearance")
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
             self._require_safety_configuration()

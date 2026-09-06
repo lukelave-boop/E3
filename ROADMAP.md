@@ -1,7 +1,7 @@
 # Roadmap
 
-Probe priority: verify the new single native fast/slow homing test with initial
-and final clearance, following successful operator-observed deployment/stow.
+Probe priority: verify the new single native fast/slow homing test with a 5 mm initial
+lift and final Z 20 clearance, following successful operator-observed deployment/stow.
 Reference/measurement admission remains held during this correction; the earlier
 repeated G30 procedure is withdrawn.
 

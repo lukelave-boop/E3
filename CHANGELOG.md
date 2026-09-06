@@ -2,7 +2,7 @@
 
 ## Unreleased - material-height calibration study
 
-- Add an operator-confirmed native-cycle diagnostic: verified 20 mm upward lift,
+- Add an operator-confirmed native-cycle diagnostic: verified 5 mm initial upward lift,
   one native G28 Z homing cycle and final clearance. No G30 repetition or manual
   pin commands are interleaved. It has no material-height authority and does not
   enable the withdrawn reference/measurement workflow.

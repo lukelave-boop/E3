@@ -6,7 +6,7 @@ without pin deployment. Reference and Measure remain blocked while separate
 provide Inspect, Deploy and Stow actions with no axis commands. The earlier
 accepted border result is not physical safety validation.
 The separately confirmed [native-cycle test](docs/MATERIAL_HEIGHT.md#single-native-fastslow-cycle-test)
-uses one native Z homing cycle with initial and final clearance. It moves Z but
+uses a 5 mm initial lift, one native Z homing cycle and final Z 20 mm clearance. It moves Z but
 does not report material thickness; physical verification is pending.
 
 An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)

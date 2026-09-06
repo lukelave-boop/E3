@@ -40,8 +40,8 @@ emission has stopped or that the area is safe to enter.
 
 - The separate native-cycle diagnostic moves Z on explicit operator request.
   It requires a freshly reset Ender, retracted steady pin, solid border under
-  the probe, disconnected Creality XY, laser unable to emit and 20 mm of actual
-  upward headroom. It verifies an initial lift, runs one native homing cycle,
+  the probe, disconnected Creality XY, laser unable to emit and space for the initial
+  5 mm lift and final Z 20 mm clearance. It verifies an initial lift, runs one native homing cycle,
   and verifies final clearance. Homing changes Z zero; this is not a material
   height result. The installed firmware reports no emergency parser, so software
   STOP/M112 is not assurance of immediate interruption. See the

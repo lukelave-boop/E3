@@ -38,8 +38,9 @@ class NativeSerial(FakeSerial):
             self.relative = True
         elif line == "G90":
             self.relative = False
-        elif line == "G1 Z20.000 F300":
-            self.z = self.z + 20 if self.relative else 20
+        elif line in {"G1 Z5.000 F300", "G1 Z20.000 F300"}:
+            target = float(line.split()[1][1:])
+            self.z = self.z + target if self.relative else target
         elif line == "G28 Z R0":
             self.z = 5
             self.homed = True
@@ -66,7 +67,7 @@ def test_one_native_cycle_lifts_before_homing_then_clears_without_height_authori
     result = run(probe)
     assert serial.writes == [
         "M115", "M119", "G21", "G90", "M114", "M84 S0", "G91",
-        "G1 Z20.000 F300", "G90", "M400", "M114", "G28 Z R0", "M420 S0",
+        "G1 Z5.000 F300", "G90", "M400", "M114", "G28 Z R0", "M420 S0",
         "M114", "M119", "G1 Z20.000 F300", "M400", "M114",
     ]
     assert serial.z == 20 and not serial.relative
@@ -94,11 +95,12 @@ def test_bad_initial_state_never_moves(native_probe, command, response):
 
 def test_failed_initial_lift_never_homes(native_probe):
     serial, probe, _ = native_probe
-    serial.overrides["G1 Z20.000 F300"] = ["ok"]
+    serial.overrides["G1 Z5.000 F300"] = ["ok"]
     with pytest.raises(MachineError, match="Initial upward clearance"):
         run(probe)
     assert "G28 Z R0" not in serial.writes
-    assert serial.writes.count("G1 Z20.000 F300") == 1
+    assert serial.writes.count("G1 Z5.000 F300") == 1
+    assert "G1 Z20.000 F300" not in serial.writes
 
 
 @pytest.mark.parametrize("response", [["ok"], ["Error:Homing failed"], ["start"]])
@@ -108,7 +110,8 @@ def test_failed_native_homing_never_retries_or_commands_final_lift(native_probe,
     with pytest.raises(MachineError):
         run(probe)
     assert serial.writes.count("G28 Z R0") == 1
-    assert serial.writes.count("G1 Z20.000 F300") == 1
+    assert serial.writes.count("G1 Z5.000 F300") == 1
+    assert "G1 Z20.000 F300" not in serial.writes
     assert probe.reference is None
 
 
@@ -130,7 +133,8 @@ def test_failed_post_home_state_prevents_final_motion(native_probe, report):
     serial.on_write = lambda line: serial.overrides.update({"M119": report}) if line == "G28 Z R0" else None
     with pytest.raises(MachineError):
         run(probe)
-    assert serial.writes.count("G1 Z20.000 F300") == 1
+    assert serial.writes.count("G1 Z5.000 F300") == 1
+    assert "G1 Z20.000 F300" not in serial.writes
 
 
 @pytest.fixture
@@ -204,5 +208,6 @@ def test_native_disconnect_during_homing_prevents_retry_and_final_lift(native_rp
         assert entered.wait(3)
     helpers._wait_until(lambda: serial.close_calls > 0, timeout=3)
     assert serial.writes.count("G28 Z R0") == 1
-    assert serial.writes.count("G1 Z20.000 F300") == 1
+    assert serial.writes.count("G1 Z5.000 F300") == 1
+    assert "G1 Z20.000 F300" not in serial.writes
     assert harness.machine._z_probe.reference is None
