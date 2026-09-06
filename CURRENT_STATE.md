@@ -52,7 +52,30 @@ passed. The probe panel was rendered offscreen and visually reviewed with the
 production dark theme and Segoe UI; the capture remains outside Git. This
 implementation has not moved physical hardware. It does
 not install measured heights into camera transforms, projects, tracing or jobs.
-The E3 Pi service must be updated alongside the desktop before physical tests.
+The operator updated the Pi checkout to `64a10f6`, compiled the package and
+restarted `e3-hardware-node.service`; systemd reported `active`. A subsequent
+authenticated read-only capability request advertised `pi-creality-z-probe-v1`
+and the new probe schema. No physical probe operation was issued.
+
+[Compatibility run 34050906127](https://github.com/lukelave-boop/E3/actions/runs/34050906127)
+passed Windows Python 3.10 core, Windows Python 3.12 desktop, Linux/Pi and Ruff
+for `64a10f61adf75869bceffb2cea79e11c67fee6d2`. The exact revision was frozen as
+Windows **0.7.21** using `packaging/build_windows.ps1`; the native-library guard
+and installer build passed. Initial packaging attempts correctly rejected
+foreign ICU/OpenSSL DLLs injected into child-process PATH by the execution
+sandbox. The successful build used an isolated cache and clean environment
+outside that sandbox, without bypassing the guard.
+
+The exact EXE passed isolated offscreen and visible Windows startup checks
+(15 seconds each, empty stderr, no startup-error log). Computer Use opened
+Tools > Machine Setup > 7 · Material height and visually checked the frozen
+panel with its motion controls disabled, then closed the isolated application.
+This was an interactive offline UI check, not hardware verification. The
+permanent **E3 DEV TEST** pointer was selected atomically with the validated
+helper for **Probe material Z offset**, version **0.7.21**, revision **64a10f6**,
+target `.codex-worktrees/creality-probe-build/dist/E3/E3.exe`. Physical border and
+known-thickness acceptance remain pending; the branch remains active for that
+verification and subsequent camera-height integration.
 See [docs/MATERIAL_HEIGHT.md](docs/MATERIAL_HEIGHT.md) for the operator procedure.
 
 ## Earlier material-height calibration study evidence
