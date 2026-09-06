@@ -23,8 +23,15 @@ selected E3 DEV TEST executable remains present at its original frozen revision.
 A clean local clone reproduced the original error; applying the index-only
 correction made the same recursive submodule command succeed. All eight local
 worktrees were checked for preservation and ignore coverage; no Git entries
-with mode 160000 remain in the corrected index. Compatibility CI on the
-correction is pending. Application, controller and publisher code is unchanged.
+with mode 160000 remain in the corrected index. Correction
+`45f533b09fdd8d8990b44d0ec2becd481c96c79a` passed
+[Compatibility run 34034721004](https://github.com/lukelave-boop/E3/actions/runs/34034721004):
+Windows Python 3.10 core, Windows Python 3.12 desktop, Linux/Pi serial/recovery,
+and Ruff all succeeded. Local Ruff, compileall and diff checks also passed.
+Application, controller and publisher code is unchanged. The follow-up commit
+records only this completed verification; it does not change the tested code.
+The accompanying [publication run 34034721012](https://github.com/lukelave-boop/E3/actions/runs/34034721012)
+also completed successfully.
 
 Publication currently runs independently of Compatibility CI, so its successful
 package-integrity checks do not establish that the compatibility suite passed.
@@ -59,7 +66,8 @@ grace reset before promotion, interrupted cleanup, metadata changes, malformed
 metadata and paginated assets. Repository Ruff, publisher compileall and
 `git diff --check` passed. These are API-fake tests plus a read-only live metadata
 plan, not a live deletion test; the first publication/retirement run is now
-recorded above, while full compatibility execution awaits the checkout correction.
+recorded above. Full compatibility subsequently passed on the checkout correction
+as recorded in the CI section.
 
 ## Main consolidation
 
