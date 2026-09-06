@@ -9,6 +9,45 @@ Snapshot: **2026-09-06**
 
 ## Active: existing-controller Z offset measurement
 
+### Successful border reference and reduced travel follow-up
+
+On 2026-09-06, after a complete Creality power/USB reset and Pi service restart,
+read-only status confirmed the existing 115200-baud secondary owner ready with
+acknowledged fan OFF and no fault. The operator then completed Reference border:
+the Windows 0.7.21 panel displayed an accepted border and final Z 20.000 mm,
+with support offset -1.500 mm. Pi source version 0.7.23, fingerprint `1b2d248c`
+(diagnostic commit `a7a2494`), confirmed `reference_ready: true`. The same
+Creality/CR Touch and unchanged firmware were used (historically identified as
+Marlin 2.0.8.26F4; no new raw identity transcript supplied). This is operator
+evidence of one successful border sequence, not known-thickness accuracy or
+verification of the full material range. The operator observed repeated fast/
+slow touches and excessive full-height lifts.
+
+The follow-up retains three G30 reports but removes the full host lift between
+them and the redundant full lift immediately after border G28. Firmware G30
+still stows/returns; M114 must place Z at least 1 mm above the reported contact
+and no higher than clearance +0.05 mm before another contact. These are software
+checks, not newly verified physical clearances. One final full lift uses the
+existing M400/M114 completion checks. Invalid contacts/readbacks stop the
+sequence; no unsafe-height fallback or automatic retry is added. G28 and G30's
+internal fast/slow touches remain firmware-controlled, so this does not claim
+exactly one fast touch followed by three slow touches. The command sequence is
+Pi-owned and works with the already-selected Windows 0.7.21 build.
+
+Local Windows verification: **94 focused tests passed** across probe core,
+MachineService, secondary owner and authenticated Pi RPC, including one final
+full lift per operation and rejection of bad/missing intermediate clearance or
+failed final retract. Physical verification of this shorter sequence and
+known-thickness measurements remain pending.
+Repository Ruff, compileall and diff checks passed. The preceding diagnostic
+[Compatibility run 34052862195](https://github.com/lukelave-boop/E3/actions/runs/34052862195)
+passed Linux/Pi and lint but failed the Windows 3.12 auto-home/STOP shutdown
+test (`stopped` to `interrupted` terminal transition). A focused local rerun
+reproduced that failure (one passed, one failed). That primary job-lifecycle
+test does not use the secondary probe; no lifecycle code is changed by this
+reduced-travel patch. The failure remains an integration blocker and is not
+counted as passing probe verification.
+
 ### First operator attempt: timeout before visible movement
 
 On 2026-09-06 the operator attempted Reference border with Windows 0.7.21 and
@@ -28,8 +67,8 @@ STOP or automatic retry behavior. The change runs on the Pi and is compatible
 with the selected Windows 0.7.21 client. Local Windows verification: **90 focused
 tests passed**, including silent/partial M115 timeout diagnostics and existing
 probe, secondary-owner, machine-service and authenticated Pi RPC tests; affected
-Ruff and compileall passed. Pi deployment and another operator observation are
-pending. This is a diagnostic improvement, not a verified fix for the timeout.
+Ruff and compileall passed. Later Pi deployment and operator observations are
+recorded above. This was a diagnostic improvement, not a verified fix for the timeout.
 
 ### Implementation and earlier software verification
 

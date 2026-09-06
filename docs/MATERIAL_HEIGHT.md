@@ -3,7 +3,8 @@
 Status: the two-height **calibration study** and an operator-positioned CR Touch
 measurement path are implemented. The latter uses the existing Creality
 controller and Marlin commands, through its shared Air Assist connection. Both
-require physical acceptance. Applying height compensation to production
+require physical acceptance beyond the first successful border reference.
+Applying height compensation to production
 tracing/jobs is still unfinished.
 
 ## Measure with the existing probe
@@ -30,7 +31,9 @@ It does not automatically select a material point from the camera.
    runs the archived `G28` / `M420 S0` homing sequence and verifies logical Z
    near 5 mm. This position readback is only a homing check, not the measured
    border height. Three subsequent G30 contacts establish the actual border
-   measurement. Each is followed by an acknowledged Z retract and M114 check.
+   measurement. E3 uses G30's own stow/return between readings, checking M114
+   before the next contact, then makes one full Z clearance lift after all three.
+   It does not add a full clearance lift immediately after border homing.
 4. Use the panel's existing laser-off **Jog** path to put the raised probe over
    solid material. Watch the physical probe location. Do not Home again: a new
    primary home invalidates the reference. The first workflow records carriage
@@ -48,6 +51,20 @@ readings produces no accepted height. A contact outside -2 mm through
 `clearance - 10 mm` is rejected before another host-commanded move. G30 still
 uses the controller's own probe travel and trigger rules; these host checks do
 not change its internal descent or establish physical clearance.
+
+Between readings, reported logical Z must be at least 1 mm above the reported
+contact and no higher than the configured clearance (0.05 mm readback tolerance).
+This conservative software check is not a newly validated physical clearance.
+Missing or out-of-range readback blocks another contact. The final full lift
+still requires M400 completion and M114 readback before the result is accepted.
+
+The operator observed a successful border reference on 2026-09-06 but reported
+excessive full-height lifts. The shortened sequence removes those host-added
+lifts; it does not change G30's internal fast/slow probing or the initial G28
+homing cycle. The published firmware fixes the fast/slow sequence in
+`run_z_probe`; G30 has no slow-only parameter. Therefore this is not exactly
+one fast touch followed by three slow touches. The shorter sequence still
+needs physical testing; three accepted G30 reports are retained.
 
 The explicit `G30 X110 Y110` avoids depending on the Creality board's fictional
 current XY. Only the primary controller moves real XY. Creality's published

@@ -110,7 +110,7 @@ class CrealityZProbe:
 
     def _samples(self, clearance: float, guard: WriteGuardFactory) -> tuple[float, ...]:
         samples: list[float] = []
-        for _ in range(3):
+        for index in range(3):
             # Creality XY motors are disconnected. The virtual bed centre avoids
             # G30's silent can_reach rejection; primary XY remains stationary.
             lines = self._execute("G30 X110 Y110", guard)
@@ -118,7 +118,17 @@ class CrealityZProbe:
             if not -2.0 <= contact <= clearance - 10.0:
                 raise MachineError("Probe contact is outside the bounded height interval; no retract attempted")
             samples.append(contact)
-            self._raise(clearance, guard)
+            if index < 2:
+                # G30 performs its own stow/retract. Keep that short return
+                # between samples instead of adding a full travel-height lift.
+                # Read back before another firmware-controlled contact cycle.
+                current = parse_position(self._execute("M114", guard))
+                if not contact + 1.0 <= current <= clearance + 0.05:
+                    raise MachineError(
+                        "Post-probe Z is outside the repeat clearance interval; "
+                        "no further contact attempted"
+                    )
+        self._raise(clearance, guard)
         if max(samples) - min(samples) > _REPEATABILITY_MM:
             raise MachineError("Probe contacts disagree by more than 0.10 mm; no height accepted")
         return tuple(samples)
@@ -155,7 +165,6 @@ class CrealityZProbe:
         homed = parse_position(self._execute("M114", guard))
         if abs(homed - 5.0) > 0.25:
             raise MachineError("Border homing did not finish at the archived Z 5 mm position")
-        self._raise(clearance, guard)
         samples = self._samples(clearance, guard)
         border = statistics.mean(samples)
         if abs(border) > 0.5:

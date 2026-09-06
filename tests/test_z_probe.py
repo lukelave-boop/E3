@@ -17,6 +17,7 @@ class ProbeSerial(FakeSerial):
         self.z = 20.0
         self.samples = [0.01, 0.02, 0.00, 3.01, 3.00, 3.02]
         self.overrides = {}
+        self.post_probe_z = None
 
     def write_line(self, line):
         super().write_line(line)
@@ -37,6 +38,8 @@ class ProbeSerial(FakeSerial):
             height = self.samples.pop(0)
             self.responses.append(f"Bed X: 110.000 Y: 110.000 Z: {height:.3f}")
             self.z = max(5, height)
+            if self.post_probe_z is not None:
+                self.z = self.post_probe_z
         self.responses.append("ok")
 
 
@@ -76,6 +79,11 @@ def test_border_and_material_use_actual_contacts_one_owner_and_retract():
     assert serial.z == 20
     assert serial.writes.count("G28") == 1
     assert serial.writes.count("G30 X110 Y110") == 6
+    assert serial.writes.count("G1 Z20.000 F300") == 2
+    for start in (0, serial.writes.index("G1 Z20.000 F300") + 1):
+        block = serial.writes[start:]
+        final_raise = block.index("G1 Z20.000 F300")
+        assert block[:final_raise].count("G30 X110 Y110") == 3
     assert not any(line.startswith(("G92", "M851", "M500", "G38")) for line in serial.writes)
     fan.ensure_off()
     assert serial.open_calls == 1
@@ -182,12 +190,40 @@ def test_changed_z_does_not_start_a_probe():
     assert serial.writes.count("G30 X110 Y110") == 3
 
 
-def test_unacknowledged_retract_position_blocks_contacts():
+def test_failed_final_retract_does_not_publish_reference():
     serial, _, _, probe, _ = ready_probe()
     serial.overrides["G1 Z20.000 F300"] = ["ok"]
     with pytest.raises(MachineError, match="retract"):
         reference(probe)
-    assert "G30 X110 Y110" not in serial.writes
+    assert serial.writes.count("G30 X110 Y110") == 3
+    assert probe.reference is None
+
+
+@pytest.mark.parametrize("post_probe_z", [0.0, 0.5, 20.1])
+def test_invalid_intermediate_clearance_blocks_next_probe_and_host_motion(post_probe_z):
+    serial, _, _, probe, _ = ready_probe()
+    serial.post_probe_z = post_probe_z
+    with pytest.raises(MachineError, match="repeat clearance"):
+        reference(probe)
+    assert serial.writes.count("G30 X110 Y110") == 1
+    assert not any(command.startswith("G1 Z") for command in serial.writes)
+    assert probe.reference is None
+
+
+def test_missing_intermediate_position_blocks_next_probe(monkeypatch):
+    serial, _, _, probe, _ = ready_probe()
+    write = serial.write_line
+
+    def missing_position(command):
+        if command == "M114" and "G30 X110 Y110" in serial.writes:
+            serial.overrides["M114"] = ["ok"]
+        write(command)
+
+    monkeypatch.setattr(serial, "write_line", missing_position)
+    with pytest.raises(MachineError, match="complete logical position"):
+        reference(probe)
+    assert serial.writes.count("G30 X110 Y110") == 1
+    assert probe.reference is None
 
 
 @pytest.mark.parametrize("height", [-2.1, 10.1, 79])

@@ -2,6 +2,9 @@
 
 ## Unreleased - material-height calibration study
 
+- Probe repeats now use G30's own return with position checks between readings
+  and one full clearance lift at the end. Border reference also omits the
+  redundant full lift after homing. Firmware-controlled fast/slow touches remain.
 - Secondary-controller failures now name the command; acknowledgement timeouts
   include the response count and last reply. Pi logs retain a bounded response
   tail, and probe transcripts retain failed commands for diagnosis.

@@ -2,8 +2,9 @@
 
 Material-height work now has a two-plane camera calibration study with a
 separate intermediate-height check and an operator-positioned probe measurement
-using the existing Creality/Air Assist owner. Next: physically validate border
-reference, known thicknesses, tall-material behavior and interruption, then integrate
+using the existing Creality/Air Assist owner. The first operator border reference
+succeeded. Next: validate the reduced-travel repeat sequence, known thicknesses,
+tall-material behavior and interruption, then integrate
 explicit material/support planes and provenance into tracing and execution.
 See [height model and probe redesign](docs/MATERIAL_HEIGHT.md).
 

@@ -20,6 +20,10 @@ collection is bounded, and generation-targeted M112 cleanup bypasses the ACK loc
 after primary STOP. Desktop `z_probe.py` adds the seventh Machine Setup tab with
 reference, existing Jog and measurement controls. Neither browser job generation
 nor desktop project/calibration persistence gains new Z or height authority.
+Three G30 readings use firmware-managed stow/return between contacts, with
+bounded M114 readback before repeating. The host commands full clearance only
+after the last reading and verifies completion before publishing. It does not
+override the firmware's fast/slow probe cycle or re-zero between material samples.
 
 Development update publication owns package retention after verified manifest
 promotion. Current and two recent package pairs stay available; dated GitHub
