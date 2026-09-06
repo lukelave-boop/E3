@@ -20,8 +20,13 @@ interval. It does not activate the model in tracing, support teaching, projects,
 job generation or execution; no controller or firmware commands have changed.
 
 The operator reports that Home / park naturally locates the probe over the
-border and offers to measure the border-to-honeycomb offset. The value/sign
-have not yet been supplied. The operator also reports no firmware change since
+border and measured the honeycomb top **1.5 mm below the border** (2026-09-06).
+Thus the reported signed support offset is **-1.5 mm**; paper directly on it is
+at `-1.5 + paper_thickness_mm`, and the same paper on a 12 mm spacer is at
+`10.5 + paper_thickness_mm`. Measurement method, uncertainty, reference-point
+coordinates and probe repeatability are not recorded; this is an operator
+measurement, not validation of an automated sequence. It is not installed as a
+global machine configuration default. The operator also reports no firmware change since
 the archived Z work (`bffecea`, tag `archive/s1pro-z-homing-safety-2026-09-05`).
 That work homes onto a known surface; its recorded G30 acknowledges without
 motion and G28 resets logical Z, so it is not an unknown-thickness measurement.
@@ -40,9 +45,8 @@ and prove study operations do not query hardware or alter the active bed map.
 Existing base mapping, calibration provenance/profiles and Machine Setup tests
 also pass. Repository Ruff, compileall and diff checks pass. The 920x700 study
 dialog was rendered offscreen and visually reviewed with the production dark
-theme and Segoe UI font; the image stays outside Git. No interactive GUI,
-physical camera, probe, controller or laser validation is claimed, and no new
-frozen feature-build handoff is recorded yet.
+theme and Segoe UI font; the image stays outside Git. No interactive GUI or
+physical camera, probe, controller or laser validation is claimed.
 
 Initial [Compatibility run 34046684566](https://github.com/lukelave-boop/E3/actions/runs/34046684566)
 passed Windows Python 3.10 core, Linux/Pi and Ruff. Windows Python 3.12 passed
@@ -50,15 +54,27 @@ passed Windows Python 3.10 core, Linux/Pi and Ruff. Windows Python 3.12 passed
 its two generated programs crossed a wall-clock second and differed only in
 the `Generated` timestamp. The test now holds the toolpath module's clock
 reference fixed, retaining the complete byte comparison and leaving application
-code unchanged. A new compatibility run is pending for that test correction.
+code unchanged. All 28 speed-display tests pass locally after the correction.
+[Compatibility rerun 34047154094](https://github.com/lukelave-boop/E3/actions/runs/34047154094)
+passed all four jobs on `b517047`: Windows Python 3.10 core, Windows Python 3.12
+desktop, Linux/Pi and Ruff. The application/configuration/packaging tree is
+identical to frozen source `15599de`; only the test and verification notes differ.
 
-The required Windows packaging script is building frozen **0.7.18** from exact
+The required Windows packaging script completed frozen **0.7.18** from exact
 source `15599de05bdb98f51b1e86201e00ecb3cbf6aedc` in the isolated
 `material-height-study-build` checkout. Its EXE passed a 15.22-second isolated
 offscreen startup check with motion disabled, a nonexistent controller endpoint,
 no stderr and no startup-error file. The collected height modules were checked
-against the isolated checkout paths. No physical device was used. Installer
-packaging and permanent launcher selection remain pending.
+against the isolated checkout paths. The native bundle guard and installer
+compile passed. No physical device was used. The permanent E3 DEV TEST pointer
+was selected atomically through `packaging/set_dev_test_feature.py` and matches
+the adjacent version/revision metadata at
+`.codex-worktrees/material-height-study-build/dist/E3/E3.exe`. The normal E3
+launcher and prior frozen bundles are preserved. The later test correction and
+verification notes have no application, configuration or packaging diff against
+the exact frozen source. This remains a development study pending physical
+evidence and the remaining production/probe implementation, not a completed
+automatic-thickness feature or a main-branch integration.
 
 ## Physical stall evidence: 2026-09-06 08:11
 

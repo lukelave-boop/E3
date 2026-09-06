@@ -28,9 +28,15 @@ These are illustrative numbers, not configuration values or measured rig data.
 An equal error in the arbitrary datum cancels from plane differences, but a
 wrong spacing between target heights does not.
 
-The operator can measure the border-to-honeycomb difference. Record its sign,
-reference location, method, and uncertainty before automatic measurement is
-enabled. Check that Home / park actually places the deployed probe over solid
+On 2026-09-06 the operator measured the honeycomb top **1.5 mm below the black
+border**, so this rig's reported signed support offset is **-1.5 mm**. Its lower
+paper plane is `-1.5 + paper_thickness_mm`; the same paper on a 12 mm spacer is
+`10.5 + paper_thickness_mm`. Paper thickness has not been supplied. The method,
+uncertainty and probe repeatability have not been recorded. This report is not
+a verified automatic measurement and is not a global configuration default.
+
+Record the reference location, measurement method and uncertainty before
+automatic measurement is enabled. Check that Home / park places the deployed probe over solid
 border with the current XY/probe offsets. A support move invalidates that setup.
 
 ## Two-height calibration study
@@ -104,6 +110,11 @@ The new measurement contract must be conservative:
 
 - Establish Z on the fixed border, once, with current session authority. Keep
   absolute position knowledge in the same reference throughout measurement.
+  Measure and retain the border's actual trigger coordinate using the same
+  measurement operation as the material. The difference between those two
+  contact coordinates establishes top height and cancels a constant probe
+  offset. Do not assume the post-home logical Z or stored nozzle offset is the
+  contact coordinate. Repeat the border measurement after a reset/rehome.
 - The firmware must execute bounded probing, stop at contact locally, fail on
   no contact, and return the measured trigger coordinate without re-zeroing.
   An ACK alone and ordinary M114 position readback are insufficient evidence.
