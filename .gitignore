@@ -7,6 +7,9 @@ __pycache__/
 /.pytest-tmp-*/
 /.pytest_tmp/
 /.tmp-pytest-*/
+# Local linked worktrees must never become submodules in the main repository.
+/.codex-worktrees/
+/worktrees/
 .ruff_cache/
 .coverage
 htmlcov/

@@ -7,6 +7,29 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-06**
 
+## CI checkout correction
+
+Retention commit `30f9543ddf3c2f57cab968361503913108800975` accidentally included
+eight local linked worktrees as mode-160000 Git entries without `.gitmodules`.
+[Compatibility run 34033923759](https://github.com/lukelave-boop/E3/actions/runs/34033923759)
+failed all four jobs during checkout credential cleanup with `No url found for
+submodule path`; no tests or Ruff checks ran. This was a repository-checkout
+failure, not evidence of four independent application regressions.
+
+The correction removes precisely those eight index entries and ignores new
+content under `/.codex-worktrees/` and `/worktrees/`. Existing tracked ordinary
+files under those paths and all local worktree folders are preserved. The
+selected E3 DEV TEST executable remains present at its original frozen revision.
+A clean local clone reproduced the original error; applying the index-only
+correction made the same recursive submodule command succeed. All eight local
+worktrees were checked for preservation and ignore coverage; no Git entries
+with mode 160000 remain in the corrected index. Compatibility CI on the
+correction is pending. Application, controller and publisher code is unchanged.
+
+Publication currently runs independently of Compatibility CI, so its successful
+package-integrity checks do not establish that the compatibility suite passed.
+CI-gated publication remains a separate workflow improvement.
+
 ## Active: development release retention
 
 The rolling development publisher now protects the current Windows/Linux pair
@@ -20,8 +43,12 @@ without rolling back a working update if cleanup fails.
 A read-only plan against the current GitHub release inspected 49 uploaded
 assets: 42 would begin grace, zero would be deleted, and the current `38ee99bb40cc`
 pair, prior `1afe4fb3fe8b`/`831b352cb0d7` pairs, and live manifest were protected.
-No remote asset metadata or files were changed. This work remains local on
-`main`; the first live retirement and eventual deletion cycle are unverified.
+That investigation changed no remote assets. The subsequent
+[publication run 34033923698](https://github.com/lukelave-boop/E3/actions/runs/34033923698)
+successfully published `30f9543` and started seven-day grace for 44 older package
+assets. No expired-package deletions occurred; the first eventual deletion cycle
+remains unverified. Compatibility testing was blocked by the checkout defect
+described above.
 There are no desktop, updater download-format, or machine-runtime changes.
 
 Verification: 70 focused publisher/updater/release tests passed on local Windows
@@ -31,7 +58,8 @@ retirement, the exact seven-day boundary, recent/current protection, mandatory
 grace reset before promotion, interrupted cleanup, metadata changes, malformed
 metadata and paginated assets. Repository Ruff, publisher compileall and
 `git diff --check` passed. These are API-fake tests plus a read-only live metadata
-plan, not a live cleanup test; compatibility CI has not run for this local change.
+plan, not a live deletion test; the first publication/retirement run is now
+recorded above, while full compatibility execution awaits the checkout correction.
 
 ## Main consolidation
 
