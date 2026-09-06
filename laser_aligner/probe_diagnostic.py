@@ -1,7 +1,7 @@
-"""Operator-run pin diagnostic client for the authenticated Pi machine service.
+"""Operator-run probe diagnostic client for the authenticated Pi machine service.
 
-This module never opens a controller or connects/homes a machine. Each invocation
-submits at most one pin diagnostic to an already connected Pi-owned session.
+Each invocation submits one explicit diagnostic to an already connected Pi-owned
+session. The separately confirmed native-cycle test moves Z and homes it.
 """
 
 from __future__ import annotations
@@ -23,15 +23,17 @@ from .machine.pi_job_protocol import (
 )
 
 _PIN_ACTION = "machine.probe_pin"
+_NATIVE_ACTION = "machine.probe_z"
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "CR Touch pin diagnostic: NO AXIS MOTION. Deploy and stow move the PIN "
-            "and must be triggered by the operator. This client never connects, "
-            "homes, jogs, or enables the laser. Inspect leaves axes and pin unchanged; "
-            "every action establishes laser and fan OFF through the Pi service."
+            "Operator CR Touch diagnostics. Inspect/deploy/stow have NO AXIS MOTION. "
+            "Deploy/stow move the PIN. "
+            "Native-cycle MOVES Z: raise 20 mm, one native homing cycle, then Z 20 mm "
+            "clearance. It does not measure material height. No automatic connection, "
+            "primary XY motion, retry or laser enable."
         ),
         epilog=(
             "Connect the machine yourself in E3 first. Run one action, observe the "
@@ -39,7 +41,7 @@ def _parser() -> argparse.ArgumentParser:
             "No action is retried automatically."
         ),
     )
-    parser.add_argument("pin_action", choices=("inspect", "deploy", "stow"))
+    parser.add_argument("pin_action", choices=("inspect", "deploy", "stow", "native-cycle"))
     parser.add_argument("--host", default="127.0.0.1", help="Pi service host (default: 127.0.0.1)")
     parser.add_argument("--port", type=int, default=8765, help="Pi service port (default: 8765)")
     parser.add_argument("--token-file", type=Path, help="Read the saved authentication token from this file")
@@ -50,6 +52,15 @@ def _parser() -> argparse.ArgumentParser:
             "at least 10 mm of free space, and the laser cannot emit"
         ),
     )
+    parser.add_argument(
+        "--confirm-native-cycle", action="store_true",
+        help=(
+            "Required for native-cycle: I will operate the test; the freshly reset Ender's "
+            "pin is retracted with steady normal light; 20 mm upward gantry travel is "
+            "physically available; the probe is over the solid border after E3 Home/park; "
+            "Creality XY motors are disconnected; the laser cannot emit"
+        ),
+    )
     return parser
 
 
@@ -57,7 +68,7 @@ def _exchange(host: str, port: int, token: str, action: str, **fields: Any) -> d
     response = request_response(
         host, port, token,
         {"action": action, "request_id": str(uuid.uuid4()), **fields},
-        timeout=25.0 if action == _PIN_ACTION else 5.0,
+        timeout=120.0 if action == _NATIVE_ACTION else 25.0 if action == _PIN_ACTION else 5.0,
     )
     if not isinstance(response, dict) or type(response.get("ok")) is not bool:
         raise MachineError("Pi service returned an invalid response; no automatic retry was made")
@@ -69,7 +80,9 @@ def _run(args: argparse.Namespace, token: str) -> dict[str, Any]:
     if not capabilities["ok"]:
         return capabilities
     actions = capabilities.get("actions")
-    if not isinstance(actions, dict) or _PIN_ACTION not in actions:
+    native = args.pin_action == "native-cycle"
+    action = _NATIVE_ACTION if native else _PIN_ACTION
+    if not isinstance(actions, dict) or action not in actions:
         raise MachineError("The Pi service does not support pin diagnostics; update the Pi service first")
 
     response = _exchange(args.host, args.port, token, "machine.status")
@@ -80,10 +93,13 @@ def _run(args: argparse.Namespace, token: str) -> dict[str, Any]:
         raise MachineError("Connect machine yourself in E3 first; this client does not connect or home it")
     boot_id = validate_boot_id(status.get("boot_id"))
     generation = validate_session_generation(status.get("controller_session_generation"))
+    fields = (
+        {"operation": "native_test", "confirmed": args.confirm_native_cycle,
+         "clearance_z_mm": 20.0, "support_height_mm": -1.5}
+        if native else {"pin_action": args.pin_action, "confirmed": args.confirm_pin_clearance}
+    )
     return _exchange(
-        args.host, args.port, token, _PIN_ACTION,
-        pin_action=args.pin_action,
-        confirmed=args.confirm_pin_clearance,
+        args.host, args.port, token, action, **fields,
         client_id=str(uuid.uuid4()),
         expected_boot_id=boot_id,
         expected_session_generation=generation,
@@ -95,7 +111,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     token: str | None = None
     try:
         # Reject missing confirmation before reading credentials or making RPCs.
-        if args.pin_action != "inspect" and not args.confirm_pin_clearance:
+        if args.pin_action == "native-cycle" and not args.confirm_native_cycle:
+            raise ValueError("Native Z motion requires the operator's --confirm-native-cycle flag")
+        if args.pin_action in {"deploy", "stow"} and not args.confirm_pin_clearance:
             raise ValueError("Deploy/stow require the operator's --confirm-pin-clearance flag")
         if not args.host.strip() or not 1 <= args.port <= 65535:
             raise ValueError("Host must be nonempty and port must be from 1 through 65535")

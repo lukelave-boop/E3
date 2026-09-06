@@ -2,6 +2,10 @@
 
 ## Unreleased - material-height calibration study
 
+- Add an operator-confirmed native-cycle diagnostic: verified 20 mm upward lift,
+  one native G28 Z homing cycle and final clearance. No G30 repetition or manual
+  pin commands are interleaved. It has no material-height authority and does not
+  enable the withdrawn reference/measurement workflow.
 - Add separate operator-run pin Inspect, Deploy and Stow diagnostics through
   the existing Pi controller owner. Each invocation is one action with bounded
   replies, session/STOP checks and no axis commands or automatic retry. Servo

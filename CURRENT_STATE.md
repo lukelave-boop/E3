@@ -9,7 +9,63 @@ Snapshot: **2026-09-06**
 
 ## Active: existing-controller Z offset measurement
 
+### Single native fast/slow test requested by the operator
+
+The operator asked to simplify the test to one native fast approach, backoff,
+and slow approach. The new CLI `native-cycle --confirm-native-cycle` submits
+the separate `native_test` operation through MachineService/Pi admission. It
+requires the primary Home / park border pose, a freshly reset Ender near logical
+Z zero, a visibly retracted steady pin, disconnected secondary XY, laser unable
+to emit and 20 mm of actual upward gantry headroom. Pin-only confirmation cannot
+authorize this operation. No hardware commands or service restarts were performed
+by the assistant; operator installation and physical testing remain pending.
+
+The sequence verifies an initial relative 20 mm lift, runs exactly one
+`G28 Z R0`, requires the Creality known-Z report and the historically observed
+retracted logical Z 5 mm state, then verifies final absolute Z 20 clearance.
+Firmware owns both approaches and pin handling. No manual M280, G30, retry or
+extra homing cycle is sent. This changes Z origin and produces a test result
+only, with no accepted border reference or material height. Reference/Measure
+remain held. Published Creality G30 includes firmware-configured extra samples,
+so reducing the number of G30 calls cannot promise exactly two internal touches.
+Published source is not proof of the installed binary's behavior.
+
+Windows verification: **235 focused tests passed** across the native cycle/CLI,
+existing Z core/service/RPC, pin core/service/RPC and secondary owner. Coverage
+includes initial lift rejection before homing, one native command, unexpected
+home state, failed final retract, stale/unauthorized requests, cached request
+replay and cancellation without another lift or retry. Repository Ruff,
+compileall and diff checks passed. Tests use fake controllers/loopback sockets;
+there was no GUI, camera or physical Z test. The new native tests are included
+in Linux/Pi CI for the next run. This development branch is not release-ready.
+
+The preceding pin diagnostic [CI run 34055605872](https://github.com/lukelave-boop/E3/actions/runs/34055605872)
+passed Windows 3.10 and lint, but failed Linux's continuous-serial-chatter test
+(`test_posix_serial_synchronization_rejects_continuous_chatter`, expected error
+not raised) and the already recorded Windows 3.12 auto-home/STOP shutdown race.
+No pin diagnostic test failed in that run. Those unrelated integration failures
+remain unresolved; they are not counted as successful full CI.
+
+Further operator pin observation: after another successful Deploy, gently
+holding the pin upward did not retract it and caused red flashing. The operator
+restarted the Ender before an input report could be collected, then reported a
+retracted pin and steady light. Contact detection remains unverified; the manual
+touch test did not establish a valid contact or identify a firmware fault.
+
 ### Operator-run pin diagnostics for the correction
+
+Operator evidence on 2026-09-06: the Pi checkout/update reported `8430bc9` and
+an active service. Inspect, Deploy and Stow then returned success on the same
+primary/secondary sessions, reporting E3 0.7.26/fingerprint `701305a6` and
+Marlin 2.0.8.26F4 (Jan 9 2023) on Ender-3 S1 Pro. The operator observed the
+pin extend and remain down with purple changing to blue; M119 changed from
+`z_min: TRIGGERED` to `z_min: open`. On Stow the operator observed retraction
+and purple returning; M119 returned to `z_min: TRIGGERED`. M114 was unchanged
+at X -10, Y -9, Z 0.03 throughout. These are one-cycle observations of pin
+actuation and correlated input state, not contact detection, clearance, or
+repeated G30 acceptance. The replies also explicitly report
+`Cap:EMERGENCY_PARSER:0`; asynchronous emergency-parser support must not be
+assumed for this firmware. No controller commands were sent by the assistant.
 
 The operator has confirmed at least 10 mm of space below the retracted pin and
 laser emission prevented for a pin-only check. They explicitly retain control
@@ -32,8 +88,8 @@ The CLI is `python -m laser_aligner.probe_diagnostic`, using the authenticated
 Pi action `machine.probe_pin`. Session compare-and-swap and replay caching
 prevent stale or repeated requests from repeating actuation. An uncertain
 reply closes the owner; bounded transcripts remain in success/failure responses
-and logs. The next physical evidence needed is Inspect followed by separately
-operator-triggered pin deployment and stow observations, per
+and logs. Initial operator-triggered deployment and stow are recorded above;
+contact response and repeat probing remain unverified. The pin procedure is in
 [MATERIAL_HEIGHT.md](docs/MATERIAL_HEIGHT.md#operator-run-pin-diagnostics).
 
 Windows source verification: **254 focused tests passed** across the pin core,
@@ -41,8 +97,8 @@ CLI, MachineService/RPC integration, existing Z probe/secondary owner, and Pi
 machine server. These use fake controllers and loopback sockets only. Repository
 Ruff, compileall and diff checks passed. No GUI, camera, controller, pin or Z
 physical test was performed by the assistant. The three pin test files are also
-included in the Linux/Pi CI job; that CI run and operator installation remain
-pending. The previously recorded Windows auto-home/STOP shutdown failure remains
+included in the Linux/Pi CI job; its result has not yet been recorded here.
+Operator installation is confirmed above. The previously recorded Windows auto-home/STOP shutdown failure remains
 an integration blocker, independent of these passing focused tests.
 
 ### Probe workflow withdrawn after observed undeployed descent

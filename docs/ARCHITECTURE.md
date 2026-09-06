@@ -21,6 +21,14 @@ only. The servo ACK is followed by 0.8 seconds of settling outside the write
 gate. ACK failures close the owner without M112, reopening or automatic stow;
 no axis command is issued. Bounded transcripts survive in responses and logs.
 
+The CLI's separately confirmed `native-cycle` maps to the typed `native_test`
+operation in `MachineService.probe_z`. Ordinary motion admission, border pose,
+controller generations, STOP/socket checks and Pi exclusivity apply. It performs
+a verified relative 20 mm lift, one G28 Z R0 and final verified Z 20 clearance.
+There is no manual M280 or G30 in this path, and it never publishes a reference
+or material height. Reference/Measure remain suspended independently. The native
+test is an operator-triggered physical test, not a software bypass for measurement.
+
 `machine/z_probe.py` is a typed client of the same `CrealityControllerOwner`
 used by secondary Air Assist. `MachineService.probe_z` owns disarmed admission,
 and currently rejects both operations before controller access due to observed

@@ -38,6 +38,15 @@ emission has stopped or that the area is safe to enter.
   offset on earlier feature builds. The updated Pi rejects both actions before
   any controller command; this software restriction is not safety-rated.
 
+- The separate native-cycle diagnostic moves Z on explicit operator request.
+  It requires a freshly reset Ender, retracted steady pin, solid border under
+  the probe, disconnected Creality XY, laser unable to emit and 20 mm of actual
+  upward headroom. It verifies an initial lift, runs one native homing cycle,
+  and verifies final clearance. Homing changes Z zero; this is not a material
+  height result. The installed firmware reports no emergency parser, so software
+  STOP/M112 is not assurance of immediate interruption. See the
+  [native-cycle procedure](docs/MATERIAL_HEIGHT.md#single-native-fastslow-cycle-test).
+
 - Separate pin diagnostics are operator-triggered one action at a time. Inspect
   issues no servo or axis command; Deploy and Stow move only the pin and require
   at least 10 mm of space below it with the laser unable to emit. All actions

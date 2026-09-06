@@ -14,6 +14,47 @@ require physical acceptance beyond the first successful border reference.
 Applying height compensation to production
 tracing/jobs is still unfinished.
 
+## Single native fast/slow cycle test
+
+The operator requested a simpler test using the Ender's native routine.
+`native-cycle` makes a verified 20 mm relative upward lift, runs one `G28 Z R0`,
+then returns to logical Z 20 mm. No G30 calls, manual M280 commands, repeated
+cycles or automatic retries are interleaved. Published Creality
+[Z homing](https://github.com/CrealityOfficial/Ender-3S1/blob/s1_pro_plus/Marlin/src/module/motion.cpp)
+has a fast approach, backoff and slow approach; the installed firmware's
+physical sequence still needs observation. G30's firmware-configured extra
+samples mean one G30 is not necessarily exactly two touches.
+
+This test **moves Z and establishes a new origin**. It does not measure material
+thickness or create a reference. Reference/Measure remain held while this simpler
+sequence is tested. The native command may home virtual Creality XY first; those
+motors must remain disconnected. Primary XY does not move during the test.
+
+The operator must have a freshly reset Ender with the pin visibly retracted and
+its normal steady light. Confirm **20 mm of free upward gantry travel**, not just
+space below the pin, and keep the laser unable to emit. Use Connect machine and
+Home / park yourself to place the probe above the solid black border. In Windows
+PowerShell from the source checkout, the operator can then run:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner.probe_diagnostic native-cycle --host 192.168.5.18 --confirm-native-cycle
+```
+
+The dedicated flag confirms those conditions; pin-only confirmation is not
+accepted for this test. Identity and retracted input are checked first. Initial
+logical Z must be within 0.25 mm of zero, matching this rig's observed reset
+state; this is not proof of physical headroom. The initial lift must complete
+and report a 20 mm increase before native homing starts. R0 omits G28's redundant
+initial clearance. After homing, Z must be reported known, with retracted input
+and the historically observed Z 5 mm position, before the final clearance move.
+Missing or unexpected replies reject the result without another motion command.
+
+Observe the initial lift, fast touch, backoff, slow touch and final clearance,
+and report the actual sequence with the JSON result. The installed firmware
+reports `Cap:EMERGENCY_PARSER:0`; software M112 cannot be assumed to interrupt an
+ongoing native move immediately. Physical stopping remains with the operator.
+No assistant-triggered hardware action, firmware change or EEPROM write occurs.
+
 ## Operator-run pin diagnostics
 
 The operator initiates every action. An assistant may prepare code and review

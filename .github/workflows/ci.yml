@@ -132,6 +132,7 @@ jobs:
           tests/test_secondary_controller.py
           tests/test_secondary_air_assist_integration.py
           tests/test_probe_pin.py
+          tests/test_native_probe.py
           tests/test_machine_probe_pin.py
           tests/test_probe_diagnostic_cli.py
           tests/test_pi_job_protocol.py

@@ -62,7 +62,8 @@ from .z_probe import CrealityZProbe, finite_number
 
 LOGGER = logging.getLogger(__name__)
 # Withdrawn after an operator observed descent with the CR Touch pin retracted.
-# No configuration or RPC override: only fake-controller tests bypass this gate.
+# Reference/Measure have no runtime override. The separately confirmed native
+# homing test produces no measurement/reference authority.
 _PROBE_SUSPENSION_REASON = (
     "Material probing is suspended after an unexpected descent with the probe pin "
     "retracted. Do not retry Reference border or Measure Z offset. "
@@ -4067,19 +4068,21 @@ class MachineService:
         clearance_z_mm: float = 20.0, support_height_mm: float = 0.0,
         _connection_alive: Callable[[], bool] | None = None,
     ) -> dict[str, Any]:
-        """Reference the fixed border or measure at the operator-positioned XY.
+        """Admit a probe operation or the separate operator native homing test.
 
         The exact existing Creality owner also serves Air Assist. No primary XY
         movement occurs here; Home / park and Jog retain their existing paths.
         """
-        if _PROBE_SUSPENSION_REASON:
+        if _PROBE_SUSPENSION_REASON and operation != "native_test":
             raise SafetyError(_PROBE_SUSPENSION_REASON)
-        if type(operation) is not str or operation not in {"reference", "measure"}:
-            raise SafetyError("Probe operation must be reference or measure")
+        if type(operation) is not str or operation not in {"reference", "measure", "native_test"}:
+            raise SafetyError("Probe operation must be reference, measure or native_test")
         if confirmed is not True:
             raise SafetyError("Confirm the solid probe surface, disconnected Creality XY and Z clearance")
         clearance = finite_number(clearance_z_mm, "Z clearance", 20, 80)
         support = finite_number(support_height_mm, "Honeycomb height", -20, 20)
+        if operation == "native_test" and clearance != 20.0:
+            raise SafetyError("The native cycle test uses a fixed 20 mm upward lift and final clearance")
         epoch = self._operation_stop_epoch()
         with self._manual_home_command_scope():
             self._require_safety_configuration()
@@ -4101,7 +4104,7 @@ class MachineService:
             position = self._jog_position_mm
             if not self.settings.work_area.contains(*position):
                 raise SafetyError("The current probe carriage position is outside the configured work area")
-            if operation == "reference" and any(
+            if operation in {"reference", "native_test"} and any(
                 abs(actual - expected) > 0.01
                 for actual, expected in zip(
                     position, (self.settings.photo_x, self.settings.photo_y), strict=True
@@ -4138,7 +4141,9 @@ class MachineService:
             try:
                 with guard():
                     pass
-                if operation == "reference":
+                if operation == "native_test":
+                    result = probe.native_cycle_test(guard=guard)
+                elif operation == "reference":
                     result = probe.establish_reference(
                         clearance_z_mm=clearance, support_height_mm=support,
                         primary_generation=session.generation, stop_epoch=epoch,
@@ -4152,6 +4157,8 @@ class MachineService:
                 self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
                 with guard():
                     self._z_probe_result = result
+                if operation == "native_test":
+                    LOGGER.info("Native probe cycle test: %s", json.dumps(result, ensure_ascii=True))
                 return result
             except BaseException as exc:
                 probe.invalidate()

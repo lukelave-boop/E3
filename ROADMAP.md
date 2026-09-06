@@ -1,9 +1,9 @@
 # Roadmap
 
-Probe priority: collect operator-observed pin deployment/stow behavior with
-the separate no-axis diagnostic, then correct initial clearance and repeated
-contact handling. Reference/measurement admission remains held while that
-correction is developed; the earlier reduced-travel procedure is withdrawn.
+Probe priority: verify the new single native fast/slow homing test with initial
+and final clearance, following successful operator-observed deployment/stow.
+Reference/measurement admission remains held during this correction; the earlier
+repeated G30 procedure is withdrawn.
 
 Material-height work now has a two-plane camera calibration study with a
 separate intermediate-height check and an operator-positioned probe measurement

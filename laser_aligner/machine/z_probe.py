@@ -89,7 +89,7 @@ class CrealityZProbe:
         try:
             lines = self.owner._execute_acknowledged(
                 command, write_guard=guard, allow_open=False,
-                timeout=90.0 if command == "G28" else 30.0,
+                timeout=90.0 if command.split()[0] == "G28" else 30.0,
                 on_failure=self._on_failure,
             )
         except Exception as exc:
@@ -107,6 +107,60 @@ class CrealityZProbe:
         actual = parse_position(self._execute("M114", guard))
         if abs(actual - clearance) > 0.05:
             raise MachineError("Probe retract did not reach the requested Z clearance")
+
+    def native_cycle_test(self, *, guard: WriteGuardFactory) -> dict[str, object]:
+        """One operator-confirmed native Z homing cycle, without a height result.
+
+        The operator confirms 20 mm of upward headroom, a retracted normal pin,
+        solid border beneath it and disconnected secondary XY motors. Native
+        G28 may home its virtual XY; only the secondary Z motor is connected.
+        Homing establishes a new origin, so this cannot measure material height.
+        """
+        self.invalidate()
+        self.transcript = []
+        self.owner.raise_if_faulted()
+        if not self.owner.ready:
+            raise MachineError("The shared Creality controller must be connected before probing")
+        self._generation = self.owner.generation
+        firmware = " ".join(self._execute("M115", guard))
+        if "marlin" not in firmware.lower() or "ender-3 s1 pro" not in firmware.lower():
+            raise MachineError("Expected the existing Ender-3 S1 Pro / Marlin controller")
+        states = [line.strip().lower() for line in self._execute("M119", guard)
+                  if line.strip().lower().startswith("z_min:")]
+        if states != ["z_min: triggered"]:
+            raise MachineError("Native test requires the operator-observed retracted pin and z_min: TRIGGERED")
+        self._execute("G21", guard)
+        self._execute("G90", guard)
+        initial = parse_position(self._execute("M114", guard))
+        # Keep this first test close to the reset state observed on this rig.
+        # A logical position is not proof of physical headroom.
+        if not -0.25 <= initial <= 0.25:
+            raise MachineError("Native test requires a freshly reset Ender near logical Z zero")
+        self._execute("M84 S0", guard)
+        self._execute("G91", guard)
+        self._execute("G1 Z20.000 F300", guard)
+        self._execute("G90", guard)
+        self._execute("M400", guard)
+        raised = parse_position(self._execute("M114", guard))
+        if abs(raised - initial - 20.0) > 0.05:
+            raise MachineError("Initial upward clearance lift was not confirmed; native homing not started")
+        # R0 omits G28's redundant initial clearance; the host just completed it.
+        # Firmware owns deployment, fast approach, bump, slow approach and stow.
+        self._execute("G28 Z R0", guard)
+        self._execute("M420 S0", guard)
+        homed = parse_position(self._execute("M114", guard))
+        flags = [line.strip().lower() for line in self._execute("M119", guard)]
+        if [line for line in flags if line.startswith("test_axis_known_z_flag")] != ["test_axis_known_z_flag = true"]:
+            raise MachineError("Native homing did not report a known Z axis")
+        if [line for line in flags if line.startswith("z_min:")] != ["z_min: triggered"] or abs(homed - 5.0) > 0.25:
+            raise MachineError("Native homing did not finish in the expected retracted Z 5 mm state")
+        self._raise(20.0, guard)
+        return {
+            "kind": "native_cycle_test", "command": "G28 Z R0",
+            "homed_z_mm": homed, "clearance_z_mm": 20.0,
+            "reference_ready": False, "operator_observation_required": True,
+            "firmware": firmware, "transcript": list(self.transcript),
+        }
 
     def _samples(self, clearance: float, guard: WriteGuardFactory) -> tuple[float, ...]:
         samples: list[float] = []

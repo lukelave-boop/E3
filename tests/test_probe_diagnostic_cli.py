@@ -13,6 +13,25 @@ _TOKEN = "a-test-token-never-shown-in-cli-output"
 _BOOT_ID = "00000000-0000-4000-8000-000000000012"
 
 
+def test_native_motion_requires_its_own_confirmation_before_credential_access(monkeypatch, capsys):
+    monkeypatch.setattr(cli, "read_bridge_token", lambda: pytest.fail("Credential read before confirmation"))
+    assert cli.main(["native-cycle", "--confirm-pin-clearance"]) == 1
+    assert "--confirm-native-cycle" in capsys.readouterr().out
+
+
+def test_native_cycle_sends_one_typed_request_without_automatic_home_or_connect(rpc, capsys):
+    calls, responses = rpc
+    responses["service.capabilities"]["actions"]["machine.probe_z"] = {}
+    responses["machine.probe_z"] = {"ok": True, "result": {"kind": "native_cycle_test"}}
+    assert cli.main(["native-cycle", "--confirm-native-cycle"]) == 0
+    assert [call[2]["action"] for call in calls] == ["service.capabilities", "machine.status", "machine.probe_z"]
+    request = calls[-1][2]
+    assert request["operation"] == "native_test"
+    assert request["confirmed"] is True
+    assert request["clearance_z_mm"] == 20
+    assert calls[-1][3]["timeout"] == 120
+
+
 @pytest.fixture
 def rpc(monkeypatch):
     calls = []
