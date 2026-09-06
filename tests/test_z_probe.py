@@ -129,6 +129,36 @@ def test_repeatability_failure_never_publishes_reference():
     assert probe.reference is None
 
 
+@pytest.mark.parametrize("responses", [[], ["FIRMWARE_NAME:Marlin partial reply"]])
+def test_identity_timeout_names_command_and_retains_failure_without_motion(
+    responses, monkeypatch, caplog,
+):
+    serial, owner, _, probe, failures = ready_probe()
+    serial.overrides["M115"] = responses
+    exchange = owner._execute_acknowledged
+
+    def fast_exchange(command, **kwargs):
+        kwargs["timeout"] = 0.005
+        return exchange(command, **kwargs)
+
+    monkeypatch.setattr(owner, "_execute_acknowledged", fast_exchange)
+    before = len(serial.writes)
+    with pytest.raises(MachineError, match="M115: timed out") as error:
+        reference(probe)
+
+    assert f"received {len(responses)} lines" in str(error.value)
+    assert (responses[-1] if responses else "last: none") in str(error.value)
+    assert probe.transcript == [
+        {"command": "M115", "responses": [], "error": str(error.value)}
+    ]
+    assert "command=M115" in caplog.text
+    assert (responses[-1] if responses else "responses=()") in caplog.text
+    assert serial.writes[before:] == ["M115", "M112"]
+    assert probe.reference is None
+    assert not owner.ready
+    assert failures == ["off"]
+
+
 @pytest.mark.parametrize("changed", ["owner", "primary", "stop"])
 def test_reference_cannot_survive_session_or_stop_change(changed):
     serial, owner, _, probe, _ = ready_probe()

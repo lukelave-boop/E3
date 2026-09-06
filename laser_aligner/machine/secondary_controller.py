@@ -323,7 +323,7 @@ class CrealityControllerOwner:
                 if on_failure is not None:
                     on_failure()
                     self.interrupt_probe(generation)
-                raise self._fail_locked(exc) from exc
+                raise self._fail_locked(f"{command}: {exc}") from exc
             try:
                 deadline = time.monotonic() + (
                     self.session.read_timeout_seconds if timeout is None else timeout
@@ -339,7 +339,9 @@ class CrealityControllerOwner:
                     remaining = deadline - time.monotonic()
                     if remaining <= 0.0:
                         raise SecondaryControllerError(
-                            "timed out waiting for an acknowledged ok response"
+                            "timed out waiting for an acknowledged ok response; "
+                            f"received {len(responses)} lines; last: "
+                            f"{_bounded_detail(responses[-1]) if responses else 'none'}"
                         )
                     response = transport.read_line(timeout=min(remaining, 0.2))
                     if response is None:
@@ -370,7 +372,12 @@ class CrealityControllerOwner:
                 if on_failure is not None:
                     on_failure()
                     self.interrupt_probe(generation)
-                raise self._fail_locked(exc) from exc
+                _LOGGER.warning(
+                    "Secondary exchange failed command=%s generation=%d detail=%s responses=%r",
+                    command, generation, _bounded_detail(exc),
+                    tuple(_bounded_detail(line) for line in responses[-8:]),
+                )
+                raise self._fail_locked(f"{command}: {exc}") from exc
 
     def _bind_secondary_fan(self, binding: AirAssistCommands) -> None:
         """Register one shared FAN2 state cache for this physical owner."""

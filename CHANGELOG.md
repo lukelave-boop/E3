@@ -2,6 +2,9 @@
 
 ## Unreleased - material-height calibration study
 
+- Secondary-controller failures now name the command; acknowledgement timeouts
+  include the response count and last reply. Pi logs retain a bounded response
+  tail, and probe transcripts retain failed commands for diagnosis.
 - Machine Setup now has a seventh Material height tab using the existing CR
   Touch and Creality controller: reference the border, jog over material, then
   measure signed surface height and thickness above the honeycomb from repeated

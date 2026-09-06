@@ -84,12 +84,18 @@ class CrealityZProbe:
     def _execute(self, command: str, guard: WriteGuardFactory) -> tuple[str, ...]:
         if self._generation != self.owner.generation:
             raise MachineError("Creality session changed; reference the border again")
-        lines = self.owner._execute_acknowledged(
-            command, write_guard=guard, allow_open=False,
-            timeout=90.0 if command == "G28" else 30.0,
-            on_failure=self._on_failure,
-        )
-        self.transcript.append({"command": command, "responses": list(lines)})
+        entry: dict[str, object] = {"command": command, "responses": []}
+        self.transcript.append(entry)
+        try:
+            lines = self.owner._execute_acknowledged(
+                command, write_guard=guard, allow_open=False,
+                timeout=90.0 if command == "G28" else 30.0,
+                on_failure=self._on_failure,
+            )
+        except Exception as exc:
+            entry["error"] = str(exc)
+            raise
+        entry["responses"] = list(lines)
         with guard():
             if self._generation != self.owner.generation:
                 raise MachineError("Creality session changed during probing")

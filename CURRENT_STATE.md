@@ -9,6 +9,30 @@ Snapshot: **2026-09-06**
 
 ## Active: existing-controller Z offset measurement
 
+### First operator attempt: timeout before visible movement
+
+On 2026-09-06 the operator attempted Reference border with Windows 0.7.21 and
+Pi checkout `64a10f6`. The dialog reported a secondary Creality acknowledgement
+timeout; the operator reports neither probe-pin nor Z movement. Read-only Pi
+status confirmed no accepted reference, no active job, a disconnected primary
+and a faulted secondary. The failed command and partial secondary replies were
+not exposed by that build, so the cause is not established. The displayed
+support offset was still 0 mm; the reported -1.5 mm must be entered for a later
+thickness result, but it cannot explain an acknowledgement timeout.
+
+The diagnostic follow-up names the failed secondary command in the existing
+error response, distinguishes silence from partial replies on timeout, logs a
+bounded response tail, and retains the failed command in the probe transcript.
+It does not change command order, motion, timeouts, acknowledgement acceptance,
+STOP or automatic retry behavior. The change runs on the Pi and is compatible
+with the selected Windows 0.7.21 client. Local Windows verification: **90 focused
+tests passed**, including silent/partial M115 timeout diagnostics and existing
+probe, secondary-owner, machine-service and authenticated Pi RPC tests; affected
+Ruff and compileall passed. Pi deployment and another operator observation are
+pending. This is a diagnostic improvement, not a verified fix for the timeout.
+
+### Implementation and earlier software verification
+
 The same `codex/material-height-calibration` branch now implements **Machine
 Setup > 7 · Material height**. This uses the existing Creality/Marlin controller
 and CR Touch, sharing `CrealityControllerOwner` with secondary Air Assist. No

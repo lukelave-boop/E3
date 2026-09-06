@@ -79,6 +79,14 @@ generation. Delivery and emergency-parser behavior require physical testing.
 No automatic retract or retry follows uncertain motion. Reconnect and reference
 again after investigating a failure.
 
+Secondary errors identify the failed command. Timeout details distinguish no
+reply from a partial response, and the Pi service journal records the last eight
+bounded response lines under `Secondary exchange failed`. The first operator
+attempt on 0.7.21 timed out before visible pin/Z movement; its older error did
+not identify the command, so the cause remains unconfirmed. The diagnostic
+follow-up only requires updating the Pi service; the 0.7.21 desktop displays
+the improved error without rebuilding.
+
 ## Fixed reference
 
 The operator identifies the black border around the honeycomb, directly under
