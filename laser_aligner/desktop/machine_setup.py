@@ -906,6 +906,16 @@ class MachineSetupDialog(QtWidgets.QDialog):
         self._build_registration_tab()
         self._build_check_tab()
         self._build_coordinate_audit_tab()
+        from .z_probe import ZProbePanel
+
+        probe_tab = QtWidgets.QWidget()
+        probe_layout = QtWidgets.QVBoxLayout(probe_tab)
+        self.z_probe_panel = ZProbePanel(self.context, self._start_operation, probe_tab)
+        for button in self.z_probe_panel.motion_buttons:
+            self._register_motion_action(button)
+        probe_layout.addWidget(self.z_probe_panel)
+        probe_layout.addStretch()
+        self._add_scrollable_tab(probe_tab, "7 · Material height")
         self._restore_preferences()
         footer = QtWidgets.QHBoxLayout()
         self.operation_status = QtWidgets.QLabel(self._operation_outcome)

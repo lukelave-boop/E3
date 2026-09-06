@@ -1483,6 +1483,20 @@ class PiJobService:
             expected_session_generation=expected_session_generation,
         )
 
+    def probe_z(
+        self, operation: str, *, confirmed: bool, clearance_z_mm: float,
+        support_height_mm: float, expected_session_generation: int | None = None,
+        connection_alive: Any = None,
+    ) -> dict[str, Any]:
+        return self._run_idle_machine_operation(
+            "probe Z",
+            lambda: self.machine.probe_z(
+                operation, confirmed=confirmed, clearance_z_mm=clearance_z_mm,
+                support_height_mm=support_height_mm, _connection_alive=connection_alive,
+            ),
+            expected_session_generation=expected_session_generation,
+        )
+
     def jog(
         self,
         dx_mm: float,

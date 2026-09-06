@@ -2,14 +2,24 @@
 
 ## Unreleased - material-height calibration study
 
+- Machine Setup now has a seventh Material height tab using the existing CR
+  Touch and Creality controller: reference the border, jog over material, then
+  measure signed surface height and thickness above the honeycomb from repeated
+  contact reports. Pi and desktop share a typed operation through the existing
+  secondary Air Assist owner. No controller firmware or EEPROM changes are made.
+- Probe operations require disarmed motion admission and operator clearance
+  confirmation. Missing contact, reset, timeout, interruption, stale reference
+  and failed repeatability/retract checks reject the result. Physical testing,
+  including the full 12 mm range, remains pending.
+
 - Machine Setup's manual Bed Mapping controls now include a height study:
   save separately measured lower/upper base maps, fit one physical camera pose,
   check an independent middle height, and preview a corrected photograph within
   the measured interval. Signed heights support a fixed border above or below
   the honeycomb top. Evidence persists separately with optical/machine binding.
-- This is diagnostic collection and review. Production tracing/job coordinates
-  and probe/controller commands are unchanged; automatic thickness measurement
-  still requires supported and physically verified firmware behavior.
+- The camera study remains diagnostic collection and review. Production
+  tracing/job coordinates are unchanged; measured heights are not automatically
+  installed into the active camera transform.
 
 ## Unreleased - development release retention
 

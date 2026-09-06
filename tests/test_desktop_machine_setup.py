@@ -209,6 +209,7 @@ def test_machine_setup_exposes_native_camera_calibration_and_checks(
             "4 · Fine registration",
             "5 · Accuracy validation",
             "6 · Coordinate audit",
+            "7 · Material height",
         ]
         assert not hasattr(dialog, "synthetic_scene")
         assert dialog.runtime.hardware_enabled is False

@@ -6,8 +6,20 @@ fixed lens intrinsics. A third plane is scored independently. `AppContext` owns
 its profile-scoped atomic evidence store; `desktop/surface_height.py` provides
 collection and diagnostic image review. It never replaces the active bed map or
 enters the current desktop/browser execution pipeline. The remaining explicit
-support/material-plane integration and shared-owner probe redesign are specified
+support/material-plane integration and probe physical acceptance are specified
 in [MATERIAL_HEIGHT.md](MATERIAL_HEIGHT.md).
+
+`machine/z_probe.py` is a typed client of the same `CrealityControllerOwner`
+used by secondary Air Assist. `MachineService.probe_z` owns disarmed admission,
+primary pose/reference checks and the complete laser-off operation. Pi's ordinary
+operation admission excludes job START and competing motion. The authenticated
+`machine.probe_z` action binds the primary session and checks socket liveness;
+its request replay returns the cached result without repeating motion. Secondary
+Z references bind both controller generations and the STOP epoch. Owner response
+collection is bounded, and generation-targeted M112 cleanup bypasses the ACK lock
+after primary STOP. Desktop `z_probe.py` adds the seventh Machine Setup tab with
+reference, existing Jog and measurement controls. Neither browser job generation
+nor desktop project/calibration persistence gains new Z or height authority.
 
 Development update publication owns package retention after verified manifest
 promotion. Current and two recent package pairs stay available; dated GitHub

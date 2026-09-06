@@ -63,6 +63,7 @@ from .pi_machine_server import (
     ACTION_MACHINE_JOG,
     ACTION_MACHINE_PREPARE_JOB_START,
     ACTION_MACHINE_PREPARE_PHOTO_POSITION,
+    ACTION_MACHINE_PROBE_Z,
     ACTION_MACHINE_REALTIME_POSITION,
     ACTION_MACHINE_REPLACE_CONNECTION,
     ACTION_MACHINE_STATUS,
@@ -116,6 +117,7 @@ _CLIENT_POLICY_MISMATCH_ERROR = (
 )
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_CONNECT,
         ACTION_MACHINE_DISCONNECT,
         ACTION_MACHINE_JOG,
@@ -1655,6 +1657,26 @@ class RemoteMachineService:
             response,
             action=ACTION_MACHINE_PREPARE_JOB_START,
         )
+        return result
+
+    def probe_z(
+        self, operation: str, *, confirmed: bool,
+        clearance_z_mm: float = 20.0, support_height_mm: float = 0.0,
+    ) -> dict[str, Any]:
+        self._require_hardware_authority()
+        generation = self._operation_stop_epoch()
+        self._require_operation_current(generation)
+        self._require_capabilities()
+        self._require_controller_session_capability()
+        if "pi-creality-z-probe-v1" not in (self._node_capabilities or ()):
+            raise MachineError("Update the E3 Pi service to this feature revision to use the probe")
+        response = self._rpc(ACTION_MACHINE_PROBE_Z, {
+            "operation": operation, "confirmed": confirmed,
+            "clearance_z_mm": clearance_z_mm, "support_height_mm": support_height_mm,
+        })
+        result = self._response_mapping(response, "result")
+        self._require_operation_current(generation)
+        self._commit_current_response(response, action=ACTION_MACHINE_PROBE_Z)
         return result
 
     def jog(self, dx_mm: float, dy_mm: float, feed_mm_min: float) -> dict[str, Any]:

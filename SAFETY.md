@@ -33,6 +33,16 @@ emission has stopped or that the area is safe to enter.
 
 ## Before every real job
 
+- The optional Material height tab moves the Creality Z axis with the existing
+  CR Touch. Reference only over the solid border at Home / park, with Creality
+  XY motors disconnected and the entered clearance physically available. Jog
+  only while the probe is retracted clear of the material. A missing or failed
+  contact is not a height measurement. STOP invalidates the reference and attempts
+  primary M5 before independent secondary M112/close; delivery and emergency-parser
+  behavior remain physically unverified. The probe workflow temporarily disables
+  the secondary motor idle timeout without saving EEPROM; motor hold is not a
+  brake. See [the probe procedure](docs/MATERIAL_HEIGHT.md).
+
 - Confirm that the intended material is appropriate for blue-diode laser processing and does not produce prohibited or highly hazardous fumes.
 - Confirm extraction flow and the exhaust destination.
 - Remove flammable debris from the enclosure.

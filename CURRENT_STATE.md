@@ -7,7 +7,55 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-06**
 
-## Active: material-height calibration study and probe redesign
+## Active: existing-controller Z offset measurement
+
+The same `codex/material-height-calibration` branch now implements **Machine
+Setup > 7 · Material height**. This uses the existing Creality/Marlin controller
+and CR Touch, sharing `CrealityControllerOwner` with secondary Air Assist. No
+firmware, G38, G92, M851 or EEPROM changes are made. The operator references the
+solid border at the existing Home / park pose, uses the ordinary primary Jog
+path to position over material, and measures three contact heights. E3 subtracts
+the three-contact border mean and the entered signed support offset to report
+surface height and thickness above the honeycomb. Each set must agree within
+0.10 mm; each retract requires completed motion and position readback. Missing
+G30 contact data is a failure, never a measurement inferred from ACK or M114.
+
+The explicit virtual-centre `G30 X110 Y110` addresses a possible cause of the
+archived silent result: Creality's published G30 can return without probing when
+its fictional XY is unreachable. This is an inference from public source, not
+confirmation of the installed binary or of why that test failed. The published
+probe code also has an early-trigger height check, so the full 12 mm range is
+not yet verified. Start physical acceptance on the border and a thin known gauge.
+
+Complete probe operations hold MachineService and Pi admission against competing
+motion/START. They require hardware authority, `allow_motion`, a disarmed idle
+primary, trusted XY, and explicit surface/clearance confirmation. The entered
+20–80 mm Z clearance range is not a newly verified physical limit. Secondary
+`M84 S0` keeps Z energized between reference and operator positioning without
+saving EEPROM. References bind both controller generations and STOP; primary
+Home, STOP, reconnect or changed clearance/support inputs require a fresh
+reference. Detected monitoring-socket closure cancels the operation; silent
+network loss is bounded by a 110-second deadline. Primary STOP precedes bounded,
+generation-targeted secondary M112/close cleanup, which bypasses the ACK lock.
+No automatic motion follows an uncertain operation. Motor hold and software
+interruption are not safety-rated or physically verified here.
+
+New fake-controller, service, authenticated loopback RPC and offscreen-widget
+tests cover actual contact subtraction, no-contact/ACK-only rejection, parsing,
+repeatability, retract, finite bounds, stale sessions, admission, request replay,
+STOP, disarm, disconnect and closed monitoring connections. The broader focused
+Windows run passed **395 tests**, covering the full machine-service module,
+secondary owner/Air Assist, probe core/service/RPC and Machine Setup widgets.
+Another **187-test** desktop/Pi/remote-client regression run passed (overlapping
+coverage, not an additional unique-test total). Repository Ruff and compileall
+passed. The probe panel was rendered offscreen and visually reviewed with the
+production dark theme and Segoe UI; the capture remains outside Git. This
+implementation has not moved physical hardware. It does
+not install measured heights into camera transforms, projects, tracing or jobs.
+The E3 Pi service must be updated alongside the desktop before physical tests.
+See [docs/MATERIAL_HEIGHT.md](docs/MATERIAL_HEIGHT.md) for the operator procedure.
+
+## Earlier material-height calibration study evidence
 
 Branch `codex/material-height-calibration` adds a profile-scoped two-height
 calibration study. Original undistorted point observations at two measured
@@ -17,7 +65,7 @@ honeycomb border at Home / park as the proposed datum. Endpoint maps, source
 identities and optical/machine provenance persist atomically under schema 1.
 The UI saves maps and previews a height-specific image within the measured
 interval. It does not activate the model in tracing, support teaching, projects,
-job generation or execution; no controller or firmware commands have changed.
+job generation or execution; the camera study itself sends no controller commands.
 
 The operator reports that Home / park naturally locates the probe over the
 border and measured the honeycomb top **1.5 mm below the border** (2026-09-06).
@@ -30,11 +78,11 @@ global machine configuration default. The operator also reports no firmware chan
 the archived Z work (`bffecea`, tag `archive/s1pro-z-homing-safety-2026-09-05`).
 That work homes onto a known surface; its recorded G30 acknowledges without
 motion and G28 resets logical Z, so it is not an unknown-thickness measurement.
-Treat current automatic measurement capability as unsupported. Preserve the
-border reference and redesign measurement to require controller-local bounded
-contact reporting without re-zeroing. Porting Z onto the current shared
-`CrealityControllerOwner`, physical firmware selection/verification, and explicit
-support/material-plane runtime integration remain unfinished. The complete
+The preceding study therefore did not claim automatic measurement capability.
+The operator-positioned implementation above now preserves the border reference
+and requires contact reporting without re-zeroing, through the current shared
+owner. Physical verification and explicit support/material-plane runtime
+integration remain unfinished. The complete
 design and operator study workflow are in [docs/MATERIAL_HEIGHT.md](docs/MATERIAL_HEIGHT.md).
 
 Local Windows Python 3.14 verification passes **156 focused tests**, including

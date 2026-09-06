@@ -57,6 +57,7 @@ from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
 from .transport import MachineTransport
 from .transport_factory import create_machine_transport
+from .z_probe import CrealityZProbe, finite_number
 
 LOGGER = logging.getLogger(__name__)
 _QUERY_COMMANDS = set(MANUAL_QUERY_COMMANDS)
@@ -714,6 +715,13 @@ class MachineService:
                 "secondary_air_assist must be SecondaryMarlinFanController or None"
             )
         self._secondary_air_assist = secondary_air_assist
+        self._z_probe = (
+            None if secondary_air_assist is None else CrealityZProbe(
+                secondary_air_assist.owner, lambda: self.request_stop(_recover=False)
+            )
+        )
+        self._z_probe_active = False
+        self._z_probe_result: dict[str, Any] | None = None
         self._controller_state = ControllerState.DISCONNECTED
         self._controller_state_revision = 0
         self._controller_session_generation = 0
@@ -1077,6 +1085,9 @@ class MachineService:
         self._armed_program_digest = None
 
     def _invalidate_coordinate_reference(self) -> None:
+        if self._z_probe is not None:
+            self._z_probe.invalidate()
+            self._z_probe_result = None
         self._coordinate_reference_ready = False
         self._coordinate_reference_session_generation = None
         self._coordinate_state_reference = None
@@ -2302,6 +2313,9 @@ class MachineService:
             self._authorization_epoch += 1
             self._clear_arm_authorization()
             self._job_laser_authorized = False
+        if self._z_probe_active:
+            self.request_stop(_recover=False)
+            return
         if self._job.running:
             self.stop_job(emergency=False)
             return
@@ -3974,6 +3988,107 @@ class MachineService:
             ),
         }
 
+    def probe_z(
+        self, operation: str, *, confirmed: bool,
+        clearance_z_mm: float = 20.0, support_height_mm: float = 0.0,
+        _connection_alive: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Reference the fixed border or measure at the operator-positioned XY.
+
+        The exact existing Creality owner also serves Air Assist. No primary XY
+        movement occurs here; Home / park and Jog retain their existing paths.
+        """
+        if type(operation) is not str or operation not in {"reference", "measure"}:
+            raise SafetyError("Probe operation must be reference or measure")
+        if confirmed is not True:
+            raise SafetyError("Confirm the solid probe surface, disconnected Creality XY and Z clearance")
+        clearance = finite_number(clearance_z_mm, "Z clearance", 20, 80)
+        support = finite_number(support_height_mm, "Honeycomb height", -20, 20)
+        epoch = self._operation_stop_epoch()
+        with self._manual_home_command_scope():
+            self._require_safety_configuration()
+            if self.hardware_enabled is not True or self.settings.allow_motion is not True:
+                raise SafetyError("Probe motion requires hardware authority and machine.allow_motion")
+            session = self._require_session()
+            probe = self._z_probe
+            if probe is None:
+                raise MachineError("Configure the Pi-owned secondary Creality connection before probing")
+            if self._job.running or self.armed:
+                raise SafetyError("Probing requires an idle machine and disarmed laser")
+            if (
+                self._controller_state is not ControllerState.READY_MOTION
+                or not self._coordinate_reference_ready
+                or self._coordinate_reference_session_generation != session.generation
+                or self._jog_position_mm is None
+            ):
+                raise SafetyError("Home / park must establish the primary XY position before probing")
+            position = self._jog_position_mm
+            if not self.settings.work_area.contains(*position):
+                raise SafetyError("The current probe carriage position is outside the configured work area")
+            if operation == "reference" and any(
+                abs(actual - expected) > 0.01
+                for actual, expected in zip(
+                    position, (self.settings.photo_x, self.settings.photo_y), strict=True
+                )
+            ):
+                raise SafetyError("Return to Home / park over the black border before referencing Z")
+            if operation == "measure" and probe.reference is None:
+                raise SafetyError("Reference the border before measuring material")
+            if operation == "measure" and probe.reference is not None and (
+                clearance != probe.reference.clearance_z_mm
+                or support != probe.reference.support_height_mm
+            ):
+                raise SafetyError("Probe clearance or honeycomb offset changed; reference the border again")
+            if self._uses_grbl_coordinate_state():
+                self._verify_grbl_coordinate_state()
+            deadline = time.monotonic() + 110.0
+
+            @contextmanager
+            def guard():
+                with self._secondary_write_gate, self._stop_epoch_lock:
+                    if self._stop_epoch != epoch:
+                        raise MachineError("Probing was cancelled by software STOP")
+                    if time.monotonic() >= deadline:
+                        raise MachineError("Probe operation exceeded its 110-second limit")
+                    if _connection_alive is not None and not _connection_alive():
+                        raise MachineError("Probe monitoring connection was lost")
+                    if not self._same_controller_session(self._session, session):
+                        raise MachineError("Primary controller session changed during probing")
+                    yield
+
+            self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+            self._z_probe_result = None
+            self._z_probe_active = True
+            try:
+                with guard():
+                    pass
+                if operation == "reference":
+                    result = probe.establish_reference(
+                        clearance_z_mm=clearance, support_height_mm=support,
+                        primary_generation=session.generation, stop_epoch=epoch,
+                        carriage_xy_mm=position, guard=guard,
+                    )
+                else:
+                    result = probe.measure(
+                        primary_generation=session.generation, stop_epoch=epoch,
+                        carriage_xy_mm=position, guard=guard,
+                    )
+                self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+                with guard():
+                    self._z_probe_result = result
+                return result
+            except BaseException as exc:
+                probe.invalidate()
+                self._z_probe_result = None
+                for entry in probe.transcript:
+                    self._append_log("Z PROBE", json.dumps(entry))
+                self._append_log("ERROR", f"Probe failed: {exc}")
+                if self.operation_generation() == epoch:
+                    self.request_stop(_recover=False)
+                raise
+            finally:
+                self._z_probe_active = False
+
     def jog(self, dx_mm: float, dy_mm: float, feed_mm_min: float) -> dict[str, Any]:
         """Make one laser-off XY move from the last trusted jog pose.
 
@@ -5448,6 +5563,20 @@ class MachineService:
         # The primary path above is authoritative and complete before this
         # independent bounded cleanup is even dispatched.  Never wait here for
         # the secondary exchange lock or its acknowledgement.
+        if self._z_probe is not None:
+            self._z_probe.invalidate()
+            self._z_probe_result = None
+            if self._z_probe_active:
+                owner = self._z_probe.owner
+                probe_generation = owner.generation
+
+                def interrupt_probe() -> None:
+                    try:
+                        owner.interrupt_probe(probe_generation)
+                    except Exception as exc:
+                        self._append_log("ERROR", f"Secondary probe interruption failed: {exc}")
+
+                threading.Thread(target=interrupt_probe, daemon=True, name="e3-probe-stop").start()
         try:
             self._queue_secondary_off(context="software STOP")
         except Exception as exc:
@@ -5536,6 +5665,7 @@ class MachineService:
             return dict(receipt)
 
     def status(self) -> dict[str, Any]:
+        probe_reference = None if self._z_probe is None else self._z_probe.reference
         secondary_status = None
         if self._secondary_air_assist is not None:
             snapshot = self._secondary_air_assist.status
@@ -5658,6 +5788,16 @@ class MachineService:
             "armed_until": self._armed_until if armed else None,
             "arm_phrase": self.ARM_PHRASE,
             "secondary_air_assist": secondary_status,
+            "z_probe": {
+                "available": self._z_probe is not None,
+                "active": self._z_probe_active,
+                "reference_ready": bool(
+                    self._z_probe is not None and probe_reference is not None
+                    and probe_reference.controller_generation == self._z_probe.owner.generation
+                    and probe_reference.primary_generation == self._controller_session_generation
+                    and probe_reference.stop_epoch == self._stop_epoch
+                ),
+            },
             "job": job,
             "last_successful_job": last_successful_job,
             "log": list(self._log)[-80:],

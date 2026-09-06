@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import select
 import socket
 import threading
 import time
@@ -70,6 +71,7 @@ ACTION_MACHINE_DISCONNECT = "machine.disconnect"
 ACTION_MACHINE_PREPARE_PHOTO_POSITION = "machine.prepare_photo_position"
 ACTION_MACHINE_PREPARE_JOB_START = "machine.prepare_job_start"
 ACTION_MACHINE_JOG = "machine.jog"
+ACTION_MACHINE_PROBE_Z = "machine.probe_z"
 ACTION_MACHINE_COMMAND = "machine.command"
 ACTION_MACHINE_REALTIME_POSITION = "machine.realtime_position"
 ACTION_MACHINE_STEPPER_HOLD = "machine.stepper_hold"
@@ -84,6 +86,7 @@ MACHINE_ACTIONS = frozenset(
         ACTION_MACHINE_PREPARE_PHOTO_POSITION,
         ACTION_MACHINE_PREPARE_JOB_START,
         ACTION_MACHINE_JOG,
+        ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_COMMAND,
         ACTION_MACHINE_REALTIME_POSITION,
         ACTION_MACHINE_STEPPER_HOLD,
@@ -92,6 +95,7 @@ MACHINE_ACTIONS = frozenset(
 )
 
 SERVER_CAPABILITIES = (
+    "pi-creality-z-probe-v1",
     CAPABILITY_PI_OWNED_JOBS,
     CAPABILITY_PI_SECONDARY_MARLIN_FAN,
     CAPABILITY_PI_EXECUTION_POLICY_DIAGNOSTICS,
@@ -148,6 +152,11 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
     },
     ACTION_MACHINE_JOG: {
         "required": ("dx_mm", "dy_mm", "feed_mm_min"),
+        "optional": (),
+        "response": ("result",),
+    },
+    ACTION_MACHINE_PROBE_Z: {
+        "required": ("operation", "confirmed", "clearance_z_mm", "support_height_mm"),
         "optional": (),
         "response": ("result",),
     },
@@ -269,6 +278,7 @@ _SHUTDOWN_JOIN_SECONDS = 2.0
 
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_CONNECT,
         ACTION_MACHINE_REPLACE_CONNECTION,
         ACTION_MACHINE_DISCONNECT,
@@ -388,6 +398,7 @@ class PiMachineServer:
         self.port = port
         self.token = token
         self._stop = threading.Event()
+        self._probe_connection = threading.local()
         self._listener: socket.socket | None = None
         self._bound_port: int | None = None
         self._slots = threading.BoundedSemaphore(_MAX_CLIENTS)
@@ -640,6 +651,15 @@ class PiMachineServer:
                     expected_session_generation=expected_generation,
                 )
             }
+        if action == ACTION_MACHINE_PROBE_Z:
+            return {"result": self.service.probe_z(
+                request.get("operation"),
+                confirmed=_exact_bool(request.get("confirmed"), "confirmed"),
+                clearance_z_mm=_number(request.get("clearance_z_mm"), "clearance_z_mm"),
+                support_height_mm=_number(request.get("support_height_mm"), "support_height_mm"),
+                expected_session_generation=expected_generation,
+                connection_alive=getattr(self._probe_connection, "alive", None),
+            )}
         if action == ACTION_MACHINE_JOG:
             return {
                 "result": self.service.jog(
@@ -992,6 +1012,14 @@ class PiMachineServer:
                     self._stepper_hold_session(conn, channel, request)
                     return
                 stage = "dispatch"
+                def connection_alive() -> bool:
+                    try:
+                        readable, _, _ = select.select([conn], [], [], 0)
+                        return not readable or conn.recv(1, socket.MSG_PEEK) != b""
+                    except OSError:
+                        return False
+
+                self._probe_connection.alive = connection_alive
                 try:
                     response = self._replayable_response(
                         request,
@@ -1104,6 +1132,7 @@ __all__ = [
     "ACTION_MACHINE_CONNECT",
     "ACTION_MACHINE_DISCONNECT",
     "ACTION_MACHINE_JOG",
+    "ACTION_MACHINE_PROBE_Z",
     "ACTION_MACHINE_PREPARE_JOB_START",
     "ACTION_MACHINE_PREPARE_PHOTO_POSITION",
     "ACTION_MACHINE_REALTIME_POSITION",

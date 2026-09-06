@@ -1,9 +1,83 @@
 # Material height and camera geometry
 
-Status: the two-height **calibration study** is implemented. Automatic probing
-and applying this model to production tracing/jobs are not implemented. The
-study is an evidence-collection step toward those features, not a claim that
-height compensation is already active or physically verified.
+Status: the two-height **calibration study** and an operator-positioned CR Touch
+measurement path are implemented. The latter uses the existing Creality
+controller and Marlin commands, through its shared Air Assist connection. Both
+require physical acceptance. Applying height compensation to production
+tracing/jobs is still unfinished.
+
+## Measure with the existing probe
+
+Open **Tools > Machine Setup > 7 · Material height**. The desktop and Pi E3
+service must both contain this feature; an older Pi reports that its service
+needs updating. This is an E3 application update, not a controller firmware
+update. The Pi must already have its secondary Creality connection configured
+as `secondary_marlin_fan`; the probe uses that same owner and serial reader.
+This first workflow positions XY through existing Home / park and Jog controls.
+It does not automatically select a material point from the camera.
+
+1. Keep the homing/parking path clear and use **Home / park**. The probe must be
+   above the solid black border. Reference admission checks the current primary
+   carriage position against the configured photo position; that numerical
+   check cannot identify the physical border.
+2. Enter the available absolute **Z clearance** after border homing. The entry
+   is constrained to 20–80 mm; this is a software range, not a physically
+   verified gantry limit. It must clear the material and fit the actual gantry.
+   Enter **-1.5 mm** for this operator-reported honeycomb-to-border offset.
+3. Confirm the surface/clearance and that the Creality XY motors are disconnected,
+   then choose **Reference border**. E3 keeps the primary laser off, checks the
+   secondary identity, deploys the CR Touch and checks `z_min: open`, stows it,
+   runs the archived `G28` / `M420 S0` homing sequence and verifies logical Z
+   near 5 mm. This position readback is only a homing check, not the measured
+   border height. Three subsequent G30 contacts establish the actual border
+   measurement. Each is followed by an acknowledged Z retract and M114 check.
+4. Use the panel's existing laser-off **Jog** path to put the raised probe over
+   solid material. Watch the physical probe location. Do not Home again: a new
+   primary home invalidates the reference. The first workflow records carriage
+   XY, not an inferred physical probe XY based on unverified offsets.
+5. Confirm the solid material and clearance, then choose **Measure Z offset**.
+   E3 takes three contacts without G28 or coordinate resets, subtracts the mean
+   border contact, and reports signed surface height and thickness above the
+   honeycomb. Thickness includes any paper and spacers. The probe returns to
+   the same verified clearance and stays at that XY point.
+
+Each contact set must agree within 0.10 mm. G30 must report exactly one finite
+`Bed X / Y / Z` measurement for the requested virtual centre. An ACK alone,
+position readback, error, reset, missing contact, failed retract or inconsistent
+readings produces no accepted height. A contact outside -2 mm through
+`clearance - 10 mm` is rejected before another host-commanded move. G30 still
+uses the controller's own probe travel and trigger rules; these host checks do
+not change its internal descent or establish physical clearance.
+
+The explicit `G30 X110 Y110` avoids depending on the Creality board's fictional
+current XY. Only the primary controller moves real XY. Creality's published
+[G30 implementation](https://github.com/CrealityOfficial/Ender-3S1/blob/s1_pro_plus/Marlin/src/gcode/probe/G30.cpp)
+silently returns when its virtual point is unreachable. That is a possible
+explanation for the archived ACK-only test, not proof of the cause or a match
+to the installed binary. Its published
+[probe implementation](https://github.com/CrealityOfficial/Ender-3S1/blob/s1_pro_plus/Marlin/src/module/probe.cpp)
+also includes an early-trigger height check. Start physical acceptance with the
+border, then a thin known gauge. A full 12 mm measurement range is **not yet
+verified**; a failed tall-material contact must not be interpreted as a height.
+No firmware image, G38, G92, M851 change or EEPROM write is used.
+
+`M84 S0` temporarily disables Creality's idle motor timeout so the Z reference
+can be retained while the operator jogs primary XY. No EEPROM save is sent and
+this operation does not subsequently disable Z motors. This motor hold is not a
+brake. Reset, disconnect, stop, primary rehome or an owner-generation change
+invalidates the reference. Changing clearance or support offset requires a new
+border reference. Results are session observations, not persisted motion or
+calibration authority. They do not change laser focus or install camera correction.
+
+Pi admission covers the complete probe operation, blocking competing motion and
+job START. Each exchange checks the operation deadline, primary session, STOP
+epoch and monitoring socket. Detected socket closure cancels probing; a silent
+network partition is bounded by the 110-second operation deadline rather than
+guaranteed immediate detection. Primary STOP runs first. Independent secondary
+M112/close cleanup bypasses the ACK lock and targets the original secondary
+generation. Delivery and emergency-parser behavior require physical testing.
+No automatic retract or retry follows uncertain motion. Reconnect and reference
+again after investigating a failure.
 
 ## Fixed reference
 
@@ -120,12 +194,11 @@ The new measurement contract must be conservative:
   An ACK alone and ordinary M114 position readback are insufficient evidence.
   Desktop polling of M119 while commanding descent is not an acceptable stop
   mechanism, particularly for a probe with a short trigger signal.
-- Treat the current firmware as unsupported for automatic thickness probing.
-  Identify the exact Creality MCU/board, firmware build/configuration, probe
-  input behavior and emergency-command support before selecting a firmware
-  replacement or board-specific G38/G30 implementation. No generic firmware
-  image, configuration, EEPROM write, or motion command is selected by this
-  study. A declaration in a UI is not a substitute for recorded physical tests.
+- Use the current Creality controller, probe and firmware. The operator-positioned
+  implementation above is ready for physical command verification; its explicit
+  virtual-centre G30 is not yet physically verified. Do not infer that an ACK-only
+  observation requires replacing firmware. A declaration in a UI is not a
+  substitute for recorded physical tests.
 - Keep one Pi `CrealityControllerOwner` for both Air Assist and Z, one physical
   reader, typed command clients, and a shared session/fault identity. A reset or
   M112 on that board invalidates both Z knowledge and secondary fan knowledge.

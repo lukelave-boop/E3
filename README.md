@@ -3,7 +3,10 @@
 An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
 can preserve two measured-height base maps, check a third height independently,
 and preview a height-specific camera correction. It does not yet apply height
-compensation to tracing/jobs or enable automatic probe measurement.
+compensation to tracing/jobs. Machine Setup also includes **7 · Material height**:
+reference the black border, jog over material and measure its Z offset with the
+existing CR Touch/Creality controller. Both E3 desktop and Pi need this feature
+revision. Probe commands and the available height range still need physical testing.
 
 The development START flow displays acknowledged upload progress, verification,
 and starting while Pi status monitoring remains responsive during upload syncing

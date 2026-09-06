@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
-from threading import RLock
+from threading import Lock, RLock
 from typing import Protocol
 
 from ..air_assist import AirAssistCommands, AirAssistMode, AirAssistTarget
@@ -133,6 +133,8 @@ class CrealityControllerOwner:
         self._serial_factory = serial_factory
         self._sleep = sleep
         self._lock = RLock()
+        self._write_lock = Lock()
+        self._generation = 0
         self._transport: _SerialTransport | None = None
         self._trusted = False
         self._fault: str | None = None
@@ -142,6 +144,35 @@ class CrealityControllerOwner:
     @property
     def session(self) -> CrealityControllerSession:
         return self._session
+
+    @property
+    def generation(self) -> int:
+        """Changes on open/close; reading never waits for a probe ACK."""
+        return self._generation
+
+    def interrupt_probe(self, expected_generation: int) -> None:
+        """Best-effort M112 on the existing session, bypassing the ACK lock.
+
+        Called by an independent cleanup worker after primary STOP. Delivery
+        and Marlin emergency-parser support are not safety-rated guarantees.
+        Never reopen a controller to send an emergency command.
+        """
+        with self._write_lock:
+            if (
+                self._generation != expected_generation
+                or not self._trusted
+                or self._transport is None
+            ):
+                return
+            transport = self._transport
+            self._generation += 1
+            self._trusted = False
+            self._secondary_fan_enabled = None
+            if transport is not None:
+                try:
+                    transport.write_line("M112")
+                finally:
+                    transport.close()
 
     @property
     def ready(self) -> bool:
@@ -174,6 +205,7 @@ class CrealityControllerOwner:
             self._fail_locked(exc)
 
     def _close_transport_locked(self) -> None:
+        self._generation += 1
         transport = self._transport
         self._transport = None
         self._trusted = False
@@ -213,6 +245,7 @@ class CrealityControllerOwner:
                 self._transport = transport
             raise self._fail_locked(exc) from exc
         self._trusted = True
+        self._generation += 1
         self._fault = None
         return transport
 
@@ -239,7 +272,9 @@ class CrealityControllerOwner:
         *,
         write_guard: WriteGuardFactory | None = None,
         allow_open: bool = True,
-    ) -> None:
+        timeout: float | None = None,
+        on_failure: Callable[[], None] | None = None,
+    ) -> tuple[str, ...]:
         """Write one typed command and consume its positive bounded ``ok`` reply.
 
         The owner lock covers the complete exchange.  An optional cross-controller
@@ -253,6 +288,12 @@ class CrealityControllerOwner:
             raise TypeError("allow_open must be an exact boolean")
         if write_guard is not None and not callable(write_guard):
             raise TypeError("write_guard must be callable")
+        if timeout is not None and (
+            type(timeout) not in {int, float}
+            or not math.isfinite(timeout)
+            or not 0 < timeout <= 120
+        ):
+            raise ValueError("Secondary timeout must be finite and within 120 seconds")
 
         with self._lock:
             self._refresh_transport_fault_locked()
@@ -264,9 +305,12 @@ class CrealityControllerOwner:
             else:
                 transport = self._transport
             guard = write_guard() if write_guard is not None else nullcontext()
+            generation = self._generation
             write_started = False
             try:
-                with guard:
+                with guard, self._write_lock:
+                    if generation != self._generation:
+                        raise SecondaryControllerError("Secondary session was interrupted")
                     write_started = True
                     transport.write_line(command)
             except Exception as exc:
@@ -276,24 +320,43 @@ class CrealityControllerOwner:
                 # close because an acknowledgement may now be outstanding.
                 if not write_started:
                     raise
+                if on_failure is not None:
+                    on_failure()
+                    self.interrupt_probe(generation)
                 raise self._fail_locked(exc) from exc
             try:
-                deadline = time.monotonic() + self.session.read_timeout_seconds
+                deadline = time.monotonic() + (
+                    self.session.read_timeout_seconds if timeout is None else timeout
+                )
+                responses: list[str] = []
+                response_bytes = 0
                 while True:
+                    if on_failure is not None and write_guard is not None:
+                        with write_guard():
+                            pass
+                    if generation != self._generation:
+                        raise SecondaryControllerError("Secondary session was interrupted")
                     remaining = deadline - time.monotonic()
                     if remaining <= 0.0:
                         raise SecondaryControllerError(
                             "timed out waiting for an acknowledged ok response"
                         )
-                    response = transport.read_line(timeout=remaining)
+                    response = transport.read_line(timeout=min(remaining, 0.2))
                     if response is None:
                         continue
                     normalized = response.strip().casefold()
+                    response_bytes += len(response)
+                    if response_bytes > 32768 or len(responses) >= 512:
+                        raise SecondaryControllerError("Secondary response exceeded its bounded limit")
+                    responses.append(response)
                     if normalized == "ok" or normalized.startswith("ok "):
                         self._fault = None
-                        return
+                        return tuple(responses)
                     if (
-                        normalized.startswith("error")
+                        normalized == "start"
+                        or normalized.startswith("echo:marlin")
+                        or normalized.startswith("echo:busy: paused")
+                        or normalized.startswith("error")
                         or normalized.startswith("alarm")
                         or normalized.startswith("!!")
                         or normalized.startswith("resend")
@@ -304,6 +367,9 @@ class CrealityControllerOwner:
                         )
                     # Bounded startup/informational chatter is not an acknowledgement.
             except Exception as exc:
+                if on_failure is not None:
+                    on_failure()
+                    self.interrupt_probe(generation)
                 raise self._fail_locked(exc) from exc
 
     def _bind_secondary_fan(self, binding: AirAssistCommands) -> None:
@@ -356,6 +422,10 @@ class SecondaryMarlinFanController:
         return self._binding
 
     @property
+    def owner(self) -> CrealityControllerOwner:
+        return self._owner
+
+    @property
     def ready(self) -> bool:
         return self._owner.ready
 
@@ -365,8 +435,10 @@ class SecondaryMarlinFanController:
 
     @property
     def status(self) -> SecondaryMarlinFanStatus:
-        with self._owner._lock:
-            self._owner._refresh_transport_fault_locked()
+        locked = self._owner._lock.acquire(blocking=False)
+        try:
+            if locked:
+                self._owner._refresh_transport_fault_locked()
             ready = (
                 self._owner._trusted
                 and self._owner._transport is not None
@@ -384,6 +456,9 @@ class SecondaryMarlinFanController:
                 baudrate=self._owner.session.baudrate,
                 mapping_digest=self._binding.mapping_digest,
             )
+        finally:
+            if locked:
+                self._owner._lock.release()
 
     def raise_if_faulted(self) -> None:
         self._owner.raise_if_faulted()
