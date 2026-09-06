@@ -2,6 +2,9 @@
 
 ## Unreleased - material-height calibration study
 
+- Suspend both probe operations before controller access after operator-observed
+  descent with the pin retracted. Status reports the suspension reason; earlier
+  probe procedures are withdrawn pending deployment/clearance investigation.
 - Probe repeats now use G30's own return with position checks between readings
   and one full clearance lift at the end. Border reference also omits the
   redundant full lift after homing. Firmware-controlled fast/slow touches remain.

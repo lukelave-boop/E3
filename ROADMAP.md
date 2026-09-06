@@ -1,5 +1,9 @@
 # Roadmap
 
+Probe priority: investigate the reported descent without pin deployment and
+initial clearance behavior. Reference/measurement admission is suspended; the
+earlier reduced-travel test procedure is withdrawn pending validation.
+
 Material-height work now has a two-plane camera calibration study with a
 separate intermediate-height check and an operator-positioned probe measurement
 using the existing Creality/Air Assist owner. The first operator border reference

@@ -8,6 +8,7 @@ import pytest
 
 from laser_aligner.machine.pi_job_protocol import authenticate_client
 from laser_aligner.machine.pi_machine_server import ACTION_MACHINE_PROBE_Z
+from laser_aligner.machine.service import _PROBE_SUSPENSION_REASON as SUSPENSION_REASON
 from laser_aligner.machine.z_probe import CrealityZProbe
 from tests import test_pi_machine_server as helpers
 from tests.test_z_probe import ready_probe
@@ -16,7 +17,9 @@ server_harness = helpers.server_harness
 
 
 @pytest.fixture
-def probe_harness(server_harness):
+def probe_harness(server_harness, monkeypatch):
+    # Synthetic regression coverage only; actual service admission is suspended.
+    monkeypatch.setattr("laser_aligner.machine.service._PROBE_SUSPENSION_REASON", "")
     harness = server_harness
     serial, _, fan, _, _ = ready_probe()
     machine = harness.machine
@@ -35,6 +38,18 @@ def fields(harness, **changes):
         "operation": "reference", "confirmed": True, "clearance_z_mm": 20,
         "support_height_mm": -1.5, **changes,
     }
+
+
+@pytest.mark.parametrize("operation", ["reference", "measure"])
+def test_production_suspension_blocks_authenticated_probe_request(probe_harness, monkeypatch, operation):
+    harness, serial = probe_harness
+    before = list(serial.writes)
+    monkeypatch.setattr("laser_aligner.machine.service._PROBE_SUSPENSION_REASON", SUSPENSION_REASON)
+    response = helpers._rpc(harness, ACTION_MACHINE_PROBE_Z, **fields(harness, operation=operation))
+    assert not response["ok"]
+    assert "Material probing is suspended" in str(response)
+    assert serial.writes == before
+    assert not harness.machine._z_probe_active
 
 
 def test_authenticated_reference_and_measure_and_replay_do_not_repeat_motion(probe_harness):

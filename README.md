@@ -1,5 +1,9 @@
 # Laser Camera Aligner / E3 Positioning System
 
+**Material-height probe testing is suspended** after observed descent without
+pin deployment. The updated Pi blocks both probe actions while the sequence is
+investigated. The earlier accepted border result is not physical safety validation.
+
 An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
 can preserve two measured-height base maps, check a third height independently,
 and preview a height-specific camera correction. It does not yet apply height

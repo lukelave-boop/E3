@@ -33,6 +33,11 @@ emission has stopped or that the area is safe to enter.
 
 ## Before every real job
 
+- Material-height probing is currently suspended after an operator observed
+  descent without pin deployment. Do not run Reference border or Measure Z
+  offset on earlier feature builds. The updated Pi rejects both actions before
+  any controller command; this software restriction is not safety-rated.
+
 - The optional Material height tab moves the Creality Z axis with the existing
   CR Touch. Reference only over the solid border at Home / park, with Creality
   XY motors disconnected and the entered clearance physically available. Jog

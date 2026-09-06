@@ -1,5 +1,12 @@
 # Material height and camera geometry
 
+**Probe testing is suspended.** The operator observed descent without the CR
+Touch pin deploying and cut power. Both probe actions are blocked by the updated
+Pi MachineService before sending commands. There is no operator override. Keep
+the Ender off while collecting the interrupted-run journal. The procedure below
+records the withdrawn implementation; do not execute it until deployment and
+initial clearance behavior have been investigated and a replacement validated.
+
 Status: the two-height **calibration study** and an operator-positioned CR Touch
 measurement path are implemented. The latter uses the existing Creality
 controller and Marlin commands, through its shared Air Assist connection. Both

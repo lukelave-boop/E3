@@ -9,6 +9,40 @@ Snapshot: **2026-09-06**
 
 ## Active: existing-controller Z offset measurement
 
+### Probe workflow withdrawn after observed undeployed descent
+
+On 2026-09-06 the operator clarified that the earlier accepted reference did
+not first raise before deploying the pin. During a subsequent sequence the
+operator observed descent without the pin being dropped and cut Ender power.
+The screenshot reports `G30 X110 Y110: Serial connection closed unexpectedly`.
+Read-only Pi status confirms source 0.7.24/fingerprint `6a2d5fe6` (shorter-sequence
+commit `379fc99`), no active job or accepted reference, disconnected primary and
+faulted 115200-baud Creality owner. The pin behavior is operator-observed; the
+disconnect is consistent with the power cut and does not identify its cause.
+Earlier accepted results must not be read as physical safety acceptance.
+
+Both Reference border and Measure Z offset are now suspended at MachineService
+admission before any controller access. Status reports the feature unavailable,
+a reason, and no usable reference. There is no configuration/RPC bypass. The
+old Windows client receives the suspension error from the updated Pi. Synthetic
+sequence tests explicitly bypass this constant only in fake-controller fixtures
+to retain regression coverage; they are not evidence of safe pin deployment.
+Deployment of the suspension update to the Pi remains pending.
+Verification: **98 focused tests passed** across probe core, MachineService,
+secondary owner and authenticated Pi RPC. New tests restore the production
+suspension and prove both actions reject without primary or secondary writes,
+including when a synthetic reference already exists. Repository Ruff,
+compileall and diff checks passed. This verifies the admission block only;
+the pin/deployment failure remains unresolved.
+
+Review confirms the existing preflight deploys before establishing clearance,
+and G30 repeats rely on firmware-managed deployment. M114 position and an open
+M119 input are not established proof of a physically deployed pin on this rig.
+Do not retry the current procedure. Further work needs the interrupted Pi
+journal, a reviewed initial-lift strategy from unknown Z, and evidence for pin
+deployment/release before guarded descent. No firmware change or speculative
+replacement motion sequence is made in this withdrawal.
+
 ### Successful border reference and reduced travel follow-up
 
 On 2026-09-06, after a complete Creality power/USB reset and Pi service restart,

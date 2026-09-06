@@ -60,6 +60,13 @@ from .transport_factory import create_machine_transport
 from .z_probe import CrealityZProbe, finite_number
 
 LOGGER = logging.getLogger(__name__)
+# Withdrawn after an operator observed descent with the CR Touch pin retracted.
+# No configuration or RPC override: only fake-controller tests bypass this gate.
+_PROBE_SUSPENSION_REASON = (
+    "Material probing is suspended after an unexpected descent with the probe pin "
+    "retracted. Do not retry Reference border or Measure Z offset. "
+    "The deployment and clearance sequence requires investigation."
+)
 _QUERY_COMMANDS = set(MANUAL_QUERY_COMMANDS)
 _STREAM_G_CODES = {0, 1, 21, 90}
 _STREAM_M_CODES = {3, 4, 5}
@@ -3998,6 +4005,8 @@ class MachineService:
         The exact existing Creality owner also serves Air Assist. No primary XY
         movement occurs here; Home / park and Jog retain their existing paths.
         """
+        if _PROBE_SUSPENSION_REASON:
+            raise SafetyError(_PROBE_SUSPENSION_REASON)
         if type(operation) is not str or operation not in {"reference", "measure"}:
             raise SafetyError("Probe operation must be reference or measure")
         if confirmed is not True:
@@ -5789,10 +5798,12 @@ class MachineService:
             "arm_phrase": self.ARM_PHRASE,
             "secondary_air_assist": secondary_status,
             "z_probe": {
-                "available": self._z_probe is not None,
+                "available": self._z_probe is not None and not _PROBE_SUSPENSION_REASON,
+                "unavailable_reason": _PROBE_SUSPENSION_REASON or None,
                 "active": self._z_probe_active,
                 "reference_ready": bool(
-                    self._z_probe is not None and probe_reference is not None
+                    not _PROBE_SUSPENSION_REASON
+                    and self._z_probe is not None and probe_reference is not None
                     and probe_reference.controller_generation == self._z_probe.owner.generation
                     and probe_reference.primary_generation == self._controller_session_generation
                     and probe_reference.stop_epoch == self._stop_epoch

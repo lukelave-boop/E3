@@ -11,6 +11,10 @@ in [MATERIAL_HEIGHT.md](MATERIAL_HEIGHT.md).
 
 `machine/z_probe.py` is a typed client of the same `CrealityControllerOwner`
 used by secondary Air Assist. `MachineService.probe_z` owns disarmed admission,
+and currently rejects both operations before controller access due to observed
+descent without pin deployment. This suspension has no runtime override. The
+sequence description below is retained for investigation, not operator testing.
+The suspended implementation owns
 primary pose/reference checks and the complete laser-off operation. Pi's ordinary
 operation admission excludes job START and competing motion. The authenticated
 `machine.probe_z` action binds the primary session and checks socket liveness;

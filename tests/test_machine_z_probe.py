@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import threading
 import time
+from unittest.mock import Mock
 
 import pytest
 
 from laser_aligner.config import LaserSettings, MachineSettings
 from laser_aligner.errors import MachineError, SafetyError
+from laser_aligner.machine.service import _PROBE_SUSPENSION_REASON as SUSPENSION_REASON
 from laser_aligner.machine.service import MachineService
 from tests.fakes.simulator_transport import SimulatedTransport
 from tests.test_z_probe import ready_probe
@@ -14,6 +16,8 @@ from tests.test_z_probe import ready_probe
 
 @pytest.fixture
 def machine_probe(monkeypatch):
+    # Preserve synthetic sequence coverage; production has no bypass setting.
+    monkeypatch.setattr("laser_aligner.machine.service._PROBE_SUSPENSION_REASON", "")
     serial, owner, fan, _, _ = ready_probe()
     primary = SimulatedTransport()
     monkeypatch.setattr("laser_aligner.machine.service.create_machine_transport", lambda *args: primary)
@@ -29,6 +33,26 @@ def machine_probe(monkeypatch):
 
 def reference(machine, **kwargs):
     return machine.probe_z("reference", confirmed=True, support_height_mm=-1.5, **kwargs)
+
+
+@pytest.mark.parametrize("operation", ["reference", "measure"])
+def test_production_suspension_rejects_before_any_controller_command(machine_probe, monkeypatch, operation):
+    machine, serial, _, primary = machine_probe
+    reference(machine)
+    before_secondary = list(serial.writes)
+    primary_line = Mock(wraps=primary.write_line)
+    primary_raw = Mock(wraps=primary.write_raw)
+    monkeypatch.setattr(primary, "write_line", primary_line)
+    monkeypatch.setattr(primary, "write_raw", primary_raw)
+    monkeypatch.setattr("laser_aligner.machine.service._PROBE_SUSPENSION_REASON", SUSPENSION_REASON)
+    with pytest.raises(SafetyError, match="Material probing is suspended"):
+        machine.probe_z(operation, confirmed=True, support_height_mm=-1.5)
+    assert serial.writes == before_secondary
+    primary_line.assert_not_called()
+    primary_raw.assert_not_called()
+    status = machine.status()["z_probe"]
+    assert not status["available"] and not status["reference_ready"]
+    assert status["unavailable_reason"] == SUSPENSION_REASON
 
 
 def test_complete_service_reference_jog_measure_has_no_secondary_xy_authority(machine_probe):
