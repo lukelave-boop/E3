@@ -11,6 +11,20 @@
   row. The latter targets only that object. Shared layer renaming remains separate.
 - No project schema, GRBL stepper-hold, or secondary Air Assist policy changes.
 
+## Unreleased - primary serial timeout evidence
+
+Acknowledgement timeouts now preserve the failed command, session generation,
+job progress, raw serial progress, receiver ownership, and targeted thread code
+locations before recovery. The bounded evidence appears in the Pi service
+journal automatically; manual strace is no longer the only way to distinguish
+empty polling from incomplete framing or a blocked reader at timeout. Existing
+timeout, STOP, reconnect, coordinate-reference and stepper-hold rules are unchanged.
+The intermittent physical stall remains under investigation.
+
+Connection retries retain the failed transport objects until the bounded retry
+sequence ends. This prevents recycled Python object ids from incorrectly
+rejecting a fresh connection candidate; an actual reused stream remains blocked.
+
 ## 0.7.0 - controller lifecycle consolidation
 
 Consolidates primary GRBL session ownership, Pi/desktop status authority,

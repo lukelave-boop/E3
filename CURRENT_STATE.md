@@ -44,6 +44,74 @@ performed for this feature yet. Required validation: Start from HOME_REQUIRED,
 repeat from held READY_MOTION, STOP during automatic Home, failed Home, and
 independent layer assignment through each dropdown/row/tile followed by Preview.
 
+## Active primary serial timeout evidence
+
+Production Windows/Pi 0.7.0 (`1afe4fb3`) intermittently stopped while streaming
+ordinary F3000 G1 segments. Operator journals identify failed jobs e9153390,
+5ed473c0, and 18db9cc9, with successful jobs between failures. The last case
+correlates a Linux write accepting all 24 bytes at 13:34:03.840 with no further
+read syscall in the remaining approximately 20 seconds of the capture, then
+an acknowledgement timeout at 13:36:03.845. Recovery created a fresh generation
+and required Home. The controller endpoint was ttyACM1 / Espressif Device by-id;
+firmware identity was not recovered. These are physical failure observations,
+not evidence that firmware, USB, temperature, or E3 is the root cause. The
+capture omitted select/readiness waits and cannot rule out a blocked reader.
+
+The `codex/serial-timeout-evidence` revision adds observational checkpoints to
+POSIX reader/writer/queue delivery and primary receive dispatch. Before ACK
+timeout unwinding, it logs one bounded JSON evidence record per session with
+the exact command/sequence/generation, job progress, checkpoint ages/counters,
+partial-byte evidence, and targeted thread code locations (no frame locals).
+Snapshotting does not acquire serial/ingress operational locks or consume input;
+busy diagnostic/ownership gates are reported without waiting. Cleanup cannot
+replace the first record. No controller commands, timeouts, retries, arming,
+reference, or stepper policies change. This is diagnostic instrumentation, not
+a stall fix or watchdog; it only runs when the existing ACK timeout is reached.
+
+Focused local verification: Windows Python 3.14, 189 passed / 2 POSIX skips;
+WSL Linux Python 3.10, 54 passed (pytest cache permission warning only). Includes
+missing-ACK job failure/abort, first-evidence retention, broken snapshot provider,
+held ownership lock, blocked reader, partial reply and real PTY CR/CR/LF delivery.
+Ruff and compileall pass. Additional Windows integration checks passed 112 tests
+with two POSIX skips. Compatibility run 33988310114 passed Windows 3.10, Linux,
+and lint; Windows 3.12 passed 3699 tests but failed the existing 1000-session
+soak's successful three-frame query using a 20 ms deadline. A temporary probe
+with 15 ms receiver scheduling delays exceeds that budget with both the baseline
+and instrumented receivers; both succeed with a one-second deadline. Only that
+soak success assertion now allows one second. Its explicit 1 ms missing-ACK
+injection and every production deadline remain unchanged. Final reverification
+is recorded below; deployment/physical validation remain pending.
+
+The second compatibility run (33991051612) passed Linux (392 tests), Windows
+3.10 (3111 passed / 72 skipped), and lint. Windows 3.12 passed 3699 tests but
+exposed a separate existing connection-retry defect: recording only object ids
+allowed an earlier failed transport to be collected and its id recycled for a
+fresh third candidate. The retry guard could then stop after two opens. A
+deterministic weak-reference/collection test reproduces loss of that identity.
+The bounded retry loop now retains candidates and compares object identity;
+reusing the actual same transport remains rejected. This affects connection
+attempts, not an established job's ACK wait, and is not a mid-job stall fix.
+The corrected Windows Python 3.14 machine/session/diagnostic checks passed
+380 tests with two POSIX skips; focused WSL Linux Python 3.10 checks passed
+67 tests (pytest cache permission warning only). Ruff and compileall passed.
+Final compatibility run
+[33991802258](https://github.com/lukelave-boop/E3/actions/runs/33991802258)
+passed for b4c026d: Windows 3.10 core 3113 passed / 72 skipped; Windows 3.12
+desktop 3702 passed / 25 skipped; Linux serial/session 392 passed; Ruff passed.
+These are automated software checks, including offscreen desktop tests, not
+physical controller, laser, or camera validation. The prepared Pi handoff pins
+b4c026d3a1f835fc556f161c2553293331537763; no Windows rebuild is required.
+The intermittent physical stall remains unresolved, and this development
+branch is awaiting Pi deployment and operator evidence before integration.
+
+The subsequent 13:50:07-13:50:12 raw trace shows the ttyACM1 reader repeatedly
+returning empty 100 ms readiness waits. The reader was polling during that
+window; whether the capture preceded recovery has not yet been confirmed.
+It does not establish the controller/USB root cause.
+
+Existing auto-Home/object-layer work remains in its separate
+unmerged feature branch; production 0.7.0 does not include those features.
+
 ## 0.7.0 consolidation
 
 The operator confirmed the final post-timing-fix STOP -> Home/park -> next-job

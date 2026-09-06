@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 import math
 import re
@@ -51,6 +52,7 @@ from .controller_session import (
     ControllerSessionDiagnostics,
     ControllerState,
 )
+from .io_diagnostics import thread_snapshot
 from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
 from .transport import MachineTransport
@@ -1337,7 +1339,7 @@ class MachineService:
         with self._lock:
             self._candidate_connect_deadline = deadline
         last_error: BaseException | None = None
-        attempted_transport_ids: set[int] = set()
+        attempted_transports: list[MachineTransport] = []
         for attempt in range(1, _CONTROLLER_CONNECT_ATTEMPTS + 1):
             self._raise_if_connection_cancelled(expected_stop_epoch)
             if time.monotonic() >= deadline:
@@ -1364,12 +1366,14 @@ class MachineService:
                 active_port,
                 active_baudrate,
             )
-            if id(transport) in attempted_transport_ids:
+            if any(transport is previous for previous in attempted_transports):
                 # A retry is useful only with a genuinely new input stream.
                 # Reusing an object that may still contain a late terminal line
                 # would turn a fresh-session retry into same-session ambiguity.
                 break
-            attempted_transport_ids.add(id(transport))
+            # Retain the bounded candidates: Python may recycle an id once an
+            # earlier object is collected, even for a genuinely fresh stream.
+            attempted_transports.append(transport)
             provisional_dialect = (
                 GRBL_DIALECT
                 if selected_protocol == "auto"
@@ -2757,12 +2761,56 @@ class MachineService:
                         f"Controller returned a malformed response frame: {response!r}"
                     )
                 responses.append(response)
+            self._record_ack_timeout_evidence(session, command_sequence, timeout)
             raise MachineError(
                 f"Controller did not acknowledge command within {timeout:g} seconds"
             )
         finally:
             clear_pending_transaction()
             self._end_session_transaction(session, command_sequence)
+
+    def _record_ack_timeout_evidence(
+        self, session: ControllerSession, sequence: int | None, timeout: float,
+    ) -> None:
+        # Observe the exact failed generation BEFORE end()/quarantine/close.
+        # This sends no query, consumes no input, and grants no authority.
+        try:
+            diagnostics = session.diagnostics.snapshot()
+            evidence: dict[str, Any] = {
+                "schema": 1, "observed_at": time.time(),
+                "observed_monotonic": time.monotonic(),
+                "generation": session.generation,
+                "endpoint": session.resolved_endpoint,
+                "protocol": session.dialect.id,
+                "sequence": sequence,
+                "command": diagnostics["last_tx_command"],
+                "timeout_seconds": timeout,
+                "last_success": diagnostics["last_successful_transaction"],
+                "transcript": diagnostics["transcript"][-8:],
+                "waiter": thread_snapshot(threading.current_thread()),
+            }
+            context = self._current_job_run_context()
+            if context is not None and self._same_controller_session(context.session, session):
+                evidence["job"] = {
+                    "phase": context.status.phase,
+                    "completed_lines": context.status.completed_lines,
+                    "total_lines": context.status.total_lines,
+                }
+            for label, owner in (("serial", session.transport), ("receiver", session.receiver)):
+                snapshot = getattr(owner, "diagnostic_snapshot", None)
+                if callable(snapshot):
+                    try:
+                        evidence[label] = snapshot()
+                    except Exception as exc:
+                        evidence[label] = {"snapshot_error": type(exc).__name__}
+            if session.diagnostics.record_ack_timeout(evidence):
+                LOGGER.warning(
+                    "primary controller ACK timeout evidence=%s",
+                    json.dumps(evidence, separators=(",", ":"), ensure_ascii=True),
+                )
+        except Exception:
+            # An observational failure must never replace the initiating timeout.
+            LOGGER.warning("Could not collect controller ACK timeout evidence", exc_info=True)
 
     def _reject_queued_unowned_responses(
         self,

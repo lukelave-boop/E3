@@ -1,5 +1,11 @@
 # Roadmap
 
+Active reliability investigation: capture primary ACK timeout evidence before
+cleanup, distinguish raw serial polling/framing from receiver contention, and
+identify the intermittent 0.7.0 streaming stall before changing lifecycle or
+timing policy. Instrumentation is implemented; root cause and physical
+verification remain open. See CURRENT_STATE.md for automated coverage.
+
 This roadmap describes work after the foundational runtime, machine-profile,
 import, planning, and updater-hardening milestones. Detailed implementation and
 verification evidence belongs in [CURRENT_STATE.md](CURRENT_STATE.md); the dated
