@@ -49,9 +49,10 @@ revision; this needs a separate lifecycle correction and does not explain the
 intermittent physical streaming stall. The final full-run pass does not resolve
 this scheduling-dependent finding.
 
-Supported-version compatibility CI awaits explicit approval for publishing the
-21-file desktop commit to the public development branch; automatic approval
-review rejected that push because the earlier authorization covered diagnostics.
+The operator reports that the 0.7.10 feature build looks good and has explicitly
+approved pushing the desktop changes and verification notes to the public
+development branch. This is general operator feedback, not an additional
+controller or laser test record. Supported-version compatibility CI is next.
 The required Windows packaging script completed for **0.7.10**, source
 `5a6122b76bcf47109d9efc0ea8628edf4eb757ca`, in the isolated
 `readable-desktop-build` checkout. The native bundle guard passed and the frozen
@@ -59,7 +60,8 @@ app stayed alive for an isolated 15.2-second offscreen startup check with no
 startup error or stderr output. The permanent E3 DEV TEST pointer was selected
 atomically through `packaging/set_dev_test_feature.py` and matches that EXE's
 adjacent version/revision metadata. Installed production E3 was not changed.
-No interactive operator, real camera, controller, or laser verification is claimed.
+The operator feedback above is recorded separately from automated verification;
+no additional real camera, controller, or laser verification is claimed.
 
 ## Active: upload/start status and progress
 
