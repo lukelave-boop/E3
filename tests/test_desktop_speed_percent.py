@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -140,7 +141,13 @@ def test_unchanged_status_reference_does_not_interrupt_percentage_typing(app):
     assert spin.value() == 2400
 
 
-def test_layer_display_and_other_edits_preserve_feeds_and_generated_program(app):
+def test_layer_display_and_other_edits_preserve_feeds_and_generated_program(app, monkeypatch):
+    # Compare the complete program with stable metadata even across a wall-clock
+    # second boundary. Only the toolpath module's clock reference is replaced.
+    monkeypatch.setattr(
+        "laser_aligner.project.toolpath.time",
+        SimpleNamespace(strftime=lambda _format: "2026-09-06 12:00:00"),
+    )
     document = ProjectDocument.new()
     layer = document.layers[0]
     layer.speed_mm_min = 1500.123456789123

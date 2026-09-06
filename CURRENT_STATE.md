@@ -42,7 +42,23 @@ also pass. Repository Ruff, compileall and diff checks pass. The 920x700 study
 dialog was rendered offscreen and visually reviewed with the production dark
 theme and Segoe UI font; the image stays outside Git. No interactive GUI,
 physical camera, probe, controller or laser validation is claimed, and no new
-frozen feature build or supported-version Compatibility CI run is recorded yet.
+frozen feature-build handoff is recorded yet.
+
+Initial [Compatibility run 34046684566](https://github.com/lukelave-boop/E3/actions/runs/34046684566)
+passed Windows Python 3.10 core, Linux/Pi and Ruff. Windows Python 3.12 passed
+3,887 tests with 25 skips and failed one existing speed-display equality test:
+its two generated programs crossed a wall-clock second and differed only in
+the `Generated` timestamp. The test now holds the toolpath module's clock
+reference fixed, retaining the complete byte comparison and leaving application
+code unchanged. A new compatibility run is pending for that test correction.
+
+The required Windows packaging script is building frozen **0.7.18** from exact
+source `15599de05bdb98f51b1e86201e00ecb3cbf6aedc` in the isolated
+`material-height-study-build` checkout. Its EXE passed a 15.22-second isolated
+offscreen startup check with motion disabled, a nonexistent controller endpoint,
+no stderr and no startup-error file. The collected height modules were checked
+against the isolated checkout paths. No physical device was used. Installer
+packaging and permanent launcher selection remain pending.
 
 ## Physical stall evidence: 2026-09-06 08:11
 
