@@ -7,6 +7,115 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-06**
 
+## Physical stall evidence: 2026-09-06 08:11
+
+Operator-provided Pi service, automatic ACK evidence, and kernel excerpts record
+job `a607d6c6` accepted at 08:10:53.988, then primary GRBL silence around
+08:11:15.808. Generation 1 on `/dev/ttyACM0` timed out on transaction 6238,
+`G1 X73.932 Y67.164 F3000`, at 08:13:15.819 with 781/3008 lines completed.
+The 25-byte host write completed. The reader/receiver had recent polling
+checkpoints, no new raw reads for 120 seconds, no partial frame, matching
+published/consumed line counts, and no pending receiver reply. This establishes
+missing input at the observed raw serial boundary; it does not establish device
+receipt of the move or prove which USB/driver/controller component failed.
+
+The kernel reported a CH340 `ttyUSB0` bulk-read completion error `-32` at
+08:12:56.274, about 100 seconds after primary silence began. This is the
+secondary connection in the recorded rig, not the primary ACM endpoint. USB
+host `dwc_otg_hcd_urb_dequeue` warnings followed at 08:13:15.850, after primary
+quarantine at .841 and during recovery. Their cancellation-path timing is
+consistent with cleanup exposing outstanding transfers; it does not locate
+the cause of the original stall. Fresh generation 2 answered handshake commands
+at 08:13:18 and recovery required Home, without resuming the failed job.
+
+USB/driver/device communication is the leading investigation path. There is
+no affirmative evidence here of a reply trapped in E3's queues, a currently
+blocked reader, a controller alarm, or undervoltage at the silence onset. Kernel
+warnings alone do not establish a bad cable, inadequate power, or firmware bug.
+The operator subsequently identified a Raspberry Pi 3 Model B Plus Rev 1.4,
+kernel `6.18.34+rpt-rpi-v8`, and deployed source
+`7ceeaeab2f9a1c7cc210f83e287eb23399d52ea7`. Its primary CDC ACM controller,
+secondary CH340, webcam, and Ethernet share the `dwc_otg` USB host. The primary
+and secondary boards have separate supplies; their motor/fan loads must not be
+attributed to Pi USB power. The controller/Pi execution sources have no diff
+against the current integration revision. Exact controller firmware, measured
+power delivery, and stall-time USB transfers remain unknown. Source-level
+interpretation is not physical verification of a particular cause. Next
+discriminating evidence is USB transfer submission and
+completion around the first lost reply. No machine behavior or recovery policy
+has been changed for this investigation; raw operator logs remain outside Git.
+
+### Subsequent power and stall observations
+
+The earlier hardware snapshot reported `get_throttled=0x0` and 49.4 C. The
+operator later substituted a wall USB supply rated 3 A and reported another
+stall, then tried another cable. A subsequent `0x50000` sample records historical
+undervoltage and throttling with the current-condition bits clear; it does not
+timestamp either condition or tie it to a particular stall.
+
+A later kernel excerpt has boot messages around 09:24:14, a USB device reset
+at 09:24:38.974, and another secondary `ttyUSB0` read error `-32` at
+09:27:29.615. Fresh undervoltage detections at 09:28:06.535 and 09:29:15.083
+each clear about six seconds later. Thus voltage detection events occurred
+during this boot, but the first shown event follows the secondary USB error
+by about 37 seconds. The subsequently supplied full service log identifies a
+different initiating failure for job `94282592`, accepted at 09:27:08.989:
+at 09:28:33.004 the secondary Creality acknowledged-response timeout fails the
+job. The primary had still acknowledged a `G1` at sequence 3024 and two `M5`
+commands at sequences 3025/3026 at 09:28:31. This is not the earlier primary
+120-second ACK silence. The tail is compatible with a late program OFF or
+post-stream secondary OFF failure, but the stored program and AUX transcript
+are needed to identify the exact boundary. Failure invalidates primary trust,
+skips successful Home/park, and recovers to Home required. Later job `b83ef520`
+was accepted at 09:29:22.219; this excerpt has no terminal result for it.
+This boot also identifies USB device 6 as the C920, so the 09:24:38 reset
+belongs to the camera near startup, not the subsequent job failure.
+
+The generated desktop program can end a path with `M5`, append another footer
+`M5`, then issue `E3AIRASSIST OFF` before its final standalone `M5`. Thus the
+acknowledged pair does not prove the whole immutable program completed. The
+stored job metadata (completed line count) and program tail are the next
+read-only evidence needed. AUX/TX/RX entries are bounded in-memory logs and
+DEBUG journal messages; the normal INFO node log does not durably preserve
+their full transcript. Failed program retention is bounded, so preserve the
+matching job artifacts before further jobs can evict them.
+
+The replacement-cable/cold-boot sequence and whether this run was laser-off
+remain unconfirmed. The operator reports a
+short cable and a 3 A supply; these ratings do not measure the voltage delivered
+at the Pi or identify the source of the warnings. Power delivery is a separate
+observed concern, not an established explanation of every primary stall.
+No further reproduction or powered validation is recorded as successful.
+
+The operator then powered the Pi from an old PC supply's 5 V rail through the
+5 V/GND header, explicitly without an inline fuse, and reported another stop.
+At capture time 09:51:26 the Pi returned `0x50005` (current undervoltage and
+throttling plus their historical flags), with temperature 45.1 C. Its kernel
+excerpt reports undervoltage at 09:43:04.790 and no normalization in the supplied
+window. Bypassing the connector has not established stable voltage at the board.
+The operator measured about 4.85 V at the PC supply without the Pi load; no
+loaded Pi-side voltage measurement has been supplied. A protected/fused feed
+and measured voltage under idle/camera load are needed before further job tests.
+
+For this latest run the CH340 read error at 09:50:14.498 precedes a pre-start
+secondary OFF timeout at 09:50:25.118. The existing fresh-session retry then
+acknowledges OFF at 09:50:27.293, and job `9cb08d0c` starts at 09:50:27.475.
+The collected service log ends there, approximately 59 seconds before capture;
+it contains no initiating job failure or terminal record for the reported stop.
+Do not classify that pre-start recovered failure as the later job failure or
+assume this is another primary ACK timeout. The previous primary-silence and
+secondary-OFF failures remain distinct observations pending causal evidence.
+
+The operator next used a 5 V / 2.5 A DIN supply adjusted to a measured 5.08 V
+and ran the same job. `get_throttled` returned `0x0` at both 10:13:06 and
+10:13:19; the operator explicitly identifies one sample as during laser work
+and the other as after the laser job. These are clean current and historical
+power/throttling flags for that run, contrasting with the preceding `0x50005`
+sample. The voltage measurement location, fused-feed implementation, and final
+Home/park result have not been explicitly confirmed. This is evidence of an
+improved reported power condition during one run, not proof that either prior
+communication failure has been eliminated or caused solely by undervoltage.
+
 ## CI checkout correction
 
 Retention commit `30f9543ddf3c2f57cab968361503913108800975` accidentally included
