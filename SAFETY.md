@@ -38,6 +38,15 @@ emission has stopped or that the area is safe to enter.
   offset on earlier feature builds. The updated Pi rejects both actions before
   any controller command; this software restriction is not safety-rated.
 
+- Separate pin diagnostics are operator-triggered one action at a time. Inspect
+  issues no servo or axis command; Deploy and Stow move only the pin and require
+  at least 10 mm of space below it with the laser unable to emit. All actions
+  establish acknowledged laser/fan OFF through the existing connections. They
+  never home, reopen a serial connection, retry, or automatically stow. An ACK,
+  M119 endstop report or M114 position is not proof of physical pin deployment
+  and grants no authority for a subsequent descent. See the diagnostic procedure
+  in [MATERIAL_HEIGHT.md](docs/MATERIAL_HEIGHT.md#operator-run-pin-diagnostics).
+
 - The optional Material height tab moves the Creality Z axis with the existing
   CR Touch. Reference only over the solid border at Home / park, with Creality
   XY motors disconnected and the entered clearance physically available. Jog

@@ -9,6 +9,42 @@ Snapshot: **2026-09-06**
 
 ## Active: existing-controller Z offset measurement
 
+### Operator-run pin diagnostics for the correction
+
+The operator has confirmed at least 10 mm of space below the retracted pin and
+laser emission prevented for a pin-only check. They explicitly retain control
+of every physical action: the assistant must not actuate axes, pin or laser,
+connect hardware, or restart hardware services. This update is code and synthetic
+verification only; installation and diagnostic invocation are operator actions.
+
+Separate Inspect, Deploy and Stow actions now use the existing Creality owner.
+They require an already connected primary and initialized secondary, disarmed
+idle admission, acknowledged M5/M106 S0, and current primary/secondary sessions.
+Deploy/Stow additionally require exact motion authority and explicit clearance
+confirmation. Each sends one M280, settles for 0.8 seconds, and collects M119
+and M114 after M115 identity. Inspect omits M280. No axis command, reconnect,
+automatic retry/stow or M112 is added. Unknown physical pin state remains
+explicit in the output; input/position reports cannot authorize a descent.
+All actions invalidate prior height references/results. Full Reference/Measure
+remain held while deployment and clearance are corrected.
+
+The CLI is `python -m laser_aligner.probe_diagnostic`, using the authenticated
+Pi action `machine.probe_pin`. Session compare-and-swap and replay caching
+prevent stale or repeated requests from repeating actuation. An uncertain
+reply closes the owner; bounded transcripts remain in success/failure responses
+and logs. The next physical evidence needed is Inspect followed by separately
+operator-triggered pin deployment and stow observations, per
+[MATERIAL_HEIGHT.md](docs/MATERIAL_HEIGHT.md#operator-run-pin-diagnostics).
+
+Windows source verification: **254 focused tests passed** across the pin core,
+CLI, MachineService/RPC integration, existing Z probe/secondary owner, and Pi
+machine server. These use fake controllers and loopback sockets only. Repository
+Ruff, compileall and diff checks passed. No GUI, camera, controller, pin or Z
+physical test was performed by the assistant. The three pin test files are also
+included in the Linux/Pi CI job; that CI run and operator installation remain
+pending. The previously recorded Windows auto-home/STOP shutdown failure remains
+an integration blocker, independent of these passing focused tests.
+
 ### Probe workflow withdrawn after observed undeployed descent
 
 On 2026-09-06 the operator clarified that the earlier accepted reference did

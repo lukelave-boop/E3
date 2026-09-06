@@ -9,6 +9,18 @@ enters the current desktop/browser execution pipeline. The remaining explicit
 support/material-plane integration and probe physical acceptance are specified
 in [MATERIAL_HEIGHT.md](MATERIAL_HEIGHT.md).
 
+`machine/probe_pin.py` is a separate typed diagnostic client. The operator-run
+`probe_diagnostic.py` CLI submits one inspect/deploy/stow action to the Pi; it
+does not connect or home hardware. `MachineService.probe_pin` requires an idle,
+disarmed, hardware-enabled primary session and the initialized shared secondary
+owner, establishes M5/M106 S0, and invalidates any Z reference. Servo actions
+also require exact motion authority and clearance confirmation. Pi admission,
+session compare-and-swap, replay caching and socket/STOP guards apply. M115
+identity precedes the optional single M280; M119/M114 are diagnostic readbacks
+only. The servo ACK is followed by 0.8 seconds of settling outside the write
+gate. ACK failures close the owner without M112, reopening or automatic stow;
+no axis command is issued. Bounded transcripts survive in responses and logs.
+
 `machine/z_probe.py` is a typed client of the same `CrealityControllerOwner`
 used by secondary Air Assist. `MachineService.probe_z` owns disarmed admission,
 and currently rejects both operations before controller access due to observed

@@ -60,6 +60,7 @@ from .pi_job_protocol import (
     validate_upload_offset,
 )
 from .pi_job_service import EXECUTION_OWNER, PiJobService, PiJobServiceError
+from .probe_pin import ProbePinDiagnosticError
 
 LOGGER = logging.getLogger(__name__)
 
@@ -72,6 +73,7 @@ ACTION_MACHINE_PREPARE_PHOTO_POSITION = "machine.prepare_photo_position"
 ACTION_MACHINE_PREPARE_JOB_START = "machine.prepare_job_start"
 ACTION_MACHINE_JOG = "machine.jog"
 ACTION_MACHINE_PROBE_Z = "machine.probe_z"
+ACTION_MACHINE_PROBE_PIN = "machine.probe_pin"
 ACTION_MACHINE_COMMAND = "machine.command"
 ACTION_MACHINE_REALTIME_POSITION = "machine.realtime_position"
 ACTION_MACHINE_STEPPER_HOLD = "machine.stepper_hold"
@@ -87,6 +89,7 @@ MACHINE_ACTIONS = frozenset(
         ACTION_MACHINE_PREPARE_JOB_START,
         ACTION_MACHINE_JOG,
         ACTION_MACHINE_PROBE_Z,
+        ACTION_MACHINE_PROBE_PIN,
         ACTION_MACHINE_COMMAND,
         ACTION_MACHINE_REALTIME_POSITION,
         ACTION_MACHINE_STEPPER_HOLD,
@@ -157,6 +160,11 @@ SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
     },
     ACTION_MACHINE_PROBE_Z: {
         "required": ("operation", "confirmed", "clearance_z_mm", "support_height_mm"),
+        "optional": (),
+        "response": ("result",),
+    },
+    ACTION_MACHINE_PROBE_PIN: {
+        "required": ("pin_action", "confirmed"),
         "optional": (),
         "response": ("result",),
     },
@@ -279,6 +287,7 @@ _SHUTDOWN_JOIN_SECONDS = 2.0
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
         ACTION_MACHINE_PROBE_Z,
+        ACTION_MACHINE_PROBE_PIN,
         ACTION_MACHINE_CONNECT,
         ACTION_MACHINE_REPLACE_CONNECTION,
         ACTION_MACHINE_DISCONNECT,
@@ -504,6 +513,7 @@ class PiMachineServer:
                 and action_required in _ACTIONS_REQUIRED
                 else None
             ),
+            **({"diagnostic": exc.diagnostic} if isinstance(exc, ProbePinDiagnosticError) else {}),
             **self._response_metadata(),
         }
 
@@ -651,6 +661,13 @@ class PiMachineServer:
                     expected_session_generation=expected_generation,
                 )
             }
+        if action == ACTION_MACHINE_PROBE_PIN:
+            return {"result": self.service.probe_pin(
+                request.get("pin_action"),
+                confirmed=_exact_bool(request.get("confirmed"), "confirmed"),
+                expected_session_generation=expected_generation,
+                connection_alive=getattr(self._probe_connection, "alive", None),
+            )}
         if action == ACTION_MACHINE_PROBE_Z:
             return {"result": self.service.probe_z(
                 request.get("operation"),
@@ -1132,6 +1149,7 @@ __all__ = [
     "ACTION_MACHINE_CONNECT",
     "ACTION_MACHINE_DISCONNECT",
     "ACTION_MACHINE_JOG",
+    "ACTION_MACHINE_PROBE_PIN",
     "ACTION_MACHINE_PROBE_Z",
     "ACTION_MACHINE_PREPARE_JOB_START",
     "ACTION_MACHINE_PREPARE_PHOTO_POSITION",

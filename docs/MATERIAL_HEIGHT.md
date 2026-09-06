@@ -1,11 +1,11 @@
 # Material height and camera geometry
 
-**Probe testing is suspended.** The operator observed descent without the CR
-Touch pin deploying and cut power. Both probe actions are blocked by the updated
-Pi MachineService before sending commands. There is no operator override. Keep
-the Ender off while collecting the interrupted-run journal. The procedure below
-records the withdrawn implementation; do not execute it until deployment and
-initial clearance behavior have been investigated and a replacement validated.
+**The full Z sequence is under correction.** The operator observed descent
+without the CR Touch pin deploying and cut power. Reference and Measure are
+blocked by the updated Pi MachineService while deployment and initial clearance
+are investigated. The separate pin diagnostic below supports controlled evidence
+collection without any axis command. The old measurement procedure is retained
+as history, not as the current test procedure.
 
 Status: the two-height **calibration study** and an operator-positioned CR Touch
 measurement path are implemented. The latter uses the existing Creality
@@ -14,7 +14,62 @@ require physical acceptance beyond the first successful border reference.
 Applying height compensation to production
 tracing/jobs is still unfinished.
 
-## Measure with the existing probe
+## Operator-run pin diagnostics
+
+The operator initiates every action. An assistant may prepare code and review
+results; it must not issue these hardware RPCs, operate machine controls, or
+restart hardware services on this operator's behalf.
+
+Keep at least 10 mm of free space below the retracted pin and keep the laser
+unable to emit. The existing Pi service must contain this revision. Connect the
+primary machine yourself in E3; Home / park is not required for pin diagnostics.
+The secondary owner must already be initialized. The CLI never connects,
+reopens, homes, retries or automatically stows. Every action establishes
+acknowledged M5 and M106 S0 first; Inspect therefore leaves axes and pin unchanged
+but requests laser/fan OFF.
+
+On Windows, from the source checkout in PowerShell, run **Inspect only**:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner.probe_diagnostic inspect --host 192.168.5.18
+```
+
+It uses the saved bridge credential without displaying it. Alternatively run
+`.venv/bin/python -m laser_aligner.probe_diagnostic inspect` in the Pi checkout,
+provided that shell can read the existing credential. The service's environment
+is not automatically inherited by SSH; `--token-file` accepts an existing token
+file path. Do not paste credentials into diagnostic reports.
+
+Review the returned firmware identity, endstop report and position before the
+next action. After a successful Inspect, the operator can run **Deploy alone**:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner.probe_diagnostic deploy --host 192.168.5.18 --confirm-pin-clearance
+```
+
+Record whether the pin actually extended and its LED state, along with the JSON
+result. Review that observation before the operator separately runs **Stow**:
+
+```powershell
+.\.venv\Scripts\python.exe -m laser_aligner.probe_diagnostic stow --host 192.168.5.18 --confirm-pin-clearance
+```
+
+Do not put these actions in a loop or combine them into a probing sequence.
+Deploy/Stow each send one M280, wait 0.8 seconds after acknowledgement, then
+collect M119/M114. An ACK, an open input, or a position report does not prove
+physical pin deployment. A failure has no automatic pin recovery or repeat;
+the report retains the attempted commands. These checks cannot authorize Z
+descent and do not produce a height measurement.
+
+The published Creality source is a lead, not proof of the installed binary:
+its [BLTouch high-speed configuration](https://github.com/CrealityOfficial/Ender-3S1/blob/s1_pro_plus/Marlin/Configuration_adv.h)
+relies on firmware pin handling between internal touches, while
+[raw M280](https://github.com/CrealityOfficial/Ender-3S1/blob/s1_pro_plus/Marlin/src/gcode/control/M280.cpp)
+bypasses those helper routines. M401/M402 are
+not used here because their firmware implementations can also move Z. No
+firmware, EEPROM, Z offset or coordinate setting is changed.
+
+## Withdrawn measurement sequence (historical)
 
 Open **Tools > Machine Setup > 7 · Material height**. The desktop and Pi E3
 service must both contain this feature; an older Pi reports that its service

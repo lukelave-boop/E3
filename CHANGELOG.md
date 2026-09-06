@@ -2,6 +2,11 @@
 
 ## Unreleased - material-height calibration study
 
+- Add separate operator-run pin Inspect, Deploy and Stow diagnostics through
+  the existing Pi controller owner. Each invocation is one action with bounded
+  replies, session/STOP checks and no axis commands or automatic retry. Servo
+  actions require clearance confirmation. Neither ACK nor M119 is labelled
+  proof of physical deployment. Reference and Measure remain held for correction.
 - Suspend both probe operations before controller access after operator-observed
   descent with the pin retracted. Status reports the suspension reason; earlier
   probe procedures are withdrawn pending deployment/clearance investigation.

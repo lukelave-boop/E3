@@ -53,6 +53,7 @@ from .controller_session import (
     ControllerState,
 )
 from .io_diagnostics import thread_snapshot
+from .probe_pin import ProbePinDiagnosticError, run_pin_diagnostic
 from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
 from .transport import MachineTransport
@@ -3994,6 +3995,72 @@ class MachineService:
                 else None
             ),
         }
+
+    def probe_pin(
+        self, pin_action: str, *, confirmed: bool = False,
+        _connection_alive: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Operator-triggered pin inspection; never homes or moves an axis."""
+        if type(pin_action) is not str or pin_action not in {"inspect", "deploy", "stow"}:
+            raise SafetyError("Pin action must be inspect, deploy or stow")
+        if type(confirmed) is not bool:
+            raise SafetyError("Pin clearance confirmation must be an exact boolean")
+        if pin_action != "inspect" and not confirmed:
+            raise SafetyError("Confirm 10 mm clearance below the pin and laser unable to emit")
+        epoch = self._operation_stop_epoch()
+        with self._manual_home_command_scope():
+            self._require_safety_configuration()
+            if self.hardware_enabled is not True:
+                raise SafetyError("Pin diagnostics require hardware authority")
+            if pin_action != "inspect" and self.settings.allow_motion is not True:
+                raise SafetyError("Pin actuation requires machine.allow_motion")
+            session = self._require_session()
+            if self._job.running or self.armed:
+                raise SafetyError("Pin diagnostics require an idle machine and disarmed laser")
+            if self._secondary_air_assist is None:
+                raise MachineError("The shared Creality controller is not configured")
+            owner = self._secondary_air_assist.owner
+            deadline = time.monotonic() + 20.0
+
+            @contextmanager
+            def guard():
+                with self._secondary_write_gate, self._stop_epoch_lock:
+                    if self._stop_epoch != epoch or not self._same_controller_session(self._session, session):
+                        raise MachineError("Pin diagnostic cancelled or controller session changed")
+                    if time.monotonic() >= deadline:
+                        raise MachineError("Pin diagnostic exceeded its 20-second limit")
+                    if _connection_alive is not None and not _connection_alive():
+                        raise MachineError("Pin diagnostic monitoring connection was lost")
+                    yield
+
+            if self._z_probe is not None:
+                self._z_probe.invalidate()
+            self._z_probe_result = None
+            try:
+                with guard():
+                    pass
+                self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+                # No axis command is in this diagnostic. Uncertain ACKs close
+                # the existing owner without M112, reopening, or an automatic
+                # pin action. Hold its lock through the acknowledged fan cache.
+                with owner._lock:
+                    owner._execute_acknowledged(
+                        "M106 S0", write_guard=guard, allow_open=False, timeout=3.0,
+                        on_failure=lambda: None, interrupt_on_failure=False,
+                    )
+                    owner._secondary_fan_enabled = False
+                result = run_pin_diagnostic(owner, pin_action, guard, lambda: None)
+                result["off_commands_acknowledged"] = ["M5", "M106 S0"]
+                with guard():
+                    LOGGER.info("Probe pin diagnostic: %s", json.dumps(result, ensure_ascii=True))
+                    return result
+            except Exception as exc:
+                detail = (
+                    json.dumps(exc.diagnostic, ensure_ascii=True)
+                    if isinstance(exc, ProbePinDiagnosticError) else str(exc)[:512]
+                )
+                LOGGER.warning("Probe pin diagnostic %s failed: %s", pin_action, detail)
+                raise
 
     def probe_z(
         self, operation: str, *, confirmed: bool,

@@ -1,8 +1,10 @@
 # Laser Camera Aligner / E3 Positioning System
 
-**Material-height probe testing is suspended** after observed descent without
-pin deployment. The updated Pi blocks both probe actions while the sequence is
-investigated. The earlier accepted border result is not physical safety validation.
+**Material-height Z sequences are under correction** after observed descent
+without pin deployment. Reference and Measure remain blocked while separate
+[operator-run pin diagnostics](docs/MATERIAL_HEIGHT.md#operator-run-pin-diagnostics)
+provide Inspect, Deploy and Stow actions with no axis commands. The earlier
+accepted border result is not physical safety validation.
 
 An experimental [material-height calibration study](docs/MATERIAL_HEIGHT.md)
 can preserve two measured-height base maps, check a third height independently,
@@ -10,9 +12,9 @@ and preview a height-specific camera correction. It does not yet apply height
 compensation to tracing/jobs. Machine Setup also includes **7 · Material height**:
 reference the black border, jog over material and measure its Z offset with the
 existing CR Touch/Creality controller. Both E3 desktop and Pi need this feature
-revision. The first border reference succeeded in operator testing. Repeated
-readings now use the firmware's short return and one final full clearance lift;
-that shorter sequence and the material-height range still need physical testing.
+revision. The first border reference returned a result in operator testing;
+the subsequent deployment failure remains unresolved, and the material-height
+range is unverified.
 
 The development START flow displays acknowledged upload progress, verification,
 and starting while Pi status monitoring remains responsive during upload syncing

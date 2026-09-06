@@ -274,16 +274,21 @@ class CrealityControllerOwner:
         allow_open: bool = True,
         timeout: float | None = None,
         on_failure: Callable[[], None] | None = None,
+        interrupt_on_failure: bool = True,
     ) -> tuple[str, ...]:
         """Write one typed command and consume its positive bounded ``ok`` reply.
 
         The owner lock covers the complete exchange.  An optional cross-controller
         guard covers only the physical write, so primary STOP never waits for a
         secondary acknowledgement timeout.  Only typed controller clients in
-        this module may use this private exchange boundary.
+        this package may use this private exchange boundary. A no-axis pin
+        diagnostic opts out of emergency interruption on failure; its guard is
+        still checked during the ACK wait and uncertainty still closes the owner.
         """
 
         command = self._validate_typed_command(command)
+        if type(interrupt_on_failure) is not bool:
+            raise TypeError("interrupt_on_failure must be an exact boolean")
         if type(allow_open) is not bool:
             raise TypeError("allow_open must be an exact boolean")
         if write_guard is not None and not callable(write_guard):
@@ -322,7 +327,8 @@ class CrealityControllerOwner:
                     raise
                 if on_failure is not None:
                     on_failure()
-                    self.interrupt_probe(generation)
+                    if interrupt_on_failure:
+                        self.interrupt_probe(generation)
                 raise self._fail_locked(f"{command}: {exc}") from exc
             try:
                 deadline = time.monotonic() + (
@@ -371,7 +377,8 @@ class CrealityControllerOwner:
             except Exception as exc:
                 if on_failure is not None:
                     on_failure()
-                    self.interrupt_probe(generation)
+                    if interrupt_on_failure:
+                        self.interrupt_probe(generation)
                 _LOGGER.warning(
                     "Secondary exchange failed command=%s generation=%d detail=%s responses=%r",
                     command, generation, _bounded_detail(exc),

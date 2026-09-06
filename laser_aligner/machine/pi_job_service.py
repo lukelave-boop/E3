@@ -1483,6 +1483,18 @@ class PiJobService:
             expected_session_generation=expected_session_generation,
         )
 
+    def probe_pin(
+        self, pin_action: str, *, confirmed: bool,
+        expected_session_generation: int | None = None, connection_alive: Any = None,
+    ) -> dict[str, Any]:
+        return self._run_idle_machine_operation(
+            "inspect or operate the probe pin",
+            lambda: self.machine.probe_pin(
+                pin_action, confirmed=confirmed, _connection_alive=connection_alive,
+            ),
+            expected_session_generation=expected_session_generation,
+        )
+
     def probe_z(
         self, operation: str, *, confirmed: bool, clearance_z_mm: float,
         support_height_mm: float, expected_session_generation: int | None = None,
