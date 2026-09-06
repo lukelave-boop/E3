@@ -152,6 +152,38 @@ def test_begin_is_idempotent_only_for_identical_metadata(tmp_path: Path) -> None
         )
 
 
+def test_observation_publishes_only_successful_durable_writes(tmp_path, monkeypatch):
+    store = PiJobStore(tmp_path / "jobs")
+    identifier = _job_id(4001)
+    _upload(store, identifier, b"G21\nG90\nM5")
+    prepared = store.get(identifier)
+    assert store.observed_get(identifier) == prepared
+
+    def fail_write(*_args, **_kwargs):
+        raise OSError("injected metadata persistence failure")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(store_module, "atomic_write_json", fail_write)
+        with pytest.raises(OSError, match="persistence failure"):
+            store.update_state(identifier, "starting")
+    assert store.get(identifier) == prepared
+    assert store.observed_get(identifier) == prepared
+    # A caller may edit its copy without granting execution ownership.
+    observation = store.observed_get(identifier)
+    observation["state"] = "running"
+    assert store.observed_get(identifier)["state"] == "prepared"
+
+    store.update_state(identifier, "starting")
+    assert store.observed_get(identifier)["state"] == "starting"
+    restarted = PiJobStore(store.root)
+    assert restarted.observed_get(identifier) == restarted.get(identifier)
+    assert restarted.observed_get(identifier)["state"] == "interrupted"
+    restarted.delete(identifier)
+    assert restarted.observed_records() == ()
+    with pytest.raises(PiJobStoreError, match="does not exist"):
+        restarted.observed_get(identifier)
+
+
 @pytest.mark.parametrize(
     ("overrides", "match"),
     [
@@ -520,6 +552,9 @@ def test_retention_keeps_latest_eight_records_and_two_terminal_programs(
 
     records = store.list_records()
     assert len(records) == MAX_METADATA_RECORDS
+    assert sorted(store.observed_records(), key=lambda record: record["job_id"]) == sorted(
+        records, key=lambda record: record["job_id"]
+    )
     assert {record["job_id"] for record in records} == set(job_ids[-8:])
     retained = [record for record in records if record["program_retained"]]
     assert {record["job_id"] for record in retained} == set(

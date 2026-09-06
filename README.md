@@ -1,5 +1,11 @@
 # Laser Camera Aligner / E3 Positioning System
 
+The development START flow displays acknowledged upload progress, verification,
+and starting while Pi status monitoring remains responsive during upload syncing
+and validation. Brief refresh gaps are distinguished from failed status requests;
+all motion and execution-ownership checks remain in force. See
+[status and progress](docs/REMOTE_STATUS_AUTHORITY.md).
+
 Version **0.7.0** consolidates the controller/session, desktop status, STOP
 recovery, and serial timing work. GRBL axes remain held while READY_MOTION;
 primary Marlin's configured post-job release remains dialect-specific.

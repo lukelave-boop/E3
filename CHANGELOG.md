@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased - upload/start status and progress
+
+- Pi machine/job monitoring no longer waits behind upload syncing or program
+  verification. It reads the last committed record without acquiring the disk
+  transaction lock; execution safety and durable acceptance checks are retained.
+- START shows acknowledged upload percentage, then verification and starting.
+  Brief status refresh gaps show CHECKING STATUS; real poll failures, contact
+  loss, and controller faults remain visible and ordinary controls stay gated.
+- Machine status and its controller metadata use the same sample. Desktop logs
+  include upload, verification, and START timings for investigating slow starts.
+- Ordinary motion lines avoid unnecessary secondary Air Assist mapping hashes
+  during preflight and streaming; exact directive validation remains unchanged.
+
 ## Unreleased - automatic Home and object layer assignment
 
 - START JOB in HOME_REQUIRED runs full Home/park on the machine owner before

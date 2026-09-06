@@ -125,6 +125,37 @@ def test_runtime_strip_defaults_to_locked_disconnected_and_blocked(
     assert strip.stop_button.isEnabled()
 
 
+@pytest.mark.parametrize("stale", [False, True])
+def test_submission_badges_and_tooltips_distinguish_progress_from_authority(
+    qt_application: QtWidgets.QApplication, stale: bool,
+) -> None:
+    strip = RuntimeSafetyStrip()
+    strip.set_chrome_mode(True)
+    strip.set_busy(True)
+    strip.set_status({
+        "backend": "serial", "hardware_enabled": True,
+        "controller_state": "READY_MOTION", "allow_motion": True,
+        "pi_owned_execution": True, "node_reachable": True,
+        "status_stale": stale,
+        "job_submission": {"job_id": "new-job", "phase": "verifying"},
+    })
+
+    assert strip.connection_label.text() == "VERIFYING JOB"
+    assert strip.motion_label.text() == ("CHECKING STATUS" if stale else "JOB PREPARATION")
+    assert "Verifying job on Pi" in strip.connection_label.toolTip()
+    assert "does not grant motion or laser authority" in strip.motion_label.toolTip()
+    if stale:
+        assert "Last observed controller state: READY_MOTION" in strip.connection_label.toolTip()
+        assert "ordinary controller actions remain blocked" in strip.motion_label.toolTip()
+    else:
+        assert "Current controller state: READY_MOTION" in strip.connection_label.toolTip()
+    assert not strip.connect_button.isEnabled()
+    assert not strip.disconnect_button.isEnabled()
+    assert strip.stop_button.isEnabled()
+    strip.close()
+    strip.deleteLater()
+
+
 def test_primary_controls_preserve_connection_gates_and_emit_requests(
     qt_application: QtWidgets.QApplication,
 ) -> None:

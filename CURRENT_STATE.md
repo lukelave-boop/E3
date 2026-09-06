@@ -5,7 +5,58 @@ operator procedure. Follow the canonical
 [Permanent Camera Setup Runbook](laser_aligner/operator_docs/PERMANENT_CAMERA_SETUP.md)
 for the current five-step calibration sequence and sixth read-only audit tab.
 
-Snapshot: **2026-09-05**
+Snapshot: **2026-09-06**
+
+## Active: upload/start status and progress
+
+The operator reports START taking more than ten seconds and desktop screenshots
+switching from upload/start to STATUS UNAVAILABLE / STATE UNKNOWN. The Pi
+diagnostic update was deployed per operator confirmation; no new timeout
+evidence or measured upload/start breakdown has been collected yet.
+
+Code and loopback tests identify a shared-lock defect: coherent machine status
+queried the durable job store while chunk fsync or finalize validation held its
+transaction lock. The store now publishes a bounded committed observation under
+a separate short lock after successful durable writes; machine/job status reads
+that observation without disk I/O. Execution admission, byte integrity, START,
+STOP, and recovery retain their durable checks. Machine-status response metadata
+now comes from the exact sampled body instead of sampling controller state again.
+
+Windows maintains a local submission phase separate from Pi job ownership and
+machine authority. It displays acknowledged upload percentage, then verification
+and starting without invented percentages. A recent-contact freshness gap says
+CHECKING STATUS in amber; an explicit failed machine poll, lost contact, or
+controller fault still takes precedence. Snapshot freshness, motion gating,
+STOP availability, and accepted-job independence remain unchanged. Advancing
+controller metadata requests an immediate monitor refresh. Timing records split
+upload, verification, and START in the desktop log without program/token payloads.
+
+With a test store lock held for 350 ms, the prior loopback status path waited
+369 ms; the corrected path replied in 2.24 ms while the lock remained held.
+Tests holding actual chunk fsync or finalize validation also keep machine and
+job queries responsive while exposing only the previous committed record.
+These are Windows loopback measurements, not Pi or physical controller timing.
+The Pi-focused Linux checks passed 109 tests; final combined verification follows.
+
+Secondary Air Assist classification previously serialized/hashed its mapping
+twice even for ordinary G1 lines, repeated across independent safety analyses.
+It now recognizes non-directive lines before that calculation; exact directive
+and malformed/foreign-mapping rejection are preserved. An alternating five-run
+Windows benchmark of a 9,006-line program produced equal ValidatedProgram values
+and median preflight times 1.134 s before / 0.474 s after under concurrent load.
+This measures local preflight CPU savings, not end-to-end physical Pi START.
+The classifier/dialect/secondary integration checks passed 90 tests.
+
+This existing feature branch now includes the verified serial diagnostics and
+connection-retry correction alongside automatic Home and layer assignment, so
+the next matched desktop/Pi handoff preserves those changes. Final compatibility,
+frozen build, and physical validation results remain pending for this revision.
+
+Combined Windows Python 3.14 machine/Pi/desktop checks passed 602 tests with
+two explicit POSIX skips. The final compact-panel/classifier checks passed 23
+tests; repository Ruff and compileall passed. Desktop verification includes
+offscreen widget interaction and reviewed rendered strips/progress bars.
+No real camera, controller, laser, or interactive operator test was performed.
 
 ## Active: automatic Home and object layer assignment
 
@@ -109,8 +160,8 @@ returning empty 100 ms readiness waits. The reader was polling during that
 window; whether the capture preceded recovery has not yet been confirmed.
 It does not establish the controller/USB root cause.
 
-Existing auto-Home/object-layer work remains in its separate
-unmerged feature branch; production 0.7.0 does not include those features.
+The diagnostics are now included in this auto-Home/object-layer development
+branch; production 0.7.0 does not include those features.
 
 ## 0.7.0 consolidation
 

@@ -27,6 +27,11 @@ _STABLE_SESSION_STATES = frozenset(
     {"READY_HOME_REQUIRED", "READY_MOTION", "JOB_RUNNING"}
 )
 _DIAGNOSTIC_STATES = frozenset({"READY_HOME_REQUIRED", "READY_MOTION"})
+_SUBMISSION_LABELS = {
+    "uploading": "UPLOADING JOB",
+    "verifying": "VERIFYING JOB",
+    "starting": "STARTING JOB",
+}
 _SENSITIVE_KEY_PARTS = (
     "authorization_phrase",
     "arm_phrase",
@@ -118,6 +123,8 @@ class ControllerUiState:
     job_running: bool
     jog_ready: bool
     operation_busy: bool = False
+    submission_phase: str | None = None
+    status_refresh_error: bool = False
 
     @property
     def status_trusted(self) -> bool:
@@ -227,7 +234,22 @@ class ControllerUiState:
         return replace(self, operation_busy=bool(busy))
 
     @property
+    def submission_visible(self) -> bool:
+        """Show local progress without granting controller-state authority."""
+
+        return (
+            self.remote
+            and self.submission_phase in _SUBMISSION_LABELS
+            and self.node_reachable
+            and self.state_valid
+            and not self.status_refresh_error
+            and self.controller_state in _STABLE_SESSION_STATES
+        )
+
+    @property
     def compact_connection_text(self) -> str:
+        if self.submission_visible:
+            return _SUBMISSION_LABELS[self.submission_phase]
         if self.remote and not self.status_trusted:
             return "STATUS UNAVAILABLE" if self.node_reachable else "PI NOT RESPONDING"
         return {
@@ -246,6 +268,9 @@ class ControllerUiState:
 
     @property
     def connection_text(self) -> str:
+        if self.submission_visible:
+            text = _SUBMISSION_LABELS[self.submission_phase].capitalize() + " on Pi"
+            return text + (" · checking machine status" if self.status_stale else "")
         if self.remote and not self.status_trusted:
             return "Machine status unavailable" if self.node_reachable else "Pi not responding"
         return {
@@ -264,6 +289,8 @@ class ControllerUiState:
 
     @property
     def compact_motion_text(self) -> str:
+        if self.submission_visible:
+            return "CHECKING STATUS" if self.status_stale else "JOB PREPARATION"
         if not self.status_trusted:
             return "STATE UNKNOWN"
         if self.controller_state == "READY_HOME_REQUIRED":
@@ -282,6 +309,8 @@ class ControllerUiState:
     def motion_text(self) -> str:
         return {
             "STATE UNKNOWN": "State unknown",
+            "CHECKING STATUS": "Checking machine status",
+            "JOB PREPARATION": "Job preparation",
             "HOME REQUIRED": "Home required",
             "MOTION READY": "Motion ready",
             "MOTION OFF": "Motion off",
@@ -292,6 +321,8 @@ class ControllerUiState:
 
     @property
     def connection_style(self) -> str:
+        if self.submission_visible:
+            return "statusWarning"
         if not self.status_trusted:
             return "statusBad"
         if self.controller_state in {"READY_HOME_REQUIRED", "READY_MOTION", "JOB_RUNNING"}:
@@ -302,6 +333,8 @@ class ControllerUiState:
 
     @property
     def motion_style(self) -> str:
+        if self.submission_visible:
+            return "statusWarning"
         if self.controller_state == "READY_MOTION" and self.allow_motion and self.status_trusted:
             return "statusWarning"
         if self.controller_state == "DISCONNECTED" and self.status_trusted:
@@ -339,8 +372,12 @@ class ControllerUiState:
             # authority; never render the old contradictory ONLINE + RECONNECT
             # combination.
             parts.append("PI REACHABLE" if self.node_reachable else "PI NOT RESPONDING")
+        if self.submission_visible:
+            parts.append(self.compact_connection_text)
         parts.append(
-            "CONTROLLER STATE UNTRUSTED"
+            "CHECKING CONTROLLER STATUS"
+            if self.submission_visible and not self.status_trusted
+            else "CONTROLLER STATE UNTRUSTED"
             if not self.status_trusted
             else "RECONNECT REQUIRED · SESSION UNTRUSTED"
             if self.controller_state == "RECONNECT_REQUIRED"
@@ -384,6 +421,8 @@ def project_machine_state(
         else (not monitor_present or machine.get("monitor_connected") is True)
         and (not stale_present or not status_stale)
     )
+    submission = machine.get("job_submission")
+    submission_phase = submission.get("phase") if isinstance(submission, Mapping) else None
     return ControllerUiState(
         controller_state=state,
         explicit_state=explicit,
@@ -399,6 +438,12 @@ def project_machine_state(
         job_running=job_running or state == "JOB_RUNNING",
         jog_ready=machine.get("jog_ready") is True,
         operation_busy=bool(operation_busy),
+        submission_phase=(
+            submission_phase
+            if isinstance(submission_phase, str) and submission_phase in _SUBMISSION_LABELS
+            else None
+        ),
+        status_refresh_error=bool(machine.get("status_refresh_error")),
     )
 
 
@@ -466,6 +511,8 @@ def running_controller_diagnostics(status: Mapping[str, Any] | None) -> dict[str
         "node_reachable": projection.node_reachable,
         "status_stale": machine.get("status_stale"),
         "status_error": _sanitized_value(machine.get("status_error")),
+        "status_refresh_error": _sanitized_value(machine.get("status_refresh_error")),
+        "job_submission": _sanitized_value(machine.get("job_submission")),
         "job_status_error": _sanitized_value(machine.get("job_status_error")),
         "protocol": _sanitized_value(machine.get("protocol")),
         "configured_endpoint": _sanitized_value(machine.get("port")),

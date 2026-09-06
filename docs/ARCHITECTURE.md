@@ -1,5 +1,15 @@
 # Architecture
 
+PiJobStore publishes committed record observations under a separate short lock
+after durable writes. Pi machine/job status reads this bounded projection,
+independent of file syncing, hashing, and validation. Execution admission and
+recovery still consult the durable store. Machine-status response metadata must
+describe the body sampled for that response, never a later controller revision.
+The desktop's local job_submission describes upload/verification/START progress;
+it cannot grant controller authority or prove Pi ownership. Machine freshness and
+explicit poll errors remain separate, and new controller metadata wakes the
+monitor without making an old snapshot fresh.
+
 Conditional Home-on-START belongs to `MachineService.start_preflighted_program`,
 inside the Pi-owned durable start operation for remote execution. The same
 immutable validated program, request STOP generation, authorization generation,

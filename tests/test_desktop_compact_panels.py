@@ -118,6 +118,102 @@ def test_job_progress_widget_is_compact_and_switches_preparation_state(
     widget.deleteLater()
 
 
+@pytest.mark.parametrize("machine_first", [False, True])
+def test_submission_progress_survives_delayed_job_poll_in_either_update_order(
+    qt_application: QtWidgets.QApplication, machine_first: bool,
+) -> None:
+    widget = JobProgressWidget()
+    machine = {
+        "controller_state": "READY_MOTION", "pi_owned_execution": True,
+        "node_reachable": True, "status_stale": True,
+        "job_submission": {
+            "job_id": "new-job", "phase": "uploading",
+            "received_size": 8192, "expected_size": 32768,
+            "elapsed_seconds": 12,
+        },
+    }
+    previous_job = {
+        "job_id": "old-job", "phase": "failed", "error": "Old failure",
+        "total_lines": 100, "completed_lines": 100,
+    }
+    if machine_first:
+        widget.set_machine_status(machine)
+        widget.set_job_status(previous_job)
+    else:
+        widget.set_job_status(previous_job)
+        widget.set_machine_status(machine)
+
+    assert widget.progress.format() == "Uploading job 25%"
+    assert widget.progress.maximum() == 1000
+    assert widget.progress.value() == 250
+    assert "8,192/32,768 bytes acknowledged" in widget.toolTip()
+    assert "12 s since upload began" in widget.toolTip()
+    assert "Checking current controller status" in widget.toolTip()
+    assert "Old failure" not in widget.toolTip()
+    assert "Connection lost" not in widget.toolTip()
+
+    for phase, label in [("verifying", "Verifying job…"), ("starting", "Starting job…")]:
+        machine["job_submission"]["phase"] = phase
+        widget.set_machine_status(machine)
+        assert widget.progress.format() == label
+        assert widget.progress.maximum() == 0
+        assert "%" not in widget.progress.format()
+        busy_label = widget.findChild(QtWidgets.QLabel, "jobExecutionStage")
+        assert busy_label is not None
+        assert not busy_label.isHidden()
+        assert busy_label.text() == label
+
+    machine.pop("job_submission")
+    widget.set_machine_status(machine)
+    widget.set_job_status({
+        "job_id": "new-job", "phase": "streaming", "running": True,
+        "total_lines": 200, "completed_lines": 80,
+    })
+    assert widget.progress.maximum() == 1000
+    assert widget.progress.value() == 400
+    assert widget.progress.format() == "Execution 40%"
+    assert busy_label.isHidden()
+    assert "since upload began" not in widget.toolTip()
+    widget.close()
+    widget.deleteLater()
+
+
+@pytest.mark.parametrize("sizes", [
+    {}, {"received_size": 30, "expected_size": 0},
+    {"received_size": 40, "expected_size": 30},
+    {"received_size": -1, "expected_size": 30},
+    {"received_size": True, "expected_size": 30},
+])
+def test_upload_without_valid_acknowledged_byte_counts_is_indeterminate(
+    qt_application: QtWidgets.QApplication, sizes: dict,
+) -> None:
+    widget = JobProgressWidget()
+    widget.set_job_status({"phase": "uploading", **sizes})
+    assert widget.progress.maximum() == 0
+    assert widget.progress.format() == "Uploading job…"
+    widget.close()
+    widget.deleteLater()
+
+
+def test_delayed_pi_job_details_do_not_claim_monitor_connection_was_lost(
+    qt_application: QtWidgets.QApplication,
+) -> None:
+    widget = JobProgressWidget()
+    widget.set_machine_status({
+        "controller_state": "JOB_RUNNING", "pi_owned_execution": True,
+        "node_reachable": True, "status_stale": False,
+    })
+    widget.set_job_status({
+        "phase": "streaming", "running": True, "execution_owner": "pi",
+        "status_stale": True, "total_lines": 200, "completed_lines": 80,
+    })
+    assert "Job status delayed" in widget.toolTip()
+    assert "remains Pi-owned" in widget.toolTip()
+    assert "Connection lost" not in widget.toolTip()
+    widget.close()
+    widget.deleteLater()
+
+
 def test_machine_panel_is_dense_without_duplicate_primary_controls(
     qt_application: QtWidgets.QApplication,
 ) -> None:

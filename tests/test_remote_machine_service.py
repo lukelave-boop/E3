@@ -341,6 +341,89 @@ def _install_fake(monkeypatch: pytest.MonkeyPatch, fake: FakePi) -> None:
     monkeypatch.setattr(remote_service_module, "request_response", fake)
 
 
+@pytest.mark.parametrize("fail_action", [None, ACTION_JOB_FINALIZE, ACTION_JOB_START])
+def test_submission_progress_tracks_acknowledged_bytes_and_clears_on_exit(
+    monkeypatch: pytest.MonkeyPatch, fail_action: str | None,
+) -> None:
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    monkeypatch.setattr(remote_service_module, "MAX_UPLOAD_CHUNK_BYTES", 16)
+    service = _service()
+    service._refresh_once()
+    program = service.preflight_program(_UNPOWERED_GCODE)
+    expected_size = len(canonical_program_bytes(program))
+    phases = []
+
+    def inspect_submission(action, request):
+        if action not in {ACTION_JOB_BEGIN, ACTION_JOB_CHUNK, ACTION_JOB_FINALIZE, ACTION_JOB_START}:
+            return
+        submission = service.status()["job_submission"]
+        assert submission["job_id"] == request["job_id"]
+        assert submission["expected_size"] == expected_size
+        assert submission["elapsed_seconds"] >= 0.0
+        if action == ACTION_JOB_BEGIN:
+            assert submission["received_size"] == 0
+        elif action == ACTION_JOB_CHUNK:
+            # Sent bytes are not yet acknowledged, so do not count this chunk.
+            assert submission["received_size"] == request["offset"]
+        else:
+            assert submission["received_size"] == expected_size
+        expected_phase = {
+            ACTION_JOB_FINALIZE: "verifying", ACTION_JOB_START: "starting",
+        }.get(action, "uploading")
+        assert submission["phase"] == expected_phase
+        phases.append(expected_phase)
+        if action == ACTION_JOB_FINALIZE:
+            # A concurrent fresh job-only reply must not replace local phase.
+            service._cache_job_record(fake.jobs[request["job_id"]])
+            refreshed = service.status()["job_submission"]
+            assert refreshed.pop("elapsed_seconds") >= submission.pop("elapsed_seconds")
+            assert refreshed == submission
+        if action == fail_action:
+            raise MachineError("injected submission failure")
+
+    fake.before_request = inspect_submission
+    if fail_action is None:
+        service.start_validated_program(program)
+        assert phases[-2:] == ["verifying", "starting"]
+    else:
+        with pytest.raises(MachineError):
+            service.start_validated_program(program)
+    assert service.status()["job_submission"] is None
+
+
+def test_machine_refresh_error_is_separate_from_snapshot_expiry(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    service._last_machine_status_monotonic -= 4.0
+    expired = service.status()
+    assert expired["status_stale"] is True
+    assert expired["status_refresh_error"] is None
+    service._mark_monitor_disconnected("status request timed out")
+    assert service.status()["status_refresh_error"] == "status request timed out"
+    service._refresh_once()
+    assert service.status()["status_refresh_error"] is None
+    assert service.status()["status_stale"] is False
+
+
+def test_new_controller_metadata_wakes_monitor_without_granting_authority(monkeypatch):
+    fake = FakePi()
+    _install_fake(monkeypatch, fake)
+    service = _service()
+    service._refresh_once()
+    service._monitor_wake.clear()
+    fake.state_revision += 1
+    service._commit_current_response(
+        fake._response({"request_id": str(uuid.uuid4())}), action=ACTION_JOB_START,
+    )
+    assert service._monitor_wake.is_set()
+    assert service.status()["status_stale"] is True
+    service._refresh_once()
+    assert service.status()["status_stale"] is False
+
+
 def test_exact_upload_finalize_start_lifecycle_and_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

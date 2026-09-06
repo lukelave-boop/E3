@@ -165,6 +165,11 @@ class AirAssistCommands:
                 return "off"
             return None
         text = line.strip()
+        # Ordinary GRBL lines cannot be secondary directives. Avoid rebuilding
+        # and hashing the physical mapping for every motion segment; candidate
+        # directives still require the exact bound ON/OFF representation below.
+        if not text.startswith(AIR_ASSIST_DIRECTIVE_PREFIX):
+            return None
         if text in self.program_lines(True):
             return "on"
         if text in self.program_lines(False):

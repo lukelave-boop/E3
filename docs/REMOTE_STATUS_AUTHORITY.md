@@ -27,6 +27,17 @@ or camera-server failures.
 
 ## Observation contract
 
+- Upload chunk syncing and final program verification keep their durable store
+  transaction lock. Monitoring reads a separate bounded projection of committed
+  job records published only after a successful durable write. A blocked write
+  still reports the previous committed receipt; it cannot expose uncommitted
+  bytes or premature prepared/accepted ownership. Startup reconstructs the
+  projection after interrupted-job reconciliation. Execution admission, START
+  integrity checks, STOP, and recovery continue using the durable store.
+- A machine.status reply stamps boot/build/controller metadata from the exact
+  machine body it sampled. A transition after that sample cannot relabel the old
+  body with a newer controller state revision.
+
 - The authenticated `machine.status` body and its boot, generation, and revision
   metadata publish together, before optional job-detail requests. Coherent Pi
   job ownership publishes with them. Where job details need another RPC, the
@@ -61,6 +72,23 @@ Camera status remains separate. A camera response cannot make machine state
 fresh, and disabling the overlay is not a prerequisite for these semantics.
 
 ## Job lifecycle and notifications
+
+While a local START submission is active, the Windows facade publishes a
+separate job_submission value with exact UUID, phase, acknowledged bytes, total
+bytes, and elapsed time. Delayed Pi job replies cannot overwrite it. The value
+clears on success, rejection, exception, STOP, or detach and grants no machine
+authority. Upload progress counts acknowledged bytes; verification and START
+remain indeterminate. A brief controller freshness gap with recent Pi contact
+and no failed machine request is labeled CHECKING STATUS. An actual failed poll,
+lost contact, invalid state, STOP/recovery, or controller fault takes precedence.
+Ordinary motion controls still require fresh authoritative status; STOP remains
+available. New controller metadata wakes the monitor instead of waiting for the
+next normal interval, without refreshing authority from job-only metadata.
+
+Desktop timing logs record upload bytes/time, finalization time, and START time
+for the same UUID. No G-code payload or authorization phrase is included. These
+measurements distinguish transfer from verification and Home/START work; the
+progress display does not imply a guarantee of physical start latency.
 
 Pending START records uncertainty about Pi ownership, not a failed monitoring
 connection. Only an actual unavailable START response invokes recovery for the

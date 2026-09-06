@@ -253,6 +253,16 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             if state.remote and not state.status_trusted
             else f"Authoritative controller state: {state.controller_state}."
         )
+        if state.submission_visible:
+            connection_description = (
+                f"{state.connection_text}. "
+                + (
+                    f"Last observed controller state: {state.controller_state}; "
+                    "waiting for a current machine snapshot."
+                    if not state.status_trusted
+                    else f"Current controller state: {state.controller_state}."
+                )
+            )
         self._set_indicator(
             self.connection_label,
             connection_text,
@@ -265,7 +275,17 @@ class RuntimeSafetyStrip(QtWidgets.QWidget):
             if self._compact or self._chrome_mode
             else state.motion_text
         )
-        if not state.status_trusted:
+        if state.submission_visible:
+            motion_description = (
+                "Job preparation is in progress; it does not grant motion or laser authority. "
+                "Software STOP remains available. "
+                + (
+                    "Current controller status is being checked; ordinary controller actions remain blocked."
+                    if not state.status_trusted
+                    else f"Current controller state: {state.controller_state}."
+                )
+            )
+        elif not state.status_trusted:
             motion_description = (
                 "Motion authority is unknown and all controller actions except "
                 "Software STOP are blocked."

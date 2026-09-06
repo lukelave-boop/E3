@@ -253,6 +253,8 @@ class RemoteMachineService:
         self._last_node_response_monotonic: float | None = None
         self._machine_observation_sequence = 0
         self._job_observation_sequence = 0
+        self._job_submission: dict[str, Any] | None = None
+        self._monitor_wake = threading.Event()
         self._retired_boot_ids: set[str] = set()
 
         self._hold_lock = threading.RLock()
@@ -272,6 +274,7 @@ class RemoteMachineService:
                 "monitor_connected": False,
                 "status_stale": True,
                 "status_error": None,
+                "status_refresh_error": None,
                 "node_reachable": False,
                 "job_status_error": None,
                 "node_boot_id": None,
@@ -552,6 +555,7 @@ class RemoteMachineService:
                 # machine snapshot from an older controller state/generation.
                 self._status_cache["status_stale"] = True
                 self._status_cache["monitor_connected"] = False
+                self._monitor_wake.set()
             self._node_boot_id = boot_id
             self._node_build = build
             self._controller_state_revision = state_revision
@@ -858,6 +862,10 @@ class RemoteMachineService:
             cached_job = self._status_cache.get("job")
             if isinstance(cached_job, dict) and cached_job.get("job_id") == job_id:
                 cached_job.update(diagnostics)
+        LOGGER.info(
+            "Pi job submission timing job=%s %s", job_id[:8],
+            " ".join(f"{key}={value}" for key, value in sorted(values.items())),
+        )
 
     def _record_local_job_identity(self, job_id: str, created_at: float) -> None:
         with self._state_lock:
@@ -900,6 +908,7 @@ class RemoteMachineService:
                         else None
                     ),
                     "job_status_error": None,
+                    "status_refresh_error": None,
                     "node_boot_id": self._node_boot_id,
                     "node_build": copy.deepcopy(self._node_build),
                     "node_capabilities": (
@@ -958,6 +967,7 @@ class RemoteMachineService:
             self._status_cache["monitor_connected"] = False
             self._status_cache["status_stale"] = True
             self._status_cache["status_error"] = error
+            self._status_cache["status_refresh_error"] = error
             job = self._status_cache.get("job")
             if isinstance(job, Mapping):
                 cached = self._normalize_job(job)
@@ -1139,7 +1149,11 @@ class RemoteMachineService:
     def _monitor_loop(self) -> None:
         delay = 0.0
         failures = 0
-        while not self._monitor_stop.wait(delay):
+        while not self._monitor_stop.is_set():
+            self._monitor_wake.wait(delay)
+            self._monitor_wake.clear()
+            if self._monitor_stop.is_set():
+                break
             generation = self.operation_generation()
             with self._state_lock:
                 observation = self._machine_observation_sequence
@@ -1189,6 +1203,7 @@ class RemoteMachineService:
         """Detach this desktop observer without issuing disconnect, M5, or STOP."""
 
         self._monitor_stop.set()
+        self._monitor_wake.set()
         idle_snapshot: bool | None = None
         # The stop epoch is the local linearization boundary for uploads and
         # START dispatch.  A pre-START operation that has not yet committed
@@ -1217,6 +1232,7 @@ class RemoteMachineService:
                 thread = self._monitor_thread
                 self._clear_arm_locked()
                 self._upload_job_id = None
+                self._job_submission = None
                 self._detached = True
         if (
             thread is not None
@@ -1259,6 +1275,12 @@ class RemoteMachineService:
             self._expire_arm_locked()
             status = copy.deepcopy(self._status_cache)
             now = time.monotonic()
+            submission = copy.deepcopy(self._job_submission)
+            if submission is not None:
+                submission["elapsed_seconds"] = max(
+                    0.0, now - submission.pop("started_monotonic")
+                )
+            status["job_submission"] = submission
             status["node_reachable"] = (
                 not self._detached
                 and self._last_node_response_monotonic is not None
@@ -1990,6 +2012,25 @@ class RemoteMachineService:
         )
         return result
 
+    @contextmanager
+    def _submission_scope(self):
+        # Local presentation of this one submission, never machine authority.
+        # The operation lock spans entry/exit so a previous worker cannot clear
+        # a newer submission. Monitor job replies do not write these fields.
+        with self._state_lock:
+            self._job_submission = None
+        try:
+            yield
+        finally:
+            with self._state_lock:
+                self._job_submission = None
+            self._monitor_wake.set()
+
+    def _submission_progress(self, job_id: str, **fields: Any) -> None:
+        with self._state_lock:
+            if self._job_submission is not None and self._job_submission["job_id"] == job_id:
+                self._job_submission.update(fields)
+
     def start_validated_program(
         self,
         program: ValidatedProgram,
@@ -2002,7 +2043,7 @@ class RemoteMachineService:
             if _expected_stop_epoch is None
             else _expected_stop_epoch
         )
-        with self._operation_lock:
+        with self._operation_lock, self._submission_scope():
             self._require_hardware_authority()
             self._require_operation_current(generation)
             self._require_capabilities()
@@ -2045,10 +2086,16 @@ class RemoteMachineService:
                 self._upload_job_id = job_id
                 self._tracked_job_id = job_id
                 self._tracked_program_digest = program.digest
+                self._job_submission = {
+                    "job_id": job_id, "phase": "uploading",
+                    "expected_size": len(canonical), "received_size": 0,
+                    "started_monotonic": time.monotonic(),
+                }
                 self._cache_job_record({
                     "job_id": job_id, "name": validated_name, "state": "receiving",
                     "phase": "uploading", "program_digest": program.digest,
                     "ownership_accepted": False,
+                    "expected_size": len(canonical), "received_size": 0,
                 })
 
             upload_started = time.monotonic()
@@ -2090,6 +2137,7 @@ class RemoteMachineService:
                         self._response_mapping(chunk_response, "job")
                     )
                     offset += len(chunk)
+                    self._submission_progress(job_id, received_size=offset)
                 upload_seconds = max(0.0, time.monotonic() - upload_started)
                 self._record_client_diagnostics(
                     job_id,
@@ -2102,6 +2150,7 @@ class RemoteMachineService:
                 )
                 self._require_operation_current(generation)
                 finalize_started = time.monotonic()
+                self._submission_progress(job_id, phase="verifying")
                 finalize = self._rpc(
                     ACTION_JOB_FINALIZE,
                     {"job_id": job_id, **binding},
@@ -2145,6 +2194,7 @@ class RemoteMachineService:
                 generation=generation,
             )
             start_requested = time.monotonic()
+            self._submission_progress(job_id, phase="starting")
             try:
                 self._require_operation_current(generation)
                 start = self._rpc(ACTION_JOB_START, start_payload)
@@ -2256,6 +2306,7 @@ class RemoteMachineService:
             self._authorization_epoch += 1
             self._clear_arm_locked()
             job_id = self._accepted_job_id or self._tracked_job_id
+            self._job_submission = None
         payload: dict[str, Any] = {"emergency": emergency}
         if job_id is not None:
             payload["job_id"] = job_id

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..project import (
@@ -3163,6 +3163,8 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         self._prepared_summary = "No job generated"
         self._execution_summary = "Controller idle · no job started"
         self._execution_format = "Execution 0%"
+        self._job_status: dict[str, Any] = {}
+        self._machine_status: dict[str, Any] = {}
         self.preparation_progress = QtWidgets.QProgressBar()
         self.preparation_progress.setObjectName("jobPreparationProgress")
         self.preparation_progress.setFixedHeight(18)
@@ -3172,6 +3174,19 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         self.progress.setRange(0, 1000)
         self.progress.setFixedHeight(18)
         self.progress.setFormat(self._execution_format)
+        # Qt's indeterminate progress style suppresses the built-in text.
+        # Keep the current stage readable over the animated busy indicator.
+        self._busy_phase_label = QtWidgets.QLabel(self.progress)
+        self._busy_phase_label.setObjectName("jobExecutionStage")
+        self._busy_phase_label.setStyleSheet("background: transparent;")
+        self._busy_phase_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        self._busy_phase_label.setAttribute(
+            QtCore.Qt.WidgetAttribute.WA_TransparentForMouseEvents, True
+        )
+        progress_layout = QtWidgets.QHBoxLayout(self.progress)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.addWidget(self._busy_phase_label)
+        self._busy_phase_label.hide()
         self.addWidget(self.progress)
         self.addWidget(self.preparation_progress)
         self._preparing = False
@@ -3189,6 +3204,10 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
 
     def _sync_execution_format(self) -> None:
         self.progress.setFormat(self._execution_format)
+        busy = self.progress.maximum() == 0
+        self.progress.setTextVisible(not busy)
+        self._busy_phase_label.setText(self._execution_format if busy else "")
+        self._busy_phase_label.setVisible(busy)
 
     def set_preparing(
         self,
@@ -3221,19 +3240,47 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         self._sync_tooltip()
 
     def set_job_status(self, job: dict[str, Any] | None) -> None:
-        job = job or {}
+        self._job_status = dict(job or {})
+        self._render_job_status()
+
+    def _render_job_status(self) -> None:
+        job = self._job_status
+        submission = self._machine_status.get("job_submission")
+        if (
+            isinstance(submission, Mapping)
+            and project_machine_state(self._machine_status).submission_visible
+        ):
+            # Local transfer progress is independent of delayed Pi job polls.
+            # It never grants execution ownership or controller authority.
+            job = dict(submission)
+            job["running"] = False
         running = bool(job.get("running", False))
         total = int(job.get("total_lines", 0) or 0)
         completed = int(job.get("completed_lines", 0) or 0)
-        progress = 0.0 if total <= 0 else completed / total
-        self.progress.setValue(int(round(progress * 1000)))
+        progress = 0.0 if total <= 0 else max(0.0, min(completed / total, 1.0))
         phase = str(job.get("phase", "streaming" if running else "idle"))
+        received = job.get("received_size")
+        expected = job.get("expected_size")
+        upload_progress = (
+            received / expected
+            if type(received) is int and type(expected) is int
+            and expected > 0 and 0 <= received <= expected
+            else None
+        )
+        uploading = phase in {"receiving", "uploading"}
+        indeterminate = phase in {"verifying", "starting"} or (
+            uploading and upload_progress is None
+        )
+        self.progress.setRange(0, 0 if indeterminate else 1000)
+        if not indeterminate:
+            visible_progress = upload_progress if uploading else progress
+            self.progress.setValue(int(round(visible_progress * 1000)))
         finishing_labels = {
-            "receiving": "Uploading to Pi",
-            "uploading": "Uploading to Pi",
-            "verifying": "Verifying on Pi",
+            "receiving": "Uploading job…",
+            "uploading": "Uploading job…",
+            "verifying": "Verifying job…",
             "prepared": "Ready on Pi",
-            "starting": "Starting on Pi",
+            "starting": "Starting job…",
             "stopping": "Stopping on Pi",
             "draining": "Finishing · motion",
             "homing": "Finishing · homing",
@@ -3244,6 +3291,8 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             phase,
             f"Execution {progress * 100:.0f}%",
         )
+        if uploading and upload_progress is not None:
+            self._execution_format = f"Uploading job {upload_progress * 100:.0f}%"
         self._sync_execution_format()
         if running:
             execution_labels = {
@@ -3257,7 +3306,8 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
                 and job.get("status_stale") is True
             ):
                 self._execution_summary = (
-                    "Connection lost — the START-accepted Pi job continues locally"
+                    "Job status delayed · the START-accepted job remains Pi-owned; "
+                    "waiting for current progress"
                 )
             else:
                 self._execution_summary = execution_labels.get(
@@ -3266,6 +3316,8 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
                 )
         elif phase in {"receiving", "uploading"}:
             self._execution_summary = "Uploading the exact job to the Raspberry Pi"
+            if upload_progress is not None:
+                self._execution_summary += f" · {received:,}/{expected:,} bytes acknowledged"
         elif phase == "verifying":
             self._execution_summary = "Raspberry Pi is verifying the uploaded job"
         elif phase == "prepared":
@@ -3280,6 +3332,19 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
             )
         else:
             self._execution_summary = "Controller idle · no job started"
+        if isinstance(submission, Mapping):
+            elapsed = submission.get("elapsed_seconds")
+            if type(elapsed) in {int, float} and math.isfinite(elapsed) and elapsed >= 0:
+                self._execution_summary += f" · {elapsed:.0f} s since upload began"
+            if self._machine_status.get("status_refresh_error"):
+                self._execution_summary += (
+                    "\nMachine status unavailable: "
+                    + str(self._machine_status["status_refresh_error"])
+                )
+            elif self._machine_status.get("node_reachable") is False:
+                self._execution_summary += "\nWaiting for a response from the Raspberry Pi"
+            elif self._machine_status.get("status_stale") is True:
+                self._execution_summary += "\nChecking current controller status"
         self._sync_tooltip()
 
     def set_prepared_job(
@@ -3302,8 +3367,8 @@ class JobProgressWidget(QtWidgets.QStackedWidget):
         self._sync_tooltip()
 
     def set_machine_status(self, machine: dict[str, Any] | None) -> None:
-        del machine
-        self._sync_tooltip()
+        self._machine_status = dict(machine or {})
+        self._render_job_status()
 
 
 class ObjectPanel(QtWidgets.QWidget):

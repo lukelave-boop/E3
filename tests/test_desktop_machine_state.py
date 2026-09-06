@@ -185,6 +185,75 @@ def test_reachable_pi_with_stale_machine_status_is_not_presented_as_offline():
     assert diagnostics["job_status_error"] == "job details timed out"
 
 
+@pytest.mark.parametrize("phase", ["uploading", "verifying", "starting"])
+@pytest.mark.parametrize("stale", [False, True])
+def test_submission_progress_is_separate_from_controller_authority(phase, stale):
+    status = {
+        "controller_state": "READY_MOTION", "pi_owned_execution": True,
+        "node_reachable": True, "monitor_connected": not stale,
+        "status_stale": stale, "status_refresh_error": None,
+        "allow_motion": True, "jog_ready": True,
+    }
+    before = project_machine_state(status)
+    status["job_submission"] = {
+        "job_id": "new-job", "phase": phase,
+        "received_size": 40, "expected_size": 100, "elapsed_seconds": 12,
+    }
+    projection = project_machine_state(status)
+
+    assert projection.compact_connection_text == {
+        "uploading": "UPLOADING JOB", "verifying": "VERIFYING JOB",
+        "starting": "STARTING JOB",
+    }[phase]
+    assert projection.compact_motion_text == (
+        "CHECKING STATUS" if stale else "JOB PREPARATION"
+    )
+    assert projection.connection_style == "statusWarning"
+    assert projection.motion_style == "statusWarning"
+    assert projection.status_trusted is (not stale)
+    for capability in _CAPABILITIES:
+        assert getattr(projection, f"can_{capability}") == getattr(before, f"can_{capability}")
+    assert projection.can_stop
+    if stale:
+        assert "CHECKING CONTROLLER STATUS" in projection.panel_summary("grbl")
+        assert "READY MOTION" not in projection.panel_summary("grbl")
+        assert "checking machine status" in projection.connection_text
+
+
+@pytest.mark.parametrize("override, expected", [
+    ({"node_reachable": False, "status_stale": True}, "PI NOT RESPONDING"),
+    ({"status_refresh_error": "machine.status timed out", "status_stale": True}, "STATUS UNAVAILABLE"),
+    ({"controller_state": "DISCONNECTED"}, "OFFLINE"),
+    ({"controller_state": "FAULTED"}, "FAULTED"),
+    ({"controller_state": "RECONNECT_REQUIRED"}, "SESSION UNTRUSTED"),
+    ({"controller_state": "STOPPING"}, "STOPPING"),
+    ({"controller_state": "RECOVERING"}, "RECOVERING"),
+    ({"controller_state": "not-a-state"}, "STATUS UNAVAILABLE"),
+])
+def test_submission_never_hides_contact_failure_or_controller_fault(override, expected):
+    projection = project_machine_state({
+        "controller_state": "READY_MOTION", "pi_owned_execution": True,
+        "node_reachable": True, "status_stale": False,
+        "allow_motion": True, "jog_ready": True,
+        "job_submission": {"job_id": "new-job", "phase": "starting"},
+        **override,
+    })
+    assert not projection.submission_visible
+    assert projection.compact_connection_text == expected
+    assert not projection.can_start_job
+    assert projection.can_stop
+
+
+def test_stale_job_phase_alone_cannot_claim_an_active_local_submission():
+    projection = project_machine_state({
+        "controller_state": "READY_MOTION", "pi_owned_execution": True,
+        "node_reachable": True, "status_stale": True,
+        "job": {"job_id": "old-job", "phase": "starting", "status_stale": True},
+    })
+    assert not projection.submission_visible
+    assert projection.compact_connection_text == "STATUS UNAVAILABLE"
+
+
 @pytest.mark.parametrize("blocker", [{"armed": True}, {"job": {"running": True}}])
 def test_repeat_home_rejects_armed_or_running_machine(blocker):
     projection = project_machine_state({

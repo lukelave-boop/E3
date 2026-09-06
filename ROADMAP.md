@@ -1,5 +1,10 @@
 # Roadmap
 
+Upload/start monitoring now avoids the durable job store's disk transaction lock,
+and the desktop shows submission progress separately from machine authority.
+Validate the combined feature on the Pi, including long uploads, slow verification,
+actual communication loss, STOP during preparation, and the next successful job.
+
 Active reliability investigation: capture primary ACK timeout evidence before
 cleanup, distinguish raw serial polling/framing from receiver contention, and
 identify the intermittent 0.7.0 streaming stall before changing lifecycle or

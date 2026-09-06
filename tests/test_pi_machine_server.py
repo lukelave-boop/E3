@@ -25,6 +25,7 @@ from laser_aligner.config import (
     WorkArea,
 )
 from laser_aligner.errors import MachineError
+from laser_aligner.machine import pi_job_store as store_module
 from laser_aligner.machine.controller_dialects import resolve_air_assist_commands
 from laser_aligner.machine.pi_job_protocol import (
     ACTION_JOB_ACTIVE,
@@ -45,6 +46,7 @@ from laser_aligner.machine.pi_job_protocol import (
     ERROR_SERVICE_SHUTTING_DOWN,
     authenticate_client,
     encode_upload_chunk,
+    request_response,
 )
 from laser_aligner.machine.pi_job_service import (
     EXECUTION_POLICY_FIELD_LABELS,
@@ -316,6 +318,128 @@ def _rpc(
             }
         )
         return channel.receive_json()
+
+
+@pytest.mark.parametrize("blocked_stage", ["chunk_fsync", "finalize_validation"])
+def test_upload_work_cannot_block_authenticated_machine_and_job_monitoring(
+    server_harness, monkeypatch, blocked_stage, record_property,
+):
+    harness = server_harness
+    assert _rpc(harness, ACTION_MACHINE_CONNECT)["ok"] is True
+    assert _rpc(harness, ACTION_MACHINE_PREPARE_JOB_START)["ok"] is True
+    program = harness.machine.preflight_program(_POWERED_PROGRAM)
+    payload = canonical_program_bytes(program)
+    identifier = str(uuid.uuid4())
+    assert _rpc(
+        harness, ACTION_JOB_BEGIN, job_id=identifier, name="blocked-upload.gcode",
+        expected_size=len(payload), expected_sha256=program.digest,
+        guarded_output_polygon_mm=None,
+    )["ok"] is True
+    entered = threading.Event()
+    release = threading.Event()
+    replies = []
+    failures = []
+    if blocked_stage == "finalize_validation":
+        assert _rpc(
+            harness, ACTION_JOB_CHUNK, job_id=identifier, offset=0,
+            data_b64=encode_upload_chunk(payload),
+        )["ok"] is True
+        original = harness.service._validate_canonical_text
+
+        def blocked_validator(*args, **kwargs):
+            entered.set()
+            assert release.wait(20.0)
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(harness.service, "_validate_canonical_text", blocked_validator)
+        action = ACTION_JOB_FINALIZE
+        fields = _binding(program)
+    else:
+        original_append = harness.service.append_upload_chunk
+        original_fsync = store_module.os.fsync
+        writer = []
+
+        def append(*args, **kwargs):
+            writer.append(threading.get_ident())
+            return original_append(*args, **kwargs)
+
+        def blocked_fsync(descriptor):
+            if writer and threading.get_ident() == writer[0]:
+                entered.set()
+                assert release.wait(20.0)
+            return original_fsync(descriptor)
+
+        monkeypatch.setattr(harness.service, "append_upload_chunk", append)
+        monkeypatch.setattr(store_module.os, "fsync", blocked_fsync)
+        action = ACTION_JOB_CHUNK
+        fields = {"offset": 0, "data_b64": encode_upload_chunk(payload)}
+
+    def upload():
+        try:
+            replies.append(_rpc(harness, action, job_id=identifier, **fields))
+        except Exception as exc:
+            failures.append(exc)
+
+    worker = threading.Thread(target=upload)
+    worker.start()
+    try:
+        assert entered.wait(3.0)
+        commands = list(harness.transport.commands)
+        elapsed = []
+        for _ in range(4):
+            started = time.monotonic()
+            snapshot = request_response(
+                "127.0.0.1", harness.server.bound_port, _TOKEN,
+                {"request_id": str(uuid.uuid4()), "action": ACTION_MACHINE_STATUS},
+                timeout=0.75,
+            )
+            elapsed.append(time.monotonic() - started)
+            assert snapshot["ok"] is True
+            assert snapshot["status"]["controller_state"] == "READY_MOTION"
+            assert snapshot["active_job"] is None
+            detail = request_response(
+                "127.0.0.1", harness.server.bound_port, _TOKEN,
+                {"request_id": str(uuid.uuid4()), "action": ACTION_JOB_STATUS,
+                 "job_id": identifier}, timeout=0.75,
+            )
+            assert detail["ok"] is True
+            assert detail["job"]["job_id"] == identifier
+            assert detail["job"]["state"] == "receiving"
+            assert detail["job"].get("ownership_accepted") is not True
+            assert detail["job"]["received_size"] == (
+                len(payload) if blocked_stage == "finalize_validation" else 0
+            )
+        record_property("max_blocked_upload_status_seconds", max(elapsed))
+        assert harness.transport.commands == commands
+        assert not release.is_set()
+    finally:
+        release.set()
+        worker.join(5.0)
+    assert not worker.is_alive()
+    assert not failures
+    assert replies[0]["ok"] is True
+    assert harness.service.get(identifier)["received_size"] == len(payload)
+    assert harness.service.get(identifier)["state"] == (
+        "prepared" if blocked_stage == "finalize_validation" else "receiving"
+    )
+
+
+def test_machine_status_metadata_comes_from_the_same_snapshot(server_harness, monkeypatch):
+    harness = server_harness
+    sampled = harness.service.response_metadata()
+    calls = []
+
+    def later_metadata():
+        calls.append(True)
+        return {**sampled, "state_revision": sampled["state_revision"] + 1,
+                "controller_state": "RECOVERING"}
+
+    monkeypatch.setattr(harness.service, "response_metadata", later_metadata)
+    response = _rpc(harness, ACTION_MACHINE_STATUS)
+    assert response["ok"] is True
+    assert calls == []
+    for key in ("controller_state", "controller_session_generation", "state_revision"):
+        assert response[key] == response["status"][key]
 
 
 def _binding(program: ValidatedProgram) -> dict[str, Any]:

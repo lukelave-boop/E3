@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from threading import RLock
+from threading import Lock, RLock
 from typing import Any
 
 from ..air_assist import (
@@ -189,6 +189,10 @@ class PiJobStore:
             raise ValueError("stale_part_seconds must be finite and non-negative")
         self.stale_part_seconds = float(stale_part_seconds)
         self._lock = RLock()
+        # Monitoring observes committed records without entering the disk/validator
+        # transaction gate. Execution decisions still use the durable methods.
+        self._observation_lock = Lock()
+        self._observed_records: dict[str, dict[str, Any]] = {}
         self.records_dir.mkdir(parents=True, exist_ok=True)
         self.programs_dir.mkdir(parents=True, exist_ok=True)
         self.reconcile_boot()
@@ -382,7 +386,25 @@ class PiJobStore:
             expected_id=validate_job_id(record.get("job_id")),
         )
         atomic_write_json(self._record_path(validated["job_id"]), validated)
+        with self._observation_lock:
+            self._observed_records[validated["job_id"]] = self._public(validated)
         return validated
+
+    def observed_get(self, job_id: str) -> dict[str, Any]:
+        """Read the last durably published record; never perform disk I/O."""
+
+        canonical = validate_job_id(job_id)
+        with self._observation_lock:
+            record = self._observed_records.get(canonical)
+            if record is None:
+                raise PiJobStoreError(f"Pi job {canonical} does not exist")
+            return self._public(record)
+
+    def observed_records(self) -> tuple[dict[str, Any], ...]:
+        """Return one bounded committed observation, never execution authority."""
+
+        with self._observation_lock:
+            return tuple(self._public(record) for record in self._observed_records.values())
 
     def _all_records(self) -> list[dict[str, Any]]:
         records: list[dict[str, Any]] = []
@@ -407,6 +429,8 @@ class PiJobStore:
         self._journal_path(job_id).unlink(missing_ok=True)
         if metadata:
             self._record_path(job_id).unlink(missing_ok=True)
+            with self._observation_lock:
+                self._observed_records.pop(job_id, None)
 
     def _apply_retention(self) -> None:
         records = self._all_records()
@@ -1179,6 +1203,11 @@ class PiJobStore:
                     program_path.unlink(missing_ok=True)
 
             self._apply_retention()
+            records = self._all_records()
+            with self._observation_lock:
+                self._observed_records = {
+                    record["job_id"]: self._public(record) for record in records
+                }
             return changed
 
 

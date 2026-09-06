@@ -1225,10 +1225,33 @@ class PiJobService:
         return _public_record(active)
 
     def get(self, job_id: str) -> dict[str, Any]:
-        return _public_record(self.store.get(job_id)) or {}
+        return _public_record(self.store.observed_get(job_id)) or {}
 
     def active(self) -> dict[str, Any] | None:
-        return _public_record(self._current_active_record())
+        active, _latest = self._observed_jobs()
+        return active
+
+    def _observed_jobs(self) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+        # Only monitor endpoints use this committed projection. Admission, START
+        # integrity, and recovery retain their durable store reads. In particular,
+        # hashing/validation/fsync must never hold a machine.status reply hostage.
+        records = self.store.observed_records()
+        active = [record for record in records if record.get("state") in _ACTIVE_STATES]
+        if len(active) > 1:
+            raise PiJobServiceError("Multiple persisted Pi jobs claim execution ownership")
+        latest = max(
+            (
+                record for record in records
+                if record.get("state") in _TERMINAL_STATES
+                and record.get("ownership_accepted") is True
+            ),
+            key=self._terminal_sort_key,
+            default=None,
+        )
+        return (
+            None if not active else _public_record(active[0]),
+            _public_record(latest),
+        )
 
     def result(self, job_id: str) -> dict[str, Any]:
         record = self.store.get(job_id)
@@ -1616,12 +1639,11 @@ class PiJobService:
         """Return one bounded machine/job observation for a monitor poll."""
 
         status = self.status()
-        active = self.active()
-        latest = None if active is not None else self.latest_result()
+        active, latest = self._observed_jobs()
         return {
             "status": status,
             "active_job": active,
-            "latest_job": latest,
+            "latest_job": None if active is not None else latest,
         }
 
     def shutdown(self, *, stop_machine: bool = True) -> None:

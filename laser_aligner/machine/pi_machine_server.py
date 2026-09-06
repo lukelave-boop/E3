@@ -839,11 +839,23 @@ class PiMachineServer:
         try:
             try:
                 body = self._dispatch_monitored(request, action)
+                if action == ACTION_MACHINE_STATUS:
+                    status = body["status"]
+                    metadata = {
+                        "protocol_version": PROTOCOL_VERSION,
+                        "boot_id": self.service.boot_id,
+                        "build": dict(self._build),
+                        "state_revision": status["state_revision"],
+                        "controller_session_generation": status["controller_session_generation"],
+                        "controller_state": status["controller_state"],
+                    }
+                else:
+                    metadata = self._response_metadata()
                 response = {
                     "ok": True,
                     "request_id": request_id,
                     **body,
-                    **self._response_metadata(),
+                    **metadata,
                 }
             except Exception as exc:
                 response = self._error_response(request_id, exc)
