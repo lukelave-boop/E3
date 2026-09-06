@@ -89,10 +89,40 @@ either the complete old revision or the complete new revision.
 
 Only after the new stable manifest is verified does the workflow move the
 `e3-development` tag and update the prerelease title, body, and target metadata
-to the current `main` revision. Previous package assets are retained so a client
-that already fetched the prior manifest can still finish its verified download.
+to the current `main` revision. Previous package assets are retained temporarily
+so a client that already fetched the prior manifest can finish its verified download.
 Old manifest-backup cleanup is best effort after publication; cleanup failure is
 reported without rolling back the working new update.
+
+### Package retention
+
+Each successful publication keeps the current Windows/Linux package pair and
+the two newest other complete pairs, ranked by their original upload time.
+Older pairs, including the legacy unversioned packages, first receive a dated
+retirement label. They can be deleted by a subsequent successful publication
+only after both members have spent at least seven days retired. The first run
+starts this grace period for existing old assets; it does not immediately remove
+the accumulated downloads. This is a minimum retention period, not a strict
+asset-count limit or a daily cleanup schedule.
+
+Labels retain the filename and record the retirement time in GitHub metadata;
+download URLs and file contents do not change. Becoming current or one of the
+recent pairs clears the retirement markers. Re-publishing an old revision clears
+its markers **before** promoting its manifest, so even interrupted publication
+cannot reuse an expired grace period for a newly active download.
+
+Only recognized E3 package names are eligible. Unknown files, custom labels,
+invalid metadata and incomplete unmarked pairs are preserved. An interrupted
+deletion can finish removing an already retired pair's remaining member. The
+publisher rechecks the authoritative manifest and candidate asset before every
+cleanup operation, defers cleanup while a manifest recovery backup remains, and
+reports cleanup failure as a warning without rolling back the working update.
+The existing workflow concurrency group serializes publication and cleanup;
+do not run independent publishers concurrently against this release.
+
+The live manifest, release and tag remain intact. GitHub's automatic source
+archives are unaffected. An update dialog left open beyond the grace period may
+need a fresh update check if its old package has since been removed.
 
 ## Private initial installer
 

@@ -7,6 +7,32 @@ for the current five-step calibration sequence and sixth read-only audit tab.
 
 Snapshot: **2026-09-06**
 
+## Active: development release retention
+
+The rolling development publisher now protects the current Windows/Linux pair
+and two recent complete pairs. Other recognized packages receive a dated asset
+label and are eligible for deletion only after at least seven days retired,
+on a later successful publication. Re-promoting an older build clears its
+retirement labels before switching the live manifest. Cleanup rechecks manifest
+and asset identity, preserves unknown assets and recovery backups, and warns
+without rolling back a working update if cleanup fails.
+
+A read-only plan against the current GitHub release inspected 49 uploaded
+assets: 42 would begin grace, zero would be deleted, and the current `38ee99bb40cc`
+pair, prior `1afe4fb3fe8b`/`831b352cb0d7` pairs, and live manifest were protected.
+No remote asset metadata or files were changed. This work remains local on
+`main`; the first live retirement and eventual deletion cycle are unverified.
+There are no desktop, updater download-format, or machine-runtime changes.
+
+Verification: 70 focused publisher/updater/release tests passed on local Windows
+Python 3.14; two existing symlink-security tests skipped because this account
+cannot create Windows symbolic links. The publisher's 49 tests cover first
+retirement, the exact seven-day boundary, recent/current protection, mandatory
+grace reset before promotion, interrupted cleanup, metadata changes, malformed
+metadata and paginated assets. Repository Ruff, publisher compileall and
+`git diff --check` passed. These are API-fake tests plus a read-only live metadata
+plan, not a live cleanup test; compatibility CI has not run for this local change.
+
 ## Main consolidation
 
 At the operator's request, `main` now integrates the completed auto-Home/layer,

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased - development release retention
+
+- Successful update publication now keeps the current Windows/Linux packages
+  and two recent versions. Older packages receive a seven-day grace period
+  before a later successful publication removes them. Cleanup preserves the
+  live update manifest and unrelated files; failures leave the new update live.
+
 ## Unreleased - readable tables, relative speed, and Preview
 
 - All desktop table columns can be resized with the mouse, including the last

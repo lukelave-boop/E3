@@ -10,6 +10,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import FrameType
 from typing import Any, Protocol
@@ -18,6 +19,9 @@ _REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 _REPOSITORY_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _TAG_RE = re.compile(r"^[A-Za-z0-9_.-]+$")
 _STABLE_MANIFEST_NAME = "update-manifest.json"
+_RETIREMENT_LABEL = " [E3 retired "
+_RECENT_PACKAGE_VERSIONS = 2
+_RETENTION_GRACE = timedelta(days=7)
 
 
 class PublicationError(RuntimeError):
@@ -35,6 +39,8 @@ class ReleaseAsset:
     size: int
     digest: str
     state: str
+    created_at: str = ""
+    label: str = ""
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> ReleaseAsset:
@@ -45,6 +51,8 @@ class ReleaseAsset:
             size=int(value["size"]),
             digest=str(digest) if digest is not None else "",
             state=str(value["state"]),
+            created_at=str(value.get("created_at") or ""),
+            label=str(value.get("label") or ""),
         )
 
 
@@ -79,6 +87,8 @@ class ReleaseClient(Protocol):
     def upload_asset(self, tag: str, path: Path) -> None: ...
 
     def rename_asset(self, asset_id: int, name: str) -> None: ...
+
+    def label_asset(self, asset_id: int, label: str) -> None: ...
 
     def delete_asset(self, asset_id: int) -> None: ...
 
@@ -224,6 +234,15 @@ class GhReleaseClient:
             input_value={"name": name},
         )
 
+    def label_asset(self, asset_id: int, label: str) -> None:
+        self._json(
+            (
+                "api", "--method", "PATCH",
+                f"repos/{self.repository}/releases/assets/{asset_id}",
+            ),
+            input_value={"label": label},
+        )
+
     def delete_asset(self, asset_id: int) -> None:
         self._run(
             (
@@ -325,6 +344,124 @@ def immutable_asset_names(revision: str) -> tuple[str, str]:
         f"E3-Setup-{short_revision}.exe",
         f"E3-{short_revision}-x86_64.AppImage",
     )
+
+
+@dataclass(frozen=True, slots=True)
+class RetentionAction:
+    asset: ReleaseAsset
+    # None deletes an expired package; an empty string clears our retirement label.
+    label: str | None
+
+
+def _asset_time(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.astimezone(timezone.utc) if parsed.tzinfo is not None else None
+    except (ValueError, OverflowError):
+        return None
+
+
+def _package_group(name: str) -> tuple[str, set[str]] | None:
+    legacy = {"E3-Setup.exe", "E3-x86_64.AppImage"}
+    if name in legacy:
+        return "legacy", legacy
+    match = re.fullmatch(r"E3-Setup-([0-9a-f]{12})\.exe|E3-([0-9a-f]{12})-x86_64\.AppImage", name)
+    if match is None:
+        return None
+    revision = match[1] or match[2]
+    return revision, set(immutable_asset_names(revision + "0" * 28))
+
+
+def _has_retirement_label(asset: ReleaseAsset) -> bool:
+    return asset.label.startswith(asset.name + _RETIREMENT_LABEL) and asset.label.endswith("]")
+
+
+def _retirement_time(asset: ReleaseAsset) -> datetime | None:
+    if not _has_retirement_label(asset):
+        return None
+    return _asset_time(asset.label[len(asset.name + _RETIREMENT_LABEL):-1])
+
+
+def plan_asset_retention(
+    assets: Sequence[ReleaseAsset], *, revision: str, now: datetime,
+) -> list[RetentionAction]:
+    """Pure, conservative plan: current + two recent pairs, then seven days retired.
+
+    Age starts when a pair first becomes eligible, not when it was uploaded.
+    Labels persist this clock across CI runs without another manifest or ledger.
+    """
+    if now.tzinfo is None:
+        raise PublicationError("Retention requires a timezone-aware clock")
+    current_names = set(immutable_asset_names(revision))
+    groups: dict[str, list[ReleaseAsset]] = {}
+    complete: dict[str, datetime] = {}
+    for asset in assets:
+        group = _package_group(asset.name)
+        if group is not None:
+            groups.setdefault(group[0], []).append(asset)
+    eligible: dict[str, list[ReleaseAsset]] = {}
+    for key, members in groups.items():
+        times = [_asset_time(asset.created_at) for asset in members]
+        # Incomplete metadata, duplicate names and user-supplied labels are not ours to clean.
+        if (
+            any(time is None or time > now for time in times)
+            or len({asset.name for asset in members}) != len(members)
+            or any(asset.state != "uploaded" or asset.size <= 0 for asset in members)
+            or any(asset.label and not _has_retirement_label(asset) for asset in members)
+        ):
+            continue
+        eligible[key] = members
+        group = _package_group(members[0].name)
+        assert group is not None
+        if {asset.name for asset in members} == group[1]:
+            complete[key] = max(time for time in times if time is not None)
+
+    current_key = _validate_revision(revision)[:12]
+    recent = sorted(
+        (key for key in complete if key != current_key),
+        key=lambda key: (complete[key], key), reverse=True,
+    )[:_RECENT_PACKAGE_VERSIONS]
+    protected = {current_key, *recent}
+    actions: list[RetentionAction] = []
+    marker = _RETIREMENT_LABEL + now.astimezone(timezone.utc).isoformat() + "]"
+    for key, members in eligible.items():
+        if key in protected or any(asset.name in current_names for asset in members):
+            actions.extend(RetentionAction(asset, "") for asset in members if asset.label)
+            continue
+        retired = [_retirement_time(asset) for asset in members]
+        if any(asset.label and time is None for asset, time in zip(members, retired, strict=True)):
+            continue  # Malformed retirement metadata must never authorize deletion.
+        if any(time is None for time in retired):
+            if key in complete:
+                actions.extend(RetentionAction(asset, asset.name + marker) for asset in members)
+        elif all(time is not None and time <= now - _RETENTION_GRACE for time in retired):
+            # Also finish a previously interrupted deletion of an already retired pair.
+            actions.extend(RetentionAction(asset, None) for asset in members)
+    return actions
+
+
+def retain_release_assets(
+    client: ReleaseClient, *, release: Release, published: ReleaseAsset, revision: str,
+) -> None:
+    assets = client.list_assets(release.release_id)
+    actions = plan_asset_retention(assets, revision=revision, now=datetime.now(timezone.utc))
+    for action in actions:
+        latest = client.list_assets(release.release_id)
+        stable = _asset_by_name(latest, _STABLE_MANIFEST_NAME)
+        if stable != published:
+            raise PublicationError("Retention stopped: the authoritative manifest changed")
+        if any(asset.name.startswith("update-manifest.previous-") for asset in latest):
+            raise PublicationError("Retention deferred: a manifest recovery backup remains")
+        if _asset_by_name(latest, action.asset.name) != action.asset:
+            raise PublicationError("Retention stopped: planned package metadata changed")
+        if action.label is None:
+            client.delete_asset(action.asset.asset_id)
+            print(f"Retention: deleted expired package {action.asset.name}")
+        else:
+            client.label_asset(action.asset.asset_id, action.label)
+            verb = "started seven-day grace for" if action.label else "protected"
+            print(f"Retention: {verb} {action.asset.name}")
+    print(f"Retention: {len(actions)} actions; current + two recent versions stay available.")
 
 
 def staged_manifest_name(revision: str, publication_id: str) -> str:
@@ -552,6 +689,12 @@ def publish_development_update(
     staged_manifest = _ensure_uploaded(client, release, release_tag, manifest_path)
 
     assets = client.list_assets(release.release_id)
+    # An old revision can be promoted again. Reset its grace BEFORE exposing its
+    # manifest, even if later best-effort cleanup fails or the publisher is cancelled.
+    incoming_names = set(immutable_asset_names(revision))
+    for asset in assets:
+        if asset.name in incoming_names and _has_retirement_label(asset):
+            client.label_asset(asset.asset_id, "")
     active_manifest = _asset_by_name(assets, _STABLE_MANIFEST_NAME)
     backup_manifest: ReleaseAsset | None = None
     if created_draft or release.draft:
@@ -625,8 +768,12 @@ def publish_development_update(
                 file=sys.stderr,
             )
     recovery_state.unlink(missing_ok=True)
+    try:
+        retain_release_assets(client, release=release, published=published, revision=revision)
+    except PublicationError as exc:
+        print(f"::warning::The new update is live, but package retention deferred: {exc}", file=sys.stderr)
     print(
-        f"Published {revision} through {_STABLE_MANIFEST_NAME}; immutable binaries remain available."
+        f"Published {revision} through {_STABLE_MANIFEST_NAME}; current packages verified."
     )
 
 

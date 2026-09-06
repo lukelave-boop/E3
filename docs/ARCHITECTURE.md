@@ -1,5 +1,11 @@
 # Architecture
 
+Development update publication owns package retention after verified manifest
+promotion. Current and two recent package pairs stay available; dated GitHub
+asset labels persist a seven-day retirement grace for older packages. Incoming
+current packages have retirement cleared before promotion. Cleanup revalidates
+manifest/asset identity and remains best effort; see [UPDATES.md](UPDATES.md#package-retention).
+
 PiJobStore publishes committed record observations under a separate short lock
 after durable writes. Pi machine/job status reads this bounded projection,
 independent of file syncing, hashing, and validation. Execution admission and

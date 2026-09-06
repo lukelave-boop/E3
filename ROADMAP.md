@@ -1,5 +1,9 @@
 # Roadmap
 
+Development release publication now includes package retention: current plus
+two recent versions, followed by a seven-day retirement grace for older packages.
+Observe the first live retirement/deletion cycle; see [update policy](docs/UPDATES.md#package-retention).
+
 Desktop readability now includes resizable columns throughout the app, relative
 speed controls, and balanced Preview defaults. Validate the new layout and
 percentage entry in E3 DEV TEST. A future hybrid speed display can build on the

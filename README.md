@@ -459,7 +459,10 @@ dialect. `E3MACHINE/2` is not compatible with the old `E3BRIDGE/1` raw serial
 service and E3 never silently falls back to Windows-side powered streaming.
 
 Windows packaging and automatic-update assets are implemented and
-automated-test covered. The installed frozen PyInstaller E3 to visible Inno
+automated-test covered. Development releases keep the current package pair and
+two recent pairs, with a seven-day grace before older packages can be removed
+after a successful publication; see [update retention](docs/UPDATES.md#package-retention).
+The installed frozen PyInstaller E3 to visible Inno
 Setup handoff still requires package-level verification in a disposable
 interactive Windows environment.
 
