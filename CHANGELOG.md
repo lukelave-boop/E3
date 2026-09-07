@@ -1,4 +1,14 @@
 # Changelog
+## Mainboard SD firmware and typed controls
+
+Added a complete retained-loader SD installer with independent FAN1/FAN2 PWM,
+native probe and Z control, bounded G39 material probing, fan status, enabled
+emergency parsing and explicit fan shutdown in native kill. The bundle includes
+official F401 stock rollback and corresponding source. Added guarded shared-owner
+fan/Z controls through MachineService and authenticated Pi RPC, plus acceptance,
+rejection, replay and cleanup tests. Ready for attached-hardware validation;
+bare-spare command/readback and compiled checks are recorded in CURRENT_STATE.md.
+
 
 Added a standalone, bounded operator-run Ender USB metadata capture for idle
 connection failures. It records no USB payloads and changes no controller

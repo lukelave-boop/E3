@@ -1,4 +1,13 @@
 # Laser Camera Aligner / E3 Positioning System
+The [mainboard SD firmware](firmware/marlin_mainboard/README.md) now supports
+independent FAN1/FAN2, native probe deployment/stow, Z motion and bounded native
+material-height measurement. The complete SD installer and stock rollback kit
+are ready for operator physical validation. The spare has exercised real
+firmware command/readback paths and now runs this image. See
+[installation](firmware/marlin_mainboard/INSTALL.md) and
+[validation](firmware/marlin_mainboard/VALIDATE.md). The working machine, Pi and
+webcam have not been changed. Earlier prototype/BENCH notes below are historical.
+
 
 For the intermittent Ender connection investigation, see the bounded
 [operator-run USB capture](docs/ENDER_USB_CAPTURE.md). It retains transfer

@@ -1,4 +1,11 @@
 # Roadmap
+Mainboard firmware now has a complete SD installation/recovery package for
+both fans, probe and Z. The next stage is operator physical validation of the
+attached loads and known-thickness measurement using
+[the supplied procedure](firmware/marlin_mainboard/VALIDATE.md). Firmware and
+guarded source controls are implemented; full-machine installation has not
+occurred. Webcam continuity remains required. Prior stage notes follow.
+
 Native material-height firmware now has a bounded Marlin prototype and guarded
 host integration. Spare-board communications, unhomed rejection and restoration
 to BENCH passed. Remaining work is physical native-cycle/contact qualification

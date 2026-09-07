@@ -140,6 +140,7 @@ class CrealityControllerOwner:
         self._fault: str | None = None
         self._secondary_fan_binding: AirAssistCommands | None = None
         self._secondary_fan_enabled: bool | None = None
+        self._mainboard_fan1_used = False
 
     @property
     def session(self) -> CrealityControllerSession:
@@ -397,6 +398,18 @@ class CrealityControllerOwner:
                 )
             self._secondary_fan_binding = binding
 
+    def _all_fans_off(self, *, allow_open: bool) -> None:
+        """Include FAN1 in lifecycle cleanup after identifying the E3 profile."""
+        commands = (_FAN_OFF_COMMAND, "M106 P1 S0") if self._mainboard_fan1_used else (_FAN_OFF_COMMAND,)
+        for command in commands:
+            self._execute_acknowledged(
+                command, allow_open=allow_open,
+                # The E3 profile's native kill also clears both fan PWM pins.
+                # A failed acknowledgement attempts M112 before closing.
+                on_failure=(lambda: None) if self._mainboard_fan1_used else None,
+            )
+        self._secondary_fan_enabled = False
+
     def close(self) -> None:
         with self._lock:
             self._close_transport_locked()
@@ -478,7 +491,7 @@ class SecondaryMarlinFanController:
         self._owner.raise_if_faulted()
 
     def _force_off(self) -> None:
-        self._owner._execute_acknowledged(_FAN_OFF_COMMAND, allow_open=True)
+        self._owner._all_fans_off(allow_open=True)
         self._owner._secondary_fan_enabled = False
 
     def initialize_off(self) -> None:
@@ -511,7 +524,7 @@ class SecondaryMarlinFanController:
                     self._owner._transport.synchronize_input()
                 except Exception as exc:
                     raise self._owner._fail_locked(exc) from exc
-                self._owner._execute_acknowledged(_FAN_OFF_COMMAND, allow_open=False)
+                self._owner._all_fans_off(allow_open=False)
                 self._owner._secondary_fan_enabled = False
             except SecondaryControllerError as original:
                 _LOGGER.warning(
@@ -576,10 +589,7 @@ class SecondaryMarlinFanController:
             attempted_current_session = self._owner.ready
             if attempted_current_session:
                 try:
-                    self._owner._execute_acknowledged(
-                        _FAN_OFF_COMMAND,
-                        allow_open=False,
-                    )
+                    self._owner._all_fans_off(allow_open=False)
                     self._owner._secondary_fan_enabled = False
                     return True
                 except Exception:
@@ -587,10 +597,7 @@ class SecondaryMarlinFanController:
             # A failed current exchange closed the session.  Cleanup may reopen
             # once; an already-closed session receives this one attempt directly.
             try:
-                self._owner._execute_acknowledged(
-                    _FAN_OFF_COMMAND,
-                    allow_open=True,
-                )
+                self._owner._all_fans_off(allow_open=True)
                 self._owner._secondary_fan_enabled = False
                 return True
             except Exception:

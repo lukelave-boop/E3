@@ -1,0 +1,87 @@
+name: Mainboard SD Firmware
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/marlin-material-*']
+    paths:
+      - 'firmware/marlin_mainboard/**'
+      - 'firmware/marlin_material/**'
+      - 'tests/test_*mainboard*'
+      - '.github/workflows/marlin-mainboard.yml'
+  pull_request:
+    paths:
+      - 'firmware/marlin_mainboard/**'
+      - 'tests/test_*mainboard*'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-firmware:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install tools
+        run: python -m pip install platformio==6.1.18 -r requirements.txt -r requirements-dev.txt -r firmware/ender_aux/requirements.txt
+      - name: Get pinned sources and updater compiler
+        shell: pwsh
+        run: |
+          $baseline = Get-Content firmware/marlin_material/baseline.json -Raw | ConvertFrom-Json
+          git init build/marlin-mainboard
+          git -C build/marlin-mainboard fetch --depth 1 $baseline.repository $baseline.revision
+          git -C build/marlin-mainboard checkout --detach FETCH_HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Force build/firmware-tools | Out-Null
+          $archivePath = Join-Path $PWD 'build/firmware-tools/arm-toolchain.zip'
+          Invoke-WebRequest 'https://armkeil.blob.core.windows.net/developer/Files/downloads/gnu/14.2.rel1/binrel/arm-gnu-toolchain-14.2.rel1-mingw-w64-i686-arm-none-eabi.zip' -OutFile $archivePath
+          if ((Get-FileHash $archivePath -Algorithm SHA256).Hash -ne '6facb152ce431ba9a4517e939ea46f057380f8f1e56b62e8712b3f3b87d994e1') { throw 'Toolchain checksum mismatch' }
+          Expand-Archive -LiteralPath $archivePath -DestinationPath build/firmware-tools
+      - name: Build unchanged retained updater
+        run: python firmware/ender_aux/build.py
+      - name: Build mainboard firmware
+        run: python firmware/marlin_mainboard/build.py build/marlin-mainboard --core build/platformio
+      - name: Verify native probing and fan kill
+        shell: pwsh
+        run: |
+          python firmware/marlin_material/run_native_tests.py build/marlin-mainboard --toolchain build/platformio/packages/toolchain-gccarmnoneeabi/bin
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python firmware/marlin_mainboard/audit_outputs.py build/marlin-mainboard/.pio/build/STM32F401RC_creality/firmware.elf
+      - name: Fetch checksum-pinned stock recovery
+        shell: python
+        run: |
+          import hashlib, urllib.request, zipfile
+          from pathlib import Path
+          p = Path('build/stock.zip')
+          p.write_bytes(urllib.request.urlopen('https://cdn.creality.com/ow/official/c2721d8d-b8d8-423c-84bb-e87be0b17dd6.zip').read())
+          assert hashlib.sha256(p.read_bytes()).hexdigest() == '20947c7fdf2131b8c3520feb1371431d3129457298f94c90a304b2e59f8cfc15'
+          with zipfile.ZipFile(p) as z:
+              names = [n for n in z.namelist() if '/STM32F4_UPDATE/' in n and n.endswith('.bin')]
+              assert len(names) == 1
+              Path('build/stock-f401-2.0.8.26.bin').write_bytes(z.read(names[0]))
+      - name: Package audited SD installer
+        shell: pwsh
+        run: |
+          $accepted = Get-ChildItem 'dist/ender-aux-*/SD_CARD/STM32F4_UPDATE/*.bin' | Select-Object -First 1
+          python firmware/marlin_mainboard/package.py build/marlin-mainboard --objdump build/platformio/packages/toolchain-gccarmnoneeabi/bin/arm-none-eabi-objdump.exe --accepted-sd $accepted.FullName --stock-bin build/stock-f401-2.0.8.26.bin
+      - name: Test host control and packaging
+        run: python -m pytest -q tests/test_marlin_mainboard.py tests/test_mainboard_rpc.py tests/test_mainboard_package.py tests/test_secondary_controller.py tests/test_native_height.py tests/test_marlin_material.py
+      - name: Lint and compile
+        shell: pwsh
+        run: |
+          python -m ruff check .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m compileall -q laser_aligner firmware/marlin_mainboard
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mainboard-sd-installation
+          path: dist/e3-mainboard-v1-*.zip
+          if-no-files-found: error

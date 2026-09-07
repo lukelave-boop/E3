@@ -1483,6 +1483,18 @@ class PiJobService:
             expected_session_generation=expected_session_generation,
         )
 
+    def mainboard_control(
+        self, action: str, value: int | float | None, *, confirmed: bool,
+        expected_session_generation: int | None = None, connection_alive: Any = None,
+    ) -> dict[str, Any]:
+        return self._run_idle_machine_operation(
+            "control the mainboard",
+            lambda: self.machine.mainboard_control(
+                action, value, confirmed=confirmed, _connection_alive=connection_alive,
+            ),
+            expected_session_generation=expected_session_generation,
+        )
+
     def probe_pin(
         self, pin_action: str, *, confirmed: bool,
         expected_session_generation: int | None = None, connection_alive: Any = None,

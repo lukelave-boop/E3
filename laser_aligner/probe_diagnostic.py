@@ -76,7 +76,7 @@ def _exchange(host: str, port: int, token: str, action: str, **fields: Any) -> d
     response = request_response(
         host, port, token,
         {"action": action, "request_id": str(uuid.uuid4()), **fields},
-        timeout=120.0 if action == _NATIVE_ACTION else 25.0 if action == _PIN_ACTION else 5.0,
+        timeout=120.0 if action == _NATIVE_ACTION else 35.0 if action == "machine.mainboard" else 25.0 if action == _PIN_ACTION else 5.0,
     )
     if not isinstance(response, dict) or type(response.get("ok")) is not bool:
         raise MachineError("Pi service returned an invalid response; no automatic retry was made")

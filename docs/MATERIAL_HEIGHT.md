@@ -1,4 +1,11 @@
 # Material height and camera geometry
+The [mainboard SD package](../firmware/marlin_mainboard/README.md) is the current
+physical-validation build. It includes both real fan channels, probe and Z
+control, and the previously tested bounded G39 implementation. Follow its
+INSTALL.md and VALIDATE.md for mainboard installation and attached-hardware
+qualification. The spare now runs this image; earlier BENCH-restoration notes
+below describe the preceding material-only prototype.
+
 ## Latest experimental firmware path
 
 The [native Marlin prototype](../firmware/marlin_material/README.md) provides G39

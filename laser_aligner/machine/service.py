@@ -53,6 +53,8 @@ from .controller_session import (
     ControllerState,
 )
 from .io_diagnostics import thread_snapshot
+from .mainboard import control as control_mainboard
+from .mainboard import validate_control
 from .probe_pin import ProbePinDiagnosticError, run_pin_diagnostic
 from .secondary_controller import SecondaryMarlinFanController
 from .serial_backend import list_serial_ports as list_serial_ports
@@ -568,7 +570,10 @@ class MachineService:
     ) -> None:
         controller = self._secondary_controller_for(program.air_assist_commands)
         if controller is None:
-            return
+            candidate = self._secondary_air_assist
+            if candidate is None or not candidate.owner._mainboard_fan1_used:
+                return
+            controller = candidate
         try:
             controller.ensure_off()
         except Exception as exc:
@@ -646,7 +651,10 @@ class MachineService:
             )
             return
         if controller is None:
-            return
+            candidate = self._secondary_air_assist
+            if candidate is None or not candidate.owner._mainboard_fan1_used:
+                return
+            controller = candidate
         try:
             if controller.best_effort_off():
                 self._append_log("AUX", f"M106 S0 ({context})")
@@ -663,7 +671,8 @@ class MachineService:
 
     def _queue_secondary_off(self, *, context: str) -> None:
         commands = self._active_job_air_assist_commands
-        if commands is None or commands.target is not AirAssistTarget.PI_SECONDARY:
+        mainboard_used = self._secondary_air_assist is not None and self._secondary_air_assist.owner._mainboard_fan1_used
+        if not mainboard_used and (commands is None or commands.target is not AirAssistTarget.PI_SECONDARY):
             return
 
         def cleanup() -> None:
@@ -3996,6 +4005,60 @@ class MachineService:
                 else None
             ),
         }
+
+    def mainboard_control(
+        self, action: str, value: int | float | None = None, *, confirmed: bool = False,
+        _connection_alive: Callable[[], bool] | None = None,
+    ) -> dict[str, Any]:
+        """Exclusive typed fan / Z controls; the Pi retains the sole serial owner."""
+        validate_control(action, value, confirmed)
+        epoch = self._operation_stop_epoch()
+        with self._manual_home_command_scope():
+            self._require_safety_configuration()
+            if self.hardware_enabled is not True:
+                raise SafetyError("Mainboard controls require hardware authority")
+            if action == "z" and self.settings.allow_motion is not True:
+                raise SafetyError("Z movement requires machine.allow_motion")
+            session = self._require_session()
+            if self._job.running or self.armed:
+                raise SafetyError("Mainboard controls require an idle machine and disarmed laser")
+            if self._secondary_air_assist is None:
+                raise MachineError("Configure the shared Creality connection first")
+            owner = self._secondary_air_assist.owner
+            if not owner.ready:
+                raise MachineError("The shared Creality connection must already be initialized")
+            deadline = time.monotonic() + 30
+
+            @contextmanager
+            def guard():
+                with self._secondary_write_gate, self._stop_epoch_lock:
+                    if self._stop_epoch != epoch or not self._same_controller_session(self._session, session):
+                        raise MachineError("Mainboard operation cancelled or session changed")
+                    if time.monotonic() >= deadline:
+                        raise MachineError("Mainboard operation exceeded its time limit")
+                    if _connection_alive is not None and not _connection_alive():
+                        raise MachineError("Mainboard monitoring connection was lost")
+                    yield
+
+            if action != "status":
+                self.send_command("M5", _internal_motion=True, _expected_stop_epoch=epoch)
+            if action == "z":
+                if self._z_probe is not None:
+                    self._z_probe.invalidate()
+                self._z_probe_result = None
+                self._z_probe_active = True
+            try:
+                return control_mainboard(
+                    owner, action, value, confirmed=confirmed, guard=guard,
+                    on_failure=lambda: self.request_stop(_recover=False),
+                )
+            except Exception:
+                if action != "status" and self.operation_generation() == epoch:
+                    self.request_stop(_recover=False)
+                raise
+            finally:
+                if action == "z":
+                    self._z_probe_active = False
 
     def probe_pin(
         self, pin_action: str, *, confirmed: bool = False,

@@ -1,0 +1,82 @@
+--- a/Marlin/Configuration_adv.h
++++ b/Marlin/Configuration_adv.h
+@@ -496,7 +496,7 @@
+  *
+  * Define one or both of these to override the default 0-255 range.
+  */
+-#define FAN_MIN_PWM 50
++#define FAN_MIN_PWM 0
+ //#define FAN_MAX_PWM 128
+ 
+ /**
+@@ -542,7 +542,8 @@
+  */
+ //视新板子是用哪个管脚来接风扇，比如为PAx，则在Configuration_adv.h中定义#define E0_AUTO_FAN_PIN PAx即可。 
+ //按新硬件原理图，假设用PC0接喉管风扇，改为#define E0_AUTO_FAN_PIN PC0，当喉管温度大于EXTRUDER_AUTO_FAN_TEMPERATURE时喉管风扇开启 --zy
+-#define E0_AUTO_FAN_PIN PC0
++#define E0_AUTO_FAN_PIN -1
++#define FAN1_PIN PC0  // E3 FAN1; FAN0/PA0 remains the existing FAN2 output
+ #define E1_AUTO_FAN_PIN -1
+ #define E2_AUTO_FAN_PIN -1
+ #define E3_AUTO_FAN_PIN -1
+@@ -2189,7 +2190,7 @@
+  * Currently handles M108, M112, M410, M876
+  * NOTE: Not yet implemented for all platforms.
+  */
+-//#define EMERGENCY_PARSER
++#define EMERGENCY_PARSER
+ 
+ /**
+  * Realtime Reporting (requires EMERGENCY_PARSER)
+--- a/Marlin/src/MarlinCore.cpp
++++ b/Marlin/src/MarlinCore.cpp
+@@ -998,6 +998,10 @@
+  * After this the machine will need to be reset.
+  */
+ void kill(PGM_P const lcd_error/*=nullptr*/, PGM_P const lcd_component/*=nullptr*/, const bool steppers_off/*=false*/) {
++  // E3 auxiliary outputs must be off even after interrupts/planner stop.
++  thermalManager.zero_fan_speeds();
++  WRITE(FAN_PIN, LOW);
++  WRITE(FAN1_PIN, LOW);
+   thermalManager.disable_all_heaters();
+ 
+   TERN_(HAS_CUTTER, cutter.kill()); // Full cutter shutdown including ISR control
+--- a/Marlin/src/gcode/gcode.cpp
++++ b/Marlin/src/gcode/gcode.cpp
+@@ -634,6 +634,7 @@
+       case 85: M85(); break;                                      // M85: Set inactivity stepper shutdown timeout
+       case 92: M92(); break;                                      // M92: Set the steps-per-unit for one or more axes
+       case 114: M114(); break;                                    // M114: Report current position
++      case 123: M123(); break; // E3 read-only mainboard status
+       case 115: M115(); break;                                    // M115: Report capabilities
+ 
+       case 117: TERN_(HAS_STATUS_MESSAGE, M117()); break;         // M117: Set LCD message text, if possible
+--- a/Marlin/src/gcode/gcode.h
++++ b/Marlin/src/gcode/gcode.h
+@@ -679,6 +679,7 @@
+ 
+   static void M114();
+   static void M115();
++  static void M123();
+ 
+   #if HAS_STATUS_MESSAGE
+     static void M117();
+--- a/Marlin/src/gcode/host/M115.cpp
++++ b/Marlin/src/gcode/host/M115.cpp
+@@ -74,6 +74,7 @@
+   // }
+   
+   SERIAL_ECHOLNPGM("Cap:E3_MATERIAL_HEIGHT_V1:1");
++  SERIAL_ECHOLNPGM("Cap:E3_MAINBOARD_V1:1");
+ 
+   #if ENABLED(EXTENDED_CAPABILITIES_REPORT)
+ 
+--- a/Marlin/src/gcode/temp/M106_M107.cpp
++++ b/Marlin/src/gcode/temp/M106_M107.cpp
+@@ -108,4 +108,6 @@
+   TERN_(LASER_SYNCHRONOUS_M106_M107, planner.buffer_sync_block(BLOCK_FLAG_SYNC_FANS));
+ }
+ 
++#include "e3_mainboard.inc"
++
+ #endif // HAS_FAN

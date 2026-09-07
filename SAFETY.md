@@ -1,4 +1,12 @@
 # Safety requirements
+The current [mainboard firmware](firmware/marlin_mainboard/README.md) is ready
+for operator physical validation. It adds independent real fan outputs; these
+are no longer BENCH simulation. MachineService admits only typed idle controls,
+and manual Z is homed, confirmed and bounded. Both fans participate in cleanup;
+native kill clears their PWM state and GPIO outputs. Emergency-parser presence
+and compiled fake-register checks do not make software stopping safety-rated.
+Use the included SD installation and attached-hardware validation procedures.
+
 The experimental Marlin G39 material mode is separate from ordinary bed probing.
 Its fixed contact interval, offset-aware retract headroom, homed/absolute/mm
 preconditions and explicit failure reports are software guardrails. The host

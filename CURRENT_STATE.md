@@ -1,4 +1,63 @@
 # Current repository state
+## Active: SD-installable FAN1/FAN2, probe and Z mainboard firmware
+
+The user requested a complete mainboard SD file ready for physical validation.
+`firmware/marlin_mainboard/` now supplies it on `codex/marlin-material-height`,
+preserving the earlier material patch, auxiliary updater, BENCH builds and all
+recovery artifacts. No working-machine, Pi, webcam or service operation was
+performed. No new Windows EXE was built or selected.
+
+Final package: `dist/e3-mainboard-v1-7f45686b`; install
+`SD_CARD/STM32F4_UPDATE/e3main_7f45686b.bin` (214620 bytes), SHA-256
+`7f45686bb003b6ecd83e628461b331b87c69aa382cfea4d1faa13f15704ac950`.
+This is a complete initial SD installer at 0x08010000 for the identified
+STM32F401RET6 / CR4NS200141C13 family: exact accepted updater 0.1.0 plus
+Marlin at 0x08020200. It does not contain factory-loader bytes. The package
+includes the official F401 2.0.8.26 stock rollback image, whose SHA is
+`9a81f7564d62b2b131dcc96f0bf47725e3ee78c3b68b198bb54680f431e02710`,
+corresponding firmware source, INSTALL.md and VALIDATE.md.
+
+Real firmware support: independent FAN1/PC0 via M106 P1, FAN2/PA0 via M106 P0
+(unindexed M106 stays FAN2), native probe deployment/stow, native Z homing and
+movement, and the inherited bounded fast/slow G39 material cycle. FAN1's
+automatic hotend ownership is disabled. M123 reports commanded fan PWM and Z
+trust; M115 advertises exact E3_MAINBOARD_V1 and E3_MATERIAL_HEIGHT_V1 capabilities.
+Emergency parsing is enabled. Native kill explicitly clears both PWM settings
+and both fan pins; compiled Cortex-M4 execution with fake MMIO verified this.
+
+The companion machine.mainboard RPC and mainboard_control CLI route independent
+fan percentages and bounded manual Z through MachineService and the existing
+shared Pi owner. Z requires trusted Z, a stowed-probe confirmation, 20–80 mm
+target and <=5 mm per command. Manual Z invalidates material references. The
+service retains idle/disarmed/hardware/motion/session/STOP guards and RPC replay
+protection. Both fans participate in lifecycle cleanup, including idle manual
+control without an enabled job Air Assist mapping. The application manual-command
+allowlist and existing desktop measurement suspension are unchanged. The native
+reference/measure and pin CLI operations remain available; new fan/Z controls
+require this companion software revision on the Pi. No Pi update was initiated.
+
+Spare physical evidence, 2026-09-07: positively identified BENCH 0.2.0 on
+COM6/CH340 (1A86:7523, location 1-1), then uploaded the exact final application
+from the SD package through the retained updater. It verified/committed and
+booted with both capabilities and EMERGENCY_PARSER:1. FAN1/FAN2 command readbacks
+passed independent 0/64/128/192/255 combinations. M280 deploy/stow reported servo
+angles 10/90. A native 1 mm Z command reported 400 steps, then returned to Z0
+and zero steps. Unhomed G39 rejected with PRECONDITION; M123 arguments rejected.
+M997 returned to the updater, HOLD succeeded, and reboot returned to the same
+Marlin image with unhomed rejection intact. **The spare now runs this final
+mainboard firmware**, superseding the earlier BENCH-restored state below. Fans
+were left commanded OFF, servo stowed, Z0. This verifies firmware command paths
+on a real bare MCU; it does not measure connector voltage, attached-fan behavior,
+probe movement, mechanical Z distance or contact accuracy. Full-machine SD
+installation and those attached-load checks are the next operator physical
+validation, using the included procedure. The webcam remains part of the system.
+
+Verification: 200 focused existing/new host tests passed; five packaging tests
+passed after correcting their synthetic vector fixture. A final 44-test new
+control/RPC/package group passed, including idle STOP/disarm cleanup. All three
+native probing configurations, real startup/VTOR audit, real kill GPIO audit,
+repository Ruff and compileall passed. CI results are recorded below when complete.
+
 ## Active: bounded native Marlin material-height prototype
 
 Implemented on `codex/marlin-material-height`, starting from `eb6f1d4`, which

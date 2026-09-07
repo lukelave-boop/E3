@@ -1,4 +1,13 @@
 # Architecture
+The `firmware/marlin_mainboard` profile extends the pinned material patch with
+two independent native fan channels, an explicit capability/status contract and
+fan shutdown in native kill. Its SD package combines the unchanged accepted
+updater with Marlin, retaining the first-stage loader. `machine/mainboard.py`
+is the typed runtime client: MachineService owns admission; PiJobService and
+`machine.mainboard` RPC retain session/replay/idle ownership; the existing
+CrealityControllerOwner remains the sole secondary serial owner. Neither the
+desktop project nor browser SVG pipeline is changed. Camera ownership is unchanged.
+
 ## Native material-height Marlin prototype
 
 `firmware/marlin_material/` pins external Creality source plus narrowly scoped

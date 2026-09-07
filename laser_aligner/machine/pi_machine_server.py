@@ -74,6 +74,7 @@ ACTION_MACHINE_PREPARE_JOB_START = "machine.prepare_job_start"
 ACTION_MACHINE_JOG = "machine.jog"
 ACTION_MACHINE_PROBE_Z = "machine.probe_z"
 ACTION_MACHINE_PROBE_PIN = "machine.probe_pin"
+ACTION_MACHINE_MAINBOARD = "machine.mainboard"
 ACTION_MACHINE_COMMAND = "machine.command"
 ACTION_MACHINE_REALTIME_POSITION = "machine.realtime_position"
 ACTION_MACHINE_STEPPER_HOLD = "machine.stepper_hold"
@@ -90,6 +91,7 @@ MACHINE_ACTIONS = frozenset(
         ACTION_MACHINE_JOG,
         ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_PROBE_PIN,
+        ACTION_MACHINE_MAINBOARD,
         ACTION_MACHINE_COMMAND,
         ACTION_MACHINE_REALTIME_POSITION,
         ACTION_MACHINE_STEPPER_HOLD,
@@ -112,6 +114,11 @@ SERVER_CAPABILITIES = (
 # `action` and canonical UUID `request_id` are required on every request in
 # addition to the per-action fields below.
 SERVER_ACTION_SCHEMAS: dict[str, dict[str, tuple[str, ...] | str]] = {
+    ACTION_MACHINE_MAINBOARD: {
+        "required": ("control", "value", "confirmed"),
+        "optional": (),
+        "response": ("result",),
+    },
     ACTION_SERVICE_CAPABILITIES: {
         "required": (),
         "optional": (),
@@ -286,6 +293,7 @@ _SHUTDOWN_JOIN_SECONDS = 2.0
 
 _SESSION_MUTATING_ACTIONS = frozenset(
     {
+        ACTION_MACHINE_MAINBOARD,
         ACTION_MACHINE_PROBE_Z,
         ACTION_MACHINE_PROBE_PIN,
         ACTION_MACHINE_CONNECT,
@@ -661,6 +669,13 @@ class PiMachineServer:
                     expected_session_generation=expected_generation,
                 )
             }
+        if action == ACTION_MACHINE_MAINBOARD:
+            return {"result": self.service.mainboard_control(
+                request.get("control"), request.get("value"),
+                confirmed=_exact_bool(request.get("confirmed"), "confirmed"),
+                expected_session_generation=expected_generation,
+                connection_alive=getattr(self._probe_connection, "alive", None),
+            )}
         if action == ACTION_MACHINE_PROBE_PIN:
             return {"result": self.service.probe_pin(
                 request.get("pin_action"),
