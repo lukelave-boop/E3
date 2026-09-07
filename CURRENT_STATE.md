@@ -6,7 +6,7 @@ The operator supplied CR4NS200141C13 / STM32F401RET6 identification and owns SD 
 
 `firmware/ender_aux/` provides a standalone second stage at the published 64 KiB S1-family application offset, an inert application after a separate metadata area, and an explicit operator-run USB maintenance client. The C updater restricts erase/program to sectors 5-7, checks image metadata/vectors/CRC and commits validity last. No updater self-write, option-byte change, motor movement, probe pulse, laser output or air-assist ON is implemented. It is not a Marlin replacement ready for machine operation. The stock loader remains outside this code. The operator has now demonstrated SD installation and application startup on the spare; its exact SD erase behavior, loader-byte preservation and physical output behavior remain unverified.
 
-Windows verification: Arm GNU 14.2.Rel1 compiled both images; 91 Python host tests and 27 compiled production-platform cases passed. Eight ARM-executed core test groups passed, including malformed commands, commit interruption, partial-upload recovery and application command rejection. Production disassembly confirms flash-busy routines/callees/literals execute from SRAM and no unresolved relocations remain. The build uses 0x20010000 for the initial stack to reach the MCU capacity check without requiring more than 64 KiB SRAM. Actual target remains RET6/512 KiB; the loader/application leave the unused SRAM available within the declared 96 KiB region. Dedicated Windows Python 3.12 firmware CI passed for source commit 2612d99: https://github.com/lukelave-boop/E3/actions/runs/34132731559 . It rebuilt the SD package and passed the host, compiled ARM core and production-platform tests plus lint/compileall. Local repository Ruff, compileall and diff checks also passed. This was the isolated firmware tier, not full desktop compatibility CI. No GUI, camera, serial controller, power or hardware operation has been performed by the assistant. Operator evidence below verifies one SD installation/application identity exchange and one complete same-image USB application upload, boot and identity cycle. A subsequent operator cold-start test also returned APP. Output-state checks, UART timing margins, update interruption recovery and stock SD recovery remain physically unverified. The working machine and MachineService are unchanged. This experimental branch is not ready for production integration.
+Windows verification: Arm GNU 14.2.Rel1 compiled both images; 91 Python host tests and 27 compiled production-platform cases passed. Eight ARM-executed core test groups passed, including malformed commands, commit interruption, partial-upload recovery and application command rejection. Production disassembly confirms flash-busy routines/callees/literals execute from SRAM and no unresolved relocations remain. The build uses 0x20010000 for the initial stack to reach the MCU capacity check without requiring more than 64 KiB SRAM. Actual target remains RET6/512 KiB; the loader/application leave the unused SRAM available within the declared 96 KiB region. Dedicated Windows Python 3.12 firmware CI passed for source commit 2612d99: https://github.com/lukelave-boop/E3/actions/runs/34132731559 . It rebuilt the SD package and passed the host, compiled ARM core and production-platform tests plus lint/compileall. Local repository Ruff, compileall and diff checks also passed. This was the isolated firmware tier, not full desktop compatibility CI. No GUI, camera, serial controller, power or hardware operation has been performed by the assistant. Operator evidence below verifies one SD installation/application identity exchange and one complete same-image USB application upload, boot and identity cycle. A subsequent operator cold-start test also returned APP. The controlled incomplete-transfer recovery test below also passed. Output-state checks, UART timing margins, power loss during active flash operations, application-crash recovery and stock SD recovery remain physically unverified. The working machine and MachineService are unchanged. This experimental branch is not ready for production integration.
 
 Operator physical result, 2026-09-07: on the identified spare CR4NS200141C13 /
 STM32F401RET6, after the SD installation procedure, the operator ran
@@ -43,7 +43,8 @@ Cold-start operator result, 2026-09-07: following the instructed SD-free shutdow
 of both 24 V and USB and normal restart, with a ten-second delay before inspection,
 the operator reported "ok power cycled. it returns APP". This verifies one
 normal cold startup of the uploaded application without a host boot command,
-on the same spare/configuration above; there is no interruption-recovery result yet.
+on the same spare/configuration above. The later incomplete-transfer recovery
+result is recorded below.
 
 Added operator-only `interrupt-upload` to the Python host: validate the complete
 recovery image before opening COM, identify/hold the updater, erase the application,
@@ -58,7 +59,31 @@ known application file still passes offline validation with CRC32 9E177C8B.
 Dedicated Windows Python 3.12 firmware CI also passed for c78377f:
 https://github.com/lukelave-boop/E3/actions/runs/34135682703 . It rebuilt the
 package and passed ARM core/production-platform cases, all 113 host tests,
-lint and compileall. Physical execution/recovery is pending the operator.
+lint and compileall.
+
+Incomplete-transfer recovery operator result, 2026-09-07: on the same
+CR4NS200141C13 / STM32F401RET6 spare, firmware 0.1.0, Windows COM6 at 115200 8N1,
+24 V and USB-C/CH340 bench setup, using the source host from c78377f/824dd67
+and the existing `ender-aux-0.1.0-177e5965/application.e3fw` identified above:
+
+- `interrupt-upload` returned `Application deliberately left incomplete after 64 bytes. No commit or boot was sent.`
+- Following the instructed power cycle of both 24 V and USB with SD removed,
+  and ten seconds without serial commands, the operator reported `UPDATER`.
+- A full `upload` of the same application returned
+  `Application verified and committed. Updater remains active; use boot when ready.`
+- Following another instructed power cycle and ten-second startup wait, the
+  operator ran `inspect` and reported `APP`. The restored image started through
+  normal startup; no host BOOT command was used for this final recovery check.
+
+This verifies one recovery from an abandoned, partially transferred application
+across a cold restart, followed by full USB restoration and automatic application
+startup. The deliberate stop occurred after completed/acknowledged flash writes.
+It does not verify power loss while flash is busy, a torn commit, an application
+crash, arbitrary corrupted/wrong-board image rejection on hardware, or recovery
+from damaged updater/stock-loader bytes. No controller commands or physical
+operations were performed by the assistant. The spare remains communications-
+only; input reporting, probe actuation, Z motion and air-assist control are future
+firmware work. This evidence does not qualify the working machine board.
 
 This file records implementation and verification evidence. It is not an
 operator procedure. Follow the canonical

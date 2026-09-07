@@ -137,8 +137,12 @@ physical recovery are not emulated by those tests.
 
 Production motion, CR Touch measurement, fans, persistent machine settings and
 Marlin behavior are intentionally future stages. No accepted application image
-can presently operate the machine. Retained-loader recovery is implemented as
-a design and pending operator bench evidence, not claimed proven.
+can presently operate the machine. On 2026-09-07 the operator verified recovery
+from an incomplete transfer on the spare: stop after one acknowledged block,
+cold startup into UPDATER, full USB restoration and cold startup into APP. This
+is one recovery case; power loss during active flash operations, torn commits,
+application crashes and stock SD restoration remain unverified. See the
+[board-specific acceptance record](../../CURRENT_STATE.md).
 
 Primary references:
 
