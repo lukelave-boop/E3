@@ -20,8 +20,8 @@ BENCH identity and never becomes a production MachineService controller path.
 No wiring changes, hardware commands or GUI operation are performed by the
 assistant. The application and operator console are implemented and packaged.
 The operator has now verified USB installation and the initial BENCH console
-identity/status exchange and the FAN1/FAN2 simulation sequence on the spare.
-Virtual Z/probe sequences, real input transitions and electrical output levels
+identity/status exchange, FAN1/FAN2 simulation and a virtual Z round trip on the
+spare. Probe sequences, real input transitions and electrical output levels
 remain pending. Earlier 0.1.0 acceptance
 does not qualify the new application's behavior.
 
@@ -74,7 +74,17 @@ coordinate stayed at 10.000 mm, probe stowed, trigger 0 (SIM), motion idle and
 outputs DISABLED. This verifies independent virtual fan state and virtual STOP
 through the real board/USB console. It does not verify fan connector voltage,
 PWM, current capability or attached fan behavior. No hardware was operated by
-the assistant. The next operator sequence checks virtual Z motion.
+the assistant.
+
+Operator virtual Z result, 2026-09-07: on the same spare, BENCH 0.2.0
+f96d3a21 application and COM6/115200 8N1 configuration above, `move 2 1`
+advanced the reported virtual position from 10.000 to 12.000 mm and completed
+with idle/result done. `move -2 1` returned it to 10.000 mm, also idle/result
+done. Both initial responses showed movement in progress. Fans remained 0%/0%,
+probe stowed, simulated trigger 0 and outputs DISABLED. This verifies the
+virtual round trip through the real board/USB console; no motor movement,
+step pulses, electrical output levels or physical timing calibration were
+verified. No hardware was operated by the assistant.
 
 ## Verified spare STM32F401RET6 firmware bootstrap (0.1.0)
 
