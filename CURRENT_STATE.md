@@ -19,8 +19,10 @@ trigger, position, bounded move/probe, stop and reset; it accepts only the exact
 BENCH identity and never becomes a production MachineService controller path.
 No wiring changes, hardware commands or GUI operation are performed by the
 assistant. The application and operator console are implemented and packaged;
-all 0.2.0 behavior remains physically unverified. The earlier 0.1.0 acceptance
-below does not qualify the new application's simulated behavior or physical input.
+The operator has now verified USB installation and the initial BENCH console
+identity/status exchange on the spare. Virtual control sequences, real input
+transitions and electrical output levels remain pending. Earlier 0.1.0 acceptance
+does not qualify the new application's behavior.
 
 Local Windows verification: 227 Python tests passed (115 image/update host and
 112 bench-console cases); focused Ruff, compileall and diff checks passed.
@@ -30,7 +32,8 @@ checks passed 27 cases; the new compiled production application with fake
 UART/time/MMIO passed 23 cases, monitoring inactive GPIO requests, PC14 input
 fields, raw reads and absence of flash writes. A contact first sampled at or
 after the probe search deadline reports NO_TRIGGER, covered by boundary tests.
-No GUI, electrical timing, physical component or real serial test was performed.
+No GUI, electrical timing, physical component or real serial test was performed
+as part of these automated checks.
 
 The 0.2.0 image has a 4712-byte payload, CRC32 9A49FE26, application.e3fw SHA-256
 0834abf9cdb664f59c3e012626009d5dce92f420dab2801d94d434e117379cd7.
@@ -46,8 +49,22 @@ Dedicated Windows Python 3.12 firmware CI passed for source commit 8da170f:
 https://github.com/lukelave-boop/E3/actions/runs/34137652240 . The run rebuilt
 the package and passed the ARM core, both production-MMIO suites, all 227
 Python client tests, lint and compileall. Every local packaged file matches
-its manifest; the manifest records source revision 8da170f. No 0.2.0 operator
-upload or bench acceptance has yet been reported.
+its manifest; the manifest records source revision 8da170f.
+
+Operator 0.2.0 startup result, 2026-09-07: the identified CR4NS200141C13 /
+STM32F401RET6 spare remained on the reported 24 V/USB-C CH340 bench setup,
+Windows COM6 at 115200 8N1. Uploading the f96d3a21 package application identified
+above returned `Application verified and committed. Updater remains active; use boot when ready.`
+The operator then launched `bench.py --port COM6 --hardware-enabled` and reported
+the initial prompt and state: outputs DISABLED, FAN1 0%, FAN2 0%, probe stowed,
+simulated trigger 0, virtual Z 10.000 mm/target 10.000 mm, idle, result none.
+The console accepts this state only after the exact BENCH 0.2.0 firmware identity.
+This verifies upload, application execution and initial bidirectional console
+communication on this spare. A boot-command acknowledgment was not supplied;
+application execution is established by the accepted identity/status exchange.
+No fan/probe/Z simulation commands or PC14 input transitions have yet been
+reported. The outputs-disabled status is a firmware report, not a measurement
+of connector voltages. No hardware was operated by the assistant.
 
 ## Verified spare STM32F401RET6 firmware bootstrap (0.1.0)
 
